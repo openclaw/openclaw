@@ -8,7 +8,9 @@ import crypto from 'node:crypto';
 import { createGitOps } from './lib/git-ops.mjs';
 import { createBudgetTracker } from './lib/budget.mjs';
 import { checkLength, checkStuffing, checkDrift } from './lib/tripwires.mjs';
-import { readSkillDescription, writeSkillDescription } from './lib/skills-io.mjs';
+import { readSkillDescription, writeSkillDescription, listSkills } from './lib/skills-io.mjs';
+import { readUsage } from './lib/usage.mjs';
+import { scoreSkills, selectPool } from './lib/pool-selector.mjs';
 import { proposeEdit } from './lib/anthropic-client.mjs';
 import { runEval } from './evaluate.mjs';
 import { buildMarkdownReport, renderMarkdownToPdf } from './report-generator.mjs';
@@ -118,8 +120,20 @@ export async function main({ force = false, dryRun = false } = {}) {
   const jsonlPath = join(reportsDir, `${date}-experiments.jsonl`);
   writeFileSync(jsonlPath, '');
 
-  const pool = JSON.parse(readFileSync(join(__dirname, 'pool.json'), 'utf8')).skills.filter(s => !s.graduated);
   const baselineEval = await runEval({ model: 'haiku', apiKey });
+
+  // Refresh pool each run using latest eval + usage data (cheap — both already loaded)
+  const usage = readUsage();
+  const allSkills = listSkills(SKILLS_DIR).filter(s => s !== 'autoresearch');
+  let pool;
+  if (usage.source === 'missing') {
+    console.warn('usage.json missing — using existing pool.json');
+    pool = JSON.parse(readFileSync(join(__dirname, 'pool.json'), 'utf8')).skills.filter(s => !s.graduated);
+  } else {
+    const scored = scoreSkills({ perSkillMetrics: baselineEval.per_skill, usageCounts: usage.counts, skills: allSkills });
+    pool = selectPool(scored, 10);
+    console.log(`Pool refreshed (EVI): ${pool.map(p => p.name).join(', ')}`);
+  }
 
   if (dryRun) {
     console.log('Dry run — baseline:', baselineEval.global_f1);

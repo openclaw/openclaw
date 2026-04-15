@@ -1,24 +1,29 @@
 // pool-selector.mjs — EVI (Expected Value of Improvement) scoring
 //
-//   EVI = usage_count * (target_f1 - current_f1)
+//   EVI = min(usage_count, USAGE_CAP) * (target_f1 - current_f1)
 //
+// USAGE_CAP prevents a single outlier (inflated by substring-match noise)
+// from dominating the ranking.
 // Skills with usage_count < MIN_USAGE are excluded (low signal).
 // Skills with current_f1 >= target_f1 are excluded (graduated).
 
 export const TARGET_F1 = 0.95;
 export const MIN_USAGE = 5;
+export const USAGE_CAP = 5000;
 
-export function scoreSkills({ perSkillMetrics, usageCounts, skills, targetF1 = TARGET_F1, minUsage = MIN_USAGE }) {
+export function scoreSkills({ perSkillMetrics, usageCounts, skills, targetF1 = TARGET_F1, minUsage = MIN_USAGE, usageCap = USAGE_CAP }) {
   const scored = [];
   for (const name of skills) {
     const m = perSkillMetrics[name];
     const f1 = m?.f1 ?? 0;
     const count = usageCounts[name] || 0;
+    const clipped = Math.min(count, usageCap);
     const gap = Math.max(0, targetF1 - f1);
-    const evi = count * gap;
+    const evi = clipped * gap;
     scored.push({
       name,
       usage_count: count,
+      usage_clipped: clipped,
       current_f1: f1,
       gap,
       evi,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { scoreSkills, selectPool, TARGET_F1, MIN_USAGE } from '../lib/pool-selector.mjs';
+import { scoreSkills, selectPool, TARGET_F1, MIN_USAGE, USAGE_CAP } from '../lib/pool-selector.mjs';
 
 const skills = ['a', 'b', 'c', 'd', 'e'];
 const metrics = {
@@ -16,6 +16,15 @@ describe('scoreSkills', () => {
     const scored = scoreSkills({ perSkillMetrics: metrics, usageCounts: usage, skills });
     const a = scored.find(s => s.name === 'a');
     expect(a.evi).toBeCloseTo(100 * (0.95 - 0.10), 5);
+  });
+
+  it('clips usage_count at USAGE_CAP before computing EVI', () => {
+    const bigUsage = { a: 50000 };
+    const scored = scoreSkills({ perSkillMetrics: { a: { f1: 0.10 } }, usageCounts: bigUsage, skills: ['a'] });
+    const a = scored[0];
+    expect(a.usage_count).toBe(50000);
+    expect(a.usage_clipped).toBe(USAGE_CAP);
+    expect(a.evi).toBeCloseTo(USAGE_CAP * (0.95 - 0.10), 5);
   });
 
   it('flags graduated skills', () => {

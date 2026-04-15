@@ -7,6 +7,8 @@ import { homedir } from 'node:os';
 import { completeOnce } from './lib/anthropic-client.mjs';
 import { listSkills, readSkillDescription } from './lib/skills-io.mjs';
 import { runEval } from './evaluate.mjs';
+import { readUsage } from './lib/usage.mjs';
+import { scoreSkills, selectPool } from './lib/pool-selector.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_DIR = join(__dirname, '..');
@@ -61,17 +63,31 @@ async function main() {
 
   console.log('Running baseline eval...');
   const metrics = await runEval({ model: 'haiku', apiKey });
-  const ranked = Object.entries(metrics.per_skill)
-    .filter(([name]) => name !== 'none' && skills.includes(name))
-    .sort(([, a], [, b]) => a.f1 - b.f1);
-  const pool = {
-    skills: ranked.slice(0, 10).map(([name, m]) => ({
-      name, baseline_f1: m.f1, current_f1: m.f1, exhausted: false, graduated: false,
-    })),
-    last_updated: new Date().toISOString(),
-  };
+  const usage = readUsage();
+  if (usage.source === 'missing') {
+    console.warn('Warning: ~/.autoresearch/usage.json missing — run bootstrap-usage.mjs first. Falling back to worst-F1 pool.');
+    const ranked = Object.entries(metrics.per_skill)
+      .filter(([name]) => name !== 'none' && skills.includes(name))
+      .sort(([, a], [, b]) => a.f1 - b.f1);
+    var pool = {
+      selection_method: 'worst_f1_fallback',
+      skills: ranked.slice(0, 10).map(([name, m]) => ({
+        name, baseline_f1: m.f1, current_f1: m.f1, exhausted: false, graduated: false,
+      })),
+      last_updated: new Date().toISOString(),
+    };
+  } else {
+    const scored = scoreSkills({ perSkillMetrics: metrics.per_skill, usageCounts: usage.counts, skills });
+    var pool = {
+      selection_method: 'evi_linear_capped',
+      usage_window_days: usage.window_days,
+      usage_generated_at: usage.generated_at,
+      skills: selectPool(scored, 10),
+      last_updated: new Date().toISOString(),
+    };
+  }
   writeFileSync(join(__dirname, 'pool.json'), JSON.stringify(pool, null, 2));
-  console.log(`Pool: ${pool.skills.map(s => s.name).join(', ')}`);
+  console.log(`Pool (${pool.selection_method}): ${pool.skills.map(s => s.name).join(', ')}`);
 
   mkdirSync(dirname(FLAG), { recursive: true });
   writeFileSync(FLAG, new Date().toISOString());
