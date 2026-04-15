@@ -189,12 +189,20 @@ function toRequestLikeInit(
  * proxy dispatcher and FormData conversion apply uniformly regardless of how
  * the caller built the request.
  */
+function stripInitHeaders(init: RequestInit | undefined): RequestInit | undefined {
+  if (!init || init.headers === undefined) {
+    return init;
+  }
+  const stripped = mergeHeaders(undefined, init.headers);
+  return { ...init, headers: stripped };
+}
+
 function normalizeProxyFetchInput(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
 ): { input: string | URL; init: RequestInit | undefined } {
   if (typeof input === "string" || input instanceof URL) {
-    return { input, init };
+    return { input, init: stripInitHeaders(init) };
   }
   if (input instanceof Request || isRequestLike(input)) {
     return {
@@ -202,7 +210,7 @@ function normalizeProxyFetchInput(
       init: toRequestLikeInit(input as RequestLikeInput, init),
     };
   }
-  return { input: input as unknown as string | URL, init };
+  return { input: input as unknown as string | URL, init: stripInitHeaders(init) };
 }
 
 function withNormalizedBody(init: RequestInit | undefined): RequestInit {
