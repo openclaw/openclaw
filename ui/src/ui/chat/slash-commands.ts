@@ -106,6 +106,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     icon: "trash",
     category: "session",
     executeLocal: true,
+    tier: "standard",
   },
   {
     key: "redirect",
@@ -115,6 +116,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     icon: "refresh",
     category: "agents",
     executeLocal: true,
+    tier: "power",
   },
 ];
 
