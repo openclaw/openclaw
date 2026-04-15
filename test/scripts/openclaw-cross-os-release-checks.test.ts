@@ -10,6 +10,7 @@ import {
   parseArgs,
   readRunnerOverrideEnv,
   resolveExplicitBaselineVersion,
+  resolveDevUpdateVerificationRef,
   resolveInstalledPrefixDirFromCliPath,
   resolveRepairGlobalInstallArgs,
   resolveRequestedSuites,
@@ -210,6 +211,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(shouldRunMainChannelDevUpdate("v2026.4.14")).toBe(false);
   });
 
+  it("pins dev-update verification to the prepared source sha when provided", () => {
+    expect(
+      resolveDevUpdateVerificationRef("main", "08753a1d793c040b101c8a26c43445dbbab14995"),
+    ).toBe("08753a1d793c040b101c8a26c43445dbbab14995");
+    expect(resolveDevUpdateVerificationRef("refs/heads/main", "")).toBe("main");
+  });
+
   it("drops the bundled plugin postinstall disable flag for real updater calls", () => {
     expect(
       buildRealUpdateEnv({
@@ -262,6 +270,45 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
           },
         }),
         { ref: "codex/cross-os-release-checks-full-native-e2e" },
+      ),
+    ).not.toThrow();
+  });
+
+  it("accepts a git dev-channel payload pinned to a prepared source sha", () => {
+    expect(() =>
+      verifyDevUpdateStatus(
+        JSON.stringify({
+          update: {
+            installKind: "git",
+            git: {
+              branch: "main",
+              sha: "08753a1d793c040b101c8a26c43445dbbab14995",
+            },
+          },
+          channel: {
+            value: "dev",
+          },
+        }),
+        { ref: "08753a1d793c040b101c8a26c43445dbbab14995" },
+      ),
+    ).not.toThrow();
+  });
+
+  it("accepts uppercase requested commit shas when update status reports lowercase", () => {
+    expect(() =>
+      verifyDevUpdateStatus(
+        JSON.stringify({
+          update: {
+            installKind: "git",
+            git: {
+              sha: "08753a1d793c040b101c8a26c43445dbbab14995",
+            },
+          },
+          channel: {
+            value: "dev",
+          },
+        }),
+        { ref: "08753A1D793C040B101C8A26C43445DBBAB14995" },
       ),
     ).not.toThrow();
   });

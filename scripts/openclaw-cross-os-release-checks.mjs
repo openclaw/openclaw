@@ -353,6 +353,7 @@ async function main(argv) {
         providerConfig: selectedProvider,
         providerSecretValue,
         ref: inputRef || "main",
+        sourceSha: build.sourceSha,
         runDiscordRoundtrip,
       });
     }
@@ -934,6 +935,7 @@ async function runDevUpdateSuite(params) {
   // an ephemeral checkout that has proven flaky as a managed service in CI.
   const useManagedGatewayAfterDevUpdate = usesManagedGateway && process.platform !== "win32";
   const requestedRef = resolveExpectedDevUpdateRef(params.ref);
+  const verificationRef = resolveDevUpdateVerificationRef(params.ref, params.sourceSha);
   const manualGateway = { current: null };
   try {
     const env = buildInstallerEnv(lane, params.providerConfig, params.providerSecretValue);
@@ -986,7 +988,7 @@ async function runDevUpdateSuite(params) {
       env,
       cliPath: updatedShell.cliPath,
       logsDir: params.logsDir,
-      requestedRef,
+      requestedRef: verificationRef,
     });
 
     if (process.platform === "win32") {
@@ -1165,6 +1167,14 @@ function looksLikeCommitSha(ref) {
 function resolveExpectedDevUpdateRef(ref) {
   const trimmed = normalizeRequestedRef(ref) || "main";
   return trimmed || "main";
+}
+
+export function resolveDevUpdateVerificationRef(ref, sourceSha) {
+  const pinnedSourceSha = normalizeRequestedRef(sourceSha);
+  if (pinnedSourceSha) {
+    return pinnedSourceSha;
+  }
+  return resolveExpectedDevUpdateRef(ref);
 }
 
 export function shouldRunMainChannelDevUpdate(ref) {
@@ -1734,7 +1744,9 @@ export function verifyDevUpdateStatus(stdout, options = {}) {
     );
   }
   if (looksLikeCommitSha(expectedRef)) {
-    if (!sha || !sha.startsWith(expectedRef)) {
+    const normalizedSha = typeof sha === "string" ? sha.toLowerCase() : "";
+    const normalizedExpectedRef = expectedRef.toLowerCase();
+    if (!normalizedSha || !normalizedSha.startsWith(normalizedExpectedRef)) {
       throw new Error(
         `Dev update status did not report sha=${expectedRef}. Found ${sha ?? "<missing>"}.`,
       );
