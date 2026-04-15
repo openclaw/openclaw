@@ -29,26 +29,30 @@ const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProvi
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 
-interface MockChild extends EventEmitter {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
+type MockEmitter = {
+  emit: (event: string, ...args: unknown[]) => boolean;
+  on: (event: string, listener: (...args: unknown[]) => void) => MockEmitter;
+};
+
+type MockChild = MockEmitter & {
+  stdout: MockEmitter;
+  stderr: MockEmitter;
   kill: (signal?: NodeJS.Signals) => void;
   closeWith: (code?: number | null) => void;
-}
+};
 
 function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }): MockChild {
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
-  const child: MockChild = Object.assign(new EventEmitter(), {
-    stdout,
-    stderr,
-    closeWith: (code: number | null = 0) => {
-      child.emit("close", code);
-    },
-    kill: () => {
-      // Let timeout rejection win in tests that simulate hung QMD commands.
-    },
-  });
+  const stdout = new EventEmitter() as unknown as MockEmitter;
+  const stderr = new EventEmitter() as unknown as MockEmitter;
+  const child = new EventEmitter() as unknown as MockChild;
+  child.stdout = stdout;
+  child.stderr = stderr;
+  child.closeWith = (code = 0) => {
+    child.emit("close", code);
+  };
+  child.kill = () => {
+    // Let timeout rejection win in tests that simulate hung QMD commands.
+  };
   if (params?.autoClose !== false) {
     const delayMs = params?.closeDelayMs ?? 0;
     if (delayMs <= 0) {
@@ -125,6 +129,7 @@ vi.mock("openclaw/plugin-sdk/file-lock", async () => {
 });
 
 import { spawn as mockedSpawn } from "node:child_process";
+import { emitSessionTranscriptUpdate } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   requireNodeSqlite,
@@ -427,9 +432,7 @@ describe("QmdMemoryManager", () => {
 
     const { manager } = await createManager({ mode: "full" });
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const watcher = watchMock.mock.results[0]?.value as {
-      emit: (event: string, ...args: unknown[]) => boolean;
-    };
+    const watcher = watchMock.mock.results[0]?.value;
     const initialUpdateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(initialUpdateCalls).toHaveLength(0);
 
@@ -3386,6 +3389,44 @@ describe("QmdMemoryManager", () => {
     expect(results).toHaveLength(4);
     expect(results.some((entry) => entry.source === "memory")).toBe(true);
     expect(results.some((entry) => entry.source === "sessions")).toBe(true);
+    await manager.close();
+  });
+
+  it("debounces transcript updates into a qmd session-delta refresh for the active agent only", async () => {
+    vi.useFakeTimers();
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          sessions: { enabled: true },
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager({ mode: "full" });
+    const inner = manager as unknown as {
+      runUpdate: (reason: string) => Promise<void>;
+      agentStateDir: string;
+    };
+    const runUpdateSpy = vi.spyOn(inner, "runUpdate").mockResolvedValue();
+    const currentSessionFile = path.join(inner.agentStateDir, "sessions", "live.jsonl");
+    const otherSessionFile = path.join(stateDir, "agents", "other", "sessions", "live.jsonl");
+
+    emitSessionTranscriptUpdate({ sessionFile: otherSessionFile });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(runUpdateSpy).not.toHaveBeenCalled();
+
+    emitSessionTranscriptUpdate({ sessionFile: currentSessionFile });
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(runUpdateSpy).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runUpdateSpy).toHaveBeenCalledWith("session-delta");
+
+    runUpdateSpy.mockRestore();
     await manager.close();
   });
 
