@@ -2,4 +2,6 @@ node_modules/
 *.cache
 .ran-*.flag
 eval-set.json
+pool.json
+reports/
 .eval-cache/
