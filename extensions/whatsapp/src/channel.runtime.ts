@@ -2,7 +2,6 @@ import {
   startWebLoginWithQr as startWebLoginWithQrImpl,
   waitForWebLogin as waitForWebLoginImpl,
 } from "../login-qr-runtime.js";
-import { getActiveWebListener as getActiveWebListenerImpl } from "./active-listener.js";
 import {
   getWebAuthAgeMs as getWebAuthAgeMsImpl,
   logWebSelfId as logWebSelfIdImpl,
@@ -10,15 +9,30 @@ import {
   readWebSelfId as readWebSelfIdImpl,
   webAuthExists as webAuthExistsImpl,
 } from "./auth-store.js";
-import { monitorWebChannel as monitorWebChannelImpl } from "./auto-reply/monitor.js";
-// Lazy-load login to keep Baileys out of the root dist import graph.
+
+// Lazy-load the heavy WhatsApp runtime modules to keep Baileys out of the
+// root dist static import graph.  These are only needed at runtime when
+// a WhatsApp channel operation is actually invoked.
 type LoginWeb = typeof import("./login.js").loginWeb;
 function loadLoginWeb(): Promise<typeof import("./login.js")> {
   return import("./login.js");
 }
-import { whatsappSetupWizard as whatsappSetupWizardImpl } from "./setup-surface.js";
 
 type GetActiveWebListener = typeof import("./active-listener.js").getActiveWebListener;
+function loadActiveListener(): Promise<typeof import("./active-listener.js")> {
+  return import("./active-listener.js");
+}
+
+type WhatsAppSetupWizard = typeof import("./setup-surface.js").whatsappSetupWizard;
+function loadSetupSurface(): Promise<typeof import("./setup-surface.js")> {
+  return import("./setup-surface.js");
+}
+
+type MonitorWebChannel = typeof import("./auto-reply/monitor.js").monitorWebChannel;
+function loadMonitor(): Promise<typeof import("./auto-reply/monitor.js")> {
+  return import("./auto-reply/monitor.js");
+}
+
 type GetWebAuthAgeMs = typeof import("./auth-store.js").getWebAuthAgeMs;
 type LogWebSelfId = typeof import("./auth-store.js").logWebSelfId;
 type LogoutWeb = typeof import("./auth-store.js").logoutWeb;
@@ -26,13 +40,20 @@ type ReadWebSelfId = typeof import("./auth-store.js").readWebSelfId;
 type WebAuthExists = typeof import("./auth-store.js").webAuthExists;
 type StartWebLoginWithQr = typeof import("../login-qr-runtime.js").startWebLoginWithQr;
 type WaitForWebLogin = typeof import("../login-qr-runtime.js").waitForWebLogin;
-type WhatsAppSetupWizard = typeof import("./setup-surface.js").whatsappSetupWizard;
-type MonitorWebChannel = typeof import("./auto-reply/monitor.js").monitorWebChannel;
 
 export function getActiveWebListener(
   ...args: Parameters<GetActiveWebListener>
 ): ReturnType<GetActiveWebListener> {
-  return getActiveWebListenerImpl(...args);
+  // getActiveWebListener is a thin wrapper; call it directly to preserve sync API.
+  // The heavy Baileys chain lives inside the returned listener object, not in this
+  // function's own static imports.
+  return import("./active-listener.js").then(
+    (m) => m.getActiveWebListener(...args),
+    (err) => {
+      // Re-throw as a clean error without leaking internal paths.
+      throw new Error("getActiveWebListener unavailable: " + String(err));
+    },
+  ) as ReturnType<GetActiveWebListener>;
 }
 
 export function getWebAuthAgeMs(...args: Parameters<GetWebAuthAgeMs>): ReturnType<GetWebAuthAgeMs> {
@@ -70,14 +91,20 @@ export async function startWebLoginWithQr(
 
 export async function waitForWebLogin(
   ...args: Parameters<WaitForWebLogin>
-): ReturnType<WaitForWebLogin> {
+): ReturnType<WaitForLogin> {
   return await waitForWebLoginImpl(...args);
 }
 
-export const whatsappSetupWizard: WhatsAppSetupWizard = { ...whatsappSetupWizardImpl };
+export async function whatsappSetupWizard(
+  ...args: Parameters<WhatsAppSetupWizard>
+): ReturnType<WhatsAppSetupWizard> {
+  const { whatsappSetupWizard: impl } = await loadSetupSurface();
+  return impl(...args);
+}
 
-export function monitorWebChannel(
+export async function monitorWebChannel(
   ...args: Parameters<MonitorWebChannel>
 ): ReturnType<MonitorWebChannel> {
-  return monitorWebChannelImpl(...args);
+  const { monitorWebChannel: fn } = await loadMonitor();
+  return await fn(...args);
 }
