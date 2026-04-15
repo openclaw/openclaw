@@ -1641,6 +1641,9 @@ export async function runDreamingSweepPhases(params: {
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   nowMs?: number;
 }): Promise<void> {
+  // Normalize nowMs once so all phase timestamps and narrative session keys are consistent.
+  const sweepNowMs = Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
+
   const light = resolveMemoryLightDreamingConfig({
     pluginConfig: params.pluginConfig,
     cfg: params.cfg,
@@ -1652,8 +1655,18 @@ export async function runDreamingSweepPhases(params: {
       config: light,
       logger: params.logger,
       subagent: params.subagent,
-      nowMs: params.nowMs,
+      nowMs: sweepNowMs,
     });
+    // Defensive cleanup: ensure the light-phase narrative session is deleted even if
+    // generateAndAppendDreamNarrative's primary cleanup was skipped due to an error.
+    if (params.subagent) {
+      const lightSessionKey = `dreaming-narrative-light-${sweepNowMs}`;
+      await params.subagent
+        .deleteSession({ sessionKey: lightSessionKey })
+        .catch(() => {
+          // Swallow errors — this is best-effort cleanup.
+        });
+    }
   }
 
   const rem = resolveMemoryRemDreamingConfig({
@@ -1667,8 +1680,17 @@ export async function runDreamingSweepPhases(params: {
       config: rem,
       logger: params.logger,
       subagent: params.subagent,
-      nowMs: params.nowMs,
+      nowMs: sweepNowMs,
     });
+    // Defensive cleanup: ensure the REM-phase narrative session is deleted.
+    if (params.subagent) {
+      const remSessionKey = `dreaming-narrative-rem-${sweepNowMs}`;
+      await params.subagent
+        .deleteSession({ sessionKey: remSessionKey })
+        .catch(() => {
+          // Swallow errors — this is best-effort cleanup.
+        });
+    }
   }
 }
 
