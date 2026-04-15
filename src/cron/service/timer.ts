@@ -1,6 +1,7 @@
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import { removeSystemEventEntries } from "../../infra/system-events.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
@@ -1171,6 +1172,33 @@ export async function executeJobCore(
   if (abortSignal?.aborted) {
     return resolveAbortError();
   }
+
+  // Pre-hook gate: run shell command before execution, skip/error based on exit code.
+  if (job.preHook) {
+    if (abortSignal?.aborted) {
+      return resolveAbortError();
+    }
+    const { runPreHook } = await import("../pre-hook.runtime.js");
+    const hookResult = await runPreHook(job.preHook, abortSignal);
+    state.deps.log.info({
+      msg: "cron preHook completed",
+      jobId: job.id,
+      outcome: hookResult.outcome,
+      exitCode: hookResult.exitCode,
+      stdout: hookResult.stdout,
+      stderr: hookResult.stderr,
+    });
+    if (hookResult.outcome === "skip") {
+      return { status: "skipped" as const, error: `preHook skip (exit ${hookResult.exitCode})` };
+    }
+    if (hookResult.outcome === "error") {
+      return {
+        status: "error" as const,
+        error: hookResult.error ?? `preHook failed (exit ${hookResult.exitCode})`,
+      };
+    }
+  }
+
   if (job.sessionTarget === "main") {
     return await executeMainSessionCronJob(state, job, abortSignal, waitWithAbort);
   }
@@ -1203,7 +1231,7 @@ async function executeMainSessionCronJob(
     };
   }
   const targetMainSessionKey = job.sessionKey;
-  state.deps.enqueueSystemEvent(text, {
+  const resolvedSessionKey = state.deps.enqueueSystemEvent(text, {
     agentId: job.agentId,
     sessionKey: targetMainSessionKey,
     contextKey: `cron:${job.id}`,
@@ -1225,6 +1253,7 @@ async function executeMainSessionCronJob(
         agentId: job.agentId,
         sessionKey: targetMainSessionKey,
         heartbeat: { target: "last" },
+        abortSignal,
       });
       if (heartbeatResult.status !== "skipped" || heartbeatResult.reason !== "requests-in-flight") {
         break;
@@ -1261,6 +1290,23 @@ async function executeMainSessionCronJob(
 
     if (heartbeatResult.status === "ran") {
       return { status: "ok", summary: text };
+    }
+    // Clean up the queued cron event when the heartbeat was blocked by preHook
+    // (skip or error). Use the canonical session key returned by enqueueSystemEvent
+    // so alias-based keys match the stored event.
+    const cleanupKey = resolvedSessionKey ?? targetMainSessionKey;
+    if (cleanupKey) {
+      const isPreHookBlocked =
+        (heartbeatResult.status === "skipped" && heartbeatResult.reason === "preHook-skip") ||
+        (heartbeatResult.status === "failed" &&
+          typeof heartbeatResult.reason === "string" &&
+          heartbeatResult.reason.startsWith("preHook"));
+      if (isPreHookBlocked) {
+        removeSystemEventEntries(
+          cleanupKey,
+          (event) => event.contextKey === `cron:${job.id}` && event.text === text,
+        );
+      }
     }
     if (heartbeatResult.status === "skipped") {
       return { status: "skipped", error: heartbeatResult.reason, summary: text };

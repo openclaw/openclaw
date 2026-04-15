@@ -4,6 +4,11 @@ import { createCronServiceState } from "../../cron/service/state.js";
 import { onTimer } from "../../cron/service/timer.js";
 import { loadCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "../../infra/system-events.js";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 
@@ -29,6 +34,7 @@ function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeMode"] }
 
 afterEach(() => {
   resetTaskRegistryForTests();
+  resetSystemEventsForTest();
 });
 
 describe("cron service timer seam coverage", () => {
@@ -49,7 +55,15 @@ describe("cron service timer seam coverage", () => {
       cronEnabled: true,
       log: logger,
       nowMs: () => now,
-      enqueueSystemEvent,
+      enqueueSystemEvent: (text, opts) => {
+        if (!opts?.sessionKey) {
+          throw new Error("sessionKey required in test");
+        }
+        enqueueSystemEvent(
+          text,
+          opts as { sessionKey: string; contextKey?: string; agentId?: string },
+        );
+      },
       requestHeartbeatNow,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
@@ -81,6 +95,49 @@ describe("cron service timer seam coverage", () => {
     expect(delays.some((delay) => delay > 0)).toBe(true);
 
     timeoutSpy.mockRestore();
+  });
+
+  it("removes only the matching queued cron event when heartbeat preHook skips", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [createDueMainJob({ now, wakeMode: "now" })],
+    });
+
+    enqueueSystemEvent("unrelated event", {
+      sessionKey: "agent:main:main",
+      contextKey: "manual:keep",
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: (text, opts) => {
+        if (!opts?.sessionKey) {
+          throw new Error("sessionKey required in test");
+        }
+        enqueueSystemEvent(text, { sessionKey: opts.sessionKey, contextKey: opts.contextKey });
+      },
+      requestHeartbeatNow: vi.fn(),
+      runHeartbeatOnce: vi.fn(async () => ({
+        status: "skipped" as const,
+        reason: "preHook-skip" as const,
+      })),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await onTimer(state);
+
+    expect(
+      peekSystemEventEntries("agent:main:main").map((event) => ({
+        text: event.text,
+        contextKey: event.contextKey,
+      })),
+    ).toEqual([{ text: "unrelated event", contextKey: "manual:keep" }]);
   });
 
   it("keeps scheduler progress when task ledger creation fails", async () => {

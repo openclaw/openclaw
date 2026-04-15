@@ -496,6 +496,38 @@ export function normalizeCronJobInput(
     delete next.isolation;
   }
 
+  // Normalize preHook: valid object with non-empty command passes through;
+  // null clears (patch); primitives and malformed objects are rejected.
+  if ("preHook" in base) {
+    if (isRecord(base.preHook)) {
+      const rawCmd = base.preHook.command;
+      if (typeof rawCmd === "string") {
+        const command = rawCmd.trim();
+        if (command) {
+          const hook: { command: string; timeoutSeconds?: number } = { command };
+          const rawTimeout = base.preHook.timeoutSeconds;
+          if (typeof rawTimeout === "number" && Number.isFinite(rawTimeout) && rawTimeout > 0) {
+            hook.timeoutSeconds = Math.min(300, Math.max(1, Math.floor(rawTimeout)));
+          }
+          next.preHook = hook;
+        } else {
+          // Empty command string is malformed — reject silently.
+          // Clearing requires explicit null/false in a patch.
+          delete next.preHook;
+        }
+      } else {
+        // Object without valid command string — reject
+        delete next.preHook;
+      }
+    } else if (!options.applyDefaults && (base.preHook === null || base.preHook === false)) {
+      // Explicit null/false: allow patches to clear the hook (not valid for create)
+      next.preHook = null;
+    } else {
+      // Bare string or other primitive — reject silently
+      delete next.preHook;
+    }
+  }
+
   const payload = isRecord(next.payload) ? next.payload : null;
   if (payload && payload.kind === "agentTurn") {
     copyTopLevelAgentTurnFields(next, payload);

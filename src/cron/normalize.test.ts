@@ -871,3 +871,78 @@ describe("normalizeCronJobPatch", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 });
+
+describe("preHook normalization", () => {
+  function createWithPreHook(preHook: unknown) {
+    return normalizeCronJobCreate({
+      name: "hook-test",
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "test" },
+      preHook,
+    }) as Record<string, unknown> | null;
+  }
+
+  function patchWithPreHook(preHook: unknown) {
+    return normalizeCronJobPatch({ preHook }) as Record<string, unknown> | null;
+  }
+
+  it("passes through valid preHook with command", () => {
+    const result = createWithPreHook({ command: "check-disk.sh" });
+    expect(result?.preHook).toEqual({ command: "check-disk.sh" });
+  });
+
+  it("trims command whitespace", () => {
+    const result = createWithPreHook({ command: "  ping host  " });
+    expect((result?.preHook as { command: string }).command).toBe("ping host");
+  });
+
+  it("includes timeoutSeconds when valid", () => {
+    const result = createWithPreHook({ command: "check", timeoutSeconds: 60 });
+    expect(result?.preHook).toEqual({ command: "check", timeoutSeconds: 60 });
+  });
+
+  it("clamps timeoutSeconds to 1-300 range", () => {
+    const high = createWithPreHook({ command: "check", timeoutSeconds: 999 });
+    expect((high?.preHook as { timeoutSeconds: number }).timeoutSeconds).toBe(300);
+
+    const low = createWithPreHook({ command: "check", timeoutSeconds: 0.5 });
+    expect((low?.preHook as { timeoutSeconds: number }).timeoutSeconds).toBe(1);
+  });
+
+  it("strips preHook when command is empty string (create)", () => {
+    const result = createWithPreHook({ command: "   " });
+    expect(result?.preHook).toBeUndefined();
+  });
+
+  it("drops preHook with empty command in patch instead of clearing", () => {
+    const result = patchWithPreHook({ command: "   " });
+    expect(result).not.toHaveProperty("preHook");
+  });
+
+  it("strips preHook when command is not a string", () => {
+    const result = createWithPreHook({ command: 123 });
+    expect(result?.preHook).toBeUndefined();
+  });
+
+  it("rejects bare string preHook", () => {
+    const result = createWithPreHook("ping host");
+    expect(result?.preHook).toBeUndefined();
+  });
+
+  it("allows null preHook in patch to clear", () => {
+    const result = patchWithPreHook(null);
+    expect(result?.preHook).toBeNull();
+  });
+
+  it("allows false preHook in patch to clear", () => {
+    const result = patchWithPreHook(false);
+    expect(result?.preHook).toBeNull();
+  });
+
+  it("drops non-numeric timeoutSeconds", () => {
+    const result = createWithPreHook({ command: "check", timeoutSeconds: "fast" });
+    expect(result?.preHook).toEqual({ command: "check" });
+  });
+});

@@ -64,8 +64,13 @@ export type CronServiceDeps = {
   maxMissedJobsPerRestart?: number;
   enqueueSystemEvent: (
     text: string,
-    opts?: { agentId?: string; sessionKey?: string; contextKey?: string; trusted?: boolean },
-  ) => void;
+    opts?: {
+      agentId?: string;
+      sessionKey?: string;
+      contextKey?: string;
+      trusted?: boolean;
+    },
+  ) => string | void;
   requestHeartbeatNow: (opts?: HeartbeatWakeRequest) => void;
   runHeartbeatOnce?: (opts?: {
     reason?: string;
@@ -73,6 +78,7 @@ export type CronServiceDeps = {
     sessionKey?: string;
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
     heartbeat?: { target?: string };
+    abortSignal?: AbortSignal;
   }) => Promise<HeartbeatRunResult>;
   /**
    * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning

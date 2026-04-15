@@ -526,6 +526,10 @@ Periodic heartbeat runs.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
 - `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
+- `preHook`: optional pre-run script gate. Runs a fixed executable before each heartbeat turn (after preflight checks). Exit 0 proceeds, exit 10 skips silently (not a failure), any other non-zero exit is treated as an error.
+  - `preHook.file`: absolute path to the executable to run (required). No shell interpretation — metacharacters are passed as literal text.
+  - `preHook.args`: optional array of string arguments.
+  - `preHook.timeoutSeconds`: timeout in seconds (default 30, max 300).
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 

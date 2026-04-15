@@ -423,6 +423,34 @@ agent heartbeats immediately.
 
 Use `--mode next-heartbeat` to wait for the next scheduled tick.
 
+## Pre-run hooks (optional)
+
+An optional `preHook` runs a shell command before each heartbeat turn. The hook runs after preflight checks (enabled, active hours, queue empty) but before the agent turn.
+
+```json5
+{
+  agents: {
+    defaults: {
+      heartbeat: {
+        every: "30m",
+        preHook: {
+          command: "/usr/local/bin/check-should-run.sh",
+          timeoutSeconds: 30,
+        },
+      },
+    },
+  },
+}
+```
+
+| Exit code | Behavior                         |
+| --------- | -------------------------------- |
+| 0         | Proceed with heartbeat turn      |
+| 10        | Skip (not a failure)             |
+| Any other | Fail (logged as heartbeat error) |
+
+Default timeout is 30 seconds (max 300). stdout and stderr are captured in logs.
+
 ## Reasoning delivery (optional)
 
 By default, heartbeats deliver only the final “answer” payload.
