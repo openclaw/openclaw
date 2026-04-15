@@ -12,15 +12,18 @@ import {
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
-function makeParams(overrides?: Record<string, unknown>) {
+type RunCronIsolatedAgentTurnParams = Parameters<typeof runCronIsolatedAgentTurn>[0];
+
+function makeParams(
+  overrides?: Partial<RunCronIsolatedAgentTurnParams>,
+): RunCronIsolatedAgentTurnParams {
   return {
     cfg: {
       auth: {
         profiles: {
           "openrouter:default": {
-            type: "api_key",
             provider: "openrouter",
-            key: "sk-or-test-key",
+            mode: "api_key",
           },
         },
         order: { openrouter: ["openrouter:default"] },

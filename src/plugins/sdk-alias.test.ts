@@ -793,14 +793,19 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
-  it("allows plugin loader dist shortcuts on non-Windows hosts", () => {
+  it("keeps bundled plugin dist modules on the aliased Jiti path", () => {
     expect(
       resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
         preferBuiltDist: true,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "helper.ts")}`, {
+        preferBuiltDist: true,
+      }),
+    ).toBe(false);
+    expect(
+      resolvePluginLoaderJitiTryNative("/repo/dist/plugins/runtime/index.js", {
         preferBuiltDist: true,
       }),
     ).toBe(true);
