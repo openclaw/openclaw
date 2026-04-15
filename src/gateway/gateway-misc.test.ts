@@ -383,6 +383,32 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(allow.has("camera.clip")).toBe(false);
   });
 
+  it("supports iOS-only platform allowlists from config", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            platformAllowlist: ["ios", "ipados"],
+          },
+        },
+      },
+      { platform: "android 16", deviceFamily: "Android" },
+    );
+    expect(allow.size).toBe(0);
+
+    const iosAllow = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            platformAllowlist: ["ios", "ipados"],
+          },
+        },
+      },
+      { platform: "ios 18", deviceFamily: "iPhone" },
+    );
+    expect(iosAllow.has("device.info")).toBe(true);
+  });
+
   it("treats unknown/confusable metadata as fail-safe for system.run defaults", () => {
     const allow = resolveNodeCommandAllowlist(
       {},

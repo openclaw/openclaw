@@ -1,3 +1,4 @@
+import { GATEWAY_NODE_PLATFORM_ALLOWLIST_VALUES } from "../config/gateway-node-platform-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
@@ -142,6 +143,17 @@ const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{
   { id: "linux", tokens: ["linux"] },
 ] as const;
 
+const PLATFORM_ALLOWLIST_ID_MAP: Readonly<Record<string, Exclude<PlatformId, "unknown">>> = {
+  ios: "ios",
+  // iPadOS nodes share the iOS command surface, so both map to iOS policy defaults.
+  ipados: "ios",
+  android: "android",
+  macos: "macos",
+  windows: "windows",
+  linux: "linux",
+};
+const PLATFORM_ALLOWLIST_INPUT_SET = new Set<string>(GATEWAY_NODE_PLATFORM_ALLOWLIST_VALUES);
+
 function resolvePlatformIdByPrefix(value: string): Exclude<PlatformId, "unknown"> | undefined {
   for (const rule of PLATFORM_PREFIX_RULES) {
     if (rule.prefixes.some((prefix) => value.startsWith(prefix))) {
@@ -173,11 +185,35 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): Platform
   return byFamily ?? "unknown";
 }
 
+function normalizePlatformAllowlist(
+  input: readonly string[] | undefined,
+): Set<Exclude<PlatformId, "unknown">> | null {
+  if (!Array.isArray(input) || input.length === 0) {
+    return null;
+  }
+  const normalized = new Set<Exclude<PlatformId, "unknown">>();
+  for (const raw of input) {
+    const normalizedInput = raw.trim().toLowerCase();
+    if (!PLATFORM_ALLOWLIST_INPUT_SET.has(normalizedInput)) {
+      continue;
+    }
+    const platformId = PLATFORM_ALLOWLIST_ID_MAP[normalizedInput];
+    if (platformId) {
+      normalized.add(platformId);
+    }
+  }
+  return normalized.size > 0 ? normalized : null;
+}
+
 export function resolveNodeCommandAllowlist(
   cfg: OpenClawConfig,
   node?: Pick<NodeSession, "platform" | "deviceFamily">,
 ): Set<string> {
   const platformId = normalizePlatformId(node?.platform, node?.deviceFamily);
+  const platformAllowlist = normalizePlatformAllowlist(cfg.gateway?.nodes?.platformAllowlist);
+  if (platformAllowlist && (platformId === "unknown" || !platformAllowlist.has(platformId))) {
+    return new Set();
+  }
   const base = PLATFORM_DEFAULTS[platformId] ?? PLATFORM_DEFAULTS.unknown;
   const extra = cfg.gateway?.nodes?.allowCommands ?? [];
   const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);
