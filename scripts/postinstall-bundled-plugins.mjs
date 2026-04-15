@@ -17,7 +17,9 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
@@ -197,7 +199,7 @@ function listInstalledDistFiles(params = {}) {
 
 function pruneEmptyDistDirectories(params = {}) {
   const readDir = params.readdirSync ?? readdirSync;
-  const removePath = params.rmSync ?? rmSync;
+  const removeDirectory = params.rmdirSync ?? rmdirSync;
   const distRoot = resolveInstalledDistRoot(params);
   if (distRoot === null) {
     return;
@@ -227,13 +229,12 @@ function pruneEmptyDistDirectories(params = {}) {
       );
     }
     if (readDir(currentDir).length === 0) {
-      removePath(
+      removeDirectory(
         assertSafeInstalledDistPath(normalizeRelativePath(relative(packageRoot, currentDir)), {
           packageRoot,
           distDirReal: distRoot.distDirReal,
           realpathSync: params.realpathSync,
         }),
-        { recursive: true, force: true },
       );
     }
   }
@@ -243,7 +244,7 @@ function pruneEmptyDistDirectories(params = {}) {
 
 export function pruneInstalledPackageDist(params = {}) {
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const removePath = params.rmSync ?? rmSync;
+  const removeFile = params.unlinkSync ?? unlinkSync;
   const log = params.log ?? console;
   const distRoot = resolveInstalledDistRoot(params);
   if (distRoot === null) {
@@ -257,13 +258,12 @@ export function pruneInstalledPackageDist(params = {}) {
     if (expectedFiles.has(relativePath)) {
       continue;
     }
-    removePath(
+    removeFile(
       assertSafeInstalledDistPath(relativePath, {
         packageRoot,
         distDirReal: distRoot.distDirReal,
         realpathSync: params.realpathSync,
       }),
-      { recursive: true, force: true },
     );
     removed.push(relativePath);
   }

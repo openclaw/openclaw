@@ -34,15 +34,24 @@ function isPackagedDistPath(relativePath: string): boolean {
 }
 async function collectRelativeFiles(rootDir: string, baseDir: string): Promise<string[]> {
   try {
+    const rootStats = await fs.lstat(rootDir);
+    if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+      throw new Error(
+        `Unsafe package dist path: ${normalizeRelativePath(path.relative(baseDir, rootDir))}`,
+      );
+    }
     const entries = await fs.readdir(rootDir, { withFileTypes: true });
     const files = await Promise.all(
       entries.map(async (entry) => {
         const entryPath = path.join(rootDir, entry.name);
+        const relativePath = normalizeRelativePath(path.relative(baseDir, entryPath));
+        if (entry.isSymbolicLink()) {
+          throw new Error(`Unsafe package dist path: ${relativePath}`);
+        }
         if (entry.isDirectory()) {
           return await collectRelativeFiles(entryPath, baseDir);
         }
-        if (entry.isFile() || entry.isSymbolicLink()) {
-          const relativePath = normalizeRelativePath(path.relative(baseDir, entryPath));
+        if (entry.isFile()) {
           return isPackagedDistPath(relativePath) ? [relativePath] : [];
         }
         return [];
