@@ -1771,28 +1771,42 @@ export function shouldRepairDevUpdateInstall(stdout, options = {}) {
 async function verifyWindowsDevUpdateToolchain(params) {
   const script = `
 ${buildWindowsPathBootstrapScript({ includeCurrentProcessPath: false })}
-$pnpmCommand = Get-Command pnpm -ErrorAction Stop
-$pnpmPath = $pnpmCommand.Source
-if ($pnpmPath -match '(?i)\\.ps1$') {
-  $pnpmCmdPath = [System.IO.Path]::ChangeExtension($pnpmPath, '.cmd')
-  if (Test-Path -LiteralPath $pnpmCmdPath) {
-    $pnpmPath = $pnpmCmdPath
+function Resolve-CommandPath([string]$Name) {
+  $command = Get-Command $Name -ErrorAction SilentlyContinue
+  if ($null -eq $command) {
+    return $null
   }
-}
-Write-Output "__PNPM_PATH__=$pnpmPath"
-& $pnpmPath --version
-$corepack = Get-Command corepack -ErrorAction SilentlyContinue
-if ($null -ne $corepack) {
-  $corepackPath = $corepack.Source
-  if ($corepackPath -match '(?i)\\.ps1$') {
-    $corepackCmdPath = [System.IO.Path]::ChangeExtension($corepackPath, '.cmd')
-    if (Test-Path -LiteralPath $corepackCmdPath) {
-      $corepackPath = $corepackCmdPath
+  $commandPath = $command.Source
+  if ($commandPath -match '(?i)\\.ps1$') {
+    $cmdPath = [System.IO.Path]::ChangeExtension($commandPath, '.cmd')
+    if (Test-Path -LiteralPath $cmdPath) {
+      $commandPath = $cmdPath
     }
   }
-  Write-Output "__COREPACK_PATH__=$corepackPath"
-  & $corepackPath --version
+  return $commandPath
 }
+$pnpmPath = Resolve-CommandPath 'pnpm'
+if ($null -ne $pnpmPath) {
+  Write-Output "__UPDATE_TOOL__=pnpm"
+  Write-Output "__UPDATE_TOOL_PATH__=$pnpmPath"
+  & $pnpmPath --version
+  return
+}
+$corepackPath = Resolve-CommandPath 'corepack'
+if ($null -ne $corepackPath) {
+  Write-Output "__UPDATE_TOOL__=corepack"
+  Write-Output "__UPDATE_TOOL_PATH__=$corepackPath"
+  & $corepackPath --version
+  return
+}
+$npmPath = Resolve-CommandPath 'npm'
+if ($null -ne $npmPath) {
+  Write-Output "__UPDATE_TOOL__=npm"
+  Write-Output "__UPDATE_TOOL_PATH__=$npmPath"
+  & $npmPath --version
+  return
+}
+throw 'Neither pnpm, corepack, nor npm is discoverable from the persisted Windows PATH.'
 `;
   const result = await runPowerShellScript(script, {
     cwd: params.lane.homeDir,
@@ -1800,8 +1814,10 @@ if ($null -ne $corepack) {
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });
-  if (!parseMarkerLine(result.stdout, "__PNPM_PATH__=")) {
-    throw new Error("pnpm was not discoverable after the Windows dev update.");
+  if (!parseMarkerLine(result.stdout, "__UPDATE_TOOL__=")) {
+    throw new Error(
+      "No Windows update bootstrap tool (pnpm, corepack, or npm) was discoverable after the dev update.",
+    );
   }
 }
 
