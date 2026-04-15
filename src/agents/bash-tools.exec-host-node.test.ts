@@ -135,9 +135,35 @@ vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: callGatewayToolMock,
 }));
 
+const resolveNodeIdFromListMock = vi.hoisted(() =>
+  vi.fn((nodes: Array<{ nodeId: string; displayName?: string }>, query?: string) => {
+    if (!query) {
+      if (nodes.length === 1) {
+        return nodes[0].nodeId;
+      }
+      throw new Error("node required");
+    }
+    const byId = nodes.find((n) => n.nodeId === query);
+    if (byId) {
+      return byId.nodeId;
+    }
+    const byName = nodes.find((n) => n.displayName === query);
+    if (byName) {
+      return byName.nodeId;
+    }
+    if (query.length >= 6) {
+      const byPrefix = nodes.find((n) => n.nodeId.startsWith(query));
+      if (byPrefix) {
+        return byPrefix.nodeId;
+      }
+    }
+    throw new Error(`unknown node: ${query}`);
+  }),
+);
+
 vi.mock("./tools/nodes-utils.js", () => ({
   listNodes: listNodesMock,
-  resolveNodeIdFromList: vi.fn(() => "node-1"),
+  resolveNodeIdFromList: resolveNodeIdFromListMock,
 }));
 
 vi.mock("../logger.js", () => ({
@@ -148,7 +174,6 @@ let executeNodeHostCommand: typeof import("./bash-tools.exec-host-node.js").exec
 
 type MockNodeInvokeParams = {
   command?: string;
-  params?: Record<string, unknown>;
 };
 
 function expectSystemRunInvoke(params: { invokeTimeoutMs: number; runTimeoutMs: number }) {
@@ -473,6 +498,145 @@ describe("executeNodeHostCommand", () => {
     });
 
     expectSystemRunInvoke({ invokeTimeoutMs: 35_000, runTimeoutMs: 0 });
+  });
+
+  it("allows exec when requestedNode is display name matching boundNode's device", async () => {
+    listNodesMock.mockResolvedValue([
+      {
+        nodeId: "f2396b588d391d30a79d300e196a17cf197f34969b5e2485d2734c953567f44e",
+        displayName: "home-wsl-debian",
+        commands: ["system.run"],
+        platform: process.platform,
+      },
+    ]);
+    const result = await executeNodeHostCommand({
+      command: "echo hello",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "test-agent",
+      sessionKey: "test-session",
+      boundNode: "f2396b588d391d30a79d300e196a17cf197f34969b5e2485d2734c953567f44e",
+      requestedNode: "home-wsl-debian",
+    });
+    expect(result.details?.status).toBeDefined();
+  });
+
+  it("allows exec when requestedNode is partial ID matching boundNode's device", async () => {
+    listNodesMock.mockResolvedValue([
+      {
+        nodeId: "f2396b588d391d30a79d300e196a17cf197f34969b5e2485d2734c953567f44e",
+        displayName: "home-wsl-debian",
+        commands: ["system.run"],
+        platform: process.platform,
+      },
+    ]);
+    const result = await executeNodeHostCommand({
+      command: "echo hello",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "test-agent",
+      sessionKey: "test-session",
+      boundNode: "f2396b588d391d30a79d300e196a17cf197f34969b5e2485d2734c953567f44e",
+      requestedNode: "f2396b588d391d",
+    });
+    expect(result.details?.status).toBeDefined();
+  });
+
+  it("rejects exec when requestedNode resolves to a different node than boundNode", async () => {
+    listNodesMock.mockResolvedValue([
+      {
+        nodeId: "f2396b588d391d30a79d300e196a17cf197f34969b5e2485d2734c953567f44e",
+        displayName: "home-wsl-debian",
+        commands: ["system.run"],
+        platform: process.platform,
+      },
+      {
+        nodeId: "aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaa7777bbb88889999",
+        displayName: "other-node",
+        commands: ["system.run"],
+        platform: process.platform,
+      },
+    ]);
+    await expect(
+      executeNodeHostCommand({
+        command: "echo hello",
+        workdir: "/tmp/work",
+        env: {},
+        security: "full",
+        ask: "off",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "test-agent",
+        sessionKey: "test-session",
+        boundNode: "f2396b588d391d30a79d300e196a17cf197f34969b5e2485d2734c953567f44e",
+        requestedNode: "other-node",
+      }),
+    ).rejects.toThrow("exec node not allowed (bound to f2396b588d391d30");
+  });
+
+  it("preserves original error when requestedNode matches no known node", async () => {
+    listNodesMock.mockResolvedValue([
+      {
+        nodeId: "f2396b588d391d30a79d300e196a17cf197f34969b5e2485d2734c953567f44e",
+        displayName: "home-wsl-debian",
+        commands: ["system.run"],
+        platform: process.platform,
+      },
+    ]);
+    await expect(
+      executeNodeHostCommand({
+        command: "echo hello",
+        workdir: "/tmp/work",
+        env: {},
+        security: "full",
+        ask: "off",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "test-agent",
+        sessionKey: "test-session",
+        requestedNode: "nonexistent-node",
+      }),
+    ).rejects.toThrow(
+      "requested node not found: nonexistent-node (unknown node: nonexistent-node)",
+    );
+  });
+
+  it("allows exec when boundNode is a display name matching the same device as requestedNode", async () => {
+    listNodesMock.mockResolvedValue([
+      {
+        nodeId: "f2396b588d391d30a79d300e196a17cf197f34969b5e2485d2734c953567f44e",
+        displayName: "home-wsl-debian",
+        commands: ["system.run"],
+        platform: process.platform,
+      },
+    ]);
+    const result = await executeNodeHostCommand({
+      command: "echo hello",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "test-agent",
+      sessionKey: "test-session",
+      boundNode: "home-wsl-debian",
+      requestedNode: "home-wsl-debian",
+    });
+    expect(result.details?.status).toBeDefined();
   });
 
   it("denies timed-out inline-eval requests instead of invoking the node", async () => {
