@@ -207,6 +207,10 @@ describe("message hook mappers", () => {
       from: "demo-chat:user:123",
       content: "commands-body",
       timestamp: 1710000000,
+      mediaPath: "/tmp/tree.jpg",
+      mediaType: "image/jpeg",
+      mediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
+      mediaTypes: ["image/jpeg", "image/jpeg"],
       metadata: expect.objectContaining({
         messageId: "msg-1",
         senderName: "User One",

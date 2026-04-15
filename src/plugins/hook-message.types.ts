@@ -35,6 +35,10 @@ export type PluginHookMessageReceivedEvent = {
   from: string;
   content: string;
   timestamp?: number;
+  mediaPath?: string;
+  mediaType?: string;
+  mediaPaths?: string[];
+  mediaTypes?: string[];
   metadata?: Record<string, unknown>;
 };
 

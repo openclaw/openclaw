@@ -296,6 +296,10 @@ export function toPluginMessageReceivedEvent(
     from: canonical.from,
     content: canonical.content,
     timestamp: canonical.timestamp,
+    mediaPath: canonical.mediaPath,
+    mediaType: canonical.mediaType,
+    mediaPaths: canonical.mediaPaths,
+    mediaTypes: canonical.mediaTypes,
     metadata: {
       to: canonical.to,
       provider: canonical.provider,
