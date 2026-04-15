@@ -1109,7 +1109,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       // HMAC integrity check: reject config modified outside the gateway.
       const hmacResult = verifyConfigHmac(configPath, raw);
-      let configIntegrityWarning: string | undefined;
+      let _configIntegrityWarning: string | undefined;
       if (hmacResult.status === "mismatch" ||
           (hmacResult.status === "no-sig" && hmacResult.suspicious)) {
         const reason = hmacResult.status === "mismatch"
@@ -1120,7 +1120,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           "External config injection is blocked. " +
           "Use the gateway API (config.patch) to modify config.";
         deps.logger.error(warning);
-        configIntegrityWarning = warning;
+        _configIntegrityWarning = warning;
         appendConfigSecurityAuditEntrySync({
           env: deps.env,
           homedir: deps.homedir,
