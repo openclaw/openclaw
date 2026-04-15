@@ -683,6 +683,87 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBe("exec");
   });
 
+  it("applies claw-code snake_case and payload compatibility shims", async () => {
+    const partialToolCall = {
+      type: "toolCall",
+      name: "TaskCreate",
+      arguments: { prompt: "build release notes" },
+    };
+    const messageToolCall = {
+      type: "toolCall",
+      name: "WorkerSendPrompt",
+      arguments: { worker_id: "agent:main:subagent:snake", prompt: "continue" },
+    };
+    const finalToolCall = {
+      type: "toolCall",
+      name: "CronDelete",
+      arguments: { cron_id: "cron_123" },
+    };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+      message: { role: "assistant", content: [messageToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["task", "sessions_send", "cron"]));
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("task");
+    expect(partialToolCall.arguments).toMatchObject({ action: "create", task: "build release notes" });
+    expect(messageToolCall.name).toBe("sessions_send");
+    expect(messageToolCall.arguments).toMatchObject({
+      sessionKey: "agent:main:subagent:snake",
+      message: "continue",
+    });
+    expect(finalToolCall.name).toBe("cron");
+    expect(finalToolCall.arguments).toMatchObject({ action: "remove", jobId: "cron_123" });
+  });
+
+  it("maps LSP path to uri and sleep duration_ms to ms", async () => {
+    const partialToolCall = {
+      type: "toolCall",
+      name: "LSP",
+      arguments: { action: "hover", path: "src/main.ts", line: 1, character: 2 },
+    };
+    const finalToolCall = {
+      type: "toolCall",
+      name: "Sleep",
+      arguments: { duration_ms: 250 },
+    };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["lsp", "sleep"]));
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("lsp");
+    expect(partialToolCall.arguments).toMatchObject({ uri: "src/main.ts" });
+    expect(finalToolCall.name).toBe("sleep");
+    expect(finalToolCall.arguments).toMatchObject({ ms: 250 });
+  });
+
   it("maps provider-prefixed tool names to allowed canonical tools", async () => {
     const partialToolCall = { type: "toolCall", name: " functions.read " };
     const messageToolCall = { type: "toolCall", name: " functions.write " };

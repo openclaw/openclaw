@@ -1,6 +1,7 @@
 import { setTimeout as sleepTimeout } from "node:timers/promises";
 import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../config/config.js";
+import { loadConfig, writeConfigFile } from "../../config/config.js";
+import { getConfigValueAtPath, parseConfigPath, setConfigValueAtPath } from "../../config/config-paths.js";
 import { listCoreToolSections } from "../tool-catalog.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
@@ -122,19 +123,26 @@ export function createSleepCompatTool(): AnyAgentTool {
       {
         ms: Type.Optional(Type.Number({ minimum: 0 })),
         seconds: Type.Optional(Type.Number({ minimum: 0 })),
+        duration_ms: Type.Optional(Type.Number({ minimum: 0 })),
       },
       { additionalProperties: true },
     ),
     execute: async (_toolCallId, args) => {
       const params = (args ?? {}) as Record<string, unknown>;
+      const durationMs = readNumberParam(params, "duration_ms");
       const msFromMs = readNumberParam(params, "ms");
       const seconds = readNumberParam(params, "seconds");
       const sleepMs =
-        msFromMs !== undefined
+        durationMs !== undefined
+          ? Math.max(0, Math.floor(durationMs))
+          : msFromMs !== undefined
           ? Math.max(0, Math.floor(msFromMs))
           : seconds !== undefined
             ? Math.max(0, Math.floor(seconds * 1000))
             : 1000;
+      if (sleepMs > 300_000) {
+        throw new ToolInputError(`duration_ms ${sleepMs} exceeds maximum allowed sleep of 300000ms`);
+      }
       await sleepTimeout(sleepMs);
       return jsonResult({ status: "ok", sleptMs: sleepMs });
     },
@@ -148,15 +156,19 @@ export function createToolSearchCompatTool(): AnyAgentTool {
     description: "Compatibility bridge for claw-code ToolSearch tool.",
     parameters: Type.Object(
       {
-        query: Type.Optional(Type.String()),
+        query: Type.String(),
         limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
+        max_results: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
       },
       { additionalProperties: true },
     ),
     execute: async (_toolCallId, args) => {
       const params = (args ?? {}) as Record<string, unknown>;
-      const query = (readStringParam(params, "query") ?? "").trim().toLowerCase();
-      const limit = Math.max(1, Math.min(100, Math.floor(readNumberParam(params, "limit") ?? 20)));
+      const query = readStringParam(params, "query", { required: true }).trim().toLowerCase();
+      const limit = Math.max(
+        1,
+        Math.min(100, Math.floor(readNumberParam(params, "max_results") ?? readNumberParam(params, "limit") ?? 5)),
+      );
       const entries = listCoreToolSections().flatMap((section) =>
         section.tools.map((tool) => ({
           id: tool.id,
@@ -221,12 +233,55 @@ export function createConfigCompatTool(): AnyAgentTool {
     parameters: Type.Object(
       {
         path: Type.Optional(Type.String()),
+        setting: Type.Optional(Type.String()),
+        value: Type.Optional(Type.Union([Type.String(), Type.Boolean(), Type.Number()])),
       },
       { additionalProperties: true },
     ),
     execute: async (_toolCallId, args) => {
       const params = (args ?? {}) as Record<string, unknown>;
       const cfg = loadConfig() as unknown as Record<string, unknown>;
+      const setting = readStringParam(params, "setting");
+      if (setting) {
+        const parsed = parseConfigPath(setting);
+        if (!parsed.ok || !parsed.path) {
+          return jsonResult({
+            success: false,
+            operation: null,
+            setting,
+            value: null,
+            previous_value: null,
+            new_value: null,
+            error: parsed.error ?? `Unknown setting: "${setting}"`,
+          });
+        }
+
+        if (params.value !== undefined) {
+          const nextCfg = structuredClone(cfg);
+          const previous = getConfigValueAtPath(nextCfg, parsed.path);
+          setConfigValueAtPath(nextCfg, parsed.path, params.value);
+          await writeConfigFile(nextCfg);
+          return jsonResult({
+            success: true,
+            operation: "set",
+            setting,
+            value: params.value,
+            previous_value: previous ?? null,
+            new_value: params.value,
+            error: null,
+          });
+        }
+
+        return jsonResult({
+          success: true,
+          operation: "get",
+          setting,
+          value: getConfigValueAtPath(cfg, parsed.path) ?? null,
+          previous_value: null,
+          new_value: null,
+          error: null,
+        });
+      }
       const path = readStringParam(params, "path");
       const value = path ? getByPath(cfg, path) : cfg;
       return jsonResult({
@@ -262,7 +317,7 @@ export function createRemoteTriggerCompatTool(): AnyAgentTool {
       } catch {
         throw new ToolInputError(`invalid url: ${url}`);
       }
-      const method = (readStringParam(params, "method") ?? "POST").toUpperCase();
+      const method = (readStringParam(params, "method") ?? "GET").toUpperCase();
       const headersRecord = readRecordParam(params, "headers") ?? {};
       const headers: Record<string, string> = {};
       for (const [key, value] of Object.entries(headersRecord)) {
@@ -277,7 +332,11 @@ export function createRemoteTriggerCompatTool(): AnyAgentTool {
         const bodyValue = params.body;
         const shouldSendBody = !["GET", "HEAD"].includes(method);
         const requestBody =
-          shouldSendBody && bodyValue !== undefined ? JSON.stringify(bodyValue) : undefined;
+          shouldSendBody && bodyValue !== undefined
+            ? typeof bodyValue === "string"
+              ? bodyValue
+              : JSON.stringify(bodyValue)
+            : undefined;
         if (requestBody && !headers["content-type"]) {
           headers["content-type"] = "application/json";
         }
@@ -308,6 +367,7 @@ export function createTestingPermissionCompatTool(): AnyAgentTool {
     description: "Compatibility bridge for claw-code TestingPermission tool.",
     parameters: Type.Object(
       {
+        action: Type.Optional(Type.String()),
         allow: Type.Optional(Type.Boolean()),
         reason: Type.Optional(Type.String()),
       },
@@ -316,7 +376,9 @@ export function createTestingPermissionCompatTool(): AnyAgentTool {
     execute: async (_toolCallId, args) => {
       const params = (args ?? {}) as Record<string, unknown>;
       return jsonResult({
-        status: "ok",
+        action: readStringParam(params, "action") ?? null,
+        permitted: true,
+        message: "Testing permission tool stub",
         allow: params.allow === true,
         reason: readStringParam(params, "reason") ?? null,
       });

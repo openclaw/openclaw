@@ -71,6 +71,7 @@ const CLAW_CODE_TOOL_ALIAS_MAP: Readonly<Record<string, ClawCodeAliasResolution>
   askuserquestion: { toolName: "ask_user_question" },
   remotetrigger: { toolName: "remote_trigger" },
   testingpermission: { toolName: "testing_permission" },
+  lsp: { toolName: "lsp" },
   mcpdemoecho: { toolName: "mcp" },
 };
 
@@ -153,6 +154,8 @@ function injectClawCodeAliasArgumentShims(
         payload.task = prompt;
       } else if (typeof message === "string" && message.trim()) {
         payload.task = message;
+      } else {
+        payload.task = "Start worker session";
       }
     }
     return;
@@ -169,8 +172,11 @@ function injectClawCodeAliasArgumentShims(
     const sessionKey = payload.sessionKey;
     if (typeof sessionKey !== "string" || !sessionKey.trim()) {
       const workerId = payload.workerId;
+      const workerIdSnake = payload.worker_id;
       if (typeof workerId === "string" && workerId.trim()) {
         payload.sessionKey = workerId;
+      } else if (typeof workerIdSnake === "string" && workerIdSnake.trim()) {
+        payload.sessionKey = workerIdSnake;
       }
     }
     return;
@@ -186,14 +192,27 @@ function injectClawCodeAliasArgumentShims(
     const sessionKey = payload.sessionKey;
     if (typeof sessionKey !== "string" || !sessionKey.trim()) {
       const workerId = payload.workerId;
+      const workerIdSnake = payload.worker_id;
       if (typeof workerId === "string" && workerId.trim()) {
         payload.sessionKey = workerId;
+      } else if (typeof workerIdSnake === "string" && workerIdSnake.trim()) {
+        payload.sessionKey = workerIdSnake;
       }
     }
     return;
   }
 
   if (aliasKey === "workerrestart") {
+    const sessionKey = payload.sessionKey;
+    if (typeof sessionKey !== "string" || !sessionKey.trim()) {
+      const workerId = payload.workerId;
+      const workerIdSnake = payload.worker_id;
+      if (typeof workerId === "string" && workerId.trim()) {
+        payload.sessionKey = workerId;
+      } else if (typeof workerIdSnake === "string" && workerIdSnake.trim()) {
+        payload.sessionKey = workerIdSnake;
+      }
+    }
     const task = payload.task;
     if (typeof task !== "string" || !task.trim()) {
       const prompt = payload.prompt;
@@ -213,8 +232,11 @@ function injectClawCodeAliasArgumentShims(
     const target = payload.target;
     if (typeof target !== "string" || !target.trim()) {
       const workerId = payload.workerId;
+      const workerIdSnake = payload.worker_id;
       if (typeof workerId === "string" && workerId.trim()) {
         payload.target = workerId;
+      } else if (typeof workerIdSnake === "string" && workerIdSnake.trim()) {
+        payload.target = workerIdSnake;
       }
     }
     return;
@@ -253,6 +275,17 @@ function injectClawCodeAliasArgumentShims(
         payload.query = q;
       }
     }
+    const maxResults = payload.max_results;
+    if (
+      (payload.max_results === undefined || payload.max_results === null) &&
+      payload.maxResults === undefined &&
+      typeof payload.limit === "number" &&
+      Number.isFinite(payload.limit)
+    ) {
+      payload.max_results = Math.floor(payload.limit);
+    } else if (typeof maxResults === "number" && Number.isFinite(maxResults)) {
+      payload.max_results = Math.floor(maxResults);
+    }
     return;
   }
 
@@ -290,6 +323,86 @@ function injectClawCodeAliasArgumentShims(
         payload.newText = newStr;
       }
     }
+  }
+
+  if (aliasKey === "taskcreate" || aliasKey === "runtaskpacket") {
+    const task = payload.task;
+    if (typeof task !== "string" || !task.trim()) {
+      const prompt = payload.prompt;
+      const objective = payload.objective;
+      if (typeof prompt === "string" && prompt.trim()) {
+        payload.task = prompt;
+      } else if (typeof objective === "string" && objective.trim()) {
+        payload.task = objective;
+      }
+    }
+    return;
+  }
+
+  if (aliasKey === "croncreate") {
+    const schedule = payload.schedule;
+    if (typeof schedule === "string" && schedule.trim()) {
+      payload.schedule = { kind: "cron", expr: schedule.trim() };
+    }
+    const prompt = payload.prompt;
+    const text = payload.text;
+    if (
+      (!payload.payload || typeof payload.payload !== "object" || Array.isArray(payload.payload)) &&
+      ((typeof prompt === "string" && prompt.trim()) || (typeof text === "string" && text.trim()))
+    ) {
+      payload.payload = {
+        kind: "agentTurn",
+        message:
+          typeof prompt === "string" && prompt.trim()
+            ? prompt.trim()
+            : typeof text === "string" && text.trim()
+              ? text.trim()
+              : undefined,
+      };
+    }
+    return;
+  }
+
+  if (aliasKey === "crondelete") {
+    const jobId = payload.jobId;
+    if (typeof jobId !== "string" || !jobId.trim()) {
+      const cronId = payload.cronId;
+      const cronIdSnake = payload.cron_id;
+      if (typeof cronId === "string" && cronId.trim()) {
+        payload.jobId = cronId;
+      } else if (typeof cronIdSnake === "string" && cronIdSnake.trim()) {
+        payload.jobId = cronIdSnake;
+      }
+    }
+    return;
+  }
+
+  if (aliasKey === "sleep") {
+    const durationMs = payload.duration_ms;
+    if (
+      (payload.ms === undefined || payload.ms === null) &&
+      typeof durationMs === "number" &&
+      Number.isFinite(durationMs)
+    ) {
+      payload.ms = Math.floor(durationMs);
+    }
+    return;
+  }
+
+  if (aliasKey === "config") {
+    const path = payload.path;
+    if ((typeof path !== "string" || !path.trim()) && typeof payload.setting === "string") {
+      payload.path = payload.setting;
+    }
+    return;
+  }
+
+  if (aliasKey === "lsp") {
+    const uri = payload.uri;
+    if ((typeof uri !== "string" || !uri.trim()) && typeof payload.path === "string" && payload.path.trim()) {
+      payload.uri = payload.path.trim();
+    }
+    return;
   }
 }
 function resolveCaseInsensitiveAllowedToolName(

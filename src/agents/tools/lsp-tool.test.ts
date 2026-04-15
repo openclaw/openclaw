@@ -67,5 +67,40 @@ describe("createLspTool", () => {
       },
     });
   });
-});
 
+  it("converts path input into file:// uri for dispatch", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text", text: "hover-ok" }],
+      details: { lspServer: "ts", lspMethod: "hover" },
+    }));
+    lspRuntimeMock.createBundleLspToolRuntime.mockResolvedValueOnce({
+      tools: [
+        {
+          name: "lsp_hover_ts",
+          label: "hover",
+          description: "hover",
+          parameters: { type: "object", properties: {} },
+          execute,
+        },
+      ],
+      sessions: [{ serverName: "ts", capabilities: {} }],
+      dispose: vi.fn(async () => {}),
+    });
+
+    const { createLspTool } = await import("./lsp-tool.js");
+    const tool = createLspTool({ workspaceDir: "/tmp/workspace" });
+    await tool.execute("tool-3", {
+      action: "hover",
+      path: "src/a.ts",
+      line: 1,
+      character: 2,
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      "lsp-dispatch",
+      expect.objectContaining({
+        uri: expect.stringMatching(/^file:\/\//),
+      }),
+    );
+  });
+});

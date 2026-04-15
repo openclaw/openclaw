@@ -1,3 +1,5 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createBundleLspToolRuntime } from "../pi-bundle-lsp-runtime.js";
@@ -17,9 +19,11 @@ export const LspToolSchema = Type.Object(
   {
     action: Type.Union(LSP_ACTIONS.map((entry) => Type.Literal(entry))),
     server: Type.Optional(Type.String()),
+    path: Type.Optional(Type.String()),
     uri: Type.Optional(Type.String()),
     line: Type.Optional(Type.Number()),
     character: Type.Optional(Type.Number()),
+    query: Type.Optional(Type.String()),
     includeDeclaration: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: true },
@@ -58,6 +62,22 @@ function resolveDynamicLspToolName(params: {
     return candidates.includes(exact) ? exact : null;
   }
   return candidates[0] ?? null;
+}
+
+function resolveLspUri(params: Record<string, unknown>, workspaceDir: string): string {
+  const explicit = readStringParam(params, "uri");
+  if (explicit) {
+    return explicit;
+  }
+  const filePath = readStringParam(params, "path");
+  if (!filePath) {
+    throw new ToolInputError("uri required");
+  }
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(filePath)) {
+    return filePath;
+  }
+  const absolute = path.isAbsolute(filePath) ? filePath : path.resolve(workspaceDir, filePath);
+  return pathToFileURL(absolute).toString();
 }
 
 export function createLspTool(options: LspToolOptions): AnyAgentTool {
@@ -113,7 +133,7 @@ export function createLspTool(options: LspToolOptions): AnyAgentTool {
         }
 
         const toolInput: Record<string, unknown> = {
-          uri: readStringParam(params, "uri", { required: true }),
+          uri: resolveLspUri(params, options.workspaceDir),
           line: readNumberParam(params, "line"),
           character: readNumberParam(params, "character"),
         };
@@ -129,4 +149,3 @@ export function createLspTool(options: LspToolOptions): AnyAgentTool {
     },
   };
 }
-
