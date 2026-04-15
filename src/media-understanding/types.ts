@@ -83,6 +83,7 @@ export type MediaUnderstandingProviderRequestTransportOverrides = {
   auth?: MediaUnderstandingProviderRequestAuthOverride;
   proxy?: MediaUnderstandingProviderRequestProxyOverride;
   tls?: MediaUnderstandingProviderRequestTlsOverride;
+  allowPrivateNetwork?: boolean;
 };
 
 export type AudioTranscriptionRequest = {
