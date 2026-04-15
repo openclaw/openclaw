@@ -512,7 +512,13 @@ describe("installContextEngineLoopHook", () => {
     expect(engine.ingest.mock.calls[0]?.[0]).toMatchObject({
       sessionId,
       sessionKey,
-      message: makeToolResult("call_1", "r1"),
+      message: expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "grep",
+        content: [{ type: "text", text: "r1" }],
+        isError: false,
+      }),
     });
     expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
