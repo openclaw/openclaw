@@ -87,6 +87,52 @@ describe("discord components", () => {
     });
     expect(spec?.bindSession).toBe(false);
   });
+
+  it("propagates expiresAtMs and clears route overrides when bindSession is false", () => {
+    const expiresAtMs = Date.now() + 60_000;
+    const spec = readDiscordComponentSpec({
+      text: "Choose a path",
+      bindSession: false,
+      expiresAtMs,
+      blocks: [
+        {
+          type: "actions",
+          buttons: [{ label: "Approve", style: "success", callbackData: "codex:approve" }],
+        },
+      ],
+      modal: {
+        title: "Details",
+        callbackData: "codex:modal",
+        fields: [{ type: "text", label: "Requester" }],
+      },
+    });
+    if (!spec) {
+      throw new Error("Expected component spec to be parsed");
+    }
+
+    expect(spec.bindSession).toBe(false);
+    expect(spec.expiresAtMs).toBe(expiresAtMs);
+
+    const result = buildDiscordComponentMessage({
+      spec,
+      sessionKey: "session-1",
+      agentId: "agent-1",
+      accountId: "account-1",
+    });
+
+    expect(result.entries).not.toHaveLength(0);
+    expect(result.modals).toHaveLength(1);
+    for (const entry of result.entries) {
+      expect(entry.sessionKey).toBeUndefined();
+      expect(entry.agentId).toBeUndefined();
+      expect(entry.accountId).toBeUndefined();
+      expect(entry.expiresAt).toBe(expiresAtMs);
+    }
+    expect(result.modals[0]?.sessionKey).toBeUndefined();
+    expect(result.modals[0]?.agentId).toBeUndefined();
+    expect(result.modals[0]?.accountId).toBeUndefined();
+    expect(result.modals[0]?.expiresAt).toBe(expiresAtMs);
+  });
 });
 
 describe("discord component registry", () => {

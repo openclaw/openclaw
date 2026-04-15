@@ -788,14 +788,17 @@ export function buildDiscordComponentMessage(params: {
     | File
   > = [];
 
-  const boundSessionKey = params.spec.bindSession === false ? undefined : params.sessionKey;
+  const bindSession = params.spec.bindSession !== false;
+  const boundSessionKey = bindSession ? params.sessionKey : undefined;
+  const boundAgentId = bindSession ? params.agentId : undefined;
+  const boundAccountId = bindSession ? params.accountId : undefined;
 
   const addEntry = (entry: DiscordComponentEntry) => {
     entries.push({
       ...entry,
       sessionKey: boundSessionKey,
-      agentId: params.agentId,
-      accountId: params.accountId,
+      agentId: boundAgentId,
+      accountId: boundAccountId,
       reusable: entry.reusable ?? params.spec.reusable,
       expiresAt: entry.expiresAt ?? params.spec.expiresAtMs,
     });
@@ -894,8 +897,8 @@ export function buildDiscordComponentMessage(params: {
       callbackData: params.spec.modal.callbackData,
       fields,
       sessionKey: boundSessionKey,
-      agentId: params.agentId,
-      accountId: params.accountId,
+      agentId: boundAgentId,
+      accountId: boundAccountId,
       reusable: params.spec.reusable,
       expiresAt: params.spec.expiresAtMs,
       allowedUsers: params.spec.modal.allowedUsers,
