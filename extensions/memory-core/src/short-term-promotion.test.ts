@@ -1104,7 +1104,7 @@ describe("short-term promotion", () => {
   it("treats transcript-style dreaming prompt echoes as contaminated", () => {
     expect(
       __testing.isContaminatedDreamingSnippet(
-        "[main/dreaming-narrative-light.jsonl#L1] Write a dream diary entry from these memory fragments:",
+        "[main/dreaming-narrative-light.jsonl#L1] User: Write a dream diary entry from these memory fragments:",
       ),
     ).toBe(true);
   });
