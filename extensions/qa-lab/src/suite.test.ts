@@ -11,6 +11,7 @@ describe("qa suite failure reply handling", () => {
     config?: Record<string, unknown>,
     plugins?: string[],
     gatewayConfigPatch?: Record<string, unknown>,
+    gatewayRuntime?: { forwardHostHome?: boolean },
   ): Parameters<typeof qaSuiteTesting.selectQaSuiteScenarios>[0]["scenarios"][number] =>
     ({
       id,
@@ -20,6 +21,7 @@ describe("qa suite failure reply handling", () => {
       successCriteria: ["test"],
       plugins,
       gatewayConfigPatch,
+      gatewayRuntime,
       sourcePath: `qa/scenarios/${id}.md`,
       execution: {
         kind: "flow",
@@ -197,6 +199,29 @@ describe("qa suite failure reply handling", () => {
         },
       },
     });
+  });
+
+  it("collects gateway runtime options across selected scenarios", () => {
+    const scenarios = [
+      makeScenario("plain"),
+      makeScenario("browser-ui", undefined, ["browser"], undefined, {
+        forwardHostHome: true,
+      }),
+    ];
+
+    expect(qaSuiteTesting.collectQaSuiteGatewayRuntimeOptions(scenarios)).toEqual({
+      forwardHostHome: true,
+    });
+  });
+
+  it("enables Control UI only for Control UI scenario workers", () => {
+    expect(
+      qaSuiteTesting.scenarioRequiresControlUi({
+        ...makeScenario("control-ui"),
+        surface: "control-ui",
+      }),
+    ).toBe(true);
+    expect(qaSuiteTesting.scenarioRequiresControlUi(makeScenario("plain"))).toBe(false);
   });
 
   it("filters provider-specific scenarios from an implicit live lane", () => {

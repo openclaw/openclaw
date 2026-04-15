@@ -15,13 +15,21 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 
 // --- Module mocks (must be hoisted before imports) ---
 
+const { countActiveDescendantRunsMock } = vi.hoisted(() => ({
+  countActiveDescendantRunsMock: vi.fn().mockReturnValue(0),
+}));
+
 vi.mock("../../config/sessions.js", () => ({
   resolveAgentMainSessionKey: vi.fn(({ agentId }: { agentId: string }) => `agent:${agentId}:main`),
   resolveMainSessionKey: vi.fn(() => "global"),
 }));
 
 vi.mock("../../agents/subagent-registry-read.js", () => ({
-  countActiveDescendantRuns: vi.fn().mockReturnValue(0),
+  countActiveDescendantRuns: countActiveDescendantRunsMock,
+}));
+
+vi.mock("./delivery-subagent-registry.runtime.js", () => ({
+  countActiveDescendantRuns: countActiveDescendantRunsMock,
 }));
 
 vi.mock("../../infra/outbound/deliver.js", () => ({
@@ -931,5 +939,51 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       },
       timeoutMs: 10_000,
     });
+  });
+
+  it("suppresses trailing NO_REPLY after summary text in direct delivery (#64976)", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({
+      synthesizedText: "All 3 items already processed.\n\nNO_REPLY",
+    });
+    (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.result).toEqual(
+      expect.objectContaining({ status: "ok", delivered: false, deliveryAttempted: true }),
+    );
+  });
+
+  it("suppresses trailing NO_REPLY after summary text in text delivery (#64976)", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({
+      synthesizedText: "Nothing actionable found today.\n\nNO_REPLY",
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.result).toEqual(
+      expect.objectContaining({ status: "ok", delivered: false, deliveryAttempted: true }),
+    );
+  });
+
+  it("suppresses mixed-case trailing No_Reply after summary text (#64976)", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({
+      synthesizedText: "All done, nothing to report.\n\nNo_Reply",
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.result).toEqual(
+      expect.objectContaining({ status: "ok", delivered: false, deliveryAttempted: true }),
+    );
   });
 });

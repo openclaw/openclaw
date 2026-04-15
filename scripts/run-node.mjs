@@ -17,6 +17,10 @@ const compilerArgs = [buildScript, "--no-clean"];
 const runNodeSourceRoots = ["src", BUNDLED_PLUGIN_ROOT_DIR];
 const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
 export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
+const ignoredRunNodeRepoPaths = new Set([
+  "src/canvas-host/a2ui/.bundle.hash",
+  "src/canvas-host/a2ui/a2ui.bundle.js",
+]);
 const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
 const extensionRestartMetadataFiles = new Set(["openclaw.plugin.json", "package.json"]);
 
@@ -38,6 +42,9 @@ const isBuildRelevantSourcePath = (relativePath) => {
 
 export const isBuildRelevantRunNodePath = (repoPath) => {
   const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
+  if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
+    return false;
+  }
   if (runNodeConfigFiles.includes(normalizedPath)) {
     return true;
   }
@@ -60,6 +67,9 @@ const isRestartRelevantExtensionPath = (relativePath) => {
 
 export const isRestartRelevantRunNodePath = (repoPath) => {
   const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
+  if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
+    return false;
+  }
   if (runNodeConfigFiles.includes(normalizedPath)) {
     return true;
   }
@@ -198,6 +208,13 @@ export const resolveBuildRequirement = (deps) => {
   if (deps.env.OPENCLAW_FORCE_BUILD === "1") {
     return { shouldBuild: true, reason: "force_build" };
   }
+  if (
+    deps.env.OPENCLAW_BUILD_PRIVATE_QA === "1" &&
+    deps.privateQaDistEntry &&
+    statMtime(deps.privateQaDistEntry, deps.fs) == null
+  ) {
+    return { shouldBuild: true, reason: "missing_private_qa_dist" };
+  }
   const stamp = readBuildStamp(deps);
   if (stamp.mtime == null) {
     return { shouldBuild: true, reason: "missing_build_stamp" };
@@ -245,6 +262,7 @@ const BUILD_REASON_LABELS = {
   git_head_changed: "git head changed",
   dirty_watched_tree: "dirty watched source tree",
   source_mtime_newer: "source mtime newer than build stamp",
+  missing_private_qa_dist: "private QA dist entry missing",
   clean: "clean",
 };
 
@@ -379,6 +397,11 @@ export async function runNodeMain(params = {}) {
     path: path.join(deps.cwd, sourceRoot),
   }));
   deps.configFiles = runNodeConfigFiles.map((filePath) => path.join(deps.cwd, filePath));
+  deps.privateQaDistEntry = path.join(deps.distRoot, "extensions", "qa-lab", "cli.js");
+  if (deps.args[0] === "qa") {
+    deps.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
+    deps.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
+  }
 
   const buildRequirement = resolveBuildRequirement(deps);
   if (!buildRequirement.shouldBuild) {
