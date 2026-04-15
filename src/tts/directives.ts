@@ -62,6 +62,18 @@ export function parseTtsDirectives(
     return "";
   });
 
+  // Defensive cleanup for stray closing tags that do not pair with an opener.
+  // The model sometimes emits a malformed closer (single `[`, extra `]`, stray
+  // slash, etc.) which left visible text like "[/tts:text]]" in the Telegram
+  // voice-note caption even though the audio itself rendered correctly. See
+  // #67343. Matches the canonical closer plus the common one-bracket-off
+  // variants; the opener side is already covered below by directiveRegex.
+  const strayClosingRegex = /\[{1,2}\s*\/\s*tts\s*:\s*text\s*\]{1,2}/gi;
+  cleanedText = cleanedText.replace(strayClosingRegex, () => {
+    hasDirective = true;
+    return "";
+  });
+
   const directiveRegex = /\[\[tts:([^\]]+)\]\]/gi;
   cleanedText = cleanedText.replace(directiveRegex, (_match, body: string) => {
     hasDirective = true;
