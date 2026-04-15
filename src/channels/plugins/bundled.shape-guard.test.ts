@@ -77,6 +77,94 @@ describe("bundled channel entry shape guards", () => {
     ).not.toThrow();
   });
 
+  it("uses the active bundled plugin root override for channel entry loading", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-override-"));
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const pluginDir = path.join(tempRoot, "dist", "extensions", "alpha");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      [
+        "globalThis.__bundledOverrideRuntime = undefined;",
+        "const plugin = { id: 'alpha', meta: {}, capabilities: {}, config: {} };",
+        "export default {",
+        "  kind: 'bundled-channel-entry',",
+        "  id: 'alpha',",
+        "  name: 'Alpha',",
+        "  description: 'Alpha',",
+        "  register() {},",
+        "  loadChannelPlugin() { return plugin; },",
+        "  setChannelRuntime(runtime) { globalThis.__bundledOverrideRuntime = runtime.marker; },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    let metadataRootDir: string | undefined;
+    let generatedRootDir: string | undefined;
+
+    vi.doMock("../../plugins/bundled-channel-runtime.js", () => ({
+      listBundledChannelPluginMetadata: (params?: { rootDir?: string }) => {
+        metadataRootDir = params?.rootDir;
+        return [
+          {
+            dirName: "alpha",
+            manifest: {
+              id: "alpha",
+              channels: ["alpha"],
+            },
+            source: {
+              source: "./index.js",
+              built: "./index.js",
+            },
+          },
+        ];
+      },
+      resolveBundledChannelGeneratedPath: (
+        rootDir: string,
+        entry: { built?: string; source?: string },
+        pluginDirName?: string,
+      ) => {
+        generatedRootDir = rootDir;
+        return path.join(
+          rootDir,
+          "dist",
+          "extensions",
+          pluginDirName ?? "alpha",
+          (entry.built ?? entry.source ?? "./index.js").replace(/^\.\//u, ""),
+        );
+      },
+    }));
+
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(tempRoot, "dist", "extensions");
+
+      const bundled = await importFreshModule<typeof import("./bundled.js")>(
+        import.meta.url,
+        "./bundled.js?scope=bundled-override-root",
+      );
+
+      bundled.setBundledChannelRuntime("alpha", { marker: "ok" } as never);
+      const testGlobal = globalThis as typeof globalThis & {
+        __bundledOverrideRuntime?: unknown;
+      };
+
+      expect(metadataRootDir).toBe(tempRoot);
+      expect(generatedRootDir).toBe(tempRoot);
+      expect(testGlobal.__bundledOverrideRuntime).toBe("ok");
+      expect(bundled.requireBundledChannelPlugin("alpha").id).toBe("alpha");
+    } finally {
+      if (previousBundledPluginsDir === undefined) {
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+      }
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+      delete (globalThis as { __bundledOverrideRuntime?: unknown }).__bundledOverrideRuntime;
+    }
+  });
+
   it("keeps channel entrypoints on the dedicated entry-contract SDK surface", () => {
     const offenders: string[] = [];
 

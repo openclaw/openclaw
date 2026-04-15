@@ -638,15 +638,20 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   return {};
 }
 
-function mergeSetupPluginSection<T>(
+function mergeChannelPluginSection<T>(
   baseValue: T | undefined,
-  setupValue: T | undefined,
+  overrideValue: T | undefined,
 ): T | undefined {
-  if (baseValue && setupValue && typeof baseValue === "object" && typeof setupValue === "object") {
+  if (
+    baseValue &&
+    overrideValue &&
+    typeof baseValue === "object" &&
+    typeof overrideValue === "object"
+  ) {
     const merged = {
       ...(baseValue as Record<string, unknown>),
     };
-    for (const [key, value] of Object.entries(setupValue as Record<string, unknown>)) {
+    for (const [key, value] of Object.entries(overrideValue as Record<string, unknown>)) {
       if (value !== undefined) {
         merged[key] = value;
       }
@@ -655,11 +660,83 @@ function mergeSetupPluginSection<T>(
       ...merged,
     } as T;
   }
-  return setupValue ?? baseValue;
+  return overrideValue ?? baseValue;
+}
+
+function mergeSetupRuntimeChannelPlugin(
+  runtimePlugin: ChannelPlugin,
+  setupPlugin: ChannelPlugin,
+): ChannelPlugin {
+  return {
+    ...runtimePlugin,
+    ...setupPlugin,
+    meta: mergeChannelPluginSection(runtimePlugin.meta, setupPlugin.meta),
+    capabilities: mergeChannelPluginSection(runtimePlugin.capabilities, setupPlugin.capabilities),
+    commands: mergeChannelPluginSection(runtimePlugin.commands, setupPlugin.commands),
+    doctor: mergeChannelPluginSection(runtimePlugin.doctor, setupPlugin.doctor),
+    reload: mergeChannelPluginSection(runtimePlugin.reload, setupPlugin.reload),
+    config: mergeChannelPluginSection(runtimePlugin.config, setupPlugin.config),
+    setup: mergeChannelPluginSection(runtimePlugin.setup, setupPlugin.setup),
+    messaging: mergeChannelPluginSection(runtimePlugin.messaging, setupPlugin.messaging),
+    actions: mergeChannelPluginSection(runtimePlugin.actions, setupPlugin.actions),
+    secrets: mergeChannelPluginSection(runtimePlugin.secrets, setupPlugin.secrets),
+  } as ChannelPlugin;
+}
+
+function resolveBundledRuntimeChannelRegistration(moduleExport: unknown): {
+  plugin?: ChannelPlugin;
+  setChannelRuntime?: (runtime: PluginRuntime) => void;
+  loadError?: unknown;
+} {
+  const resolved = unwrapDefaultModuleExport(moduleExport);
+  if (!resolved || typeof resolved !== "object") {
+    return {};
+  }
+  const entryRecord = resolved as {
+    kind?: unknown;
+    loadChannelPlugin?: unknown;
+    loadChannelSecrets?: unknown;
+    setChannelRuntime?: unknown;
+  };
+  if (
+    entryRecord.kind !== "bundled-channel-entry" ||
+    typeof entryRecord.loadChannelPlugin !== "function"
+  ) {
+    return {};
+  }
+  try {
+    const loadedPlugin = entryRecord.loadChannelPlugin();
+    const loadedSecrets =
+      typeof entryRecord.loadChannelSecrets === "function"
+        ? (entryRecord.loadChannelSecrets() as ChannelPlugin["secrets"] | undefined)
+        : undefined;
+    if (loadedPlugin && typeof loadedPlugin === "object") {
+      const mergedSecrets = mergeChannelPluginSection(
+        (loadedPlugin as ChannelPlugin).secrets,
+        loadedSecrets,
+      );
+      return {
+        plugin: {
+          ...(loadedPlugin as ChannelPlugin),
+          ...(mergedSecrets !== undefined ? { secrets: mergedSecrets } : {}),
+        },
+        ...(typeof entryRecord.setChannelRuntime === "function"
+          ? {
+              setChannelRuntime: entryRecord.setChannelRuntime as (runtime: PluginRuntime) => void,
+            }
+          : {}),
+      };
+    }
+  } catch (err) {
+    return { loadError: err };
+  }
+  return {};
 }
 
 function resolveSetupChannelRegistration(moduleExport: unknown): {
   plugin?: ChannelPlugin;
+  setChannelRuntime?: (runtime: PluginRuntime) => void;
+  usesBundledSetupContract?: boolean;
   loadError?: unknown;
 } {
   const resolved = unwrapDefaultModuleExport(moduleExport);
@@ -670,6 +747,7 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
     kind?: unknown;
     loadSetupPlugin?: unknown;
     loadSetupSecrets?: unknown;
+    setChannelRuntime?: unknown;
   };
   if (
     setupEntryRecord.kind === "bundled-channel-setup-entry" &&
@@ -682,7 +760,7 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
           ? (setupEntryRecord.loadSetupSecrets() as ChannelPlugin["secrets"] | undefined)
           : undefined;
       if (loadedPlugin && typeof loadedPlugin === "object") {
-        const mergedSecrets = mergeSetupPluginSection(
+        const mergedSecrets = mergeChannelPluginSection(
           (loadedPlugin as ChannelPlugin).secrets,
           loadedSecrets,
         );
@@ -691,6 +769,14 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
             ...(loadedPlugin as ChannelPlugin),
             ...(mergedSecrets !== undefined ? { secrets: mergedSecrets } : {}),
           },
+          usesBundledSetupContract: true,
+          ...(typeof setupEntryRecord.setChannelRuntime === "function"
+            ? {
+                setChannelRuntime: setupEntryRecord.setChannelRuntime as (
+                  runtime: PluginRuntime,
+                ) => void,
+              }
+            : {}),
         };
       }
     } catch (err) {
@@ -1697,9 +1783,81 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           continue;
         }
         if (setupRegistration.plugin) {
-          if (setupRegistration.plugin.id && setupRegistration.plugin.id !== record.id) {
+          let mergedSetupRegistration = setupRegistration;
+          if (setupRegistration.usesBundledSetupContract && candidate.source !== safeSource) {
+            const runtimeOpened = openBoundaryFileSync({
+              absolutePath: candidate.source,
+              rootPath: pluginRoot,
+              boundaryLabel: "plugin root",
+              rejectHardlinks: candidate.origin !== "bundled",
+              skipLexicalRootCheck: true,
+            });
+            if (!runtimeOpened.ok) {
+              pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+              continue;
+            }
+            const safeRuntimeSource = runtimeOpened.path;
+            fs.closeSync(runtimeOpened.fd);
+            const safeRuntimeImportSource = toSafeImportPath(safeRuntimeSource);
+            let runtimeMod: OpenClawPluginModule | null = null;
+            try {
+              runtimeMod = profilePluginLoaderSync({
+                phase: "load-setup-runtime-entry",
+                pluginId: record.id,
+                source: safeRuntimeSource,
+                run: () =>
+                  getJiti(safeRuntimeSource)(safeRuntimeImportSource) as OpenClawPluginModule,
+              });
+            } catch (err) {
+              recordPluginError({
+                logger,
+                registry,
+                record,
+                seenIds,
+                pluginId,
+                origin: candidate.origin,
+                phase: "load",
+                error: err,
+                logPrefix: `[plugins] ${record.id} failed to load setup-runtime entry from ${record.source}: `,
+                diagnosticMessagePrefix: "failed to load setup-runtime entry: ",
+              });
+              continue;
+            }
+            const runtimeRegistration = resolveBundledRuntimeChannelRegistration(runtimeMod);
+            if (runtimeRegistration.loadError) {
+              recordPluginError({
+                logger,
+                registry,
+                record,
+                seenIds,
+                pluginId,
+                origin: candidate.origin,
+                phase: "load",
+                error: runtimeRegistration.loadError,
+                logPrefix: `[plugins] ${record.id} failed to load setup-runtime channel entry from ${record.source}: `,
+                diagnosticMessagePrefix: "failed to load setup-runtime channel entry: ",
+              });
+              continue;
+            }
+            if (runtimeRegistration.plugin) {
+              mergedSetupRegistration = {
+                ...setupRegistration,
+                plugin: mergeSetupRuntimeChannelPlugin(
+                  runtimeRegistration.plugin,
+                  setupRegistration.plugin,
+                ),
+                setChannelRuntime:
+                  runtimeRegistration.setChannelRuntime ?? setupRegistration.setChannelRuntime,
+              };
+            }
+          }
+          const mergedSetupPlugin = mergedSetupRegistration.plugin;
+          if (!mergedSetupPlugin) {
+            continue;
+          }
+          if (mergedSetupPlugin.id && mergedSetupPlugin.id !== record.id) {
             pushPluginLoadError(
-              `plugin id mismatch (config uses "${record.id}", setup export uses "${setupRegistration.plugin.id}")`,
+              `plugin id mismatch (config uses "${record.id}", setup export uses "${mergedSetupPlugin.id}")`,
             );
             continue;
           }
@@ -1709,7 +1867,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             hookPolicy: entry?.hooks,
             registrationMode,
           });
-          api.registerChannel(setupRegistration.plugin);
+          mergedSetupRegistration.setChannelRuntime?.(api.runtime);
+          api.registerChannel(mergedSetupPlugin);
           registry.plugins.push(record);
           seenIds.set(pluginId, candidate.origin);
           continue;

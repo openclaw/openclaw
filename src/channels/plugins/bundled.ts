@@ -8,6 +8,7 @@ import {
   resolveBundledChannelGeneratedPath,
   type BundledChannelPluginMetadata,
 } from "../../plugins/bundled-channel-runtime.js";
+import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
 import { unwrapDefaultModuleExport } from "../../plugins/module-export.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { isJavaScriptModulePath, loadChannelPluginModule } from "./module-loader.js";
@@ -51,6 +52,27 @@ const OPENCLAW_PACKAGE_ROOT =
   (import.meta.url.startsWith("file:")
     ? path.resolve(fileURLToPath(new URL("../../..", import.meta.url)))
     : process.cwd());
+
+function derivePackageRootFromBundledPluginsDir(pluginsDir: string): string {
+  const resolvedDir = path.resolve(pluginsDir);
+  if (path.basename(resolvedDir) !== "extensions") {
+    return resolvedDir;
+  }
+  const parentDir = path.dirname(resolvedDir);
+  const parentBase = path.basename(parentDir);
+  if (parentBase === "dist" || parentBase === "dist-runtime") {
+    return path.dirname(parentDir);
+  }
+  return parentDir;
+}
+
+function resolveBundledChannelPackageRoot(): string {
+  const bundledPluginsDir = resolveBundledPluginsDir(process.env);
+  if (bundledPluginsDir) {
+    return derivePackageRootFromBundledPluginsDir(bundledPluginsDir);
+  }
+  return OPENCLAW_PACKAGE_ROOT;
+}
 
 function resolveChannelPluginModuleEntry(
   moduleExport: unknown,
@@ -103,16 +125,12 @@ function resolveBundledChannelBoundaryRoot(params: {
   metadata: BundledChannelPluginMetadata;
   modulePath: string;
 }): string {
-  const distRoot = path.resolve(
-    OPENCLAW_PACKAGE_ROOT,
-    "dist",
-    "extensions",
-    params.metadata.dirName,
-  );
+  const packageRoot = resolveBundledChannelPackageRoot();
+  const distRoot = path.resolve(packageRoot, "dist", "extensions", params.metadata.dirName);
   if (params.modulePath === distRoot || params.modulePath.startsWith(`${distRoot}${path.sep}`)) {
     return distRoot;
   }
-  return path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions", params.metadata.dirName);
+  return path.resolve(packageRoot, "extensions", params.metadata.dirName);
 }
 
 function resolveGeneratedBundledChannelModulePath(params: {
@@ -122,8 +140,9 @@ function resolveGeneratedBundledChannelModulePath(params: {
   if (!params.entry) {
     return null;
   }
+  const packageRoot = resolveBundledChannelPackageRoot();
   const resolved = resolveBundledChannelGeneratedPath(
-    OPENCLAW_PACKAGE_ROOT,
+    packageRoot,
     params.entry,
     params.metadata.dirName,
   );
@@ -194,14 +213,21 @@ function loadGeneratedBundledChannelEntry(params: {
   }
 }
 
-let cachedBundledChannelMetadata: readonly BundledChannelPluginMetadata[] | null = null;
+const cachedBundledChannelMetadata = new Map<string, readonly BundledChannelPluginMetadata[]>();
 
 function listBundledChannelMetadata(): readonly BundledChannelPluginMetadata[] {
-  cachedBundledChannelMetadata ??= listBundledChannelPluginMetadata({
+  const packageRoot = resolveBundledChannelPackageRoot();
+  const cached = cachedBundledChannelMetadata.get(packageRoot);
+  if (cached) {
+    return cached;
+  }
+  const loaded = listBundledChannelPluginMetadata({
+    rootDir: packageRoot,
     includeChannelConfigs: false,
     includeSyntheticChannelConfigs: false,
   }).filter((metadata) => (metadata.manifest.channels?.length ?? 0) > 0);
-  return cachedBundledChannelMetadata;
+  cachedBundledChannelMetadata.set(packageRoot, loaded);
+  return loaded;
 }
 
 export function listBundledChannelPluginIds(): readonly ChannelId[] {
