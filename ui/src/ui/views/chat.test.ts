@@ -1668,6 +1668,41 @@ describe("chat view", () => {
     expect(container.textContent).toContain("Shortcode view");
   });
 
+  it("does not render leaked system exec rows from chat history", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          messages: [
+            {
+              id: "leaked-system-row",
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "System (untrusted): [2026-04-14 22:56:23 PDT] Exec completed (tidy-zep, code 0)",
+                },
+              ],
+              timestamp: Date.now(),
+            },
+            {
+              id: "assistant-visible-row",
+              role: "assistant",
+              content: [{ type: "text", text: "real reply" }],
+              timestamp: Date.now() + 1,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).not.toContain("System (untrusted)");
+    expect(container.textContent).not.toContain("Exec completed");
+    expect(container.textContent).toContain("real reply");
+  });
+
   it("renders canvas-only assistant bubbles", () => {
     const container = document.createElement("div");
     render(

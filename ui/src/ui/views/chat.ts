@@ -1729,6 +1729,27 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   return result;
 }
 
+function shouldHideRenderedHistoryMessage(message: unknown): boolean {
+  const text = extractTextCached(message);
+  if (typeof text !== "string") {
+    return false;
+  }
+  const lower = text.trim().toLowerCase();
+  if (!lower) {
+    return false;
+  }
+  const hasExecStatus =
+    lower.includes("exec started") ||
+    lower.includes("exec completed") ||
+    lower.includes("exec finished") ||
+    lower.includes("exec failed") ||
+    lower.includes("exec denied");
+  if (lower.startsWith("system:") || lower.startsWith("system (untrusted):")) {
+    return true;
+  }
+  return lower.startsWith("sender (untrusted metadata):") && hasExecStatus;
+}
+
 function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
@@ -1747,6 +1768,9 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   }
   for (let i = historyStart; i < history.length; i++) {
     const msg = history[i];
+    if (shouldHideRenderedHistoryMessage(msg)) {
+      continue;
+    }
     const normalized = normalizeMessage(msg);
     const raw = msg as Record<string, unknown>;
     const marker = raw.__openclaw as Record<string, unknown> | undefined;

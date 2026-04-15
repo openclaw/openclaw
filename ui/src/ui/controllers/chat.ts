@@ -71,8 +71,41 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
   return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
 }
 
+function isLeakedInternalHistoryMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  const text = extractText(message);
+  if (typeof text !== "string") {
+    return false;
+  }
+  const lower = normalizeLowercaseStringOrEmpty(text.trim());
+  if (!lower) {
+    return false;
+  }
+  const role = normalizeLowercaseStringOrEmpty(entry.role);
+  const hasExecStatus =
+    lower.includes("exec started") ||
+    lower.includes("exec completed") ||
+    lower.includes("exec finished") ||
+    lower.includes("exec failed") ||
+    lower.includes("exec denied");
+  if (
+    role === "system" &&
+    (lower.startsWith("system:") || lower.startsWith("system (untrusted):") || hasExecStatus)
+  ) {
+    return true;
+  }
+  return lower.startsWith("sender (untrusted metadata):") && hasExecStatus;
+}
+
 function shouldHideHistoryMessage(message: unknown): boolean {
-  return isAssistantSilentReply(message) || isSyntheticTranscriptRepairToolResult(message);
+  return (
+    isAssistantSilentReply(message) ||
+    isSyntheticTranscriptRepairToolResult(message) ||
+    isLeakedInternalHistoryMessage(message)
+  );
 }
 
 function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {

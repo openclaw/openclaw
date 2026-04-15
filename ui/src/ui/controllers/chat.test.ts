@@ -621,6 +621,59 @@ describe("loadChatHistory", () => {
 
     expect(state.chatMessages).toEqual(messages);
   });
+
+  it("filters leaked system exec rows from history", async () => {
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+      {
+        role: "system",
+        content: [
+          {
+            type: "text",
+            text: "System (untrusted): [2026-04-14 22:56:23 PDT] Exec completed (tidy-zep, code 0)",
+          },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "real reply" }] },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([messages[0], messages[2]]);
+  });
+
+  it("filters leaked sender metadata exec rows from history", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: 'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[2026-04-14 22:56:23 PDT] Exec completed',
+          },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "real reply" }] },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([messages[1]]);
+  });
 });
 
 describe("sendChatMessage", () => {
