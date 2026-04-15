@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createEmbeddedLobsterRunner, resolveLobsterCwd } from "./lobster-runner.js";
+import {
+  createEmbeddedLobsterRunner,
+  resolveLobsterCwd,
+  withSerializedCompatCwd,
+} from "./lobster-runner.js";
 
 describe("resolveLobsterCwd", () => {
   it("defaults to the current working directory", () => {
@@ -13,6 +17,55 @@ describe("resolveLobsterCwd", () => {
     expect(resolveLobsterCwd("extensions/lobster")).toBe(
       path.resolve(process.cwd(), "extensions/lobster"),
     );
+  });
+});
+
+describe("withSerializedCompatCwd", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("serializes compat runtime work even when cwd matches process.cwd()", async () => {
+    let releaseFirst: (() => void) | undefined;
+    let markFirstStarted: (() => void) | undefined;
+    const secondStarted = vi.fn();
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+
+    const first = withSerializedCompatCwd(process.cwd(), async () => {
+      await new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+        markFirstStarted?.();
+      });
+    });
+
+    await firstStarted;
+    const second = withSerializedCompatCwd(process.cwd(), async () => {
+      secondStarted();
+    });
+
+    await Promise.resolve();
+    expect(secondStarted).not.toHaveBeenCalled();
+
+    releaseFirst?.();
+    await Promise.all([first, second]);
+    expect(secondStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the cwd queue when chdir throws", async () => {
+    const missingCwd = path.join(
+      os.tmpdir(),
+      `openclaw-lobster-missing-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
+
+    await expect(
+      withSerializedCompatCwd(missingCwd, async () => {
+        throw new Error("unreachable");
+      }),
+    ).rejects.toThrow();
+
+    await expect(withSerializedCompatCwd(process.cwd(), async () => "ok")).resolves.toBe("ok");
   });
 });
 

@@ -212,11 +212,10 @@ function toAsyncInput(items: unknown[]) {
   })();
 }
 
-async function withSerializedCompatCwd<T>(cwd: string | undefined, fn: () => Promise<T>): Promise<T> {
-  if (!cwd || cwd === process.cwd()) {
-    return await fn();
-  }
-
+export async function withSerializedCompatCwd<T>(
+  cwd: string | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
   const previous = compatRuntimeCwdQueue;
   let release: (() => void) | undefined;
   compatRuntimeCwdQueue = new Promise<void>((resolve) => {
@@ -225,12 +224,21 @@ async function withSerializedCompatCwd<T>(cwd: string | undefined, fn: () => Pro
 
   await previous.catch(() => {});
   const originalCwd = process.cwd();
-  process.chdir(cwd);
+  let changedCwd = false;
   try {
+    if (cwd && cwd !== originalCwd) {
+      process.chdir(cwd);
+      changedCwd = true;
+    }
     return await fn();
   } finally {
-    process.chdir(originalCwd);
-    release?.();
+    try {
+      if (changedCwd) {
+        process.chdir(originalCwd);
+      }
+    } finally {
+      release?.();
+    }
   }
 }
 
@@ -603,6 +611,7 @@ async function withTimeout<T>(
 async function loadEmbeddedToolRuntimeFromPackage(): Promise<EmbeddedToolRuntime> {
   let primaryLoadError: unknown;
   try {
+    // Split to prevent static bundler resolution of this optional entrypoint.
     const coreSpecifier = ["@clawdbot", "lobster", "core"].join("/");
     const coreModule = (await import(coreSpecifier)) as Partial<EmbeddedToolRuntime>;
     if (
@@ -661,8 +670,15 @@ async function loadEmbeddedToolRuntimeFromPackage(): Promise<EmbeddedToolRuntime
       runWorkflowFile: workflowFileModule.runWorkflowFile,
     });
   } catch (compatError) {
+    const cause =
+      primaryLoadError === undefined
+        ? compatError
+        : new AggregateError(
+            [primaryLoadError, compatError],
+            "Both Lobster embedded runtime load paths failed",
+          );
     throw new Error("Failed to load the Lobster embedded runtime", {
-      cause: compatError ?? primaryLoadError,
+      cause,
     });
   }
 }
