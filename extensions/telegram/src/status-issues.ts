@@ -13,6 +13,11 @@ type TelegramAccountStatus = {
   accountId?: unknown;
   enabled?: unknown;
   configured?: unknown;
+  running?: unknown;
+  connected?: unknown;
+  deliveryTruth?: unknown;
+  routeIntegrity?: unknown;
+  sessionStoreIntegrity?: unknown;
   allowUnmentionedGroups?: unknown;
   audit?: unknown;
 };
@@ -38,6 +43,11 @@ function readTelegramAccountStatus(value: ChannelAccountSnapshot): TelegramAccou
     accountId: value.accountId,
     enabled: value.enabled,
     configured: value.configured,
+    running: value.running,
+    connected: value.connected,
+    deliveryTruth: value.deliveryTruth,
+    routeIntegrity: value.routeIntegrity,
+    sessionStoreIntegrity: value.sessionStoreIntegrity,
     allowUnmentionedGroups: value.allowUnmentionedGroups,
     audit: value.audit,
   };
@@ -92,6 +102,43 @@ export function collectTelegramStatusIssues(
     const accountId = resolveEnabledConfiguredAccountId(account);
     if (!accountId) {
       continue;
+    }
+
+    if (account.sessionStoreIntegrity === "mixed-artifacts") {
+      issues.push({
+        channel: "telegram",
+        accountId,
+        kind: "runtime",
+        message:
+          "Live session storage contains backup/archive/orphan artifacts mixed into the active sessions directory.",
+        fix: "Run `openclaw doctor --non-interactive`, then move legacy artifacts out of `~/.openclaw/agents/*/sessions` before restarting.",
+      });
+    }
+
+    if (account.routeIntegrity === "contradictory") {
+      issues.push({
+        channel: "telegram",
+        accountId,
+        kind: "runtime",
+        message:
+          "Telegram route evidence is contradictory (for example a generic main session carrying Telegram-origin metadata).",
+        fix: "Run `openclaw doctor --non-interactive`, inspect `sessions.json` route metadata, and restart after cleanup.",
+      });
+    }
+
+    if (
+      account.running === true &&
+      account.connected === true &&
+      account.deliveryTruth === "unknown"
+    ) {
+      issues.push({
+        channel: "telegram",
+        accountId,
+        kind: "runtime",
+        message:
+          "Transport is reachable but delivery truth is unknown (`lastInboundAt` and `lastOutboundAt` are still null after startup grace).",
+        fix: "Check recent Telegram traffic, run `openclaw doctor --non-interactive`, and inspect gateway logs before treating Telegram as healthy.",
+      });
     }
 
     if (account.allowUnmentionedGroups === true) {

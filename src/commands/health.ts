@@ -1,6 +1,7 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { listChannelPlugins } from "../channels/plugins/index.js";
+import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import { buildChannelAccountSnapshot } from "../channels/plugins/status.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
@@ -16,6 +17,7 @@ import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routi
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { styleHealthChannelLine } from "../terminal/health-style.js";
 import { isRich } from "../terminal/theme.js";
 import { formatHealthChannelLines } from "./health-format.js";
@@ -23,6 +25,7 @@ import type {
   AgentHealthSummary,
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
+  HealthReason,
   HealthSummary,
 } from "./health.types.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
@@ -31,6 +34,7 @@ export type {
   AgentHealthSummary,
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
+  HealthReason,
   HealthSummary,
 } from "./health.types.js";
 
@@ -206,6 +210,10 @@ async function resolveHealthAccountContext(params: {
 export async function getHealthSnapshot(params?: {
   timeoutMs?: number;
   probe?: boolean;
+  runtimeSnapshot?: {
+    channels?: Record<string, ChannelAccountSnapshot | undefined>;
+    channelAccounts?: Record<string, Record<string, ChannelAccountSnapshot | undefined> | undefined>;
+  } | null;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
   const { loadConfig } = await import("../config/config.js");
@@ -237,7 +245,18 @@ export async function getHealthSnapshot(params?: {
   const start = Date.now();
   const cappedTimeout = timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : Math.max(50, timeoutMs);
   const doProbe = params?.probe !== false;
+  const runtimeSnapshot = params?.runtimeSnapshot ?? null;
+  const resolveRuntimeAccountSnapshot = (
+    channelId: string,
+    accountId: string,
+    defaultAccountId: string,
+  ) => {
+    const accounts = runtimeSnapshot?.channelAccounts?.[channelId];
+    const defaultRuntime = runtimeSnapshot?.channels?.[channelId];
+    return accounts?.[accountId] ?? (accountId === defaultAccountId ? defaultRuntime : undefined);
+  };
   const channels: Record<string, ChannelHealthSummary> = {};
+  const reasons: HealthReason[] = [];
   const channelOrder = listChannelPlugins().map((plugin) => plugin.id);
   const channelLabels: Record<string, string> = {};
 
@@ -274,6 +293,7 @@ export async function getHealthSnapshot(params?: {
       accountIdsToProbe,
     });
     const accountSummaries: Record<string, ChannelAccountHealthSummary> = {};
+    const resolvedAccounts: Record<string, unknown> = {};
 
     for (const accountId of accountIdsToProbe) {
       const { account, enabled, configured, diagnostics } = await resolveHealthAccountContext({
@@ -281,6 +301,7 @@ export async function getHealthSnapshot(params?: {
         cfg,
         accountId,
       });
+      resolvedAccounts[accountId] = account;
       if (diagnostics.length > 0) {
         debugHealth("account.diagnostics", { channel: plugin.id, accountId, diagnostics });
       }
@@ -311,60 +332,61 @@ export async function getHealthSnapshot(params?: {
         debugHealth("probe.bot", { channel: plugin.id, accountId, username: bot.username });
       }
 
-      const snapshot: ChannelAccountSnapshot = {
+      const record = await buildChannelAccountSnapshot({
+        plugin,
+        cfg,
         accountId,
-        enabled,
-        configured,
-      };
-      if (probe !== undefined) {
-        snapshot.probe = probe;
-      }
-      if (lastProbeAt) {
-        snapshot.lastProbeAt = lastProbeAt;
-      }
-
-      const summary = plugin.status?.buildChannelSummary
-        ? await plugin.status.buildChannelSummary({
-            account,
-            cfg,
-            defaultAccountId: accountId,
-            snapshot,
-          })
-        : undefined;
-      const record =
-        summary && typeof summary === "object"
-          ? (summary as ChannelAccountHealthSummary)
-          : ({
-              accountId,
-              configured,
-              probe,
-              lastProbeAt,
-            } satisfies ChannelAccountHealthSummary);
+        runtime: resolveRuntimeAccountSnapshot(plugin.id, accountId, defaultAccountId),
+        probe,
+      });
       if (record.configured === undefined) {
         record.configured = configured;
       }
-      if (record.lastProbeAt === undefined && lastProbeAt) {
+      if (record.enabled === undefined) {
+        record.enabled = enabled;
+      }
+      if (lastProbeAt) {
         record.lastProbeAt = lastProbeAt;
       }
       record.accountId = accountId;
       accountSummaries[accountId] = record;
+      reasons.push(...resolveOperationalHealthIssues(plugin.id, record));
     }
 
+    const fallbackAccountId =
+      preferredAccountId ?? defaultAccountId ?? accountIdsToProbe[0] ?? Object.keys(accountSummaries)[0];
     const defaultSummary =
-      accountSummaries[preferredAccountId] ??
+      accountSummaries[fallbackAccountId] ??
       accountSummaries[defaultAccountId] ??
       accountSummaries[accountIdsToProbe[0] ?? preferredAccountId];
     const fallbackSummary = defaultSummary ?? accountSummaries[Object.keys(accountSummaries)[0]];
     if (fallbackSummary) {
+      const summaryAccountId = fallbackSummary.accountId ?? fallbackAccountId ?? defaultAccountId;
+      const fallbackAccount =
+        resolvedAccounts[summaryAccountId] ?? plugin.config.resolveAccount(cfg, summaryAccountId);
+      const channelSummary = plugin.status?.buildChannelSummary
+        ? await plugin.status.buildChannelSummary({
+            account: fallbackAccount,
+            cfg,
+            defaultAccountId,
+            snapshot: fallbackSummary,
+          })
+        : {
+            configured: fallbackSummary.configured ?? false,
+          };
       channels[plugin.id] = {
-        ...fallbackSummary,
+        ...((channelSummary && typeof channelSummary === "object"
+          ? channelSummary
+          : fallbackSummary) as ChannelHealthSummary),
         accounts: accountSummaries,
       } satisfies ChannelHealthSummary;
     }
   }
 
   const summary: HealthSummary = {
-    ok: true,
+    ok: reasons.length === 0,
+    state: reasons.length > 0 ? "degraded" : "ok",
+    reasons,
     ts: Date.now(),
     durationMs: Date.now() - start,
     channels,

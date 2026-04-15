@@ -25,6 +25,46 @@ export type SessionOrigin = {
   threadId?: string | number;
 };
 
+export type SessionRouteScope =
+  | "agent-main"
+  | "peer-scoped-direct"
+  | "explicit"
+  | "heartbeat-isolated"
+  | "global";
+
+export type SessionRouteIntegrityState = "ok" | "unknown" | "contradictory";
+
+export type SessionRouteSurface =
+  | "telegram"
+  | "tui"
+  | "webchat"
+  | "heartbeat"
+  | "cron"
+  | "hook"
+  | "api"
+  | "main";
+
+export type SessionRouteMetadata = {
+  resolvedAt?: number | null;
+  sessionKey?: string | null;
+  surface?: SessionRouteSurface | null;
+  scope?: SessionRouteScope | null;
+  explicit?: boolean;
+  actorFingerprint?: string | null;
+  heartbeatIsolatedBaseSessionKey?: string | null;
+  provenance?: {
+    provider?: string | null;
+    surface?: string | null;
+    from?: string | null;
+    to?: string | null;
+    chatType?: SessionChatType | null;
+    label?: string | null;
+    accountId?: string | null;
+    threadId?: string | number | null;
+  };
+  integrity?: SessionRouteIntegrityState;
+};
+
 export type SessionAcpIdentitySource = "ensure" | "status" | "event";
 
 export type SessionAcpIdentityState = "pending" | "resolved";
@@ -122,6 +162,8 @@ export type SessionEntry = {
    * a real user/session-scoped key that merely happens to end with `:heartbeat`.
    */
   heartbeatIsolatedBaseSessionKey?: string;
+  routeMetadata?: SessionRouteMetadata;
+  routeIntegrityState?: SessionRouteIntegrityState;
   /** Heartbeat task state (task name -> last run timestamp ms). */
   heartbeatTaskState?: Record<string, number>;
   sessionId: string;

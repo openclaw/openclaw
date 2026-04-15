@@ -13,6 +13,9 @@ let healthVersion = 1;
 let healthCache: HealthSummary | null = null;
 let healthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
+let healthRuntimeSnapshotGetter:
+  | (() => NonNullable<Parameters<typeof getHealthSnapshot>[0]>["runtimeSnapshot"])
+  | null = null;
 
 export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Snapshot {
   const cfg = loadConfig();
@@ -69,10 +72,22 @@ export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | n
   broadcastHealthUpdate = fn;
 }
 
-export async function refreshGatewayHealthSnapshot(opts?: { probe?: boolean }) {
+export function setHealthRuntimeSnapshotGetter(
+  fn:
+    | (() => NonNullable<Parameters<typeof getHealthSnapshot>[0]>["runtimeSnapshot"])
+    | null,
+) {
+  healthRuntimeSnapshotGetter = typeof fn === "function" ? fn : null;
+}
+
+export async function refreshGatewayHealthSnapshot(opts?: {
+  probe?: boolean;
+  runtimeSnapshot?: NonNullable<Parameters<typeof getHealthSnapshot>[0]>["runtimeSnapshot"];
+}) {
   if (!healthRefresh) {
     healthRefresh = (async () => {
-      const snap = await getHealthSnapshot({ probe: opts?.probe });
+      const runtimeSnapshot = opts?.runtimeSnapshot ?? healthRuntimeSnapshotGetter?.();
+      const snap = await getHealthSnapshot({ probe: opts?.probe, runtimeSnapshot });
       healthCache = snap;
       healthVersion += 1;
       if (broadcastHealthUpdate) {

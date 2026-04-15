@@ -992,12 +992,18 @@ export async function runEmbeddedPiAgent(
             const errorText = contextOverflowError.text;
             const msgCount = attempt.messagesSnapshot?.length ?? 0;
             const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
+            const overflowTokenCountSource =
+              observedOverflowTokens != null ? "observed" : "synthetic";
+            const overflowTokenCountForRecovery =
+              observedOverflowTokens ?? ctxInfo.tokens + Math.max(512, Math.ceil(ctxInfo.tokens * 0.05));
             log.warn(
               `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `provider=${provider}/${modelId} source=${contextOverflowError.source} ` +
                 `messages=${msgCount} sessionFile=${params.sessionFile} ` +
                 `diagId=${overflowDiagId} compactionAttempts=${overflowCompactionAttempts} ` +
                 `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
+                `recoveryTokens=${overflowTokenCountForRecovery} ` +
+                `recoveryTokenSource=${overflowTokenCountSource} ` +
                 `error=${errorText.slice(0, 200)}`,
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
@@ -1007,6 +1013,7 @@ export async function runEmbeddedPiAgent(
             if (
               !isCompactionFailure &&
               hadAttemptLevelCompaction &&
+              observedOverflowTokens != null &&
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
             ) {
               overflowCompactionAttempts++;
@@ -1015,11 +1022,21 @@ export async function runEmbeddedPiAgent(
               );
               continue;
             }
+            if (
+              !isCompactionFailure &&
+              hadAttemptLevelCompaction &&
+              observedOverflowTokens == null &&
+              overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
+            ) {
+              log.warn(
+                `[context-overflow-diag] provider overflow persisted after in-attempt compaction without an observed token count; forcing recovery compaction with ${overflowTokenCountSource} token estimate ${overflowTokenCountForRecovery} for ${provider}/${modelId}`,
+              );
+            }
             // Attempt explicit overflow compaction only when this attempt did not
             // already auto-compact.
             if (
               !isCompactionFailure &&
-              !hadAttemptLevelCompaction &&
+              (!hadAttemptLevelCompaction || observedOverflowTokens == null) &&
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
             ) {
               if (log.isEnabled("debug")) {
@@ -1031,7 +1048,7 @@ export async function runEmbeddedPiAgent(
               }
               overflowCompactionAttempts++;
               log.warn(
-                `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
+                `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId} using ${overflowTokenCountSource} token count ${overflowTokenCountForRecovery}`,
               );
               let compactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
               await runOwnsCompactionBeforeHook("overflow recovery");
@@ -1063,9 +1080,8 @@ export async function runEmbeddedPiAgent(
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
                   trigger: "overflow",
-                  ...(observedOverflowTokens !== undefined
-                    ? { currentTokenCount: observedOverflowTokens }
-                    : {}),
+                  currentTokenCount: overflowTokenCountForRecovery,
+                  currentTokenCountSource: overflowTokenCountSource,
                   diagId: overflowDiagId,
                   attempt: overflowCompactionAttempts,
                   maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
@@ -1075,9 +1091,7 @@ export async function runEmbeddedPiAgent(
                   sessionKey: params.sessionKey,
                   sessionFile: params.sessionFile,
                   tokenBudget: ctxInfo.tokens,
-                  ...(observedOverflowTokens !== undefined
-                    ? { currentTokenCount: observedOverflowTokens }
-                    : {}),
+                  currentTokenCount: overflowTokenCountForRecovery,
                   force: true,
                   compactionTarget: "budget",
                   runtimeContext: overflowCompactionRuntimeContext,

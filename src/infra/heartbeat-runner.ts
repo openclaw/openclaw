@@ -30,7 +30,6 @@ import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.public.js";
 import { loadConfig } from "../config/config.js";
 import {
-  canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -49,13 +48,12 @@ import { CommandLane } from "../process/lanes.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
-  parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
-  toAgentStoreSessionKey,
+  parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { resolveSessionRoute } from "../routing/resolve-route.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
@@ -222,8 +220,14 @@ function resolveHeartbeatSession(
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
-  const mainSessionKey =
-    scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
+  const mainSessionKey = resolveSessionRoute({
+    cfg,
+    agentId: resolvedAgentId,
+    surface: "heartbeat",
+    sessionScope: scope === "global" ? "global" : "agent",
+    mainKey: cfg.session?.mainKey,
+    appendHeartbeatSuffix: false,
+  }).sessionKey;
   const storeAgentId = scope === "global" ? resolveDefaultAgentId(cfg) : resolvedAgentId;
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: storeAgentId,
@@ -241,6 +245,25 @@ function resolveHeartbeatSession(
     };
   }
 
+  const resolveBaseSessionKey = (rawSessionInput?: string) => {
+    const resolved = resolveSessionRoute({
+      cfg,
+      agentId: resolvedAgentId,
+      surface: "heartbeat",
+      rawSessionInput,
+      sessionScope: "agent",
+      mainKey: cfg.session?.mainKey,
+      appendHeartbeatSuffix: false,
+    });
+    if (resolved.sessionKey === "global") {
+      return null;
+    }
+    if (resolveAgentIdFromSessionKey(resolved.sessionKey) !== normalizeAgentId(resolvedAgentId)) {
+      return null;
+    }
+    return resolved.sessionKey;
+  };
+
   // Guard: never route heartbeats to subagent sessions, regardless of entry path.
   const forced = forcedSessionKey?.trim();
   if (forced && isSubagentSessionKey(forced)) {
@@ -254,29 +277,15 @@ function resolveHeartbeatSession(
   }
 
   if (forced && !isSubagentSessionKey(forced)) {
-    const forcedCandidate = toAgentStoreSessionKey({
-      agentId: resolvedAgentId,
-      requestKey: forced,
-      mainKey: cfg.session?.mainKey,
-    });
-    if (!isSubagentSessionKey(forcedCandidate)) {
-      const forcedCanonical = canonicalizeMainSessionAlias({
-        cfg,
-        agentId: resolvedAgentId,
-        sessionKey: forcedCandidate,
-      });
-      if (forcedCanonical !== "global" && !isSubagentSessionKey(forcedCanonical)) {
-        const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
-        if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
-          return {
-            sessionKey: forcedCanonical,
-            storePath,
-            store,
-            entry: store[forcedCanonical],
-            suppressOriginatingContext: false,
-          };
-        }
-      }
+    const forcedCanonical = resolveBaseSessionKey(forced);
+    if (forcedCanonical) {
+      return {
+        sessionKey: forcedCanonical,
+        storePath,
+        store,
+        entry: store[forcedCanonical],
+        suppressOriginatingContext: false,
+      };
     }
   }
 
@@ -291,47 +300,15 @@ function resolveHeartbeatSession(
     };
   }
 
-  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
-  if (normalized === "main" || normalized === "global") {
+  const canonical = resolveBaseSessionKey(trimmed);
+  if (canonical) {
     return {
-      sessionKey: mainSessionKey,
+      sessionKey: canonical,
       storePath,
       store,
-      entry: mainEntry,
+      entry: store[canonical],
       suppressOriginatingContext: false,
     };
-  }
-
-  const candidate = toAgentStoreSessionKey({
-    agentId: resolvedAgentId,
-    requestKey: trimmed,
-    mainKey: cfg.session?.mainKey,
-  });
-  if (isSubagentSessionKey(candidate)) {
-    return {
-      sessionKey: mainSessionKey,
-      storePath,
-      store,
-      entry: mainEntry,
-      suppressOriginatingContext: false,
-    };
-  }
-  const canonical = canonicalizeMainSessionAlias({
-    cfg,
-    agentId: resolvedAgentId,
-    sessionKey: candidate,
-  });
-  if (canonical !== "global" && !isSubagentSessionKey(canonical)) {
-    const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
-    if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
-      return {
-        sessionKey: canonical,
-        storePath,
-        store,
-        entry: store[canonical],
-        suppressOriginatingContext: false,
-      };
-    }
   }
 
   return {

@@ -117,6 +117,24 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       if (outboundAt) {
         bits.push(`out:${formatTimeAgo(Date.now() - outboundAt)}`);
       }
+      if (typeof account.transportTruth === "string" && account.transportTruth.length > 0) {
+        bits.push(`transport:${account.transportTruth}`);
+      }
+      if (typeof account.deliveryTruth === "string" && account.deliveryTruth.length > 0) {
+        bits.push(`delivery:${account.deliveryTruth}`);
+      }
+      if (typeof account.routeIntegrity === "string" && account.routeIntegrity.length > 0) {
+        bits.push(`route:${account.routeIntegrity}`);
+      }
+      if (
+        typeof account.sessionStoreIntegrity === "string" &&
+        account.sessionStoreIntegrity.length > 0
+      ) {
+        bits.push(`store:${account.sessionStoreIntegrity}`);
+      }
+      if (typeof account.healthState === "string" && account.healthState.length > 0) {
+        bits.push(`health:${account.healthState}`);
+      }
       appendModeBit(bits, account);
       const botUsername = (() => {
         const bot = account.bot as { username?: string | null } | undefined;

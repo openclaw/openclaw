@@ -255,11 +255,13 @@ export function buildStatusHealthRows(params: {
     const item = line.slice(0, colon).trim();
     const detail = line.slice(colon + 1).trim();
     const normalized = normalizeLowercaseStringOrEmpty(detail);
-    const status = normalized.startsWith("ok")
-      ? params.ok("OK")
-      : normalized.startsWith("failed")
-        ? params.warn("WARN")
-        : normalized.startsWith("not configured")
+        const status = normalized.startsWith("ok")
+          ? params.ok("OK")
+          : normalized.startsWith("degraded")
+            ? params.warn("WARN")
+          : normalized.startsWith("failed")
+            ? params.warn("WARN")
+            : normalized.startsWith("not configured")
           ? params.muted("OFF")
           : normalized.startsWith("configured")
             ? params.ok("OK")

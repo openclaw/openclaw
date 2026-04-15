@@ -89,7 +89,8 @@ export function createSessionActions(context: SessionActionContext) {
         state.currentAgentId =
           state.agents[0]?.id ?? normalizeAgentId(result.defaultId ?? state.currentAgentId);
       }
-      const nextSessionKey = resolveSessionKey(initialSessionInput);
+      const nextSessionInput = initialSessionInput || "";
+      const nextSessionKey = resolveSessionKey(nextSessionInput);
       if (nextSessionKey !== state.currentSessionKey) {
         state.currentSessionKey = nextSessionKey;
       }

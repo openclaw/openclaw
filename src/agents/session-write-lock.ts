@@ -1,12 +1,29 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
 
+type LockFileOwnerPayload = {
+  pid?: number;
+  hostname?: string;
+  cwd?: string;
+  starttime?: number;
+};
+
 type LockFilePayload = {
+  version?: number;
+  kind?: string;
+  leaseId?: string;
+  sessionFile?: string;
+  lockPath?: string;
+  acquiredAt?: string;
   pid?: number;
   createdAt?: string;
+  expiresAt?: string;
+  maxHoldMs?: number;
+  owner?: LockFileOwnerPayload;
   /** Process start time in clock ticks (from /proc/pid/stat field 22). */
   starttime?: number;
 };
@@ -122,6 +139,49 @@ export function resolveSessionLockMaxHoldFromTimeout(params: {
   }
   const graceMs = resolvePositiveMs(params.graceMs, DEFAULT_TIMEOUT_GRACE_MS);
   return Math.min(MAX_LOCK_HOLD_MS, Math.max(minMs, timeoutMs + graceMs));
+}
+
+function normalizeLockTimestamp(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || Number.isNaN(Date.parse(trimmed))) {
+    return null;
+  }
+  return trimmed;
+}
+
+function buildSessionLockPayload(params: {
+  lockPath: string;
+  sessionFile: string;
+  maxHoldMs: number;
+}): LockFilePayload {
+  const acquiredAt = new Date().toISOString();
+  const starttime = getProcessStartTime(process.pid);
+  const owner: LockFileOwnerPayload = {
+    pid: process.pid,
+    hostname: os.hostname(),
+  };
+  const cwd = process.cwd();
+  if (cwd) {
+    owner.cwd = cwd;
+  }
+  if (starttime !== null) {
+    owner.starttime = starttime;
+  }
+  return {
+    version: 2,
+    kind: "session-write-lock",
+    leaseId: `${process.pid}-${Date.now().toString(36)}`,
+    sessionFile: params.sessionFile,
+    lockPath: params.lockPath,
+    acquiredAt,
+    createdAt: acquiredAt,
+    expiresAt: new Date(Date.now() + params.maxHoldMs).toISOString(),
+    maxHoldMs: params.maxHoldMs,
+    owner,
+  };
 }
 
 async function releaseHeldLock(
@@ -299,15 +359,40 @@ async function readLockPayload(lockPath: string): Promise<LockFilePayload | null
   try {
     const raw = await fs.readFile(lockPath, "utf8");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const owner =
+      parsed.owner && typeof parsed.owner === "object"
+        ? (parsed.owner as Record<string, unknown>)
+        : {};
     const payload: LockFilePayload = {};
-    if (isValidLockNumber(parsed.pid) && parsed.pid > 0) {
-      payload.pid = parsed.pid;
+    const pid =
+      isValidLockNumber(parsed.pid) && parsed.pid > 0
+        ? parsed.pid
+        : isValidLockNumber(owner.pid) && owner.pid > 0
+          ? owner.pid
+          : null;
+    const createdAt =
+      normalizeLockTimestamp(parsed.acquiredAt) ?? normalizeLockTimestamp(parsed.createdAt);
+    const expiresAt = normalizeLockTimestamp(parsed.expiresAt);
+    const starttime =
+      isValidLockNumber(parsed.starttime)
+        ? parsed.starttime
+        : isValidLockNumber(owner.starttime)
+          ? owner.starttime
+          : null;
+    if (pid !== null) {
+      payload.pid = pid;
     }
-    if (typeof parsed.createdAt === "string") {
-      payload.createdAt = parsed.createdAt;
+    if (createdAt) {
+      payload.createdAt = createdAt;
     }
-    if (isValidLockNumber(parsed.starttime)) {
-      payload.starttime = parsed.starttime;
+    if (expiresAt) {
+      payload.expiresAt = expiresAt;
+    }
+    if (starttime !== null) {
+      payload.starttime = starttime;
+    }
+    if (isValidLockNumber(parsed.maxHoldMs)) {
+      payload.maxHoldMs = parsed.maxHoldMs;
     }
     return payload;
   } catch {
@@ -325,6 +410,8 @@ function inspectLockPayload(
   const createdAt = typeof payload?.createdAt === "string" ? payload.createdAt : null;
   const createdAtMs = createdAt ? Date.parse(createdAt) : Number.NaN;
   const ageMs = Number.isFinite(createdAtMs) ? Math.max(0, nowMs - createdAtMs) : null;
+  const expiresAt = typeof payload?.expiresAt === "string" ? payload.expiresAt : null;
+  const expiresAtMs = expiresAt ? Date.parse(expiresAt) : Number.NaN;
 
   // Detect PID recycling: if the PID is alive but its start time differs from
   // what was recorded in the lock file, the original process died and the OS
@@ -350,6 +437,9 @@ function inspectLockPayload(
     staleReasons.push("invalid-createdAt");
   } else if (ageMs > staleMs) {
     staleReasons.push("too-old");
+  }
+  if (Number.isFinite(expiresAtMs) && nowMs > expiresAtMs) {
+    staleReasons.push("expired-lease");
   }
 
   return {
@@ -508,12 +598,11 @@ export async function acquireSessionWriteLock(params: {
     let handle: fs.FileHandle | null = null;
     try {
       handle = await fs.open(lockPath, "wx");
-      const createdAt = new Date().toISOString();
-      const starttime = getProcessStartTime(process.pid);
-      const lockPayload: LockFilePayload = { pid: process.pid, createdAt };
-      if (starttime !== null) {
-        lockPayload.starttime = starttime;
-      }
+      const lockPayload = buildSessionLockPayload({
+        lockPath,
+        sessionFile: normalizedSessionFile,
+        maxHoldMs,
+      });
       await handle.writeFile(JSON.stringify(lockPayload, null, 2), "utf8");
       const createdHeld: HeldLock = {
         count: 1,

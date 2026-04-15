@@ -30,7 +30,7 @@ describe("tui session actions", () => {
 
     const state: TuiStateAccess = {
       agentDefaultId: "main",
-      sessionMainKey: "agent:main:main",
+      sessionMainKey: "main",
       sessionScope: "global",
       agents: [],
       currentAgentId: "main",
@@ -136,7 +136,7 @@ describe("tui session actions", () => {
 
     const state: TuiStateAccess = {
       agentDefaultId: "main",
-      sessionMainKey: "agent:main:main",
+      sessionMainKey: "main",
       sessionScope: "global",
       agents: [],
       currentAgentId: "main",
@@ -222,7 +222,7 @@ describe("tui session actions", () => {
 
     const state: TuiStateAccess = {
       agentDefaultId: "main",
-      sessionMainKey: "agent:main:main",
+      sessionMainKey: "main",
       sessionScope: "global",
       agents: [],
       currentAgentId: "main",
@@ -300,7 +300,7 @@ describe("tui session actions", () => {
 
     const state: TuiStateAccess = {
       agentDefaultId: "main",
-      sessionMainKey: "agent:main:main",
+      sessionMainKey: "main",
       sessionScope: "global",
       agents: [],
       currentAgentId: "main",

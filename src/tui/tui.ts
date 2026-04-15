@@ -11,12 +11,11 @@ import {
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import {
-  buildAgentMainSessionKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { resolveSessionRoute } from "../routing/resolve-route.js";
 import { getSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
@@ -51,28 +50,24 @@ export {
 } from "./tui-submit.js";
 
 export function resolveTuiSessionKey(params: {
+  cfg?: OpenClawConfig;
   raw?: string;
   sessionScope: SessionScope;
   currentAgentId: string;
   sessionMainKey: string;
 }) {
-  const trimmed = (params.raw ?? "").trim();
-  if (!trimmed) {
-    if (params.sessionScope === "global") {
-      return "global";
-    }
-    return buildAgentMainSessionKey({
-      agentId: params.currentAgentId,
-      mainKey: params.sessionMainKey,
-    });
-  }
-  if (trimmed === "global" || trimmed === "unknown") {
-    return trimmed;
-  }
-  if (trimmed.startsWith("agent:")) {
-    return normalizeLowercaseStringOrEmpty(trimmed);
-  }
-  return `agent:${params.currentAgentId}:${normalizeLowercaseStringOrEmpty(trimmed)}`;
+  return resolveSessionRoute({
+    cfg: params.cfg,
+    agentId: params.currentAgentId,
+    surface: "tui",
+    rawSessionInput: (params.raw ?? "").trim() || undefined,
+    sessionScope: params.sessionScope === "global" ? "global" : "agent",
+    mainKey: params.sessionMainKey,
+  }).sessionKey;
+}
+
+function resolveConfiguredTuiDefaultSessionInput(_cfg: OpenClawConfig, _agentId: string) {
+  return null;
 }
 
 export function resolveInitialTuiAgentId(params: {
@@ -472,6 +467,7 @@ export async function runTui(opts: TuiOptions) {
 
   const resolveSessionKey = (raw?: string) => {
     return resolveTuiSessionKey({
+      cfg: config,
       raw,
       sessionScope,
       currentAgentId,
@@ -479,7 +475,9 @@ export async function runTui(opts: TuiOptions) {
     });
   };
 
-  currentSessionKey = resolveSessionKey(initialSessionInput);
+  const configuredDefaultSessionInput =
+    initialSessionInput || resolveConfiguredTuiDefaultSessionInput(config, currentAgentId) || "";
+  currentSessionKey = resolveSessionKey(configuredDefaultSessionInput);
 
   const updateHeader = () => {
     const sessionLabel = formatSessionKey(currentSessionKey);

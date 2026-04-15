@@ -41,8 +41,20 @@ async function expectCurrentPidOwnsLock(params: {
   const lockPath = `${sessionFile}.lock`;
   const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs, staleMs });
   const raw = await fs.readFile(lockPath, "utf8");
-  const payload = JSON.parse(raw) as { pid: number };
-  expect(payload.pid).toBe(process.pid);
+  const canonicalSessionFile = path.join(await fs.realpath(path.dirname(sessionFile)), path.basename(sessionFile));
+  const canonicalLockPath = await fs.realpath(lockPath);
+  const payload = JSON.parse(raw) as {
+    version?: number;
+    kind?: string;
+    sessionFile?: string;
+    lockPath?: string;
+    owner?: { pid?: number };
+  };
+  expect(payload.kind).toBe("session-write-lock");
+  expect(payload.version).toBe(2);
+  expect(payload.sessionFile).toBe(canonicalSessionFile);
+  expect(payload.lockPath).toBe(canonicalLockPath);
+  expect(payload.owner?.pid).toBe(process.pid);
   await lock.release();
 }
 

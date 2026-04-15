@@ -10,6 +10,7 @@ import {
   buildAgentMainSessionKey,
   buildAgentPeerSessionKey,
   DEFAULT_ACCOUNT_ID,
+  DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   normalizeAccountId,
   normalizeAgentId,
@@ -18,10 +19,65 @@ import {
 
 /** @deprecated Use ChatType from channels/chat-type.js */
 export type RoutePeerKind = ChatType;
+export type RouteSurface = "telegram" | "tui" | "webchat" | "heartbeat" | "cron" | "hook" | "api";
+export type RouteScope =
+  | "agent-main"
+  | "peer-scoped-direct"
+  | "explicit"
+  | "heartbeat-isolated"
+  | "global";
 
 export type RoutePeer = {
   kind: ChatType;
   id: string;
+};
+
+export type RouteActor = {
+  provider?: string | null;
+  accountId?: string | null;
+  from?: string | null;
+  to?: string | null;
+  identityLinkKey?: string | null;
+  chatType?: ChatType | null;
+  label?: string | null;
+};
+
+export type ResolveSessionRouteInput = {
+  cfg?: OpenClawConfig | null;
+  agentId?: string | null;
+  surface?: string | null;
+  rawSessionInput?: string | null;
+  sessionScope?: "agent" | "global";
+  mainKey?: string | null;
+  actor?: RouteActor | null;
+  heartbeatBaseSessionKey?: string | null;
+  appendHeartbeatSuffix?: boolean;
+};
+
+export type SessionRouteProvenance = {
+  provider: string | null;
+  accountId: string | null;
+  from: string | null;
+  to: string | null;
+  identityLinkKey: string | null;
+  chatType: ChatType | null;
+  label: string | null;
+  heartbeatBaseSessionKey: string | null;
+  sessionScope: "agent" | "global";
+  dmScope: OpenClawConfig["session"] extends { dmScope?: infer T } ? T | null : string | null;
+};
+
+export type ResolvedSessionRoute = {
+  agentId: string;
+  sessionKey: string;
+  mainSessionKey: string;
+  scope: RouteScope;
+  reason: string;
+  explicit: boolean;
+  surface: RouteSurface;
+  actorFingerprint: string | null;
+  provenance: SessionRouteProvenance;
+  resolverVersion: typeof ROUTE_RESOLVER_VERSION;
 };
 
 export type ResolveAgentRouteInput = {
@@ -45,6 +101,13 @@ export type ResolvedAgentRoute = {
   sessionKey: string;
   /** Convenience alias for direct-chat collapse. */
   mainSessionKey: string;
+  scope: RouteScope;
+  reason: string;
+  explicit: boolean;
+  surface: RouteSurface;
+  actorFingerprint: string | null;
+  provenance: SessionRouteProvenance;
+  resolverVersion: typeof ROUTE_RESOLVER_VERSION;
   /** Which session should receive inbound last-route updates. */
   lastRoutePolicy: "main" | "session";
   /** Match description for debugging/logging. */
@@ -61,6 +124,8 @@ export type ResolvedAgentRoute = {
 };
 
 export { DEFAULT_ACCOUNT_ID, DEFAULT_AGENT_ID } from "./session-key.js";
+
+const ROUTE_RESOLVER_VERSION = "2026-04-15-route-v1" as const;
 
 export function deriveLastRoutePolicy(params: {
   sessionKey: string;
@@ -113,6 +178,328 @@ export function buildAgentSessionKey(params: {
   });
 }
 
+function normalizeRouteSurface(value: string | undefined | null): RouteSurface {
+  const normalized = normalizeToken(value);
+  if (
+    normalized === "telegram" ||
+    normalized === "tui" ||
+    normalized === "webchat" ||
+    normalized === "heartbeat" ||
+    normalized === "cron" ||
+    normalized === "hook" ||
+    normalized === "api"
+  ) {
+    return normalized;
+  }
+  return "api";
+}
+
+function normalizeRouteScopeFromSessionKey(sessionKey: string | undefined | null): RouteScope {
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
+  if (!normalized) {
+    return "agent-main";
+  }
+  if (normalized === "global") {
+    return "global";
+  }
+  if (normalized.endsWith(":heartbeat")) {
+    return "heartbeat-isolated";
+  }
+  if (/:direct:/.test(normalized)) {
+    return "peer-scoped-direct";
+  }
+  if (/^agent:[^:]+:main$/.test(normalized)) {
+    return "agent-main";
+  }
+  if (/^agent:[^:]+:explicit:/.test(normalized)) {
+    return "explicit";
+  }
+  return "explicit";
+}
+
+function buildRouteActorFingerprint(actor: RouteActor | null): string | null {
+  if (!actor) {
+    return null;
+  }
+  const parts = [
+    actor.provider ?? "",
+    actor.accountId ?? "",
+    actor.chatType ?? "",
+    actor.from ?? "",
+    actor.to ?? "",
+    actor.identityLinkKey ?? "",
+  ];
+  return parts.every((value) => value === "") ? null : parts.join("|");
+}
+
+function normalizeRouteActor(
+  actor: RouteActor | undefined | null,
+  fallbackSurface: RouteSurface,
+): {
+  provider: string | null;
+  accountId: string;
+  from: string | null;
+  to: string | null;
+  identityLinkKey: string | null;
+  chatType: ChatType | null;
+  label: string | null;
+} | null {
+  if (!actor || typeof actor !== "object") {
+    return null;
+  }
+  const provider = normalizeToken(actor.provider ?? fallbackSurface);
+  const accountId = normalizeAccountId(actor.accountId);
+  const from = normalizeToken(actor.from);
+  const to = normalizeToken(actor.to);
+  const identityLinkKey = normalizeToken(actor.identityLinkKey);
+  const normalizedChatType = normalizeChatType(actor.chatType ?? undefined);
+  const chatType =
+    normalizedChatType ??
+    (normalizeToken(actor.chatType) === "direct"
+      ? "direct"
+      : normalizeToken(actor.chatType) === "group"
+        ? "group"
+        : normalizeToken(actor.chatType) === "channel"
+          ? "channel"
+          : null);
+  const label = normalizeId(actor.label);
+  if (!(provider || accountId || from || to || identityLinkKey || chatType || label)) {
+    return null;
+  }
+  return {
+    provider: provider || null,
+    accountId,
+    from: from || null,
+    to: to || null,
+    identityLinkKey: identityLinkKey || null,
+    chatType,
+    label: label || null,
+  };
+}
+
+function resolveRoutePeerId(
+  actor:
+    | {
+        identityLinkKey: string | null;
+        from: string | null;
+        to: string | null;
+        label: string | null;
+      }
+    | null,
+): string | null {
+  if (!actor) {
+    return null;
+  }
+  if (actor.identityLinkKey) {
+    return actor.identityLinkKey;
+  }
+  if (actor.from) {
+    return actor.from;
+  }
+  if (actor.to) {
+    return actor.to;
+  }
+  if (actor.label) {
+    return actor.label;
+  }
+  return null;
+}
+
+function normalizeExplicitRouteSessionKey(
+  rawSessionInput: string | undefined | null,
+  agentId: string,
+  mainKey: string,
+): string {
+  const trimmed = normalizeId(rawSessionInput);
+  const lowered = normalizeToken(trimmed);
+  const canonicalMainSessionKey = buildAgentMainSessionKey({ agentId, mainKey });
+  const canonicalMainAliasKey = buildAgentMainSessionKey({
+    agentId,
+    mainKey: DEFAULT_MAIN_KEY,
+  });
+  const legacyMainSessionKey = buildAgentMainSessionKey({
+    agentId: DEFAULT_AGENT_ID,
+    mainKey,
+  });
+  const legacyMainAliasKey = buildAgentMainSessionKey({
+    agentId: DEFAULT_AGENT_ID,
+    mainKey: DEFAULT_MAIN_KEY,
+  });
+  if (!trimmed) {
+    return canonicalMainSessionKey;
+  }
+  if (lowered === "global" || lowered === "unknown") {
+    return lowered;
+  }
+  if (
+    lowered === "main" ||
+    lowered === normalizeToken(mainKey) ||
+    lowered === canonicalMainSessionKey ||
+    lowered === canonicalMainAliasKey ||
+    lowered === legacyMainSessionKey ||
+    lowered === legacyMainAliasKey
+  ) {
+    return canonicalMainSessionKey;
+  }
+  if (lowered.startsWith("agent:")) {
+    return normalizeLowercaseStringOrEmpty(trimmed);
+  }
+  return `agent:${normalizeAgentId(agentId)}:${normalizeLowercaseStringOrEmpty(trimmed)}`;
+}
+
+function normalizeHeartbeatSessionKey(sessionKey: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
+  if (!normalized || normalized === "global") {
+    return normalized || "global";
+  }
+  return normalized.endsWith(":heartbeat")
+    ? normalized.replace(/(:heartbeat)+$/u, ":heartbeat")
+    : `${normalized}:heartbeat`;
+}
+
+function resolveHeartbeatBaseSessionKey(params: {
+  agentId: string;
+  mainKey: string;
+  sessionScope: "agent" | "global";
+  rawSessionInput?: string | null;
+  heartbeatBaseSessionKey?: string | null;
+}): string {
+  if (params.sessionScope === "global") {
+    return "global";
+  }
+  if (params.heartbeatBaseSessionKey?.trim()) {
+    return normalizeExplicitRouteSessionKey(
+      params.heartbeatBaseSessionKey,
+      params.agentId,
+      params.mainKey,
+    );
+  }
+  if (params.rawSessionInput?.trim()) {
+    return normalizeExplicitRouteSessionKey(params.rawSessionInput, params.agentId, params.mainKey);
+  }
+  return buildAgentMainSessionKey({
+    agentId: params.agentId,
+    mainKey: params.mainKey,
+  });
+}
+
+function resolveActorSessionKey(params: {
+  cfg?: OpenClawConfig | null;
+  agentId: string;
+  mainKey: string;
+  actor: NonNullable<ReturnType<typeof normalizeRouteActor>>;
+}): string {
+  if (!params.actor.chatType || !params.actor.provider) {
+    return buildAgentMainSessionKey({
+      agentId: params.agentId,
+      mainKey: params.mainKey,
+    });
+  }
+  const peerId = resolveRoutePeerId(params.actor);
+  return buildAgentPeerSessionKey({
+    agentId: params.agentId,
+    mainKey: params.mainKey,
+    channel: params.actor.provider,
+    accountId: params.actor.accountId ?? DEFAULT_ACCOUNT_ID,
+    peerKind: params.actor.chatType,
+    peerId,
+    dmScope: params.cfg?.session?.dmScope,
+    identityLinks: params.cfg?.session?.identityLinks,
+  });
+}
+
+export function resolveSessionRoute(input: ResolveSessionRouteInput): ResolvedSessionRoute {
+  const cfg = input?.cfg && typeof input.cfg === "object" ? input.cfg : undefined;
+  const surface = normalizeRouteSurface(input?.surface);
+  const sessionScope = input?.sessionScope === "global" ? "global" : "agent";
+  const mainKey = normalizeToken(input?.mainKey) || DEFAULT_MAIN_KEY;
+  const agentId = pickFirstExistingAgentId(cfg, input?.agentId);
+  const actor = normalizeRouteActor(input?.actor, surface);
+  const mainSessionKey =
+    sessionScope === "global"
+      ? "global"
+      : normalizeLowercaseStringOrEmpty(
+          buildAgentMainSessionKey({
+            agentId,
+            mainKey,
+          }),
+        );
+  const explicitInput = normalizeId(input?.rawSessionInput);
+
+  let sessionKey = mainSessionKey;
+  let reason = `${surface}-agent-main`;
+  let explicit = false;
+
+  if (sessionScope === "global") {
+    sessionKey = "global";
+    reason = `${surface}-global`;
+  } else if (surface === "heartbeat") {
+    const baseSessionKey = resolveHeartbeatBaseSessionKey({
+      agentId,
+      mainKey,
+      sessionScope,
+      rawSessionInput: explicitInput,
+      heartbeatBaseSessionKey: input?.heartbeatBaseSessionKey,
+    });
+    if (input?.appendHeartbeatSuffix === false) {
+      sessionKey = baseSessionKey;
+      explicit = Boolean(explicitInput || input?.heartbeatBaseSessionKey);
+      reason = input?.heartbeatBaseSessionKey?.trim()
+        ? "heartbeat-base-session"
+        : explicitInput
+          ? "heartbeat-explicit-base"
+          : "heartbeat-agent-main-base";
+    } else {
+      sessionKey = normalizeHeartbeatSessionKey(baseSessionKey);
+      explicit = Boolean(explicitInput || input?.heartbeatBaseSessionKey);
+      reason = input?.heartbeatBaseSessionKey?.trim()
+        ? "heartbeat-isolated-base-session"
+        : explicitInput
+          ? "heartbeat-isolated-explicit"
+          : "heartbeat-isolated-agent-main";
+    }
+  } else if (explicitInput) {
+    sessionKey = normalizeExplicitRouteSessionKey(explicitInput, agentId, mainKey);
+    explicit = true;
+    reason = `${surface}-explicit-session`;
+  } else if (actor?.provider && actor.chatType) {
+    sessionKey = normalizeLowercaseStringOrEmpty(
+      resolveActorSessionKey({
+        cfg,
+        agentId,
+        mainKey,
+        actor,
+      }),
+    );
+    reason = actor.chatType === "direct" ? `${surface}-peer-direct` : `${surface}-peer`;
+  }
+
+  const scope = normalizeRouteScopeFromSessionKey(sessionKey);
+  return {
+    agentId,
+    sessionKey,
+    mainSessionKey,
+    scope,
+    reason,
+    explicit,
+    surface,
+    actorFingerprint: buildRouteActorFingerprint(actor),
+    provenance: {
+      provider: actor?.provider ?? null,
+      accountId: actor?.accountId ?? null,
+      from: actor?.from ?? null,
+      to: actor?.to ?? null,
+      identityLinkKey: actor?.identityLinkKey ?? null,
+      chatType: actor?.chatType ?? null,
+      label: actor?.label ?? null,
+      heartbeatBaseSessionKey: input?.heartbeatBaseSessionKey?.trim() || null,
+      sessionScope,
+      dmScope: cfg?.session?.dmScope ?? null,
+    },
+    resolverVersion: ROUTE_RESOLVER_VERSION,
+  };
+}
+
 function listAgents(cfg: OpenClawConfig) {
   const agents = cfg.agents?.list;
   return Array.isArray(agents) ? agents : [];
@@ -150,7 +537,14 @@ function resolveAgentLookupCache(cfg: OpenClawConfig): AgentLookupCache {
   return next;
 }
 
-export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): string {
+export function pickFirstExistingAgentId(
+  cfg: OpenClawConfig | null | undefined,
+  agentId: string | undefined | null,
+): string {
+  if (!cfg || typeof cfg !== "object") {
+    const trimmed = (agentId ?? "").trim();
+    return trimmed ? sanitizeAgentId(trimmed) : "main";
+  }
   const lookup = resolveAgentLookupCache(cfg);
   const trimmed = (agentId ?? "").trim();
   if (!trimmed) {
@@ -678,28 +1072,39 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
 
   const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
-    const sessionKey = normalizeLowercaseStringOrEmpty(
-      buildAgentSessionKey({
-        agentId: resolvedAgentId,
-        channel,
-        accountId,
-        peer,
-        dmScope,
-        identityLinks,
-      }),
-    );
-    const mainSessionKey = normalizeLowercaseStringOrEmpty(
-      buildAgentMainSessionKey({
-        agentId: resolvedAgentId,
-        mainKey: DEFAULT_MAIN_KEY,
-      }),
-    );
+    const resolved = resolveSessionRoute({
+      cfg: input.cfg,
+      agentId: resolvedAgentId,
+      surface: channel || "api",
+      sessionScope: "agent",
+      actor: peer
+        ? {
+            provider: channel,
+            accountId,
+            from: normalizeId(peer.id),
+            to: normalizeId(peer.id),
+            chatType: peer.kind,
+          }
+        : {
+            provider: channel,
+            accountId,
+          },
+    });
+    const sessionKey = resolved.sessionKey;
+    const mainSessionKey = resolved.mainSessionKey;
     const route = {
       agentId: resolvedAgentId,
       channel,
       accountId,
       sessionKey,
       mainSessionKey,
+      scope: resolved.scope,
+      reason: resolved.reason,
+      explicit: resolved.explicit,
+      surface: resolved.surface,
+      actorFingerprint: resolved.actorFingerprint,
+      provenance: resolved.provenance,
+      resolverVersion: resolved.resolverVersion,
       lastRoutePolicy: deriveLastRoutePolicy({ sessionKey, mainSessionKey }),
       matchedBy,
     };

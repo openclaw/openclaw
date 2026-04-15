@@ -58,13 +58,13 @@ describe("tui slash commands", () => {
 });
 
 describe("resolveTuiSessionKey", () => {
-  it("uses global only as the default when scope is global", () => {
+  it("keeps the session global when scope is global", () => {
     expect(
       resolveTuiSessionKey({
         raw: "",
         sessionScope: "global",
         currentAgentId: "main",
-        sessionMainKey: "agent:main:main",
+        sessionMainKey: "main",
       }),
     ).toBe("global");
     expect(
@@ -72,18 +72,18 @@ describe("resolveTuiSessionKey", () => {
         raw: "test123",
         sessionScope: "global",
         currentAgentId: "main",
-        sessionMainKey: "agent:main:main",
+        sessionMainKey: "main",
       }),
-    ).toBe("agent:main:test123");
+    ).toBe("global");
   });
 
   it("keeps explicit agent-prefixed keys unchanged", () => {
     expect(
       resolveTuiSessionKey({
         raw: "agent:ops:incident",
-        sessionScope: "global",
+        sessionScope: "per-sender",
         currentAgentId: "main",
-        sessionMainKey: "agent:main:main",
+        sessionMainKey: "main",
       }),
     ).toBe("agent:ops:incident");
   });
@@ -93,18 +93,18 @@ describe("resolveTuiSessionKey", () => {
     expect(
       resolveTuiSessionKey({
         raw: "agent:main:Test1",
-        sessionScope: "global",
+        sessionScope: "per-sender",
         currentAgentId: "main",
-        sessionMainKey: "agent:main:main",
+        sessionMainKey: "main",
       }),
     ).toBe("agent:main:test1");
     // Uppercase in bare form (prefixed by currentAgentId)
     expect(
       resolveTuiSessionKey({
         raw: "Test1",
-        sessionScope: "global",
+        sessionScope: "per-sender",
         currentAgentId: "main",
-        sessionMainKey: "agent:main:main",
+        sessionMainKey: "main",
       }),
     ).toBe("agent:main:test1");
   });

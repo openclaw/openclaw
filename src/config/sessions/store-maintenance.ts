@@ -279,6 +279,27 @@ async function getSessionFileSize(storePath: string): Promise<number | null> {
   }
 }
 
+export function resolveSessionMaintenanceRoot(storePath: string): string {
+  const resolvedStorePath = path.resolve(storePath);
+  const sessionsDir = path.dirname(resolvedStorePath);
+  if (path.basename(sessionsDir) === "sessions") {
+    const agentDir = path.dirname(sessionsDir);
+    const agentsDir = path.dirname(agentDir);
+    if (path.basename(agentsDir) === "agents") {
+      return path.join(agentDir, "artifacts");
+    }
+  }
+  return path.join(path.dirname(sessionsDir), ".openclaw-artifacts");
+}
+
+export function resolveSessionStoreBackupDir(storePath: string): string {
+  return path.join(resolveSessionMaintenanceRoot(storePath), "session-store");
+}
+
+export function resolveSessionTranscriptArchiveDir(storePath: string): string {
+  return path.join(resolveSessionMaintenanceRoot(storePath), "session-transcripts");
+}
+
 /**
  * Rotate the sessions file if it exceeds the configured size threshold.
  * Renames the current file to `sessions.json.bak.{timestamp}` and cleans up
@@ -300,12 +321,13 @@ export async function rotateSessionFile(
     return false;
   }
 
-  // Rotate: rename current file to .bak.{timestamp}
-  const backupPath = `${storePath}.bak.${Date.now()}`;
+  const backupDir = resolveSessionStoreBackupDir(storePath);
+  await fs.promises.mkdir(backupDir, { recursive: true }).catch(() => undefined);
+  const backupPath = path.join(backupDir, `${path.basename(storePath)}.bak.${Date.now()}`);
   try {
     await fs.promises.rename(storePath, backupPath);
     log.info("rotated session store file", {
-      backupPath: path.basename(backupPath),
+      backupPath,
       sizeBytes: fileSize,
     });
   } catch {
@@ -315,9 +337,8 @@ export async function rotateSessionFile(
 
   // Clean up old backups — keep only the 3 most recent .bak.* files.
   try {
-    const dir = path.dirname(storePath);
     const baseName = path.basename(storePath);
-    const files = await fs.promises.readdir(dir);
+    const files = await fs.promises.readdir(backupDir);
     const backups = files
       .filter((f) => f.startsWith(`${baseName}.bak.`))
       .toSorted()
@@ -327,7 +348,7 @@ export async function rotateSessionFile(
     if (backups.length > maxBackups) {
       const toDelete = backups.slice(maxBackups);
       for (const old of toDelete) {
-        await fs.promises.unlink(path.join(dir, old)).catch(() => undefined);
+        await fs.promises.unlink(path.join(backupDir, old)).catch(() => undefined);
       }
       log.info("cleaned up old session store backups", { deleted: toDelete.length });
     }

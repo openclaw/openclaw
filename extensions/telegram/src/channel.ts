@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildDmGroupAccountAllowlistAdapter,
@@ -32,9 +34,11 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolveTelegramAccount, type ResolvedTelegramAccount } from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
@@ -128,6 +132,186 @@ function getOptionalTelegramRuntime() {
   } catch {
     return null;
   }
+}
+
+const TELEGRAM_TRUTH_GRACE_MS = 5 * 60 * 1000;
+const TELEGRAM_STATUS_SCAN_TTL_MS = 30_000;
+const TELEGRAM_STATUS_SCAN_CACHE_KEY = Symbol.for("openclaw.telegramStatusScanCache");
+
+type TelegramOperationalStoreTruth = {
+  routeIntegrity: "ok" | "unknown" | "contradictory";
+  sessionStoreIntegrity: "ok" | "unknown" | "mixed-artifacts";
+  routeContradictions: number;
+  artifactNoise: number;
+};
+
+function getTelegramStatusScanCache(): {
+  expiresAt: number;
+  value: TelegramOperationalStoreTruth;
+} {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalStore[TELEGRAM_STATUS_SCAN_CACHE_KEY] as
+    | { expiresAt: number; value: TelegramOperationalStoreTruth }
+    | undefined;
+  if (existing) {
+    return existing;
+  }
+  const created = {
+    expiresAt: 0,
+    value: {
+      routeIntegrity: "unknown",
+      sessionStoreIntegrity: "unknown",
+      routeContradictions: 0,
+      artifactNoise: 0,
+    } satisfies TelegramOperationalStoreTruth,
+  };
+  globalStore[TELEGRAM_STATUS_SCAN_CACHE_KEY] = created;
+  return created;
+}
+
+function isTelegramSessionArtifactNoise(name: string): boolean {
+  return (
+    name.endsWith(".telegram-sent-messages.json") ||
+    name.includes(".bak.") ||
+    name.includes(".deleted.") ||
+    name.includes(".reset.") ||
+    name.includes(".rotated.") ||
+    name === "session-reset-backups" ||
+    /^manual-archive-/i.test(name) ||
+    /^orphans-/i.test(name) ||
+    /^backup-/i.test(name)
+  );
+}
+
+function inspectTelegramOperationalStoreTruth(): TelegramOperationalStoreTruth {
+  const cache = getTelegramStatusScanCache();
+  const now = Date.now();
+  if (cache.expiresAt > now && cache.value) {
+    return cache.value;
+  }
+
+  const result: TelegramOperationalStoreTruth = {
+    routeIntegrity: "unknown",
+    sessionStoreIntegrity: "unknown",
+    routeContradictions: 0,
+    artifactNoise: 0,
+  };
+
+  try {
+    const agentsDir = path.join(resolveStateDir(process.env), "agents");
+    const agentDirs = fs.existsSync(agentsDir)
+      ? fs.readdirSync(agentsDir, { withFileTypes: true })
+      : [];
+    result.routeIntegrity = "ok";
+    result.sessionStoreIntegrity = "ok";
+    for (const agentDir of agentDirs) {
+      if (!agentDir.isDirectory()) {
+        continue;
+      }
+      const sessionsDir = path.join(agentsDir, agentDir.name, "sessions");
+      if (!fs.existsSync(sessionsDir)) {
+        continue;
+      }
+      let dirEntries: fs.Dirent[] = [];
+      try {
+        dirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const dirEntry of dirEntries) {
+        if (dirEntry.isDirectory() || isTelegramSessionArtifactNoise(dirEntry.name)) {
+          result.artifactNoise += 1;
+        }
+      }
+      const storePath = path.join(sessionsDir, "sessions.json");
+      if (!fs.existsSync(storePath)) {
+        continue;
+      }
+      let store: Record<string, Record<string, unknown>> = {};
+      try {
+        store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, Record<string, unknown>>;
+      } catch {
+        continue;
+      }
+      if (!store || typeof store !== "object" || Array.isArray(store)) {
+        continue;
+      }
+      for (const [sessionKey, sessionEntry] of Object.entries(store)) {
+        const entry = sessionEntry && typeof sessionEntry === "object" ? sessionEntry : {};
+        const normalizedKey = normalizeLowercaseStringOrEmpty(sessionKey);
+        const origin = entry.origin as Record<string, unknown> | undefined;
+        const routeMetadata = entry.routeMetadata as Record<string, unknown> | undefined;
+        const originProvider = normalizeLowercaseStringOrEmpty(origin?.provider ?? origin?.surface);
+        const originChatType = normalizeLowercaseStringOrEmpty(origin?.chatType);
+        const routeIntegrityState = normalizeLowercaseStringOrEmpty(
+          entry.routeIntegrityState ?? routeMetadata?.integrity,
+        );
+        if (routeIntegrityState === "contradictory") {
+          result.routeContradictions += 1;
+        }
+        if (
+          /^agent:[^:]+:main$/.test(normalizedKey) &&
+          originProvider === "telegram" &&
+          originChatType === "direct"
+        ) {
+          result.routeContradictions += 1;
+        }
+        if (/^agent:[^:]+:main:heartbeat$/.test(normalizedKey) && originProvider === "telegram") {
+          result.routeContradictions += 1;
+        }
+      }
+    }
+    if (result.artifactNoise > 0) {
+      result.sessionStoreIntegrity = "mixed-artifacts";
+    }
+    if (result.routeContradictions > 0) {
+      result.routeIntegrity = "contradictory";
+    }
+  } catch {
+    // Keep unknown defaults on scan failures.
+  }
+
+  cache.value = result;
+  cache.expiresAt = now + TELEGRAM_STATUS_SCAN_TTL_MS;
+  return result;
+}
+
+function resolveTelegramOperationalTruth(
+  runtime: { running?: boolean; connected?: boolean; lastStartAt?: number | null; lastInboundAt?: number | null; lastOutboundAt?: number | null; healthState?: string | null } | undefined,
+  storeTruth: TelegramOperationalStoreTruth,
+): {
+  deliveryTruth: "stopped" | "observed" | "warming" | "unknown";
+  transportTruth: "stopped" | "reachable" | "unreachable";
+  healthState?: string;
+} {
+  const running = runtime?.running === true;
+  const connected = runtime?.connected === true;
+  const lastStartAt = typeof runtime?.lastStartAt === "number" ? runtime.lastStartAt : null;
+  const lastInboundAt = typeof runtime?.lastInboundAt === "number" ? runtime.lastInboundAt : null;
+  const lastOutboundAt = typeof runtime?.lastOutboundAt === "number" ? runtime.lastOutboundAt : null;
+  const graceExpired = lastStartAt != null && Date.now() - lastStartAt > TELEGRAM_TRUTH_GRACE_MS;
+  const deliveryTruth =
+    !running
+      ? "stopped"
+      : lastInboundAt != null || lastOutboundAt != null
+        ? "observed"
+        : graceExpired
+          ? "unknown"
+          : "warming";
+  const transportTruth = !running ? "stopped" : connected ? "reachable" : "unreachable";
+  const currentHealthState = normalizeOptionalString(runtime?.healthState);
+  const shouldDegrade =
+    (running && connected && deliveryTruth === "unknown") ||
+    storeTruth.routeIntegrity === "contradictory" ||
+    storeTruth.sessionStoreIntegrity === "mixed-artifacts";
+  return {
+    deliveryTruth,
+    transportTruth,
+    healthState:
+      shouldDegrade && (!currentHealthState || currentHealthState === "healthy")
+        ? "degraded"
+        : currentHealthState ?? undefined,
+  };
 }
 
 async function resolveTelegramSend(deps?: OutboundSendDeps): Promise<TelegramSendFn> {
@@ -846,6 +1030,8 @@ export const telegramPlugin = createChatChannelPlugin({
           Object.entries(groups ?? {}).some(
             ([key, value]) => key !== "*" && value?.requireMention === false,
           );
+        const storeTruth = inspectTelegramOperationalStoreTruth();
+        const operationalTruth = resolveTelegramOperationalTruth(runtime, storeTruth);
         return {
           accountId: account.accountId,
           name: account.name,
@@ -857,6 +1043,11 @@ export const telegramPlugin = createChatChannelPlugin({
             mode: runtime?.mode ?? (account.config.webhookUrl ? "webhook" : "polling"),
             audit,
             allowUnmentionedGroups,
+            deliveryTruth: operationalTruth.deliveryTruth,
+            transportTruth: operationalTruth.transportTruth,
+            routeIntegrity: storeTruth.routeIntegrity,
+            sessionStoreIntegrity: storeTruth.sessionStoreIntegrity,
+            healthState: operationalTruth.healthState,
           },
         };
       },
