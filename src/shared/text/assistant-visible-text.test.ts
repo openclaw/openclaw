@@ -243,8 +243,8 @@ describe("stripAssistantInternalScaffolding", () => {
 
     it("preserves literal JSON tool-call examples in instructional prose", () => {
       expectVisibleText(
-        'Use <tool_call>{"name":"exec"}</tool_call> in docs.',
-        'Use <tool_call>{"name":"exec"}</tool_call> in docs.',
+        'Example: <tool_call>{"name":"exec"}</tool_call> in docs.',
+        'Example: <tool_call>{"name":"exec"}</tool_call> in docs.',
       );
     });
 
@@ -261,6 +261,14 @@ describe("stripAssistantInternalScaffolding", () => {
         'Example: <tool_call>{"name":"exec"}</tool_call>',
         'Example: <tool_call>{"name":"exec"}</tool_call>',
       );
+      expectVisibleText(
+        'Syntax: <tool_call>{"name":"exec"}</tool_call>',
+        'Syntax: <tool_call>{"name":"exec"}</tool_call>',
+      );
+      expectVisibleText(
+        'Literal: <tool_call>{"name":"exec"}</tool_call>',
+        'Literal: <tool_call>{"name":"exec"}</tool_call>',
+      );
     });
 
     it("preserves newline-formatted literal JSON tool-call examples", () => {
@@ -276,6 +284,17 @@ describe("stripAssistantInternalScaffolding", () => {
 
     it("strips broad prose that wraps JSON tool-call payloads", () => {
       expectVisibleText('show <tool_call>{"name":"exec"}</tool_call> xml', "show  xml");
+    });
+
+    it("strips real tool-call payloads despite nearby docs prose", () => {
+      expectVisibleText(
+        'I will use <tool_call>{"name":"read","arguments":{"path":"/secret"}}</tool_call> to check docs.',
+        "I will use  to check docs.",
+      );
+      expectVisibleText(
+        'Use <tool_call>{"name":"read","arguments":{"path":"/secret"}}</tool_call> to check docs.',
+        "Use  to check docs.",
+      );
     });
 
     it("does not preserve newline JSON tool-call payloads without a literal syntax cue", () => {
