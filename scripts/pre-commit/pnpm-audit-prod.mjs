@@ -4,7 +4,6 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import YAML from "yaml";
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 const BULK_ADVISORY_PATH = "/-/npm/v1/security/advisories/bulk";
@@ -16,6 +15,11 @@ const SEVERITY_RANK = {
   high: 3,
   critical: 4,
 };
+const TOP_LEVEL_INDENT = 0;
+const SECTION_ENTRY_INDENT = 2;
+const NESTED_SECTION_INDENT = 4;
+const MAPPING_ENTRY_INDENT = 6;
+const NESTED_MAPPING_ENTRY_INDENT = 8;
 const SNAPSHOT_SECTIONS = ["dependencies", "optionalDependencies"];
 const IMPORTER_SECTIONS = ["dependencies", "optionalDependencies"];
 const LOCAL_REFERENCE_PREFIXES = ["file:", "link:", "portal:", "workspace:"];
@@ -67,18 +71,343 @@ export function parseSnapshotKey(snapshotKey) {
   };
 }
 
-function readResolvedReference(entry) {
-  if (typeof entry === "string") {
-    return entry;
-  }
-  if (entry && typeof entry === "object" && typeof entry.version === "string") {
-    return entry.version;
-  }
-  return null;
-}
-
 function isLocalReference(reference) {
   return LOCAL_REFERENCE_PREFIXES.some((prefix) => reference.startsWith(prefix));
+}
+
+function countIndentation(line) {
+  let indentation = 0;
+  while (indentation < line.length && line[indentation] === " ") {
+    indentation += 1;
+  }
+  return indentation;
+}
+
+function isIgnorableYamlLine(trimmed) {
+  return !trimmed || trimmed.startsWith("#");
+}
+
+function unquoteYamlString(value) {
+  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1).replaceAll("''", "'");
+  }
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1).replaceAll('\\"', '"');
+  }
+  return value;
+}
+
+function parseYamlScalar(value) {
+  return unquoteYamlString(value.trim());
+}
+
+function splitInlineYamlMapEntries(text) {
+  const entries = [];
+  let current = "";
+  let quote = null;
+  let depth = 0;
+
+  for (const character of text) {
+    if (quote) {
+      current += character;
+      if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      current += character;
+      continue;
+    }
+    if (character === "{" || character === "[" || character === "(") {
+      depth += 1;
+      current += character;
+      continue;
+    }
+    if (character === "}" || character === "]" || character === ")") {
+      depth = Math.max(0, depth - 1);
+      current += character;
+      continue;
+    }
+    if (character === "," && depth === 0) {
+      const entry = current.trim();
+      if (entry) {
+        entries.push(entry);
+      }
+      current = "";
+      continue;
+    }
+    current += character;
+  }
+
+  const entry = current.trim();
+  if (entry) {
+    entries.push(entry);
+  }
+  return entries;
+}
+
+function parseInlineYamlMap(rawValue) {
+  const trimmed = rawValue.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return null;
+  }
+
+  const body = trimmed.slice(1, -1).trim();
+  if (!body) {
+    return {};
+  }
+
+  const result = {};
+  for (const entry of splitInlineYamlMapEntries(body)) {
+    const mapping = parseYamlMappingLine(entry);
+    if (!mapping?.value) {
+      continue;
+    }
+    result[mapping.key] = parseYamlScalar(mapping.value);
+  }
+  return result;
+}
+
+function parseYamlMappingLine(line) {
+  const separatorIndex = line.indexOf(":");
+  if (separatorIndex === -1) {
+    return null;
+  }
+  return {
+    key: parseYamlScalar(line.slice(0, separatorIndex)),
+    value: line.slice(separatorIndex + 1).trim(),
+  };
+}
+
+function isNamedYamlSection(trimmed, sectionNames) {
+  return sectionNames.some((sectionName) => trimmed === `${sectionName}:`);
+}
+
+function readNestedVersionValue(lines, startIndex, parentIndent) {
+  let index = startIndex;
+  let version = null;
+
+  while (index < lines.length) {
+    const nestedLine = lines[index];
+    const nestedTrimmed = nestedLine.trim();
+    const nestedIndentation = countIndentation(nestedLine);
+    if (isIgnorableYamlLine(nestedTrimmed)) {
+      index += 1;
+      continue;
+    }
+    if (nestedIndentation <= parentIndent) {
+      break;
+    }
+    if (nestedIndentation === NESTED_MAPPING_ENTRY_INDENT) {
+      const nestedEntry = parseYamlMappingLine(nestedTrimmed);
+      if (nestedEntry?.key === "version") {
+        version = parseYamlScalar(nestedEntry.value);
+      }
+    }
+    index += 1;
+  }
+
+  return { nextIndex: index, version };
+}
+
+function collectIndentedStringMap(lines, startIndex, entryIndent) {
+  const entries = {};
+  let index = startIndex;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    const indentation = countIndentation(line);
+
+    if (isIgnorableYamlLine(trimmed)) {
+      index += 1;
+      continue;
+    }
+    if (indentation < entryIndent) {
+      break;
+    }
+    if (indentation !== entryIndent) {
+      index += 1;
+      continue;
+    }
+
+    const entry = parseYamlMappingLine(trimmed);
+    if (entry?.value) {
+      entries[entry.key] = parseYamlScalar(entry.value);
+    }
+    index += 1;
+  }
+
+  return { entries, nextIndex: index };
+}
+
+function collectImporterDependencyReferences(lines, startIndex) {
+  const references = [];
+  let index = startIndex;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    const indentation = countIndentation(line);
+
+    if (isIgnorableYamlLine(trimmed)) {
+      index += 1;
+      continue;
+    }
+    if (indentation < MAPPING_ENTRY_INDENT) {
+      break;
+    }
+    if (indentation > MAPPING_ENTRY_INDENT) {
+      index += 1;
+      continue;
+    }
+
+    const entry = parseYamlMappingLine(trimmed);
+    index += 1;
+    if (!entry) {
+      continue;
+    }
+
+    if (entry.value) {
+      const inlineMap = parseInlineYamlMap(entry.value);
+      if (inlineMap && typeof inlineMap.version === "string") {
+        references.push({ dependencyName: entry.key, reference: inlineMap.version });
+        continue;
+      }
+      references.push({ dependencyName: entry.key, reference: parseYamlScalar(entry.value) });
+      continue;
+    }
+
+    const nestedVersion = readNestedVersionValue(lines, index, MAPPING_ENTRY_INDENT);
+    index = nestedVersion.nextIndex;
+    if (nestedVersion.version) {
+      references.push({ dependencyName: entry.key, reference: nestedVersion.version });
+    }
+  }
+
+  return {
+    nextIndex: index,
+    references,
+  };
+}
+
+function collectSnapshotDependencies(lines, startIndex) {
+  const result = collectIndentedStringMap(lines, startIndex, MAPPING_ENTRY_INDENT);
+  return { dependencies: result.entries, nextIndex: result.nextIndex };
+}
+
+function parsePnpmLockfileSections(lockfileText) {
+  // Keep this parser dependency-free: security-fast runs this hook without pnpm install.
+  // It only needs the small pnpm-lock subset used to collect production snapshots.
+  const importers = [];
+  const snapshots = {};
+  const lines = lockfileText.split(/\r?\n/u);
+  let currentTopLevelSection = null;
+  let hasImportersSection = false;
+  let hasSnapshotsSection = false;
+
+  for (let index = 0; index < lines.length; ) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    const indentation = countIndentation(line);
+
+    if (isIgnorableYamlLine(trimmed)) {
+      index += 1;
+      continue;
+    }
+
+    if (indentation === TOP_LEVEL_INDENT && trimmed.endsWith(":")) {
+      currentTopLevelSection = parseYamlScalar(trimmed.slice(0, -1));
+      if (currentTopLevelSection === "importers") {
+        hasImportersSection = true;
+      }
+      if (currentTopLevelSection === "snapshots") {
+        hasSnapshotsSection = true;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (
+      currentTopLevelSection === "importers" &&
+      indentation === SECTION_ENTRY_INDENT &&
+      trimmed.endsWith(":")
+    ) {
+      index += 1;
+      while (index < lines.length) {
+        const nestedLine = lines[index];
+        const nestedTrimmed = nestedLine.trim();
+        const nestedIndentation = countIndentation(nestedLine);
+
+        if (isIgnorableYamlLine(nestedTrimmed)) {
+          index += 1;
+          continue;
+        }
+        if (nestedIndentation <= SECTION_ENTRY_INDENT) {
+          break;
+        }
+        if (
+          nestedIndentation === NESTED_SECTION_INDENT &&
+          isNamedYamlSection(nestedTrimmed, IMPORTER_SECTIONS)
+        ) {
+          const result = collectImporterDependencyReferences(lines, index + 1);
+          importers.push(...result.references);
+          index = result.nextIndex;
+          continue;
+        }
+        index += 1;
+      }
+      continue;
+    }
+
+    if (currentTopLevelSection === "snapshots" && indentation === SECTION_ENTRY_INDENT) {
+      const snapshotEntry = parseYamlMappingLine(trimmed);
+      if (!snapshotEntry) {
+        index += 1;
+        continue;
+      }
+      if (snapshotEntry.value) {
+        snapshots[snapshotEntry.key] = {};
+        index += 1;
+        continue;
+      }
+
+      const snapshotKey = snapshotEntry.key;
+      const snapshot = {};
+      index += 1;
+      while (index < lines.length) {
+        const nestedLine = lines[index];
+        const nestedTrimmed = nestedLine.trim();
+        const nestedIndentation = countIndentation(nestedLine);
+
+        if (isIgnorableYamlLine(nestedTrimmed)) {
+          index += 1;
+          continue;
+        }
+        if (nestedIndentation <= SECTION_ENTRY_INDENT) {
+          break;
+        }
+        if (
+          nestedIndentation === NESTED_SECTION_INDENT &&
+          isNamedYamlSection(nestedTrimmed, SNAPSHOT_SECTIONS)
+        ) {
+          const result = collectSnapshotDependencies(lines, index + 1);
+          snapshot[nestedTrimmed.slice(0, -1)] = result.dependencies;
+          index = result.nextIndex;
+          continue;
+        }
+        index += 1;
+      }
+      snapshots[snapshotKey] = snapshot;
+      continue;
+    }
+
+    index += 1;
+  }
+
+  return { hasImportersSection, hasSnapshotsSection, importers, snapshots };
 }
 
 function resolveSnapshot({ dependencyName, reference, snapshots }) {
@@ -117,38 +446,17 @@ function resolveSnapshot({ dependencyName, reference, snapshots }) {
 }
 
 export function collectProdResolvedPackagesFromLockfile(lockfileText) {
-  const lockfile = YAML.parse(lockfileText);
-  const importers = lockfile?.importers;
-  const snapshots = lockfile?.snapshots;
-  if (!importers || typeof importers !== "object") {
+  const lockfile = parsePnpmLockfileSections(lockfileText);
+  if (!lockfile.hasImportersSection) {
     throw new Error("pnpm-lock.yaml is missing the importers section.");
   }
-  if (!snapshots || typeof snapshots !== "object") {
+  if (!lockfile.hasSnapshotsSection) {
     throw new Error("pnpm-lock.yaml is missing the snapshots section.");
   }
 
   const versionsByPackage = new Map();
   const seenSnapshots = new Set();
-  const queue = [];
-
-  for (const importer of Object.values(importers)) {
-    if (!importer || typeof importer !== "object") {
-      continue;
-    }
-    for (const sectionName of IMPORTER_SECTIONS) {
-      const dependencies = importer[sectionName];
-      if (!dependencies || typeof dependencies !== "object") {
-        continue;
-      }
-      for (const [dependencyName, entry] of Object.entries(dependencies)) {
-        const reference = readResolvedReference(entry);
-        if (!reference) {
-          continue;
-        }
-        queue.push({ dependencyName, reference });
-      }
-    }
-  }
+  const queue = [...lockfile.importers];
 
   while (queue.length > 0) {
     const next = queue.pop();
@@ -158,7 +466,7 @@ export function collectProdResolvedPackagesFromLockfile(lockfileText) {
     const resolved = resolveSnapshot({
       dependencyName: next.dependencyName,
       reference: next.reference,
-      snapshots,
+      snapshots: lockfile.snapshots,
     });
     if (!resolved) {
       continue;
@@ -176,7 +484,7 @@ export function collectProdResolvedPackagesFromLockfile(lockfileText) {
     }
     seenSnapshots.add(resolved.snapshotKey);
 
-    const snapshot = snapshots[resolved.snapshotKey];
+    const snapshot = lockfile.snapshots[resolved.snapshotKey];
     if (!snapshot || typeof snapshot !== "object") {
       continue;
     }

@@ -84,6 +84,27 @@ snapshots:
     });
   });
 
+  it("reads inline importer dependency maps without repo dependencies", () => {
+    const lockfile = `lockfileVersion: '9.0'
+
+importers:
+  .:
+    dependencies:
+      axios: {specifier: ^1.0.0, version: 1.0.0}
+      '@scope/pkg': {'version': '2.0.0(peer@4.0.0)'}
+
+snapshots:
+  axios@1.0.0: {}
+  '@scope/pkg@2.0.0(peer@4.0.0)': {}
+`;
+
+    const payload = createBulkAdvisoryPayload(collectProdResolvedPackagesFromLockfile(lockfile));
+    expect(payload).toEqual({
+      "@scope/pkg": ["2.0.0"],
+      axios: ["1.0.0"],
+    });
+  });
+
   it("filters advisory findings by minimum severity", () => {
     const findings = filterFindingsBySeverity(
       {
