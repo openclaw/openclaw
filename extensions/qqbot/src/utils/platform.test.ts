@@ -6,7 +6,7 @@ import {
   getHomeDir,
   resolveQQBotLocalMediaPath,
   resolveQQBotPayloadLocalFilePath,
-} from "./platform.js";
+} from "../engine/utils/platform.js";
 
 describe("qqbot local media path remapping", () => {
   const createdPaths: string[] = [];

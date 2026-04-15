@@ -3,21 +3,23 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mediaRuntimeMocks = vi.hoisted(() => ({
-  fetchRemoteMedia: vi.fn(),
+const adapterMocks = vi.hoisted(() => ({
+  fetchMedia: vi.fn(),
 }));
 
-vi.mock("./file-utils-runtime.js", () => ({
-  fetchRemoteMedia: (...args: unknown[]) => mediaRuntimeMocks.fetchRemoteMedia(...args),
+vi.mock("../engine/adapter/index.js", () => ({
+  getPlatformAdapter: () => ({
+    fetchMedia: (...args: unknown[]) => adapterMocks.fetchMedia(...args),
+  }),
 }));
 
-import { QQBOT_MEDIA_SSRF_POLICY, downloadFile } from "./file-utils.js";
+import { QQBOT_MEDIA_SSRF_POLICY, downloadFile } from "../engine/utils/file-utils.js";
 
 describe("qqbot file-utils downloadFile", () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    mediaRuntimeMocks.fetchRemoteMedia.mockReset();
+    adapterMocks.fetchMedia.mockReset();
     tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "qqbot-file-utils-"));
   });
 
@@ -25,8 +27,8 @@ describe("qqbot file-utils downloadFile", () => {
     await fs.promises.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("downloads through the guarded media runtime with the qqbot SSRF policy", async () => {
-    mediaRuntimeMocks.fetchRemoteMedia.mockResolvedValueOnce({
+  it("downloads through the guarded media adapter with the qqbot SSRF policy", async () => {
+    adapterMocks.fetchMedia.mockResolvedValueOnce({
       buffer: Buffer.from("image-bytes"),
       contentType: "image/png",
       fileName: "remote.png",
@@ -41,7 +43,7 @@ describe("qqbot file-utils downloadFile", () => {
     expect(savedPath).toBeTruthy();
     expect(savedPath).toMatch(/photo_\d+_[0-9a-f]{6}\.png$/);
     expect(await fs.promises.readFile(savedPath!, "utf8")).toBe("image-bytes");
-    expect(mediaRuntimeMocks.fetchRemoteMedia).toHaveBeenCalledWith({
+    expect(adapterMocks.fetchMedia).toHaveBeenCalledWith({
       url: "https://media.qq.com/assets/photo.png",
       filePathHint: "photo.png",
       ssrfPolicy: QQBOT_MEDIA_SSRF_POLICY,
@@ -65,6 +67,6 @@ describe("qqbot file-utils downloadFile", () => {
     const savedPath = await downloadFile("http://media.qq.com/assets/photo.png", tempDir);
 
     expect(savedPath).toBeNull();
-    expect(mediaRuntimeMocks.fetchRemoteMedia).not.toHaveBeenCalled();
+    expect(adapterMocks.fetchMedia).not.toHaveBeenCalled();
   });
 });

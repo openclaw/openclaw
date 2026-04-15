@@ -1,69 +1,38 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { initApiConfig } from "./api.js";
 import { qqbotBasePluginFields } from "./channel-base.js";
 import { DEFAULT_ACCOUNT_ID, resolveQQBotAccount } from "./config.js";
+import { initApiConfig } from "./engine/api/facade.js";
+import {
+  normalizeTarget as coreNormalizeTarget,
+  looksLikeQQBotTarget,
+} from "./engine/messaging/target-parser.js";
 import { getQQBotRuntime } from "./runtime.js";
-// Re-export text helpers so existing consumers of channel.ts are unaffected.
-// The canonical definition lives in text-utils.ts to avoid a circular
-// dependency: channel.ts → (dynamic) gateway.ts → outbound-deliver.ts → channel.ts.
-export { chunkText, TEXT_CHUNK_LIMIT } from "./text-utils.js";
+// Re-export text helpers from engine/.
+export { chunkText, TEXT_CHUNK_LIMIT } from "./engine/utils/text-chunk.js";
+import { registerTextChunker } from "./engine/utils/text-chunk.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
-type QQBotOutboundModule = typeof import("./outbound.js");
+// Register the text chunker — delegates to runtime, which is available after startup.
+registerTextChunker((text, limit) => getQQBotRuntime().channel.text.chunkMarkdownText(text, limit));
 
 // Shared promise so concurrent multi-account startups serialize the dynamic
 // import of the gateway module, avoiding an ESM circular-dependency race.
 let _gatewayModulePromise: Promise<typeof import("./gateway.js")> | undefined;
-let _outboundModulePromise: Promise<QQBotOutboundModule> | undefined;
 
 function loadGatewayModule(): Promise<typeof import("./gateway.js")> {
   _gatewayModulePromise ??= import("./gateway.js");
   return _gatewayModulePromise;
 }
 
-function loadOutboundModule(): Promise<QQBotOutboundModule> {
-  _outboundModulePromise ??= import("./outbound.js");
-  return _outboundModulePromise;
-}
-
 export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   ...qqbotBasePluginFields,
   messaging: {
     /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */
-    normalizeTarget: (target: string): string | undefined => {
-      const id = target.replace(/^qqbot:/i, "");
-      if (id.startsWith("c2c:") || id.startsWith("group:") || id.startsWith("channel:")) {
-        return `qqbot:${id}`;
-      }
-      const openIdHexPattern = /^[0-9a-fA-F]{32}$/;
-      if (openIdHexPattern.test(id)) {
-        return `qqbot:c2c:${id}`;
-      }
-      const openIdUuidPattern =
-        /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-      if (openIdUuidPattern.test(id)) {
-        return `qqbot:c2c:${id}`;
-      }
-
-      return undefined;
-    },
+    normalizeTarget: coreNormalizeTarget,
     targetResolver: {
       /** Return true when the id looks like a QQ Bot target. */
-      looksLikeId: (id: string): boolean => {
-        if (/^qqbot:(c2c|group|channel):/i.test(id)) {
-          return true;
-        }
-        if (/^(c2c|group|channel):/i.test(id)) {
-          return true;
-        }
-        if (/^[0-9a-fA-F]{32}$/.test(id)) {
-          return true;
-        }
-        const openIdPattern =
-          /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-        return openIdPattern.test(id);
-      },
+      looksLikeId: looksLikeQQBotTarget,
       hint: "QQ Bot target format: qqbot:c2c:openid (direct) or qqbot:group:groupid (group)",
     },
   },
@@ -74,9 +43,9 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     textChunkLimit: 5000,
     sendText: async ({ to, text, accountId, replyToId, cfg }) => {
       const account = resolveQQBotAccount(cfg, accountId);
-      const { sendText } = await loadOutboundModule();
+      const { sendText } = await import("./engine/messaging/outbound.js");
       initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
-      const result = await sendText({ to, text, accountId, replyToId, account });
+      const result = await sendText({ to, text, accountId, replyToId, account: account as never });
       return {
         channel: "qqbot" as const,
         messageId: result.messageId ?? "",
@@ -85,7 +54,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, cfg }) => {
       const account = resolveQQBotAccount(cfg, accountId);
-      const { sendMedia } = await loadOutboundModule();
+      const { sendMedia } = await import("./engine/messaging/outbound.js");
       initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
       const result = await sendMedia({
         to,
@@ -93,7 +62,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         mediaUrl: mediaUrl ?? "",
         accountId,
         replyToId,
-        account,
+        account: account as never,
       });
       return {
         channel: "qqbot" as const,

@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  hasConfiguredSecretInput,
-  normalizeResolvedSecretInputString,
-  normalizeSecretInputString,
-} from "openclaw/plugin-sdk/secret-input";
+import { getPlatformAdapter } from "./engine/adapter/index.js";
+import { normalizeOptionalLowercaseString } from "./engine/utils/string-normalize.js";
 import type { ResolvedQQBotAccount, QQBotAccountConfig } from "./types.js";
 
 export const DEFAULT_ACCOUNT_ID = "default";
@@ -15,11 +12,7 @@ interface QQBotChannelConfig extends QQBotAccountConfig {
 }
 
 function normalizeConfiguredDefaultAccountId(raw: unknown): string | null {
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const normalized = raw.trim().toLowerCase();
-  return normalized || null;
+  return normalizeOptionalLowercaseString(raw) ?? null;
 }
 
 function normalizeQQBotAccountConfig(account: QQBotAccountConfig | undefined): QQBotAccountConfig {
@@ -133,10 +126,11 @@ export function resolveQQBotAccount(
       : `channels.qqbot.accounts.${resolvedAccountId}.clientSecret`;
 
   // Resolve clientSecret from config, file, or environment.
-  if (hasConfiguredSecretInput(accountConfig.clientSecret)) {
+  const adapter = getPlatformAdapter();
+  if (adapter.hasConfiguredSecret(accountConfig.clientSecret)) {
     clientSecret = opts?.allowUnresolvedSecretRef
-      ? (normalizeSecretInputString(accountConfig.clientSecret) ?? "")
-      : (normalizeResolvedSecretInputString({
+      ? (adapter.normalizeSecretInputString(accountConfig.clientSecret) ?? "")
+      : (adapter.resolveSecretInputString({
           value: accountConfig.clientSecret,
           path: clientSecretPath,
         }) ?? "");

@@ -1,18 +1,18 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createStandardChannelSetupStatus,
-  hasConfiguredSecretInput,
   setSetupChannelEnabled,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   DEFAULT_ACCOUNT_ID,
   listQQBotAccountIds,
   resolveQQBotAccount,
   applyQQBotAccountConfig,
 } from "./config.js";
+import { getPlatformAdapter } from "./engine/adapter/index.js";
+import { normalizeOptionalString } from "./engine/utils/string-normalize.js";
 
 const channel = "qqbot" as const;
 
@@ -23,6 +23,10 @@ type QQBotSetupCredentialState = {
   resolvedAppId?: string;
   resolvedClientSecret?: string;
 };
+
+function hasConfiguredSecretInput(secret: unknown): boolean {
+  return getPlatformAdapter().hasConfiguredSecret(secret);
+}
 
 function resolveQQBotSetupCredentialState(
   cfg: OpenClawConfig,
@@ -106,7 +110,7 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
         return Boolean(
           account.appId &&
           (Boolean(account.clientSecret) ||
-            hasConfiguredSecretInput(account.config.clientSecret) ||
+            getPlatformAdapter().hasConfiguredSecret(account.config.clientSecret) ||
             Boolean(account.config.clientSecretFile?.trim())),
         );
       }),

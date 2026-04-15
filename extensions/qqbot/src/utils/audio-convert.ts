@@ -2,11 +2,14 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { asRecord, readString } from "../config-record-shared.js";
-import { debugLog, debugError, debugWarn } from "./debug-log.js";
-import { detectFfmpeg, isWindows } from "./platform.js";
+import { debugLog, debugError, debugWarn } from "../engine/utils/debug-log.js";
+import { formatErrorMessage } from "../engine/utils/error-format.js";
+import { detectFfmpeg, isWindows } from "../engine/utils/platform.js";
+import { normalizeLowercaseStringOrEmpty } from "../engine/utils/string-normalize.js";
+import {
+  asOptionalObjectRecord as asRecord,
+  readStringField as readString,
+} from "../engine/utils/string-normalize.js";
 
 type SilkWasm = typeof import("silk-wasm");
 let _silkWasmPromise: Promise<SilkWasm | null> | null = null;

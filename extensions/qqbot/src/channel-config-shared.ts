@@ -1,10 +1,9 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  applyAccountNameToChannelSection,
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
-} from "openclaw/plugin-sdk/channel-plugin-common";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
-import { applyAccountNameToChannelSection } from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/core";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -13,21 +12,12 @@ import {
   resolveDefaultQQBotAccountId,
   resolveQQBotAccount,
 } from "./config.js";
+import { getPlatformAdapter } from "./engine/adapter/index.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringifiedOptionalString,
+} from "./engine/utils/string-normalize.js";
 import type { ResolvedQQBotAccount } from "./types.js";
-
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
-function normalizeStringifiedOptionalString(
-  value: string | number | null | undefined,
-): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  const normalized = String(value).trim();
-  return normalized || undefined;
-}
 
 export const qqbotMeta = {
   id: "qqbot",
@@ -111,7 +101,7 @@ export function isQQBotConfigured(account: ResolvedQQBotAccount | undefined): bo
   return Boolean(
     account?.appId &&
     (Boolean(account?.clientSecret) ||
-      hasConfiguredSecretInput(account?.config?.clientSecret) ||
+      getPlatformAdapter().hasConfiguredSecret(account?.config?.clientSecret) ||
       Boolean(account?.config?.clientSecretFile?.trim())),
   );
 }

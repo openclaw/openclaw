@@ -1,9 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { getAccessToken } from "../api.js";
 import { listQQBotAccountIds, resolveQQBotAccount } from "../config.js";
-import { debugError, debugLog } from "../utils/debug-log.js";
+import { getAccessToken } from "../engine/api/facade.js";
+import { debugError, debugLog } from "../engine/utils/debug-log.js";
 import { jsonToolResult as json } from "./result.js";
 
 const API_BASE = "https://api.sgroup.qq.com";

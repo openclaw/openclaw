@@ -1,15 +1,17 @@
 import { Buffer } from "buffer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mediaRuntimeMocks = vi.hoisted(() => ({
-  fetchRemoteMedia: vi.fn(),
+const adapterMocks = vi.hoisted(() => ({
+  fetchMedia: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
-  fetchRemoteMedia: (...args: unknown[]) => mediaRuntimeMocks.fetchRemoteMedia(...args),
+vi.mock("../engine/adapter/index.js", () => ({
+  getPlatformAdapter: () => ({
+    fetchMedia: (...args: unknown[]) => adapterMocks.fetchMedia(...args),
+  }),
 }));
 
-import { getImageSizeFromUrl, parseImageSize } from "./image-size.js";
+import { getImageSizeFromUrl, parseImageSize } from "../engine/utils/image-size.js";
 
 /** Build a minimal valid PNG header with the given dimensions. */
 function buildPngHeader(width: number, height: number): Buffer {
@@ -35,20 +37,20 @@ function buildPngHeader(width: number, height: number): Buffer {
 
 describe("getImageSizeFromUrl", () => {
   beforeEach(() => {
-    mediaRuntimeMocks.fetchRemoteMedia.mockReset();
+    adapterMocks.fetchMedia.mockReset();
   });
 
-  describe("fetchRemoteMedia options contract", () => {
+  describe("fetchMedia options contract", () => {
     it("passes maxBytes, maxRedirects, ssrfPolicy, and headers", async () => {
-      mediaRuntimeMocks.fetchRemoteMedia.mockResolvedValueOnce({
+      adapterMocks.fetchMedia.mockResolvedValueOnce({
         buffer: buildPngHeader(800, 600),
         contentType: "image/png",
       });
 
       await getImageSizeFromUrl("https://cdn.example.com/photo.png");
 
-      expect(mediaRuntimeMocks.fetchRemoteMedia).toHaveBeenCalledOnce();
-      const opts = mediaRuntimeMocks.fetchRemoteMedia.mock.calls[0][0];
+      expect(adapterMocks.fetchMedia).toHaveBeenCalledOnce();
+      const opts = adapterMocks.fetchMedia.mock.calls[0][0];
 
       expect(opts.url).toBe("https://cdn.example.com/photo.png");
       expect(opts.maxBytes).toBe(65_536);
@@ -62,60 +64,52 @@ describe("getImageSizeFromUrl", () => {
     });
 
     it("threads caller abort signal through requestInit", async () => {
-      mediaRuntimeMocks.fetchRemoteMedia.mockResolvedValueOnce({
+      adapterMocks.fetchMedia.mockResolvedValueOnce({
         buffer: buildPngHeader(100, 100),
       });
 
       await getImageSizeFromUrl("https://cdn.example.com/img.png", 3000);
 
-      const opts = mediaRuntimeMocks.fetchRemoteMedia.mock.calls[0][0];
+      const opts = adapterMocks.fetchMedia.mock.calls[0][0];
       expect(opts.requestInit.signal).toBeInstanceOf(AbortSignal);
     });
   });
 
-  describe("SSRF blocking (fetchRemoteMedia rejects)", () => {
-    it("returns null when fetchRemoteMedia throws for loopback", async () => {
-      mediaRuntimeMocks.fetchRemoteMedia.mockRejectedValueOnce(
-        new Error("SSRF blocked: loopback address"),
-      );
+  describe("SSRF blocking (adapter.fetchMedia rejects)", () => {
+    it("returns null when adapter.fetchMedia throws for loopback", async () => {
+      adapterMocks.fetchMedia.mockRejectedValueOnce(new Error("SSRF blocked: loopback address"));
 
       const result = await getImageSizeFromUrl("https://127.0.0.1/img.png");
 
       expect(result).toBeNull();
     });
 
-    it("returns null when fetchRemoteMedia throws for IPv6 loopback", async () => {
-      mediaRuntimeMocks.fetchRemoteMedia.mockRejectedValueOnce(
-        new Error("SSRF blocked: loopback address"),
-      );
+    it("returns null when adapter.fetchMedia throws for IPv6 loopback", async () => {
+      adapterMocks.fetchMedia.mockRejectedValueOnce(new Error("SSRF blocked: loopback address"));
 
       const result = await getImageSizeFromUrl("https://[::1]/img.png");
 
       expect(result).toBeNull();
     });
 
-    it("returns null when fetchRemoteMedia throws for link-local/metadata", async () => {
-      mediaRuntimeMocks.fetchRemoteMedia.mockRejectedValueOnce(
-        new Error("SSRF blocked: link-local address"),
-      );
+    it("returns null when adapter.fetchMedia throws for link-local/metadata", async () => {
+      adapterMocks.fetchMedia.mockRejectedValueOnce(new Error("SSRF blocked: link-local address"));
 
       const result = await getImageSizeFromUrl("https://169.254.169.254/latest/meta-data/");
 
       expect(result).toBeNull();
     });
 
-    it("returns null when fetchRemoteMedia throws for RFC1918 addresses", async () => {
-      mediaRuntimeMocks.fetchRemoteMedia.mockRejectedValueOnce(
-        new Error("SSRF blocked: private address"),
-      );
+    it("returns null when adapter.fetchMedia throws for RFC1918 addresses", async () => {
+      adapterMocks.fetchMedia.mockRejectedValueOnce(new Error("SSRF blocked: private address"));
 
       const result = await getImageSizeFromUrl("https://10.0.0.1/img.png");
 
       expect(result).toBeNull();
     });
 
-    it("returns null on http error from fetchRemoteMedia", async () => {
-      mediaRuntimeMocks.fetchRemoteMedia.mockRejectedValueOnce(new Error("HTTP 403 Forbidden"));
+    it("returns null on http error from adapter.fetchMedia", async () => {
+      adapterMocks.fetchMedia.mockRejectedValueOnce(new Error("HTTP 403 Forbidden"));
 
       const result = await getImageSizeFromUrl("https://cdn.example.com/forbidden.png");
 
@@ -125,7 +119,7 @@ describe("getImageSizeFromUrl", () => {
 
   describe("happy path", () => {
     it("returns parsed dimensions for a valid PNG", async () => {
-      mediaRuntimeMocks.fetchRemoteMedia.mockResolvedValueOnce({
+      adapterMocks.fetchMedia.mockResolvedValueOnce({
         buffer: buildPngHeader(1920, 1080),
         contentType: "image/png",
       });
@@ -136,7 +130,7 @@ describe("getImageSizeFromUrl", () => {
     });
 
     it("returns null when the buffer is not a recognized image format", async () => {
-      mediaRuntimeMocks.fetchRemoteMedia.mockResolvedValueOnce({
+      adapterMocks.fetchMedia.mockResolvedValueOnce({
         buffer: Buffer.from("not an image"),
         contentType: "text/html",
       });
