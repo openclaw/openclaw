@@ -118,7 +118,7 @@ export async function elevenLabsTTS(params: {
       headers: {
         "xi-api-key": apiKey,
         "Content-Type": "application/json",
-        Accept: "audio/mpeg",
+        ...(outputFormat && !outputFormat.startsWith("mp3_") ? {} : { Accept: "audio/mpeg" }),
       },
       body: JSON.stringify({
         text,

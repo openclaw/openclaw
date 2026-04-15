@@ -130,4 +130,64 @@ describe("elevenlabs tts diagnostics", () => {
 
     expect(streamed.getReadCount()).toBeLessThan(200);
   });
+
+  it("omits Accept: audio/mpeg header when outputFormat is PCM", async () => {
+    let capturedInit: RequestInit | undefined;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedInit = init;
+      return new Response(Buffer.from("pcm-audio-data"), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await elevenLabsTTS({
+      text: "hello",
+      apiKey: "test-key",
+      baseUrl: "https://api.elevenlabs.io",
+      voiceId: "pMsXgVXv3BLzUgSXRplE",
+      modelId: "eleven_multilingual_v2",
+      outputFormat: "pcm_22050",
+      voiceSettings: {
+        stability: 0.5,
+        similarityBoost: 0.75,
+        style: 0,
+        useSpeakerBoost: true,
+        speed: 1.0,
+      },
+      timeoutMs: 5_000,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const headers = capturedInit?.headers as Record<string, string>;
+    expect(headers).not.toHaveProperty("Accept");
+  });
+
+  it("sends Accept: audio/mpeg header when outputFormat is MP3", async () => {
+    let capturedInit: RequestInit | undefined;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedInit = init;
+      return new Response(Buffer.from("mp3-audio-data"), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await elevenLabsTTS({
+      text: "hello",
+      apiKey: "test-key",
+      baseUrl: "https://api.elevenlabs.io",
+      voiceId: "pMsXgVXv3BLzUgSXRplE",
+      modelId: "eleven_multilingual_v2",
+      outputFormat: "mp3_44100_128",
+      voiceSettings: {
+        stability: 0.5,
+        similarityBoost: 0.75,
+        style: 0,
+        useSpeakerBoost: true,
+        speed: 1.0,
+      },
+      timeoutMs: 5_000,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const headers = capturedInit?.headers as Record<string, string>;
+    expect(headers).toHaveProperty("Accept", "audio/mpeg");
+  });
 });
