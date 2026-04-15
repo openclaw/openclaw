@@ -3243,20 +3243,20 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Max total characters across all injected workspace bootstrap files (default: 150000).",
               },
-              localModelMode: {
-                anyOf: [
-                  {
-                    type: "string",
-                    const: "default",
+              experimental: {
+                type: "object",
+                properties: {
+                  localModelLean: {
+                    type: "boolean",
+                    title: "Enable Lean Local Model Mode (Experimental)",
+                    description:
+                      "Experimental local-model prompt trim. When enabled, OpenClaw drops heavyweight default tools like browser, cron, and message for weaker or smaller local-model backends.",
                   },
-                  {
-                    type: "string",
-                    const: "lean",
-                  },
-                ],
-                title: "Local Model Mode",
+                },
+                additionalProperties: false,
+                title: "Experimental Agent Flags",
                 description:
-                  'Local-model prompt profile: "default" keeps the standard tool surface, while "lean" drops heavyweight non-essential tools for smaller or weaker models.',
+                  "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
               },
               bootstrapPromptTruncationWarning: {
                 anyOf: [
@@ -24528,10 +24528,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Max total characters across all injected workspace bootstrap files (default: 150000).",
       tags: ["performance"],
     },
-    "agents.defaults.localModelMode": {
-      label: "Local Model Mode",
-      help: 'Local-model prompt profile: "default" keeps the standard tool surface, while "lean" drops heavyweight non-essential tools for smaller or weaker models.',
-      tags: ["advanced"],
+    "agents.defaults.experimental": {
+      label: "Experimental Agent Flags",
+      help: "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
+      tags: ["security", "advanced"],
+    },
+    "agents.defaults.experimental.localModelLean": {
+      label: "Enable Lean Local Model Mode (Experimental)",
+      help: "Experimental local-model prompt trim. When enabled, OpenClaw drops heavyweight default tools like browser, cron, and message for weaker or smaller local-model backends.",
+      tags: ["security", "advanced"],
     },
     "agents.defaults.bootstrapPromptTruncationWarning": {
       label: "Bootstrap Prompt Truncation Warning",

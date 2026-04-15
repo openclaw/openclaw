@@ -14,6 +14,7 @@ UPDATE_BASELINE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL:-}"
 UPDATE_EXPECT_VERSION="${OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION:-}"
 UPDATE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_TAG_URL:-}"
 HEARTBEAT_INTERVAL="${OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL:-60}"
+INSTALL_COMMAND_TIMEOUT="${OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT:-300}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # shellcheck source=../install-sh-common/cli-verify.sh
@@ -108,12 +109,26 @@ run_with_heartbeat() {
   return "$status"
 }
 
+npm_install_global() {
+  local label="$1"
+  shift
+  run_with_heartbeat "$label" \
+    timeout --foreground "${INSTALL_COMMAND_TIMEOUT}s" \
+      npm \
+      --loglevel=error \
+      --logs-max=0 \
+      --no-update-notifier \
+      --no-fund \
+      --no-audit \
+      --no-progress \
+      install -g "$@"
+}
+
 run_install_smoke() {
   if [[ -n "$FRESH_VERSION" && -n "$FRESH_TAG_URL" ]]; then
     echo "package=$PACKAGE_NAME latest=$FRESH_VERSION source=$FRESH_TAG_URL"
     echo "==> Install latest release tarball"
-    run_with_heartbeat "install latest release tarball" \
-      quiet_npm install -g --omit=optional "$FRESH_TAG_URL"
+    npm_install_global "install latest release tarball" --omit=optional "$FRESH_TAG_URL"
     print_install_audit "fresh install"
 
     echo "==> Verify installed version"
@@ -167,8 +182,7 @@ NODE
     echo "==> Skip preinstall previous (OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS=1)"
   else
     echo "==> Preinstall previous (forces installer upgrade path)"
-    run_with_heartbeat "preinstall previous release" \
-      quiet_npm install -g "${PACKAGE_NAME}@${PREVIOUS_VERSION}"
+    npm_install_global "preinstall previous release" "${PACKAGE_NAME}@${PREVIOUS_VERSION}"
     print_install_audit "previous install"
   fi
 
@@ -197,11 +211,9 @@ run_update_smoke() {
   echo "package=$PACKAGE_NAME baseline=$UPDATE_BASELINE_VERSION target=$UPDATE_EXPECT_VERSION"
   echo "==> Install baseline release"
   if [[ -n "$UPDATE_BASELINE_TAG_URL" ]]; then
-    run_with_heartbeat "install baseline release" \
-      quiet_npm install -g --omit=optional "$UPDATE_BASELINE_TAG_URL"
+    npm_install_global "install baseline release" --omit=optional "$UPDATE_BASELINE_TAG_URL"
   else
-    run_with_heartbeat "install baseline release" \
-      quiet_npm install -g --omit=optional "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
+    npm_install_global "install baseline release" --omit=optional "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
   fi
   print_install_audit "baseline install"
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_BASELINE_VERSION"
@@ -275,12 +287,48 @@ NODE
   echo "OK"
 }
 
+run_npm_global_smoke() {
+  if [[ -z "$UPDATE_EXPECT_VERSION" ]]; then
+    echo "ERROR: OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION is required for npm-global mode" >&2
+    return 1
+  fi
+  if [[ -z "$UPDATE_TAG_URL" ]]; then
+    echo "ERROR: OPENCLAW_INSTALL_UPDATE_TAG_URL is required for npm-global mode" >&2
+    return 1
+  fi
+
+  echo "package=$PACKAGE_NAME baseline=$UPDATE_BASELINE_VERSION target=$UPDATE_EXPECT_VERSION"
+  echo "==> Direct npm global install candidate"
+  npm_install_global "direct npm global install candidate" "$UPDATE_TAG_URL"
+  print_install_audit "direct npm fresh install"
+  verify_installed_cli "$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION"
+
+  echo "==> Direct npm global install baseline"
+  if [[ -n "$UPDATE_BASELINE_TAG_URL" ]]; then
+    npm_install_global "direct npm global install baseline" "$UPDATE_BASELINE_TAG_URL"
+  else
+    npm_install_global "direct npm global install baseline" "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
+  fi
+  print_install_audit "direct npm baseline install"
+  verify_installed_cli "$PACKAGE_NAME" "$UPDATE_BASELINE_VERSION"
+
+  echo "==> Direct npm global update candidate"
+  npm_install_global "direct npm global update candidate" "$UPDATE_TAG_URL"
+  print_install_audit "direct npm updated install"
+  verify_installed_cli "$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION"
+
+  echo "OK"
+}
+
 case "$SMOKE_MODE" in
   install)
     run_install_smoke
     ;;
   update)
     run_update_smoke
+    ;;
+  npm-global)
+    run_npm_global_smoke
     ;;
   *)
     echo "ERROR: unsupported OPENCLAW_INSTALL_SMOKE_MODE=$SMOKE_MODE" >&2
