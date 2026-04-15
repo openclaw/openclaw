@@ -473,16 +473,26 @@ async function insertBlocksWithDescendant(
 }
 
 async function clearDocumentContent(client: Lark.Client, docToken: string) {
-  const existing = await client.docx.documentBlock.list({
-    path: { document_id: docToken },
-  });
-  if (existing.code !== 0) {
-    throw new Error(existing.msg);
-  }
+  // Paginate through all blocks to reliably clear large documents.
+  // documentBlock.list returns up to 500 blocks per page; documents with
+  // more top-level blocks require multiple requests.
+  const items: FeishuDocxBlock[] = [];
+  let pageToken: string | undefined;
+  do {
+    const existing = await client.docx.documentBlock.list({
+      path: { document_id: docToken },
+      params: pageToken ? { page_token: pageToken } : {},
+    });
+    if (existing.code !== 0) {
+      throw new Error(existing.msg);
+    }
+    items.push(...(existing.data?.items ?? []));
+    pageToken = existing.data?.page_token ?? undefined;
+  } while (pageToken);
 
   const childIds =
-    existing.data?.items
-      ?.filter((b) => b.parent_id === docToken && b.block_type !== 1)
+    items
+      .filter((b) => b.parent_id === docToken && b.block_type !== 1)
       .map((b) => b.block_id) ?? [];
 
   if (childIds.length > 0) {
