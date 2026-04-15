@@ -3,15 +3,16 @@ import Foundation
 import OpenClawKit
 
 final class MotionService: MotionServicing {
+    private static let errorDomain = "Motion"
     func activities(params: OpenClawMotionActivityParams) async throws -> OpenClawMotionActivityPayload {
         guard CMMotionActivityManager.isActivityAvailable() else {
-            throw NSError(domain: "Motion", code: 1, userInfo: [
+            throw NSError(domain: Self.errorDomain, code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "MOTION_UNAVAILABLE: activity not supported on this device",
             ])
         }
         let auth = CMMotionActivityManager.authorizationStatus()
         guard auth == .authorized else {
-            throw NSError(domain: "Motion", code: 3, userInfo: [
+            throw NSError(domain: Self.errorDomain, code: 3, userInfo: [
                 NSLocalizedDescriptionKey: "MOTION_PERMISSION_REQUIRED: grant Motion & Fitness permission",
             ])
         }
@@ -49,13 +50,13 @@ final class MotionService: MotionServicing {
 
     func pedometer(params: OpenClawPedometerParams) async throws -> OpenClawPedometerPayload {
         guard CMPedometer.isStepCountingAvailable() else {
-            throw NSError(domain: "Motion", code: 2, userInfo: [
+            throw NSError(domain: Self.errorDomain, code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "PEDOMETER_UNAVAILABLE: step counting not supported",
             ])
         }
         let auth = CMPedometer.authorizationStatus()
         guard auth == .authorized else {
-            throw NSError(domain: "Motion", code: 4, userInfo: [
+            throw NSError(domain: Self.errorDomain, code: 4, userInfo: [
                 NSLocalizedDescriptionKey: "MOTION_PERMISSION_REQUIRED: grant Motion & Fitness permission",
             ])
         }
