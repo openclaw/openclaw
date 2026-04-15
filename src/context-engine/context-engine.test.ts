@@ -765,33 +765,35 @@ describe("Factory context passing", () => {
     expect(engine.info.id).toBe(engineId);
   });
 
-  it("provides empty config when resolveContextEngine is called without config", async () => {
-    const engineId = `factory-noconfig-${Date.now().toString(36)}`;
+  it("passes undefined config when resolveContextEngine is called without config", async () => {
     let receivedCtx: ContextEngineFactoryContext | undefined;
 
-    registerContextEngine(engineId, (ctx?: ContextEngineFactoryContext) => {
-      receivedCtx = ctx;
-      return {
-        info: { id: engineId, name: "NoConfig Engine" },
-        async ingest() {
-          return { ingested: true };
-        },
-        async assemble({ messages }: { messages: AgentMessage[] }) {
-          return { messages, estimatedTokens: 0 };
-        },
-        async compact() {
-          return { ok: true, compacted: false };
-        },
-      };
-    });
+    // Override the default "legacy" engine to intercept the no-config path
+    registerContextEngineForOwner(
+      "legacy",
+      (ctx?: ContextEngineFactoryContext) => {
+        receivedCtx = ctx;
+        return {
+          info: { id: "legacy", name: "NoConfig Engine", version: "1" },
+          async ingest() {
+            return { ingested: true };
+          },
+          async assemble({ messages }: { messages: AgentMessage[] }) {
+            return { messages, estimatedTokens: 0 };
+          },
+          async compact() {
+            return { ok: true, compacted: false };
+          },
+        };
+      },
+      "core",
+      { allowSameOwnerRefresh: true },
+    );
 
-    // Call with undefined config — should still resolve the default engine,
-    // but our engine is not the default slot so register as default temporarily.
-    // Instead, just verify the factory type works as a ContextEngineFactory.
-    await resolveContextEngine(configWithSlot(engineId));
+    await resolveContextEngine(undefined);
 
     expect(receivedCtx).toBeDefined();
-    expect(receivedCtx!.config).toBeDefined();
+    expect(receivedCtx!.config).toBeUndefined();
     expect(receivedCtx!.agentDir).toBeUndefined();
     expect(receivedCtx!.workspaceDir).toBeUndefined();
   });
