@@ -140,11 +140,7 @@ export async function handleQaBusRequest(params: {
           return true;
         }
         try {
-          await params.state.waitFor({
-            kind: "event-kind",
-            eventKind: "inbound-message",
-            timeoutMs,
-          });
+          await params.state.waitForCursorAdvance(input.cursor ?? 0, timeoutMs);
         } catch {
           // timeout ok for long-poll
         }
