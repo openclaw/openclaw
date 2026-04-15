@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   looksLikeReleaseVersionRef,
   parseArgs,
+  readRunnerOverrideEnv,
   resolveRequestedSuites,
   resolveRunnerMatrix,
   resolveStaticFileContentType,
@@ -70,12 +71,27 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
   });
 
+  it("prefers workflow-injected runner override env names over legacy ones", () => {
+    expect(
+      readRunnerOverrideEnv({
+        VAR_UBUNTU_RUNNER: "workflow-linux",
+        VAR_WINDOWS_RUNNER: "workflow-windows",
+        VAR_MACOS_RUNNER: "workflow-macos",
+        OPENCLAW_RELEASE_CHECKS_UBUNTU_RUNNER: "legacy-linux",
+        OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER: "legacy-windows",
+        OPENCLAW_RELEASE_CHECKS_MACOS_RUNNER: "legacy-macos",
+      }),
+    ).toEqual({
+      varUbuntuRunner: "workflow-linux",
+      varWindowsRunner: "workflow-windows",
+      varMacosRunner: "workflow-macos",
+    });
+  });
+
   it("serves installer scripts as UTF-8 text and package payloads as binary", () => {
     expect(resolveStaticFileContentType("scripts/install.sh")).toBe("text/plain; charset=utf-8");
     expect(resolveStaticFileContentType("scripts/install.ps1")).toBe("text/plain; charset=utf-8");
-    expect(resolveStaticFileContentType("openclaw-2026.4.14.tgz")).toBe(
-      "application/octet-stream",
-    );
+    expect(resolveStaticFileContentType("openclaw-2026.4.14.tgz")).toBe("application/octet-stream");
   });
 
   it("accepts a git main dev-channel update status payload", () => {

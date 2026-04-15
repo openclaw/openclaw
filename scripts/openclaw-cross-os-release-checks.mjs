@@ -160,6 +160,14 @@ export function resolveRunnerMatrix(params) {
   };
 }
 
+export function readRunnerOverrideEnv(env = process.env) {
+  return {
+    varUbuntuRunner: env.VAR_UBUNTU_RUNNER ?? env.OPENCLAW_RELEASE_CHECKS_UBUNTU_RUNNER ?? "",
+    varWindowsRunner: env.VAR_WINDOWS_RUNNER ?? env.OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER ?? "",
+    varMacosRunner: env.VAR_MACOS_RUNNER ?? env.OPENCLAW_RELEASE_CHECKS_MACOS_RUNNER ?? "",
+  };
+}
+
 function formatSuiteLabel(suite) {
   if (suite === "packaged-fresh") {
     return "packaged fresh";
@@ -179,6 +187,7 @@ async function main(argv) {
   if (args["resolve-matrix"] === "true") {
     const mode = args["mode"] ?? "both";
     const ref = args["ref"]?.trim() || "main";
+    const runnerOverrideEnv = readRunnerOverrideEnv(process.env);
     process.stdout.write(
       `${JSON.stringify(
         resolveRunnerMatrix({
@@ -187,9 +196,7 @@ async function main(argv) {
           ubuntuRunner: args["ubuntu-runner"],
           windowsRunner: args["windows-runner"],
           macosRunner: args["macos-runner"],
-          varUbuntuRunner: process.env.OPENCLAW_RELEASE_CHECKS_UBUNTU_RUNNER,
-          varWindowsRunner: process.env.OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER,
-          varMacosRunner: process.env.OPENCLAW_RELEASE_CHECKS_MACOS_RUNNER,
+          ...runnerOverrideEnv,
         }),
       )}\n`,
     );
