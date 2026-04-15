@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../../media/local-media-access.js";
+import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../infra/local-file-access.js";
 import { isAudioFileName } from "../../media/mime.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
@@ -40,7 +40,7 @@ function resolveLocalMediaPathForEmbedding(raw: string): string | null {
   }
   if (trimmed.startsWith("file:")) {
     try {
-      const p = fileURLToPath(trimmed);
+      const p = safeFileURLToPath(trimmed);
       if (!path.isAbsolute(p)) {
         return null;
       }
@@ -50,6 +50,11 @@ function resolveLocalMediaPathForEmbedding(raw: string): string | null {
     }
   }
   if (!path.isAbsolute(trimmed)) {
+    return null;
+  }
+  try {
+    assertNoWindowsNetworkPath(trimmed, "Local media path");
+  } catch {
     return null;
   }
   return trimmed;
