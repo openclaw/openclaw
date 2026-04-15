@@ -1053,6 +1053,7 @@ async function processOpenAICompletionsStream(
         partialArgs: string;
       }
     | null = null;
+  let pendingThinkingDelta: { signature: string; text: string } | null = null;
   const blockIndex = () => output.content.length - 1;
   const finishCurrentBlock = () => {
     if (!currentBlock) {
@@ -1066,6 +1067,33 @@ async function processOpenAICompletionsStream(
       };
       output.content[blockIndex()] = completed;
     }
+  };
+  const appendThinkingDelta = (reasoningDelta: { signature: string; text: string }) => {
+    if (!currentBlock || currentBlock.type !== "thinking") {
+      finishCurrentBlock();
+      currentBlock = {
+        type: "thinking",
+        thinking: "",
+        thinkingSignature: reasoningDelta.signature,
+      };
+      output.content.push(currentBlock);
+      stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+    }
+    currentBlock.thinking += reasoningDelta.text;
+    stream.push({
+      type: "thinking_delta",
+      contentIndex: blockIndex(),
+      delta: reasoningDelta.text,
+      partial: output,
+    });
+  };
+  const flushPendingThinkingDelta = () => {
+    if (!pendingThinkingDelta) {
+      return;
+    }
+    const bufferedDelta = pendingThinkingDelta;
+    pendingThinkingDelta = null;
+    appendThinkingDelta(bufferedDelta);
   };
   for await (const chunk of responseStream) {
     output.responseId ||= chunk.id;
@@ -1091,6 +1119,7 @@ async function processOpenAICompletionsStream(
       continue;
     }
     if (choice.delta.content) {
+      flushPendingThinkingDelta();
       if (!currentBlock || currentBlock.type !== "text") {
         finishCurrentBlock();
         currentBlock = { type: "text", text: "" };
@@ -1108,23 +1137,15 @@ async function processOpenAICompletionsStream(
     }
     const reasoningDelta = getCompletionsReasoningDelta(choice.delta as Record<string, unknown>);
     if (reasoningDelta) {
-      if (!currentBlock || currentBlock.type !== "thinking") {
-        finishCurrentBlock();
-        currentBlock = {
-          type: "thinking",
-          thinking: "",
-          thinkingSignature: reasoningDelta.signature,
-        };
-        output.content.push(currentBlock);
-        stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+      if (currentBlock?.type === "toolCall") {
+        if (!pendingThinkingDelta) {
+          pendingThinkingDelta = { ...reasoningDelta };
+        } else {
+          pendingThinkingDelta.text += reasoningDelta.text;
+        }
+      } else {
+        appendThinkingDelta(reasoningDelta);
       }
-      currentBlock.thinking += reasoningDelta.text;
-      stream.push({
-        type: "thinking_delta",
-        contentIndex: blockIndex(),
-        delta: reasoningDelta.text,
-        partial: output,
-      });
     }
     if (choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {
       for (const toolCall of choice.delta.tool_calls) {
@@ -1167,6 +1188,7 @@ async function processOpenAICompletionsStream(
     }
   }
   finishCurrentBlock();
+  flushPendingThinkingDelta();
   const hasToolCalls = output.content.some((block) => block.type === "toolCall");
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
