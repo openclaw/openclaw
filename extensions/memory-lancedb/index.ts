@@ -64,7 +64,9 @@ function withMemoryLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
     .then(() => fn())
     .finally(() => {
       resolveLock();
-      if (_memoryLocks.get(id) === next) _memoryLocks.delete(id);
+      if (_memoryLocks.get(id) === next) {
+        _memoryLocks.delete(id);
+      }
     });
 }
 

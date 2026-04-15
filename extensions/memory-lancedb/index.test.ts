@@ -608,7 +608,7 @@ describe("memory plugin e2e", () => {
 
       // result is guaranteed to be set after the try block (execute() throws on failure).
       expect(result).toBeDefined();
-      const r = result!;
+      const r = result;
       expect(r.details.operation).toBe("replaced");
       expect(r.details.old_id).toBe(existingId);
       expect(r.details.new_id).toBeDefined();
@@ -1275,11 +1275,8 @@ describeLive("memory plugin live tests", () => {
 
     // Get tool functions — non-null assertion is safe since we just asserted the tool count
     // and the registrations above confirmed all tool names are present.
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     const storeTool = registeredTools.find((t) => t.opts?.name === "memory_store")!.tool;
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")!.tool;
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     const forgetTool = registeredTools.find((t) => t.opts?.name === "memory_forget")!.tool;
 
     // Test store
