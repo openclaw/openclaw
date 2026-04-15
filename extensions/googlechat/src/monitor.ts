@@ -255,8 +255,8 @@ async function processMessageWithPipeline(params: {
     Surface: "googlechat",
     MessageSid: message.name,
     MessageSidFull: message.name,
-    ReplyToId: message.thread?.name,
-    ReplyToIdFull: message.thread?.name,
+    ReplyToId: account.config.replyToMode === "off" ? undefined : message.thread?.name,
+    ReplyToIdFull: account.config.replyToMode === "off" ? undefined : message.thread?.name,
     MediaPath: mediaPath,
     MediaType: mediaType,
     MediaUrl: mediaPath,
@@ -300,7 +300,7 @@ async function processMessageWithPipeline(params: {
         account,
         space: spaceId,
         text: `_${botName} is typing..._`,
-        thread: message.thread?.name,
+        thread: account.config.replyToMode === "off" ? undefined : message.thread?.name,
       });
       typingMessageName = result?.messageName;
     } catch (err) {
@@ -434,7 +434,7 @@ async function deliverGoogleChatReply(params: {
             account,
             space: spaceId,
             text: chunk,
-            thread: payload.replyToId,
+            thread: account.config.replyToMode === "off" ? undefined : payload.replyToId,
           });
         }
         firstTextChunk = false;
@@ -463,7 +463,7 @@ async function deliverGoogleChatReply(params: {
           account,
           space: spaceId,
           text: caption,
-          thread: payload.replyToId,
+          thread: account.config.replyToMode === "off" ? undefined : payload.replyToId,
           attachments: [
             { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],
