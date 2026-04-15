@@ -33,10 +33,14 @@
     "!dist/extensions/qa-channel/**",
     "dist/extensions/qa-channel/runtime-api.js",
     "!dist/extensions/qa-lab/**",
-    "dist/extensions/qa-lab/runtime-api.js",
     "!dist/extensions/qa-matrix/**",
+    "!dist/plugin-sdk/extensions/qa-lab/**",
+    "!dist/plugin-sdk/qa-lab.*",
+    "!dist/plugin-sdk/qa-runtime.*",
+    "!dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
+    "!dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
+    "!dist/qa-runtime-*.js",
     "docs/reference/templates/",
-    "qa/scenarios/",
     "skills/",
     "scripts/npm-runner.mjs",
     "scripts/preinstall-package-manager-warning.mjs",
@@ -766,10 +770,6 @@
     "./plugin-sdk/matrix-thread-bindings": {
       "types": "./dist/plugin-sdk/matrix-thread-bindings.d.ts",
       "default": "./dist/plugin-sdk/matrix-thread-bindings.js"
-    },
-    "./plugin-sdk/qa-runtime": {
-      "types": "./dist/plugin-sdk/qa-runtime.d.ts",
-      "default": "./dist/plugin-sdk/qa-runtime.js"
     },
     "./plugin-sdk/qa-runner-runtime": {
       "types": "./dist/plugin-sdk/qa-runner-runtime.d.ts",

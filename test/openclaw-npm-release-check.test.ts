@@ -1,8 +1,12 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
 import {
   compareReleaseVersions,
   collectControlUiPackErrors,
+  collectForbiddenPackedContentErrors,
   collectForbiddenPackedPathErrors,
   collectReleasePackageMetadataErrors,
   collectReleaseTagErrors,
@@ -15,10 +19,13 @@ import {
   shouldSkipPackedTarballValidation,
   utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
+import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
 
-const LEGACY_UPDATE_COMPAT_PACKED_PATHS = [
-  "dist/extensions/qa-channel/runtime-api.js",
-  "dist/extensions/qa-lab/runtime-api.js",
+const LEGACY_UPDATE_COMPAT_PACKED_PATHS = ["dist/extensions/qa-channel/runtime-api.js"] as const;
+const REQUIRED_PACKED_PATHS = [
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  ...LEGACY_UPDATE_COMPAT_PACKED_PATHS,
+  ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;
 
 describe("parseReleaseVersion", () => {
@@ -286,11 +293,7 @@ describe("parseNpmPackJsonOutput", () => {
 describe("collectControlUiPackErrors", () => {
   it("rejects packs that ship the dashboard HTML without the asset payload", () => {
     expect(collectControlUiPackErrors(["dist/control-ui/index.html"])).toEqual([
-      ...LEGACY_UPDATE_COMPAT_PACKED_PATHS.map(
-        (requiredPath) =>
-          `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
-      ),
-      ...WORKSPACE_TEMPLATE_PACK_PATHS.map(
+      ...REQUIRED_PACKED_PATHS.map(
         (requiredPath) =>
           `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
       ),
@@ -302,8 +305,7 @@ describe("collectControlUiPackErrors", () => {
     expect(
       collectControlUiPackErrors([
         "dist/control-ui/index.html",
-        ...LEGACY_UPDATE_COMPAT_PACKED_PATHS,
-        ...WORKSPACE_TEMPLATE_PACK_PATHS,
+        ...REQUIRED_PACKED_PATHS,
         "dist/control-ui/assets/index-Bu8rSoJV.js",
         "dist/control-ui/assets/index-BK0yXA_h.css",
       ]),
@@ -332,20 +334,49 @@ describe("collectForbiddenPackedPathErrors", () => {
         "dist/extensions/qa-channel/package.json",
         "dist/extensions/qa-lab/runtime-api.js",
         "dist/extensions/qa-lab/src/cli.js",
+        "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
+        "dist/qa-runtime-B9LDtssJ.js",
+        "qa/scenarios/index.md",
       ]),
     ).toEqual([
       'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
+      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
+      'npm package must not include private QA lab type artifact "dist/plugin-sdk/extensions/qa-lab/cli.d.ts".',
+      'npm package must not include private QA runtime chunk "dist/qa-runtime-B9LDtssJ.js".',
+      'npm package must not include private QA suite artifact "qa/scenarios/index.md".',
     ]);
   });
 
-  it("allows the legacy update verifier QA runtime sidecars", () => {
+  it("allows only the legacy update verifier QA channel runtime sidecar", () => {
     expect(
       collectForbiddenPackedPathErrors([
         "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-lab/runtime-api.js",
       ]),
-    ).toEqual([]);
+    ).toEqual([
+      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
+    ]);
+  });
+
+  it("rejects root dist chunks that still reference the private qa lab", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "openclaw-pack-private-qa-"));
+
+    try {
+      mkdirSync(join(rootDir, "dist"), { recursive: true });
+      writeFileSync(
+        join(rootDir, "dist", "entry.js"),
+        "//#region extensions/qa-lab/src/cli.ts\n",
+        "utf8",
+      );
+      writeFileSync(join(rootDir, "README.md"), "developer docs mention extensions/qa-lab/\n");
+
+      expect(collectForbiddenPackedContentErrors(["dist/entry.js", "README.md"], rootDir)).toEqual([
+        'npm package must not include private QA lab marker "//#region extensions/qa-lab/" in "dist/entry.js".',
+      ]);
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
   });
 });
 
