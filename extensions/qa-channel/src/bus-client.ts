@@ -1,5 +1,6 @@
 import http from "node:http";
 import https from "node:https";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type {
   QaBusConversation,
   QaBusEvent,
@@ -271,9 +272,17 @@ export async function injectQaBusInboundMessage(params: {
 }
 
 export async function getQaBusState(baseUrl: string): Promise<QaBusStateSnapshot> {
-  const response = await fetch(buildQaBusUrl(baseUrl, "/v1/state"));
-  if (!response.ok) {
-    throw new Error(`qa-bus request failed: ${response.status}`);
+  const { response, release } = await fetchWithSsrFGuard({
+    url: buildQaBusUrl(baseUrl, "/v1/state").toString(),
+    policy: { allowPrivateNetwork: true },
+    auditContext: "qa-channel.bus-state",
+  });
+  try {
+    if (!response.ok) {
+      throw new Error(`qa-bus request failed: ${response.status}`);
+    }
+    return (await response.json()) as QaBusStateSnapshot;
+  } finally {
+    await release();
   }
-  return (await response.json()) as QaBusStateSnapshot;
 }
