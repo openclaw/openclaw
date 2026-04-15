@@ -302,4 +302,22 @@ describe("message hook mappers", () => {
       messageId: "adapter-msg-42",
     });
   });
+
+  // Codex P2 review on PR #66770: outbound delivery normalises missing
+  // native IDs to "" rather than undefined (see `createEmptyChannelResult`
+  // and `buildChannelSendResult` under src/infra/outbound). Plugins must
+  // not see `messageId: ""` and mistake the empty sentinel for a real
+  // adapter ID — treat "" the same as undefined.
+  it("omits messageId when the canonical sentinel is an empty string", () => {
+    const canonical = buildCanonicalSentMessageHookContext({
+      to: "demo-chat:chat:456",
+      content: "reply",
+      success: true,
+      channelId: "demo-chat",
+      messageId: "",
+    });
+
+    const event = toPluginMessageSentEvent(canonical);
+    expect("messageId" in event).toBe(false);
+  });
 });
