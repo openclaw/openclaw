@@ -962,15 +962,15 @@ pub fn run() {
                 .cloned()
                 .ok_or_else(|| "Default tray icon missing".to_string())?;
             let tray_menu = MenuBuilder::new(app)
-                .text("tray_show", "Open OpenClaw")
+                .text("tray_show", "Open OpenClaw Beta")
                 .separator()
-                .text("tray_quit", "Exit OpenClaw")
+                .text("tray_quit", "Exit OpenClaw Beta")
                 .build()
                 .map_err(|e| e.to_string())?;
             TrayIconBuilder::with_id("main")
                 .icon(tray_icon)
                 .menu(&tray_menu)
-                .tooltip("OpenClaw")
+                .tooltip("OpenClaw Beta")
                 .show_menu_on_left_click(false)
                 .on_tray_icon_event(|tray, event| match event {
                     TrayIconEvent::Click {

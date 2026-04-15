@@ -15,9 +15,9 @@ $ErrorActionPreference = "Stop"
 
 function Get-InstallRoot {
   $roots = @(
-    "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenClaw",
-    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenClaw",
-    "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\OpenClaw"
+    "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenClaw Beta",
+    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenClaw Beta",
+    "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\OpenClaw Beta"
   )
 
   foreach ($root in $roots) {
@@ -30,9 +30,9 @@ function Get-InstallRoot {
   }
 
   $fallbacks = @(
-    (Join-Path $env:LOCALAPPDATA "OpenClaw"),
-    (Join-Path $env:ProgramFiles "OpenClaw"),
-    (Join-Path ${env:ProgramFiles(x86)} "OpenClaw")
+    (Join-Path $env:LOCALAPPDATA "OpenClaw Beta"),
+    (Join-Path $env:ProgramFiles "OpenClaw Beta"),
+    (Join-Path ${env:ProgramFiles(x86)} "OpenClaw Beta")
   )
 
   foreach ($path in $fallbacks) {
@@ -91,7 +91,7 @@ switch ($InstallerType) {
 
 $installRoot = Get-InstallRoot
 if ([string]::IsNullOrWhiteSpace($installRoot)) {
-  throw "Unable to locate OpenClaw install root after $InstallerType install."
+  throw "Unable to locate OpenClaw Beta install root after $InstallerType install."
 }
 
 $exePath = Join-Path $installRoot "openclaw-desktop.exe"
@@ -103,7 +103,7 @@ $appProcess = Start-Process -FilePath $exePath -PassThru
 Start-Sleep -Seconds 8
 
 if ($appProcess.HasExited) {
-  throw "OpenClaw exited immediately after launch smoke."
+  throw "OpenClaw Beta exited immediately after launch smoke."
 }
 
 Stop-Process -Id $appProcess.Id -Force

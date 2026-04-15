@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "OpenClaw Windows - default permissions",
+  "description": "OpenClaw Beta desktop - default permissions",
   "windows": [
     "main"
   ],

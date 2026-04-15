@@ -31,7 +31,7 @@
         throw new Error(window.__OPENCLAW_GATEWAY_START_ERROR);
       }
       if (window.__OPENCLAW_GATEWAY_READY) {
-        setProgress(100, "Ready", "Opening OpenClaw…");
+        setProgress(100, "Ready", "Opening OpenClaw Beta…");
         window.location.replace(target);
         return;
       }
@@ -44,7 +44,7 @@
       try {
         const response = await fetch(`${target}/health`, { cache: "no-store" });
         if (response.ok) {
-          setProgress(100, "Ready", "Opening OpenClaw…");
+          setProgress(100, "Ready", "Opening OpenClaw Beta…");
           await new Promise((resolve) => setTimeout(resolve, 250));
           window.location.replace(target);
           return;

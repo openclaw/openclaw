@@ -302,7 +302,7 @@ jobs:
             create_args=(
               "$RELEASE_TAG"
               --repo "$GITHUB_REPOSITORY"
-              --title "OpenClaw ${RELEASE_TAG#v}"
+              --title "OpenClaw Beta ${RELEASE_TAG#v}"
             )
             if [[ "$RELEASE_DRAFT" == "true" ]]; then
               create_args+=(--draft)

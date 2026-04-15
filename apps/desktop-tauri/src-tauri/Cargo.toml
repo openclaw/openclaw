@@ -1,7 +1,7 @@
 [package]
 name = "openclaw"
 version = "0.1.8"
-description = "OpenClaw Windows Client"
+description = "OpenClaw Beta desktop client"
 authors = ["OpenClaw"]
 license = "MIT"
 repository = ""

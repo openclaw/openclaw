@@ -241,9 +241,9 @@ jobs:
           DMG_PATH="$(find apps/desktop-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
           DSYM_PATH="$(find apps/desktop-tauri/src-tauri/target/aarch64-apple-darwin/release -name '*.dSYM' -print -quit)"
           RELEASE_ASSET_DIR="$RUNNER_TEMP/openclaw-macos-arm64-release"
-          APP_ZIP_PATH="$RELEASE_ASSET_DIR/OpenClaw-${VERSION}-macOS-arm64.zip"
-          NOTARY_ZIP_PATH="$RUNNER_TEMP/OpenClaw-${VERSION}-macOS-arm64.notary.zip"
-          DSYM_ZIP_PATH="$RELEASE_ASSET_DIR/OpenClaw-${VERSION}-macOS-arm64.dSYM.zip"
+          APP_ZIP_PATH="$RELEASE_ASSET_DIR/OpenClaw-Beta-${VERSION}-macOS-arm64.zip"
+          NOTARY_ZIP_PATH="$RUNNER_TEMP/OpenClaw-Beta-${VERSION}-macOS-arm64.notary.zip"
+          DSYM_ZIP_PATH="$RELEASE_ASSET_DIR/OpenClaw-Beta-${VERSION}-macOS-arm64.dSYM.zip"
 
           [[ -n "$APP_PATH" ]] || { echo "Missing .app bundle"; exit 1; }
           [[ -n "$DMG_PATH" ]] || { echo "Missing .dmg bundle"; exit 1; }
@@ -352,7 +352,7 @@ jobs:
             create_args=(
               "$RELEASE_TAG"
               --repo "$GITHUB_REPOSITORY"
-              --title "OpenClaw ${RELEASE_TAG#v}"
+              --title "OpenClaw Beta ${RELEASE_TAG#v}"
             )
             if [[ "$RELEASE_DRAFT" == "true" ]]; then
               create_args+=(--draft)

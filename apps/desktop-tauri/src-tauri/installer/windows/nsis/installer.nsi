@@ -404,7 +404,7 @@ Var AppStartMenuFolder
 ; Use show readme button in the finish page as a launch-at-login opt-in.
 !define MUI_FINISHPAGE_SHOWREADME
 !define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
-!define MUI_FINISHPAGE_SHOWREADME_TEXT "Launch OpenClaw at login"
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "Launch OpenClaw Beta at login"
 !define MUI_FINISHPAGE_SHOWREADME_FUNCTION EnableLaunchAtLogin
 ; Show run app after installation.
 !define MUI_FINISHPAGE_RUN
