@@ -51,6 +51,48 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "startup-connect-grace" });
   });
 
+  it("allows a reconnecting channel to finish its own reconnect window", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+        healthState: "reconnecting",
+        lastStartAt: 0,
+        lastEventAt: 95_000,
+      },
+      {
+        channelId: "whatsapp",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "reconnecting-grace" });
+  });
+
+  it("flags reconnecting channels after their reconnect grace expires", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+        healthState: "reconnecting",
+        lastStartAt: 0,
+        lastEventAt: 80_000,
+      },
+      {
+        channelId: "whatsapp",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "disconnected" });
+  });
+
   it("treats active runs as busy even when disconnected", () => {
     const now = 100_000;
     const evaluation = evaluateChannelHealth(

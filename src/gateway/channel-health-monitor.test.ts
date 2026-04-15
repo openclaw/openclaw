@@ -295,6 +295,25 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("does not restart WhatsApp while its own reconnect loop is active", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      whatsapp: {
+        default: {
+          running: true,
+          connected: false,
+          enabled: true,
+          configured: true,
+          linked: true,
+          healthState: "reconnecting",
+          lastStartAt: now - 300_000,
+          lastEventAt: now - 5_000,
+        },
+      },
+    });
+    await expectNoRestart(manager);
+  });
+
   it("skips restart when channel is busy with active runs", async () => {
     const now = Date.now();
     const manager = createSnapshotManager({

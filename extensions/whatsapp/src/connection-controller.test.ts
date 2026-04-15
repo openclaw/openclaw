@@ -1,18 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import { WhatsAppConnectionController } from "./connection-controller.js";
-import { createWaSocket, waitForWaConnection } from "./session.js";
+import {
+  createWaSocket,
+  waitForCredsSaveQueueWithTimeout,
+  waitForWaConnection,
+} from "./session.js";
 
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
   return {
     ...actual,
     createWaSocket: vi.fn(),
+    waitForCredsSaveQueueWithTimeout: vi.fn(),
     waitForWaConnection: vi.fn(),
   };
 });
 
 const createWaSocketMock = vi.mocked(createWaSocket);
+const waitForCredsSaveQueueWithTimeoutMock = vi.mocked(waitForCredsSaveQueueWithTimeout);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 
 describe("WhatsAppConnectionController", () => {
@@ -62,8 +68,30 @@ describe("WhatsAppConnectionController", () => {
 
     expect(createListener).not.toHaveBeenCalled();
     expect(sock.ws.close).toHaveBeenCalledOnce();
+    expect(waitForCredsSaveQueueWithTimeoutMock).toHaveBeenCalledWith("/tmp/wa-auth");
     expect(controller.socketRef.current).toBeNull();
     expect(controller.getActiveListener()).toBeNull();
+  });
+
+  it("waits for pending credential saves when closing an active connection", async () => {
+    const sock = {
+      ws: {
+        close: vi.fn(),
+      },
+    };
+
+    createWaSocketMock.mockResolvedValueOnce(sock as never);
+    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+
+    await controller.openConnection({
+      connectionId: "conn-1",
+      createListener: async () => ({}) as never,
+    });
+
+    await controller.closeCurrentConnection();
+
+    expect(sock.ws.close).toHaveBeenCalledOnce();
+    expect(waitForCredsSaveQueueWithTimeoutMock).toHaveBeenCalledWith("/tmp/wa-auth");
   });
 
   it("keeps the previous registered controller until a replacement listener is ready", async () => {

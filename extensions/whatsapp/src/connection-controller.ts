@@ -376,6 +376,7 @@ export class WhatsAppConnectionController {
       if (connection?.unregisterUnhandled) {
         connection.unregisterUnhandled();
       }
+      await waitForCredsSaveQueueWithTimeout(this.authDir);
       throw err;
     }
   }
@@ -506,6 +507,7 @@ export class WhatsAppConnectionController {
       // best-effort close
     }
     closeWaSocket(connection.sock);
+    await waitForCredsSaveQueueWithTimeout(this.authDir);
   }
 
   async waitBeforeRetry(delayMs: number): Promise<void> {

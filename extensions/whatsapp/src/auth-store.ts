@@ -18,19 +18,51 @@ export function resolveDefaultWebAuthDir(): string {
 
 export const WA_WEB_AUTH_DIR = resolveDefaultWebAuthDir();
 
-export function readCredsJsonRaw(filePath: string): string | null {
+export type CredsJsonInspectResult =
+  | {
+      ok: true;
+      raw: string;
+      bytes: number;
+    }
+  | {
+      ok: false;
+      reason: "missing" | "not-file" | "empty" | "read-error" | "invalid-json";
+      bytes?: number;
+      error?: string;
+    };
+
+export function inspectCredsJson(filePath: string): CredsJsonInspectResult {
   try {
     if (!fsSync.existsSync(filePath)) {
-      return null;
+      return { ok: false, reason: "missing" };
     }
     const stats = fsSync.statSync(filePath);
-    if (!stats.isFile() || stats.size <= 1) {
-      return null;
+    if (!stats.isFile()) {
+      return { ok: false, reason: "not-file" };
     }
-    return fsSync.readFileSync(filePath, "utf-8");
-  } catch {
-    return null;
+    if (stats.size <= 1) {
+      return { ok: false, reason: "empty", bytes: stats.size };
+    }
+    const raw = fsSync.readFileSync(filePath, "utf-8");
+    try {
+      JSON.parse(raw);
+    } catch (err) {
+      return {
+        ok: false,
+        reason: "invalid-json",
+        bytes: stats.size,
+        error: String(err),
+      };
+    }
+    return { ok: true, raw, bytes: stats.size };
+  } catch (err) {
+    return { ok: false, reason: "read-error", error: String(err) };
   }
+}
+
+export function readCredsJsonRaw(filePath: string): string | null {
+  const inspected = inspectCredsJson(filePath);
+  return inspected.ok ? inspected.raw : null;
 }
 
 export function maybeRestoreCredsFromBackup(authDir: string): void {
@@ -38,27 +70,45 @@ export function maybeRestoreCredsFromBackup(authDir: string): void {
   try {
     const credsPath = resolveWebCredsPath(authDir);
     const backupPath = resolveWebCredsBackupPath(authDir);
-    const raw = readCredsJsonRaw(credsPath);
-    if (raw) {
-      // Validate that creds.json is parseable.
-      JSON.parse(raw);
+    const current = inspectCredsJson(credsPath);
+    if (current.ok) {
       return;
     }
 
-    const backupRaw = readCredsJsonRaw(backupPath);
-    if (!backupRaw) {
+    const backup = inspectCredsJson(backupPath);
+    if (!backup.ok) {
+      if (current.reason !== "missing") {
+        logger.warn(
+          {
+            credsPath,
+            backupPath,
+            reason: current.reason,
+            backupReason: backup.reason,
+            credsBytes: current.bytes,
+            backupBytes: backup.bytes,
+          },
+          "WhatsApp creds.json is unusable and no valid backup is available",
+        );
+      }
       return;
     }
 
-    // Ensure backup is parseable before restoring.
-    JSON.parse(backupRaw);
     fsSync.copyFileSync(backupPath, credsPath);
     try {
       fsSync.chmodSync(credsPath, 0o600);
     } catch {
       // best-effort on platforms that support it
     }
-    logger.warn({ credsPath }, "restored corrupted WhatsApp creds.json from backup");
+    logger.warn(
+      {
+        credsPath,
+        backupPath,
+        reason: current.reason,
+        credsBytes: current.bytes,
+        backupBytes: backup.bytes,
+      },
+      "restored corrupted WhatsApp creds.json from backup",
+    );
   } catch {
     // ignore
   }

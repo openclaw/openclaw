@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -243,6 +244,38 @@ describe("web session", () => {
     creds.restore();
   });
 
+  it("restores the last valid creds when saveCreds leaves invalid JSON", async () => {
+    const authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-creds-"));
+    const credsPath = path.join(authDir, "creds.json");
+    const backupPath = path.join(authDir, "creds.json.bak");
+    try {
+      fsSync.writeFileSync(credsPath, JSON.stringify({ session: "before" }), "utf-8");
+      fsSync.writeFileSync(backupPath, JSON.stringify({ session: "older" }), "utf-8");
+      const saveCreds = vi.fn(async () => {
+        fsSync.writeFileSync(credsPath, "{", "utf-8");
+      });
+      useMultiFileAuthStateMock.mockResolvedValueOnce({
+        state: { creds: {} as never, keys: {} as never },
+        saveCreds,
+      });
+
+      await createWaSocket(false, false, { authDir });
+      const sock = getLastSocket();
+      sock.ev.emit("creds.update", {});
+      await waitForCredsSaveQueue(authDir);
+
+      expect(saveCreds).toHaveBeenCalledOnce();
+      expect(JSON.parse(fsSync.readFileSync(credsPath, "utf-8"))).toEqual({
+        session: "before",
+      });
+      expect(JSON.parse(fsSync.readFileSync(backupPath, "utf-8"))).toEqual({
+        session: "before",
+      });
+    } finally {
+      fsSync.rmSync(authDir, { recursive: true, force: true });
+    }
+  });
+
   it("serializes creds.update saves to avoid overlapping writes", async () => {
     let inFlight = 0;
     let maxInFlight = 0;
@@ -351,7 +384,7 @@ describe("web session", () => {
     await createWaSocket(false, false);
     const saveCreds = await emitCredsUpdateAndReadSaveCreds();
 
-    expect(creds.copySpy).toHaveBeenCalledTimes(1);
+    expect(creds.copySpy).toHaveBeenCalledTimes(2);
     const args = creds.copySpy.mock.calls[0] ?? [];
     expect(String(args[0] ?? "")).toContain(creds.credsSuffix);
     expect(String(args[1] ?? "")).toContain(backupSuffix);

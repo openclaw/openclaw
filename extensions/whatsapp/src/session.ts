@@ -8,8 +8,8 @@ import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
 import {
+  inspectCredsJson,
   maybeRestoreCredsFromBackup,
-  readCredsJsonRaw,
   resolveDefaultWebAuthDir,
   resolveWebCredsBackupPath,
   resolveWebCredsPath,
@@ -44,6 +44,33 @@ async function loadQrTerminal() {
 // Per-authDir queues so multi-account creds saves don't block each other.
 const credsSaveQueues = new Map<string, Promise<void>>();
 const CREDS_SAVE_FLUSH_TIMEOUT_MS = 15_000;
+
+function chmodCredsFile(filePath: string): void {
+  try {
+    fsSync.chmodSync(filePath, 0o600);
+  } catch {
+    // best-effort on platforms that support it
+  }
+}
+
+function rotateCredsBackupIfValid(
+  authDir: string,
+  logger: ReturnType<typeof getChildLogger>,
+): void {
+  const credsPath = resolveWebCredsPath(authDir);
+  const backupPath = resolveWebCredsBackupPath(authDir);
+  const inspected = inspectCredsJson(credsPath);
+  if (!inspected.ok) {
+    return;
+  }
+  try {
+    fsSync.copyFileSync(credsPath, backupPath);
+    chmodCredsFile(backupPath);
+  } catch (err) {
+    logger.warn({ error: String(err) }, "failed rotating WhatsApp creds backup");
+  }
+}
+
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
@@ -68,37 +95,32 @@ async function safeSaveCreds(
   saveCreds: () => Promise<void> | void,
   logger: ReturnType<typeof getChildLogger>,
 ): Promise<void> {
-  try {
-    // Best-effort backup so we can recover after abrupt restarts.
-    // Important: don't clobber a good backup with a corrupted/truncated creds.json.
-    const credsPath = resolveWebCredsPath(authDir);
-    const backupPath = resolveWebCredsBackupPath(authDir);
-    const raw = readCredsJsonRaw(credsPath);
-    if (raw) {
-      try {
-        JSON.parse(raw);
-        fsSync.copyFileSync(credsPath, backupPath);
-        try {
-          fsSync.chmodSync(backupPath, 0o600);
-        } catch {
-          // best-effort on platforms that support it
-        }
-      } catch {
-        // keep existing backup
-      }
-    }
-  } catch {
-    // ignore backup failures
-  }
+  // Best-effort backup so we can recover after abrupt restarts.
+  // Important: don't clobber a good backup with a corrupted/truncated creds.json.
+  rotateCredsBackupIfValid(authDir, logger);
+
   try {
     await Promise.resolve(saveCreds());
-    try {
-      fsSync.chmodSync(resolveWebCredsPath(authDir), 0o600);
-    } catch {
-      // best-effort on platforms that support it
+    const credsPath = resolveWebCredsPath(authDir);
+    const inspected = inspectCredsJson(credsPath);
+    if (!inspected.ok) {
+      logger.warn(
+        {
+          credsPath,
+          reason: inspected.reason,
+          credsBytes: inspected.bytes,
+          error: inspected.error,
+        },
+        "WhatsApp creds save produced invalid creds.json; attempting backup restore",
+      );
+      maybeRestoreCredsFromBackup(authDir);
+      return;
     }
+    chmodCredsFile(credsPath);
+    rotateCredsBackupIfValid(authDir, logger);
   } catch (err) {
     logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
+    maybeRestoreCredsFromBackup(authDir);
   }
 }
 

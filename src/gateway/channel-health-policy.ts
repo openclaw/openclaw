@@ -13,6 +13,7 @@ export type ChannelHealthSnapshot = {
   lastStartAt?: number | null;
   reconnectAttempts?: number;
   mode?: string;
+  healthState?: string;
 };
 
 export type ChannelHealthEvaluationReason =
@@ -22,6 +23,7 @@ export type ChannelHealthEvaluationReason =
   | "busy"
   | "stuck"
   | "startup-connect-grace"
+  | "reconnecting-grace"
   | "disconnected"
   | "stale-socket";
 
@@ -102,6 +104,15 @@ export function evaluateChannelHealth(
     const upDuration = policy.now - snapshot.lastStartAt;
     if (upDuration < policy.channelConnectGraceMs) {
       return { healthy: true, reason: "startup-connect-grace" };
+    }
+  }
+  if (snapshot.healthState === "reconnecting") {
+    const lastEventAt =
+      typeof snapshot.lastEventAt === "number" && Number.isFinite(snapshot.lastEventAt)
+        ? snapshot.lastEventAt
+        : null;
+    if (lastEventAt != null && policy.now - lastEventAt < policy.channelConnectGraceMs) {
+      return { healthy: true, reason: "reconnecting-grace" };
     }
   }
   if (snapshot.connected === false) {
