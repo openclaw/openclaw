@@ -1,4 +1,4 @@
-import { listChannelPlugins } from "../channels/plugins/index.js";
+import { listChannelPlugins, type ChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
@@ -164,6 +164,132 @@ function collectDurableExecApprovalWarnings(cfg: OpenClawConfig): string[] {
   return [];
 }
 
+type ChannelDmPolicyWarningParams = {
+  label: string;
+  provider: ChannelId;
+  accountId: string;
+  dmPolicy: string;
+  allowFrom?: Array<string | number> | null;
+  policyPath?: string;
+  allowFromPath: string;
+  approveHint: string;
+  normalizeEntry?: (raw: string) => string;
+};
+
+async function pushChannelDmPolicyWarnings(
+  cfg: OpenClawConfig,
+  warnings: string[],
+  params: ChannelDmPolicyWarningParams,
+): Promise<void> {
+  const dmPolicy = params.dmPolicy;
+  const policyPath = params.policyPath ?? `${params.allowFromPath}policy`;
+  const { hasWildcard, allowCount, isMultiUserDm } = await resolveDmAllowState({
+    provider: params.provider,
+    accountId: params.accountId,
+    allowFrom: params.allowFrom,
+    normalizeEntry: params.normalizeEntry,
+  });
+  const dmScope = cfg.session?.dmScope ?? "main";
+
+  if (dmPolicy === "open") {
+    const allowFromPath = `${params.allowFromPath}allowFrom`;
+    warnings.push(`- ${params.label} DMs: OPEN (${policyPath}="open"). Anyone can DM it.`);
+    if (!hasWildcard) {
+      warnings.push(
+        `- ${params.label} DMs: config invalid — "open" requires ${allowFromPath} to include "*".`,
+      );
+    }
+  }
+
+  if (dmPolicy === "disabled") {
+    warnings.push(`- ${params.label} DMs: disabled (${policyPath}="disabled").`);
+    return;
+  }
+
+  if (dmPolicy !== "open" && allowCount === 0) {
+    warnings.push(
+      `- ${params.label} DMs: locked (${policyPath}="${dmPolicy}") with no allowlist; unknown senders will be blocked / get a pairing code.`,
+    );
+    warnings.push(`  ${params.approveHint}`);
+  }
+
+  if (dmScope === "main" && isMultiUserDm) {
+    warnings.push(
+      `- ${params.label} DMs: multiple senders share the main session; run: ` +
+        formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
+        ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
+    );
+  }
+}
+
+async function collectChannelPluginAccountSecurityWarnings(
+  plugin: ChannelPlugin,
+  cfg: OpenClawConfig,
+  warnings: string[],
+): Promise<void> {
+  const security = plugin.security;
+  if (!security) {
+    return;
+  }
+
+  const { defaultAccountId, enabled, configured, diagnostics } =
+    await resolveDefaultChannelAccountContext(plugin, cfg, {
+      mode: "read_only",
+      commandName: "doctor",
+    });
+  for (const diagnostic of diagnostics) {
+    warnings.push(`- [secrets] ${diagnostic}`);
+  }
+  if (!enabled || !configured) {
+    return;
+  }
+
+  const accountIds = plugin.config.listAccountIds(cfg);
+  const orderedAccountIds = Array.from(new Set([defaultAccountId, ...accountIds]));
+
+  for (const accountId of orderedAccountIds) {
+    const account = plugin.config.resolveAccount(cfg, accountId);
+    if (plugin.config.isEnabled && !plugin.config.isEnabled(account, cfg)) {
+      continue;
+    }
+    if (plugin.config.isConfigured && !(await plugin.config.isConfigured(account, cfg))) {
+      continue;
+    }
+    const accountLabel =
+      orderedAccountIds.length > 1
+        ? `${plugin.meta.label ?? plugin.id} (${accountId})`
+        : (plugin.meta.label ?? plugin.id);
+    const dmPolicy = security.resolveDmPolicy?.({
+      cfg,
+      accountId,
+      account,
+    });
+    if (dmPolicy) {
+      await pushChannelDmPolicyWarnings(cfg, warnings, {
+        label: accountLabel,
+        provider: plugin.id,
+        accountId,
+        dmPolicy: dmPolicy.policy,
+        allowFrom: dmPolicy.allowFrom,
+        policyPath: dmPolicy.policyPath,
+        allowFromPath: dmPolicy.allowFromPath,
+        approveHint: dmPolicy.approveHint,
+        normalizeEntry: dmPolicy.normalizeEntry,
+      });
+    }
+    if (security.collectWarnings) {
+      const extra = await security.collectWarnings({
+        cfg,
+        accountId,
+        account,
+      });
+      if (extra?.length) {
+        warnings.push(...extra);
+      }
+    }
+  }
+}
+
 export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const warnings: string[] = [];
   const auditHint = `- Run: ${formatCliCommand("openclaw security audit --deep")}`;
@@ -252,125 +378,8 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     }
   }
 
-  const warnDmPolicy = async (params: {
-    label: string;
-    provider: ChannelId;
-    accountId: string;
-    dmPolicy: string;
-    allowFrom?: Array<string | number> | null;
-    policyPath?: string;
-    allowFromPath: string;
-    approveHint: string;
-    normalizeEntry?: (raw: string) => string;
-  }) => {
-    const dmPolicy = params.dmPolicy;
-    const policyPath = params.policyPath ?? `${params.allowFromPath}policy`;
-    const { hasWildcard, allowCount, isMultiUserDm } = await resolveDmAllowState({
-      provider: params.provider,
-      accountId: params.accountId,
-      allowFrom: params.allowFrom,
-      normalizeEntry: params.normalizeEntry,
-    });
-    const dmScope = cfg.session?.dmScope ?? "main";
-
-    if (dmPolicy === "open") {
-      const allowFromPath = `${params.allowFromPath}allowFrom`;
-      warnings.push(`- ${params.label} DMs: OPEN (${policyPath}="open"). Anyone can DM it.`);
-      if (!hasWildcard) {
-        warnings.push(
-          `- ${params.label} DMs: config invalid — "open" requires ${allowFromPath} to include "*".`,
-        );
-      }
-    }
-
-    if (dmPolicy === "disabled") {
-      warnings.push(`- ${params.label} DMs: disabled (${policyPath}="disabled").`);
-      return;
-    }
-
-    if (dmPolicy !== "open" && allowCount === 0) {
-      warnings.push(
-        `- ${params.label} DMs: locked (${policyPath}="${dmPolicy}") with no allowlist; unknown senders will be blocked / get a pairing code.`,
-      );
-      warnings.push(`  ${params.approveHint}`);
-    }
-
-    if (dmScope === "main" && isMultiUserDm) {
-      warnings.push(
-        `- ${params.label} DMs: multiple senders share the main session; run: ` +
-          formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
-          ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
-      );
-    }
-  };
-
   for (const plugin of listChannelPlugins()) {
-    if (!plugin.security) {
-      continue;
-    }
-    const { defaultAccountId, enabled, configured, diagnostics } =
-      await resolveDefaultChannelAccountContext(plugin, cfg, {
-        mode: "read_only",
-        commandName: "doctor",
-      });
-    for (const diagnostic of diagnostics) {
-      warnings.push(`- [secrets] ${diagnostic}`);
-    }
-    if (!enabled) {
-      continue;
-    }
-    if (!configured) {
-      continue;
-    }
-
-    const accountIds = plugin.config.listAccountIds(cfg);
-    const orderedAccountIds = Array.from(new Set([defaultAccountId, ...accountIds]));
-
-    for (const accountId of orderedAccountIds) {
-      const account = plugin.config.resolveAccount(cfg, accountId);
-      const enabled = plugin.config.isEnabled ? plugin.config.isEnabled(account, cfg) : true;
-      if (!enabled) {
-        continue;
-      }
-      const configured = plugin.config.isConfigured
-        ? await plugin.config.isConfigured(account, cfg)
-        : true;
-      if (!configured) {
-        continue;
-      }
-      const accountLabel =
-        orderedAccountIds.length > 1
-          ? `${plugin.meta.label ?? plugin.id} (${accountId})`
-          : (plugin.meta.label ?? plugin.id);
-      const dmPolicy = plugin.security.resolveDmPolicy?.({
-        cfg,
-        accountId,
-        account,
-      });
-      if (dmPolicy) {
-        await warnDmPolicy({
-          label: accountLabel,
-          provider: plugin.id,
-          accountId,
-          dmPolicy: dmPolicy.policy,
-          allowFrom: dmPolicy.allowFrom,
-          policyPath: dmPolicy.policyPath,
-          allowFromPath: dmPolicy.allowFromPath,
-          approveHint: dmPolicy.approveHint,
-          normalizeEntry: dmPolicy.normalizeEntry,
-        });
-      }
-      if (plugin.security.collectWarnings) {
-        const extra = await plugin.security.collectWarnings({
-          cfg,
-          accountId,
-          account,
-        });
-        if (extra?.length) {
-          warnings.push(...extra);
-        }
-      }
-    }
+    await collectChannelPluginAccountSecurityWarnings(plugin, cfg, warnings);
   }
 
   const lines = warnings.length > 0 ? warnings : ["- No channel security warnings detected."];
