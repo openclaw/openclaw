@@ -654,9 +654,7 @@ describe("qa bundled plugin dir", () => {
         repoRoot,
         pluginId: "qa-channel",
       }),
-    ).toBe(
-      path.join(repoRoot, "dist", "extensions", "qa-channel"),
-    );
+    ).toBe(path.join(repoRoot, "dist", "extensions", "qa-channel"));
   });
 
   it("falls back to the source bundled plugin when no built copy exists", async () => {
@@ -672,9 +670,7 @@ describe("qa bundled plugin dir", () => {
         repoRoot,
         pluginId: "qa-channel",
       }),
-    ).toBe(
-      path.join(repoRoot, "extensions", "qa-channel"),
-    );
+    ).toBe(path.join(repoRoot, "extensions", "qa-channel"));
   });
 
   it("creates a scoped bundled plugin tree for allowed plugins plus always-allowed runtime facades", async () => {
@@ -779,6 +775,82 @@ describe("qa bundled plugin dir", () => {
           path.basename(tempRoot),
           "dist",
           "shared-chunk-abc123.js",
+        ),
+      ),
+    ).resolves.toBeTruthy();
+  });
+
+  it("preserves dist-runtime-only root chunks when dist also exists", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-mixed-runtime-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await writeFile(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
+      "utf8",
+    );
+    await mkdir(path.join(repoRoot, "dist"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "dist", "shared-dist.js"),
+      'export const dist = "dist";\n',
+      "utf8",
+    );
+    await mkdir(path.join(repoRoot, "dist-runtime", "extensions", "runtime-only"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(repoRoot, "dist-runtime", "runtime-chunk.js"),
+      'export const marker = "runtime";\n',
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "dist-runtime", "extensions", "runtime-only", "package.json"),
+      JSON.stringify({ name: "@openclaw/runtime-only", type: "module" }, null, 2),
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "dist-runtime", "extensions", "runtime-only", "index.js"),
+      ['import { marker } from "../../runtime-chunk.js";', "export { marker };", ""].join("\n"),
+      "utf8",
+    );
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-mixed-target-"));
+    cleanups.push(async () => {
+      await rm(tempRoot, { recursive: true, force: true });
+    });
+
+    const { bundledPluginsDir } = await __testing.createQaBundledPluginsDir({
+      repoRoot,
+      tempRoot,
+      allowedPluginIds: ["runtime-only"],
+    });
+
+    expect(bundledPluginsDir).toBe(
+      path.join(
+        repoRoot,
+        ".artifacts",
+        "qa-runtime",
+        path.basename(tempRoot),
+        "dist",
+        "extensions",
+      ),
+    );
+    await expect(
+      import(
+        `${pathToFileURL(path.join(bundledPluginsDir, "runtime-only", "index.js")).href}?t=${Date.now()}`
+      ),
+    ).resolves.toMatchObject({
+      marker: "runtime",
+    });
+    await expect(
+      lstat(
+        path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-runtime",
+          path.basename(tempRoot),
+          "dist",
+          "runtime-chunk.js",
         ),
       ),
     ).resolves.toBeTruthy();

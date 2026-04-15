@@ -165,6 +165,22 @@ function resolveQaStagedBundledTreeName(repoRoot: string) {
   return "dist";
 }
 
+function resolveQaBuiltBundledPluginTreeRoot(params: { repoRoot: string; sourceDir: string }) {
+  const sourceDir = path.resolve(params.sourceDir);
+  for (const treeName of ["dist", "dist-runtime"] as const) {
+    const extensionsRoot = path.join(params.repoRoot, treeName, "extensions");
+    const relativeSourceDir = path.relative(extensionsRoot, sourceDir);
+    if (
+      relativeSourceDir.length > 0 &&
+      !relativeSourceDir.startsWith("..") &&
+      !path.isAbsolute(relativeSourceDir)
+    ) {
+      return path.join(params.repoRoot, treeName);
+    }
+  }
+  return null;
+}
+
 async function symlinkQaStagedDirEntry(params: {
   sourcePath: string;
   targetPath: string;
@@ -193,6 +209,57 @@ async function seedQaStagedNodeModules(params: { repoRoot: string; stagedRoot: s
       targetPath: path.join(stagedNodeModulesDir, entry.name),
       directory: entry.isDirectory(),
     });
+  }
+}
+
+function collectQaBuiltTreeRoots(params: {
+  repoRoot: string;
+  stagedPluginIds: readonly string[];
+  stagedTreeName: string;
+}) {
+  const treeRoots = new Set<string>();
+  treeRoots.add(path.join(params.repoRoot, params.stagedTreeName));
+  for (const pluginId of params.stagedPluginIds) {
+    const sourceDir = resolveQaBundledPluginSourceDir({
+      repoRoot: params.repoRoot,
+      pluginId,
+    });
+    if (!sourceDir) {
+      continue;
+    }
+    const builtTreeRoot = resolveQaBuiltBundledPluginTreeRoot({
+      repoRoot: params.repoRoot,
+      sourceDir,
+    });
+    if (builtTreeRoot) {
+      treeRoots.add(builtTreeRoot);
+    }
+  }
+  return [...treeRoots];
+}
+
+async function seedQaStagedBuiltTreeRoots(params: {
+  stagedTreeRoot: string;
+  sourceTreeRoots: readonly string[];
+}) {
+  for (const sourceTreeRoot of params.sourceTreeRoots) {
+    if (!existsSync(sourceTreeRoot)) {
+      continue;
+    }
+    for (const entry of await fs.readdir(sourceTreeRoot, { withFileTypes: true })) {
+      if (entry.name === "extensions") {
+        continue;
+      }
+      const targetPath = path.join(params.stagedTreeRoot, entry.name);
+      if (existsSync(targetPath)) {
+        continue;
+      }
+      await symlinkQaStagedDirEntry({
+        sourcePath: path.join(sourceTreeRoot, entry.name),
+        targetPath,
+        directory: entry.isDirectory(),
+      });
+    }
   }
 }
 
@@ -254,7 +321,10 @@ export async function createQaBundledPluginsDir(params: {
   );
   await fs.rm(stagedRoot, { recursive: true, force: true });
   await fs.mkdir(stagedRoot, { recursive: true });
-  await fs.copyFile(path.join(params.repoRoot, "package.json"), path.join(stagedRoot, "package.json"));
+  await fs.copyFile(
+    path.join(params.repoRoot, "package.json"),
+    path.join(stagedRoot, "package.json"),
+  );
   await seedQaStagedNodeModules({
     repoRoot: params.repoRoot,
     stagedRoot,
@@ -266,21 +336,16 @@ export async function createQaBundledPluginsDir(params: {
     path.join(stagedOpenClawPackageDir, "package.json"),
   );
   const stagedTreeName = resolveQaStagedBundledTreeName(params.repoRoot);
-  const sourceTreeRoot = path.join(params.repoRoot, stagedTreeName);
   const stagedTreeRoot = path.join(stagedRoot, stagedTreeName);
   await fs.mkdir(stagedTreeRoot, { recursive: true });
-  if (existsSync(sourceTreeRoot)) {
-    for (const entry of await fs.readdir(sourceTreeRoot, { withFileTypes: true })) {
-      if (entry.name === "extensions") {
-        continue;
-      }
-      await symlinkQaStagedDirEntry({
-        sourcePath: path.join(sourceTreeRoot, entry.name),
-        targetPath: path.join(stagedTreeRoot, entry.name),
-        directory: entry.isDirectory(),
-      });
-    }
-  }
+  await seedQaStagedBuiltTreeRoots({
+    stagedTreeRoot,
+    sourceTreeRoots: collectQaBuiltTreeRoots({
+      repoRoot: params.repoRoot,
+      stagedPluginIds,
+      stagedTreeName,
+    }),
+  });
   if (stagedTreeName === "dist-runtime" && !existsSync(path.join(stagedRoot, "dist"))) {
     const repoDistDir = path.join(params.repoRoot, "dist");
     const stagedDistTarget = existsSync(repoDistDir) ? repoDistDir : stagedTreeRoot;

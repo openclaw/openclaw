@@ -3,6 +3,6 @@ export function isPrivateQaCliEnabled(env: NodeJS.ProcessEnv = process.env): boo
 }
 
 export function loadPrivateQaCliModule(): Promise<Record<string, unknown>> {
-  const specifier = "openclaw/plugin-sdk/qa-lab";
+  const specifier = "../../plugin-sdk/qa-lab.js";
   return import(specifier) as Promise<Record<string, unknown>>;
 }
