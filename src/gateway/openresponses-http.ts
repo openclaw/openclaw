@@ -801,12 +801,37 @@ export async function handleOpenResponsesHttpRequest(
   setSseHeaders(res);
 
   let accumulatedText = "";
-  let sawAssistantDelta = false;
+  let bufferedVisibleText = "";
+  let streamedVisibleText = "";
+  let sawVisibleAssistantDelta = false;
   let closed = false;
   let unsubscribe = () => {};
   let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
+
+  const emitBufferedVisibleText = () => {
+    if (!bufferedVisibleText) {
+      return;
+    }
+
+    const delta = bufferedVisibleText.startsWith(streamedVisibleText)
+      ? bufferedVisibleText.slice(streamedVisibleText.length)
+      : bufferedVisibleText;
+    if (!delta) {
+      return;
+    }
+
+    streamedVisibleText = bufferedVisibleText;
+    sawVisibleAssistantDelta = true;
+    writeSseEvent(res, {
+      type: "response.output_text.delta",
+      item_id: outputItemId,
+      output_index: 0,
+      content_index: 0,
+      delta,
+    });
+  };
 
   const maybeFinalize = () => {
     if (closed) {
@@ -919,24 +944,33 @@ export async function handleOpenResponsesHttpRequest(
     if (evt.stream === "assistant") {
       const text = evt.data?.text;
       const replace = evt.data?.replace === true;
+      const phase =
+        evt.data?.phase === "commentary" || evt.data?.phase === "final_answer"
+          ? evt.data.phase
+          : undefined;
       if (replace && typeof text === "string") {
         accumulatedText = text;
+        bufferedVisibleText = phase === "commentary" ? "" : text;
+        if (phase !== "commentary") {
+          emitBufferedVisibleText();
+        }
       }
       const content = resolveAssistantStreamDeltaText(evt);
       if (!content) {
         return;
       }
 
-      sawAssistantDelta = true;
-      accumulatedText += content;
+      if (!replace || typeof text !== "string") {
+        accumulatedText += content;
+      }
 
-      writeSseEvent(res, {
-        type: "response.output_text.delta",
-        item_id: outputItemId,
-        output_index: 0,
-        content_index: 0,
-        delta: content,
-      });
+      if (phase === "commentary") {
+        return;
+      }
+
+      bufferedVisibleText =
+        replace && typeof text === "string" ? text : bufferedVisibleText + content;
+      emitBufferedVisibleText();
       return;
     }
 
@@ -1072,27 +1106,21 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
 
-      // Fallback: if no streaming deltas were received, send the full response as text
-      if (!sawAssistantDelta) {
+      // Fallback: if no user-visible streaming deltas were received, send the final visible text.
+      if (!sawVisibleAssistantDelta) {
         const payloads = resultAny.payloads;
         const content =
-          Array.isArray(payloads) && payloads.length > 0
+          bufferedVisibleText ||
+          (Array.isArray(payloads) && payloads.length > 0
             ? payloads
                 .map((p) => (typeof p.text === "string" ? p.text : ""))
                 .filter(Boolean)
                 .join("\n\n")
-            : "No response from OpenClaw.";
+            : "No response from OpenClaw.");
 
         accumulatedText = content;
-        sawAssistantDelta = true;
-
-        writeSseEvent(res, {
-          type: "response.output_text.delta",
-          item_id: outputItemId,
-          output_index: 0,
-          content_index: 0,
-          delta: content,
-        });
+        bufferedVisibleText = content;
+        emitBufferedVisibleText();
       }
     } catch (err) {
       if (closed || abortController.signal.aborted) {

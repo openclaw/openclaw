@@ -742,6 +742,105 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 
+  it("does not stream commentary deltas before function calls", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { delta: "Let me check that.", phase: "commentary" },
+      });
+      return {
+        payloads: [{ text: "Let me check that." }],
+        meta: {
+          stopReason: "tool_calls",
+          pendingToolCalls: [
+            {
+              id: "call_1",
+              name: "get_weather",
+              arguments: '{"city":"Taipei"}',
+            },
+          ],
+        },
+      };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "check the weather",
+      tools: WEATHER_TOOL,
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const events = parseSseEvents(text);
+    const deltaTexts = events
+      .filter((event) => event.event === "response.output_text.delta")
+      .map((event) => (JSON.parse(event.data) as { delta?: string }).delta ?? "")
+      .filter(Boolean);
+    expect(deltaTexts).toEqual([]);
+
+    const outputTextDone = events.find((event) => event.event === "response.output_text.done");
+    expect((JSON.parse(outputTextDone?.data ?? "{}") as { text?: string }).text).toBe(
+      "Let me check that.",
+    );
+
+    const completed = events.find((event) => event.event === "response.completed");
+    const response = (
+      JSON.parse(completed?.data ?? "{}") as {
+        response?: { status?: string; output?: Array<Record<string, unknown>> };
+      }
+    ).response;
+    expect(response?.status).toBe("incomplete");
+    expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
+    expect(response?.output?.[0]?.phase).toBe("commentary");
+    expect(response?.output?.[1]?.name).toBe("get_weather");
+    expect(events.some((event) => event.data === "[DONE]")).toBe(true);
+  });
+
+  it("streams explicit final_answer deltas", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { delta: "hello", phase: "final_answer" },
+      });
+      return {
+        payloads: [{ text: "hello" }],
+      };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "hi",
+    });
+    expect(res.status).toBe(200);
+
+    const eventText = await res.text();
+    const events = parseSseEvents(eventText);
+    const deltas = events
+      .filter((event) => event.event === "response.output_text.delta")
+      .map((event) => (JSON.parse(event.data) as { delta?: string }).delta ?? "")
+      .join("");
+    expect(deltas).toBe("hello");
+
+    const completed = events.find((event) => event.event === "response.completed");
+    const output = (
+      JSON.parse(completed?.data ?? "{}") as {
+        response?: { output?: Array<Record<string, unknown>> };
+      }
+    ).response?.output;
+    expect(output?.[0]?.phase).toBe("final_answer");
+    expect(events.some((event) => event.data === "[DONE]")).toBe(true);
+  });
+
   it("treats write-scoped HTTP callers as non-owner and admin-scoped callers as owner", async () => {
     const port = enabledPort;
 
