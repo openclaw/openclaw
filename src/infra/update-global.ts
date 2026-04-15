@@ -2,10 +2,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "../../scripts/lib/npm-update-compat-sidecars.mjs";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { pathExists } from "../utils.js";
+import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "./npm-update-compat-sidecars.js";
 import {
   collectPackageDistInventory,
   readPackageDistInventoryIfPresent,
