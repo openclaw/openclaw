@@ -6,6 +6,7 @@ import type {
   VerboseLevel,
 } from "../../auto-reply/thinking.js";
 import { loadConfig } from "../../config/config.js";
+import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import {
   loadSessionStore,
   resolveStorePath,
@@ -515,6 +516,25 @@ export function createSessionStatusTool(opts?: {
         relatedSessionKey: resolved.key,
         callerOwnerKey: visibilityRequesterKey,
       });
+      const statusChannel =
+        statusSessionEntry.channel ??
+        statusSessionEntry.lastChannel ??
+        statusSessionEntry.origin?.provider ??
+        "unknown";
+      const defaultGroupActivation = () => {
+        if (!isGroup) {
+          return "mention" as const;
+        }
+        return resolveChannelGroupRequireMention({
+          cfg,
+          channel: statusChannel as never,
+          groupId: statusSessionEntry.groupId,
+          accountId:
+            statusSessionEntry.lastAccountId ?? statusSessionEntry.deliveryContext?.accountId,
+        })
+          ? "mention"
+          : "always";
+      };
       const { buildStatusText } = await loadCommandsStatusRuntime();
       const statusText = await buildStatusText({
         cfg,
@@ -523,11 +543,7 @@ export function createSessionStatusTool(opts?: {
         parentSessionKey: statusSessionEntry.parentSessionKey,
         sessionScope: cfg.session?.scope,
         storePath,
-        statusChannel:
-          statusSessionEntry.channel ??
-          statusSessionEntry.lastChannel ??
-          statusSessionEntry.origin?.provider ??
-          "unknown",
+        statusChannel,
         provider: providerForCard,
         model: defaultModelForCard,
         resolvedThinkLevel: statusSessionEntry.thinkingLevel as ThinkLevel | undefined,
@@ -537,7 +553,7 @@ export function createSessionStatusTool(opts?: {
         resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
         resolveDefaultThinkingLevel: async () => cfg.agents?.defaults?.thinkingDefault,
         isGroup,
-        defaultGroupActivation: () => "mention",
+        defaultGroupActivation,
         taskLineOverride: taskLine,
         skipDefaultTaskLookup: true,
         primaryModelLabelOverride: primaryModelLabel,

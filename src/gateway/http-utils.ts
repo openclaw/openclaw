@@ -215,10 +215,24 @@ export function resolveAgentIdFromModel(
     return resolveDefaultAgentId(cfg);
   }
 
-  const m =
-    raw.match(/^openclaw[:/](?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i) ??
-    raw.match(/^agent:(?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i);
-  const agentId = m?.groups?.agentId;
+  const openclawTarget = raw.match(/^openclaw[:/](?<target>[^\s].+)$/i)?.groups?.target?.trim();
+  if (openclawTarget) {
+    if (openclawTarget.includes("/")) {
+      return undefined;
+    }
+    const normalized = normalizeAgentId(openclawTarget);
+    const configuredAgents = new Set(
+      (Array.isArray(cfg?.agents?.list) ? cfg.agents.list : [])
+        .map((entry) => normalizeAgentId(entry?.id))
+        .filter(Boolean),
+    );
+    if (!configuredAgents.has(normalized)) {
+      return undefined;
+    }
+    return normalized;
+  }
+
+  const agentId = raw.match(/^agent:(?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i)?.groups?.agentId;
   if (!agentId) {
     return undefined;
   }
@@ -230,19 +244,24 @@ export async function resolveOpenAiCompatModelOverride(params: {
   agentId: string;
   model: string | undefined;
 }): Promise<{ modelOverride?: string; errorMessage?: string }> {
+  const cfg = loadConfig();
   const requestModel = params.model?.trim();
-  if (requestModel && !resolveAgentIdFromModel(requestModel)) {
-    return {
-      errorMessage: "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
-    };
+  let bodyModelOverrideRaw: string | undefined;
+  if (requestModel && !resolveAgentIdFromModel(requestModel, cfg)) {
+    const target = requestModel.match(/^openclaw[:/](?<target>[^\s].+)$/i)?.groups?.target?.trim();
+    if (!target || !target.includes("/")) {
+      return {
+        errorMessage:
+          "Invalid `model`. Use `openclaw`, `openclaw/<agentId>`, or `openclaw/<provider>/<model>`.",
+      };
+    }
+    bodyModelOverrideRaw = target;
   }
 
-  const raw = getHeader(params.req, "x-openclaw-model")?.trim();
+  const raw = getHeader(params.req, "x-openclaw-model")?.trim() ?? bodyModelOverrideRaw;
   if (!raw) {
     return {};
   }
-
-  const cfg = loadConfig();
   const defaultModelRef = resolveDefaultModelForAgent({ cfg, agentId: params.agentId });
   const defaultProvider = defaultModelRef.provider;
   const parsed = parseModelRef(raw, defaultProvider);

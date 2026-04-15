@@ -13,7 +13,7 @@ vi.mock("./server-model-catalog.js", () => ({
   loadGatewayModelCatalog: () => loadGatewayModelCatalogMock(),
 }));
 
-import { resolveOpenAiCompatModelOverride } from "./http-utils.js";
+import { resolveAgentIdFromModel, resolveOpenAiCompatModelOverride } from "./http-utils.js";
 
 function createReq(headers: Record<string, string> = {}): IncomingMessage {
   return { headers } as IncomingMessage;
@@ -29,6 +29,7 @@ describe("resolveOpenAiCompatModelOverride", () => {
             "openai/gpt-5.4": {},
           },
         },
+        list: [{ id: "main" }, { id: "hephaestus" }],
       },
     } satisfies OpenClawConfig);
     loadGatewayModelCatalogMock
@@ -45,6 +46,35 @@ describe("resolveOpenAiCompatModelOverride", () => {
       }),
     ).resolves.toEqual({
       errorMessage: "Model 'claude-cli/opus' is not allowed for agent 'main'.",
+    });
+  });
+
+  it("treats openclaw provider-model forms as model overrides, not agent ids", async () => {
+    await expect(
+      resolveOpenAiCompatModelOverride({
+        req: createReq(),
+        agentId: "main",
+        model: "openclaw/openai/gpt-5.4",
+      }),
+    ).resolves.toEqual({
+      modelOverride: "openai/gpt-5.4",
+    });
+  });
+
+  it("still treats openclaw single-segment forms as agent ids when configured", () => {
+    expect(resolveAgentIdFromModel("openclaw/hephaestus")).toBe("hephaestus");
+  });
+
+  it("rejects invalid openclaw body model forms that are neither agent ids nor provider models", async () => {
+    await expect(
+      resolveOpenAiCompatModelOverride({
+        req: createReq(),
+        agentId: "main",
+        model: "openclaw/not-a-real-target",
+      }),
+    ).resolves.toEqual({
+      errorMessage:
+        "Invalid `model`. Use `openclaw`, `openclaw/<agentId>`, or `openclaw/<provider>/<model>`.",
     });
   });
 });
