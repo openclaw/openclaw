@@ -725,21 +725,51 @@ describe("Invalid engine fallback", () => {
 
   it("throws when the default engine itself is not registered", async () => {
     // Access the process-global registry via the well-known symbol and clear it
-    // so even the default engine is missing.
+    // so even the default engine is missing. The symbol key must match the
+    // private CONTEXT_ENGINE_REGISTRY_STATE constant in registry.ts — guard
+    // against a silent key mismatch so a rename surfaces loudly.
     const registryState = (globalThis as Record<symbol, unknown>)[
       Symbol.for("openclaw.contextEngineRegistryState")
-    ] as { engines: Map<string, unknown> };
-    const snapshot = new Map(registryState.engines);
-    registryState.engines.clear();
+    ] as { engines: Map<string, unknown> } | undefined;
+    expect(registryState).toBeDefined();
+    const snapshot = new Map(registryState!.engines);
+    registryState!.engines.clear();
 
     try {
       await expect(resolveContextEngine()).rejects.toThrow("not registered");
     } finally {
-      // Restore so other tests are not affected.
       for (const [key, value] of snapshot) {
-        registryState.engines.set(key, value);
+        registryState!.engines.set(key, value);
       }
     }
+  });
+
+  it("propagates error when default engine factory throws", async () => {
+    // Override the default "legacy" engine with a throwing factory via the
+    // core-owner path so the registration is accepted.
+    registerContextEngineForOwner(
+      "legacy",
+      () => {
+        throw new Error("default engine init failed");
+      },
+      "core",
+      { allowSameOwnerRefresh: true },
+    );
+
+    await expect(resolveContextEngine()).rejects.toThrow("default engine init failed");
+  });
+
+  it("propagates error when default engine fails contract validation", async () => {
+    registerContextEngineForOwner(
+      "legacy",
+      () => ({ broken: true }) as unknown as ContextEngine,
+      "core",
+      { allowSameOwnerRefresh: true },
+    );
+
+    await expect(resolveContextEngine()).rejects.toThrow(
+      'Context engine "legacy" factory returned an invalid ContextEngine',
+    );
   });
 
   it("falls back to default engine when factory throws", async () => {
@@ -822,6 +852,20 @@ describe("Invalid engine fallback", () => {
     expect(engine.info.id).toBe("legacy");
     expect(console.error).toHaveBeenCalledWith(
       expect.stringContaining("missing assemble(), missing compact()"),
+    );
+  });
+
+  it("falls back to default engine when contract validation itself throws", async () => {
+    const engineId = `validation-throw-${Date.now().toString(36)}`;
+    // BigInt cannot be JSON.stringify'd — triggers a throw inside
+    // describeResolvedContextEngineContractError when the factory returns
+    // a non-object value that passes the typeof !== "object" branch.
+    registerContextEngine(engineId, () => 42n as unknown as ContextEngine);
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    expect(engine.info.id).toBe("legacy");
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("contract validation threw"),
     );
   });
 });

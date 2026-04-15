@@ -494,13 +494,27 @@ export async function resolveContextEngine(config?: OpenClawConfig): Promise<Con
     return resolveDefaultContextEngine(defaultEngineId);
   }
 
-  const contractError = describeResolvedContextEngineContractError(engineId, engine);
+  let contractError: string | null;
+  try {
+    contractError = describeResolvedContextEngineContractError(engineId, engine);
+  } catch (validationError) {
+    if (isDefaultEngine) {
+      throw validationError;
+    }
+    console.error(
+      `[context-engine] Context engine "${sanitizeForLog(engineId)}" contract validation threw: ` +
+        `${sanitizeForLog(validationError instanceof Error ? validationError.message : String(validationError))}; ` +
+        `falling back to default engine "${defaultEngineId}".`,
+    );
+    return resolveDefaultContextEngine(defaultEngineId);
+  }
   if (contractError) {
     if (isDefaultEngine) {
       throw new Error(contractError);
     }
+    // contractError includes engineId from plugin config; sanitizeForLog covers it
     console.error(
-      `[context-engine] ${sanitizeForLog(contractError)} Falling back to default engine "${defaultEngineId}".`,
+      `[context-engine] ${sanitizeForLog(contractError)}; falling back to default engine "${defaultEngineId}".`,
     );
     return resolveDefaultContextEngine(defaultEngineId);
   }
@@ -518,14 +532,14 @@ async function resolveDefaultContextEngine(defaultEngineId: string): Promise<Con
   const defaultEntry = getContextEngineRegistryState().engines.get(defaultEngineId);
   if (!defaultEntry) {
     throw new Error(
-      `Context engine fallback failed: default engine "${defaultEngineId}" is not registered. ` +
+      `[context-engine] fallback failed: default engine "${defaultEngineId}" is not registered. ` +
         `Available engines: ${listContextEngineIds().join(", ") || "(none)"}`,
     );
   }
   const engine = await defaultEntry.factory();
   const contractError = describeResolvedContextEngineContractError(defaultEngineId, engine);
   if (contractError) {
-    throw new Error(contractError);
+    throw new Error(`[context-engine] ${contractError}`);
   }
   return wrapContextEngineWithSessionKeyCompat(engine);
 }
