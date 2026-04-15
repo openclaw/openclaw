@@ -9,7 +9,7 @@ import { resolveBundledPluginFile } from "./test-helpers/bundled-plugin-roots.js
 
 const require = createRequire(import.meta.url);
 const tsdownModuleUrl = pathToFileURL(require.resolve("tsdown")).href;
-const bundledRepresentativeEntrypoints = ["matrix-runtime-heavy"] as const;
+const bundledRepresentativeEntrypoints = ["matrix-runtime-heavy", "qa-lab"] as const;
 const bundleTempRootTracker = createSuiteTempRootTracker(
   "openclaw-plugin-sdk-build",
   path.join(process.cwd(), "node_modules", ".cache"),
@@ -75,6 +75,7 @@ describe("plugin-sdk bundled exports", () => {
       platform: "node",
     });
 
+    expect(pluginSdkEntrypoints).toEqual(expect.arrayContaining([...bundledRepresentativeEntrypoints]));
     expect(pluginSdkEntrypoints.length).toBeGreaterThan(bundledRepresentativeEntrypoints.length);
     await Promise.all(
       bundledRepresentativeEntrypoints.map(async (entry) => {

@@ -767,6 +767,10 @@
       "types": "./dist/plugin-sdk/matrix-thread-bindings.d.ts",
       "default": "./dist/plugin-sdk/matrix-thread-bindings.js"
     },
+    "./plugin-sdk/qa-lab": {
+      "types": "./dist/plugin-sdk/qa-lab.d.ts",
+      "default": "./dist/plugin-sdk/qa-lab.js"
+    },
     "./plugin-sdk/qa-runtime": {
       "types": "./dist/plugin-sdk/qa-runtime.d.ts",
       "default": "./dist/plugin-sdk/qa-runtime.js"

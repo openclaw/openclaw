@@ -14,7 +14,12 @@ const PUBLIC_CONTRACT_REFERENCE_FILES = [
   "docs/plugins/architecture.md",
   "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
 ] as const;
+const CORE_RUNTIME_PLUGIN_SDK_REFERENCE_FILES = [
+  "src/cli/program/subcli-descriptors.ts",
+  "src/cli/program/register.subclis-core.ts",
+] as const;
 const PLUGIN_SDK_SUBPATH_PATTERN = /openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)\b/g;
+const CORE_RELATIVE_PLUGIN_SDK_SUBPATH_PATTERN = /["']((?:\.\.\/)+plugin-sdk\/([a-z0-9][a-z0-9-]*)\.js)["']/g;
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>^%\r\n]/;
 const tempDirs: string[] = [];
@@ -48,6 +53,22 @@ function collectPluginSdkSubpathReferences() {
         continue;
       }
       references.push({ file, subpath });
+    }
+  }
+  return references;
+}
+
+function collectCoreRelativePluginSdkReferences() {
+  const references: Array<{ file: string; specifier: string; subpath: string }> = [];
+  for (const file of CORE_RUNTIME_PLUGIN_SDK_REFERENCE_FILES) {
+    const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
+    for (const match of source.matchAll(CORE_RELATIVE_PLUGIN_SDK_SUBPATH_PATTERN)) {
+      const specifier = match[1];
+      const subpath = match[2];
+      if (!specifier || !subpath) {
+        continue;
+      }
+      references.push({ file, specifier, subpath });
     }
   }
   return references;
@@ -285,6 +306,30 @@ describe("plugin-sdk package contract guardrails", () => {
       }
       failures.push(
         `${reference.file} references openclaw/plugin-sdk/${reference.subpath}, but ${reference.subpath} is missing from ${missingFrom.join(" and ")}`,
+      );
+    }
+
+    expect(failures).toEqual([]);
+  });
+
+  it("keeps core CLI runtime plugin-sdk imports on emitted plugin-sdk subpaths", () => {
+    const entrypoints = new Set(pluginSdkEntrypoints);
+    const exports = new Set(collectPluginSdkPackageExports());
+    const failures: string[] = [];
+
+    for (const reference of collectCoreRelativePluginSdkReferences()) {
+      const missingFrom: string[] = [];
+      if (!entrypoints.has(reference.subpath)) {
+        missingFrom.push("scripts/lib/plugin-sdk-entrypoints.json");
+      }
+      if (!exports.has(reference.subpath)) {
+        missingFrom.push("package.json exports");
+      }
+      if (missingFrom.length === 0) {
+        continue;
+      }
+      failures.push(
+        `${reference.file} imports ${reference.specifier}, but ${reference.subpath} is missing from ${missingFrom.join(" and ")}`,
       );
     }
 
