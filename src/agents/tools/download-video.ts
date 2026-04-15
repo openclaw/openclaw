@@ -357,35 +357,50 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
   }
   
   try {
-    await execFileAsync(ytDlpPath, ['--version'], { signal: abortController.signal });
-    
-    let integrityCheckPassed = false;
+    // FIX: Check if binary exists first
+    let exists = false;
     try {
-      const expectedHash = await getExpectedChecksum(signal);
-      const isValid = await verifyFileChecksum(ytDlpPath, expectedHash);
-      if (!isValid) {
-        console.warn('Existing yt-dlp binary failed integrity check, will re-download');
+      await fs.access(ytDlpPath, fs.constants.X_OK);
+      exists = true;
+    } catch {
+      exists = false;
+    }
+    
+    if (exists) {
+      // FIX: Verify integrity BEFORE executing!
+      let integrityCheckPassed = false;
+      try {
+        const expectedHash = await getExpectedChecksum(signal);
+        const isValid = await verifyFileChecksum(ytDlpPath, expectedHash);
+        if (isValid) {
+          integrityCheckPassed = true;
+          console.log('Existing yt-dlp binary passed integrity check');
+        } else {
+          console.warn('Existing yt-dlp binary failed integrity check, will re-download');
+        }
+      } catch (checksumError) {
+        console.warn('Could not verify existing yt-dlp binary (network/parsing issue):', checksumError);
+        // FIX: Fail closed - don't trust unverified binary
         integrityCheckPassed = false;
-      } else {
-        integrityCheckPassed = true;
       }
-    } catch (checksumError) {
-      console.warn('Could not verify existing yt-dlp binary (network/parsing issue):', checksumError);
-      // FIX #2: Fail closed - don't trust unverified binary
-      integrityCheckPassed = false;
+      
+      if (integrityCheckPassed) {
+        // ONLY execute version check after integrity is verified
+        await execFileAsync(ytDlpPath, ['--version'], { signal: abortController.signal });
+        return ytDlpPath;
+      }
+      
+      // Integrity check failed - delete the compromised binary
+      console.warn('Removing compromised/unverified yt-dlp binary');
+      await fs.unlink(ytDlpPath).catch(() => {});
     }
     
-    if (!integrityCheckPassed) {
-      throw new Error('Integrity check failed or unverifiable - need fresh download');
-    }
-    
-    return ytDlpPath;
-  } catch (error) {
+    // No valid binary exists - download fresh copy
     signal?.throwIfAborted();
     
     const url = YTDLP_URLS[process.platform];
     if (!url) {
-      throw new Error(`Unsupported platform: ${process.platform}`, { cause: error });
+      throw new Error(`Unsupported platform: ${process.platform}`);
     }
     
     console.log('Downloading fresh yt-dlp binary...');
@@ -393,15 +408,28 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
     const expectedHash = await getExpectedChecksum(signal);
     console.log(`Expected SHA256: ${expectedHash}`);
     
+    // Download to temp file first, then atomically rename
     await downloadFileWithVerification(url, ytDlpPath, expectedHash, signal);
     
+    // Final verification of downloaded binary
     const isValid = await verifyFileChecksum(ytDlpPath, expectedHash);
     if (!isValid) {
-      throw new Error('Downloaded yt-dlp binary failed final integrity check', { cause: error });
+      throw new Error('Downloaded yt-dlp binary failed final integrity check');
     }
+    
+    // Now it's safe to execute the freshly downloaded binary
+    await execFileAsync(ytDlpPath, ['--version'], { signal: abortController.signal });
     
     console.log('yt-dlp binary downloaded and verified successfully');
     return ytDlpPath;
+  } catch (error) {
+    // Clean up on any error
+    try {
+      await fs.unlink(ytDlpPath).catch(() => {});
+    } catch {
+      // Ignore cleanup errors
+    }
+    throw error;
   } finally {
     if (!abortController.signal.aborted) {
       abortController.abort();
