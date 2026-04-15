@@ -523,7 +523,7 @@ describe("DiscordVoiceManager", () => {
     await runSegment();
     await runSegment();
 
-    expect(client.fetchMember).toHaveBeenCalledTimes(3);
+    expect(client.fetchMember).toHaveBeenCalledTimes(2);
   });
 
   it("persists full speaker context in cache writes", async () => {
@@ -596,16 +596,6 @@ describe("DiscordVoiceManager", () => {
       })
       .mockResolvedValueOnce({
         nickname: "Role Speaker",
-        roles: ["role-voice"],
-        user: {
-          id: "u-role",
-          username: "role",
-          globalName: "Role",
-          discriminator: "2222",
-        },
-      })
-      .mockResolvedValueOnce({
-        nickname: "Role Speaker",
         roles: [],
         user: {
           id: "u-role",
@@ -644,7 +634,7 @@ describe("DiscordVoiceManager", () => {
     await processVoiceSegment(manager, "u-role");
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    expect(client.fetchMember).toHaveBeenCalledTimes(3);
+    expect(client.fetchMember).toHaveBeenCalledTimes(2);
   });
 
   it("fetches guild metadata before allowlist checks when the session lacks a guild name", async () => {

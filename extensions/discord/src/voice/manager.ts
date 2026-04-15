@@ -733,7 +733,7 @@ export class DiscordVoiceManager {
         entry.guildName = guild.name;
       }
     }
-    const speaker = await this.resolveSpeakerContext(entry.guildId, userId);
+    const speaker = await this.resolveSpeakerContextForVoiceIngress(entry.guildId, userId);
     const access = await authorizeDiscordVoiceIngress({
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
@@ -1049,6 +1049,53 @@ export class DiscordVoiceManager {
     };
     this.setCachedSpeakerContext(guildId, userId, context);
     return context;
+  }
+
+  private async resolveSpeakerContextForVoiceIngress(
+    guildId: string,
+    userId: string,
+  ): Promise<{
+    id: string;
+    label: string;
+    name?: string;
+    tag?: string;
+    senderIsOwner: boolean;
+    memberRoleIds: string[];
+  }> {
+    const cached = this.getCachedSpeakerContext(guildId, userId);
+    if (!cached) {
+      return this.resolveSpeakerContext(guildId, userId);
+    }
+    try {
+      const member = await this.params.client.fetchMember(guildId, userId);
+      const username = member.user?.username ?? cached.name;
+      const tag = member.user ? formatDiscordUserTag(member.user) : cached.tag;
+      const context = {
+        id: userId,
+        label: member.nickname ?? member.user?.globalName ?? username ?? cached.label,
+        name: username,
+        tag,
+        senderIsOwner: this.resolveSpeakerIsOwner({
+          id: userId,
+          name: username,
+          tag,
+        }),
+        memberRoleIds: Array.isArray(member.roles)
+          ? member.roles
+              .map((role) =>
+                typeof role === "string" ? role : typeof role?.id === "string" ? role.id : "",
+              )
+              .filter(Boolean)
+          : [],
+      };
+      this.setCachedSpeakerContext(guildId, userId, context);
+      return context;
+    } catch {
+      return {
+        ...cached,
+        memberRoleIds: [],
+      };
+    }
   }
 
   private async resolveSpeakerIdentity(
