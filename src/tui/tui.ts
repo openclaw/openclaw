@@ -56,7 +56,7 @@ export {
   shouldEnableWindowsGitBashPasteFallback,
 } from "./tui-submit.js";
 
-const RUN_NODE_SCRIPT_PATH = fileURLToPath(new URL("../../scripts/run-node.mjs", import.meta.url));
+const OPENCLAW_CLI_WRAPPER_PATH = fileURLToPath(new URL("../../openclaw.mjs", import.meta.url));
 
 const OPENAI_CODEX_PROVIDER = "openai-codex";
 
@@ -739,8 +739,10 @@ export async function runTui(opts: TuiOptions) {
                   command = codexBin;
                   args = ["login"];
                 } else {
+                  // Use the packaged CLI wrapper instead of the dev-only run-node
+                  // helper so local /auth also works in published installs.
                   command = process.execPath;
-                  args = [RUN_NODE_SCRIPT_PATH, "models", "auth", "login"];
+                  args = [OPENCLAW_CLI_WRAPPER_PATH, "models", "auth", "login"];
                   if (provider) {
                     args.push("--provider", provider);
                   }

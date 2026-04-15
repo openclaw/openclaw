@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { PluginApprovalResolutions } from "../plugins/types.js";
 import { runBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -41,6 +42,7 @@ describe("runBeforeToolCallHook — embedded mode auto-approve", () => {
 
   it("auto-approves when a plugin hook returns requireApproval in embedded mode", async () => {
     setEmbeddedMode(true);
+    const onResolution = vi.fn();
 
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
@@ -48,6 +50,7 @@ describe("runBeforeToolCallHook — embedded mode auto-approve", () => {
         title: "Needs approval",
         description: "Test approval request",
         severity: "low",
+        onResolution,
       },
       params: { adjusted: true },
     });
@@ -64,6 +67,8 @@ describe("runBeforeToolCallHook — embedded mode auto-approve", () => {
     }
     // Must NOT call the gateway for approval
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(onResolution).toHaveBeenCalledTimes(1);
+    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.ALLOW_ONCE);
   });
 
   it("sends approval to gateway when NOT in embedded mode", async () => {

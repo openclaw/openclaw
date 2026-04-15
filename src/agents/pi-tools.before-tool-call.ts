@@ -219,15 +219,6 @@ export async function runBeforeToolCallHook(args: {
     }
 
     if (hookResult?.requireApproval) {
-      // In embedded (gateway-less) TUI mode the local operator is trusted and
-      // there is no gateway WebSocket to route approval requests through.
-      // Auto-approve so tools are not blocked.
-      if (isEmbeddedMode()) {
-        return {
-          blocked: false,
-          params: mergeParamsWithApprovalOverrides(params, hookResult.params),
-        };
-      }
       const approval = hookResult.requireApproval;
       const safeOnResolution = (resolution: PluginApprovalResolution): void => {
         const onResolution = approval.onResolution;
@@ -242,6 +233,16 @@ export async function runBeforeToolCallHook(args: {
           log.warn(`plugin onResolution callback failed: ${String(err)}`);
         }
       };
+      // In embedded (gateway-less) TUI mode the local operator is trusted and
+      // there is no gateway WebSocket to route approval requests through.
+      // Auto-approve so tools are not blocked.
+      if (isEmbeddedMode()) {
+        safeOnResolution(PluginApprovalResolutions.ALLOW_ONCE);
+        return {
+          blocked: false,
+          params: mergeParamsWithApprovalOverrides(params, hookResult.params),
+        };
+      }
       try {
         const requestResult: {
           id?: string;
