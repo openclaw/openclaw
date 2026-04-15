@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type MemoryRef, memoryRefId } from "./ref.js";
+import { type MemoryRef, memoryLocationId, memoryRefId } from "./ref.js";
 import {
   deleteByRefId,
   getByRefId,
@@ -47,6 +47,18 @@ describe("sidecar repo", () => {
     expect(rec.createdAt).toBe(1000);
     expect(rec.lastAccessedAt).toBeNull();
     expect(rec.schemaVersion).toBe(1);
+  });
+
+  it("derives location_id from the ref on insert", () => {
+    const rec = upsertRecord(db, refA, {}, 1000);
+    expect(rec.locationId).toBe(
+      memoryLocationId({
+        source: refA.source,
+        path: refA.path,
+        startLine: refA.startLine,
+        endLine: refA.endLine,
+      }),
+    );
   });
 
   it("upsert preserves created_at and updates only provided fields", () => {

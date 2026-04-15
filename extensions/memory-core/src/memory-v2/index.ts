@@ -1,4 +1,10 @@
-export { type MemoryRef, type MemorySource, memoryRefId } from "./ref.js";
+export {
+  type MemoryRef,
+  type MemorySource,
+  memoryLocationId,
+  memoryRefId,
+  normalizeLocationPath,
+} from "./ref.js";
 export {
   SIDECAR_SCHEMA_VERSION,
   ensureSidecarSchema,

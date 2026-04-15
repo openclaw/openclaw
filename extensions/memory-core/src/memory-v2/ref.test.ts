@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type MemoryRef, memoryRefId } from "./ref.js";
+import { type MemoryRef, memoryLocationId, memoryRefId, normalizeLocationPath } from "./ref.js";
 
 const baseRef: MemoryRef = {
   source: "memory",
@@ -56,5 +56,74 @@ describe("memoryRefId", () => {
   it("returns a 32-char lowercase hex id", () => {
     const id = memoryRefId(baseRef);
     expect(id).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  it("normalizes equivalent paths to the same id", () => {
+    expect(memoryRefId(baseRef)).toBe(memoryRefId({ ...baseRef, path: `./${baseRef.path}` }));
+    expect(memoryRefId(baseRef)).toBe(
+      memoryRefId({ ...baseRef, path: baseRef.path.replace(/\//g, "\\") }),
+    );
+  });
+});
+
+describe("memoryLocationId", () => {
+  const base = {
+    source: "memory" as const,
+    path: "memory/2026-04-15.md",
+    startLine: 10,
+    endLine: 24,
+  };
+
+  it("is deterministic and 32-char hex", () => {
+    expect(memoryLocationId(base)).toMatch(/^[0-9a-f]{32}$/);
+    expect(memoryLocationId(base)).toBe(memoryLocationId({ ...base }));
+  });
+
+  it("ignores content hash by construction (no contentHash field)", () => {
+    // Two refs differing only in content hash share a location id.
+    const a = memoryRefId({ ...base, contentHash: "h1" });
+    const b = memoryRefId({ ...base, contentHash: "h2" });
+    expect(a).not.toBe(b);
+    expect(memoryLocationId(base)).toBe(memoryLocationId(base));
+  });
+
+  it("differs for different sources, paths, or line ranges", () => {
+    expect(memoryLocationId(base)).not.toBe(memoryLocationId({ ...base, source: "sessions" }));
+    expect(memoryLocationId(base)).not.toBe(memoryLocationId({ ...base, path: "other.md" }));
+    expect(memoryLocationId(base)).not.toBe(memoryLocationId({ ...base, startLine: 11 }));
+    expect(memoryLocationId(base)).not.toBe(memoryLocationId({ ...base, endLine: 25 }));
+  });
+
+  it("collapses backend path drift", () => {
+    expect(memoryLocationId(base)).toBe(memoryLocationId({ ...base, path: `./${base.path}` }));
+    expect(memoryLocationId(base)).toBe(
+      memoryLocationId({ ...base, path: base.path.replace(/\//g, "\\") }),
+    );
+    expect(memoryLocationId(base)).toBe(
+      memoryLocationId({ ...base, path: base.path.replace("/", "//") }),
+    );
+  });
+});
+
+describe("normalizeLocationPath", () => {
+  it("converts backslashes to forward slashes", () => {
+    expect(normalizeLocationPath("memory\\foo.md")).toBe("memory/foo.md");
+  });
+
+  it("strips a leading ./ (and repeats)", () => {
+    expect(normalizeLocationPath("./memory/foo.md")).toBe("memory/foo.md");
+    expect(normalizeLocationPath(".//memory/foo.md")).toBe("memory/foo.md");
+  });
+
+  it("collapses repeated slashes", () => {
+    expect(normalizeLocationPath("memory///foo.md")).toBe("memory/foo.md");
+  });
+
+  it("does not lowercase", () => {
+    expect(normalizeLocationPath("Memory/Foo.MD")).toBe("Memory/Foo.MD");
+  });
+
+  it("leaves the synthetic conversation prefix intact", () => {
+    expect(normalizeLocationPath(":conversation/abc")).toBe(":conversation/abc");
   });
 });

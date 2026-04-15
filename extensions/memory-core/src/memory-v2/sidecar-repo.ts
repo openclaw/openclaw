@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { type MemoryRef, memoryRefId } from "./ref.js";
+import { type MemoryRef, memoryLocationId, memoryRefId } from "./ref.js";
 
 export type SidecarStatus = "active" | "superseded" | "archived" | "deleted";
 
@@ -23,6 +23,7 @@ export type SidecarRecord = {
   lastSeenAt: number | null;
   lastAccessedAt: number | null;
   consolidatedAt: number | null;
+  locationId: string | null;
   schemaVersion: number;
 };
 
@@ -60,6 +61,7 @@ type Row = {
   last_seen_at: number | null;
   last_accessed_at: number | null;
   consolidated_at: number | null;
+  location_id: string | null;
   schema_version: number;
 };
 
@@ -84,6 +86,7 @@ function rowToRecord(row: Row): SidecarRecord {
     lastSeenAt: row.last_seen_at,
     lastAccessedAt: row.last_accessed_at,
     consolidatedAt: row.consolidated_at,
+    locationId: row.location_id,
     schemaVersion: row.schema_version,
   };
 }
@@ -100,13 +103,19 @@ export function upsertRecord(
   const existing = getByRefId(db, refId);
 
   if (!existing) {
+    const locationId = memoryLocationId({
+      source: ref.source,
+      path: ref.path,
+      startLine: ref.startLine,
+      endLine: ref.endLine,
+    });
     db.prepare(
       `INSERT INTO memory_v2_records (
          ref_id, source, path, start_line, end_line, content_hash,
          memory_type, importance, salience, confidence,
          status, pinned, source_kind, source_ref, superseded_by,
-         created_at, last_seen_at, last_accessed_at, consolidated_at, schema_version
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+         created_at, last_seen_at, last_accessed_at, consolidated_at, location_id, schema_version
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
     ).run(
       refId,
       ref.source,
@@ -127,6 +136,7 @@ export function upsertRecord(
       partial.lastSeenAt ?? null,
       null,
       partial.consolidatedAt ?? null,
+      locationId,
     );
     const inserted = getByRefId(db, refId);
     if (!inserted) {

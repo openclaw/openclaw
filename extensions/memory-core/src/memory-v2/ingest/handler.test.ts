@@ -110,12 +110,21 @@ describe("runIngest", () => {
     expect(out.deduped).toBe(0);
     expect(countRows(db)).toBe(1);
     const row = db
-      .prepare(`SELECT memory_type, source_kind, source_ref, status FROM memory_v2_records`)
-      .get() as { memory_type: string; source_kind: string; source_ref: string; status: string };
+      .prepare(
+        `SELECT memory_type, source_kind, source_ref, status, location_id FROM memory_v2_records`,
+      )
+      .get() as {
+      memory_type: string;
+      source_kind: string;
+      source_ref: string;
+      status: string;
+      location_id: string | null;
+    };
     expect(row.memory_type).toBe("identity");
     expect(row.source_kind).toBe("conversation");
     expect(row.source_ref).toBe("s:0");
     expect(row.status).toBe("active");
+    expect(row.location_id).toMatch(/^[0-9a-f]{32}$/);
   });
 
   it("does not extract from assistant text", () => {
