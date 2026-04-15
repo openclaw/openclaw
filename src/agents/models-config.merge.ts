@@ -1,5 +1,6 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
-import type { ProviderConfig } from "./models-config.providers.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 export type ExistingProviderConfig = ProviderConfig & {
   apiKey?: string;
@@ -30,7 +31,7 @@ function getProviderModelId(model: unknown): string {
     return "";
   }
   const id = (model as { id?: unknown }).id;
-  return typeof id === "string" ? id.trim() : "";
+  return normalizeOptionalString(id) ?? "";
 }
 
 export function mergeProviderModels(
@@ -39,8 +40,27 @@ export function mergeProviderModels(
 ): ProviderConfig {
   const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
   const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
+  const implicitHeaders =
+    implicit.headers && typeof implicit.headers === "object" && !Array.isArray(implicit.headers)
+      ? implicit.headers
+      : undefined;
+  const explicitHeaders =
+    explicit.headers && typeof explicit.headers === "object" && !Array.isArray(explicit.headers)
+      ? explicit.headers
+      : undefined;
   if (implicitModels.length === 0) {
-    return { ...implicit, ...explicit };
+    return {
+      ...implicit,
+      ...explicit,
+      ...(implicitHeaders || explicitHeaders
+        ? {
+            headers: {
+              ...implicitHeaders,
+              ...explicitHeaders,
+            },
+          }
+        : {}),
+    };
   }
 
   const implicitById = new Map(
@@ -66,6 +86,11 @@ export function mergeProviderModels(
       explicitValue: explicitModel.contextWindow,
       implicitValue: implicitModel.contextWindow,
     });
+    const contextTokens = resolvePreferredTokenLimit({
+      explicitPresent: "contextTokens" in explicitModel,
+      explicitValue: explicitModel.contextTokens,
+      implicitValue: implicitModel.contextTokens,
+    });
     const maxTokens = resolvePreferredTokenLimit({
       explicitPresent: "maxTokens" in explicitModel,
       explicitValue: explicitModel.maxTokens,
@@ -77,6 +102,7 @@ export function mergeProviderModels(
       input: implicitModel.input,
       reasoning: "reasoning" in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(contextTokens === undefined ? {} : { contextTokens }),
       ...(maxTokens === undefined ? {} : { maxTokens }),
     };
   });
@@ -93,6 +119,14 @@ export function mergeProviderModels(
   return {
     ...implicit,
     ...explicit,
+    ...(implicitHeaders || explicitHeaders
+      ? {
+          headers: {
+            ...implicitHeaders,
+            ...explicitHeaders,
+          },
+        }
+      : {}),
     models: mergedModels,
   };
 }
@@ -103,7 +137,7 @@ export function mergeProviders(params: {
 }): Record<string, ProviderConfig> {
   const out: Record<string, ProviderConfig> = params.implicit ? { ...params.implicit } : {};
   for (const [key, explicit] of Object.entries(params.explicit ?? {})) {
-    const providerKey = key.trim();
+    const providerKey = normalizeOptionalString(key) ?? "";
     if (!providerKey) {
       continue;
     }
@@ -114,11 +148,7 @@ export function mergeProviders(params: {
 }
 
 function resolveProviderApi(entry: { api?: unknown } | undefined): string | undefined {
-  if (typeof entry?.api !== "string") {
-    return undefined;
-  }
-  const api = entry.api.trim();
-  return api || undefined;
+  return normalizeOptionalString(entry?.api);
 }
 
 function resolveModelApiSurface(entry: { models?: unknown } | undefined): string | undefined {
@@ -132,7 +162,8 @@ function resolveModelApiSurface(entry: { models?: unknown } | undefined): string
         return [];
       }
       const api = (model as { api?: unknown }).api;
-      return typeof api === "string" && api.trim() ? [api.trim()] : [];
+      const normalized = normalizeOptionalString(api);
+      return normalized ? [normalized] : [];
     })
     .toSorted();
 
@@ -148,9 +179,14 @@ function resolveProviderApiSurface(
 function shouldPreserveExistingApiKey(params: {
   providerKey: string;
   existing: ExistingProviderConfig;
+  nextEntry: ProviderConfig;
   secretRefManagedProviders: ReadonlySet<string>;
 }): boolean {
-  const { providerKey, existing, secretRefManagedProviders } = params;
+  const { providerKey, existing, nextEntry, secretRefManagedProviders } = params;
+  const nextApiKey = typeof nextEntry.apiKey === "string" ? nextEntry.apiKey : "";
+  if (nextApiKey && isNonSecretApiKeyMarker(nextApiKey)) {
+    return false;
+  }
   return (
     !secretRefManagedProviders.has(providerKey) &&
     typeof existing.apiKey === "string" &&
@@ -198,7 +234,14 @@ export function mergeWithExistingProviderSecrets(params: {
       continue;
     }
     const preserved: Record<string, unknown> = {};
-    if (shouldPreserveExistingApiKey({ providerKey: key, existing, secretRefManagedProviders })) {
+    if (
+      shouldPreserveExistingApiKey({
+        providerKey: key,
+        existing,
+        nextEntry: newEntry,
+        secretRefManagedProviders,
+      })
+    ) {
       preserved.apiKey = existing.apiKey;
     }
     if (

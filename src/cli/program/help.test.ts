@@ -1,11 +1,14 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";
+import { configureProgramHelp } from "./help.js";
 
-const hasEmittedCliBannerMock = vi.fn(() => false);
-const formatCliBannerLineMock = vi.fn(() => "BANNER-LINE");
-const formatDocsLinkMock = vi.fn((_path: string, full: string) => `https://${full}`);
-const resolveCommitHashMock = vi.fn<() => string | null>(() => "abc1234");
+const hasEmittedCliBannerMock = vi.hoisted(() => vi.fn(() => false));
+const formatCliBannerLineMock = vi.hoisted(() => vi.fn(() => "BANNER-LINE"));
+const formatDocsLinkMock = vi.hoisted(() =>
+  vi.fn((_path: string, full: string) => `https://${full}`),
+);
+const resolveCommitHashMock = vi.hoisted(() => vi.fn<() => string | null>(() => "abc1234"));
 
 vi.mock("../../terminal/links.js", () => ({
   formatDocsLink: formatDocsLinkMock,
@@ -43,8 +46,6 @@ vi.mock("./command-registry.js", () => ({
 vi.mock("./register.subclis.js", () => ({
   getSubCliCommandsWithSubcommands: () => ["gateway"],
 }));
-
-const { configureProgramHelp } = await import("./help.js");
 
 const testProgramContext: ProgramContext = {
   programVersion: "9.9.9-test",
@@ -90,6 +91,23 @@ describe("configureProgramHelp", () => {
     }
   }
 
+  function expectVersionExit(params: { expectedVersion: string }) {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code ?? ""}`);
+    }) as typeof process.exit);
+
+    try {
+      const program = makeProgramWithCommands();
+      expect(() => configureProgramHelp(program, testProgramContext)).toThrow("exit:0");
+      expect(logSpy).toHaveBeenCalledWith(params.expectedVersion);
+      expect(exitSpy).toHaveBeenCalledWith(0);
+    } finally {
+      logSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  }
+
   it("adds root help hint and marks commands with subcommands", () => {
     process.argv = ["node", "openclaw", "--help"];
     const program = makeProgramWithCommands();
@@ -115,35 +133,12 @@ describe("configureProgramHelp", () => {
 
   it("prints version and exits immediately when version flags are present", () => {
     process.argv = ["node", "openclaw", "--version"];
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-      throw new Error(`exit:${code ?? ""}`);
-    }) as typeof process.exit);
-
-    const program = makeProgramWithCommands();
-    expect(() => configureProgramHelp(program, testProgramContext)).toThrow("exit:0");
-    expect(logSpy).toHaveBeenCalledWith("OpenClaw 9.9.9-test (abc1234)");
-    expect(exitSpy).toHaveBeenCalledWith(0);
-
-    logSpy.mockRestore();
-    exitSpy.mockRestore();
+    expectVersionExit({ expectedVersion: "OpenClaw 9.9.9-test (abc1234)" });
   });
 
   it("prints version and exits immediately without commit metadata", () => {
     process.argv = ["node", "openclaw", "--version"];
     resolveCommitHashMock.mockReturnValue(null);
-
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-      throw new Error(`exit:${code ?? ""}`);
-    }) as typeof process.exit);
-
-    const program = makeProgramWithCommands();
-    expect(() => configureProgramHelp(program, testProgramContext)).toThrow("exit:0");
-    expect(logSpy).toHaveBeenCalledWith("OpenClaw 9.9.9-test");
-    expect(exitSpy).toHaveBeenCalledWith(0);
-
-    logSpy.mockRestore();
-    exitSpy.mockRestore();
+    expectVersionExit({ expectedVersion: "OpenClaw 9.9.9-test" });
   });
 });

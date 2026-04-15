@@ -2,6 +2,11 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { isRecord } from "../src/utils.js";
+
+function writeStdoutLine(message = ""): void {
+  process.stdout.write(`${message}\n`);
+}
 
 const BUG_LABEL = "bug";
 const ENHANCEMENT_LABEL = "enhancement";
@@ -231,25 +236,20 @@ function parseArgs(argv: string[]): ScriptOptions {
 }
 
 function logHeader(title: string) {
-  // eslint-disable-next-line no-console
-  console.log(`\n${title}`);
-  // eslint-disable-next-line no-console
-  console.log("=".repeat(title.length));
+  writeStdoutLine(`\n${title}`);
+  writeStdoutLine("=".repeat(title.length));
 }
 
 function logStep(message: string) {
-  // eslint-disable-next-line no-console
-  console.log(`• ${message}`);
+  writeStdoutLine(`• ${message}`);
 }
 
 function logSuccess(message: string) {
-  // eslint-disable-next-line no-console
-  console.log(`✓ ${message}`);
+  writeStdoutLine(`✓ ${message}`);
 }
 
 function logInfo(message: string) {
-  // eslint-disable-next-line no-console
-  console.log(`  ${message}`);
+  writeStdoutLine(`  ${message}`);
 }
 
 function createEmptyState(): LoadedState {
@@ -547,10 +547,6 @@ function extractResponseText(payload: OpenAIResponse): string {
   return chunks.join("\n").trim();
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function fallbackCategory(issueText: string): "bug" | "enhancement" {
   const lower = issueText.toLowerCase();
   const bugSignals = [
@@ -748,8 +744,7 @@ async function main() {
     logInfo(`Processing ${pendingIssues.length} issues (scanned so far: ${scannedCount}).`);
 
     for (const issue of pendingIssues) {
-      // eslint-disable-next-line no-console
-      console.log(`\n#${issue.number} — ${issue.title}`);
+      writeStdoutLine(`\n#${issue.number} — ${issue.title}`);
 
       const labels = new Set(issue.labels.map((label) => label.name));
       logInfo(`Existing labels: ${Array.from(labels).toSorted().join(", ") || "none"}`);
@@ -824,8 +819,7 @@ async function main() {
     );
 
     for (const pullRequest of pendingPullRequests) {
-      // eslint-disable-next-line no-console
-      console.log(`\n#${pullRequest.number} — ${pullRequest.title}`);
+      writeStdoutLine(`\n#${pullRequest.number} — ${pullRequest.title}`);
 
       const labels = new Set(pullRequest.labels.map((label) => label.name));
       logInfo(`Existing labels: ${Array.from(labels).toSorted().join(", ") || "none"}`);

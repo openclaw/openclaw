@@ -12,6 +12,7 @@
  * - On shutdown, cleans up registered commands via DELETE /api/v4/commands/{id}
  */
 
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { MattermostClient } from "./client.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -508,7 +509,9 @@ const DEFAULT_CALLBACK_PATH = "/api/channels/mattermost/command";
  */
 function normalizeCallbackPath(path: string): string {
   const trimmed = path.trim();
-  if (!trimmed) return DEFAULT_CALLBACK_PATH;
+  if (!trimmed) {
+    return DEFAULT_CALLBACK_PATH;
+  }
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
@@ -519,7 +522,7 @@ export function resolveSlashCommandConfig(
     native: raw?.native ?? "auto",
     nativeSkills: raw?.nativeSkills ?? "auto",
     callbackPath: normalizeCallbackPath(raw?.callbackPath ?? DEFAULT_CALLBACK_PATH),
-    callbackUrl: raw?.callbackUrl?.trim() || undefined,
+    callbackUrl: normalizeOptionalString(raw?.callbackUrl),
   };
 }
 
@@ -532,6 +535,22 @@ export function isSlashCommandsEnabled(config: MattermostSlashCommandConfig): bo
   }
   // "auto" defaults to false for mattermost (opt-in)
   return false;
+}
+
+export function collectMattermostSlashCallbackPaths(raw?: Partial<MattermostSlashCommandConfig>) {
+  const config = resolveSlashCommandConfig(raw);
+  const paths = new Set<string>([config.callbackPath]);
+  if (typeof config.callbackUrl === "string" && config.callbackUrl.trim()) {
+    try {
+      const pathname = new URL(config.callbackUrl).pathname;
+      if (pathname) {
+        paths.add(pathname);
+      }
+    } catch {
+      // Ignore invalid callback URLs and keep the normalized callback path only.
+    }
+  }
+  return [...paths];
 }
 
 /**
@@ -548,7 +567,9 @@ export function resolveCallbackUrl(params: {
 
   const isWildcardBindHost = (rawHost: string): boolean => {
     const trimmed = rawHost.trim();
-    if (!trimmed) return false;
+    if (!trimmed) {
+      return false;
+    }
     const host = trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
 
     // NOTE: Wildcard listen hosts are valid bind addresses but are not routable callback

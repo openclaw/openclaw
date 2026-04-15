@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
 import { buildContextReply } from "./commands-context-report.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 function makeParams(
   commandBodyNormalized: string,
   truncated: boolean,
-  options?: { omitBootstrapLimits?: boolean },
+  options?: {
+    omitBootstrapLimits?: boolean;
+    contextTokens?: number | null;
+    totalTokens?: number | null;
+    totalTokensFresh?: boolean;
+  },
 ): HandleCommandsParams {
   return {
     command: {
@@ -15,14 +21,15 @@ function makeParams(
     },
     sessionKey: "agent:default:main",
     workspaceDir: "/tmp/workspace",
-    contextTokens: null,
+    contextTokens: options?.contextTokens ?? null,
     provider: "openai",
     model: "gpt-5",
     elevated: { allowed: false },
     resolvedThinkLevel: "off",
     resolvedReasoningLevel: "off",
     sessionEntry: {
-      totalTokens: 123,
+      totalTokens: options?.totalTokens ?? 123,
+      totalTokensFresh: options?.totalTokensFresh ?? true,
       inputTokens: 100,
       outputTokens: 23,
       systemPromptReport: {
@@ -88,5 +95,64 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Bootstrap max/file: 20,000 chars");
     expect(result.text).toContain("Bootstrap max/total: 150,000 chars");
     expect(result.text).not.toContain("Bootstrap max/file: ? chars");
+  });
+
+  it("shows tracked estimate and cached context delta in detail output", async () => {
+    const result = await buildContextReply(
+      makeParams("/context detail", false, {
+        contextTokens: 8_192,
+        totalTokens: 900,
+      }),
+    );
+    expect(result.text).toContain("Tracked prompt estimate: 1,020 chars (~255 tok)");
+    expect(result.text).toContain("Actual context usage (cached): 900 tok");
+    expect(result.text).toContain("Untracked provider/runtime overhead: ~645 tok");
+    expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
+  });
+
+  it("shows estimate-only detail output when cached context usage is unavailable", async () => {
+    const result = await buildContextReply(
+      makeParams("/context detail", false, {
+        contextTokens: 8_192,
+        totalTokens: 900,
+        totalTokensFresh: false,
+      }),
+    );
+    expect(result.text).toContain("Tracked prompt estimate: 1,020 chars (~255 tok)");
+    expect(result.text).toContain("Actual context usage (cached): unavailable");
+    expect(result.text).toContain("Session tokens (cached): unknown / ctx=8,192");
+    expect(result.text).not.toContain("~645 tok");
+  });
+
+  it("prefers the target session entry from sessionStore for cached context stats", async () => {
+    const params = makeParams("/context detail", false, {
+      contextTokens: 8_192,
+      totalTokens: 111,
+    });
+    const sessionEntry = {
+      ...params.sessionEntry,
+      sessionId: params.sessionEntry?.sessionId ?? "session-main",
+      updatedAt: params.sessionEntry?.updatedAt ?? 1,
+      totalTokens: 111,
+      totalTokensFresh: true,
+      inputTokens: 100,
+      outputTokens: 11,
+    } satisfies SessionEntry;
+    params.sessionEntry = sessionEntry;
+    params.sessionStore = {
+      [params.sessionKey]: {
+        ...sessionEntry,
+        totalTokens: 900,
+        totalTokensFresh: true,
+        inputTokens: 700,
+        outputTokens: 200,
+      },
+    };
+
+    const result = await buildContextReply(params);
+
+    expect(result.text).toContain("Actual context usage (cached): 900 tok");
+    expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
+    expect(result.text).not.toContain("Actual context usage (cached): 111 tok");
   });
 });

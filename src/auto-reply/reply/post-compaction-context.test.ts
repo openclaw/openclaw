@@ -15,6 +15,28 @@ describe("readPostCompactionContext", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  async function expectLegacySectionFallback(
+    postCompactionSections: string[],
+    expectDefaultProse = false,
+  ) {
+    const content = `## Every Session\n\nDo startup things.\n\n## Safety\n\nBe safe.\n`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: { postCompactionSections },
+        },
+      },
+    } as OpenClawConfig;
+    const result = await readPostCompactionContext(tmpDir, cfg);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Do startup things");
+    expect(result).toContain("Be safe");
+    if (expectDefaultProse) {
+      expect(result).toContain("Run your Session Startup sequence");
+    }
+  }
+
   it("returns null when no AGENTS.md exists", async () => {
     const result = await readPostCompactionContext(tmpDir);
     expect(result).toBeNull();
@@ -212,7 +234,7 @@ Never modify memory/YYYY-MM-DD.md destructively.
     expect(result).toContain("memory/2026-03-03.md");
     expect(result).not.toContain("memory/YYYY-MM-DD.md");
     expect(result).toContain(
-      "Current time: Tuesday, March 3rd, 2026 — 9:00 AM (America/New_York) / 2026-03-03 14:00 UTC",
+      "Current time: Tuesday, March 3rd, 2026 - 9:00 AM (America/New_York) / 2026-03-03 14:00 UTC",
     );
   });
 
@@ -332,43 +354,18 @@ Read WORKFLOW.md on startup.
       fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
       const result = await readPostCompactionContext(tmpDir);
       expect(result).not.toBeNull();
-      expect(result).toContain("Execute your Session Startup sequence now");
+      expect(result).toContain("Run your Session Startup sequence");
     });
 
     it("falls back to legacy sections when defaults are explicitly configured", async () => {
       // Older AGENTS.md templates use "Every Session" / "Safety" instead of
       // "Session Startup" / "Red Lines". Explicitly setting the defaults should
       // still trigger the legacy fallback — same behavior as leaving the field unset.
-      const content = `## Every Session\n\nDo startup things.\n\n## Safety\n\nBe safe.\n`;
-      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
-      const cfg = {
-        agents: {
-          defaults: {
-            compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
-          },
-        },
-      } as OpenClawConfig;
-      const result = await readPostCompactionContext(tmpDir, cfg);
-      expect(result).not.toBeNull();
-      expect(result).toContain("Do startup things");
-      expect(result).toContain("Be safe");
+      await expectLegacySectionFallback(["Session Startup", "Red Lines"]);
     });
 
     it("falls back to legacy sections when default sections are configured in a different order", async () => {
-      const content = `## Every Session\n\nDo startup things.\n\n## Safety\n\nBe safe.\n`;
-      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
-      const cfg = {
-        agents: {
-          defaults: {
-            compaction: { postCompactionSections: ["Red Lines", "Session Startup"] },
-          },
-        },
-      } as OpenClawConfig;
-      const result = await readPostCompactionContext(tmpDir, cfg);
-      expect(result).not.toBeNull();
-      expect(result).toContain("Do startup things");
-      expect(result).toContain("Be safe");
-      expect(result).toContain("Execute your Session Startup sequence now");
+      await expectLegacySectionFallback(["Red Lines", "Session Startup"], true);
     });
 
     it("custom section names are matched case-insensitively", async () => {

@@ -9,7 +9,8 @@ import {
   resolveChannelAccountEnabled,
 } from "../channels/account-summary.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
-import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
@@ -105,14 +106,18 @@ const buildAccountDetails = (params: {
   return details;
 };
 
-function inspectChannelAccount(plugin: ChannelPlugin, cfg: OpenClawConfig, accountId: string) {
+async function inspectChannelAccount(
+  plugin: ChannelPlugin,
+  cfg: OpenClawConfig,
+  accountId: string,
+) {
   return (
     plugin.config.inspectAccount?.(cfg, accountId) ??
-    inspectReadOnlyChannelAccount({
+    (await inspectReadOnlyChannelAccount({
       channelId: plugin.id,
       cfg,
       accountId,
-    })
+    }))
   );
 }
 
@@ -135,8 +140,8 @@ export async function buildChannelSummary(
     const entries: ChannelAccountEntry[] = [];
 
     for (const accountId of resolvedAccountIds) {
-      const sourceInspectedAccount = inspectChannelAccount(plugin, sourceConfig, accountId);
-      const resolvedInspectedAccount = inspectChannelAccount(plugin, effective, accountId);
+      const sourceInspectedAccount = await inspectChannelAccount(plugin, sourceConfig, accountId);
+      const resolvedInspectedAccount = await inspectChannelAccount(plugin, effective, accountId);
       const resolvedInspection = resolvedInspectedAccount as {
         enabled?: boolean;
         configured?: boolean;

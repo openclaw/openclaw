@@ -1,21 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import { type FetchMock, withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { makeFetchHeaders } from "./web-fetch.test-harness.js";
+import "./web-fetch.test-mocks.js";
 
 const lookupMock = vi.fn();
 const resolvePinnedHostname = ssrf.resolvePinnedHostname;
-
-function makeHeaders(map: Record<string, string>): { get: (key: string) => string | null } {
-  return {
-    get: (key) => map[key.toLowerCase()] ?? null,
-  };
-}
 
 function redirectResponse(location: string): Response {
   return {
     ok: false,
     status: 302,
-    headers: makeHeaders({ location }),
+    headers: makeFetchHeaders({ location }),
     body: { cancel: vi.fn() },
   } as unknown as Response;
 }
@@ -24,7 +20,7 @@ function textResponse(body: string): Response {
   return {
     ok: true,
     status: 200,
-    headers: makeHeaders({ "content-type": "text/plain" }),
+    headers: makeFetchHeaders({ "content-type": "text/plain" }),
     text: async () => body,
   } as unknown as Response;
 }
@@ -32,26 +28,43 @@ function textResponse(body: string): Response {
 function setMockFetch(
   impl: FetchMock = async (_input: RequestInfo | URL, _init?: RequestInit) => textResponse(""),
 ) {
-  const fetchSpy = vi.fn<FetchMock>(impl);
+  const fetchSpy = vi.fn(impl);
   global.fetch = withFetchPreconnect(fetchSpy);
   return fetchSpy;
 }
 
 async function createWebFetchToolForTest(params?: {
-  firecrawl?: { enabled?: boolean; apiKey?: string };
+  firecrawlApiKey?: string;
+  ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean };
+  cacheTtlMinutes?: number;
 }) {
   const { createWebFetchTool } = await import("./web-tools.js");
   return createWebFetchTool({
     config: {
+      plugins: params?.firecrawlApiKey
+        ? {
+            entries: {
+              firecrawl: {
+                config: {
+                  webFetch: {
+                    apiKey: params.firecrawlApiKey,
+                  },
+                },
+              },
+            },
+          }
+        : undefined,
       tools: {
         web: {
           fetch: {
-            cacheTtlMinutes: 0,
-            firecrawl: params?.firecrawl ?? { enabled: false },
+            cacheTtlMinutes: params?.cacheTtlMinutes ?? 0,
+            ssrfPolicy: params?.ssrfPolicy,
+            ...(params?.firecrawlApiKey ? { provider: "firecrawl" } : {}),
           },
         },
       },
     },
+    lookupFn: lookupMock,
   });
 }
 
@@ -81,7 +94,7 @@ describe("web_fetch SSRF protection", () => {
   it("blocks localhost hostnames before fetch/firecrawl", async () => {
     const fetchSpy = setMockFetch();
     const tool = await createWebFetchToolForTest({
-      firecrawl: { apiKey: "firecrawl-test" }, // pragma: allowlist secret
+      firecrawlApiKey: "firecrawl-test", // pragma: allowlist secret
     });
 
     await expectBlockedUrl(tool, "http://localhost/test", /Blocked hostname/i);
@@ -123,7 +136,7 @@ describe("web_fetch SSRF protection", () => {
       redirectResponse("http://127.0.0.1/secret"),
     );
     const tool = await createWebFetchToolForTest({
-      firecrawl: { apiKey: "firecrawl-test" }, // pragma: allowlist secret
+      firecrawlApiKey: "firecrawl-test", // pragma: allowlist secret
     });
 
     await expectBlockedUrl(tool, "https://example.com", /private|internal|blocked/i);
@@ -141,5 +154,28 @@ describe("web_fetch SSRF protection", () => {
       status: 200,
       extractor: "raw",
     });
+  });
+
+  it("allows RFC2544 benchmark-range URLs only when web_fetch ssrfPolicy opts in", async () => {
+    const url = "http://198.18.0.153/file";
+    lookupMock.mockResolvedValue([{ address: "198.18.0.153", family: 4 }]);
+
+    const deniedTool = await createWebFetchToolForTest({ cacheTtlMinutes: 1 });
+    await expectBlockedUrl(deniedTool, url, /private|internal|blocked/i);
+
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("benchmark ok"));
+    const allowedTool = await createWebFetchToolForTest({
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      cacheTtlMinutes: 1,
+    });
+
+    const allowed = await allowedTool?.execute?.("call", { url });
+    expect(allowed?.details).toMatchObject({
+      status: 200,
+      extractor: "raw",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const stricterTool = await createWebFetchToolForTest({ cacheTtlMinutes: 1 });
+    await expectBlockedUrl(stricterTool, url, /private|internal|blocked/i);
   });
 });

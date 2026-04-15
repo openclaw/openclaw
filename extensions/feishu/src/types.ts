@@ -1,11 +1,11 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk/feishu";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/core";
 import type {
   FeishuConfigSchema,
   FeishuGroupSchema,
   FeishuAccountConfigSchema,
   z,
 } from "./config-schema.js";
-import type { MentionTarget } from "./mention.js";
+import type { MentionTarget } from "./mention-target.types.js";
 
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>;
 export type FeishuGroupConfig = z.infer<typeof FeishuGroupSchema>;
@@ -60,11 +60,27 @@ export type FeishuSendResult = {
   chatId: string;
 };
 
-export type FeishuProbeResult = BaseProbeResult<string> & {
+export type FeishuChatType = "p2p" | "group" | "private";
+
+export type FeishuMessageInfo = {
+  messageId: string;
+  chatId: string;
+  chatType?: FeishuChatType;
+  senderId?: string;
+  senderOpenId?: string;
+  senderType?: string;
+  content: string;
+  contentType: string;
+  createTime?: number;
+  /** Feishu thread ID (omt_xxx) — present when the message belongs to a topic thread. */
+  threadId?: string;
+};
+
+export interface FeishuProbeResult extends BaseProbeResult {
   appId?: string;
   botName?: string;
   botOpenId?: string;
-};
+}
 
 export type FeishuMediaInfo = {
   path: string;

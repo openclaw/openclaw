@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { ZodIssue } from "zod";
-import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import { note } from "../terminal/note.js";
 import { isRecord } from "../utils.js";
@@ -105,26 +105,30 @@ export function noteOpencodeProviderOverrides(cfg: OpenClawConfig): void {
   if (providers["opencode-zen"]) {
     overrides.push("opencode-zen");
   }
+  if (providers["opencode-go"]) {
+    overrides.push("opencode-go");
+  }
   if (overrides.length === 0) {
     return;
   }
 
   const lines = overrides.flatMap((id) => {
+    const providerLabel = id === "opencode-go" ? "OpenCode Go" : "OpenCode Zen";
     const providerEntry = providers[id];
     const api =
       isRecord(providerEntry) && typeof providerEntry.api === "string"
         ? providerEntry.api
         : undefined;
     return [
-      `- models.providers.${id} is set; this overrides the built-in OpenCode Zen catalog.`,
+      `- models.providers.${id} is set; this overrides the built-in ${providerLabel} catalog.`,
       api ? `- models.providers.${id}.api=${api}` : null,
     ].filter((line): line is string => Boolean(line));
   });
 
   lines.push(
-    "- Remove these entries to restore per-model API routing + costs (then re-run onboarding if needed).",
+    "- Remove these entries to restore per-model API routing + costs (then re-run setup if needed).",
   );
-  note(lines.join("\n"), "OpenCode Zen");
+  note(lines.join("\n"), "OpenCode");
 }
 
 export function noteIncludeConfinementWarning(snapshot: {

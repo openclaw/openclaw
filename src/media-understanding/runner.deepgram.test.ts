@@ -1,7 +1,27 @@
-import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
 import { withAudioFixture } from "./runner.test-utils.js";
+
+const modelAuthMocks = vi.hoisted(() => ({
+  hasAvailableAuthForProvider: vi.fn(() => true),
+  resolveApiKeyForProvider: vi.fn(async () => ({
+    apiKey: "test-key",
+    source: "test",
+    mode: "api-key",
+  })),
+  requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? "test-key"),
+}));
+
+vi.mock("../agents/model-auth.js", () => ({
+  hasAvailableAuthForProvider: modelAuthMocks.hasAvailableAuthForProvider,
+  resolveApiKeyForProvider: modelAuthMocks.resolveApiKeyForProvider,
+  requireApiKey: modelAuthMocks.requireApiKey,
+}));
+
+vi.mock("../plugins/capability-provider-runtime.js", () => ({
+  resolvePluginCapabilityProviders: () => [],
+}));
 
 describe("runCapability deepgram provider options", () => {
   it("merges provider options, headers, and baseUrl overrides", async () => {
@@ -9,6 +29,9 @@ describe("runCapability deepgram provider options", () => {
       let seenQuery: Record<string, string | number | boolean> | undefined;
       let seenBaseUrl: string | undefined;
       let seenHeaders: Record<string, string> | undefined;
+      let seenRequest:
+        | import("../agents/provider-request-config.js").ProviderRequestTransportOverrides
+        | undefined;
 
       const providerRegistry = buildProviderRegistry({
         deepgram: {
@@ -18,6 +41,7 @@ describe("runCapability deepgram provider options", () => {
             seenQuery = req.query;
             seenBaseUrl = req.baseUrl;
             seenHeaders = req.headers;
+            seenRequest = req.request;
             return { text: "ok", model: req.model };
           },
         },
@@ -46,6 +70,16 @@ describe("runCapability deepgram provider options", () => {
                 "X-Config": "2",
                 "X-Config-Managed": "secretref-env:DEEPGRAM_HEADER_TOKEN",
               },
+              request: {
+                headers: {
+                  "X-Config-Request": "cfg",
+                },
+                auth: {
+                  mode: "header",
+                  headerName: "x-config-auth",
+                  value: "cfg-secret",
+                },
+              },
               providerOptions: {
                 deepgram: {
                   detect_language: true,
@@ -61,6 +95,14 @@ describe("runCapability deepgram provider options", () => {
                   headers: {
                     "X-Entry": "3",
                     "X-Entry-Managed": "secretref-managed",
+                  },
+                  request: {
+                    headers: {
+                      "X-Entry-Request": "entry",
+                    },
+                    tls: {
+                      serverName: "deepgram.internal",
+                    },
                   },
                   providerOptions: {
                     deepgram: {
@@ -100,6 +142,20 @@ describe("runCapability deepgram provider options", () => {
         smart_format: true,
       });
       expect((seenQuery as Record<string, unknown>)["detectLanguage"]).toBeUndefined();
+      expect(seenRequest).toEqual({
+        headers: {
+          "X-Config-Request": "cfg",
+          "X-Entry-Request": "entry",
+        },
+        auth: {
+          mode: "header",
+          headerName: "x-config-auth",
+          value: "cfg-secret",
+        },
+        tls: {
+          serverName: "deepgram.internal",
+        },
+      });
     });
   });
 });

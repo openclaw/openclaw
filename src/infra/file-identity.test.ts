@@ -6,28 +6,66 @@ function stat(dev: number | bigint, ino: number | bigint): FileIdentityStat {
 }
 
 describe("sameFileIdentity", () => {
-  it("accepts exact dev+ino match", () => {
-    expect(sameFileIdentity(stat(7, 11), stat(7, 11), "linux")).toBe(true);
-  });
-
-  it("rejects inode mismatch", () => {
-    expect(sameFileIdentity(stat(7, 11), stat(7, 12), "linux")).toBe(false);
-  });
-
-  it("rejects dev mismatch on non-windows", () => {
-    expect(sameFileIdentity(stat(7, 11), stat(8, 11), "linux")).toBe(false);
-  });
-
-  it("accepts win32 dev mismatch when either side is 0", () => {
-    expect(sameFileIdentity(stat(0, 11), stat(8, 11), "win32")).toBe(true);
-    expect(sameFileIdentity(stat(7, 11), stat(0, 11), "win32")).toBe(true);
-  });
-
-  it("accepts win32 dev mismatch even when both dev values are non-zero", () => {
-    expect(sameFileIdentity(stat(7, 11), stat(8, 11), "win32")).toBe(true);
-  });
-
-  it("handles bigint stats", () => {
-    expect(sameFileIdentity(stat(0n, 11n), stat(8n, 11n), "win32")).toBe(true);
+  it.each([
+    {
+      name: "accepts exact dev+ino match",
+      left: stat(7, 11),
+      right: stat(7, 11),
+      platform: "linux" as const,
+      expected: true,
+    },
+    {
+      name: "rejects inode mismatch",
+      left: stat(7, 11),
+      right: stat(7, 12),
+      platform: "linux" as const,
+      expected: false,
+    },
+    {
+      name: "rejects dev mismatch on non-windows",
+      left: stat(7, 11),
+      right: stat(8, 11),
+      platform: "linux" as const,
+      expected: false,
+    },
+    {
+      name: "keeps dev strictness on linux when one side is zero",
+      left: stat(0, 11),
+      right: stat(8, 11),
+      platform: "linux" as const,
+      expected: false,
+    },
+    {
+      name: "accepts win32 dev mismatch when either side is 0",
+      left: stat(0, 11),
+      right: stat(8, 11),
+      platform: "win32" as const,
+      expected: true,
+    },
+    {
+      name: "accepts win32 dev mismatch when right side is 0",
+      left: stat(7, 11),
+      right: stat(0, 11),
+      platform: "win32" as const,
+      expected: true,
+    },
+    {
+      // Windows 上 lstatSync（路径）与 fstatSync（fd）可返回两个不同的非零 dev，
+      // inode 匹配时应接受，否则插件在 Windows 上全部加载失败。
+      name: "accepts win32 dev mismatch even when both dev values are non-zero",
+      left: stat(7, 11),
+      right: stat(8, 11),
+      platform: "win32" as const,
+      expected: true,
+    },
+    {
+      name: "handles bigint stats",
+      left: stat(0n, 11n),
+      right: stat(8n, 11n),
+      platform: "win32" as const,
+      expected: true,
+    },
+  ])("$name", ({ left, right, platform, expected }) => {
+    expect(sameFileIdentity(left, right, platform)).toBe(expected);
   });
 });

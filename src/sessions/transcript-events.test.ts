@@ -20,6 +20,23 @@ describe("transcript events", () => {
     expect(listener).toHaveBeenCalledWith({ sessionFile: "/tmp/session.jsonl" });
   });
 
+  it("includes optional session metadata when provided", () => {
+    const listener = vi.fn();
+    cleanup.push(onSessionTranscriptUpdate(listener));
+
+    emitSessionTranscriptUpdate({
+      sessionFile: "  /tmp/session.jsonl  ",
+      sessionKey: "  agent:main:main  ",
+      message: { role: "assistant", content: "hi" },
+    });
+
+    expect(listener).toHaveBeenCalledWith({
+      sessionFile: "/tmp/session.jsonl",
+      sessionKey: "agent:main:main",
+      message: { role: "assistant", content: "hi" },
+    });
+  });
+
   it("continues notifying other listeners when one throws", () => {
     const first = vi.fn(() => {
       throw new Error("boom");

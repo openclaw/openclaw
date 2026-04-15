@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
 export type HeartbeatReasonKind =
   | "retry"
   | "interval"
@@ -9,7 +11,7 @@ export type HeartbeatReasonKind =
   | "other";
 
 function trimReason(reason?: string): string {
-  return typeof reason === "string" ? reason.trim() : "";
+  return normalizeOptionalString(reason) ?? "";
 }
 
 export function normalizeHeartbeatWakeReason(reason?: string): string {
@@ -32,6 +34,9 @@ export function resolveHeartbeatReasonKind(reason?: string): HeartbeatReasonKind
     return "exec-event";
   }
   if (trimmed === "wake") {
+    return "wake";
+  }
+  if (trimmed.startsWith("acp:spawn:")) {
     return "wake";
   }
   if (trimmed.startsWith("cron:")) {

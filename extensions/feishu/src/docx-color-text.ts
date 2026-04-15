@@ -12,6 +12,7 @@
  */
 
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 // Feishu text_color values (1-7)
 const TEXT_COLOR: Record<string, number> = {
@@ -43,6 +44,11 @@ interface Segment {
   bgColor?: number;
   bold?: boolean;
 }
+
+type DocxPatchPayload = NonNullable<Parameters<Lark.Client["docx"]["documentBlock"]["patch"]>[0]>;
+type DocxTextElement = NonNullable<
+  NonNullable<NonNullable<DocxPatchPayload["data"]>["update_text_elements"]>["elements"]
+>[number];
 
 /**
  * Parse color markup into segments.
@@ -81,7 +87,7 @@ export function parseColorMarkup(content: string): Segment[] {
       }
     } else {
       // Tagged segment
-      const tagStr = match[1].toLowerCase().trim();
+      const tagStr = normalizeLowercaseStringOrEmpty(match[1]);
       const text = match[2];
       const tags = tagStr.split(/\s+/);
 
@@ -120,8 +126,7 @@ export async function updateColorText(
 ) {
   const segments = parseColorMarkup(content);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK type
-  const elements: any[] = segments.map((seg) => ({
+  const elements: DocxTextElement[] = segments.map((seg) => ({
     text_run: {
       content: seg.text,
       text_element_style: {
