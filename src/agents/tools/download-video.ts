@@ -351,7 +351,7 @@ async function findWorkspaceFolder(): Promise<string> {
   }
   
   // Fallback to a workspace-relative path
-  const fallback = path.join(os.homedir(), '.openclaw', 'workspace', 'default');
+  const fallback = path.join(os.homedir(), '.openclaw', 'workspace');
   await fs.mkdir(fallback, { recursive: true });
   return fallback;
 }
