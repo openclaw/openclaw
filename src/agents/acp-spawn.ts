@@ -1046,6 +1046,7 @@ export async function spawnAcpDirect(
   }
 
   let sessionKey: string | undefined;
+  let wasResolved = false;
   if (params.label && spawnMode === "session") {
     try {
       const resolved = await callGateway({
@@ -1054,11 +1055,12 @@ export async function spawnAcpDirect(
         timeoutMs: 5000,
       });
       if (resolved?.ok && resolved.key) {
-        const storePath = resolveStorePath(null, { agentId: targetAgentId });
+        const storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
         const store = loadSessionStore(storePath);
         const entry = store[resolved.key] as SessionEntry | undefined;
         if (!entry?.acp?.mode || entry.acp.mode === "persistent") {
           sessionKey = resolved.key;
+          wasResolved = true;
         }
       }
     } catch {
@@ -1145,8 +1147,8 @@ export async function spawnAcpDirect(
     await cleanupFailedAcpSpawn({
       cfg,
       sessionKey,
-      shouldDeleteSession: sessionCreated,
-      deleteTranscript: true,
+      shouldDeleteSession: sessionCreated && !wasResolved,
+      deleteTranscript: !wasResolved,
       runtimeCloseHandle: initializedRuntime,
     });
     return createAcpSpawnFailure({
@@ -1223,8 +1225,8 @@ export async function spawnAcpDirect(
     await cleanupFailedAcpSpawn({
       cfg,
       sessionKey,
-      shouldDeleteSession: true,
-      deleteTranscript: true,
+      shouldDeleteSession: !wasResolved,
+      deleteTranscript: !wasResolved,
     });
     return createAcpSpawnFailure({
       status: "error",
