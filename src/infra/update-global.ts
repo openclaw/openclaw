@@ -2,9 +2,13 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { pathExists } from "../utils.js";
-import { collectPackageDistInventoryErrors } from "./package-dist-inventory.js";
+import {
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  collectPackageDistInventoryErrors,
+} from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
 
@@ -35,6 +39,7 @@ const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
   "--omit=optional",
   ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
 ] as const;
+const MISSING_PACKAGE_DIST_INVENTORY_ERROR = `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`;
 
 function normalizePackageTarget(value: string): string {
   return value.trim();
@@ -89,7 +94,22 @@ export async function collectInstalledGlobalPackageErrors(params: {
       `expected installed version ${params.expectedVersion}, found ${installedVersion ?? "<missing>"}`,
     );
   }
-  errors.push(...(await collectPackageDistInventoryErrors(params.packageRoot)));
+  const distErrors = await collectPackageDistInventoryErrors(params.packageRoot);
+  if (distErrors.length === 1 && distErrors[0] === MISSING_PACKAGE_DIST_INVENTORY_ERROR) {
+    errors.push(...(await collectLegacyInstalledGlobalPackageErrors(params.packageRoot)));
+    return errors;
+  }
+  errors.push(...distErrors);
+  return errors;
+}
+
+async function collectLegacyInstalledGlobalPackageErrors(packageRoot: string): Promise<string[]> {
+  const errors: string[] = [];
+  for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
+    if (!(await pathExists(path.join(packageRoot, relativePath)))) {
+      errors.push(`missing bundled runtime sidecar ${relativePath}`);
+    }
+  }
   return errors;
 }
 

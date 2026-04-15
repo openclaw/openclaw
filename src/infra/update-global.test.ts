@@ -397,4 +397,26 @@ describe("update global helpers", () => {
       );
     });
   });
+
+  it("falls back to legacy sidecar verification when the inventory is missing", async () => {
+    await withTempDir({ prefix: "openclaw-update-global-legacy-" }, async (packageRoot) => {
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+        "utf-8",
+      );
+      for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
+        const absolutePath = path.join(packageRoot, relativePath);
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+        await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+      }
+
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+
+      await fs.rm(path.join(packageRoot, MATRIX_HELPER_API));
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
+        `missing bundled runtime sidecar ${MATRIX_HELPER_API}`,
+      );
+    });
+  });
 });
