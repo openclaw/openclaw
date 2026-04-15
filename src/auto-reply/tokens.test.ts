@@ -132,6 +132,27 @@ describe("isSilentReplyText", () => {
       expect(isSilentReplyText(text)).toBe(false);
     });
 
+    // Codex P1 re-review (3rd round) on PR #66755: the "glued"
+    // adjacency check must require the character immediately before
+    // the token to be non-whitespace. A SPACE-separated token (not
+    // just newline-separated) still leaves the reasoning/output
+    // boundary ambiguous and should return false.
+    it("does NOT classify as silent when bare-think ends with space-separated token", () => {
+      const text = [
+        "think",
+        "Reasoning about the request.",
+        "Here is the answer. NO_REPLY",
+      ].join("\n");
+      expect(isSilentReplyText(text)).toBe(false);
+    });
+
+    // Positive guard: true adjacency (no whitespace before token)
+    // remains the #66701 shape and must stay silent.
+    it("classifies bare-think with token truly glued to preceding punctuation as silent", () => {
+      const text = "think\nReasoning.\nI will stay quiet here.NO_REPLY";
+      expect(isSilentReplyText(text)).toBe(true);
+    });
+
     // Codex P2 re-review on PR #66755: an unclosed <think> tag (common
     // during streaming) where the body ends with the trailing token
     // should still be treated as silent — otherwise the reasoning

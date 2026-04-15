@@ -122,11 +122,13 @@ function isReasoningWrappedSilentReply(text: string, token: string): boolean {
     }
     // No blank-line separator: the reasoning/output boundary is
     // ambiguous. Only classify as silent when the trailing token is
-    // GLUED to its preceding text on the last line — that's the
-    // specific #66701 shape (model forgot the newline before the
-    // token). If the token sits alone on its own line, we can't tell
-    // reasoning from a substantive reply, so be conservative and
-    // return false (Codex P1 review on PR #66755).
+    // TRULY adjacent to its preceding text — the character
+    // immediately before the token must be non-whitespace. That's
+    // the specific #66701 shape (model forgot the newline and
+    // produced "...quiet here.NO_REPLY"). Any whitespace separator
+    // — newline, tab, or even a single space — is evidence that the
+    // reasoning/output boundary might land there, so be conservative
+    // and return false (Codex P1 re-reviews on PR #66755).
     const trailMatch = afterMarker.match(trailRegex);
     if (!trailMatch) {
       return false;
@@ -135,11 +137,8 @@ function isReasoningWrappedSilentReply(text: string, token: string): boolean {
       0,
       trailMatch.index ?? afterMarker.length,
     );
-    // "Glued" = the last line before the token is non-empty after the
-    // leading reasoning region. i.e. there's no trailing `\n` right
-    // before the token.
-    const gluedToPrecedingText = !/\r?\n\s*$/.test(charBeforeToken);
-    return gluedToPrecedingText;
+    const trulyAdjacent = charBeforeToken.length > 0 && !/\s$/.test(charBeforeToken);
+    return trulyAdjacent;
   }
 
   return false;
