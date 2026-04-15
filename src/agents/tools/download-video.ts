@@ -420,6 +420,7 @@ export const downloadVideoTool = {
       const { stdout: ytDlpOutput } = await execFileAsync(ytDlpPath, [
         '-f', formatSelector,
         '--no-playlist',
+        '--remote-components', 'ejs:npm',
         '--restrict-filenames',
         '--force-overwrites',
         '--quiet',
