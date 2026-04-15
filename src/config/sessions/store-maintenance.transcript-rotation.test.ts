@@ -848,4 +848,49 @@ describe("rotateTranscriptFile", () => {
     const rotated = await rotateTranscriptFile({ transcriptPath: jsonlPath, maintenance });
     expect(rotated).toBe(true);
   });
+
+  it("restores original file from archive when replacement write fails", async () => {
+    const jsonlPath = path.join(sessionsDir, "session.jsonl");
+    await writeJsonlLines(jsonlPath, 50, 80);
+
+    const statBefore = await fs.stat(jsonlPath);
+    const maintenance = makeMaintenance({
+      transcriptRotateBytes: Math.floor(statBefore.size / 2),
+      transcriptMaxLines: 5,
+    });
+
+    // Mock fs.promises.open to throw ENOSPC (simulating disk-full on replacement write)
+    const origOpen = fs.open;
+    vi.spyOn(fs, "open").mockImplementation(async (...args: unknown[]) => {
+      // Detect the O_EXCL replacement write by checking flags
+      const flags = args[1];
+      if (typeof flags === "number" && flags & fs.constants.O_EXCL) {
+        const err = new Error("No space left on device") as NodeJS.ErrnoException;
+        err.code = "ENOSPC";
+        throw err;
+      }
+      return origOpen.apply(fs, args as Parameters<typeof origOpen>);
+    });
+
+    try {
+      const rotated = await rotateTranscriptFile({ transcriptPath: jsonlPath, maintenance });
+      // Should return false because replacement was not written
+      expect(rotated).toBe(false);
+
+      // Original file should be restored from archive
+      const restoredContent = await fs.readFile(jsonlPath, "utf-8");
+      const restoredLines = restoredContent.trim().split("\n").filter(Boolean);
+      // 1 header + 50 message lines — same as original
+      expect(restoredLines).toHaveLength(51);
+      const header = JSON.parse(restoredLines[0]);
+      expect(header.type).toBe("session");
+
+      // No .bak file should remain (it was renamed back)
+      const files = await fs.readdir(sessionsDir);
+      const bakFiles = files.filter((f) => f.startsWith("session.jsonl.bak."));
+      expect(bakFiles).toHaveLength(0);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
 });

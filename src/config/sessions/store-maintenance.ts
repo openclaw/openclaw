@@ -412,6 +412,7 @@ export async function rotateTranscriptFile(params: {
 
   // Write replacement file with session header + most recent lines
   const maxLines = maintenance.transcriptMaxLines;
+  let replacementWritten = false;
   try {
     const { headerLine: archiveHeader, tailLines } = await readHeaderAndTailLines(
       backupPath,
@@ -439,12 +440,14 @@ export async function rotateTranscriptFile(params: {
       );
       try {
         await fd.writeFile(replacementLines.join("\n") + "\n", "utf-8");
+        replacementWritten = true;
       } finally {
         await fd.close();
       }
     } catch (exclErr) {
       if ((exclErr as NodeJS.ErrnoException).code === "EEXIST") {
         // A concurrent append already recreated the file — skip replacement write.
+        replacementWritten = true;
         log.warn("transcript rotation skipped replacement: file recreated concurrently", {
           file: path.basename(transcriptPath),
         });
@@ -453,10 +456,33 @@ export async function rotateTranscriptFile(params: {
       }
     }
   } catch {
-    // Best-effort; the archive is safe even if replacement write fails.
     log.warn("transcript rotation: replacement file not written", {
       file: path.basename(transcriptPath),
     });
+  }
+
+  // If the replacement was not written (and no concurrent writer recreated it),
+  // attempt to restore the original file from the archive to avoid data loss.
+  if (!replacementWritten) {
+    try {
+      // Only restore if the transcript file still does not exist
+      await fs.promises.access(transcriptPath).then(
+        () => undefined, // file exists — a concurrent writer saved us, nothing to do
+        () => fs.promises.rename(backupPath, transcriptPath),
+      );
+      log.warn(
+        "transcript rotation: restored original file from archive after replacement failure",
+        {
+          file: path.basename(transcriptPath),
+        },
+      );
+    } catch {
+      log.error("transcript rotation: failed to restore original file from archive", {
+        file: path.basename(transcriptPath),
+        archive: path.basename(backupPath),
+      });
+    }
+    return false;
   }
 
   log.info("rotated transcript file", {
