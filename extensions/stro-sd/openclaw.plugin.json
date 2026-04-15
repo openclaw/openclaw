@@ -1,4 +1,9 @@
 {
   "id": "stro-sd",
-  "uiHints": {}
+  "uiHints": {},
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
 }
