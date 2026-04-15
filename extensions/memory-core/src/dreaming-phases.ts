@@ -739,10 +739,7 @@ async function collectSessionIngestionBatches(params: {
       mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)),
       size: Math.floor(Math.max(0, stat.size)),
     };
-    const cursorAtEnd =
-      previous !== undefined &&
-      previous.lineCount > 0 &&
-      previous.lastContentLine >= previous.lineCount;
+    const cursorAtEnd = previous !== undefined && previous.lastContentLine >= previous.lineCount;
     const unchanged =
       Boolean(previous) &&
       previous.mtimeMs === fingerprint.mtimeMs &&
@@ -756,6 +753,26 @@ async function collectSessionIngestionBatches(params: {
 
     const entry = await buildSessionEntry(file.absolutePath);
     if (!entry) {
+      continue;
+    }
+    if (entry.generatedByDreamingNarrative) {
+      nextFiles[stateKey] = {
+        mtimeMs: fingerprint.mtimeMs,
+        size: fingerprint.size,
+        contentHash: entry.hash.trim(),
+        lineCount: entry.lineMap.length,
+        lastContentLine: entry.lineMap.length,
+      };
+      if (
+        !previous ||
+        previous.mtimeMs !== fingerprint.mtimeMs ||
+        previous.size !== fingerprint.size ||
+        previous.contentHash !== entry.hash.trim() ||
+        previous.lineCount !== entry.lineMap.length ||
+        previous.lastContentLine !== entry.lineMap.length
+      ) {
+        changed = true;
+      }
       continue;
     }
     const contentHash = entry.hash.trim();
@@ -1221,7 +1238,13 @@ export async function seedHistoricalDailyMemorySignals(params: {
 }
 
 function entryAverageScore(entry: ShortTermRecallEntry): number {
-  return entry.recallCount > 0 ? Math.max(0, Math.min(1, entry.totalScore / entry.recallCount)) : 0;
+  const signalCount = Math.max(
+    0,
+    Math.floor(entry.recallCount ?? 0) +
+      Math.floor(entry.dailyCount ?? 0) +
+      Math.floor(entry.groundedCount ?? 0),
+  );
+  return signalCount > 0 ? Math.max(0, Math.min(1, entry.totalScore / signalCount)) : 0;
 }
 
 function tokenizeSnippet(snippet: string): Set<string> {

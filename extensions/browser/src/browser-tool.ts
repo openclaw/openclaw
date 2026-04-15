@@ -286,7 +286,7 @@ async function callBrowserProxy(params: {
       ? Math.max(1, Math.floor(params.timeoutMs))
       : DEFAULT_BROWSER_PROXY_TIMEOUT_MS;
   const gatewayTimeoutMs = proxyTimeoutMs + BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS;
-  const payload = await browserToolDeps.callGatewayTool<{ payloadJSON?: string; payload?: string }>(
+  const payload = await browserToolDeps.callGatewayTool(
     "node.invoke",
     { timeoutMs: gatewayTimeoutMs },
     {

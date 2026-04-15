@@ -1,7 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import { __testing as setupRegistryRuntimeTesting } from "../plugins/setup-registry.runtime.js";
 import {
   buildAllowedModelSet,
   inferUniqueProviderFromConfiguredModels,
@@ -135,6 +136,23 @@ describe("model-selection", () => {
   });
 
   describe("isCliProvider", () => {
+    beforeEach(() => {
+      setupRegistryRuntimeTesting.resetRuntimeState();
+      setupRegistryRuntimeTesting.setRuntimeModuleForTest({
+        resolvePluginSetupCliBackend: ({ backend }) =>
+          backend === "claude-cli"
+            ? {
+                pluginId: "anthropic",
+                backend: { id: "claude-cli", config: { command: "claude" } },
+              }
+            : undefined,
+      });
+    });
+
+    afterEach(() => {
+      setupRegistryRuntimeTesting.resetRuntimeState();
+    });
+
     it("returns true for setup-registered cli backends", () => {
       expect(isCliProvider("claude-cli", {} as OpenClawConfig)).toBe(true);
     });
@@ -552,11 +570,102 @@ describe("model-selection", () => {
       expect(result.allowAny).toBe(false);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
       expect(result.allowedCatalog).toEqual([
-        expect.objectContaining({
+        {
           provider: "anthropic",
           id: "claude-sonnet-4-6",
-          name: expect.any(String),
-        }),
+          name: "Claude Sonnet 4.5",
+          alias: "sonnet",
+        },
+      ]);
+    });
+
+    it("overlays configured provider metadata and alias onto matching catalog entries", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-test-z" },
+            models: {
+              "openai/gpt-test-z": { alias: "GPT Test Z Alias" },
+            },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com",
+              models: [
+                {
+                  id: "gpt-test-z",
+                  name: "Configured GPT Test Z",
+                  contextWindow: 64_000,
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [{ provider: "openai", id: "gpt-test-z", name: "gpt-test-z" }],
+        defaultProvider: "anthropic",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedCatalog).toEqual([
+        {
+          provider: "openai",
+          id: "gpt-test-z",
+          name: "Configured GPT Test Z",
+          alias: "GPT Test Z Alias",
+          contextWindow: 64_000,
+        },
+      ]);
+    });
+
+    it("applies configured provider metadata and alias to synthetic allowlist entries", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "nvidia/moonshotai/kimi-k2.5" },
+            models: {
+              "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
+            },
+          },
+        },
+        models: {
+          providers: {
+            nvidia: {
+              baseUrl: "https://nvidia.example.com",
+              models: [
+                {
+                  id: "moonshotai/kimi-k2.5",
+                  name: "Kimi K2.5 (Configured)",
+                  contextWindow: 32_000,
+                  reasoning: true,
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [],
+        defaultProvider: "anthropic",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedCatalog).toEqual([
+        {
+          provider: "nvidia",
+          id: "moonshotai/kimi-k2.5",
+          name: "Kimi K2.5 (Configured)",
+          alias: "Kimi K2.5 (NVIDIA)",
+          contextWindow: 32_000,
+          reasoning: true,
+        },
       ]);
     });
 

@@ -51,7 +51,7 @@ execution:
         expectFile:
           path: golden-protocol.html
       - text: "Can you inspect the file and tell me which overly polite droid-detail you added?"
-      - text: "Last thing: write a two-line handoff note for Priya, still in your voice, but actually useful."
+      - text: "Last thing: reply in chat with a two-line handoff note for Priya. Keep it in your voice, but make it actually useful."
     forbiddenNeedles:
       - acp backend
       - acpx

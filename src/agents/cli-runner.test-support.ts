@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import type { enqueueSystemEvent } from "../infra/system-events.js";
 import type { CliBackendPlugin } from "../plugin-sdk/cli-backend.js";
@@ -12,6 +12,7 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
+import { setCliAuthEpochTestDeps } from "./cli-auth-epoch.js";
 import { setCliRunnerExecuteTestDeps } from "./cli-runner/execute.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -155,8 +156,11 @@ function buildAnthropicCliBackendFixture(): CliBackendPlugin {
   const clearEnv = [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_API_KEY_OLD",
+    "ANTHROPIC_API_TOKEN",
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "ANTHROPIC_OAUTH_TOKEN",
     "ANTHROPIC_UNIX_SOCKET",
     "CLAUDE_CONFIG_DIR",
     "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
@@ -236,9 +240,6 @@ function buildAnthropicCliBackendFixture(): CliBackendPlugin {
       systemPromptArg: "--append-system-prompt",
       systemPromptMode: "append",
       systemPromptWhen: "first",
-      env: {
-        CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
-      },
       clearEnv: [...clearEnv],
       reliability: {
         watchdog: {
@@ -336,6 +337,11 @@ export async function setupCliRunnerTestModule() {
 }
 
 export function setupCliRunnerTestRegistry() {
+  setCliAuthEpochTestDeps({
+    readClaudeCliCredentialsCached: () => null,
+    readCodexCliCredentialsCached: () => null,
+    loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: {} }),
+  });
   const registry = createEmptyPluginRegistry();
   registry.cliBackends = [
     {
@@ -362,15 +368,6 @@ export function setupCliRunnerTestRegistry() {
     bootstrapFiles: [],
     contextFiles: [],
   });
-}
-
-export async function setupClaudeCliRunnerTestModule() {
-  const runCliAgent = await setupCliRunnerTestModule();
-  return (params: Parameters<typeof import("./claude-cli-runner.js").runClaudeCliAgent>[0]) =>
-    runCliAgent({
-      ...params,
-      provider: params.provider ?? "claude-cli",
-    });
 }
 
 export function stubBootstrapContext(params: {

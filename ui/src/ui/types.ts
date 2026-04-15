@@ -321,7 +321,7 @@ export type GatewaySessionsDefaults = {
   contextTokens: number | null;
 };
 
-export type ChatModelOverride = import("./chat-model-ref.ts").ChatModelOverride;
+export type ChatModelOverride = import("./chat-model-ref.types.ts").ChatModelOverride;
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 
@@ -707,6 +707,7 @@ export type ModelCatalogEntry = {
   id: string;
   name: string;
   provider: string;
+  alias?: string;
   contextWindow?: number;
   reasoning?: boolean;
   input?: Array<"text" | "image" | "document">;

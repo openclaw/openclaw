@@ -324,7 +324,7 @@ describe("status-all format", () => {
             ahead: 0,
             fetchOk: true,
           },
-          registry: { latestVersion: "2026.4.9" },
+          registry: { latestVersion: "2026.4.10" },
         } as never,
         tailscaleMode: "serve",
         tailscaleDns: "box.tail.ts.net",

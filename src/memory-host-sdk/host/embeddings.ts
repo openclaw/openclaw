@@ -1,22 +1,19 @@
 import fsSync from "node:fs";
 import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { SecretInput } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
-import type { EmbeddingInput } from "./embedding-inputs.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import {
   createBedrockEmbeddingProvider,
   hasAwsCredentials,
   type BedrockEmbeddingClient,
 } from "./embeddings-bedrock.js";
+import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import {
-  createGeminiEmbeddingProvider,
-  type GeminiEmbeddingClient,
-  type GeminiTaskType,
-} from "./embeddings-gemini.js";
+  createLmstudioEmbeddingProvider,
+  type LmstudioEmbeddingClient,
+} from "./embeddings-lmstudio.js";
 import {
   createMistralEmbeddingProvider,
   type MistralEmbeddingClient,
@@ -24,39 +21,36 @@ import {
 import { createOllamaEmbeddingProvider, type OllamaEmbeddingClient } from "./embeddings-ollama.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
+import type {
+  EmbeddingProvider,
+  EmbeddingProviderFallback,
+  EmbeddingProviderId,
+  EmbeddingProviderOptions,
+  EmbeddingProviderRequest,
+  GeminiTaskType,
+} from "./embeddings.types.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
 
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
+export type { LmstudioEmbeddingClient } from "./embeddings-lmstudio.js";
 export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 export type { OllamaEmbeddingClient } from "./embeddings-ollama.js";
 export type { BedrockEmbeddingClient } from "./embeddings-bedrock.js";
-
-export type EmbeddingProvider = {
-  id: string;
-  model: string;
-  maxInputTokens?: number;
-  embedQuery: (text: string) => Promise<number[]>;
-  embedBatch: (texts: string[]) => Promise<number[][]>;
-  embedBatchInputs?: (inputs: EmbeddingInput[]) => Promise<number[][]>;
-};
-
-export type EmbeddingProviderId =
-  | "openai"
-  | "local"
-  | "gemini"
-  | "voyage"
-  | "mistral"
-  | "ollama"
-  | "bedrock";
-export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
-export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
+export type {
+  EmbeddingProvider,
+  EmbeddingProviderFallback,
+  EmbeddingProviderId,
+  EmbeddingProviderOptions,
+  EmbeddingProviderRequest,
+  GeminiTaskType,
+} from "./embeddings.types.js";
 
 // Remote providers considered for auto-selection when provider === "auto".
-// Ollama is intentionally excluded here so that "auto" mode does not
-// implicitly assume a local Ollama instance is available.
-// Bedrock is included when AWS credentials are detected.
+// LM Studio and Ollama are intentionally excluded here so that "auto" mode does not
+// implicitly assume either instance is available.
+// Bedrock is handled separately when AWS credentials are detected.
 const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
 
 export type EmbeddingProviderResult = {
@@ -71,27 +65,7 @@ export type EmbeddingProviderResult = {
   mistral?: MistralEmbeddingClient;
   ollama?: OllamaEmbeddingClient;
   bedrock?: BedrockEmbeddingClient;
-};
-
-export type EmbeddingProviderOptions = {
-  config: OpenClawConfig;
-  agentDir?: string;
-  provider: EmbeddingProviderRequest;
-  remote?: {
-    baseUrl?: string;
-    apiKey?: SecretInput;
-    headers?: Record<string, string>;
-  };
-  model: string;
-  fallback: EmbeddingProviderFallback;
-  local?: {
-    modelPath?: string;
-    modelCacheDir?: string;
-  };
-  /** Provider-specific output vector dimensions for supported embedding families. */
-  outputDimensionality?: number;
-  /** Gemini: override the default task type sent with embedding requests. */
-  taskType?: GeminiTaskType;
+  lmstudio?: LmstudioEmbeddingClient;
 };
 
 export const DEFAULT_LOCAL_MODEL =
@@ -191,6 +165,10 @@ export async function createEmbeddingProvider(
     if (id === "local") {
       const provider = await createLocalEmbeddingProvider(options);
       return { provider };
+    }
+    if (id === "lmstudio") {
+      const { provider, client } = await createLmstudioEmbeddingProvider(options);
+      return { provider, lmstudio: client };
     }
     if (id === "ollama") {
       const { provider, client } = await createOllamaEmbeddingProvider(options);

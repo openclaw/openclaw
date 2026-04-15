@@ -25,6 +25,15 @@ vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: mockLoadPluginManifestRegistry,
 }));
 
+vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
+  return {
+    ...actual,
+    listPluginDoctorLegacyConfigRules: () => [],
+    applyPluginDoctorCompatibilityMigrations: () => ({ next: null, changes: [] }),
+  };
+});
+
 vi.mock("./backup-rotation.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./backup-rotation.js")>();
   return {
@@ -179,5 +188,59 @@ describe("config io write", () => {
       );
       expect(overwriteLogs).toHaveLength(0);
     });
+  });
+
+  it("writes disabled plugin entries without requiring plugin config", async () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "required-plugin",
+          origin: "bundled",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          rootDir: "/tmp/openclaw-test-required-plugin",
+          source: "/tmp/openclaw-test-required-plugin/index.ts",
+          manifestPath: "/tmp/openclaw-test-required-plugin/openclaw.plugin.json",
+          configSchema: {
+            type: "object",
+            properties: {
+              token: { type: "string" },
+            },
+            required: ["token"],
+            additionalProperties: true,
+          },
+        },
+      ],
+    } satisfies PluginManifestRegistry);
+
+    await withSuiteHome(async (home) => {
+      const io = createConfigIO({
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      await expect(
+        io.writeConfigFile({
+          agents: { list: [{ id: "main", default: true }] },
+          plugins: {
+            entries: {
+              "required-plugin": {
+                enabled: false,
+              },
+            },
+          },
+        }),
+      ).resolves.toEqual({ persistedHash: expect.any(String) });
+    });
+
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [],
+    } satisfies PluginManifestRegistry);
   });
 });

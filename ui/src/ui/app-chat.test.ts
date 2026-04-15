@@ -7,7 +7,7 @@ const { setLastActiveSessionKeyMock } = vi.hoisted(() => ({
   setLastActiveSessionKeyMock: vi.fn(),
 }));
 
-vi.mock("./app-settings.ts", () => ({
+vi.mock("./app-last-active-session.ts", () => ({
   setLastActiveSessionKey: (...args: unknown[]) => setLastActiveSessionKeyMock(...args),
 }));
 
@@ -21,6 +21,16 @@ async function loadChatHelpers(params?: { reload?: boolean }): Promise<void> {
   }
   ({ handleSendChat, refreshChatAvatar, clearPendingQueueItemsForRun } =
     await import("./app-chat.ts"));
+}
+
+function requestUrl(input: string | URL | Request): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  return input.url;
 }
 
 function makeHost(overrides?: Partial<ChatHost>): ChatHost {
@@ -39,6 +49,8 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     basePath: "",
     hello: null,
     chatAvatarUrl: null,
+    chatSideResult: null,
+    chatSideResultTerminalRuns: new Set<string>(),
     chatModelOverrides: {},
     chatModelsLoading: false,
     chatModelCatalog: [],
@@ -105,7 +117,7 @@ describe("refreshChatAvatar", () => {
     const mainRequest = createDeferred<{ avatarUrl?: string }>();
     const opsRequest = createDeferred<{ avatarUrl?: string }>();
     const fetchMock = vi.fn((input: string | URL | Request) => {
-      const url = String(input);
+      const url = requestUrl(input);
       if (url === "avatar/main?meta=1") {
         return Promise.resolve({
           ok: true,
@@ -222,6 +234,125 @@ describe("handleSendChat", () => {
     expect(onSlashAction).toHaveBeenCalledWith("refresh-tools-effective");
   });
 
+  it("sends /btw immediately while a main run is active without queueing it", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return {};
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-main",
+      chatStream: "Working...",
+      chatMessage: "/btw what changed?",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main",
+        message: "/btw what changed?",
+        deliver: false,
+        idempotencyKey: expect.any(String),
+      }),
+    );
+    expect(host.chatQueue).toEqual([]);
+    expect(host.chatRunId).toBe("run-main");
+    expect(host.chatStream).toBe("Working...");
+    expect(host.chatMessages).toEqual([]);
+    expect(host.chatMessage).toBe("");
+  });
+
+  it("sends /btw without adopting a main chat run when idle", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return {};
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/btw summarize this",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        message: "/btw summarize this",
+        deliver: false,
+      }),
+    );
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatMessages).toEqual([]);
+    expect(host.chatMessage).toBe("");
+  });
+
+  it("restores the BTW draft when detached send fails", async () => {
+    const host = makeHost({
+      client: {
+        request: vi.fn(async (method: string) => {
+          if (method === "chat.send") {
+            throw new Error("network down");
+          }
+          throw new Error(`Unexpected request: ${method}`);
+        }),
+      } as unknown as ChatHost["client"],
+      chatRunId: "run-main",
+      chatStream: "Working...",
+      chatMessage: "/btw what changed?",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatQueue).toEqual([]);
+    expect(host.chatRunId).toBe("run-main");
+    expect(host.chatStream).toBe("Working...");
+    expect(host.chatMessage).toBe("/btw what changed?");
+    expect(host.lastError).toContain("network down");
+  });
+
+  it("clears BTW side results when /clear resets chat history", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.reset") {
+        return { ok: true };
+      }
+      if (method === "chat.history") {
+        return { messages: [], thinkingLevel: null };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatMessage: "/clear",
+      chatMessages: [{ role: "user", content: "hello", timestamp: 1 }],
+      chatSideResult: {
+        kind: "btw",
+        runId: "btw-run-clear",
+        sessionKey: "main",
+        question: "what changed?",
+        text: "Detached BTW result",
+        isError: false,
+        ts: 1,
+      },
+      chatSideResultTerminalRuns: new Set(["btw-run-clear"]),
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.reset", { key: "main" });
+    expect(host.chatMessages).toEqual([]);
+    expect(host.chatSideResult).toBeNull();
+    expect(host.chatSideResultTerminalRuns?.size).toBe(0);
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+  });
+
   it("shows a visible pending item for /steer on the active run", async () => {
     vi.doMock("./chat/slash-command-executor.ts", async () => {
       const actual = await vi.importActual<typeof import("./chat/slash-command-executor.ts")>(
@@ -282,6 +413,6 @@ describe("handleSendChat", () => {
 });
 
 afterAll(() => {
-  vi.doUnmock("./app-settings.ts");
+  vi.doUnmock("./app-last-active-session.ts");
   vi.resetModules();
 });

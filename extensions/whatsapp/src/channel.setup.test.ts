@@ -39,7 +39,7 @@ vi.mock("openclaw/plugin-sdk/setup", async () => {
     "openclaw/plugin-sdk/setup",
   );
   const normalizeE164 = (value?: string | null) => {
-    const raw = `${value ?? ""}`.trim();
+    const raw = (value ?? "").trim();
     if (!raw) {
       return "";
     }

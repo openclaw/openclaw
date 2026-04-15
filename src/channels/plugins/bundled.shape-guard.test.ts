@@ -11,6 +11,7 @@ afterEach(() => {
   vi.doUnmock("../../plugins/bundled-plugin-metadata.js");
   vi.doUnmock("../../plugins/discovery.js");
   vi.doUnmock("../../plugins/manifest-registry.js");
+  vi.doUnmock("../../plugins/channel-catalog-registry.js");
   vi.doUnmock("../../infra/boundary-file-read.js");
   vi.doUnmock("jiti");
 });

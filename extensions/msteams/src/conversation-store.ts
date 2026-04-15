@@ -11,6 +11,8 @@ export type StoredConversationReference = {
   lastSeenAt?: string;
   /** Activity ID from the last message */
   activityId?: string;
+  /** Channel thread root activity ID for threaded replies. */
+  threadId?: string;
   /** User who sent the message */
   user?: { id?: string; name?: string; aadObjectId?: string };
   /** Agent/bot that received the message */
@@ -19,6 +21,20 @@ export type StoredConversationReference = {
   bot?: { id?: string; name?: string };
   /** Conversation details */
   conversation?: { id?: string; conversationType?: string; tenantId?: string };
+  /**
+   * Tenant ID sourced from `activity.channelData.tenant.id` at inbound time.
+   * Bot Framework requires this on outbound proactive messages so the connector
+   * can route them to the correct Azure AD tenant; without it, the connector
+   * rejects the request with HTTP 403. For channel activities, `conversation.tenantId`
+   * is often unset, making `channelData.tenant.id` the reliable source.
+   */
+  tenantId?: string;
+  /**
+   * Azure AD object ID of the user who sent the last inbound activity,
+   * mirrored from `activity.from.aadObjectId` so outbound proactive sends
+   * can include it on the connector request (required for personal DMs).
+   */
+  aadObjectId?: string;
   /** Team ID for channel messages (when available). */
   teamId?: string;
   /** Channel ID (usually "msteams") */
@@ -36,15 +52,6 @@ export type StoredConversationReference = {
   graphChatId?: string;
   /** IANA timezone from Teams clientInfo entity (e.g. "America/New_York") */
   timezone?: string;
-  /**
-   * Thread root message ID for channel thread messages.
-   * When a message arrives inside a Teams channel thread, the Bot Framework
-   * sets `conversation.id` to `19:xxx@thread.tacv2;messageid=<rootId>` and/or
-   * `replyToId` to the thread root activity ID. This field caches that root ID
-   * so outbound replies can target the correct thread instead of landing as
-   * top-level channel posts.
-   */
-  threadId?: string;
 };
 
 export type MSTeamsConversationStoreEntry = {

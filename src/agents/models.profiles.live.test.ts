@@ -9,6 +9,7 @@ import {
   isAnthropicBillingError,
   isAnthropicRateLimitError,
 } from "./live-auth-keys.js";
+import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 import {
   isHighSignalLiveModelRef,
   resolveHighSignalLiveModelLimit,
@@ -135,35 +136,6 @@ function isGoogleModelNotFoundError(err: unknown): boolean {
   return false;
 }
 
-function isModelNotFoundErrorMessage(raw: string): boolean {
-  const msg = raw.trim();
-  if (!msg) {
-    return false;
-  }
-  if (/\b404\b/.test(msg) && /not(?:[\s_-]+)?found/i.test(msg)) {
-    return true;
-  }
-  if (/not_found_error/i.test(msg)) {
-    return true;
-  }
-  if (/model:\s*[a-z0-9._-]+/i.test(msg) && /not(?:[\s_-]+)?found/i.test(msg)) {
-    return true;
-  }
-  if (/does not exist or you do not have access/i.test(msg)) {
-    return true;
-  }
-  if (/deprecated/i.test(msg) && /(upgrade|transition) to/i.test(msg)) {
-    return true;
-  }
-  if (/stealth model/i.test(msg) && /find it here/i.test(msg)) {
-    return true;
-  }
-  if (/is not a valid model id/i.test(msg)) {
-    return true;
-  }
-  return false;
-}
-
 describe("isModelNotFoundErrorMessage", () => {
   it("matches whitespace-separated not found errors", () => {
     expect(isModelNotFoundErrorMessage("404 model not found")).toBe(true);
@@ -182,6 +154,12 @@ describe("isModelNotFoundErrorMessage", () => {
       ),
     ).toBe(true);
   });
+
+  it("matches OpenRouter no-endpoints wording", () => {
+    expect(
+      isModelNotFoundErrorMessage("404 No endpoints found for deepseek/deepseek-r1:free."),
+    ).toBe(true);
+  });
 });
 
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
@@ -195,6 +173,14 @@ function isRefreshTokenReused(raw: string): boolean {
 
 function isInstructionsRequiredError(raw: string): boolean {
   return /instructions are required/i.test(raw);
+}
+
+function isOpenAiCodexHtmlInterruption(raw: string): boolean {
+  const trimmed = raw.trim().replace(/^Error:\s*/i, "");
+  return (
+    /^(?:<!doctype\s+html\b|<html\b)/i.test(trimmed) &&
+    (/<meta\s+name=["']viewport["']/i.test(trimmed) || /<body\b/i.test(trimmed))
+  );
 }
 
 function isModelTimeoutError(raw: string): boolean {
@@ -298,6 +284,15 @@ describe("resolveLiveSystemPrompt", () => {
         provider: "openai",
       } as Model<Api>),
     ).toBeUndefined();
+  });
+
+  it("matches OpenAI Codex HTML interruption pages", () => {
+    expect(
+      isOpenAiCodexHtmlInterruption(
+        'Error: <html><head><meta name="viewport" content="width=device-width" /></head><body>Try again</body></html>',
+      ),
+    ).toBe(true);
+    expect(isOpenAiCodexHtmlInterruption("Error: connection reset")).toBe(false);
   });
 });
 
@@ -784,6 +779,15 @@ describeLive("live models (profile keys)", () => {
             ) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (instructions required)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "openai-codex" &&
+              isOpenAiCodexHtmlInterruption(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (codex html interruption)`);
               break;
             }
             if (allowNotFoundSkip && isModelTimeoutError(message)) {
