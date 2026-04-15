@@ -238,14 +238,14 @@ export async function startGatewaySidecars(params: {
           // via spoofed system tags (e.g. "[System Message]", "System:").
           const rawSenderLabel =
             payload.senderName ?? payload.senderUsername ?? payload.senderId ?? "unknown";
-          const senderLabel = sanitizeInboundSystemTags(String(rawSenderLabel));
+          const senderLabel = sanitizeInboundSystemTags(rawSenderLabel);
           // Limit preview to 100 chars, strip newlines, and escape backticks to
           // prevent prompt injection via crafted message content in System: events.
           const rawPreview = (payload.text ?? "")
             .slice(0, 100)
             .replace(/\n/g, "\\n")
             .replace(/`/g, "\\`");
-          const textPreview = sanitizeInboundSystemTags(String(rawPreview));
+          const textPreview = sanitizeInboundSystemTags(rawPreview);
           // Prefer the resolved session key stored at capture time; fall back to
           // fabricated key for backward compatibility with entries captured before
           // this change.
