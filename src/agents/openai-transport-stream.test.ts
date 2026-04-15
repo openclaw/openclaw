@@ -1633,6 +1633,253 @@ describe("openai transport stream", () => {
     expect(params).toHaveProperty("tool_choice", "required");
   });
 
+  describe("Gemini 3 thought_signature round-trip (openai-completions)", () => {
+    const geminiModel = {
+      id: "gemini-3-flash-preview",
+      name: "Gemini 3 Flash Preview",
+      api: "openai-completions",
+      provider: "google",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1000000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    function makeAssistantOutput() {
+      return {
+        role: "assistant" as const,
+        content: [],
+        api: geminiModel.api,
+        provider: geminiModel.provider,
+        model: geminiModel.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      };
+    }
+
+    it("captures thought_signature from streaming tool_calls into the parsed block", async () => {
+      const output = makeAssistantOutput();
+      const chunks = [
+        {
+          id: "chatcmpl-x",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: geminiModel.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_abc",
+                    type: "function",
+                    function: { name: "exec", arguments: "" },
+                    extra_content: { google: { thought_signature: "SIG-OPAQUE-ABC==" } },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-x",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: geminiModel.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [{ index: 0, function: { arguments: '{"cmd":"ls"}' } }],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls" as const,
+            },
+          ],
+        },
+      ] as const;
+      async function* gen() {
+        for (const c of chunks) {
+          yield c as never;
+        }
+      }
+      await __testing.processOpenAICompletionsStream(gen(), output, geminiModel, {
+        push: () => {},
+      });
+      const block = output.content[0] as Record<string, unknown>;
+      expect(block.type).toBe("toolCall");
+      expect(block.id).toBe("call_abc");
+      expect(block.thoughtSignature).toBe("SIG-OPAQUE-ABC==");
+    });
+
+    it("re-emits thought_signature on outgoing tool_calls when replaying same provider+model", () => {
+      const params = buildOpenAICompletionsParams(
+        geminiModel,
+        {
+          systemPrompt: "system",
+          messages: [
+            { role: "user", content: "hi" },
+            {
+              role: "assistant",
+              api: geminiModel.api,
+              provider: geminiModel.provider,
+              model: geminiModel.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse",
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_abc",
+                  name: "exec",
+                  arguments: { cmd: "ls" },
+                  thoughtSignature: "SIG-OPAQUE-ABC==",
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call_abc",
+              toolName: "exec",
+              content: [{ type: "text", text: "ok" }],
+              isError: false,
+            },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as { messages: Array<Record<string, unknown>> };
+
+      const assistant = params.messages.find((m) => m.role === "assistant") as {
+        tool_calls?: Array<{
+          id?: string;
+          extra_content?: { google?: { thought_signature?: string } };
+        }>;
+      };
+      expect(assistant?.tool_calls?.[0]?.id).toBe("call_abc");
+      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
+        "SIG-OPAQUE-ABC==",
+      );
+    });
+
+    it("does not replay thought_signature across a different provider/model", () => {
+      const params = buildOpenAICompletionsParams(
+        { ...geminiModel, provider: "openai", id: "gpt-5.4" } as Model<"openai-completions">,
+        {
+          systemPrompt: "system",
+          messages: [
+            {
+              role: "assistant",
+              api: geminiModel.api,
+              provider: geminiModel.provider,
+              model: geminiModel.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse",
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_abc",
+                  name: "exec",
+                  arguments: { cmd: "ls" },
+                  thoughtSignature: "SIG-OPAQUE-ABC==",
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call_abc",
+              toolName: "exec",
+              content: [{ type: "text", text: "ok" }],
+              isError: false,
+            },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as { messages: Array<Record<string, unknown>> };
+
+      const assistant = params.messages.find((m) => m.role === "assistant") as {
+        tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }>;
+      };
+      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBeUndefined();
+    });
+
+    it("emits no thought_signature when none was captured", () => {
+      const params = buildOpenAICompletionsParams(
+        geminiModel,
+        {
+          systemPrompt: "system",
+          messages: [
+            {
+              role: "assistant",
+              api: geminiModel.api,
+              provider: geminiModel.provider,
+              model: geminiModel.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse",
+              timestamp: 1,
+              content: [
+                { type: "toolCall", id: "call_xyz", name: "exec", arguments: { cmd: "ls" } },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call_xyz",
+              toolName: "exec",
+              content: [{ type: "text", text: "ok" }],
+              isError: false,
+            },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as { messages: Array<Record<string, unknown>> };
+      const assistant = params.messages.find((m) => m.role === "assistant") as {
+        tool_calls?: Array<{
+          function?: Record<string, unknown>;
+          extra_content?: Record<string, unknown>;
+        }>;
+      };
+      expect(assistant?.tool_calls?.[0]?.function).toBeDefined();
+      expect(assistant?.tool_calls?.[0]?.extra_content).toBeUndefined();
+    });
+  });
+
   it("resets stopReason to stop when finish_reason is tool_calls but tool_calls array is empty", async () => {
     const model = {
       id: "nemotron-3-super",
