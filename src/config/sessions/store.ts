@@ -379,24 +379,26 @@ async function saveSessionStoreUnlocked(
       // Rotate the on-disk file if it exceeds the size threshold.
       await rotateSessionFile(storePath, maintenance.rotateBytes);
 
-      // Rotate the active session's transcript if it exceeds the size threshold.
-      // Only check the active transcript on the hot path (per-write) to avoid
-      // an expensive full-directory walk. Use `rotateTranscriptFiles` (full walk)
-      // in CLI/cron scenarios instead.
+      // Rotate oversized transcript files.
       const activeSessionKey = opts?.activeSessionKey?.trim();
-      if (
-        activeSessionKey &&
-        maintenance.transcriptRotateBytes != null &&
-        maintenance.transcriptRotateBytes > 0
-      ) {
-        const activeEntry = store[activeSessionKey];
-        if (activeEntry?.sessionId) {
-          const transcriptPath = resolveSessionFilePath(
-            activeEntry.sessionId,
-            activeEntry,
-            resolveSessionFilePathOptions({ storePath }),
-          );
-          await rotateTranscriptFile({ transcriptPath, maintenance });
+      if (maintenance.transcriptRotateBytes != null && maintenance.transcriptRotateBytes > 0) {
+        if (activeSessionKey) {
+          // Hot path (per-write): only check the active transcript to avoid an
+          // expensive full-directory walk on every save.
+          const activeEntry = store[activeSessionKey];
+          if (activeEntry?.sessionId) {
+            const transcriptPath = resolveSessionFilePath(
+              activeEntry.sessionId,
+              activeEntry,
+              resolveSessionFilePathOptions({ storePath }),
+            );
+            await rotateTranscriptFile({ transcriptPath, maintenance });
+          }
+        } else {
+          // Bulk path (maintenance/cleanup without an active session): scan the
+          // full sessions directory so pre-existing oversized transcripts that
+          // were never rotated on the hot path get cleaned up.
+          await rotateTranscriptFiles({ storePath, maintenance });
         }
       }
 
