@@ -438,11 +438,20 @@ function walkSchedulableJobs(
   return changed;
 }
 
-function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob; nowMs: number }) {
+function recomputeJobNextRunAtMs(params: {
+  state: CronServiceState;
+  job: CronJob;
+  nowMs: number;
+  suppressMissingNextRunScheduleError?: boolean;
+  preserveScheduleErrorCount?: boolean;
+}) {
   let changed = false;
   try {
     let newNext = computeJobNextRunAtMs(params.job, params.nowMs);
     if (params.job.schedule.kind === "cron" && newNext === undefined) {
+      if (params.suppressMissingNextRunScheduleError) {
+        return changed;
+      }
       return recordScheduleComputeError({
         state: params.state,
         job: params.job,
@@ -474,7 +483,7 @@ function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob
       changed = true;
     }
     // Clear schedule error count on successful computation.
-    if (params.job.state.scheduleErrorCount) {
+    if (params.job.state.scheduleErrorCount && !params.preserveScheduleErrorCount) {
       params.job.state.scheduleErrorCount = undefined;
       changed = true;
     }
@@ -515,7 +524,8 @@ export function recomputeNextRunsForMaintenance(
   opts?: {
     recomputeExpired?: boolean;
     nowMs?: number;
-    skipMissingNextRunJobIds?: ReadonlySet<string>;
+    suppressMissingNextRunScheduleErrorJobIds?: ReadonlySet<string>;
+    preserveScheduleErrorCountJobIds?: ReadonlySet<string>;
   },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
@@ -524,10 +534,17 @@ export function recomputeNextRunsForMaintenance(
     ({ job, nowMs: now }) => {
       let changed = false;
       if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
-        if (opts?.skipMissingNextRunJobIds?.has(job.id)) {
-          return changed;
-        }
-        if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
+        if (
+          recomputeJobNextRunAtMs({
+            state,
+            job,
+            nowMs: now,
+            suppressMissingNextRunScheduleError:
+              opts?.suppressMissingNextRunScheduleErrorJobIds?.has(job.id) ?? false,
+            preserveScheduleErrorCount:
+              opts?.preserveScheduleErrorCountJobIds?.has(job.id) ?? false,
+          })
+        ) {
           changed = true;
         }
       } else if (

@@ -864,7 +864,8 @@ export async function onTimer(state: CronServiceState) {
         // those jobs (advancing nextRunAtMs without execution), causing
         // daily cron schedules to jump 48 h instead of 24 h (#17852).
         recomputeNextRunsForMaintenance(state, {
-          skipMissingNextRunJobIds: scheduleComputeFailedJobIds,
+          suppressMissingNextRunScheduleErrorJobIds: scheduleComputeFailedJobIds,
+          preserveScheduleErrorCountJobIds: scheduleComputeFailedJobIds,
         });
         await persist(state);
       });
