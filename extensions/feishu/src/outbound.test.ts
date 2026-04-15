@@ -117,6 +117,34 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     }
   });
 
+  it("passes replyInThread for local-image auto-send when threadId is used as reply target", async () => {
+    const { dir, file } = await createTmpImage();
+    try {
+      await sendText({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: file,
+        replyToId: " ",
+        threadId: "om_thread_local_image",
+        accountId: "main",
+        mediaLocalRoots: [dir],
+      });
+
+      expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "chat_1",
+          mediaUrl: file,
+          replyToMessageId: "om_thread_local_image",
+          replyInThread: true,
+          accountId: "main",
+          mediaLocalRoots: [dir],
+        }),
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps non-path text on the text-send path", async () => {
     await sendText({
       cfg: emptyConfig,
