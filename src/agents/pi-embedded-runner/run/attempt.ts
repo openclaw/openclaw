@@ -29,6 +29,7 @@ import {
   resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
+import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
@@ -86,7 +87,11 @@ import {
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
-import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
+import {
+  createClientToolNameConflictError,
+  findClientToolNameConflicts,
+  toClientToolDefinitions,
+} from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
@@ -962,6 +967,37 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
         agentId: sessionAgentId,
       });
+      // Exact raw names of every tool registered for this run, including
+      // bundled/plugin tools. Used as the raw-name set for the trusted local
+      // MEDIA: passthrough gate: a normalized alias is not sufficient — the
+      // emitted tool name must match an exact registration of this run.
+      const builtinToolNames = new Set(
+        effectiveTools.flatMap((tool) => {
+          const name = (tool.name ?? "").trim();
+          return name ? [name] : [];
+        }),
+      );
+      // Admission-time conflict check only against non-plugin core tools, to
+      // preserve prior behavior where client tools may coexist with unrelated
+      // plugin tool names. MEDIA passthrough is still gated by the raw-name
+      // set above, so a client tool that normalize-collides with a plugin
+      // tool cannot inherit the plugin's local-media trust.
+      const coreBuiltinToolNames = new Set(
+        effectiveTools.flatMap((tool) => {
+          const name = (tool.name ?? "").trim();
+          if (!name || getPluginToolMeta(tool)) {
+            return [];
+          }
+          return [name];
+        }),
+      );
+      const clientToolNameConflicts = findClientToolNameConflicts({
+        tools: clientTools ?? [],
+        existingToolNames: coreBuiltinToolNames,
+      });
+      if (clientToolNameConflicts.length > 0) {
+        throw createClientToolNameConflictError(clientToolNameConflicts);
+      }
       const clientToolDefs = clientTools
         ? toClientToolDefinitions(
             clientTools,
@@ -1529,6 +1565,7 @@ export async function runEmbeddedAttempt(
           sessionKey: sandboxSessionKey,
           sessionId: params.sessionId,
           agentId: sessionAgentId,
+          builtinToolNames,
           internalEvents: params.internalEvents,
         }),
       );
