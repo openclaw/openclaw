@@ -2018,3 +2018,224 @@ describe("openai transport stream", () => {
     ]);
   });
 });
+
+describe("Mistral reasoning_content object/array handling (#67192)", () => {
+  // Shared model fixture for Mistral completions
+  const mistralModel = {
+    id: "mistral-small-latest",
+    provider: "mistral",
+    api: "openai-completions" as const,
+    baseUrl: "https://api.mistral.ai/v1",
+    reasoning: true,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 16384,
+  };
+
+  function makeOutput() {
+    return {
+      role: "assistant" as const,
+      content: [],
+      api: mistralModel.api,
+      provider: mistralModel.provider,
+      model: mistralModel.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+  }
+
+  it("extracts reasoning from reasoning_content array of block objects", async () => {
+    const output = makeOutput();
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "cmpl-mistral-array",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_content: [
+                { type: "thinking", content: "Let me think about this." },
+                { type: "thinking", content: " More reasoning." },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "cmpl-mistral-text",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: { content: "Here is the answer." },
+            logprobs: null,
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ];
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, mistralModel, stream);
+
+    expect(output.content).toMatchObject([
+      { type: "thinking", thinking: "Let me think about this. More reasoning." },
+      { type: "text", text: "Here is the answer." },
+    ]);
+  });
+
+  it("extracts reasoning from reasoning_content plain object (single block)", async () => {
+    const output = makeOutput();
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "cmpl-mistral-obj",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_content: { type: "thinking", content: "Single block reasoning." },
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "cmpl-mistral-text",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: { content: "Answer." },
+            logprobs: null,
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ];
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, mistralModel, stream);
+
+    expect(output.content).toMatchObject([
+      { type: "thinking", thinking: "Single block reasoning." },
+      { type: "text", text: "Answer." },
+    ]);
+  });
+
+  it("still handles reasoning_content as a plain string (backward compat)", async () => {
+    const output = makeOutput();
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "cmpl-mistral-str",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: { reasoning_content: "String reasoning." } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "cmpl-mistral-end",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: { content: "Done." },
+            logprobs: null,
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ];
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, mistralModel, stream);
+
+    expect(output.content).toMatchObject([
+      { type: "thinking", thinking: "String reasoning." },
+      { type: "text", text: "Done." },
+    ]);
+  });
+
+  it("ignores empty reasoning_content arrays without crashing", async () => {
+    const output = makeOutput();
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "cmpl-mistral-empty",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: { reasoning_content: [] } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "cmpl-mistral-end",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: { content: "Just text, no reasoning." },
+            logprobs: null,
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ];
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, mistralModel, stream);
+
+    // Should have only text, no thinking block
+    expect(output.content).toMatchObject([{ type: "text", text: "Just text, no reasoning." }]);
+    expect(output.content.some((b: { type: string }) => b.type === "thinking")).toBe(false);
+  });
+});

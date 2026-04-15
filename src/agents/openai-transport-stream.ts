@@ -1218,6 +1218,43 @@ function getCompletionsReasoningDelta(delta: Record<string, unknown>): {
     if (typeof value === "string" && value.length > 0) {
       return { signature: field, text: value };
     }
+    // Mistral returns reasoning_content as an array of block objects:
+    //   [{type: "thinking", content: "..."}, ...]
+    // or occasionally as a plain object {type: "thinking", content: "..."}
+    // rather than a flat string. Without this branch the value coerces to
+    // "[object Object]" when used in a template literal, corrupting the stream
+    // and crashing the channel. (#67192)
+    if (Array.isArray(value)) {
+      let text = "";
+      for (const item of value) {
+        if (item && typeof item === "object") {
+          const block = item as Record<string, unknown>;
+          // Mistral block shapes: {type:"thinking",content:"..."} or {type:"text",text:"..."}
+          if (typeof block.content === "string" && block.content.length > 0) {
+            text += block.content;
+          } else if (typeof block.text === "string" && block.text.length > 0) {
+            text += block.text;
+          }
+        } else if (typeof item === "string" && item.length > 0) {
+          text += item;
+        }
+      }
+      if (text.length > 0) {
+        return { signature: field, text };
+      }
+    } else if (value !== null && value !== undefined && typeof value === "object") {
+      // Plain object block: {type: "thinking", content: "..."}
+      const block = value as Record<string, unknown>;
+      const text =
+        typeof block.content === "string"
+          ? block.content
+          : typeof block.text === "string"
+            ? block.text
+            : undefined;
+      if (text && text.length > 0) {
+        return { signature: field, text };
+      }
+    }
   }
   return null;
 }
