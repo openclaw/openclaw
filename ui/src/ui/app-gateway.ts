@@ -177,6 +177,27 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
   if (!defaults?.mainSessionKey) {
     return;
   }
+
+  // Detect if user has already selected a specific session (not an alias like "main").
+  // If normalization doesn't change the value, it's a user-selected session.
+  const normalizedSessionKey = normalizeSessionKeyForDefaults(host.sessionKey, defaults);
+  const isUserSelectedSession = normalizedSessionKey === host.sessionKey;
+
+  if (isUserSelectedSession) {
+    // User has selected a specific session; preserve their choice
+    // Only normalize lastActiveSessionKey, don't override current sessionKey
+    const resolvedLastActiveSessionKey = normalizeSessionKeyForDefaults(
+      host.settings.lastActiveSessionKey,
+      defaults,
+    );
+    if (resolvedLastActiveSessionKey !== host.settings.lastActiveSessionKey) {
+      applySettings(host as unknown as Parameters<typeof applySettings>[0], {
+        ...host.settings,
+        lastActiveSessionKey: resolvedLastActiveSessionKey,
+      });
+    }
+    return; // Keep user's session selection
+  }
   const resolvedSessionKey = normalizeSessionKeyForDefaults(host.sessionKey, defaults);
   const resolvedSettingsSessionKey = normalizeSessionKeyForDefaults(
     host.settings.sessionKey,
@@ -393,6 +414,17 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   }
 }
 
+function handleSessionMessageGatewayEvent(
+  host: GatewayHost,
+  payload: { sessionKey?: string } | undefined,
+) {
+  const sessionKey = payload?.sessionKey?.trim();
+  if (!sessionKey || sessionKey !== host.sessionKey) {
+    return;
+  }
+  void loadChatHistory(host as unknown as ChatState);
+}
+
 function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   host.eventLogBuffer = [
     { ts: Date.now(), event: evt.event, payload: evt.payload },
@@ -426,6 +458,11 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     const sideResultHost = host as GatewayHostWithSideResults;
     sideResultHost.chatSideResult = sideResult;
     sideResultHost.chatSideResultTerminalRuns?.add(sideResult.runId);
+    return;
+  }
+
+  if (evt.event === "session.message") {
+    handleSessionMessageGatewayEvent(host, evt.payload as { sessionKey?: string } | undefined);
     return;
   }
 

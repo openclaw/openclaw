@@ -4,7 +4,7 @@
   "description": "OpenClaw Microsoft Teams channel plugin",
   "type": "module",
   "dependencies": {
-    "@azure/identity": "^4.9.1",
+    "@azure/identity": "^4.13.1",
     "@microsoft/teams.api": "2.0.7",
     "@microsoft/teams.apps": "2.0.7",
     "@sinclair/typebox": "0.34.49",

@@ -61,6 +61,7 @@ async function runDirectiveStatus(
     model: "claude-opus-4-6",
     initialModelLabel: "anthropic/claude-opus-4-6",
     formatModelSwitchEvent: (label) => `Switched to ${label}`,
+    senderIsOwner: true,
     ...restOverrides,
   });
   return { text: result?.text, sessionEntry: effectiveSessionEntry };
@@ -256,5 +257,49 @@ describe("directive behavior", () => {
     expect(reset.sessionEntry.queueCap).toBeUndefined();
     expect(reset.sessionEntry.queueDrop).toBeUndefined();
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("shows current trace level and persists trace directives", async () => {
+    const { text: currentText } = await runDirectiveStatus("/trace", {
+      sessionEntry: { sessionId: "trace", updatedAt: Date.now(), traceLevel: "on" },
+    });
+    expect(currentText).toContain("Current trace level: on");
+
+    const enabled = await runDirectiveStatus("/trace on");
+    expect(enabled.text).toContain("Trace enabled.");
+    expect(enabled.text).toContain("may contain sensitive information");
+    expect(enabled.sessionEntry.traceLevel).toBe("on");
+
+    const disabled = await runDirectiveStatus("/trace off", {
+      sessionEntry: { sessionId: "trace", updatedAt: Date.now(), traceLevel: "on" },
+    });
+    expect(disabled.text).toContain("Trace disabled.");
+    expect(disabled.text).not.toContain("may contain sensitive information");
+    expect(disabled.sessionEntry.traceLevel).toBe("off");
+
+    const raw = await runDirectiveStatus("/trace raw");
+    expect(raw.text).toContain("Trace set to raw.");
+    expect(raw.text).toContain("may contain sensitive information");
+    expect(raw.sessionEntry.traceLevel).toBe("raw");
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks /trace for non-owners without delegated gateway scope", async () => {
+    const denied = await runDirectiveStatus("/trace raw", {
+      senderIsOwner: false,
+      gatewayClientScopes: ["operator.write"],
+    });
+    expect(denied.text).toContain("/trace is restricted to owners and gateway clients");
+    expect(denied.sessionEntry.traceLevel).toBeUndefined();
+  });
+
+  it("allows /trace for delegated gateway clients with operator.admin", async () => {
+    const allowed = await runDirectiveStatus("/trace on", {
+      senderIsOwner: false,
+      gatewayClientScopes: ["operator.admin"],
+    });
+    expect(allowed.text).toContain("Trace enabled.");
+    expect(allowed.text).toContain("may contain sensitive information");
+    expect(allowed.sessionEntry.traceLevel).toBe("on");
   });
 });

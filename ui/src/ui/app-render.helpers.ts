@@ -9,6 +9,7 @@ import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
 } from "./chat-model-select-state.ts";
+import { refreshSlashCommands } from "./chat/slash-commands.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "./controllers/agents.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
@@ -116,9 +117,11 @@ export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: bo
         }
         event.preventDefault();
         if (tab === "chat") {
-          const mainSessionKey = resolveSidebarChatSessionKey(state);
-          if (state.sessionKey !== mainSessionKey) {
+          if (!state.sessionKey) {
+            const mainSessionKey = resolveSidebarChatSessionKey(state);
             resetChatStateForSessionSwitch(state, mainSessionKey);
+          }
+          if (state.tab !== "chat") {
             void state.loadAssistantIdentity();
           }
         }
@@ -201,7 +204,13 @@ export function renderChatSessionSelect(state: AppViewState) {
                   group.options,
                   (entry) => entry.key,
                   (entry) =>
-                    html`<option value=${entry.key} title=${entry.title}>${entry.label}</option>`,
+                    html`<option
+                      value=${entry.key}
+                      title=${entry.title}
+                      ?selected=${entry.key === state.sessionKey}
+                    >
+                      ${entry.label}
+                    </option>`,
                 )}
               </optgroup>`,
           )}
@@ -473,7 +482,13 @@ export function renderChatMobileToggle(state: AppViewState) {
                   <optgroup label=${group.label}>
                     ${group.options.map(
                       (opt) => html`
-                        <option value=${opt.key} title=${opt.title}>${opt.label}</option>
+                        <option
+                          value=${opt.key}
+                          title=${opt.title}
+                          ?selected=${opt.key === state.sessionKey}
+                        >
+                          ${opt.label}
+                        </option>
                       `,
                     )}
                   </optgroup>
@@ -542,6 +557,10 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   resetChatStateForSessionSwitch(state, nextSessionKey);
   void state.loadAssistantIdentity();
   void refreshChatAvatar(state);
+  void refreshSlashCommands({
+    client: state.client,
+    agentId: parseAgentSessionKey(nextSessionKey)?.agentId,
+  });
   syncUrlWithSessionKey(
     state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
     nextSessionKey,
