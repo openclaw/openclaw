@@ -1,3 +1,13 @@
+## AI Agent (if applicable)
+
+- [ ] Mac Claude (`claude/mac-*`)
+- [ ] Sense Claude (`claude/sense-*`)
+- [ ] Mac Codex (`codex/*` from Mac)
+- [ ] Sense Codex (`codex/*` from Sense)
+- [ ] Human
+
+**If AI-authored:** What should the next agent (human or AI) know about this change?
+
 ## Summary
 
 Describe the problem and fix in 2–5 bullets:

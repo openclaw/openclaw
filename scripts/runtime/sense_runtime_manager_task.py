@@ -113,12 +113,13 @@ def main() -> int:
     completed = bridge.sanitize_runtime_result(task_type, completed)
     result = completed.get('result') if isinstance(completed, dict) else {}
     normalized = result if isinstance(result, dict) else {'result': result}
+    normalized['sense_job_id'] = str(submit_result['job_id'])
     normalized['task_payload'] = {
         'task': args.task,
         'input': args.input,
         'params': params,
     }
-    print(json.dumps(normalized, ensure_ascii=False, indent=2))
+    print(json.dumps(normalized, ensure_ascii=False))
     if isinstance(result, dict) and int(result.get('exit_code', 0)) != 0:
         return 1
     return 0
