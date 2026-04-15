@@ -19,6 +19,21 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "memoryV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ingest": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
       "dreaming": {
         "type": "object",
         "additionalProperties": false,

@@ -8,6 +8,7 @@ import {
   DEFAULT_MEMORY_FLUSH_PROMPT,
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
 } from "./src/flush-plan.js";
+import { registerMemoryV2Ingest } from "./src/memory-v2/ingest-wiring.js";
 import { registerBuiltInMemoryEmbeddingProviders } from "./src/memory/provider-adapters.js";
 import { buildPromptSection } from "./src/prompt-section.js";
 import { listMemoryCorePublicArtifacts } from "./src/public-artifacts.js";
@@ -30,6 +31,7 @@ export default definePluginEntry({
     registerBuiltInMemoryEmbeddingProviders(api);
     registerShortTermPromotionDreaming(api);
     registerDreamingCommand(api);
+    registerMemoryV2Ingest(api);
     api.registerMemoryCapability({
       promptBuilder: buildPromptSection,
       flushPlanResolver: buildMemoryFlushPlan,
