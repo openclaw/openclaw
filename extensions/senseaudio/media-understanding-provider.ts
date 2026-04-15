@@ -20,5 +20,6 @@ export const senseaudioMediaUnderstandingProvider: MediaUnderstandingProvider = 
   id: "senseaudio",
   capabilities: ["audio"],
   defaultModels: { audio: DEFAULT_SENSEAUDIO_AUDIO_MODEL },
+  autoPriority: { audio: 40 },
   transcribeAudio: transcribeSenseAudioAudio,
 };
