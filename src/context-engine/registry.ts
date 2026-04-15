@@ -10,7 +10,7 @@ import type { ContextEngine } from "./types.js";
  * without fragile workarounds.
  */
 export type ContextEngineFactoryContext = {
-  config: OpenClawConfig;
+  config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
 };
@@ -510,7 +510,7 @@ export async function resolveContextEngine(
   const isDefaultEngine = engineId === defaultEngineId;
 
   const factoryCtx: ContextEngineFactoryContext = {
-    config: config ?? ({} as OpenClawConfig),
+    config,
     agentDir: options?.agentDir,
     workspaceDir: options?.workspaceDir,
   };
