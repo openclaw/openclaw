@@ -10,7 +10,7 @@ import {
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
-import { resolveSecretInputString } from "../../config/types.secrets.js";
+import { isSecretRef } from "../../config/types.secrets.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
 import { PROVIDER_LABELS, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId, UsageWindow } from "../../infra/provider-usage.types.js";
@@ -209,19 +209,31 @@ function resolveConfiguredProviders(cfg: OpenClawConfig): {
   // and the auth.profiles scan apply the escape hatch consistently.
   const envBacked = new Set<string>();
   for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
-    if (!id || provider?.apiKey === undefined || provider.apiKey === null) {
+    const apiKey = provider?.apiKey;
+    if (!id || apiKey === undefined || apiKey === null) {
       continue;
     }
-    // `inspect` mode never throws; it tells us whether the SecretRef
-    // currently resolves to a real value. Only treat as env-backed when
-    // status is "available" — a configured-but-unset SecretRef should still
-    // flag as missing on the dashboard (that's a real broken config).
-    const resolved = resolveSecretInputString({
-      value: provider.apiKey,
-      path: `models.providers.${id}.apiKey`,
-      mode: "inspect",
-    });
-    if (resolved.status === "available") {
+    // Treat as env-backed when the credential is currently resolvable:
+    // - inline string literal → always resolvable (satisfies auth today)
+    // - env SecretRef → check process.env for the referenced id (the only
+    //   source we can cheaply verify synchronously on a dashboard read)
+    // - file/exec SecretRef → conservatively treat as env-backed; we can't
+    //   read files or run commands here without making this a heavy async
+    //   path, and the alternative is crying wolf on valid configs
+    // A SecretRef pointing at an unset env var falls through to the normal
+    // "missing" synthesis so the dashboard surfaces the broken config.
+    let resolvable = false;
+    if (typeof apiKey === "string" && apiKey.length > 0) {
+      resolvable = true;
+    } else if (isSecretRef(apiKey)) {
+      if (apiKey.source === "env") {
+        const envValue = process.env[apiKey.id];
+        resolvable = typeof envValue === "string" && envValue.length > 0;
+      } else {
+        resolvable = true;
+      }
+    }
+    if (resolvable) {
       envBacked.add(normalizeProviderId(id));
     }
   }

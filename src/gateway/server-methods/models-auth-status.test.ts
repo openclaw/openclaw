@@ -315,12 +315,11 @@ describe("models.authStatus", () => {
     expect(call?.[0]?.providers).toBeUndefined();
   });
 
-  it("still flags provider as missing when apiKey SecretRef is unresolvable", async () => {
-    // Config declares an apiKey SecretRef but the referenced env var isn't
-    // set. Previously we treated any non-null apiKey as env-backed, which
-    // masked this broken config. Now the inspect-mode resolver returns
-    // `configured_unavailable` and we fall through to the normal missing
-    // synthesis so the dashboard surfaces it.
+  it("still flags provider as missing when apiKey env SecretRef points at an unset env var", async () => {
+    // Config declares an env SecretRef but the referenced env var isn't
+    // set. We read process.env directly for env-source SecretRefs and fall
+    // through to the normal missing synthesis so the dashboard surfaces
+    // the broken config instead of masking it.
     delete process.env.MODELS_AUTH_STATUS_TEST_MISSING_KEY;
     mocks.loadConfig.mockReturnValue({
       models: {
@@ -341,6 +340,33 @@ describe("models.authStatus", () => {
       | [{ providers?: string[] }]
       | undefined;
     expect(call?.[0]?.providers).toEqual(["openai-codex"]);
+  });
+
+  it("env SecretRef pointing at a set env var is treated as env-backed", async () => {
+    process.env.MODELS_AUTH_STATUS_TEST_SET_KEY = "sk-real-value";
+    mocks.loadConfig.mockReturnValue({
+      models: {
+        providers: {
+          "openai-codex": {
+            auth: "oauth",
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "MODELS_AUTH_STATUS_TEST_SET_KEY",
+            },
+          },
+        },
+      },
+    });
+    try {
+      await handler(createOptions());
+      const call = mocks.buildAuthHealthSummary.mock.calls[0] as unknown as
+        | [{ providers?: string[] }]
+        | undefined;
+      expect(call?.[0]?.providers).toBeUndefined();
+    } finally {
+      delete process.env.MODELS_AUTH_STATUS_TEST_SET_KEY;
+    }
   });
 
   it("env-backed escape hatch also applies to auth.profiles entries", async () => {
