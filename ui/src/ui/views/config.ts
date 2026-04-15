@@ -711,8 +711,8 @@ export function renderConfig(props: ConfigProps) {
     unsupportedPaths: scopeUnsupportedPaths(rawAnalysis.unsupportedPaths, { include, exclude }),
   };
   const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
-  const rawAvailable = props.rawAvailable ?? true;
-  const formMode = showModeToggle && rawAvailable ? props.formMode : "form";
+  const rawEditable = props.rawAvailable ?? true;
+  const formMode = showModeToggle ? props.formMode : "form";
   const envSensitiveVisible = cvs.envRevealed;
   const requestUpdate = props.onRequestUpdate ?? (() => props.onRawChange(props.raw));
 
@@ -762,20 +762,23 @@ export function renderConfig(props: ConfigProps) {
 
   // Compute diff for showing changes (works for both form and raw modes)
   const diff = formMode === "form" ? computeDiff(props.originalValue, props.formValue) : [];
-  const hasRawChanges = formMode === "raw" && props.raw !== props.originalRaw;
+  const hasRawChanges = rawEditable && formMode === "raw" && props.raw !== props.originalRaw;
   const hasChanges = formMode === "form" ? diff.length > 0 : hasRawChanges;
 
   // Save/apply buttons require actual changes to be enabled.
   // Note: formUnsafe warns about unsupported schema paths but shouldn't block saving.
   const canSaveForm = Boolean(props.formValue) && !props.loading && Boolean(analysis.schema);
   const canSave =
-    props.connected && !props.saving && hasChanges && (formMode === "raw" ? true : canSaveForm);
+    props.connected &&
+    !props.saving &&
+    hasChanges &&
+    (formMode === "raw" ? rawEditable : canSaveForm);
   const canApply =
     props.connected &&
     !props.applying &&
     !props.updating &&
     hasChanges &&
-    (formMode === "raw" ? true : canSaveForm);
+    (formMode === "raw" ? rawEditable : canSaveForm);
   const canUpdate = props.connected && !props.applying && !props.updating;
 
   const showAppearanceOnRoot =
@@ -802,10 +805,9 @@ export function renderConfig(props: ConfigProps) {
                     </button>
                     <button
                       class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
-                      ?disabled=${!rawAvailable}
-                      title=${rawAvailable
+                      title=${rawEditable
                         ? "Edit raw JSON/JSON5 config"
-                        : "Raw mode unavailable for this snapshot"}
+                        : "Raw view is read-only for this snapshot"}
                       @click=${() => props.onFormModeChange("raw")}
                     >
                       Raw
@@ -824,10 +826,10 @@ export function renderConfig(props: ConfigProps) {
               : html` <span class="config-status muted">No changes</span> `}
           </div>
           <div class="config-actions__right">
-            ${!rawAvailable
+            ${!rawEditable && formMode === "raw"
               ? html`
                   <span class="config-status muted"
-                    >Raw mode disabled (snapshot cannot safely round-trip raw text).</span
+                    >Raw view is read-only (snapshot cannot safely round-trip raw text).</span
                   >
                 `
               : nothing}
@@ -1057,7 +1059,7 @@ export function renderConfig(props: ConfigProps) {
                         schema: analysis.schema,
                         uiHints: props.uiHints,
                         value: props.formValue,
-                        rawAvailable,
+                        rawAvailable: rawEditable,
                         disabled: props.loading || !props.formValue,
                         unsupportedPaths: analysis.unsupportedPaths,
                         onPatch: props.onFormPatch,
@@ -1115,7 +1117,7 @@ export function renderConfig(props: ConfigProps) {
                             `
                           : nothing}
                       </span>
-                      ${blurred
+                      ${blurred && rawEditable
                         ? html`
                             <div class="callout info" style="margin-top: 12px">
                               ${sensitiveCount} sensitive value${sensitiveCount === 1 ? "" : "s"}
@@ -1126,9 +1128,13 @@ export function renderConfig(props: ConfigProps) {
                             <textarea
                               placeholder="Raw config (JSON/JSON5)"
                               .value=${props.raw}
-                              @input=${(e: Event) => {
-                                props.onRawChange((e.target as HTMLTextAreaElement).value);
-                              }}
+                              ?readonly=${!rawEditable}
+                              title=${rawEditable ? "" : "Raw view is read-only for this snapshot"}
+                              @input=${rawEditable
+                                ? (e: Event) => {
+                                    props.onRawChange((e.target as HTMLTextAreaElement).value);
+                                  }
+                                : null}
                             ></textarea>
                           `}
                     </div>

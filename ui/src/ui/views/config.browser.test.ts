@@ -207,7 +207,7 @@ describe("config view", () => {
     expect(onFormModeChange).toHaveBeenCalledWith("raw");
   });
 
-  it("forces Form mode and disables Raw mode when raw text is unavailable", () => {
+  it("allows Raw view but keeps it read-only when raw text is unavailable", () => {
     const onFormModeChange = vi.fn();
     const { container } = renderConfigView({
       formMode: "raw",
@@ -234,15 +234,17 @@ describe("config view", () => {
     const rawButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === "Raw",
     );
-    expect(formButton?.classList.contains("active")).toBe(true);
-    expect(rawButton?.disabled).toBe(true);
+    expect(formButton?.classList.contains("active")).toBe(false);
+    expect(rawButton?.disabled).toBe(false);
     expect(normalizedText(container)).toContain(
-      "Raw mode disabled (snapshot cannot safely round-trip raw text).",
+      "Raw view is read-only (snapshot cannot safely round-trip raw text).",
     );
-    expect(container.querySelector(".config-raw-field")).toBeNull();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    expect(textarea?.readOnly).toBe(true);
 
     rawButton?.click();
-    expect(onFormModeChange).not.toHaveBeenCalled();
+    expect(onFormModeChange).toHaveBeenCalledWith("raw");
   });
 
   it("switches sections from the sidebar", () => {
@@ -450,7 +452,7 @@ describe("config view", () => {
   it("uses a file-edit placeholder for structured SecretRefs when raw mode is unavailable", () => {
     const { container } = renderConfigView({
       rawAvailable: false,
-      formMode: "raw",
+      formMode: "form",
       schema: {
         type: "object",
         properties: {
@@ -495,7 +497,7 @@ describe("config view", () => {
     const onFormPatch = vi.fn();
     const { container } = renderConfigView({
       rawAvailable: false,
-      formMode: "raw",
+      formMode: "form",
       schema: {
         type: "object",
         properties: {

@@ -617,6 +617,7 @@ export function renderApp(state: AppViewState) {
     gatewayUrl: state.settings.gatewayUrl,
     assistantName: state.assistantName,
     configPath: state.configSnapshot?.path ?? null,
+    // Raw view is always available; this flag indicates whether raw text is editable.
     rawAvailable: typeof state.configSnapshot?.raw === "string",
   } satisfies Omit<
     ConfigProps,
