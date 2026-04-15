@@ -7,7 +7,6 @@ import {
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import {
   mergeModelProviderRequestOverrides,
-  mergeProviderRequestOverrides,
   sanitizeConfiguredModelProviderRequest,
   sanitizeConfiguredProviderRequest,
 } from "../agents/provider-request-config.js";
