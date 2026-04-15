@@ -333,6 +333,31 @@ describe("loadWebMedia", () => {
   );
 
   it.each([
+    { label: "CSV", fileName: "alternating-high.csv" },
+    { label: "Markdown", fileName: "alternating-high.md" },
+  ])("rejects alternating ASCII/high-byte data disguised as %s", async ({ fileName }) => {
+    const fakeTextFile = path.join(fixtureRoot, fileName);
+    // Alternating 0x41 ('A') and 0xFF — exactly 50% ASCII, 50% high bytes.
+    // With the old 50% threshold hasSingleByteTextShape would accept this;
+    // the tightened 70%/30% thresholds must reject it.
+    const mixed = Buffer.alloc(9000);
+    for (let i = 0; i < mixed.length; i += 1) {
+      mixed[i] = i % 2 === 0 ? 0x41 : 0xff;
+    }
+    await fs.writeFile(fakeTextFile, mixed);
+    await expect(
+      loadWebMedia(fakeTextFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
+  it.each([
     { label: "CSV", fileName: "high-bytes.csv" },
     { label: "Markdown", fileName: "high-bytes.md" },
   ])("rejects high-byte opaque data disguised as %s", async ({ fileName }) => {

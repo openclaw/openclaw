@@ -164,7 +164,8 @@ function hasSingleByteTextShape(buffer: Buffer): boolean {
     }
   }
   const total = buffer.length;
-  return control === 0 && asciiText / total >= 0.5;
+  const highBytes = total - asciiText - control;
+  return control === 0 && asciiText / total >= 0.7 && highBytes / total <= 0.3;
 }
 
 function decodeHostReadText(buffer: Buffer): string | undefined {
