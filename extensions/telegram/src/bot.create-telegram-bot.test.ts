@@ -302,6 +302,38 @@ describe("createTelegramBot", () => {
     expect(harness.sequentializeKey?.(ctx)).toBe(getTelegramSequentialKey(ctx));
   });
 
+  it.each(["coalesce", "followups", "follow-ups"] as const)(
+    "keeps busy Telegram messages on the ordinary topic lane when %s overrides a lower-precedence immediate mode",
+    (mode) => {
+      loadConfig.mockReturnValue({
+        messages: {
+          queue: {
+            mode: "interrupt",
+            byChannel: {
+              telegram: mode,
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      });
+
+      createTelegramBot({ token: "tok" });
+      const ctx = makeForumGroupMessageCtx({
+        threadId: 99,
+        text: "follow up please",
+      }) as unknown as TelegramSequentialKeyContext;
+      isReplyRunActiveForSessionKeySpy.mockReturnValue(true);
+
+      expect(harness.sequentializeKey?.(ctx)).toBe(getTelegramSequentialKey(ctx));
+    },
+  );
+
   it("does not reroute whole-message control commands through the busy session lane", () => {
     loadConfig.mockReturnValue({
       messages: {

@@ -39,11 +39,20 @@ function normalizeQueueMode(value: unknown): QueueMode | undefined {
   if (!normalized) {
     return undefined;
   }
-  if (normalized === "queue" || normalized === "queued" || normalized === "steering") {
+  if (normalized === "queue" || normalized === "queued") {
     return "steer";
   }
-  if (normalized === "interrupts" || normalized === "abort") {
+  if (normalized === "interrupt" || normalized === "interrupts" || normalized === "abort") {
     return "interrupt";
+  }
+  if (normalized === "steer" || normalized === "steering") {
+    return "steer";
+  }
+  if (normalized === "followup" || normalized === "followups" || normalized === "follow-ups") {
+    return "followup";
+  }
+  if (normalized === "collect" || normalized === "coalesce") {
+    return "collect";
   }
   if (
     normalized === "steer+backlog" ||
@@ -51,14 +60,6 @@ function normalizeQueueMode(value: unknown): QueueMode | undefined {
     normalized === "steer_backlog"
   ) {
     return "steer-backlog";
-  }
-  if (
-    normalized === "collect" ||
-    normalized === "followup" ||
-    normalized === "interrupt" ||
-    normalized === "steer"
-  ) {
-    return normalized;
   }
   return undefined;
 }
