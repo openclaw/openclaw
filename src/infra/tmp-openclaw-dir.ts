@@ -108,7 +108,18 @@ export function resolvePreferredOpenClawTmpDir(
       if (typeof st.mode !== "number" || (st.mode & 0o022) === 0) {
         return false;
       }
-      chmodSync(candidatePath, 0o700);
+      try {
+        chmodSync(candidatePath, 0o700);
+      } catch (chmodErr) {
+        if (
+          isNodeErrorWithCode(chmodErr, "EPERM") ||
+          isNodeErrorWithCode(chmodErr, "EACCES") ||
+          isNodeErrorWithCode(chmodErr, "ENOENT")
+        ) {
+          return resolveDirState(candidatePath) === "available";
+        }
+        throw chmodErr;
+      }
       warn(`[openclaw] tightened permissions on temp dir: ${candidatePath}`);
       return resolveDirState(candidatePath) === "available";
     } catch {

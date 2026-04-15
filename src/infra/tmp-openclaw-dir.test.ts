@@ -394,6 +394,38 @@ describe("resolvePreferredOpenClawTmpDir", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("tightened permissions on temp dir"));
   });
 
+  it("succeeds when another process already tightened permissions while we attempted repair", () => {
+    const chmodSync = vi.fn((target: string, mode: number) => {
+      if (target === POSIX_OPENCLAW_TMP_DIR && mode === 0o700) {
+        throw nodeErrorWithCode("EPERM");
+      }
+    });
+    let callCount = 0;
+    const warn = vi.fn();
+
+    const lstatSync = vi.fn<NonNullable<TmpDirOptions["lstatSync"]>>((target: string) => {
+      callCount++;
+      if (target === POSIX_OPENCLAW_TMP_DIR) {
+        if (callCount <= 2) {
+          return makeDirStat({ mode: 0o40777 });
+        }
+        return makeDirStat({ mode: 0o40700 });
+      }
+      return secureDirStat(501);
+    });
+
+    const resolved = resolvePreferredOpenClawTmpDir({
+      accessSync: vi.fn(),
+      lstatSync,
+      chmodSync,
+      getuid: vi.fn(() => 501),
+      tmpdir: vi.fn(() => "/var/fallback"),
+      warn,
+    });
+
+    expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
+  });
+
   it("throws when the fallback directory cannot be created", () => {
     expect(() =>
       resolvePreferredOpenClawTmpDir({
