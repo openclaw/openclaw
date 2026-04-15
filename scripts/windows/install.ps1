@@ -88,11 +88,13 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
 
 # 3. Installation
 Write-Step "Installing files to $InstallPath..."
-New-Item -ItemType Directory -Force -Path $InstallPath | Out-Null
-$srcExe = Get-ChildItem -Path "OpenClaw_*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($srcExe) {
-    Copy-Item $srcExe.FullName -Destination (Join-Path $InstallPath "OpenClaw.exe") -Force
+$srcExe = Get-ChildItem -Path (Join-Path $PSScriptRoot "OpenClaw_*.exe") -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $srcExe) {
+    Write-Host "ERROR: OpenClaw executable (OpenClaw_*.exe) not found in $PSScriptRoot." -ForegroundColor Red
+    exit 1
 }
+New-Item -ItemType Directory -Force -Path $InstallPath | Out-Null
+Copy-Item $srcExe.FullName -Destination (Join-Path $InstallPath "OpenClaw.exe") -Force
 
 # Persistent Uninstaller
 $UninstallerTarget = Join-Path $InstallPath "uninstall.ps1"
