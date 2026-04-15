@@ -421,6 +421,8 @@ describe("sanitizeUserFacingText", () => {
   it("strips tool-call tags from ordinary indented prose", () => {
     const text = ["Before", '    <tool_call>{"name":"find"}</tool_call>', "After"].join("\n");
     expect(sanitizeUserFacingText(text)).toBe(["Before", "    ", "After"].join("\n"));
+    expect(sanitizeUserFacingText('    <tool_call>{"name":"find"}</tool_call>')).toBe("");
+    expect(sanitizeUserFacingText('\t<tool_call>{"name":"find"}</tool_call>')).toBe("");
     const afterColon = ["Before:", '    <tool_call>{"name":"find"}</tool_call>', "After"].join(
       "\n",
     );

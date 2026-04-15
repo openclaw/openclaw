@@ -434,6 +434,8 @@ describe("stripAssistantInternalScaffolding", () => {
         ["Before", '    <tool_call>{"name":"find"}</tool_call>', "After"].join("\n"),
         ["Before", "    ", "After"].join("\n"),
       );
+      expectVisibleText('    <tool_call>{"name":"find"}</tool_call>', "");
+      expectVisibleText('\t<tool_call>{"name":"find"}</tool_call>', "");
       expectVisibleText(
         ["Before:", '    <tool_call>{"name":"find"}</tool_call>', "After"].join("\n"),
         ["Before:", "    ", "After"].join("\n"),

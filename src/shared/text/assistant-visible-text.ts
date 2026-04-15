@@ -248,7 +248,7 @@ function isOnIndentedMarkdownCodeLine(text: string, index: number): boolean {
   }
 
   if (blockStart === 0) {
-    return true;
+    return false;
   }
 
   const previousLineEnd = blockStart - 1;
