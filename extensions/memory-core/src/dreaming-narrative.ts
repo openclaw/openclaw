@@ -704,7 +704,11 @@ async function normalizeSessionEntryPathForComparison(params: {
   });
 }
 
-async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
+async function scrubDreamingNarrativeArtifacts(params: {
+  logger: Logger;
+  /** Maximum age in ms for dreaming session entries. Entries older than this are pruned regardless of file existence. */
+  maxAgeMs?: number;
+}): Promise<void> {
   const cfg = loadConfig();
   const agentsDir = path.join(resolveStateDir(), "agents");
   let agentEntries: Dirent[] = [];
@@ -736,6 +740,7 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
 
     const referencedSessionFiles = new Set<string>();
     let needsStoreUpdate = false;
+    const maxAgeCutoff = params.maxAgeMs != null ? Date.now() - params.maxAgeMs : 0;
     for (const [key, entry] of Object.entries(store)) {
       const normalizedSessionFile = await normalizeSessionEntryPathForComparison({
         sessionsDir,
@@ -747,7 +752,18 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       if (!isDreamingSessionStoreKey(key)) {
         continue;
       }
-      if (!normalizedSessionFile || !(await safePathExists(normalizedSessionFile))) {
+      // Prune if: no file, phantom file, OR maxAge exceeded.
+      const updatedAt = (entry as { updatedAt?: number })?.updatedAt;
+      const exceededMaxAge =
+        maxAgeCutoff > 0 &&
+        updatedAt != null &&
+        Number.isFinite(updatedAt) &&
+        updatedAt < maxAgeCutoff;
+      if (
+        !normalizedSessionFile ||
+        !(await safePathExists(normalizedSessionFile)) ||
+        exceededMaxAge
+      ) {
         needsStoreUpdate = true;
       }
     }
@@ -767,7 +783,17 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
           if (!isDreamingSessionStoreKey(key)) {
             continue;
           }
-          if (!normalizedSessionFile || !(await safePathExists(normalizedSessionFile))) {
+          const updatedAt = (entry as { updatedAt?: number })?.updatedAt;
+          const exceededMaxAge =
+            maxAgeCutoff > 0 &&
+            updatedAt != null &&
+            Number.isFinite(updatedAt) &&
+            updatedAt < maxAgeCutoff;
+          if (
+            !normalizedSessionFile ||
+            !(await safePathExists(normalizedSessionFile)) ||
+            exceededMaxAge
+          ) {
             delete lockedStore[key];
             prunedForAgent += 1;
           }
@@ -825,7 +851,7 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
   }
 
   if (prunedEntries > 0 || archivedOrphans > 0) {
-    logger.info(
+    params.logger.info(
       `memory-core: dreaming cleanup scrubbed ${prunedEntries} stale session entr${prunedEntries === 1 ? "y" : "ies"} and archived ${archivedOrphans} orphan transcript${archivedOrphans === 1 ? "" : "s"}.`,
     );
   }
@@ -838,6 +864,8 @@ export async function generateAndAppendDreamNarrative(params: {
   nowMs?: number;
   timezone?: string;
   logger: Logger;
+  /** Maximum age in ms for dreaming session entries managed by this run. Defaults to no limit. */
+  maxAgeMs?: number;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
 
@@ -937,7 +965,10 @@ export async function generateAndAppendDreamNarrative(params: {
       );
     }
 
-    await scrubDreamingNarrativeArtifacts(params.logger).catch((scrubErr: unknown) => {
+    await scrubDreamingNarrativeArtifacts({
+      logger: params.logger,
+      maxAgeMs: params.maxAgeMs,
+    }).catch((scrubErr: unknown) => {
       params.logger.warn(
         `memory-core: dreaming cleanup scrub failed for ${params.data.phase} phase: ${formatErrorMessage(scrubErr)}`,
       );

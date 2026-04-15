@@ -624,6 +624,10 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
           snippets: candidates.map((c) => c.snippet).filter(Boolean),
           promotions: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
         };
+        const maxAgeMs =
+          params.config.maxAgeDays != null
+            ? params.config.maxAgeDays * 24 * 60 * 60 * 1000
+            : undefined;
         await generateAndAppendDreamNarrative({
           subagent: params.subagent,
           workspaceDir,
@@ -631,6 +635,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
           nowMs: sweepNowMs,
           timezone: params.config.timezone,
           logger: params.logger,
+          maxAgeMs,
         });
       }
     } catch (err) {
