@@ -830,8 +830,27 @@ export class OpenClawApp extends LitElement {
       sessionsResult: this.sessionsResult,
       assistantAgentId: this.assistantAgentId,
     });
-    if (!agentId && !this.sessionsResult && this.client && this.connected) {
-      await loadSessionsInternal(this as Parameters<typeof loadSessionsInternal>[0]);
+    const scopedSessionAgentId = parseAgentSessionKey(this.sessionKey)?.agentId;
+    const normalizedScopedSessionAgentId = scopedSessionAgentId
+      ? normalizeAgentId(scopedSessionAgentId)
+      : null;
+    const activeSessionMissingFromList =
+      this.sessionsResult?.sessions?.every((row) => row.key !== this.sessionKey) ?? false;
+    const shouldRetrySessionLookup =
+      !agentId &&
+      this.client &&
+      this.connected &&
+      (!this.sessionsResult ||
+        (normalizedScopedSessionAgentId !== null &&
+          normalizedScopedSessionAgentId !== "main" &&
+          activeSessionMissingFromList));
+    if (shouldRetrySessionLookup) {
+      await loadSessionsInternal(this as Parameters<typeof loadSessionsInternal>[0], {
+        activeMinutes: 0,
+        limit: 0,
+        includeGlobal: true,
+        includeUnknown: true,
+      });
       agentId = resolveNewSessionAgentId({
         sessionKey: this.sessionKey,
         sessionsResult: this.sessionsResult,
