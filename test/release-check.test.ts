@@ -158,6 +158,14 @@ describe("bundled plugin root runtime mirrors", () => {
         `import("@larksuiteoapi/node-sdk");\n`,
         "utf8",
       );
+      mkdirSync(join(distDir, "extensions", "feishu", "node_modules", "@larksuiteoapi"), {
+        recursive: true,
+      });
+      writeFileSync(
+        join(distDir, "extensions", "feishu", "node_modules", "@larksuiteoapi", "node-sdk.js"),
+        `import("@larksuiteoapi/node-sdk");\n`,
+        "utf8",
+      );
 
       const mirrors = collectRootDistBundledRuntimeMirrors({
         bundledRuntimeDependencySpecs: makeBundledSpecs(),
@@ -169,7 +177,10 @@ describe("bundled plugin root runtime mirrors", () => {
         "@matrix-org/matrix-sdk-crypto-nodejs",
         "@matrix-org/matrix-sdk-crypto-wasm",
       ]);
-      expect([...mirrors.get("@larksuiteoapi/node-sdk")!.importers]).toEqual(["probe-Cz2PiFtC.js"]);
+      expect([...mirrors.get("@larksuiteoapi/node-sdk")!.importers]).toEqual([
+        "extensions/feishu/index.js",
+        "probe-Cz2PiFtC.js",
+      ]);
       expect([...mirrors.get("@matrix-org/matrix-sdk-crypto-nodejs")!.importers]).toEqual([
         "<curated root runtime surface>",
       ]);
