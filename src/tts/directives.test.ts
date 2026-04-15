@@ -6,7 +6,7 @@ const OPEN_POLICY: SpeechModelOverridePolicy = {
   enabled: true,
   allowProvider: true,
   allowVoice: true,
-  allowModel: true,
+  allowModelId: true,
   allowText: true,
   allowVoiceSettings: true,
 };
@@ -33,6 +33,9 @@ describe("parseTtsDirectives", () => {
       { providers: [] },
     );
     expect(result.cleanedText).toBe("spoken content");
+    // blockRegex never fires on the malformed input, so ttsText stays unset —
+    // downstream TTS falls back to cleanedText instead of overrides.ttsText.
+    expect(result.ttsText).toBeUndefined();
     expect(result.hasDirective).toBe(true);
   });
 
@@ -46,7 +49,7 @@ describe("parseTtsDirectives", () => {
     expect(result.hasDirective).toBe(true);
   });
 
-  it("strips a stray '/tts:text]]' closer with no leading brackets", () => {
+  it("strips a stray '[/tts:text]]' closer with a single leading bracket", () => {
     const result = parseTtsDirectives(
       "hello [/tts:text]] world",
       OPEN_POLICY,
