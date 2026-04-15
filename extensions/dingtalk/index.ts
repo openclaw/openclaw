@@ -1,7 +1,4 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/dingtalk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/dingtalk";
-import { dingtalkPlugin } from "./src/channel.js";
-import { setDingtalkRuntime } from "./src/runtime.js";
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
 export { monitorDingtalkProvider } from "./src/monitor.js";
 export {
@@ -16,15 +13,17 @@ export { createAICard, streamAICard, finishAICard } from "./src/card.js";
 export { probeDingtalk } from "./src/probe.js";
 export { dingtalkPlugin } from "./src/channel.js";
 
-const plugin = {
+export default defineBundledChannelEntry({
   id: "dingtalk",
   name: "DingTalk",
   description: "DingTalk channel plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setDingtalkRuntime(api.runtime);
-    api.registerChannel({ plugin: dingtalkPlugin });
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./src/channel.js",
+    exportName: "dingtalkPlugin",
   },
-};
-
-export default plugin;
+  runtime: {
+    specifier: "./src/runtime.js",
+    exportName: "setDingtalkRuntime",
+  },
+});
