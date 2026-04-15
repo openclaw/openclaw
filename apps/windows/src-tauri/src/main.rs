@@ -198,7 +198,7 @@ fn main() {
             }
             SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
                 "quit" => {
-                    if let Ok(state) = app.state::<GatewayState>().process.lock() {
+                    if let Ok(mut state) = app.state::<GatewayState>().process.lock() {
                         if let Some(child) = state.as_mut() {
                             let _ = child.kill();
                         }
