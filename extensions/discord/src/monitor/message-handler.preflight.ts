@@ -334,6 +334,11 @@ async function hydrateDiscordMessageIfEmpty(params: {
   if (currentText) {
     return params.message;
   }
+  // Log diagnostic info for #67151: empty content may indicate Message Content Intent issues
+  const rawContent = params.message.content;
+  logVerbose(
+    `discord: message ${params.message.id} has empty resolved text (rawContent=${rawContent === undefined ? "undefined" : rawContent === null ? "null" : rawContent === "" ? "empty-string" : `length:${rawContent.length}`})`,
+  );
   const rest = params.client.rest as { get?: (route: string) => Promise<unknown> } | undefined;
   if (typeof rest?.get !== "function") {
     return params.message;
@@ -345,7 +350,10 @@ async function hydrateDiscordMessageIfEmpty(params: {
     if (!fetched) {
       return params.message;
     }
-    logVerbose(`discord: hydrated empty inbound payload via REST for ${params.message.id}`);
+    const hydratedContent = fetched.content;
+    logVerbose(
+      `discord: hydrated empty inbound payload via REST for ${params.message.id} (hydratedContent=${hydratedContent === undefined ? "undefined" : hydratedContent === null ? "null" : hydratedContent === "" ? "empty-string" : `length:${hydratedContent.length}`})`,
+    );
     return mergeFetchedDiscordMessage(params.message, fetched);
   } catch (err) {
     logVerbose(`discord: failed to hydrate message ${params.message.id}: ${String(err)}`);

@@ -956,6 +956,57 @@ describe("resolveDiscordMessageText", () => {
     expect(text).toContain("[Forwarded message from @Bob]");
     expect(text).toContain("Forwarded title\nForwarded details");
   });
+
+  // Regression tests for #67151: URLs with https must be preserved
+  it("preserves full https URLs in message content", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "Check out https://example.com/path?query=1",
+        mentionedUsers: [],
+      }),
+    );
+    expect(text).toBe("Check out https://example.com/path?query=1");
+  });
+
+  it("preserves bare https: prefix in message content", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "https: test",
+        mentionedUsers: [],
+      }),
+    );
+    expect(text).toBe("https: test");
+  });
+
+  it("preserves multiple https URLs in message content", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "Links: https://a.com and https://b.com/page",
+        mentionedUsers: [],
+      }),
+    );
+    expect(text).toBe("Links: https://a.com and https://b.com/page");
+  });
+
+  it("preserves https URLs alongside mentions", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "Hey <@123> check https://example.com",
+        mentionedUsers: [{ id: "123", username: "alice", globalName: "Alice", discriminator: "0" }],
+      }),
+    );
+    expect(text).toBe("Hey @Alice check https://example.com");
+  });
+
+  it("preserves http URLs in message content", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "Visit http://legacy-site.com",
+        mentionedUsers: [],
+      }),
+    );
+    expect(text).toBe("Visit http://legacy-site.com");
+  });
 });
 
 describe("resolveDiscordChannelInfo", () => {
