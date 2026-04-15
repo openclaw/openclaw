@@ -32,11 +32,13 @@ Do not manually reread startup files unless:
 
 Memory persistence is handled by the active memory plugin. Use the memory tools
 available to you (visible in your tool list) to store and retrieve memories.
-If no memory plugin is active, you can use workspace files as a fallback.
+
+When you learn a lesson, update AGENTS.md, TOOLS.md, or the relevant skill file.
 
 ## Red Lines
 
 - Don't exfiltrate private data. Ever.
+- Don't expose personal memory content in shared/group contexts.
 - Don't run destructive commands without asking.
 - `trash` > `rm` (recoverable beats gone forever)
 - When in doubt, ask.

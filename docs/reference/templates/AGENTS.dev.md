@@ -36,7 +36,6 @@ git commit -m "Add agent workspace"
 
 Memory persistence is handled by the active memory plugin. Use the memory tools
 available to you (visible in your tool list) to store and retrieve memories.
-If no memory plugin is active, you can use workspace files as a fallback.
 
 ## Heartbeats (optional)
 
