@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
 import {
-  listBundledPluginBuildEntries,
+  collectBundledPluginBuildEntries,
   listBundledPluginRuntimeDependencies,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
@@ -90,7 +90,7 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
   };
 }
 
-const bundledPluginBuildEntries = listBundledPluginBuildEntries();
+const bundledPluginBuildEntries = collectBundledPluginBuildEntries();
 const bundledPluginRuntimeDependencies = listBundledPluginRuntimeDependencies();
 
 function buildBundledHookEntries(): Record<string, string> {
@@ -135,6 +135,70 @@ function shouldNeverBundleDependency(id: string): boolean {
   });
 }
 
+function shouldStageBundledPluginRuntimeDependencies(packageJson: unknown): boolean {
+  return (
+    typeof packageJson === "object" &&
+    packageJson !== null &&
+    (packageJson as { openclaw?: { bundle?: { stageRuntimeDependencies?: boolean } } }).openclaw
+      ?.bundle?.stageRuntimeDependencies === true
+  );
+}
+
+function listBundledPluginEntrySources(
+  entries: Array<{
+    id: string;
+    packageJson: unknown;
+    sourceEntries: string[];
+  }>,
+): Record<string, string> {
+  return Object.fromEntries(
+    entries.flatMap(({ id, sourceEntries }) =>
+      sourceEntries.map((entry) => {
+        const normalizedEntry = entry.replace(/^\.\//u, "");
+        const entryKey = bundledPluginFile(id, normalizedEntry.replace(/\.[^.]+$/u, ""));
+        return [
+          entryKey,
+          normalizedEntry ? `extensions/${id}/${normalizedEntry}` : `extensions/${id}`,
+        ];
+      }),
+    ),
+  );
+}
+
+function normalizeBundledPluginOutEntry(entry: string): string {
+  return entry.replace(/^\.\//u, "").replace(/\.[^.]+$/u, "");
+}
+
+function isPluginSdkSelfReference(id: string): boolean {
+  return (
+    id === "openclaw/plugin-sdk" ||
+    id.startsWith("openclaw/plugin-sdk/") ||
+    id === "@openclaw/plugin-sdk" ||
+    id.startsWith("@openclaw/plugin-sdk/")
+  );
+}
+
+function buildBundledPluginNeverBundlePredicate(packageJson: {
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+}) {
+  const runtimeDependencies = shouldStageBundledPluginRuntimeDependencies(packageJson)
+    ? [
+        ...Object.keys(packageJson.dependencies ?? {}),
+        ...Object.keys(packageJson.optionalDependencies ?? {}),
+      ].toSorted((left, right) => left.localeCompare(right))
+    : [];
+
+  return (id: string): boolean => {
+    if (isPluginSdkSelfReference(id)) {
+      return true;
+    }
+    return runtimeDependencies.some((dependency) => {
+      return id === dependency || id.startsWith(`${dependency}/`);
+    });
+  };
+}
+
 function buildCoreDistEntries(): Record<string, string> {
   return {
     index: "src/index.ts",
@@ -167,6 +231,12 @@ function buildCoreDistEntries(): Record<string, string> {
 }
 
 const coreDistEntries = buildCoreDistEntries();
+const stagedBundledPluginBuildEntries = bundledPluginBuildEntries.filter(({ packageJson }) =>
+  shouldStageBundledPluginRuntimeDependencies(packageJson),
+);
+const rootBundledPluginBuildEntries = bundledPluginBuildEntries.filter(
+  ({ packageJson }) => !shouldStageBundledPluginRuntimeDependencies(packageJson),
+);
 
 function buildUnifiedDistEntries(): Record<string, string> {
   return {
@@ -179,18 +249,43 @@ function buildUnifiedDistEntries(): Record<string, string> {
         source,
       ]),
     ),
-    ...bundledPluginBuildEntries,
+    ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     ...bundledHookEntries,
   };
+}
+
+function buildBundledPluginConfigs(): UserConfig[] {
+  return stagedBundledPluginBuildEntries.map(({ id, packageJson, sourceEntries }) =>
+    nodeBuildConfig({
+      clean: false,
+      entry: Object.fromEntries(
+        sourceEntries.map((entry) => [
+          normalizeBundledPluginOutEntry(entry),
+          `extensions/${id}/${entry.replace(/^\.\//u, "")}`,
+        ]),
+      ),
+      outDir: `dist/extensions/${id}`,
+      deps: {
+        neverBundle: buildBundledPluginNeverBundlePredicate(
+          (packageJson ?? {}) as {
+            dependencies?: Record<string, string>;
+            optionalDependencies?: Record<string, string>;
+          },
+        ),
+      },
+    }),
+  );
 }
 
 export default defineConfig([
   nodeBuildConfig({
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.
+    clean: true,
     entry: buildUnifiedDistEntries(),
     deps: {
       neverBundle: shouldNeverBundleDependency,
     },
   }),
+  ...buildBundledPluginConfigs(),
 ]);

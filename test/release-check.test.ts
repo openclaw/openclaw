@@ -122,6 +122,14 @@ describe("bundled plugin root runtime mirrors", () => {
   function makeBundledSpecs() {
     return new Map([
       ["@larksuiteoapi/node-sdk", { conflicts: [], pluginIds: ["feishu"], spec: "^1.60.0" }],
+      [
+        "@matrix-org/matrix-sdk-crypto-nodejs",
+        { conflicts: [], pluginIds: ["matrix"], spec: "^0.4.0" },
+      ],
+      [
+        "@matrix-org/matrix-sdk-crypto-wasm",
+        { conflicts: [], pluginIds: ["matrix"], spec: "18.0.0" },
+      ],
     ]);
   }
 
@@ -150,14 +158,35 @@ describe("bundled plugin root runtime mirrors", () => {
         `import("@larksuiteoapi/node-sdk");\n`,
         "utf8",
       );
+      mkdirSync(join(distDir, "extensions", "feishu", "node_modules", "@larksuiteoapi"), {
+        recursive: true,
+      });
+      writeFileSync(
+        join(distDir, "extensions", "feishu", "node_modules", "@larksuiteoapi", "node-sdk.js"),
+        `import("@larksuiteoapi/node-sdk");\n`,
+        "utf8",
+      );
 
       const mirrors = collectRootDistBundledRuntimeMirrors({
         bundledRuntimeDependencySpecs: makeBundledSpecs(),
         distDir,
       });
 
-      expect([...mirrors.keys()]).toEqual(["@larksuiteoapi/node-sdk"]);
-      expect([...mirrors.get("@larksuiteoapi/node-sdk")!.importers]).toEqual(["probe-Cz2PiFtC.js"]);
+      expect([...mirrors.keys()].toSorted((left, right) => left.localeCompare(right))).toEqual([
+        "@larksuiteoapi/node-sdk",
+        "@matrix-org/matrix-sdk-crypto-nodejs",
+        "@matrix-org/matrix-sdk-crypto-wasm",
+      ]);
+      expect([...mirrors.get("@larksuiteoapi/node-sdk")!.importers]).toEqual([
+        "extensions/feishu/index.js",
+        "probe-Cz2PiFtC.js",
+      ]);
+      expect([...mirrors.get("@matrix-org/matrix-sdk-crypto-nodejs")!.importers]).toEqual([
+        "<curated root runtime surface>",
+      ]);
+      expect([...mirrors.get("@matrix-org/matrix-sdk-crypto-wasm")!.importers]).toEqual([
+        "<curated root runtime surface>",
+      ]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -247,7 +276,7 @@ describe("bundled plugin root runtime mirrors", () => {
 });
 
 describe("collectForbiddenPackPaths", () => {
-  it("allows bundled plugin runtime deps under dist/extensions but still blocks other node_modules", () => {
+  it("blocks all packaged node_modules payloads", () => {
     expect(
       collectForbiddenPackPaths([
         "dist/index.js",
@@ -255,7 +284,11 @@ describe("collectForbiddenPackPaths", () => {
         bundledPluginFile("tlon", "node_modules/.bin/tlon"),
         "node_modules/.bin/openclaw",
       ]),
-    ).toEqual([bundledPluginFile("tlon", "node_modules/.bin/tlon"), "node_modules/.bin/openclaw"]);
+    ).toEqual([
+      bundledDistPluginFile("discord", "node_modules/@buape/carbon/index.js"),
+      bundledPluginFile("tlon", "node_modules/.bin/tlon"),
+      "node_modules/.bin/openclaw",
+    ]);
   });
 
   it("blocks generated docs artifacts from npm pack output", () => {
@@ -296,6 +329,7 @@ describe("collectMissingPackPaths", () => {
         "dist/control-ui/index.html",
         "qa/scenarios/index.md",
         "scripts/npm-runner.mjs",
+        "scripts/preinstall-package-manager-warning.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         bundledDistPluginFile("matrix", "helper-api.js"),
@@ -327,6 +361,7 @@ describe("collectMissingPackPaths", () => {
         ...requiredPluginSdkPackPaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "scripts/npm-runner.mjs",
+        "scripts/preinstall-package-manager-warning.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/plugin-sdk/root-alias.cjs",
         "dist/build-info.json",
