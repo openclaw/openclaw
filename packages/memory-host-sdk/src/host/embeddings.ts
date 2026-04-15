@@ -57,6 +57,7 @@ export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 // implicitly assume a local Ollama instance is available.
 // Bedrock is included when AWS credentials are detected.
 const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
+const REMOTE_EMBEDDING_SETUP_PROVIDER_IDS = [...REMOTE_EMBEDDING_PROVIDER_IDS, "bedrock"] as const;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
@@ -351,7 +352,7 @@ function formatLocalSetupError(err: unknown): string {
       ? "2) Reinstall OpenClaw (this should install node-llama-cpp): npm i -g openclaw@latest"
       : null,
     "3) If you use pnpm: pnpm approve-builds (select node-llama-cpp), then pnpm rebuild node-llama-cpp",
-    ...REMOTE_EMBEDDING_PROVIDER_IDS.map(
+    ...REMOTE_EMBEDDING_SETUP_PROVIDER_IDS.map(
       (provider) => `Or set agents.defaults.memorySearch.provider = "${provider}" (remote).`,
     ),
   ]

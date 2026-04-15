@@ -85,7 +85,7 @@ function formatLocalSetupError(err: unknown): string {
       ? "2) Reinstall OpenClaw (this should install node-llama-cpp): npm i -g openclaw@latest"
       : null,
     "3) If you use pnpm: pnpm approve-builds (select node-llama-cpp), then pnpm rebuild node-llama-cpp",
-    ...["openai", "gemini", "voyage", "mistral"].map(
+    ...["openai", "gemini", "voyage", "mistral", "bedrock"].map(
       (provider) => `Or set agents.defaults.memorySearch.provider = "${provider}" (remote).`,
     ),
   ]

@@ -482,8 +482,11 @@ describe("embedding provider local fallback", () => {
 
   it("mentions every remote provider in local setup guidance", async () => {
     mockMissingLocalEmbeddingDependency();
+    await expect(createLocalProvider()).rejects.toThrow(/provider = "openai"/i);
     await expect(createLocalProvider()).rejects.toThrow(/provider = "gemini"/i);
+    await expect(createLocalProvider()).rejects.toThrow(/provider = "voyage"/i);
     await expect(createLocalProvider()).rejects.toThrow(/provider = "mistral"/i);
+    await expect(createLocalProvider()).rejects.toThrow(/provider = "bedrock"/i);
   });
 });
 
