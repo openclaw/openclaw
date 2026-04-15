@@ -602,13 +602,7 @@ export function resolveBrowserExecutableForPlatform(
   platform: NodeJS.Platform,
 ): BrowserExecutable | null {
   if (resolved.executablePath) {
-    const expandedPath = resolved.executablePath.startsWith("~")
-      ? expandHomePrefix(resolved.executablePath, {
-          home: os.homedir(),
-          env: process.env,
-          homedir: os.homedir,
-        })
-      : resolved.executablePath;
+    const expandedPath = expandHomePrefix(resolved.executablePath);
     if (!exists(expandedPath)) {
       throw new Error(`browser.executablePath not found: ${expandedPath}`);
     }
