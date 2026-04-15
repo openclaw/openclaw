@@ -185,13 +185,13 @@ export function buildSenseaudioMusicGenerationProvider(): MusicGenerationProvide
       }
 
       // Step 2: Submit the song creation task.
-      // custom_mode=true: the API treats the lyrics field as a free-form prompt.
-      // custom_mode=false: the API treats it as structured lyrics with section tags.
-      const customMode = !resolvedLyrics;
+      // custom_mode=false: the API expects structured lyrics with section tags.
+      // Unstructured prompts with custom_mode=true cause a 400 "无效的歌词格式";
+      // resolvedLyrics is always set at this point (generated above if not user-supplied).
       const songBody: Record<string, unknown> = {
         model,
-        lyrics: resolvedLyrics ?? req.prompt,
-        custom_mode: customMode,
+        lyrics: resolvedLyrics,
+        custom_mode: false,
         instrumental: req.instrumental === true,
       };
       if (resolvedTitle) {

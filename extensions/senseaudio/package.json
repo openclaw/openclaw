@@ -2,7 +2,7 @@
   "name": "@openclaw/senseaudio-provider",
   "version": "2026.4.14-beta.1",
   "private": true,
-  "description": "OpenClaw SenseAudio media-understanding provider",
+  "description": "OpenClaw SenseAudio music generation provider",
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
