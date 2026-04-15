@@ -441,7 +441,10 @@ export function renderUsage(props: UsageProps) {
       <section class="card usage-header ${display.headerPinned ? "pinned" : ""}">
         <div class="usage-header-row">
           <div class="usage-header-title">
-            <div class="card-title usage-section-title">${t("usage.filters.title")}</div>
+            <div class="usage-header-heading">
+              <div class="card-title usage-section-title">${t("tabs.usage")}</div>
+              <div class="card-sub usage-section-subtitle">${t("subtitles.usage")}</div>
+            </div>
             ${data.loading
               ? html`<span class="usage-refresh-indicator">${t("usage.loading.badge")}</span>`
               : nothing}

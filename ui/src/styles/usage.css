@@ -89,6 +89,15 @@
   gap: 10px;
 }
 
+.usage-header-heading {
+  display: grid;
+  gap: 2px;
+}
+
+.usage-section-subtitle {
+  margin: 0;
+}
+
 .usage-header-metrics {
   display: flex;
   flex-wrap: wrap;
