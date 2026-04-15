@@ -41,7 +41,7 @@ export function readLoggingConfig(): LoggingConfig | undefined {
           loadConfig?: () => OpenClawConfig;
         }
       | undefined;
-    return coerceLoggingConfig(loaded?.loadConfig?.().logging);
+    return coerceLoggingConfig(loaded?.loadConfig?.()?.logging);
   } catch {
     return undefined;
   }
