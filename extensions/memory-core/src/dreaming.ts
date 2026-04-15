@@ -155,7 +155,7 @@ function buildManagedDreamingCronJob(
       expr: config.cron,
       ...(config.timezone ? { tz: config.timezone } : {}),
     },
-    sessionTarget: "main",
+    sessionTarget: "isolated",
     wakeMode: "now",
     payload: {
       kind: "systemEvent",
