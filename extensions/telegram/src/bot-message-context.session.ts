@@ -1,9 +1,4 @@
-import {
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-  toLocationContext,
-  type NormalizedLocation,
-} from "openclaw/plugin-sdk/channel-inbound";
+import { formatInboundEnvelope, resolveEnvelopeFormatOptions, toLocationContext, type NormalizedLocation, } from "openclaw/plugin-sdk/channel-inbound";
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
@@ -254,6 +249,7 @@ export async function buildTelegramInboundContextPayload(params: {
     : "";
   const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
   const senderName = buildSenderName(msg);
+  const senderLabel = buildSenderLabel(msg, senderId || chatId);
   const conversationLabel = isGroup
     ? (groupLabel ?? `group:${chatId}`)
     : buildSenderLabel(msg, senderId || chatId);
