@@ -752,7 +752,11 @@ async function runUpgradeLane(params) {
 async function runInstallerFreshSuite(params) {
   const lane = createLaneState("installer-fresh");
   const cleanup = [];
-  const installVersion = resolveBaselineVersion(params.baselineSpec);
+  const installVersion = await resolveInstallerTargetVersion({
+    baselineSpec: params.baselineSpec,
+    logsDir: params.logsDir,
+    suiteName: "installer-fresh",
+  });
   const usesManagedGateway = shouldUseManagedGatewayService();
   const manualGateway = { current: null };
   try {
@@ -912,7 +916,11 @@ async function runInstallerFreshSuite(params) {
 async function runDevUpdateSuite(params) {
   const lane = createLaneState("dev-update");
   const cleanup = [];
-  const installVersion = resolveBaselineVersion(params.baselineSpec);
+  const installVersion = await resolveInstallerTargetVersion({
+    baselineSpec: params.baselineSpec,
+    logsDir: params.logsDir,
+    suiteName: "dev-update",
+  });
   const usesManagedGateway = shouldUseManagedGatewayService();
   // Keep dev-update on a manual gateway even on Windows. The packaged lanes
   // already cover the Scheduled Task path, while repaired git installs live in
@@ -1143,17 +1151,6 @@ function shouldRestoreBundledPluginRuntimeDeps() {
   return true;
 }
 
-function resolveBaselineVersion(baselineSpec) {
-  const trimmed = baselineSpec.trim();
-  if (!trimmed) {
-    return "latest";
-  }
-  if (trimmed.startsWith("openclaw@")) {
-    return trimmed.slice("openclaw@".length);
-  }
-  return trimmed;
-}
-
 function looksLikeCommitSha(ref) {
   return /^[0-9a-f]{7,40}$/iu.test(ref.trim());
 }
@@ -1171,6 +1168,33 @@ export function buildRealUpdateEnv(env) {
   const updateEnv = { ...env };
   delete updateEnv.OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL;
   return updateEnv;
+}
+
+export function resolveExplicitBaselineVersion(baselineSpec) {
+  const trimmed = baselineSpec.trim();
+  if (!trimmed || trimmed === "openclaw@latest") {
+    return "";
+  }
+  if (trimmed.startsWith("openclaw@")) {
+    return trimmed.slice("openclaw@".length);
+  }
+  return trimmed;
+}
+
+async function resolveInstallerTargetVersion(params) {
+  const resolvedVersion = resolveExplicitBaselineVersion(params.baselineSpec);
+  if (resolvedVersion) {
+    return resolvedVersion;
+  }
+  const latestResult = await runCommand(npmCommand(), ["view", "openclaw@latest", "version"], {
+    logPath: join(params.logsDir, `${params.suiteName}-latest-version.log`),
+    timeoutMs: 2 * 60 * 1000,
+  });
+  const latestVersion = latestResult.stdout.trim();
+  if (!latestVersion) {
+    throw new Error("npm view openclaw@latest version did not return a version.");
+  }
+  return latestVersion;
 }
 
 function powerShellSingleQuote(value) {

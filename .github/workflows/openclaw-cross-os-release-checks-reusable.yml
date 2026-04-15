@@ -391,6 +391,7 @@ jobs:
             --candidate-version "${{ needs.prepare.outputs.candidate_version }}" \
             --source-sha "${{ needs.prepare.outputs.source_sha }}" \
             --baseline-spec "${{ needs.prepare.outputs.baseline_spec }}" \
+            --previous-version "${{ inputs.previous_version }}" \
             --baseline-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/baseline/${{ needs.prepare.outputs.baseline_file_name }}" \
             --provider "${{ inputs.provider }}" \
             --mode "${{ matrix.lane }}" \

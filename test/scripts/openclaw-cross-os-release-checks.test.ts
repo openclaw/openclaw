@@ -8,6 +8,7 @@ import {
   normalizeWindowsInstalledCliPath,
   parseArgs,
   readRunnerOverrideEnv,
+  resolveExplicitBaselineVersion,
   resolveRepairGlobalInstallArgs,
   resolveRequestedSuites,
   resolveRunnerMatrix,
@@ -184,6 +185,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ).toEqual({
       FOO: "bar",
     });
+  });
+
+  it("only treats pinned baseline specs as exact installer version assertions", () => {
+    expect(resolveExplicitBaselineVersion("")).toBe("");
+    expect(resolveExplicitBaselineVersion("openclaw@latest")).toBe("");
+    expect(resolveExplicitBaselineVersion("openclaw@2026.4.10")).toBe("2026.4.10");
+    expect(resolveExplicitBaselineVersion("2026.4.10")).toBe("2026.4.10");
   });
 
   it("accepts a git main dev-channel update status payload", () => {
