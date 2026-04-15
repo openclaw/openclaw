@@ -2,8 +2,6 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import semverGte from "semver/functions/gte.js";
-import semverValid from "semver/functions/valid.js";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { pathExists } from "../utils.js";
@@ -15,6 +13,7 @@ import {
 } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
+import { isAtLeast, parseSemver } from "./runtime-guard.js";
 
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
 
@@ -43,7 +42,7 @@ const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
   "--omit=optional",
   ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
 ] as const;
-const FIRST_PACKAGED_DIST_INVENTORY_VERSION = "2026.4.15";
+const FIRST_PACKAGED_DIST_INVENTORY_VERSION = { major: 2026, minor: 4, patch: 15 };
 
 function normalizePackageTarget(value: string): string {
   return value.trim();
@@ -109,9 +108,7 @@ export async function collectInstalledGlobalPackageErrors(params: {
 }
 
 function shouldRequirePackagedDistInventory(version: string | null | undefined): boolean {
-  return typeof version === "string" && semverValid(version) !== null
-    ? semverGte(version, FIRST_PACKAGED_DIST_INVENTORY_VERSION)
-    : false;
+  return isAtLeast(parseSemver(version ?? null), FIRST_PACKAGED_DIST_INVENTORY_VERSION);
 }
 
 async function collectInstalledPackageDistErrors(params: {
