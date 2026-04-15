@@ -17,6 +17,8 @@ export type MatrixQaScenarioId =
   | "matrix-thread-isolation"
   | "matrix-top-level-reply-shape"
   | "matrix-room-thread-reply-override"
+  | "matrix-room-quiet-streaming-preview"
+  | "matrix-room-block-streaming"
   | "matrix-dm-reply-shape"
   | "matrix-dm-shared-session-notice"
   | "matrix-dm-thread-reply-override"
@@ -29,6 +31,7 @@ export type MatrixQaScenarioId =
   | "matrix-room-membership-loss"
   | "matrix-homeserver-restart-resume"
   | "matrix-mention-gating"
+  | "matrix-observer-allowlist-override"
   | "matrix-allowlist-block";
 
 export type MatrixQaScenarioDefinition = LiveTransportScenarioDefinition<MatrixQaScenarioId> & {
@@ -36,9 +39,12 @@ export type MatrixQaScenarioDefinition = LiveTransportScenarioDefinition<MatrixQ
   topology?: MatrixQaTopologySpec;
 };
 
+export const MATRIX_QA_BLOCK_ROOM_KEY = "block";
 export const MATRIX_QA_DRIVER_DM_ROOM_KEY = "driver-dm";
 export const MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY = "driver-dm-shared";
+export const MATRIX_QA_HOMESERVER_ROOM_KEY = "homeserver";
 export const MATRIX_QA_MEMBERSHIP_ROOM_KEY = "membership";
+export const MATRIX_QA_RESTART_ROOM_KEY = "restart";
 export const MATRIX_QA_SECONDARY_ROOM_KEY = "secondary";
 
 function buildMatrixQaDmTopology(
@@ -101,9 +107,27 @@ const MATRIX_QA_SECONDARY_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
   requireMention: true,
 });
 
+const MATRIX_QA_BLOCK_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
+  key: MATRIX_QA_BLOCK_ROOM_KEY,
+  name: "Matrix QA Block Streaming Room",
+  requireMention: true,
+});
+
 const MATRIX_QA_MEMBERSHIP_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
   key: MATRIX_QA_MEMBERSHIP_ROOM_KEY,
   name: "Matrix QA Membership Room",
+  requireMention: true,
+});
+
+const MATRIX_QA_RESTART_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
+  key: MATRIX_QA_RESTART_ROOM_KEY,
+  name: "Matrix QA Restart Room",
+  requireMention: true,
+});
+
+const MATRIX_QA_HOMESERVER_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
+  key: MATRIX_QA_HOMESERVER_ROOM_KEY,
+  name: "Matrix QA Homeserver Restart Room",
   requireMention: true,
 });
 
@@ -132,6 +156,36 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     title: "Matrix threadReplies always keeps room replies threaded",
     configOverrides: {
       threadReplies: "always",
+    },
+  },
+  {
+    id: "matrix-room-quiet-streaming-preview",
+    timeoutMs: 45_000,
+    title: "Matrix quiet streaming emits notice previews before finalizing",
+    configOverrides: {
+      streaming: "quiet",
+    },
+  },
+  {
+    id: "matrix-room-block-streaming",
+    timeoutMs: 45_000,
+    title: "Matrix block streaming preserves completed quiet preview blocks",
+    topology: MATRIX_QA_BLOCK_ROOM_TOPOLOGY,
+    configOverrides: {
+      agentDefaults: {
+        blockStreamingChunk: {
+          breakPreference: "newline",
+          maxChars: 48,
+          minChars: 1,
+        },
+        blockStreamingCoalesce: {
+          idleMs: 0,
+          maxChars: 48,
+          minChars: 1,
+        },
+      },
+      blockStreaming: true,
+      streaming: "quiet",
     },
   },
   {
@@ -208,6 +262,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     standardId: "restart-resume",
     timeoutMs: 60_000,
     title: "Matrix lane resumes cleanly after gateway restart",
+    topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
   },
   {
     id: "matrix-room-membership-loss",
@@ -219,12 +274,21 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     id: "matrix-homeserver-restart-resume",
     timeoutMs: 75_000,
     title: "Matrix lane resumes after homeserver restart",
+    topology: MATRIX_QA_HOMESERVER_ROOM_TOPOLOGY,
   },
   {
     id: "matrix-mention-gating",
     standardId: "mention-gating",
     timeoutMs: 8_000,
     title: "Matrix room message without mention does not trigger",
+  },
+  {
+    id: "matrix-observer-allowlist-override",
+    timeoutMs: 45_000,
+    title: "Matrix sender allowlist override lets observer messages trigger replies",
+    configOverrides: {
+      groupAllowRoles: ["driver", "observer"],
+    },
   },
   {
     id: "matrix-allowlist-block",

@@ -67,6 +67,39 @@ describe("matrix observed event normalization", () => {
     );
   });
 
+  it("prefers m.new_content text for Matrix replacement events", () => {
+    expect(
+      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+        event_id: "$replace",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        content: {
+          body: "* finalized",
+          msgtype: "m.text",
+          "m.new_content": {
+            body: "finalized",
+            msgtype: "m.text",
+          },
+          "m.relates_to": {
+            rel_type: "m.replace",
+            event_id: "$draft",
+          },
+        },
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        kind: "message",
+        eventId: "$replace",
+        body: "finalized",
+        msgtype: "m.text",
+        relatesTo: {
+          eventId: "$draft",
+          relType: "m.replace",
+        },
+      }),
+    );
+  });
+
   it("normalizes Matrix reaction events with target metadata", () => {
     expect(
       normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
