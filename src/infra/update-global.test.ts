@@ -5,6 +5,7 @@ import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.j
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
+import { writePackageDistInventory } from "./package-dist-inventory.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   collectInstalledGlobalPackageErrors,
@@ -365,7 +366,7 @@ describe("update global helpers", () => {
     });
   });
 
-  it("checks bundled runtime sidecars, including Matrix helper-api", async () => {
+  it("checks installed dist against the packaged inventory", async () => {
     await withTempDir({ prefix: "openclaw-update-global-pkg-" }, async (packageRoot) => {
       await fs.writeFile(
         path.join(packageRoot, "package.json"),
@@ -377,12 +378,22 @@ describe("update global helpers", () => {
         await fs.mkdir(path.dirname(absolutePath), { recursive: true });
         await fs.writeFile(absolutePath, "export {};\n", "utf-8");
       }
+      await writePackageDistInventory(packageRoot);
 
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
 
       await fs.rm(path.join(packageRoot, MATRIX_HELPER_API));
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
-        `missing bundled runtime sidecar ${MATRIX_HELPER_API}`,
+        `missing packaged dist file ${MATRIX_HELPER_API}`,
+      );
+
+      await fs.writeFile(
+        path.join(packageRoot, "dist", "stale-CJUAgRQR.js"),
+        "export {};\n",
+        "utf8",
+      );
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
+        "unexpected packaged dist file dist/stale-CJUAgRQR.js",
       );
     });
   });
