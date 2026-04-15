@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   looksLikeReleaseVersionRef,
+  normalizeWindowsInstalledCliPath,
   parseArgs,
   readRunnerOverrideEnv,
   resolveRequestedSuites,
@@ -21,6 +22,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("detects release refs and keeps branch refs out of release-only logic", () => {
     expect(looksLikeReleaseVersionRef("2026.4.5")).toBe(true);
     expect(looksLikeReleaseVersionRef("v2026.4.5-beta.1")).toBe(true);
+    expect(looksLikeReleaseVersionRef("v2026.4.7-1")).toBe(true);
     expect(looksLikeReleaseVersionRef("main")).toBe(false);
     expect(looksLikeReleaseVersionRef("codex/cross-os-release-checks")).toBe(false);
   });
@@ -99,6 +101,19 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(shouldUseManagedGatewayService("win32")).toBe(true);
     expect(shouldUseManagedGatewayService("darwin")).toBe(false);
     expect(shouldUseManagedGatewayService("linux")).toBe(false);
+  });
+
+  it("normalizes Windows installed CLI paths to the cmd shim", () => {
+    expect(
+      normalizeWindowsInstalledCliPath(
+        String.raw`C:\Users\runner\AppData\Roaming\npm\openclaw.ps1`,
+      ),
+    ).toBe(String.raw`C:\Users\runner\AppData\Roaming\npm\openclaw.cmd`);
+    expect(
+      normalizeWindowsInstalledCliPath(
+        String.raw`C:\Users\runner\AppData\Roaming\npm\openclaw.cmd`,
+      ),
+    ).toBe(String.raw`C:\Users\runner\AppData\Roaming\npm\openclaw.cmd`);
   });
 
   it("accepts a git main dev-channel update status payload", () => {

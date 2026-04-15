@@ -104,7 +104,9 @@ export function parseArgs(argv) {
 
 export function looksLikeReleaseVersionRef(ref) {
   const trimmed = ref.trim();
-  return /^v?[0-9]{4}\.[0-9]+\.[0-9]+(?:[-.](?:beta|rc)[-.]?[0-9]+)?$/iu.test(trimmed);
+  return /^v?[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[1-9][0-9]*)|[-.](?:beta|rc)[-.]?[0-9]+)?$/iu.test(
+    trimmed,
+  );
 }
 
 export function resolveRequestedSuites(mode, ref) {
@@ -1152,6 +1154,13 @@ function parseMarkerLine(output, marker) {
     .trim();
 }
 
+export function normalizeWindowsInstalledCliPath(cliPath) {
+  if (typeof cliPath !== "string") {
+    return cliPath;
+  }
+  return cliPath.replace(/\.ps1$/iu, ".cmd");
+}
+
 async function runPosixShellScript(script, options) {
   return runCommand("/bin/bash", ["-lc", script], options);
 }
@@ -1228,7 +1237,9 @@ if ('${powerShellSingleQuote(params.expectedNeedle)}'.Length -gt 0 -and $version
       logPath: params.logPath,
       timeoutMs: 2 * 60 * 1000,
     });
-    const cliPath = parseMarkerLine(result.stdout, "__OPENCLAW_PATH__=");
+    const cliPath = normalizeWindowsInstalledCliPath(
+      parseMarkerLine(result.stdout, "__OPENCLAW_PATH__="),
+    );
     if (!cliPath) {
       throw new Error("Failed to resolve installed openclaw path from fresh Windows shell.");
     }

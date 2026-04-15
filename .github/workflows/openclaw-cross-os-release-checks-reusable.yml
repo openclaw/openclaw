@@ -141,6 +141,13 @@ jobs:
               ;;
           esac
 
+      - name: Checkout workflow repo
+        uses: actions/checkout@v6
+        with:
+          path: workflow
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Checkout public source ref
         uses: actions/checkout@v6
         with:
@@ -168,7 +175,7 @@ jobs:
         env:
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare
         run: |
-          node source/scripts/openclaw-cross-os-release-checks.mjs \
+          node workflow/scripts/openclaw-cross-os-release-checks.mjs \
             --prepare-only \
             --source-dir source \
             --output-dir "${OUTPUT_DIR}"
@@ -251,7 +258,7 @@ jobs:
           VAR_WINDOWS_RUNNER: ${{ vars.OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER }}
           VAR_MACOS_RUNNER: ${{ vars.OPENCLAW_RELEASE_CHECKS_MACOS_RUNNER }}
         run: |
-          MATRIX_JSON="$(node source/scripts/openclaw-cross-os-release-checks.mjs \
+          MATRIX_JSON="$(node workflow/scripts/openclaw-cross-os-release-checks.mjs \
             --resolve-matrix \
             --ref "${INPUT_REF}" \
             --mode "${INPUT_MODE}" \
@@ -269,15 +276,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     steps:
-      - name: Checkout public source ref
+      - name: Checkout workflow repo
         uses: actions/checkout@v6
         with:
-          repository: ${{ env.OPENCLAW_REPOSITORY }}
-          ref: ${{ inputs.ref }}
-          path: source
-          fetch-depth: 0
+          path: workflow
+          fetch-depth: 1
           persist-credentials: false
-          submodules: recursive
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -319,7 +323,7 @@ jobs:
           if [[ -n "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_GUILD_ID}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_CHANNEL_ID}" ]]; then
             DISCORD_ARGS+=(--run-discord-roundtrip true)
           fi
-          node source/scripts/openclaw-cross-os-release-checks.mjs \
+          node workflow/scripts/openclaw-cross-os-release-checks.mjs \
             --candidate-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/candidate/${{ needs.prepare.outputs.candidate_file_name }}" \
             --candidate-version "${{ needs.prepare.outputs.candidate_version }}" \
             --source-sha "${{ needs.prepare.outputs.source_sha }}" \
