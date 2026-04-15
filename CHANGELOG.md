@@ -110,6 +110,7 @@ Docs: https://docs.openclaw.ai
 - Agents/error rendering: ignore stale assistant `errorMessage` fields on successful turns so background/tool-side failures no longer prepend synthetic billing errors over valid replies. (#40616) Thanks @ingyukoh.
 - Agents/fallback: recognize Venice `402 Insufficient USD or Diem balance` billing errors so configured model fallbacks trigger instead of surfacing the raw provider error. (#43205) Thanks @Squabble9.
 - Dependencies: refresh workspace dependencies except the pinned Carbon package, and harden ACP session-config writes against non-string SDK values so newer ACP clients fail fast instead of tripping type/runtime mismatches.
+- Agents/auth-profiles: treat post-completion bookkeeping save failures (for example Windows EPERM when `auth-profiles.json` gets a ReadOnly attribute during concurrent hot-reload) as non-fatal in `markAuthProfileGood`, `markAuthProfileUsed`, and `markAuthProfileFailure`, so a succeeded LLM request is not turned into a cascading gateway failure. Fixes #62099. Thanks @ademczuk.
 
 ## 2026.3.8
 

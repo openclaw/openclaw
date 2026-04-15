@@ -1,6 +1,7 @@
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { normalizeProviderId, normalizeProviderIdForAuth } from "../model-selection.js";
+import { log } from "./constants.js";
 import {
   ensureAuthProfileStore,
   saveAuthProfileStore,
@@ -91,25 +92,36 @@ export async function markAuthProfileGood(params: {
   agentDir?: string;
 }): Promise<void> {
   const { store, provider, profileId, agentDir } = params;
-  const updated = await updateAuthProfileStoreWithLock({
-    agentDir,
-    updater: (freshStore) => {
-      const profile = freshStore.profiles[profileId];
-      if (!profile || profile.provider !== provider) {
-        return false;
-      }
-      freshStore.lastGood = { ...freshStore.lastGood, [provider]: profileId };
-      return true;
-    },
-  });
-  if (updated) {
-    store.lastGood = updated.lastGood;
-    return;
+  // Post-success bookkeeping. Save failures (e.g. Windows EPERM on a ReadOnly
+  // auth-profiles.json during concurrent hot-reload) must not propagate and
+  // fail an LLM request that has already completed.
+  try {
+    const updated = await updateAuthProfileStoreWithLock({
+      agentDir,
+      updater: (freshStore) => {
+        const profile = freshStore.profiles[profileId];
+        if (!profile || profile.provider !== provider) {
+          return false;
+        }
+        freshStore.lastGood = { ...freshStore.lastGood, [provider]: profileId };
+        return true;
+      },
+    });
+    if (updated) {
+      store.lastGood = updated.lastGood;
+      return;
+    }
+    const profile = store.profiles[profileId];
+    if (!profile || profile.provider !== provider) {
+      return;
+    }
+    store.lastGood = { ...store.lastGood, [provider]: profileId };
+    saveAuthProfileStore(store, agentDir);
+  } catch (err) {
+    log.warn("markAuthProfileGood: failed to persist last-good profile; continuing", {
+      provider,
+      profileId,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
-  const profile = store.profiles[profileId];
-  if (!profile || profile.provider !== provider) {
-    return;
-  }
-  store.lastGood = { ...store.lastGood, [provider]: profileId };
-  saveAuthProfileStore(store, agentDir);
 }
