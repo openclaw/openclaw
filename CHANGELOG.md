@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 - docs-i18n: add behavior baseline fixtures (#64073). Thanks @hxy91819
 - docs-i18n: harden behavior fixture path reads (#67046). Thanks @hxy91819
 - GitHub Copilot/memory search: add a GitHub Copilot embedding provider for memory search, and expose a dedicated Copilot embedding host helper so plugins can reuse the transport while honoring remote overrides, token refresh, and safer payload validation. (#61718) Thanks @feiskyer and @vincentkoc.
+- Packaging/plugins: localize bundled plugin runtime deps to their owning extensions, trim the published docs payload, and tighten install/package-manager guardrails so published builds stay leaner and core stops carrying extension-owned runtime baggage. Thanks @vincentkoc.
 
 ### Fixes
 

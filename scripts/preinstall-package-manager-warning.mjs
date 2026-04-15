@@ -1,14 +1,24 @@
 import { pathToFileURL } from "node:url";
 
+const allowedLifecyclePackageManagers = new Set(["pnpm", "npm", "yarn", "bun"]);
+
 function normalizeEnvValue(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function normalizeLifecyclePackageManagerName(value) {
+  const normalized = normalizeEnvValue(value).toLowerCase();
+  if (!/^[a-z0-9][a-z0-9._-]*$/u.test(normalized)) {
+    return null;
+  }
+  return allowedLifecyclePackageManagers.has(normalized) ? normalized : null;
+}
+
 export function detectLifecyclePackageManager(env = process.env) {
   const userAgent = normalizeEnvValue(env.npm_config_user_agent);
-  const userAgentMatch = /^([^/\s]+)\//.exec(userAgent);
+  const userAgentMatch = /^([A-Za-z0-9._-]+)\//u.exec(userAgent);
   if (userAgentMatch) {
-    return userAgentMatch[1].toLowerCase();
+    return normalizeLifecyclePackageManagerName(userAgentMatch[1]);
   }
 
   const execPath = normalizeEnvValue(env.npm_execpath).toLowerCase();

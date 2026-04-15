@@ -21,6 +21,15 @@ describe("detectLifecyclePackageManager", () => {
       }),
     ).toBe("pnpm");
   });
+
+  it("ignores untrusted user-agent tokens with control characters", () => {
+    expect(
+      detectLifecyclePackageManager({
+        npm_config_user_agent: "\u001bnpm/11.4.1 node/v22.20.0 darwin arm64",
+        npm_execpath: "/Users/test/.cache/node/corepack/v1/pnpm/10.32.1/bin/pnpm.cjs",
+      }),
+    ).toBe("pnpm");
+  });
 });
 
 describe("createPackageManagerWarningMessage", () => {

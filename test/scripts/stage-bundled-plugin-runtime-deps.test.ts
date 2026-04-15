@@ -10,23 +10,6 @@ import { createScriptTestHarness } from "./test-helpers.js";
 const { createTempDir } = createScriptTestHarness();
 
 describe("stageBundledPluginRuntimeDeps", () => {
-  it("splits required and optional specs for explicit npm fallback installs", () => {
-    expect(
-      collectRuntimeDependencyInstallSpecs({
-        dependencies: {
-          "@aws-sdk/client-bedrock": "3.1028.0",
-          "left-pad": "1.3.0",
-        },
-        optionalDependencies: {
-          "@discordjs/opus": "^0.10.0",
-        },
-      }),
-    ).toEqual({
-      dependencies: ["@aws-sdk/client-bedrock@3.1028.0", "left-pad@1.3.0"],
-      optionalDependencies: ["@discordjs/opus@^0.10.0"],
-    });
-  });
-
   function createBundledPluginFixture(params: {
     packageJson: Record<string, unknown>;
     pluginId?: string;
@@ -42,6 +25,58 @@ describe("stageBundledPluginRuntimeDeps", () => {
     );
     return { pluginDir, repoRoot };
   }
+
+  it("pins fallback install specs to exact installed versions", () => {
+    const { repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: {
+          direct: "^1.0.0",
+        },
+        optionalDependencies: {
+          optional: "~2.0.0",
+        },
+      },
+    });
+    const rootNodeModulesDir = path.join(repoRoot, "node_modules");
+    fs.mkdirSync(path.join(rootNodeModulesDir, "direct"), { recursive: true });
+    fs.mkdirSync(path.join(rootNodeModulesDir, "optional"), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootNodeModulesDir, "direct", "package.json"),
+      '{ "name": "direct", "version": "1.2.3" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(rootNodeModulesDir, "optional", "package.json"),
+      '{ "name": "optional", "version": "2.0.4" }\n',
+      "utf8",
+    );
+
+    expect(
+      collectRuntimeDependencyInstallSpecs(
+        {
+          dependencies: { direct: "^1.0.0" },
+          optionalDependencies: { optional: "~2.0.0" },
+        },
+        { rootNodeModulesDir },
+      ),
+    ).toEqual({
+      dependencies: ["direct@1.2.3"],
+      optionalDependencies: ["optional@2.0.4"],
+    });
+  });
+
+  it("rejects unsafe runtime dependency specs for fallback installs", () => {
+    expect(() =>
+      collectRuntimeDependencyInstallSpecs(
+        {
+          dependencies: { direct: "file:/etc/passwd" },
+        },
+        { rootNodeModulesDir: "/tmp/node_modules" },
+      ),
+    ).toThrow(/disallowed runtime dependency spec for direct: file:\/etc\/passwd/u);
+  });
 
   it("skips restaging when runtime deps stamp matches the sanitized manifest", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({

@@ -110,6 +110,9 @@ async function writeDistInventory(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+  run(pnpmCommand, ["build"]);
+  run(pnpmCommand, ["ui:build"]);
   ensurePreparedArtifacts();
   await writeDistInventory();
   runBuildSmoke();
