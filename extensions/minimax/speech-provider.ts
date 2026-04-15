@@ -43,9 +43,7 @@ function normalizeMinimaxProviderConfig(
       path: "messages.tts.providers.minimax.apiKey",
     }),
     baseUrl: normalizeMinimaxTtsBaseUrl(
-      trimToUndefined(raw?.baseUrl) ??
-        trimToUndefined(process.env.MINIMAX_API_HOST) ??
-        DEFAULT_MINIMAX_TTS_BASE_URL,
+      trimToUndefined(raw?.baseUrl) ?? DEFAULT_MINIMAX_TTS_BASE_URL,
     ),
     model:
       trimToUndefined(raw?.model) ??
@@ -75,7 +73,7 @@ function readMinimaxProviderConfig(config: SpeechProviderConfig): MinimaxTtsProv
 }
 
 function readMinimaxOverrides(
-  overrides: SpeechProviderOverrides | undefined,
+  overrides?: MinimaxTtsProviderOverrides,
 ): MinimaxTtsProviderOverrides {
   if (!overrides) {
     return {};

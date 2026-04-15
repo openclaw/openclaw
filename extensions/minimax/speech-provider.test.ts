@@ -86,12 +86,12 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(config.pitch).toBe(3);
     });
 
-    it("reads from env vars as fallback", () => {
+    it("keeps TTS model and voice env fallbacks without honoring MINIMAX_API_HOST", () => {
       process.env.MINIMAX_API_HOST = "https://env.api.com";
       process.env.MINIMAX_TTS_MODEL = "speech-01-240228";
       process.env.MINIMAX_TTS_VOICE_ID = "Chinese (Mandarin)_Gentle_Boy";
       const config = provider.resolveConfig!({ rawConfig: {}, cfg: {} as never, timeoutMs: 30000 });
-      expect(config.baseUrl).toBe("https://env.api.com");
+      expect(config.baseUrl).toBe("https://api.minimax.io");
       expect(config.model).toBe("speech-01-240228");
       expect(config.voiceId).toBe("Chinese (Mandarin)_Gentle_Boy");
     });
