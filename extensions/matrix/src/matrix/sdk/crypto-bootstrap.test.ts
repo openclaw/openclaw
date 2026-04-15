@@ -5,7 +5,7 @@ import type { MatrixCryptoBootstrapApi, MatrixRawEvent } from "./types.js";
 function createBootstrapperDeps() {
   return {
     getUserId: vi.fn(async () => "@bot:example.org"),
-    getPassword: vi.fn(() => "super-secret-password"),
+    getPassword: vi.fn<() => string | undefined>(() => "super-secret-password"),
     getDeviceId: vi.fn(() => "DEVICE123"),
     verificationManager: {
       trackVerificationRequest: vi.fn(),
@@ -279,7 +279,7 @@ describe("MatrixCryptoBootstrapper", () => {
 
   it("does not mutate secret storage before forced repair fails on password UIA without a password", async () => {
     const deps = createBootstrapperDeps();
-    deps.getPassword = vi.fn(() => undefined);
+    deps.getPassword = vi.fn<() => string | undefined>(() => undefined);
     const bootstrapCrossSigning = vi.fn<
       ({
         authUploadDeviceSigningKeys,
