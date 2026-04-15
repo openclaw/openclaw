@@ -38,18 +38,12 @@ export function buildCronEventPrompt(
   );
 }
 
-export function buildExecEventPrompt(opts?: { deliverToUser?: boolean }): string {
-  const deliverToUser = opts?.deliverToUser ?? true;
-  if (!deliverToUser) {
-    return (
-      "An async command you ran earlier has completed. The result is shown in the system messages above. " +
-      "Handle the result internally. Do not relay it to the user unless explicitly requested."
-    );
-  }
+export function buildExecEventPrompt(_opts?: { deliverToUser?: boolean }): string {
   return (
     "An async command you ran earlier has completed. The result is shown in the system messages above. " +
-    "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
-    "If it failed, explain what went wrong."
+    "Handle the result internally only. Do not relay it to the user, do not summarize it into a visible chat reply, " +
+    "and do not turn it into a reminder unless the user explicitly asks about that async command itself. " +
+    "Reply HEARTBEAT_OK when there is no separate user-facing follow-up."
   );
 }
 
