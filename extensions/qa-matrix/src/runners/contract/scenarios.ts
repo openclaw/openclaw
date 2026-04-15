@@ -1,4 +1,3 @@
-import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import {
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
   MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY,
@@ -23,6 +22,12 @@ import {
   type MatrixQaScenarioContext,
   type MatrixQaSyncState,
 } from "./scenario-runtime.js";
+import type {
+  MatrixQaCanaryArtifact,
+  MatrixQaReplyArtifact,
+  MatrixQaScenarioArtifacts,
+  MatrixQaScenarioExecution,
+} from "./scenario-types.js";
 
 export type { MatrixQaScenarioDefinition, MatrixQaScenarioId };
 export {
@@ -37,55 +42,11 @@ export {
   runMatrixQaCanary,
   runMatrixQaScenario,
 };
-
-export type MatrixQaReplyArtifact = {
-  bodyPreview?: string;
-  eventId: string;
-  mentions?: MatrixQaObservedEvent["mentions"];
-  relatesTo?: MatrixQaObservedEvent["relatesTo"];
-  sender?: string;
-  tokenMatched?: boolean;
-};
-
-export type MatrixQaCanaryArtifact = {
-  driverEventId: string;
-  reply: MatrixQaReplyArtifact;
-  token: string;
-};
-
-export type MatrixQaScenarioArtifacts = {
-  actorUserId?: string;
-  driverEventId?: string;
-  expectedNoReplyWindowMs?: number;
-  reactionEmoji?: string;
-  reactionEventId?: string;
-  reactionTargetEventId?: string;
-  reply?: MatrixQaReplyArtifact;
-  recoveredDriverEventId?: string;
-  recoveredReply?: MatrixQaReplyArtifact;
-  roomKey?: string;
-  restartSignal?: string;
-  rootEventId?: string;
-  threadDriverEventId?: string;
-  threadReply?: MatrixQaReplyArtifact;
-  threadRootEventId?: string;
-  threadToken?: string;
-  token?: string;
-  topLevelDriverEventId?: string;
-  topLevelReply?: MatrixQaReplyArtifact;
-  topLevelToken?: string;
-  triggerBody?: string;
-  membershipJoinEventId?: string;
-  membershipLeaveEventId?: string;
-  noticeBodyPreview?: string;
-  noticeEventId?: string;
-  transportInterruption?: string;
-  joinedRoomId?: string;
-};
-
-export type MatrixQaScenarioExecution = {
-  artifacts?: MatrixQaScenarioArtifacts;
-  details: string;
+export type {
+  MatrixQaCanaryArtifact,
+  MatrixQaReplyArtifact,
+  MatrixQaScenarioArtifacts,
+  MatrixQaScenarioExecution,
 };
 
 export type { MatrixQaScenarioContext, MatrixQaSyncState };

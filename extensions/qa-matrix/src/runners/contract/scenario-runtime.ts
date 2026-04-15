@@ -14,7 +14,7 @@ import type {
   MatrixQaCanaryArtifact,
   MatrixQaReplyArtifact,
   MatrixQaScenarioExecution,
-} from "./scenarios.js";
+} from "./scenario-types.js";
 
 type MatrixQaActorId = "driver" | "observer";
 

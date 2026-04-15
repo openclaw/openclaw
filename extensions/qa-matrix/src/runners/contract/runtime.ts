@@ -107,7 +107,7 @@ type MatrixQaArtifactPaths = {
   summary: string;
 };
 
-function countMatrixQaStatuses<T extends { status: "fail" | "pass" }>(entries: T[]) {
+function countMatrixQaStatuses<T extends { status: "fail" | "pass" | "skip" }>(entries: T[]) {
   return {
     failed: entries.filter((entry) => entry.status === "fail").length,
     passed: entries.filter((entry) => entry.status === "pass").length,
