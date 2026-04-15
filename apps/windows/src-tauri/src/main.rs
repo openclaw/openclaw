@@ -36,9 +36,12 @@ impl GatewayState {
 
 // Determines the command to launch OpenClaw (binary directly, no cmd /C)
 fn get_openclaw_command() -> (String, Vec<String>) {
+    let sidecar_name = if cfg!(windows) { "openclaw.exe" } else { "openclaw" };
+    let fallback_name = if cfg!(windows) { "openclaw.cmd" } else { "openclaw" };
+
     if let Ok(exe_path) = env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            let sidecar = exe_dir.join("openclaw.exe");
+            let sidecar = exe_dir.join(sidecar_name);
             // Validate sidecar exists and is > 0 bytes (not just a placeholder)
             if sidecar.exists() {
                 if let Ok(metadata) = sidecar.metadata() {
@@ -49,8 +52,8 @@ fn get_openclaw_command() -> (String, Vec<String>) {
             }
         }
     }
-    // Fallback: direct binary invocation
-    ("openclaw".to_string(), vec![])
+    // Fallback: direct binary invocation via PATH
+    (fallback_name.to_string(), vec![])
 }
 
 fn get_gateway_port() -> u16 {
