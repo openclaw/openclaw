@@ -119,6 +119,11 @@ export type AgentConfig = {
   tools?: AgentToolsConfig;
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;
+  /** Optional per-agent dreaming overrides. */
+  dreaming?: {
+    /** Set to false to disable dreaming for this agent. */
+    enabled?: boolean;
+  };
 };
 
 export type AgentsConfig = {
