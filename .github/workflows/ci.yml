@@ -332,7 +332,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          install-deps: "true"
+          install-deps: "false"
           use-sticky-disk: "false"
 
       - name: Setup Python

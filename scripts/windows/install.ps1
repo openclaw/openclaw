@@ -9,7 +9,7 @@ param(
 # 0. Admin & Context Check
 if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "Administrator privileges required. Relaunching..." -ForegroundColor Yellow
-    $arguments = "& '" + $myinvocation.mycommand.definition + "'"
+    $arguments = "-ExecutionPolicy Bypass -File `"$($myinvocation.mycommand.definition)`""
     if ($Uninstall) { $arguments += " -Uninstall" }
     if ($Silent) { $arguments += " -Silent" }
     $arguments += " -InstallPath `"$InstallPath`""
