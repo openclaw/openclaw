@@ -4,8 +4,9 @@ import {
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
 } from "../../shared/live-transport-scenarios.js";
-import { createMatrixQaClient, type MatrixQaObservedEvent } from "../../substrate/client.js";
+import { createMatrixQaClient } from "../../substrate/client.js";
 import { type MatrixQaConfigOverrides } from "../../substrate/config.js";
+import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import {
   buildDefaultMatrixQaTopologySpec,
   findMatrixQaProvisionedRoom,

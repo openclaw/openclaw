@@ -12,12 +12,10 @@ import {
   appendLiveLaneIssue,
   buildLiveLaneArtifactsError,
 } from "../../shared/live-lane-helpers.js";
-import {
-  provisionMatrixQaRoom,
-  type MatrixQaObservedEvent,
-  type MatrixQaProvisionResult,
-} from "../../substrate/client.js";
+import { buildMatrixQaObservedEventsArtifact } from "../../substrate/artifacts.js";
+import { provisionMatrixQaRoom, type MatrixQaProvisionResult } from "../../substrate/client.js";
 import { buildMatrixQaConfig, type MatrixQaConfigOverrides } from "../../substrate/config.js";
+import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { startMatrixQaHarness } from "../../substrate/harness.runtime.js";
 import { resolveMatrixQaModels } from "./model-selection.js";
 import {
@@ -138,29 +136,6 @@ function buildMatrixQaSummary(params: {
     sutAccountId: params.sutAccountId,
     userIds: params.userIds,
   };
-}
-
-function buildObservedEventsArtifact(params: {
-  includeContent: boolean;
-  observedEvents: MatrixQaObservedEvent[];
-}) {
-  return params.observedEvents.map((event) =>
-    params.includeContent
-      ? event
-      : {
-          roomId: event.roomId,
-          eventId: event.eventId,
-          sender: event.sender,
-          stateKey: event.stateKey,
-          type: event.type,
-          originServerTs: event.originServerTs,
-          msgtype: event.msgtype,
-          membership: event.membership,
-          relatesTo: event.relatesTo,
-          mentions: event.mentions,
-          reaction: event.reaction,
-        },
-  );
 }
 
 function isMatrixAccountReady(entry?: {
@@ -531,7 +506,7 @@ export async function runMatrixQaLive(params: {
   await fs.writeFile(
     observedEventsPath,
     `${JSON.stringify(
-      buildObservedEventsArtifact({
+      buildMatrixQaObservedEventsArtifact({
         includeContent: includeObservedEventContent,
         observedEvents,
       }),
@@ -581,7 +556,6 @@ export const __testing = {
   buildMatrixQaSummary,
   MATRIX_QA_SCENARIOS,
   buildMatrixQaConfig,
-  buildObservedEventsArtifact,
   isMatrixAccountReady,
   resolveMatrixQaModels,
   waitForMatrixChannelReady,
