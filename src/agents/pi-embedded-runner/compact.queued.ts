@@ -69,15 +69,26 @@ export async function compactEmbeddedPiSession(
       // chat.abort / abortEmbeddedPiRun / /stop can cancel this compaction.
       // Registration happens inside the lane callback to avoid being
       // overwritten by other queued runs for the same session.
+      const abortController = new AbortController();
+
+      // Forward external abort signal (from caller) to the internal controller.
+      if (params.abortSignal) {
+        if (params.abortSignal.aborted) {
+          abortController.abort(params.abortSignal.reason);
+        } else {
+          params.abortSignal.addEventListener("abort", () => {
+            abortController.abort(params.abortSignal!.reason);
+          }, { once: true });
+        }
+      }
+
       const compactHandle: EmbeddedPiQueueHandle = {
         kind: "embedded",
         queueMessage: async () => {},
         isStreaming: () => false,
         isCompacting: () => true,
         abort: () => {
-          params.abortSignal?.addEventListener
-            ? undefined // signal is read-only; cancel via abortEmbeddedPiRun
-            : undefined;
+          abortController.abort("user_abort");
         },
       };
       setActiveEmbeddedRun(params.sessionId, compactHandle, params.sessionKey);
@@ -140,6 +151,7 @@ export async function compactEmbeddedPiSession(
         };
         const runtimeContext = {
           ...params,
+          abortSignal: abortController.signal,
           ...buildEmbeddedCompactionRuntimeContext({
             sessionKey: params.sessionKey,
             messageChannel: params.messageChannel,
