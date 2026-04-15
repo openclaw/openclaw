@@ -1,6 +1,6 @@
 // bootstrap.mjs — run once, generates eval-set.json + pool.json
 // Usage: ANTHROPIC_API_KEY=... node bootstrap.mjs
-import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -31,6 +31,10 @@ async function main() {
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY required');
 
   const skills = listSkills(SKILLS_DIR).filter(s => s !== 'autoresearch');
+  const evalSetPath = join(__dirname, 'eval-set.json');
+  if (existsSync(evalSetPath)) {
+    console.log(`Reusing existing eval-set.json (${JSON.parse(readFileSync(evalSetPath, 'utf8')).length} pairs)`);
+  } else {
   console.log(`Generating eval pairs for ${skills.length} skills...`);
 
   const allPairs = [];
@@ -51,8 +55,9 @@ async function main() {
     }
   }
 
-  writeFileSync(join(__dirname, 'eval-set.json'), JSON.stringify(allPairs, null, 2));
+  writeFileSync(evalSetPath, JSON.stringify(allPairs, null, 2));
   console.log(`Wrote ${allPairs.length} pairs to eval-set.json`);
+  }
 
   console.log('Running baseline eval...');
   const metrics = await runEval({ model: 'haiku', apiKey });

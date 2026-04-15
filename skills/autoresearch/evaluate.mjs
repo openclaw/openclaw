@@ -51,10 +51,15 @@ function loadEvalSet() {
 
 function loadSkillsSnapshot() {
   const names = listSkills(SKILLS_DIR);
-  return names.map(name => ({
-    name,
-    description: readSkillDescription(SKILLS_DIR, name),
-  }));
+  const out = [];
+  for (const name of names) {
+    try {
+      out.push({ name, description: readSkillDescription(SKILLS_DIR, name) });
+    } catch {
+      // Skip skills with missing/malformed frontmatter — they can't participate in routing.
+    }
+  }
+  return out;
 }
 
 async function runConcurrent(items, concurrency, worker) {
