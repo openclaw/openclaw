@@ -185,6 +185,35 @@ describe("loadWebMedia", () => {
     });
   });
 
+  it("allows host-read CSV files", async () => {
+    const csvFile = path.join(fixtureRoot, "data.csv");
+    await fs.writeFile(csvFile, "name,value\nfoo,1\nbar,2\n", "utf8");
+    const result = await loadWebMedia(csvFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("text/csv");
+  });
+
+  it("rejects binary data disguised as a CSV file", async () => {
+    const fakeCsv = path.join(fixtureRoot, "evil.csv");
+    // Write a PNG header — binary, not text
+    await fs.writeFile(fakeCsv, Buffer.from(TINY_PNG_BASE64, "base64"));
+    await expect(
+      loadWebMedia(fakeCsv, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
   it("rejects traversal-style canvas media paths before filesystem access", async () => {
     await expect(
       loadWebMedia(`${CANVAS_HOST_PATH}/documents/../collection.media/tiny.png`),

@@ -83,6 +83,7 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/csv",
 ]);
 const MB = 1024 * 1024;
 
@@ -133,6 +134,13 @@ function assertHostReadMediaAllowed(params: {
     return;
   }
   const normalizedMime = normalizeMimeType(params.contentType);
+  // CSV exception: content sniffers report text/plain for CSV because CSV is structurally
+  // indistinguishable from plain text at the byte level. Allow it when:
+  // - The extension-derived MIME is text/csv (operator intent)
+  // - The content sniffed as text/plain (confirming valid text, not binary data)
+  if (sniffedMime === "text/plain" && normalizedMime === "text/csv") {
+    return;
+  }
   if (
     params.kind === "document" &&
     normalizedMime &&
