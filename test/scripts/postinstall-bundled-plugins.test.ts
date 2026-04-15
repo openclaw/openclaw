@@ -214,6 +214,54 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("rejects symlinked dist roots in packaged installs", () => {
+    expect(() =>
+      pruneInstalledPackageDist({
+        packageRoot: "/pkg",
+        expectedFiles: new Set(),
+        existsSync: vi.fn(() => true),
+        lstatSync: vi.fn((filePath) => ({
+          isDirectory: () => filePath === "/pkg/dist",
+          isSymbolicLink: () => filePath === "/pkg/dist",
+        })),
+        realpathSync: vi.fn((filePath) => filePath),
+        readdirSync: vi.fn(),
+        rmSync: vi.fn(),
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toThrow("unsafe dist root: dist must be a real directory");
+  });
+
+  it("rejects symlink entries in packaged dist trees", () => {
+    expect(() =>
+      pruneInstalledPackageDist({
+        packageRoot: "/pkg",
+        expectedFiles: new Set(),
+        existsSync: vi.fn(() => true),
+        lstatSync: vi.fn(() => ({
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        })),
+        realpathSync: vi.fn((filePath) => filePath),
+        readdirSync: vi.fn((filePath) => {
+          if (filePath === "/pkg/dist") {
+            return [
+              {
+                name: "escape",
+                isDirectory: () => false,
+                isFile: () => false,
+                isSymbolicLink: () => true,
+              },
+            ];
+          }
+          return [];
+        }),
+        rmSync: vi.fn(),
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toThrow("unsafe dist entry: dist/escape");
+  });
+
   it("runs nested local installs with sanitized env when the sentinel package is missing", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
