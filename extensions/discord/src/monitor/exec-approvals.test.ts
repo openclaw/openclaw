@@ -209,4 +209,18 @@ describe("discord exec approval monitor helpers", () => {
       reason: "not-found",
     });
   });
+
+  it("does not suppress message-only errors as stale approvals", async () => {
+    resolveApprovalOverGatewayMock.mockRejectedValue(new Error("unknown or expired approval id"));
+    const ctx = createDiscordExecApprovalButtonContext({
+      cfg: buildConfig({ enabled: true, approvers: ["123"] }),
+      accountId: "default",
+      config: { enabled: true, approvers: ["123"] },
+    });
+
+    await expect(ctx.resolveApproval("abc", "allow-once")).resolves.toEqual({
+      ok: false,
+      reason: "error",
+    });
+  });
 });

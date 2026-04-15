@@ -2,7 +2,6 @@ import { Button, type ButtonInteraction, type ComponentData } from "@buape/carbo
 import { ButtonStyle } from "discord-api-types/v10";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
@@ -20,6 +19,33 @@ export type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "openclaw/plugin-sdk/infra-runtime";
+
+const INVALID_REQUEST = "INVALID_REQUEST";
+const APPROVAL_NOT_FOUND = "APPROVAL_NOT_FOUND";
+
+function isStructuredApprovalNotFoundError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const gatewayCode =
+    typeof (error as { gatewayCode?: unknown }).gatewayCode === "string"
+      ? (error as { gatewayCode: string }).gatewayCode
+      : null;
+  if (gatewayCode === APPROVAL_NOT_FOUND) {
+    return true;
+  }
+  if (gatewayCode !== INVALID_REQUEST) {
+    return false;
+  }
+  const details = (error as { details?: unknown }).details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return false;
+  }
+  return (
+    typeof (details as { reason?: unknown }).reason === "string" &&
+    (details as { reason: string }).reason === APPROVAL_NOT_FOUND
+  );
+}
 
 function decodeCustomIdValue(value: string): string {
   try {
@@ -148,7 +174,7 @@ export function createDiscordExecApprovalButtonContext(params: {
         });
         return { ok: true };
       } catch (error) {
-        return isApprovalNotFoundError(error)
+        return isStructuredApprovalNotFoundError(error)
           ? { ok: false, reason: "not-found" }
           : { ok: false, reason: "error" };
       }
