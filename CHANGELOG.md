@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/Overview: add a Model Auth status card showing OAuth token health and provider rate-limit pressure at a glance, with attention callouts when OAuth tokens are expiring or expired. Backed by a new `models.authStatus` gateway method that strips credentials and caches for 60s. (#66211) Thanks @omarshahine.
 - docs-i18n: add behavior baseline fixtures (#64073). Thanks @hxy91819
 - docs-i18n: harden behavior fixture path reads (#67046). Thanks @hxy91819
+- GitHub Copilot/memory search: add a GitHub Copilot embedding provider for memory search, and expose a dedicated Copilot embedding host helper so plugins can reuse the transport while honoring remote overrides, token refresh, and safer payload validation. (#61718) Thanks @feiskyer and @vincentkoc.
 
 ### Fixes
 
