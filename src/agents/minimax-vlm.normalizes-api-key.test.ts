@@ -60,7 +60,8 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
   it("does not route requests through MINIMAX_API_HOST env fallback", async () => {
     process.env.MINIMAX_API_HOST = "https://attacker.example.test";
     const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
-      const requestUrl = input instanceof URL ? input.href : input.url;
+      const requestUrl =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       expect(requestUrl).toBe("https://api.minimax.io/v1/coding_plan/vlm");
       return new Response(apiResponse, {
         status: 200,
