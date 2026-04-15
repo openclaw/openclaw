@@ -25,32 +25,36 @@
   width: min(520px, 100%);
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 32px;
-  animation: scale-in 0.25s var(--ease-out);
+  border-radius: var(--radius-xl);
+  padding: 40px;
+  animation: scale-in 0.3s var(--ease-out);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
 }
 
 .login-gate__header {
   text-align: center;
-  margin-bottom: 24px;
+  margin-bottom: 28px;
 }
 
 .login-gate__logo {
-  width: 48px;
-  height: 48px;
-  margin-bottom: 12px;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 16px;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
 }
 
 .login-gate__title {
-  font-size: 22px;
+  font-size: 26px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
 }
 
 .login-gate__sub {
   color: var(--muted);
   font-size: 14px;
-  margin-top: 4px;
+  margin-top: 6px;
+  line-height: 1.5;
 }
 
 .login-gate__form {
@@ -76,12 +80,14 @@
 }
 
 .login-gate__connect {
-  margin-top: 4px;
+  margin-top: 8px;
   width: 100%;
   justify-content: center;
-  padding: 10px 16px;
+  padding: 12px 16px;
   font-size: 15px;
   font-weight: 600;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 2px 12px var(--accent-glow);
 }
 
 .login-gate__help {
@@ -226,22 +232,24 @@
 .card {
   border: 1px solid var(--border);
   background: var(--card);
-  border-radius: var(--radius-lg);
-  padding: 18px;
+  border-radius: var(--radius-xl);
+  padding: 22px;
   animation: rise 0.25s var(--ease-out) backwards;
   transition:
     border-color var(--duration-normal) var(--ease-out),
-    box-shadow var(--duration-normal) var(--ease-out);
+    box-shadow var(--duration-normal) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
 }
 
 .card:hover {
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-sm);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
 }
 
 .card-title {
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 17px;
+  font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--text-strong);
 }
@@ -2962,18 +2970,31 @@ td.data-table-key-col {
 
 .qr-wrap {
   margin-top: 16px;
-  border-radius: var(--radius-md);
-  background: var(--card);
-  border: 1px dashed var(--border-strong);
-  padding: 16px;
+  border-radius: var(--radius-xl);
+  background: #ffffff;
+  border: 2px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+  padding: 20px;
   display: inline-flex;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  position: relative;
+  overflow: hidden;
+}
+
+.qr-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(37, 211, 102, 0.05), transparent);
+  pointer-events: none;
 }
 
 .qr-wrap img {
-  width: 160px;
-  height: 160px;
-  border-radius: var(--radius-sm);
+  width: 200px;
+  height: 200px;
+  border-radius: var(--radius-md);
   image-rendering: pixelated;
+  position: relative;
+  z-index: 1;
 }
 
 /* ===========================================
@@ -3935,9 +3956,9 @@ td.data-table-key-col {
 .ov-card {
   display: grid;
   gap: 6px;
-  padding: 16px;
+  padding: 18px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--card);
   cursor: pointer;
   text-align: left;
@@ -3949,9 +3970,9 @@ td.data-table-key-col {
 }
 
 .ov-card:hover {
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-sm);
-  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-strong));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08), 0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent);
+  transform: translateY(-2px);
 }
 
 .ov-card:focus-visible {

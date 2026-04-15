@@ -60,13 +60,14 @@ export function renderWhatsAppCard(params: {
         : nothing}
     `,
     configSection: renderChannelConfigSection({ channelId: "whatsapp", props }),
-    footer: html`<div class="row" style="margin-top: 14px; flex-wrap: wrap;">
+    footer: html`<div class="row" style="margin-top: 18px; flex-wrap: wrap; gap: 10px;">
       <button
         class="btn primary"
+        style="background: #25D366; border-color: #25D366; box-shadow: 0 2px 12px rgba(37, 211, 102, 0.3); font-size: 14px; padding: 10px 20px; border-radius: 12px;"
         ?disabled=${props.whatsappBusy}
         @click=${() => props.onWhatsAppStart(false)}
       >
-        ${props.whatsappBusy ? t("common.working") : t("common.showQr")}
+        ${props.whatsappBusy ? t("common.working") : "📱 Connect WhatsApp"}
       </button>
       <button
         class="btn"
