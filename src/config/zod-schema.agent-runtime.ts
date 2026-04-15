@@ -583,12 +583,15 @@ export const AgentSandboxSchema = z
   })
   .optional();
 
+const ToolsBySenderSchema = z.record(z.string(), ToolPolicyBaseSchema).optional();
+
 const CommonToolPolicyFields = {
   profile: ToolProfileSchema,
   allow: z.array(z.string()).optional(),
   alsoAllow: z.array(z.string()).optional(),
   deny: z.array(z.string()).optional(),
   byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
+  toolsBySender: ToolsBySenderSchema,
 };
 
 export const AgentToolsSchema = z

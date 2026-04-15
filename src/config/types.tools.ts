@@ -204,6 +204,22 @@ export type GroupToolPolicyConfig = {
 export const TOOLS_BY_SENDER_KEY_TYPES = ["id", "e164", "username", "name"] as const;
 export type ToolsBySenderKeyType = (typeof TOOLS_BY_SENDER_KEY_TYPES)[number];
 
+/**
+ * Returns true if `rawKey` is a channel-scoped compound key (e.g. "discord:123456789").
+ * Mirrors the detection logic in `parseSenderPolicyKey` in group-policy.ts.
+ * Used by the doctor to avoid misclassifying valid channel-scoped keys as legacy untyped keys.
+ */
+export function isChannelScopedSenderKey(rawKey: string): boolean {
+  const trimmed = rawKey.trim();
+  const colonIdx = trimmed.indexOf(":");
+  if (colonIdx <= 0) {
+    return false;
+  }
+  const channelPart = trimmed.slice(0, colonIdx).toLowerCase();
+  const idPart = trimmed.slice(colonIdx + 1).trim();
+  return Boolean(channelPart && idPart && /^[a-z][a-z0-9-]*$/.test(channelPart));
+}
+
 export function parseToolsBySenderTypedKey(
   rawKey: string,
 ): { type: ToolsBySenderKeyType; value: string } | undefined {
