@@ -565,6 +565,59 @@ describe("describeImageWithModel", () => {
     );
   });
 
+  it("falls back to getApiKeyForModel when registry auth lookup throws", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "openai-compatible",
+        id: "custom-image-model",
+        input: ["text", "image"],
+        baseUrl: "https://example.com/v1",
+      })),
+      getApiKeyAndHeaders: getApiKeyAndHeadersMock.mockRejectedValueOnce(
+        new Error("lookup failed"),
+      ),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai-compatible",
+      model: "custom-image-model",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "fallback throw ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai-compatible",
+      model: "custom-image-model",
+      profile: "openai-compatible:work",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "fallback throw ok",
+      model: "custom-image-model",
+    });
+    expect(getApiKeyForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "openai-compatible:work",
+      }),
+    );
+    expect(completeMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.not.objectContaining({
+        headers: expect.anything(),
+      }),
+    );
+  });
+
   it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");
