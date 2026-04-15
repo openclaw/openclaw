@@ -372,6 +372,7 @@ function loadSkillEntries(
     agentId?: string;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
+    agentId?: string;
   },
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
