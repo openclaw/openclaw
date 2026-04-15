@@ -5,9 +5,8 @@
   },
   "tauri": {
     "allowlist": {
-      "all": true,
       "shell": {
-        "all": true,
+        "all": false,
         "sidecar": true,
         "scope": [
           {
@@ -16,17 +15,27 @@
             "args": ["gateway", "run"]
           }
         ]
+      },
+      "dialog": {
+        "all": true
+      },
+      "notification": {
+        "all": true
+      },
+      "process": {
+        "relaunch": true,
+        "exit": true
       }
     },
     "bundle": {
       "active": true,
-      "targets": ["msi", "nsis"],
-      "identifier": "com.openclaw.gateway",
+      "targets": "all",
+      "identifier": "com.openclaw.desktop",
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",
         "icons/128x128@2x.png",
-        "icons/icon.png",
+        "icons/icon.icns",
         "icons/icon.ico"
       ],
       "externalBin": ["binaries/openclaw"],
@@ -41,7 +50,7 @@
       }
     },
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:18789; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     },
     "windows": [
       {

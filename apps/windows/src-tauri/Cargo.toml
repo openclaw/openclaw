@@ -2,8 +2,8 @@
 name = "openclaw-desktop"
 version = "1.0.0"
 edition = "2021"
-description = "OpenClaw Windows wrapper"
-authors = ["Aliyev Ecosystem"]
+description = "Official OpenClaw native Windows wrapper"
+authors = ["OpenClaw Contributors"]
 
 [dependencies]
 tauri = { version = "1.5", features = ["system-tray", "devtools", "notification", "api-all"] }

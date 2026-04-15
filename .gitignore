@@ -150,9 +150,6 @@ test/fixtures/openclaw-vitest-unit-report.json
 analysis/
 .artifacts/qa-e2e/
 extensions/qa-lab/web/dist/
-# Rust build artifacts
-target/
-**/target/
-Cargo.lock
-debug/
-release/
+# Rust build artifacts (scoped to windows app)
+apps/windows/src-tauri/target/
+apps/windows/src-tauri/binaries/

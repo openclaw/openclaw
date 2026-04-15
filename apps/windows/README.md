@@ -58,4 +58,4 @@ To install the application using the automated script:
 - **Registry Guard**: The uninstaller is persisted in the installation directory to ensure clean removal even if temporary files are lost.
 
 ---
-Part of the **Aliyev Ecosystem**.
+Part of the **OpenClaw** core ecosystem.

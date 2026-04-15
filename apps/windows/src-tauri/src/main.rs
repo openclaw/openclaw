@@ -121,9 +121,9 @@ fn watchdog_thread(app: AppHandle, state: GatewayState) {
                     
                     // Exponential backoff
                     thread::sleep(Duration::from_secs(5 * (1 << (count - 1))));
-                    
                     if let Err(e) = spawn_gateway(app.clone(), state.clone()) {
                         eprintln!("Restart failed: {}", e);
+                        show_notification(&app, "Restart Error", &format!("Failed to restart gateway: {}", e));
                     }
                     break; 
                 }
