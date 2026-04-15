@@ -89,6 +89,7 @@ const mocks = vi.hoisted(() => {
     getCustomProviderApiKey: vi.fn().mockReturnValue(undefined),
     getShellEnvAppliedKeys: vi.fn().mockReturnValue(["OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]),
     shouldEnableShellEnvFallback: vi.fn().mockReturnValue(true),
+    resolveProviderSyntheticAuthWithPlugin: vi.fn().mockResolvedValue(undefined),
     createConfigIO: vi.fn().mockReturnValue({
       configPath: "/tmp/openclaw-dev/openclaw.json",
     }),
@@ -158,6 +159,9 @@ async function loadFreshModelsStatusCommandModuleForTest() {
     formatUsageWindowSummary: vi.fn().mockReturnValue("-"),
     loadProviderUsageSummary: mocks.loadProviderUsageSummary,
     resolveUsageProviderId: vi.fn((providerId: string) => providerId),
+  }));
+  vi.doMock("../../plugins/provider-runtime.runtime.js", () => ({
+    resolveProviderSyntheticAuthWithPlugin: mocks.resolveProviderSyntheticAuthWithPlugin,
   }));
   ({ modelsStatusCommand } = await import("./list.status-command.js"));
 }
@@ -433,6 +437,76 @@ describe("modelsStatusCommand auth overview", () => {
       } else {
         mocks.resolveEnvApiKey.mockImplementation(() => null);
       }
+    }
+  });
+
+  it("does not report Codex synthetic auth as missing for codex models", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: {
+            primary: "codex/gpt-5.4",
+            fallbacks: ["codex/gpt-5.4-mini"],
+          },
+          models: {
+            "codex/gpt-5.4": { alias: "codex" },
+            "codex/gpt-5.4-mini": { alias: "codex-mini" },
+          },
+        },
+      },
+      models: { providers: {} },
+      plugins: { entries: { codex: { enabled: true } } },
+      env: { shellEnv: { enabled: true } },
+    });
+    mocks.resolveEnvApiKey.mockImplementation(() => null);
+    mocks.resolveProviderSyntheticAuthWithPlugin.mockImplementation(async ({ provider }) => {
+      if (provider === "codex") {
+        return {
+          apiKey: "codex-app-server",
+          source: "codex-app-server",
+          mode: "token",
+        };
+      }
+      return undefined;
+    });
+
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      expect(payload.defaultModel).toBe("codex/gpt-5.4");
+      expect(payload.auth.missingProvidersInUse).toEqual([]);
+      expect(payload.auth.providersWithOAuth).toContain("codex (1)");
+      expect(payload.auth.providers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider: "codex",
+            effective: expect.objectContaining({
+              kind: "synthetic",
+              detail: "token:codex-app-server",
+            }),
+            synthetic: {
+              mode: "token",
+              source: "codex-app-server",
+            },
+          }),
+        ]),
+      );
+    } finally {
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
+      }
+      mocks.resolveProviderSyntheticAuthWithPlugin.mockResolvedValue(undefined);
     }
   });
 

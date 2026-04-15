@@ -11,6 +11,8 @@ type FormatProviderAuthProfileApiKeyWithPlugin =
 type PrepareProviderRuntimeAuth = ProviderRuntimeModule["prepareProviderRuntimeAuth"];
 type RefreshProviderOAuthCredentialWithPlugin =
   ProviderRuntimeModule["refreshProviderOAuthCredentialWithPlugin"];
+type ResolveProviderSyntheticAuthWithPlugin =
+  ProviderRuntimeModule["resolveProviderSyntheticAuthWithPlugin"];
 
 let providerRuntimePromise: Promise<ProviderRuntimeModule> | undefined;
 
@@ -61,4 +63,11 @@ export async function refreshProviderOAuthCredentialWithPlugin(
 ): Promise<Awaited<ReturnType<RefreshProviderOAuthCredentialWithPlugin>>> {
   const runtime = await loadProviderRuntime();
   return runtime.refreshProviderOAuthCredentialWithPlugin(...args);
+}
+
+export async function resolveProviderSyntheticAuthWithPlugin(
+  ...args: Parameters<ResolveProviderSyntheticAuthWithPlugin>
+): Promise<Awaited<ReturnType<ResolveProviderSyntheticAuthWithPlugin>>> {
+  const runtime = await loadProviderRuntime();
+  return runtime.resolveProviderSyntheticAuthWithPlugin(...args);
 }

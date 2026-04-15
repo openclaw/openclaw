@@ -170,12 +170,20 @@ export async function modelsStatusCommand(
   const shellFallbackEnabled =
     shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true;
 
-  const providerAuth = providers
-    .map((provider) => resolveProviderAuthOverview({ provider, cfg, store, modelsPath }))
-    .filter((entry) => {
-      const hasAny = entry.profiles.count > 0 || Boolean(entry.env) || Boolean(entry.modelsJson);
-      return hasAny;
-    });
+  const providerAuth = (
+    await Promise.all(
+      providers.map((provider) =>
+        resolveProviderAuthOverview({ provider, cfg, store, modelsPath }),
+      ),
+    )
+  ).filter((entry) => {
+    const hasAny =
+      entry.profiles.count > 0 ||
+      Boolean(entry.env) ||
+      Boolean(entry.modelsJson) ||
+      Boolean(entry.synthetic);
+    return hasAny;
+  });
   const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
   const missingProvidersInUse = Array.from(providersInUse)
     .filter((provider) => !providerAuthMap.has(provider))
@@ -250,11 +258,18 @@ export async function modelsStatusCommand(
   const providersWithOauth = providerAuth
     .filter(
       (entry) =>
-        entry.profiles.oauth > 0 || entry.profiles.token > 0 || entry.env?.value === "OAuth (env)",
+        entry.profiles.oauth > 0 ||
+        entry.profiles.token > 0 ||
+        entry.env?.value === "OAuth (env)" ||
+        entry.synthetic?.mode === "oauth" ||
+        entry.synthetic?.mode === "token",
     )
     .map((entry) => {
       const count =
-        entry.profiles.oauth + entry.profiles.token + (entry.env?.value === "OAuth (env)" ? 1 : 0);
+        entry.profiles.oauth +
+        entry.profiles.token +
+        (entry.env?.value === "OAuth (env)" ? 1 : 0) +
+        (entry.synthetic?.mode === "oauth" || entry.synthetic?.mode === "token" ? 1 : 0);
       return `${entry.provider} (${count})`;
     });
 
@@ -510,6 +525,14 @@ export async function modelsStatusCommand(
         formatKeyValue(
           "models.json",
           `${entry.modelsJson.value}${separator}${formatKeyValue("source", entry.modelsJson.source)}`,
+        ),
+      );
+    }
+    if (entry.synthetic) {
+      bits.push(
+        formatKeyValue(
+          "synthetic",
+          `${entry.synthetic.mode}${separator}${formatKeyValue("source", entry.synthetic.source)}`,
         ),
       );
     }

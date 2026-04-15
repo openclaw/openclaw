@@ -12,7 +12,10 @@ import {
   resolveEnvApiKey,
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
+import { normalizeProviderId } from "../../agents/provider-id.js";
+import type { ModelProviderConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -44,12 +47,12 @@ function formatProfileSecretLabel(params: {
   return params.kind === "token" ? "token:missing" : "missing";
 }
 
-export function resolveProviderAuthOverview(params: {
+export async function resolveProviderAuthOverview(params: {
   provider: string;
   cfg: OpenClawConfig;
   store: AuthProfileStore;
   modelsPath: string;
-}): ProviderAuthOverview {
+}): Promise<ProviderAuthOverview> {
   const { provider, cfg, store } = params;
   const now = Date.now();
   const profiles = listProfilesForProvider(store, provider);
@@ -108,6 +111,30 @@ export function resolveProviderAuthOverview(params: {
   const envKey = resolveEnvApiKey(provider);
   const customKey = getCustomProviderApiKey(cfg, provider);
   const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
+  const providerConfig = (() => {
+    const providers = cfg.models?.providers ?? {};
+    const direct = providers[provider];
+    if (direct) {
+      return direct;
+    }
+    const normalized = normalizeProviderId(provider);
+    if (!normalized) {
+      return undefined;
+    }
+    const matched = Object.entries(providers).find(
+      ([key]) => normalizeProviderId(key) === normalized,
+    );
+    return matched?.[1];
+  })();
+  const synthetic = await resolveProviderSyntheticAuthWithPlugin({
+    provider,
+    config: cfg,
+    context: {
+      config: cfg,
+      provider,
+      providerConfig,
+    },
+  });
 
   const effective: ProviderAuthOverview["effective"] = (() => {
     if (profiles.length > 0) {
@@ -127,6 +154,12 @@ export function resolveProviderAuthOverview(params: {
     }
     if (usableCustomKey) {
       return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
+    }
+    if (synthetic) {
+      return {
+        kind: "synthetic",
+        detail: `${synthetic.mode}:${synthetic.source}`,
+      };
     }
     return { kind: "missing", detail: "missing" };
   })();
@@ -159,6 +192,14 @@ export function resolveProviderAuthOverview(params: {
           modelsJson: {
             value: formatMarkerOrSecret(customKey),
             source: `models.json: ${shortenHomePath(params.modelsPath)}`,
+          },
+        }
+      : {}),
+    ...(synthetic
+      ? {
+          synthetic: {
+            mode: synthetic.mode,
+            source: synthetic.source,
           },
         }
       : {}),
