@@ -148,6 +148,25 @@ function getTextStats(text: string): { printableRatio: number } {
   return { printableRatio: printable / total };
 }
 
+function hasSingleByteTextShape(buffer: Buffer): boolean {
+  if (buffer.length === 0) {
+    return true;
+  }
+  let asciiText = 0;
+  let control = 0;
+  for (const byte of buffer) {
+    if (byte === 9 || byte === 10 || byte === 13 || (byte >= 0x20 && byte <= 0x7e)) {
+      asciiText += 1;
+      continue;
+    }
+    if (byte < 0x20 || byte === 0x7f) {
+      control += 1;
+    }
+  }
+  const total = buffer.length;
+  return control === 0 && asciiText / total >= 0.5;
+}
+
 function decodeHostReadText(buffer: Buffer): string | undefined {
   if (buffer.length === 0) {
     return "";
@@ -172,7 +191,11 @@ function decodeHostReadText(buffer: Buffer): string | undefined {
     }
     return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
   } catch {
-    return undefined;
+    if (!hasSingleByteTextShape(buffer)) {
+      return undefined;
+    }
+    // WHATWG latin1 decodes common Excel-style single-byte exports via Windows-1252 mapping.
+    return new TextDecoder("latin1").decode(buffer);
   }
 }
 

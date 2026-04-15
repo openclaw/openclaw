@@ -303,6 +303,57 @@ describe("loadWebMedia", () => {
     },
   );
 
+  it.each([
+    {
+      label: "CSV",
+      fileName: "legacy.csv",
+      contentType: "text/csv",
+      body: Buffer.from("caf\xe9,ni\xf1o\n", "latin1"),
+    },
+    {
+      label: "Markdown",
+      fileName: "legacy.md",
+      contentType: "text/markdown",
+      body: Buffer.from("R\xe9sum\xe9\nni\xf1o\n", "latin1"),
+    },
+  ])(
+    "loads valid single-byte encoded %s files when host-read capability is enabled",
+    async ({ fileName, contentType, body }) => {
+      const textFile = path.join(fixtureRoot, fileName);
+      await fs.writeFile(textFile, body);
+      const result = await loadWebMedia(textFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      });
+      expect(result.kind).toBe("document");
+      expect(result.contentType).toBe(contentType);
+    },
+  );
+
+  it.each([
+    { label: "CSV", fileName: "high-bytes.csv" },
+    { label: "Markdown", fileName: "high-bytes.md" },
+  ])("rejects high-byte opaque data disguised as %s", async ({ fileName }) => {
+    const fakeTextFile = path.join(fixtureRoot, fileName);
+    const opaqueBinary = Buffer.alloc(9000);
+    for (let i = 0; i < opaqueBinary.length; i += 1) {
+      opaqueBinary[i] = 0xa0 + (i % 96);
+    }
+    await fs.writeFile(fakeTextFile, opaqueBinary);
+    await expect(
+      loadWebMedia(fakeTextFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
   it("rejects traversal-style canvas media paths before filesystem access", async () => {
     await expect(
       loadWebMedia(`${CANVAS_HOST_PATH}/documents/../collection.media/tiny.png`),
