@@ -149,6 +149,8 @@ type LobsterPackageCompatModules = {
     stderr?: NodeJS.WritableStream;
     env?: Record<string, string | undefined>;
     mode?: "tool" | "human" | "sdk";
+    cwd?: string;
+    signal?: AbortSignal;
   }) => Promise<CompatPipelineResult>;
   encodeToken: (payload: unknown) => string;
   decodeResumeToken: (token: string) => ResumeTokenPayload;
@@ -347,7 +349,7 @@ async function importLobsterModule<T>(packageRoot: string, relativePath: string)
   return (await import(moduleUrl)) as T;
 }
 
-function createCompatEmbeddedToolRuntime(
+export function createCompatEmbeddedToolRuntime(
   modules: LobsterPackageCompatModules,
 ): EmbeddedToolRuntime {
   const registry = modules.createDefaultRegistry();
@@ -385,6 +387,8 @@ function createCompatEmbeddedToolRuntime(
               stderr: ctx.stderr,
               env: ctx.env,
               mode: ctx.mode,
+              cwd: ctx.cwd,
+              signal: ctx.signal,
             }),
           });
         });
@@ -442,6 +446,8 @@ function createCompatEmbeddedToolRuntime(
               stderr: ctx.stderr,
               env: ctx.env,
               mode: ctx.mode,
+              cwd: ctx.cwd,
+              signal: ctx.signal,
             }),
           });
         });

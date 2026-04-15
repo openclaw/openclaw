@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createCompatEmbeddedToolRuntime,
   createEmbeddedLobsterRunner,
   resolveLobsterCwd,
   withSerializedCompatCwd,
@@ -66,6 +67,63 @@ describe("withSerializedCompatCwd", () => {
     ).rejects.toThrow();
 
     await expect(withSerializedCompatCwd(process.cwd(), async () => "ok")).resolves.toBe("ok");
+  });
+});
+
+describe("createCompatEmbeddedToolRuntime", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("passes ctx.signal through compat pipeline execution for run and resume", async () => {
+    const runPipeline = vi
+      .fn()
+      .mockResolvedValueOnce({ items: [], halted: false, rendered: false })
+      .mockResolvedValueOnce({ items: [], halted: false, rendered: false });
+
+    const runtime = createCompatEmbeddedToolRuntime({
+      parsePipeline: vi.fn().mockReturnValue([{ name: "exec", args: { _: [] } }]),
+      createDefaultRegistry: vi.fn().mockReturnValue({
+        get: vi.fn(),
+        list: vi.fn().mockReturnValue([]),
+      }),
+      runPipeline,
+      encodeToken: vi.fn(),
+      decodeResumeToken: vi.fn().mockReturnValue({
+        pipeline: [{ name: "exec", args: { _: [] } }],
+        resumeAtIndex: 0,
+        items: [],
+      }),
+      runWorkflowFile: vi.fn(),
+    });
+
+    const runSignal = new AbortController().signal;
+    await runtime.runToolRequest({
+      pipeline: "exec",
+      ctx: { cwd: process.cwd(), mode: "tool", signal: runSignal },
+    });
+
+    const resumeSignal = new AbortController().signal;
+    await runtime.resumeToolRequest({
+      token: "resume-token",
+      approved: true,
+      ctx: { cwd: process.cwd(), mode: "tool", signal: resumeSignal },
+    });
+
+    expect(runPipeline).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        cwd: process.cwd(),
+        signal: runSignal,
+      }),
+    );
+    expect(runPipeline).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        cwd: process.cwd(),
+        signal: resumeSignal,
+      }),
+    );
   });
 });
 
