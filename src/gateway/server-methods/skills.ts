@@ -341,6 +341,28 @@ export const skillsHandlers: GatewayRequestHandlers = {
       skills,
     };
     await writeConfigFile(nextConfig);
-    respond(true, { ok: true, skillKey: p.skillKey, config: current }, undefined);
+
+    // Mask secrets before returning to prevent leaking sensitive values
+    const redacted = { ...current };
+    if (redacted.apiKey) {
+      redacted.apiKey = redacted.apiKey.length > 8
+        ? redacted.apiKey.slice(0, 4) + "…" + redacted.apiKey.slice(-4)
+        : "••••••••";
+    }
+    if (redacted.env && typeof redacted.env === "object") {
+      const maskedEnv: Record<string, string> = {};
+      for (const [key, value] of Object.entries(redacted.env)) {
+        const lower = key.toLowerCase();
+        if (lower.includes("key") || lower.includes("secret") || lower.includes("token") || lower.includes("password")) {
+          maskedEnv[key] = value.length > 8
+            ? value.slice(0, 4) + "…" + value.slice(-4)
+            : "••••••••";
+        } else {
+          maskedEnv[key] = value;
+        }
+      }
+      redacted.env = maskedEnv;
+    }
+    respond(true, { ok: true, skillKey: p.skillKey, config: redacted }, undefined);
   },
 };
