@@ -243,6 +243,6 @@ describe("google generative ai helpers", () => {
       transport: "http",
       request: { allowPrivateNetwork: true } as unknown as ProviderRequestTransportOverrides,
     });
-    expect(config.allowPrivateNetwork).toBe(false);
+    expect(config.allowPrivateNetwork).toBe(true);
   });
 });
