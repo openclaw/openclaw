@@ -382,16 +382,17 @@ describe("web session", () => {
     const writeFileSpy = vi.spyOn(fsSync.promises, "writeFile").mockResolvedValue(undefined);
     const renameSpy = vi.spyOn(fsSync.promises, "rename").mockResolvedValue(undefined);
     const rmSpy = vi.spyOn(fsSync.promises, "rm").mockResolvedValue(undefined);
+    const chmodSpy = vi.spyOn(fsSync, "chmodSync").mockImplementation(() => {});
 
     await writeCredsJsonAtomically(
       "/tmp/openclaw-oauth/whatsapp/default",
       { me: { id: "123@s.whatsapp.net" } },
-      { warn: vi.fn() } as never,
     );
 
     expect(writeFileSpy).toHaveBeenCalledTimes(1);
     expect(renameSpy).toHaveBeenCalledTimes(1);
     expect(rmSpy).not.toHaveBeenCalled();
+    expect(chmodSpy).not.toHaveBeenCalled();
     const writePath = String(writeFileSpy.mock.calls[0]?.[0] ?? "");
     const renameArgs = renameSpy.mock.calls[0] ?? [];
     expect(writePath).toContain(".creds.");

@@ -47,25 +47,18 @@ async function loadQrTerminal() {
 export async function writeCredsJsonAtomically(
   authDir: string,
   creds: unknown,
-  logger: ReturnType<typeof getChildLogger>,
 ): Promise<void> {
   const credsPath = resolveWebCredsPath(authDir);
   const tempPath = path.join(authDir, `.creds.${process.pid}.${Date.now()}.tmp`);
   try {
     await fs.writeFile(tempPath, JSON.stringify(creds, BufferJSON.replacer), { mode: 0o600 });
     await fs.rename(tempPath, credsPath);
-    try {
-      fsSync.chmodSync(credsPath, 0o600);
-    } catch {
-      // best-effort on platforms that support it
-    }
   } catch (err) {
     try {
       await fs.rm(tempPath, { force: true });
     } catch {
       // best-effort cleanup
     }
-    logger.warn({ error: String(err) }, "failed atomic WhatsApp creds write");
     throw err;
   }
 }
@@ -121,11 +114,6 @@ async function safeSaveCreds(
   }
   try {
     await Promise.resolve(saveCreds());
-    try {
-      fsSync.chmodSync(resolveWebCredsPath(authDir), 0o600);
-    } catch {
-      // best-effort on platforms that support it
-    }
   } catch (err) {
     logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
   }
@@ -153,7 +141,7 @@ export async function createWaSocket(
   maybeRestoreCredsFromBackup(authDir);
   const { state } = await useMultiFileAuthState(authDir);
   const saveCreds = async () => {
-    await writeCredsJsonAtomically(authDir, state.creds, sessionLogger);
+    await writeCredsJsonAtomically(authDir, state.creds);
   };
   const { version } = await fetchLatestBaileysVersion();
   const agent = await resolveEnvProxyAgent(sessionLogger);
