@@ -1142,7 +1142,7 @@ function resolveExpectedDevUpdateRef(ref) {
   return trimmed || "main";
 }
 
-function shouldRunMainChannelDevUpdate(ref) {
+export function shouldRunMainChannelDevUpdate(ref) {
   return resolveExpectedDevUpdateRef(ref) === "main";
 }
 
@@ -1331,44 +1331,14 @@ async function ensureDevUpdateGitInstall(params) {
     return repairedShell;
   }
 
-  try {
-    const updateStatus = await readInstalledUpdateStatus({
-      cliPath: params.cliPath,
-      cwd: params.lane.homeDir,
-      env: params.env,
-      logPath: join(params.logsDir, "dev-update-status.log"),
-    });
-    verifyDevUpdateStatus(updateStatus.stdout, { ref: params.requestedRef });
-    return { cliPath: params.cliPath };
-  } catch (initialError) {
-    await repairLegacyDevUpdateInstall({
-      lane: params.lane,
-      env: params.env,
-      logsDir: params.logsDir,
-      requestedRef: params.requestedRef,
-    });
-    const repairedShell = await verifyFreshShellCommand({
-      lane: params.lane,
-      env: params.env,
-      expectedNeedle: "OpenClaw",
-      logPath: join(params.logsDir, "dev-update-repair-shell.log"),
-    });
-    try {
-      const repairedStatus = await readInstalledUpdateStatus({
-        cliPath: repairedShell.cliPath,
-        cwd: params.lane.homeDir,
-        env: params.env,
-        logPath: join(params.logsDir, "dev-update-status-after-repair.log"),
-      });
-      verifyDevUpdateStatus(repairedStatus.stdout, { ref: params.requestedRef });
-      return repairedShell;
-    } catch (repairError) {
-      throw new Error(
-        `Dev update repair did not produce a git install. Initial failure: ${formatError(initialError)}. Repair failure: ${formatError(repairError)}`,
-        { cause: repairError },
-      );
-    }
-  }
+  const updateStatus = await readInstalledUpdateStatus({
+    cliPath: params.cliPath,
+    cwd: params.lane.homeDir,
+    env: params.env,
+    logPath: join(params.logsDir, "dev-update-status.log"),
+  });
+  verifyDevUpdateStatus(updateStatus.stdout, { ref: params.requestedRef });
+  return { cliPath: params.cliPath };
 }
 
 async function repairLegacyDevUpdateInstall(params) {

@@ -8,6 +8,7 @@ import {
   resolveRequestedSuites,
   resolveRunnerMatrix,
   resolveStaticFileContentType,
+  shouldRunMainChannelDevUpdate,
   shouldUseManagedGatewayService,
   verifyDevUpdateStatus,
 } from "../../scripts/openclaw-cross-os-release-checks.mjs";
@@ -127,6 +128,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "--no-fund",
       "--no-audit",
     ]);
+  });
+
+  it("only treats main as a real dev-update lane", () => {
+    expect(shouldRunMainChannelDevUpdate("main")).toBe(true);
+    expect(shouldRunMainChannelDevUpdate(" codex/cross-os-release-checks-full-native-e2e ")).toBe(
+      false,
+    );
+    expect(shouldRunMainChannelDevUpdate("v2026.4.14")).toBe(false);
   });
 
   it("accepts a git main dev-channel update status payload", () => {
