@@ -22,6 +22,7 @@ function createOllamaFetchMock(params: {
   show?: Record<string, number | undefined>;
   pullResponse?: Response;
   tagsError?: Error;
+  meResponse?: Response;
 }) {
   return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = requestUrl(input);
@@ -38,6 +39,9 @@ function createOllamaFetchMock(params: {
         ? jsonResponse({ model_info: { "llama.context_length": contextWindow } })
         : jsonResponse({});
     }
+    if (url.endsWith("/api/me")) {
+      return params.meResponse ?? jsonResponse({});
+    }
     if (url.endsWith("/api/pull")) {
       return params.pullResponse ?? new Response('{"status":"success"}\n', { status: 200 });
     }
@@ -47,7 +51,7 @@ function createOllamaFetchMock(params: {
 
 function createLocalPrompter(): WizardPrompter {
   return {
-    select: vi.fn().mockResolvedValueOnce("local"),
+    select: vi.fn().mockResolvedValueOnce("local-only"),
     text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
     note: vi.fn(async () => undefined),
   } as unknown as WizardPrompter;
@@ -55,9 +59,17 @@ function createLocalPrompter(): WizardPrompter {
 
 function createCloudPrompter(): WizardPrompter {
   return {
-    select: vi.fn().mockResolvedValueOnce("cloud"),
+    select: vi.fn().mockResolvedValueOnce("cloud-only"),
     confirm: vi.fn().mockResolvedValueOnce(false),
     text: vi.fn().mockResolvedValueOnce("test-ollama-key"),
+    note: vi.fn(async () => undefined),
+  } as unknown as WizardPrompter;
+}
+
+function createCloudLocalPrompter(): WizardPrompter {
+  return {
+    select: vi.fn().mockResolvedValueOnce("cloud-local"),
+    text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
     note: vi.fn(async () => undefined),
   } as unknown as WizardPrompter;
 }
@@ -111,6 +123,31 @@ describe("ollama setup", () => {
     expect(modelIds?.[0]).toBe("kimi-k2.5:cloud");
     expect(result.config.models?.providers?.ollama?.baseUrl).toBe("https://ollama.com");
     expect(result.credential).toBe("test-ollama-key");
+  });
+
+  it("puts hybrid cloud model suggestions after the local default when signed in", async () => {
+    const prompter = createCloudLocalPrompter();
+    const fetchMock = createOllamaFetchMock({
+      tags: ["llama3:8b"],
+      meResponse: jsonResponse({ user: "signed-in" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await promptAndConfigureOllama({
+      cfg: {},
+      prompter,
+    });
+    const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
+
+    expect(modelIds).toEqual([
+      "gemma4",
+      "kimi-k2.5:cloud",
+      "minimax-m2.7:cloud",
+      "glm-5.1:cloud",
+      "llama3:8b",
+    ]);
+    expect(result.config.models?.providers?.ollama?.baseUrl).toBe("http://127.0.0.1:11434");
+    expect(result.credential).toBe("ollama-local");
   });
 
   it("mode selection affects model ordering (local)", async () => {
@@ -167,7 +204,7 @@ describe("ollama setup", () => {
     const prompter = {
       select: vi.fn(async () => {
         events.push("select");
-        return "cloud";
+        return "cloud-only";
       }),
       confirm: vi.fn(async () => false),
       text: vi.fn(async () => {
@@ -210,6 +247,37 @@ describe("ollama setup", () => {
     );
   });
 
+  it("cloud + local mode falls back to local models when ollama signin is missing", async () => {
+    const prompter = createCloudLocalPrompter();
+    const fetchMock = createOllamaFetchMock({
+      tags: ["llama3:8b"],
+      meResponse: new Response(JSON.stringify({ signin_url: "https://ollama.com/signin" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await promptAndConfigureOllama({
+      cfg: {},
+      prompter,
+    });
+
+    expect(result.config.models?.providers?.ollama?.models?.map((m) => m.id)).toEqual([
+      "gemma4",
+      "llama3:8b",
+    ]);
+    expect(prompter.note).toHaveBeenCalledWith(
+      [
+        "Cloud models on this Ollama host need `ollama signin`.",
+        "https://ollama.com/signin",
+        "",
+        "Continuing with local models only for now.",
+      ].join("\n"),
+      "Ollama Cloud + Local",
+    );
+  });
+
   it("cloud mode seeds the hosted cloud model list", async () => {
     const prompter = createCloudPrompter();
     const result = await promptAndConfigureOllama({
@@ -231,7 +299,7 @@ describe("ollama setup", () => {
   it("uses /api/show context windows when building Ollama model configs", async () => {
     const prompter = {
       text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-      select: vi.fn().mockResolvedValueOnce("local"),
+      select: vi.fn().mockResolvedValueOnce("local-only"),
       note: vi.fn(async () => undefined),
     } as unknown as WizardPrompter;
 
