@@ -452,7 +452,9 @@ export function redactConfigSnapshot(
         ),
     })
   ) {
-    redactedRaw = null;
+    // Keep redactedRaw string so UI can display raw view without edit.
+    // isReadonly state is controlled upstream — fallback only blocks editing,
+    // not rendering.
   }
   // Also redact the resolved config (contains values after ${ENV} substitution)
   const redactedResolved = redactConfigObject(snapshot.resolved, uiHints);
