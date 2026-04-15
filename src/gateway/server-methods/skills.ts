@@ -343,7 +343,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     await writeConfigFile(nextConfig);
     const redacted = { ...current };
     delete redacted.apiKey;
-    const secretKeyPattern = /key|secret|token|password|credential/i;
+    const secretKeyPattern = /api.?key|secret|auth.?token|password|credential/i;
     if (redacted.env && typeof redacted.env === "object") {
       const safeEnv: Record<string, string> = {};
       for (const [key, value] of Object.entries(redacted.env)) {
