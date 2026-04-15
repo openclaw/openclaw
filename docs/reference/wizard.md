@@ -40,7 +40,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
       - Sets `agents.defaults.model` to `openai/gpt-5.4` when model is unset, `openai/*`, or `openai-codex/*`.
     - **xAI (Grok) API key**: prompts for `XAI_API_KEY` and configures xAI as a model provider.
     - **OpenCode**: prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, get it at https://opencode.ai/auth) and lets you pick the Zen or Go catalog.
-    - **Ollama**: prompts for the Ollama base URL, offers **Cloud + Local** or **Local** mode, discovers available models, and auto-pulls the selected local model when needed.
+    - **Ollama**: offers **Cloud** or **Local** mode first. Cloud prompts for `OLLAMA_API_KEY` and uses `https://ollama.com`; Local prompts for the Ollama base URL, discovers available models, and auto-pulls the selected local model when needed.
     - More detail: [Ollama](/providers/ollama)
     - **API key**: stores the key for you.
     - **Vercel AI Gateway (multi-model proxy)**: prompts for `AI_GATEWAY_API_KEY`.
