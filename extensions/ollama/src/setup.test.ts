@@ -125,6 +125,24 @@ describe("ollama setup", () => {
     expect(result.credential).toBe("test-ollama-key");
   });
 
+  it("uses generic token flags for cloud-only setup", async () => {
+    const prompter = createCloudPrompter();
+
+    const result = await promptAndConfigureOllama({
+      cfg: {},
+      env: {},
+      opts: {
+        token: "generic-ollama-key",
+        tokenProvider: "ollama",
+      },
+      prompter,
+      allowSecretRefPrompt: false,
+    });
+
+    expect(result.credential).toBe("generic-ollama-key");
+    expect(prompter.text).not.toHaveBeenCalled();
+  });
+
   it("puts hybrid cloud model suggestions after the local default when signed in", async () => {
     const prompter = createCloudLocalPrompter();
     const fetchMock = createOllamaFetchMock({
@@ -179,6 +197,22 @@ describe("ollama setup", () => {
     });
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects the local marker during cloud-only setup", async () => {
+    const prompter = createCloudPrompter();
+
+    await expect(
+      promptAndConfigureOllama({
+        cfg: {},
+        env: {},
+        opts: {
+          ollamaApiKey: "ollama-local",
+        },
+        prompter,
+        allowSecretRefPrompt: false,
+      }),
+    ).rejects.toThrow("Cloud-only Ollama setup requires a real OLLAMA_API_KEY.");
   });
 
   it("local mode only hits local model discovery endpoints", async () => {
