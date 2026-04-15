@@ -15,6 +15,7 @@ import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
 import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -121,10 +122,11 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return false;
 }
 
-function buildWebchatAudioOnlyAssistantMessage(
+async function buildWebchatAudioOnlyAssistantMessage(
   payloads: ReplyPayload[],
-): { content: Array<Record<string, unknown>>; transcriptText: string } | null {
-  const audioBlocks = buildWebchatAudioContentBlocksFromReplyPayloads(payloads);
+  localRoots: readonly string[] | "any" | undefined,
+): Promise<{ content: Array<Record<string, unknown>>; transcriptText: string } | null> {
+  const audioBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads(payloads, localRoots);
   if (audioBlocks.length === 0) {
     return null;
   }
@@ -2075,11 +2077,25 @@ export const chatHandlers: GatewayRequestHandlers = {
           savedImages: await persistedImagesPromise,
         });
       };
-      const appendWebchatAgentAudioTranscriptIfNeeded = (payload: ReplyPayload) => {
+      const appendWebchatAgentAudioTranscriptIfNeeded = async (payload: ReplyPayload) => {
         if (!agentRunStarted || appendedWebchatAgentAudio || !isMediaBearingPayload(payload)) {
           return;
         }
-        const audioMessage = buildWebchatAudioOnlyAssistantMessage([payload]);
+        const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+          cfg,
+          agentId,
+          sessionKey,
+          messageProvider: originatingChannel,
+          accountId,
+          requesterSenderId: clientInfo?.id,
+          requesterSenderName: clientInfo?.displayName,
+          requesterSenderUsername: clientInfo?.displayName,
+          mediaSources: resolveSendableOutboundReplyParts(payload).mediaUrls,
+        });
+        const audioMessage = await buildWebchatAudioOnlyAssistantMessage(
+          [payload],
+          mediaAccess.localRoots,
+        );
         if (!audioMessage) {
           return;
         }
@@ -2113,7 +2129,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             case "block":
             case "final":
               deliveredReplies.push({ payload, kind: info.kind });
-              appendWebchatAgentAudioTranscriptIfNeeded(payload);
+              await appendWebchatAgentAudioTranscriptIfNeeded(payload);
               break;
             case "tool":
               // Tool results that carry audio (e.g. the TTS tool) must be promoted
