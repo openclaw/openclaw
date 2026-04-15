@@ -365,9 +365,14 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(text)).toBe("Before middle after");
   });
 
-  it("strips tool_result XML tags from text", () => {
-    const text = "Response <tool_result>some output</tool_result> continues";
+  it("strips JSON tool_result XML tags from text", () => {
+    const text = 'Response <tool_result>{"output":"some output"}</tool_result> continues';
     expect(sanitizeUserFacingText(text)).toBe("Response continues");
+  });
+
+  it("preserves plain tool_result XML examples", () => {
+    const text = "Use <tool_result>payload</tool_result> in XML examples.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
   });
 
   it("strips multiline tool_call tags", () => {
@@ -392,7 +397,9 @@ describe("sanitizeUserFacingText", () => {
 
   it("strips orphaned tool tags through the end of text", () => {
     expect(sanitizeUserFacingText('Visible <tool_call>{"name": "exec"}')).toBe("Visible ");
-    expect(sanitizeUserFacingText("Visible <tool_result>partial output")).toBe("Visible ");
+    expect(sanitizeUserFacingText('Visible <tool_result>{"output":"partial output"}')).toBe(
+      "Visible ",
+    );
   });
 
   it("does not leak embedded closing-tag text from tool payloads", () => {

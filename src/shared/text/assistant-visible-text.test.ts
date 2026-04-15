@@ -127,6 +127,10 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
+    it("preserves plain <tool_result> examples", () => {
+      expectLiteralVisibleText("Use <tool_result>payload</tool_result> in XML examples.");
+    });
+
     it("strips dangling <tool_result> content to end-of-string", () => {
       expectVisibleText('Result:\n<tool_result>\n{"output": "data"}\n', "Result:\n");
     });
