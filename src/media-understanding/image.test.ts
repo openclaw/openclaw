@@ -229,6 +229,60 @@ describe("describeImageWithModel", () => {
     expect(context?.messages?.[0]?.content).toHaveLength(1);
   });
 
+  it("preserves configured provider headers for custom OpenAI-compatible image models", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "openai",
+        id: "gpt-4.1-mini",
+        input: ["text", "image"],
+        baseUrl: "https://example.test/v1",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "ok" }],
+    });
+
+    await describeImageWithModel({
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://example.test/v1",
+              headers: {
+                "X-Custom": "1",
+                "User-Agent": "custom-agent",
+              },
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    const [, , opts] = completeMock.mock.calls[0] ?? [];
+    expect(opts).toEqual(
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "X-Custom": "1",
+          "User-Agent": "custom-agent",
+        }),
+      }),
+    );
+  });
+
   it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");

@@ -9,6 +9,7 @@ import {
 import { normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { coerceImageAssistantText } from "../agents/tools/image-tool.helpers.js";
+import { resolveProviderRequestConfig } from "../agents/provider-request-config.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
@@ -43,7 +44,7 @@ async function resolveImageRuntime(params: {
   model: string;
   profile?: string;
   preferredProfile?: string;
-}): Promise<{ apiKey: string; model: Model<Api> }> {
+}): Promise<{ apiKey: string; model: Model<Api>; headers?: Record<string, string> }> {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
   const { discoverAuthStorage, discoverModels } = await loadPiModelDiscoveryRuntime();
   const authStorage = discoverAuthStorage(params.agentDir);
@@ -65,7 +66,23 @@ async function resolveImageRuntime(params: {
   });
   const apiKey = requireApiKey(apiKeyInfo, model.provider);
   authStorage.setRuntimeApiKey(model.provider, apiKey);
-  return { apiKey, model };
+  const providerConfig = params.cfg.models?.providers?.[resolvedRef.provider];
+  const providerHeaders =
+    providerConfig?.headers && typeof providerConfig.headers === "object"
+      ? Object.fromEntries(
+          Object.entries(providerConfig.headers as Record<string, unknown>)
+            .filter(([, value]) => typeof value === "string" && value.trim().length > 0)
+            .map(([key, value]) => [String(key), String(value).trim()]),
+        )
+      : undefined;
+  const requestConfig = resolveProviderRequestConfig({
+    provider: resolvedRef.provider,
+    baseUrl: model.baseUrl,
+    providerHeaders,
+    capability: "llm",
+    transport: "http",
+  });
+  return { apiKey, model, headers: requestConfig.headers };
 }
 
 function buildImageContext(
@@ -156,11 +173,13 @@ export async function describeImagesWithModel(
   const prompt = params.prompt ?? "Describe the image.";
   let apiKey: string;
   let model: Model<Api> | undefined;
+  let headers: Record<string, string> | undefined;
 
   try {
     const resolved = await resolveImageRuntime(params);
     apiKey = resolved.apiKey;
     model = resolved.model;
+    headers = resolved.headers;
   } catch (err) {
     if (!isMinimaxVlmModel(params.provider, params.model) || !isUnknownModelError(err)) {
       throw err;
@@ -197,6 +216,7 @@ export async function describeImagesWithModel(
     apiKey,
     maxTokens: resolveImageToolMaxTokens(model.maxTokens, params.maxTokens ?? 512),
     signal: controller.signal,
+    ...(headers ? { headers } : {}),
   }).finally(() => {
     clearTimeout(timeout);
   });
