@@ -442,14 +442,14 @@ function recomputeJobNextRunAtMs(params: {
   state: CronServiceState;
   job: CronJob;
   nowMs: number;
-  suppressMissingNextRunScheduleError?: boolean;
+  suppressScheduleComputeError?: boolean;
   preserveScheduleErrorCount?: boolean;
 }) {
   let changed = false;
   try {
     let newNext = computeJobNextRunAtMs(params.job, params.nowMs);
     if (params.job.schedule.kind === "cron" && newNext === undefined) {
-      if (params.suppressMissingNextRunScheduleError) {
+      if (params.suppressScheduleComputeError) {
         return changed;
       }
       return recordScheduleComputeError({
@@ -488,6 +488,9 @@ function recomputeJobNextRunAtMs(params: {
       changed = true;
     }
   } catch (err) {
+    if (params.suppressScheduleComputeError) {
+      return changed;
+    }
     if (recordScheduleComputeError({ state: params.state, job: params.job, err })) {
       changed = true;
     }
@@ -495,7 +498,13 @@ function recomputeJobNextRunAtMs(params: {
   return changed;
 }
 
-export function recomputeNextRuns(state: CronServiceState): boolean {
+export function recomputeNextRuns(
+  state: CronServiceState,
+  opts?: {
+    suppressScheduleComputeErrorJobIds?: ReadonlySet<string>;
+    preserveScheduleErrorCountJobIds?: ReadonlySet<string>;
+  },
+): boolean {
   return walkSchedulableJobs(state, ({ job, nowMs: now }) => {
     let changed = false;
     // Only recompute if nextRunAtMs is missing or already past-due.
@@ -504,7 +513,16 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
     const nextRun = job.state.nextRunAtMs;
     const isDueOrMissing = !hasScheduledNextRunAtMs(nextRun) || now >= nextRun;
     if (isDueOrMissing) {
-      if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
+      if (
+        recomputeJobNextRunAtMs({
+          state,
+          job,
+          nowMs: now,
+          suppressScheduleComputeError:
+            opts?.suppressScheduleComputeErrorJobIds?.has(job.id) ?? false,
+          preserveScheduleErrorCount: opts?.preserveScheduleErrorCountJobIds?.has(job.id) ?? false,
+        })
+      ) {
         changed = true;
       }
     }
@@ -524,7 +542,7 @@ export function recomputeNextRunsForMaintenance(
   opts?: {
     recomputeExpired?: boolean;
     nowMs?: number;
-    suppressMissingNextRunScheduleErrorJobIds?: ReadonlySet<string>;
+    suppressScheduleComputeErrorJobIds?: ReadonlySet<string>;
     preserveScheduleErrorCountJobIds?: ReadonlySet<string>;
   },
 ): boolean {
@@ -539,8 +557,8 @@ export function recomputeNextRunsForMaintenance(
             state,
             job,
             nowMs: now,
-            suppressMissingNextRunScheduleError:
-              opts?.suppressMissingNextRunScheduleErrorJobIds?.has(job.id) ?? false,
+            suppressScheduleComputeError:
+              opts?.suppressScheduleComputeErrorJobIds?.has(job.id) ?? false,
             preserveScheduleErrorCount:
               opts?.preserveScheduleErrorCountJobIds?.has(job.id) ?? false,
           })
@@ -557,7 +575,17 @@ export function recomputeNextRunsForMaintenance(
         const lastRun = job.state.lastRunAtMs;
         const alreadyExecutedSlot = isFiniteTimestamp(lastRun) && lastRun >= job.state.nextRunAtMs;
         if (alreadyExecutedSlot) {
-          if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
+          if (
+            recomputeJobNextRunAtMs({
+              state,
+              job,
+              nowMs: now,
+              suppressScheduleComputeError:
+                opts?.suppressScheduleComputeErrorJobIds?.has(job.id) ?? false,
+              preserveScheduleErrorCount:
+                opts?.preserveScheduleErrorCountJobIds?.has(job.id) ?? false,
+            })
+          ) {
             changed = true;
           }
         }

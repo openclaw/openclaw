@@ -165,7 +165,7 @@ export async function start(state: CronServiceState) {
     }
   });
 
-  await runMissedJobs(state, {
+  const startupScheduleComputeFailedJobIds = await runMissedJobs(state, {
     skipJobIds: interruptedJobIds.size > 0 ? interruptedJobIds : undefined,
   });
 
@@ -174,7 +174,10 @@ export async function start(state: CronServiceState) {
     // this path runs before the scheduler begins servicing regular timer ticks.
     // Avoid an extra reload/write cycle on startup.
     await ensureLoaded(state, { skipRecompute: true });
-    const changed = recomputeNextRuns(state);
+    const changed = recomputeNextRuns(state, {
+      suppressScheduleComputeErrorJobIds: startupScheduleComputeFailedJobIds,
+      preserveScheduleErrorCountJobIds: startupScheduleComputeFailedJobIds,
+    });
     if (changed) {
       await persist(state);
     }
