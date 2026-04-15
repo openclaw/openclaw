@@ -276,6 +276,28 @@ describe("createEmbeddedLobsterRunner", () => {
     expect(loadRuntime).toHaveBeenCalledTimes(1);
   });
 
+  it("loads the installed Lobster package through the default runtime loader", async () => {
+    const runner = createEmbeddedLobsterRunner();
+
+    const envelope = await runner.run({
+      action: "run",
+      pipeline: "commands.list",
+      cwd: process.cwd(),
+      timeoutMs: 5_000,
+      maxStdoutBytes: 65_536,
+    });
+
+    expect(envelope.ok).toBe(true);
+    if (!envelope.ok) {
+      throw new Error(envelope.error.message);
+    }
+    expect(envelope.status).toBe("ok");
+    expect(envelope.requiresApproval).toBeNull();
+    expect(envelope.output).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "commands.list" })]),
+    );
+  });
+
   it("requires a pipeline for run", async () => {
     const runner = createEmbeddedLobsterRunner({
       loadRuntime: vi.fn().mockResolvedValue({

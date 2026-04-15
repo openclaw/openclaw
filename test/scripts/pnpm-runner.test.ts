@@ -92,6 +92,24 @@ describe("resolvePnpmRunner", () => {
     }
   });
 
+  it("executes pnpm.exe directly on Windows", () => {
+    expect(
+      resolvePnpmRunner({
+        npmExecPath:
+          "C:\\Users\\test\\AppData\\Local\\pnpm\\.tools\\@pnpm+exe\\10.32.1\\node_modules\\@pnpm\\exe\\pnpm.exe",
+        nodeArgs: ["--no-maglev"],
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        pnpmArgs: ["exec", "vitest", "run"],
+        platform: "win32",
+      }),
+    ).toEqual({
+      command:
+        "C:\\Users\\test\\AppData\\Local\\pnpm\\.tools\\@pnpm+exe\\10.32.1\\node_modules\\@pnpm\\exe\\pnpm.exe",
+      args: ["exec", "vitest", "run"],
+      shell: false,
+    });
+  });
+
   it("falls back to bare pnpm on non-Windows when npm_execpath is missing", () => {
     expect(
       resolvePnpmRunner({

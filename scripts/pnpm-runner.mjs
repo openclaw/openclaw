@@ -51,13 +51,22 @@ export function resolvePnpmRunner(params = {}) {
   if (
     typeof npmExecPath === "string" &&
     npmExecPath.length > 0 &&
-    isNodeRunnablePnpmExecPath(npmExecPath)
+    isPnpmExecPath(npmExecPath)
   ) {
-    return {
-      command: nodeExecPath,
-      args: [...nodeArgs, npmExecPath, ...pnpmArgs],
-      shell: false,
-    };
+    if (isNodeRunnablePnpmExecPath(npmExecPath)) {
+      return {
+        command: nodeExecPath,
+        args: [...nodeArgs, npmExecPath, ...pnpmArgs],
+        shell: false,
+      };
+    }
+    if (platform === "win32" && path.extname(npmExecPath).toLowerCase() === ".exe") {
+      return {
+        command: npmExecPath,
+        args: pnpmArgs,
+        shell: false,
+      };
+    }
   }
 
   if (platform === "win32") {
