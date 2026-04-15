@@ -213,8 +213,9 @@ describe("loadWebMedia", () => {
 
   it("rejects binary data disguised as a CSV file", async () => {
     const fakeCsv = path.join(fixtureRoot, "evil.csv");
-    // Write a PNG header — binary, not text
-    await fs.writeFile(fakeCsv, Buffer.from(TINY_PNG_BASE64, "base64"));
+    // Write ZIP magic bytes — file-type detects application/zip (not image, not CSV),
+    // so it is rejected by the host-read policy rather than allowed as an image.
+    await fs.writeFile(fakeCsv, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
     await expect(
       loadWebMedia(fakeCsv, {
         maxBytes: 1024 * 1024,

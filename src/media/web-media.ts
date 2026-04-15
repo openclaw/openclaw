@@ -86,6 +86,9 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "text/csv",
   "text/markdown",
 ]);
+// file-type returns undefined (no magic bytes) for plain-text formats like CSV and
+// Markdown. These MIME types are allowed via extension + null-byte check only.
+const HOST_READ_TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/markdown"]);
 const MB = 1024 * 1024;
 
 function formatMb(bytes: number, digits = 2): string {
@@ -115,6 +118,7 @@ function assertHostReadMediaAllowed(params: {
   contentType?: string;
   filePath?: string;
   kind: MediaKind | undefined;
+  buffer?: Buffer;
 }): void {
   const sniffedKind = kindFromMime(params.sniffedContentType);
   if (sniffedKind === "image" || sniffedKind === "audio" || sniffedKind === "video") {
@@ -135,13 +139,18 @@ function assertHostReadMediaAllowed(params: {
     return;
   }
   const normalizedMime = normalizeMimeType(params.contentType);
-  // CSV and Markdown exception: content sniffers report text/plain for both formats
-  // because they are structurally indistinguishable from plain text at the byte level.
-  // Allow them when:
+  // CSV / Markdown exception: file-type v22 returns undefined (not "text/plain") for
+  // plain-text buffers that have no binary magic bytes. Allow these formats when:
+  // - sniffedMime is undefined (no binary signature detected by file-type)
   // - The extension-derived MIME is text/csv or text/markdown (operator intent)
-  // - The content sniffed as text/plain (confirming valid text, not binary data)
-  const TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/markdown"]);
-  if (sniffedMime === "text/plain" && normalizedMime && TEXT_PLAIN_ALIASES.has(normalizedMime)) {
+  // - The buffer contains no null bytes (rules out binary data with no known signature)
+  if (
+    !sniffedMime &&
+    normalizedMime &&
+    HOST_READ_TEXT_PLAIN_ALIASES.has(normalizedMime) &&
+    params.buffer &&
+    !params.buffer.subarray(0, 8192).includes(0x00)
+  ) {
     return;
   }
   if (
@@ -403,6 +412,7 @@ async function loadWebMediaInternal(
       contentType: mime,
       filePath: mediaUrl,
       kind,
+      buffer: data,
     });
   }
   let fileName = path.basename(mediaUrl) || undefined;
