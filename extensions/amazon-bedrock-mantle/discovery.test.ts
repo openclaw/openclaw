@@ -495,4 +495,68 @@ describe("bedrock mantle discovery", () => {
 
     expect(result.models?.map((m) => m.id)).toEqual(["custom-model"]);
   });
+
+  // ---------------------------------------------------------------------------
+  // Discovery gate (#67288)
+  // ---------------------------------------------------------------------------
+
+  it("returns null without hitting the network when discovery.enabled === false (#67288)", async () => {
+    const mockFetch = vi.fn();
+    const tokenProvider = vi.fn(async () => "bedrock-api-key-iam"); // pragma: allowlist secret
+    mocks.getTokenProvider.mockReturnValue(tokenProvider);
+
+    const provider = await resolveImplicitMantleProvider({
+      env: {
+        AWS_BEARER_TOKEN_BEDROCK: "my-token", // pragma: allowlist secret
+        AWS_REGION: "us-east-1",
+      } as NodeJS.ProcessEnv,
+      fetchFn: mockFetch as unknown as typeof fetch,
+      pluginConfig: { discovery: { enabled: false } },
+    });
+
+    expect(provider).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(tokenProvider).not.toHaveBeenCalled();
+  });
+
+  it("still resolves when discovery.enabled is undefined (preserves auto-detect)", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],
+      }),
+    });
+
+    const provider = await resolveImplicitMantleProvider({
+      env: {
+        AWS_BEARER_TOKEN_BEDROCK: "my-token", // pragma: allowlist secret
+        AWS_REGION: "us-east-1",
+      } as NodeJS.ProcessEnv,
+      fetchFn: mockFetch as unknown as typeof fetch,
+      pluginConfig: { discovery: {} },
+    });
+
+    expect(provider).not.toBeNull();
+    expect(provider?.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/v1");
+  });
+
+  it("still resolves when discovery.enabled === true", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],
+      }),
+    });
+
+    const provider = await resolveImplicitMantleProvider({
+      env: {
+        AWS_BEARER_TOKEN_BEDROCK: "my-token", // pragma: allowlist secret
+        AWS_REGION: "us-east-1",
+      } as NodeJS.ProcessEnv,
+      fetchFn: mockFetch as unknown as typeof fetch,
+      pluginConfig: { discovery: { enabled: true } },
+    });
+
+    expect(provider).not.toBeNull();
+  });
 });

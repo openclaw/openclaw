@@ -246,6 +246,24 @@ export async function discoverMantleModels(params: {
 // ---------------------------------------------------------------------------
 
 /**
+ * Plugin-level config shape recognised by `resolveImplicitMantleProvider`.
+ * Mirrors the equivalent `config.discovery.enabled` gate in amazon-bedrock
+ * so operators can disable Mantle's implicit discovery / IAM token generation
+ * without having to turn the whole plugin off.
+ */
+export interface MantlePluginConfig {
+  discovery?: {
+    /**
+     * Explicit opt-out. When `false`, `resolveImplicitMantleProvider` returns
+     * `null` without attempting to resolve a bearer token or hit `/v1/models`.
+     * Any other value (including `undefined`) preserves the existing
+     * auto-detect behavior.
+     */
+    enabled?: boolean;
+  };
+}
+
+/**
  * Resolve an implicit Bedrock Mantle provider if authentication is available.
  *
  * Detection priority:
@@ -253,11 +271,20 @@ export async function discoverMantleModels(params: {
  * 2. IAM credentials → generate bearer token via `@aws/bedrock-token-generator`
  * - Region from AWS_REGION / AWS_DEFAULT_REGION / default us-east-1
  * - Models discovered from `/v1/models`
+ *
+ * When `pluginConfig.discovery.enabled === false`, returns `null` before any
+ * token resolution or network call runs, which suppresses the
+ * `[bedrock-mantle-discovery] Mantle IAM token generation unavailable` log
+ * spam for operators who aren't using Mantle. See #67288.
  */
 export async function resolveImplicitMantleProvider(params: {
   env?: NodeJS.ProcessEnv;
   fetchFn?: typeof fetch;
+  pluginConfig?: MantlePluginConfig;
 }): Promise<ModelProviderConfig | null> {
+  if (params.pluginConfig?.discovery?.enabled === false) {
+    return null;
+  }
   const env = params.env ?? process.env;
   const region = env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
   const explicitBearerToken = resolveMantleBearerToken(env);

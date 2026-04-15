@@ -3,10 +3,12 @@ import {
   mergeImplicitMantleProvider,
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,
+  type MantlePluginConfig,
 } from "./discovery.js";
 
 export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
   const providerId = "amazon-bedrock-mantle";
+  const pluginConfig = (api.pluginConfig ?? {}) as MantlePluginConfig;
 
   api.registerProvider({
     id: providerId,
@@ -18,6 +20,7 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
       run: async (ctx) => {
         const implicit = await resolveImplicitMantleProvider({
           env: ctx.env,
+          pluginConfig,
         });
         if (!implicit) {
           return null;
