@@ -56,6 +56,21 @@ type ProviderConfig = {
 };
 
 type OllamaInteractiveMode = "cloud-local" | "cloud-only" | "local-only";
+type HostBackedOllamaInteractiveMode = Exclude<OllamaInteractiveMode, "cloud-only">;
+
+const HOST_BACKED_OLLAMA_MODE_CONFIG: Record<
+  HostBackedOllamaInteractiveMode,
+  { includeCloudModels: boolean; noteTitle: string }
+> = {
+  "cloud-local": {
+    includeCloudModels: true,
+    noteTitle: "Ollama Cloud + Local",
+  },
+  "local-only": {
+    includeCloudModels: false,
+    noteTitle: "Ollama",
+  },
+};
 
 function buildOllamaUnreachableLines(baseUrl: string): string[] {
   return [
@@ -400,9 +415,31 @@ async function promptForOllamaBaseUrl(prompter: WizardPrompter): Promise<string>
   return resolveOllamaApiBase((baseUrlRaw ?? "").trim().replace(/\/+$/, ""));
 }
 
+async function resolveHostBackedSuggestedModelNames(params: {
+  mode: HostBackedOllamaInteractiveMode;
+  baseUrl: string;
+  prompter: WizardPrompter;
+}): Promise<string[]> {
+  const modeConfig = HOST_BACKED_OLLAMA_MODE_CONFIG[params.mode];
+  if (!modeConfig.includeCloudModels) {
+    return OLLAMA_SUGGESTED_MODELS_LOCAL;
+  }
+
+  const auth = await checkOllamaCloudAuth(params.baseUrl);
+  if (auth.signedIn) {
+    return mergeUniqueModelNames(OLLAMA_SUGGESTED_MODELS_LOCAL, OLLAMA_SUGGESTED_MODELS_CLOUD);
+  }
+
+  await params.prompter.note(
+    buildOllamaCloudSigninLines(auth.signinUrl).join("\n"),
+    modeConfig.noteTitle,
+  );
+  return OLLAMA_SUGGESTED_MODELS_LOCAL;
+}
+
 async function promptAndConfigureHostBackedOllama(params: {
   cfg: OpenClawConfig;
-  mode: Extract<OllamaInteractiveMode, "cloud-local" | "local-only">;
+  mode: HostBackedOllamaInteractiveMode;
   prompter: WizardPrompter;
 }): Promise<OllamaSetupResult> {
   const baseUrl = await promptForOllamaBaseUrl(params.prompter);
@@ -419,22 +456,11 @@ async function promptAndConfigureHostBackedOllama(params: {
   );
   const discoveredModelsByName = new Map(enrichedModels.map((model) => [model.name, model]));
   const discoveredModelNames = models.map((model) => model.name);
-  let suggestedModelNames = OLLAMA_SUGGESTED_MODELS_LOCAL;
-
-  if (params.mode === "cloud-local") {
-    const auth = await checkOllamaCloudAuth(baseUrl);
-    if (auth.signedIn) {
-      suggestedModelNames = mergeUniqueModelNames(
-        OLLAMA_SUGGESTED_MODELS_LOCAL,
-        OLLAMA_SUGGESTED_MODELS_CLOUD,
-      );
-    } else {
-      await params.prompter.note(
-        buildOllamaCloudSigninLines(auth.signinUrl).join("\n"),
-        "Ollama Cloud + Local",
-      );
-    }
-  }
+  const suggestedModelNames = await resolveHostBackedSuggestedModelNames({
+    mode: params.mode,
+    baseUrl,
+    prompter: params.prompter,
+  });
 
   return {
     credential: "ollama-local",
