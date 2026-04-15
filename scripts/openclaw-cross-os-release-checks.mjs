@@ -124,6 +124,11 @@ export function normalizeRequestedRef(ref) {
   return trimmed;
 }
 
+export function isImmutableReleaseRef(ref) {
+  const trimmed = ref?.trim() || "";
+  return trimmed.startsWith("refs/tags/") || looksLikeReleaseVersionRef(trimmed);
+}
+
 export function resolveRequestedSuites(mode, ref) {
   if (!SUPPORTED_MODES.has(mode)) {
     throw new Error(`Unsupported mode "${mode}".`);
@@ -134,7 +139,7 @@ export function resolveRequestedSuites(mode, ref) {
   }
   if (mode === "upgrade" || mode === "both") {
     suites.push("packaged-upgrade");
-    if (!looksLikeReleaseVersionRef(ref)) {
+    if (!isImmutableReleaseRef(ref)) {
       suites.push("dev-update");
     }
   }
@@ -1159,7 +1164,7 @@ function resolveExpectedDevUpdateRef(ref) {
 }
 
 export function shouldRunMainChannelDevUpdate(ref) {
-  return resolveExpectedDevUpdateRef(ref) === "main";
+  return !isImmutableReleaseRef(ref) && resolveExpectedDevUpdateRef(ref) === "main";
 }
 
 export function buildRealUpdateEnv(env) {

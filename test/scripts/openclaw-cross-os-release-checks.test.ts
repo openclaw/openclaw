@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildDiscordSmokeGuildsConfig,
   buildRealUpdateEnv,
+  isImmutableReleaseRef,
   looksLikeReleaseVersionRef,
   normalizeRequestedRef,
   normalizeWindowsInstalledCliPath,
@@ -36,12 +37,19 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("normalizes full Git refs before suite and update decisions", () => {
     expect(normalizeRequestedRef(" refs/heads/main ")).toBe("main");
     expect(normalizeRequestedRef("refs/tags/v2026.4.14")).toBe("v2026.4.14");
+    expect(isImmutableReleaseRef("refs/tags/test-tag")).toBe(true);
     expect(resolveRequestedSuites("both", "refs/tags/v2026.4.14")).toEqual([
       "packaged-fresh",
       "installer-fresh",
       "packaged-upgrade",
     ]);
+    expect(resolveRequestedSuites("both", "refs/tags/test-tag")).toEqual([
+      "packaged-fresh",
+      "installer-fresh",
+      "packaged-upgrade",
+    ]);
     expect(shouldRunMainChannelDevUpdate("refs/heads/main")).toBe(true);
+    expect(shouldRunMainChannelDevUpdate("refs/tags/main")).toBe(false);
   });
 
   it("skips the dev-update suite for immutable release refs", () => {
