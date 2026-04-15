@@ -35,9 +35,9 @@ async function main() {
 
   const allPairs = [];
   for (const skill of skills) {
-    const desc = readSkillDescription(SKILLS_DIR, skill);
     process.stdout.write(`  ${skill}... `);
     try {
+      const desc = readSkillDescription(SKILLS_DIR, skill);
       const pairs = await generateEvalPairs(skill, desc, apiKey);
       for (const p of pairs) {
         allPairs.push({
