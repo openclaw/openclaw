@@ -104,8 +104,15 @@ function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeMo
       : model.name;
   const useCodexTransport =
     !model.baseUrl || isOpenAIApiBaseUrl(model.baseUrl) || isOpenAICodexBaseUrl(model.baseUrl);
+  // When the request targets the OpenAI Codex transport, default to the
+  // `openai-codex-responses` api (→ /responses endpoint). The previous
+  // condition only converted `openai-responses`, leaving `undefined` and
+  // other variants to fall back to `/chat/completions`, which Cloudflare
+  // began blocking on 2026-04-14 with a managed challenge (403).
   const api =
-    useCodexTransport && model.api === "openai-responses" ? "openai-codex-responses" : model.api;
+    useCodexTransport && (!model.api || model.api === "openai-responses")
+      ? "openai-codex-responses"
+      : model.api;
   const baseUrl =
     api === "openai-codex-responses" && (!model.baseUrl || isOpenAIApiBaseUrl(model.baseUrl))
       ? OPENAI_CODEX_BASE_URL
