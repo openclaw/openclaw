@@ -34,7 +34,7 @@ export async function registerBrowserPlugin(api: OpenClawPluginApi) {
       allowHostControl: ctx.browser?.allowHostControl,
       agentSessionKey: ctx.sessionKey,
     });
-  }) as OpenClawPluginToolFactory);
+  }) as unknown as OpenClawPluginToolFactory);
   api.registerCli(
     async ({ program }) => {
       const { registerBrowserCli } = await import("./register.runtime.js");
