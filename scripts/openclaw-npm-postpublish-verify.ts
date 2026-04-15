@@ -166,20 +166,12 @@ export function resolveInstalledBinaryPath(prefixDir: string, platform = process
     : join(prefixDir, "bin", "openclaw");
 }
 
-function collectExpectedBundledExtensionPackageIds(
-  sourceExtensionsDir = join(process.cwd(), "extensions"),
-): ReadonlySet<string> | null {
-  if (!existsSync(sourceExtensionsDir)) {
-    return null;
-  }
-
+function collectExpectedBundledExtensionPackageIds(): ReadonlySet<string> {
   const ids = new Set<string>();
-  for (const entry of readdirSync(sourceExtensionsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    if (existsSync(join(sourceExtensionsDir, entry.name, "package.json"))) {
-      ids.add(entry.name);
+  for (const relativePath of listBundledPluginPackArtifacts()) {
+    const match = /^dist\/extensions\/([^/]+)\/package\.json$/u.exec(relativePath);
+    if (match) {
+      ids.add(match[1]);
     }
   }
   return ids;
@@ -206,7 +198,7 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
     const extensionDirPath = join(extensionsDir, entry.name);
     const packageJsonPath = join(extensionsDir, entry.name, "package.json");
     if (!existsSync(packageJsonPath)) {
-      if (expectedPackageIds === null || expectedPackageIds.has(entry.name)) {
+      if (expectedPackageIds.has(entry.name)) {
         errors.push(`installed bundled extension manifest missing: ${packageJsonPath}.`);
       }
       continue;
