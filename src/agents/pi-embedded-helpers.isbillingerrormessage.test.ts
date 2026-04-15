@@ -648,6 +648,12 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("410 conversation expired")).toBe("session_expired");
   });
 
+  it("classifies 'No conversation found' from Claude CLI as session_expired", () => {
+    expect(classifyFailoverReason("No conversation found with session ID: abc123")).toBe(
+      "session_expired",
+    );
+  });
+
   it("keeps explicit billing and auth signals on 410 text", () => {
     expect(classifyFailoverReason("HTTP 410: invalid_api_key")).toBe("auth");
     expect(classifyFailoverReason("HTTP 410: authentication failed")).toBe("auth");
