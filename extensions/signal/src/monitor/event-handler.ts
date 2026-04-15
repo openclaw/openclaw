@@ -64,7 +64,7 @@ import type {
   SignalReceivePayload,
 } from "./event-handler.types.js";
 import { resolveSignalQuoteContext } from "./inbound-context.js";
-import { renderSignalMentions } from "./mentions.js";
+import { doesSignalMentionTargetBot, renderSignalMentions } from "./mentions.js";
 
 function formatAttachmentKindCount(kind: string, count: number): string {
   if (kind === "attachment") {
@@ -660,7 +660,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       senderPeerId,
     });
     const mentionRegexes = buildMentionRegexes(deps.cfg, route.agentId);
-    const wasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    // Signal renders native @mentions as @<uuid> or @<phone>, which won't match
+    // patterns derived from the agent's display name. Detect native mentions of
+    // the bot's own account from the envelope metadata so requireMention-gated
+    // groups don't drop valid @mentions of the bot.
+    const nativeBotMention =
+      isGroup &&
+      doesSignalMentionTargetBot(dataMessage.mentions, {
+        phone: deps.account,
+        uuid: deps.accountUuid,
+      });
+    const wasMentioned =
+      isGroup && (nativeBotMention || matchesMentionPatterns(messageText, mentionRegexes));
     const requireMention =
       isGroup &&
       resolveChannelGroupRequireMention({
