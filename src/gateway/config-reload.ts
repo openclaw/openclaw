@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
+import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh-state.js";
 import type {
   OpenClawConfig,
   ConfigFileSnapshot,
@@ -24,6 +25,31 @@ const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
 };
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
+
+/**
+ * Paths under `skills.*` always change the snapshot that sessions cache in
+ * sessions.json. Any prefix match here (for example `skills.allowBundled`,
+ * `skills.entries.X.enabled`, `skills.profile`) forces sessions to rebuild
+ * their snapshot on the next turn rather than silently advertising stale
+ * tools to the model.
+ */
+const SKILLS_INVALIDATION_PREFIXES = ["skills"] as const;
+
+export function shouldInvalidateSkillsSnapshotForPaths(changedPaths: string[]): boolean {
+  return changedPaths.some((path) =>
+    SKILLS_INVALIDATION_PREFIXES.some(
+      (prefix) => path === prefix || path.startsWith(`${prefix}.`),
+    ),
+  );
+}
+
+function firstSkillsChangedPath(changedPaths: string[]): string | undefined {
+  return changedPaths.find((path) =>
+    SKILLS_INVALIDATION_PREFIXES.some(
+      (prefix) => path === prefix || path.startsWith(`${prefix}.`),
+    ),
+  );
+}
 
 export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
   if (prev === next) {
@@ -162,6 +188,18 @@ export function startGatewayConfigReloader(opts: {
     settings = resolveGatewayReloadSettings(nextConfig);
     if (changedPaths.length === 0) {
       return;
+    }
+
+    // Invalidate cached skills snapshots (persisted in sessions.json) whenever
+    // the user touches skills.* config. Without this, sessions keep advertising
+    // tools that no longer exist in the allowlist, which causes infinite
+    // tool-not-found loops against the model.
+    if (shouldInvalidateSkillsSnapshotForPaths(changedPaths)) {
+      const changedPath = firstSkillsChangedPath(changedPaths);
+      bumpSkillsSnapshotVersion({ reason: "config-change", changedPath });
+      opts.log.info(
+        `skills snapshot invalidated by config change (${changedPath ?? "skills.*"})`,
+      );
     }
 
     opts.log.info(`config change detected; evaluating reload (${changedPaths.join(", ")})`);
