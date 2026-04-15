@@ -36,5 +36,6 @@ describe("buildOllamaBaseUrlSsrFPolicy", () => {
     expect(buildOllamaBaseUrlSsrFPolicy("")).toBeUndefined();
     expect(buildOllamaBaseUrlSsrFPolicy("ftp://ollama.example.com")).toBeUndefined();
     expect(buildOllamaBaseUrlSsrFPolicy("not-a-url")).toBeUndefined();
+    expect(buildOllamaBaseUrlSsrFPolicy("http://metadata.google.internal")).toBeUndefined();
   });
 });

@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { blockedIpv6MulticastLiterals } from "../../shared/net/ip-test-fixtures.js";
-import {
-  assertHostnameAllowedWithPolicy,
-  isBlockedHostnameOrIp,
-  isPrivateIpAddress,
-} from "./ssrf.js";
+import { isBlockedHostnameOrIp, isPrivateIpAddress } from "./ssrf.js";
 
 const privateIpCases = [
   "198.18.0.1",
@@ -151,31 +147,5 @@ describe("isBlockedHostnameOrIp", () => {
 
   it.each(["example.com", "api.example.net"])("does not block ordinary hostname %s", (value) => {
     expect(isBlockedHostnameOrIp(value)).toBe(false);
-  });
-});
-
-describe("assertHostnameAllowedWithPolicy", () => {
-  it("allows explicit private-network hostnames when the policy opts in", () => {
-    expect(
-      assertHostnameAllowedWithPolicy("db.internal", {
-        hostnameAllowlist: ["db.internal"],
-        allowPrivateNetwork: true,
-      }),
-    ).toBe("db.internal");
-    expect(
-      assertHostnameAllowedWithPolicy("localhost", {
-        hostnameAllowlist: ["localhost"],
-        allowPrivateNetwork: true,
-      }),
-    ).toBe("localhost");
-  });
-
-  it("still blocks metadata.google.internal even when private-network access is enabled", () => {
-    expect(() =>
-      assertHostnameAllowedWithPolicy("metadata.google.internal", {
-        hostnameAllowlist: ["metadata.google.internal"],
-        allowPrivateNetwork: true,
-      }),
-    ).toThrow("Blocked hostname or private/internal/special-use IP address");
   });
 });

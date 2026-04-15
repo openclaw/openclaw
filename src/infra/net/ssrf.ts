@@ -50,8 +50,6 @@ const BLOCKED_HOSTNAMES = new Set([
   "metadata.google.internal",
 ]);
 
-const ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
-
 function normalizeHostnameSet(values?: string[]): Set<string> {
   if (!values || values.length === 0) {
     return new Set<string>();
@@ -176,16 +174,6 @@ function isBlockedHostnameNormalized(normalized: string): boolean {
   );
 }
 
-function isBlockedHostnameWithPolicy(normalized: string, policy?: SsrFPolicy): boolean {
-  if (ALWAYS_BLOCKED_HOSTNAMES.has(normalized)) {
-    return true;
-  }
-  if (isBlockedHostnameNormalized(normalized)) {
-    return !isPrivateNetworkAllowedByPolicy(policy);
-  }
-  return false;
-}
-
 export function isBlockedHostnameOrIp(hostname: string, policy?: SsrFPolicy): boolean {
   const normalized = normalizeHostname(hostname);
   if (!normalized) {
@@ -220,10 +208,6 @@ function resolveHostnamePolicyChecks(
 
   if (!matchesHostnameAllowlist(normalized, hostnameAllowlist)) {
     throw new SsrFBlockedError(`Blocked hostname (not in allowlist): ${hostname}`);
-  }
-
-  if (isBlockedHostnameWithPolicy(normalized, policy)) {
-    throw new SsrFBlockedError(BLOCKED_HOST_OR_IP_MESSAGE);
   }
 
   if (!skipPrivateNetworkChecks) {
