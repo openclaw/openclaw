@@ -18,7 +18,7 @@ import { mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -340,10 +340,11 @@ async function main(argv) {
       }
     } else if (suite === "installer-fresh") {
       summary.result = await runInstallerFreshSuite({
-        baselineSpec,
+        build,
         logsDir,
         providerConfig: selectedProvider,
         providerSecretValue,
+        ref: inputRef || "main",
         runDiscordRoundtrip,
       });
     } else {
@@ -752,11 +753,7 @@ async function runUpgradeLane(params) {
 async function runInstallerFreshSuite(params) {
   const lane = createLaneState("installer-fresh");
   const cleanup = [];
-  const installVersion = await resolveInstallerTargetVersion({
-    baselineSpec: params.baselineSpec,
-    logsDir: params.logsDir,
-    suiteName: "installer-fresh",
-  });
+  const installTarget = resolveInstallerRequestedTarget(params.ref);
   const usesManagedGateway = shouldUseManagedGatewayService();
   const manualGateway = { current: null };
   try {
@@ -772,7 +769,7 @@ async function runInstallerFreshSuite(params) {
       lane,
       env,
       installerUrl: installerServer.url,
-      installVersion,
+      installTarget,
       logPath: join(params.logsDir, "installer-fresh-install.log"),
     });
 
@@ -780,9 +777,11 @@ async function runInstallerFreshSuite(params) {
     const freshShell = await verifyFreshShellCommand({
       lane,
       env,
-      expectedNeedle: installVersion,
+      expectedNeedle: params.build.candidateVersion,
       logPath: join(params.logsDir, "installer-fresh-shell.log"),
     });
+    const installed = readInstalledMetadataFromCliPath(freshShell.cliPath);
+    verifyInstalledCandidate(installed, params.build);
 
     logLanePhase(lane, "onboard");
     await runOnboardWithInstalledCli({
@@ -901,8 +900,11 @@ async function runInstallerFreshSuite(params) {
 
     return {
       status: "pass",
-      installVersion,
+      installTarget,
+      installVersion: installed.version,
       cliPath: freshShell.cliPath,
+      installedVersion: installed.version,
+      installedCommit: installed.commit,
       gatewayPort: lane.gatewayPort,
       dashboardStatus: "pass",
       discordStatus,
@@ -916,7 +918,7 @@ async function runInstallerFreshSuite(params) {
 async function runDevUpdateSuite(params) {
   const lane = createLaneState("dev-update");
   const cleanup = [];
-  const installVersion = await resolveInstallerTargetVersion({
+  const installTarget = await resolveInstallerTargetVersion({
     baselineSpec: params.baselineSpec,
     logsDir: params.logsDir,
     suiteName: "dev-update",
@@ -941,7 +943,7 @@ async function runDevUpdateSuite(params) {
       lane,
       env,
       installerUrl: installerServer.url,
-      installVersion,
+      installTarget,
       logPath: join(params.logsDir, "dev-update-install.log"),
     });
 
@@ -949,7 +951,7 @@ async function runDevUpdateSuite(params) {
     const baselineShell = await verifyFreshShellCommand({
       lane,
       env,
-      expectedNeedle: installVersion,
+      expectedNeedle: installTarget,
       logPath: join(params.logsDir, "dev-update-baseline-shell.log"),
     });
 
@@ -1066,7 +1068,7 @@ async function runDevUpdateSuite(params) {
 
     return {
       status: "pass",
-      installVersion,
+      installVersion: installTarget,
       cliPath: updatedShell.cliPath,
       gatewayPort: lane.gatewayPort,
       dashboardStatus: "pass",
@@ -1164,10 +1166,25 @@ export function shouldRunMainChannelDevUpdate(ref) {
   return !isImmutableReleaseRef(ref) && resolveExpectedDevUpdateRef(ref) === "main";
 }
 
+export function shouldSkipInstallerDaemonHealthCheck(platform = process.platform) {
+  return platform === "win32";
+}
+
 export function buildRealUpdateEnv(env) {
   const updateEnv = { ...env };
   delete updateEnv.OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL;
   return updateEnv;
+}
+
+export function resolveInstallerRequestedTarget(ref) {
+  const requestedRef = normalizeRequestedRef(ref) || "main";
+  if (looksLikeReleaseVersionRef(requestedRef)) {
+    return requestedRef.replace(/^v/iu, "");
+  }
+  if (requestedRef === "main") {
+    return "main";
+  }
+  return `github:openclaw/openclaw#${requestedRef}`;
 }
 
 export function resolveExplicitBaselineVersion(baselineSpec) {
@@ -1216,6 +1233,43 @@ export function normalizeWindowsInstalledCliPath(cliPath) {
   return cliPath.replace(/\.ps1$/iu, ".cmd");
 }
 
+export function resolveInstalledPrefixDirFromCliPath(cliPath, platform = process.platform) {
+  const resolvedCliPath =
+    platform === "win32" ? normalizeWindowsInstalledCliPath(cliPath) : String(cliPath ?? "");
+  if (!resolvedCliPath?.trim()) {
+    throw new Error("Missing installed CLI path.");
+  }
+  if (platform === "win32") {
+    return pathWin32.dirname(resolvedCliPath);
+  }
+  return dirname(dirname(resolvedCliPath));
+}
+
+function readInstalledMetadataFromCliPath(cliPath, platform = process.platform) {
+  return readInstalledMetadata(resolveInstalledPrefixDirFromCliPath(cliPath, platform));
+}
+
+function resolveInstalledCliInvocation(cliPath, platform = process.platform) {
+  if (platform !== "win32") {
+    return { command: cliPath, argsPrefix: [], shell: false };
+  }
+  const normalizedCliPath = normalizeWindowsInstalledCliPath(cliPath);
+  if (!/\.cmd$/iu.test(normalizedCliPath)) {
+    return { command: normalizedCliPath, argsPrefix: [], shell: false };
+  }
+  const entryPath = installedEntryPath(
+    resolveInstalledPrefixDirFromCliPath(normalizedCliPath, platform),
+  );
+  if (existsSync(entryPath)) {
+    return {
+      command: process.execPath,
+      argsPrefix: [entryPath],
+      shell: false,
+    };
+  }
+  return { command: normalizedCliPath, argsPrefix: [], shell: true };
+}
+
 export function resolveRepairGlobalInstallArgs(platform = process.platform, gitRoot) {
   if (platform === "win32") {
     return ["install", "-g", gitRoot, "--no-fund", "--no-audit"];
@@ -1243,7 +1297,7 @@ $content = $response.Content
 if ($content -is [byte[]]) {
   $content = [System.Text.Encoding]::UTF8.GetString($content)
 }
-& ([scriptblock]::Create([string]$content)) -Tag '${powerShellSingleQuote(params.installVersion)}' -NoOnboard
+& ([scriptblock]::Create([string]$content)) -Tag '${powerShellSingleQuote(params.installTarget)}' -NoOnboard
 `;
     await runPowerShellScript(script, {
       cwd: params.lane.homeDir,
@@ -1256,7 +1310,7 @@ if ($content -is [byte[]]) {
 
   const script = [
     "set -euo pipefail",
-    `curl -fsSL '${shellEscapeForSh(params.installerUrl)}' | bash -s -- --version '${shellEscapeForSh(params.installVersion)}' --no-onboard`,
+    `curl -fsSL '${shellEscapeForSh(params.installerUrl)}' | bash -s -- --version '${shellEscapeForSh(params.installTarget)}' --no-onboard`,
   ].join("\n");
   await runPosixShellScript(script, {
     cwd: params.lane.homeDir,
@@ -1338,7 +1392,8 @@ if ('${powerShellSingleQuote(params.expectedNeedle)}'.Length -gt 0 -and $version
 }
 
 async function runInstalledCli(params) {
-  return runCommand(params.cliPath, params.args, {
+  const invocation = resolveInstalledCliInvocation(params.cliPath);
+  return runCommand(invocation.command, [...invocation.argsPrefix, ...params.args], {
     cwd: params.cwd,
     env: params.env,
     logPath: params.logPath,
@@ -1359,38 +1414,41 @@ async function readInstalledUpdateStatus(params) {
 }
 
 async function ensureDevUpdateGitInstall(params) {
-  if (!shouldRunMainChannelDevUpdate(params.requestedRef)) {
-    await repairLegacyDevUpdateInstall({
-      activeCliPath: params.cliPath,
-      lane: params.lane,
-      env: params.env,
-      logsDir: params.logsDir,
-      requestedRef: params.requestedRef,
-    });
-    const repairedShell = await verifyFreshShellCommand({
-      lane: params.lane,
-      env: params.env,
-      expectedNeedle: "OpenClaw",
-      logPath: join(params.logsDir, "dev-update-repair-shell.log"),
-    });
-    const repairedStatus = await readInstalledUpdateStatus({
-      cliPath: repairedShell.cliPath,
+  try {
+    const updateStatus = await readInstalledUpdateStatus({
+      cliPath: params.cliPath,
       cwd: params.lane.homeDir,
       env: params.env,
-      logPath: join(params.logsDir, "dev-update-status-after-repair.log"),
+      logPath: join(params.logsDir, "dev-update-status.log"),
     });
-    verifyDevUpdateStatus(repairedStatus.stdout, { ref: params.requestedRef });
-    return repairedShell;
+    if (!shouldRepairDevUpdateInstall(updateStatus.stdout, { ref: params.requestedRef })) {
+      return { cliPath: params.cliPath };
+    }
+  } catch {
+    // Fall through to the legacy repair path when the in-place status probe is unusable.
   }
 
-  const updateStatus = await readInstalledUpdateStatus({
-    cliPath: params.cliPath,
+  await repairLegacyDevUpdateInstall({
+    activeCliPath: params.cliPath,
+    lane: params.lane,
+    env: params.env,
+    logsDir: params.logsDir,
+    requestedRef: params.requestedRef,
+  });
+  const repairedShell = await verifyFreshShellCommand({
+    lane: params.lane,
+    env: params.env,
+    expectedNeedle: "OpenClaw",
+    logPath: join(params.logsDir, "dev-update-repair-shell.log"),
+  });
+  const repairedStatus = await readInstalledUpdateStatus({
+    cliPath: repairedShell.cliPath,
     cwd: params.lane.homeDir,
     env: params.env,
-    logPath: join(params.logsDir, "dev-update-status.log"),
+    logPath: join(params.logsDir, "dev-update-status-after-repair.log"),
   });
-  verifyDevUpdateStatus(updateStatus.stdout, { ref: params.requestedRef });
-  return { cliPath: params.cliPath };
+  verifyDevUpdateStatus(repairedStatus.stdout, { ref: params.requestedRef });
+  return repairedShell;
 }
 
 async function repairLegacyDevUpdateInstall(params) {
@@ -1486,7 +1544,8 @@ async function runOnboardWithInstalledCli(params) {
   ];
   if (params.installDaemon) {
     args.push("--install-daemon");
-  } else {
+  }
+  if (!params.installDaemon || shouldSkipInstallerDaemonHealthCheck()) {
     args.push("--skip-health");
   }
   await runInstalledCli({
@@ -1502,13 +1561,23 @@ async function runOnboardWithInstalledCli(params) {
 async function startManualGatewayFromInstalledCli(params) {
   mkdirSync(dirname(params.logPath), { recursive: true });
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
+  const invocation = resolveInstalledCliInvocation(params.cliPath);
   const child = spawn(
-    params.cliPath,
-    ["gateway", "run", "--bind", "loopback", "--port", String(params.lane.gatewayPort), "--force"],
+    invocation.command,
+    [
+      ...invocation.argsPrefix,
+      "gateway",
+      "run",
+      "--bind",
+      "loopback",
+      "--port",
+      String(params.lane.gatewayPort),
+      "--force",
+    ],
     {
       cwd: params.lane.homeDir,
       env: params.env,
-      shell: process.platform === "win32" && /\.(cmd|bat)$/iu.test(params.cliPath),
+      shell: invocation.shell,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     },
@@ -1671,6 +1740,15 @@ export function verifyDevUpdateStatus(stdout, options = {}) {
     throw new Error(
       `Dev update status did not report branch=${expectedRef}. Found ${branch ?? "<missing>"}.`,
     );
+  }
+}
+
+export function shouldRepairDevUpdateInstall(stdout, options = {}) {
+  try {
+    verifyDevUpdateStatus(stdout, options);
+    return false;
+  } catch {
+    return true;
   }
 }
 
@@ -2631,6 +2709,7 @@ function writeSummary(baseDir, summaryPayload) {
     `- Candidate version: \`${summaryPayload.candidateVersion || "unknown"}\``,
     `- Baseline spec: \`${summaryPayload.baselineSpec}\``,
     result.status ? `- Result: \`${result.status}\`` : "",
+    result.installTarget ? `- Install target: \`${result.installTarget}\`` : "",
     result.installVersion ? `- Install version: \`${result.installVersion}\`` : "",
     result.baselineVersion ? `- Baseline version: \`${result.baselineVersion}\`` : "",
     result.installedVersion ? `- Installed version: \`${result.installedVersion}\`` : "",

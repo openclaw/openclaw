@@ -9,10 +9,14 @@ import {
   parseArgs,
   readRunnerOverrideEnv,
   resolveExplicitBaselineVersion,
+  resolveInstalledPrefixDirFromCliPath,
+  resolveInstallerRequestedTarget,
   resolveRepairGlobalInstallArgs,
   resolveRequestedSuites,
   resolveRunnerMatrix,
   resolveStaticFileContentType,
+  shouldRepairDevUpdateInstall,
+  shouldSkipInstallerDaemonHealthCheck,
   shouldRunMainChannelDevUpdate,
   shouldUseManagedGatewayService,
   verifyDevUpdateStatus,
@@ -129,6 +133,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(shouldUseManagedGatewayService("linux")).toBe(false);
   });
 
+  it("skips daemon health during installed onboarding only on native Windows", () => {
+    expect(shouldSkipInstallerDaemonHealthCheck("win32")).toBe(true);
+    expect(shouldSkipInstallerDaemonHealthCheck("darwin")).toBe(false);
+    expect(shouldSkipInstallerDaemonHealthCheck("linux")).toBe(false);
+  });
+
   it("normalizes Windows installed CLI paths to the cmd shim", () => {
     expect(
       normalizeWindowsInstalledCliPath(
@@ -140,6 +150,18 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         String.raw`C:\Users\runner\AppData\Roaming\npm\openclaw.cmd`,
       ),
     ).toBe(String.raw`C:\Users\runner\AppData\Roaming\npm\openclaw.cmd`);
+  });
+
+  it("derives the installed prefix from resolved CLI paths", () => {
+    expect(
+      resolveInstalledPrefixDirFromCliPath(
+        String.raw`C:\Users\runner\AppData\Roaming\npm\openclaw.ps1`,
+        "win32",
+      ),
+    ).toBe(String.raw`C:\Users\runner\AppData\Roaming\npm`);
+    expect(
+      resolveInstalledPrefixDirFromCliPath("/Users/runner/.npm-global/bin/openclaw", "darwin"),
+    ).toBe("/Users/runner/.npm-global");
   });
 
   it("uses a real global link when repairing git installs outside Windows", () => {
@@ -194,6 +216,20 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolveExplicitBaselineVersion("2026.4.10")).toBe("2026.4.10");
   });
 
+  it("resolves installer fresh targets from the requested public ref", () => {
+    expect(resolveInstallerRequestedTarget("refs/heads/main")).toBe("main");
+    expect(resolveInstallerRequestedTarget("refs/tags/v2026.4.14")).toBe("2026.4.14");
+    expect(resolveInstallerRequestedTarget("refs/tags/test-tag")).toBe(
+      "github:openclaw/openclaw#test-tag",
+    );
+    expect(resolveInstallerRequestedTarget("codex/cross-os-release-checks-full-native-e2e")).toBe(
+      "github:openclaw/openclaw#codex/cross-os-release-checks-full-native-e2e",
+    );
+    expect(resolveInstallerRequestedTarget("96e6f8ba5f94a4f509f833bf8a2f3260e48daa7c")).toBe(
+      "github:openclaw/openclaw#96e6f8ba5f94a4f509f833bf8a2f3260e48daa7c",
+    );
+  });
+
   it("accepts a git main dev-channel update status payload", () => {
     expect(() =>
       verifyDevUpdateStatus(
@@ -230,6 +266,38 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         { ref: "codex/cross-os-release-checks-full-native-e2e" },
       ),
     ).not.toThrow();
+  });
+
+  it("only repairs dev updates when the status payload is not already the requested git lane", () => {
+    expect(
+      shouldRepairDevUpdateInstall(
+        JSON.stringify({
+          update: {
+            installKind: "git",
+            git: {
+              branch: "main",
+            },
+          },
+          channel: {
+            value: "dev",
+          },
+        }),
+        { ref: "main" },
+      ),
+    ).toBe(false);
+    expect(
+      shouldRepairDevUpdateInstall(
+        JSON.stringify({
+          update: {
+            installKind: "package",
+          },
+          channel: {
+            value: "stable",
+          },
+        }),
+        { ref: "main" },
+      ),
+    ).toBe(true);
   });
 
   it("rejects update status payloads that are not on dev/main git", () => {
