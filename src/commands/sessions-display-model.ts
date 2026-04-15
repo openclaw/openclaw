@@ -8,6 +8,7 @@ type SessionDisplayModelRow = {
   modelProvider?: string;
   modelOverride?: string;
   providerOverride?: string;
+  modelIsFromFallback?: boolean;
 };
 
 type SessionDisplayDefaults = {
@@ -96,7 +97,7 @@ export function resolveSessionDisplayModel(
       normalizedOverride.providerOverride ?? defaultRef.provider,
     ).model;
   }
-  if (row.model) {
+  if (row.model && !row.modelIsFromFallback) {
     return parseModelRef(row.model, row.modelProvider ?? defaultRef.provider).model;
   }
   return defaultRef.model;
