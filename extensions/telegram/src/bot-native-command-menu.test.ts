@@ -349,4 +349,69 @@ describe("bot-native-command-menu", () => {
       "Telegram rejected 10 commands (BOT_COMMANDS_TOO_MUCH); retrying with 8.",
     );
   });
+
+  it("skips sync when commands are empty but native is not explicitly disabled (#66958)", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const runtimeLog = vi.fn();
+    const accountId = `test-empty-protect-${Date.now()}`;
+
+    // When nativeDisabledExplicit is false (default) and commands are empty,
+    // we should skip sync and log a warning instead of clearing the menu.
+    syncTelegramMenuCommands({
+      bot: {
+        api: { deleteMyCommands, setMyCommands },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: {
+        log: runtimeLog,
+        error: vi.fn(),
+        exit: vi.fn(),
+      } as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
+      commandsToRegister: [],
+      accountId,
+      botIdentity: "bot-a",
+      nativeDisabledExplicit: false,
+    });
+
+    // Wait a tick for the async sync function
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // deleteMyCommands and setMyCommands should NOT be called
+    expect(deleteMyCommands).not.toHaveBeenCalled();
+    expect(setMyCommands).not.toHaveBeenCalled();
+    // Should log a warning about the transient issue
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("command registration skipped because the resolved command list is empty"),
+    );
+  });
+
+  it("clears menu when commands are empty and native is explicitly disabled (#66958)", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const runtimeLog = vi.fn();
+    const accountId = `test-empty-disabled-${Date.now()}`;
+
+    // When nativeDisabledExplicit is true and commands are empty,
+    // we should proceed to clear the menu as intended.
+    syncTelegramMenuCommands({
+      bot: {
+        api: { deleteMyCommands, setMyCommands },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: {
+        log: runtimeLog,
+        error: vi.fn(),
+        exit: vi.fn(),
+      } as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
+      commandsToRegister: [],
+      accountId,
+      botIdentity: "bot-a",
+      nativeDisabledExplicit: true,
+    });
+
+    await vi.waitFor(() => {
+      expect(deleteMyCommands).toHaveBeenCalled();
+    });
+
+    expect(setMyCommands).not.toHaveBeenCalled();
+  });
 });

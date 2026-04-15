@@ -238,8 +238,9 @@ export function syncTelegramMenuCommands(params: {
   commandsToRegister: TelegramMenuCommand[];
   accountId?: string;
   botIdentity?: string;
+  nativeDisabledExplicit?: boolean;
 }): void {
-  const { bot, runtime, commandsToRegister, accountId, botIdentity } = params;
+  const { bot, runtime, commandsToRegister, accountId, botIdentity, nativeDisabledExplicit } = params;
   const sync = async () => {
     // Skip sync if the command list hasn't changed since the last successful
     // sync. This prevents hitting Telegram's 429 rate limit when the gateway
@@ -249,6 +250,20 @@ export function syncTelegramMenuCommands(params: {
     const cachedHash = readCachedCommandHash(accountId, botIdentity);
     if (cachedHash === currentHash) {
       logVerbose("telegram: command menu unchanged; skipping sync");
+      return;
+    }
+
+    // Protect against accidentally clearing the command menu when commands
+    // are enabled but the runtime resolution produces an empty list.
+    // This can happen due to race conditions during startup or plugin loading.
+    // See: openclaw/openclaw#66958
+    if (commandsToRegister.length === 0 && !nativeDisabledExplicit) {
+      runtime.log?.(
+        "telegram: command registration skipped because the resolved command list is empty, " +
+          "but native commands are not explicitly disabled. " +
+          "This may indicate a transient runtime resolution issue. " +
+          "If you intend to clear the menu, set channels.telegram.commands.native to false."
+      );
       return;
     }
 
