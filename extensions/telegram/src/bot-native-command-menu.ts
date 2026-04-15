@@ -211,9 +211,7 @@ export function hashCommandList(commands: TelegramMenuCommand[]): string {
   return createHash("sha256").update(JSON.stringify(sorted)).digest("hex").slice(0, 16);
 }
 
-/** Process-scoped cache of synced command hashes to avoid rapid-restart rate limits.
- * Unlike a file-based cache, this resets on gateway restart so commands are
- * always re-registered after a fresh start. See: openclaw/openclaw#32017 */
+// Keep the sync cache process-local so restarts always re-register commands.
 const syncedCommandHashes = new Map<string, string>();
 
 function getCommandHashKey(accountId?: string, botIdentity?: string): string {
@@ -225,7 +223,11 @@ function readCachedCommandHash(accountId?: string, botIdentity?: string): string
   return syncedCommandHashes.get(key) ?? null;
 }
 
-function writeCachedCommandHash(accountId: string | undefined, botIdentity: string | undefined, hash: string): void {
+function writeCachedCommandHash(
+  accountId: string | undefined,
+  botIdentity: string | undefined,
+  hash: string,
+): void {
   const key = getCommandHashKey(accountId, botIdentity);
   syncedCommandHashes.set(key, hash);
 }
@@ -244,7 +246,7 @@ export function syncTelegramMenuCommands(params: {
     // is restarted several times in quick succession.
     // See: openclaw/openclaw#32017
     const currentHash = hashCommandList(commandsToRegister);
-    const cachedHash = await readCachedCommandHash(accountId, botIdentity);
+    const cachedHash = readCachedCommandHash(accountId, botIdentity);
     if (cachedHash === currentHash) {
       logVerbose("telegram: command menu unchanged; skipping sync");
       return;
@@ -267,7 +269,7 @@ export function syncTelegramMenuCommands(params: {
         runtime.log?.("telegram: deleteMyCommands failed; skipping empty-menu hash cache write");
         return;
       }
-      await writeCachedCommandHash(accountId, botIdentity, currentHash);
+      writeCachedCommandHash(accountId, botIdentity, currentHash);
       return;
     }
 
@@ -289,7 +291,7 @@ export function syncTelegramMenuCommands(params: {
             }),
           );
         }
-        await writeCachedCommandHash(accountId, botIdentity, currentHash);
+        writeCachedCommandHash(accountId, botIdentity, currentHash);
         return;
       } catch (err) {
         if (!isBotCommandsTooMuchError(err)) {
