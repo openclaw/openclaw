@@ -209,6 +209,12 @@ function Read-TrimmedFileText {
     return ((Get-Content -LiteralPath $Path -Raw) -replace "(\r?\n)+$", "")
 }
 
+function ConvertTo-PowerShellSingleQuotedLiteral {
+    param([string]$Value)
+
+    return "'" + ($Value -replace "'", "''") + "'"
+}
+
 function Invoke-NativeCommandCapture {
     param(
         [Parameter(Mandatory = $true)]
@@ -220,8 +226,34 @@ function Invoke-NativeCommandCapture {
     $stderrPath = [System.IO.Path]::GetTempFileName()
 
     try {
-        $process = Start-Process -FilePath $FilePath `
-            -ArgumentList $Arguments `
+        $startFilePath = $FilePath
+        $startArguments = $Arguments
+
+        if ($FilePath -match '(?i)\.(cmd|bat)$') {
+            # Start-Process cannot directly redirect stdio for command shims like
+            # npm.cmd. Run them inside a nested PowerShell so the shim executes
+            # normally while stdout/stderr still flow back to these temp files.
+            $commandParts = @(
+                ConvertTo-PowerShellSingleQuotedLiteral -Value $FilePath
+            )
+            foreach ($argument in $Arguments) {
+                $commandParts += ConvertTo-PowerShellSingleQuotedLiteral -Value $argument
+            }
+            $commandScript = "& " + ($commandParts -join " ") + "`nexit `$LASTEXITCODE"
+            $startFilePath = "powershell.exe"
+            $startArguments = @(
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                $commandScript
+            )
+        }
+
+        $process = Start-Process -FilePath $startFilePath `
+            -ArgumentList $startArguments `
             -Wait `
             -PassThru `
             -RedirectStandardOutput $stdoutPath `
