@@ -459,4 +459,29 @@ describe("browser config", () => {
       expect(resolved.defaultProfile).toBe("custom");
     });
   });
+
+  describe("executablePath tilde expansion (#67264)", () => {
+    it("expands a leading ~ in executablePath so spawn() can find the binary", () => {
+      withEnv({ HOME: "/home/og_mr_claw" }, () => {
+        const resolved = resolveBrowserConfig({
+          executablePath: "~/.local/chromium/linux-1615071/chrome-linux/chrome",
+        } as BrowserConfig);
+        expect(resolved.executablePath).toBe(
+          "/home/og_mr_claw/.local/chromium/linux-1615071/chrome-linux/chrome",
+        );
+      });
+    });
+
+    it("leaves an absolute executablePath untouched", () => {
+      const resolved = resolveBrowserConfig({
+        executablePath: "/opt/chromium/chrome-linux/chrome",
+      } as BrowserConfig);
+      expect(resolved.executablePath).toBe("/opt/chromium/chrome-linux/chrome");
+    });
+
+    it("omits executablePath when the config leaves it empty", () => {
+      const resolved = resolveBrowserConfig({ executablePath: "" } as BrowserConfig);
+      expect(resolved.executablePath).toBeUndefined();
+    });
+  });
 });

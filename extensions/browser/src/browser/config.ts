@@ -244,7 +244,12 @@ export function resolveBrowserConfig(
   const headless = cfg?.headless === true;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
-  const executablePath = normalizeOptionalString(cfg?.executablePath);
+  // Expand `~` / `~user` / `$HOME` style paths so Node's child_process.spawn()
+  // can resolve executables stored under the user's home. Node does not expand
+  // `~` itself, so leaving the raw tilde in place causes ENOENT at spawn time.
+  // See #67264.
+  const rawExecutablePath = normalizeOptionalString(cfg?.executablePath);
+  const executablePath = rawExecutablePath ? resolveUserPath(rawExecutablePath) : undefined;
   const defaultProfileFromConfig = normalizeOptionalString(cfg?.defaultProfile);
 
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
