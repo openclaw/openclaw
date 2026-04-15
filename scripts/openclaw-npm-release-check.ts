@@ -588,7 +588,6 @@ export function collectPackedTestCargoErrors(paths: Iterable<string>): string[] 
 }
 
 async function main(): Promise<number> {
-async function main(): Promise<number> {
   const pkg = loadPackageJson();
   const now = new Date();
   const skipPackValidation = shouldSkipPackedTarballValidation();

@@ -478,8 +478,8 @@ function walkFiles(rootDir, visitFile) {
     return;
   }
   const queue = [rootDir];
-  while (queue.length > 0) {
-    const currentDir = queue.shift();
+  for (let index = 0; index < queue.length; index += 1) {
+    const currentDir = queue[index];
     for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
       const fullPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
@@ -522,8 +522,8 @@ function pruneDependencyDirectoriesByBasename(depRoot, basenames) {
   }
   const basenameSet = new Set(basenames);
   const queue = [depRoot];
-  while (queue.length > 0) {
-    const currentDir = queue.shift();
+  for (let index = 0; index < queue.length; index += 1) {
+    const currentDir = queue[index];
     for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) {
         continue;
