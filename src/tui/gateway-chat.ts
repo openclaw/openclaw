@@ -86,6 +86,10 @@ export type GatewaySessionList = {
       | "totalTokens"
       | "modelProvider"
       | "displayName"
+      | "status"
+      | "startedAt"
+      | "endedAt"
+      | "runtimeMs"
     > & {
       key: string;
       sessionId?: string;
@@ -238,6 +242,10 @@ export class GatewayChatClient {
       includeLastMessage: opts?.includeLastMessage,
       agentId: opts?.agentId,
     });
+  }
+
+  async subscribeSessions() {
+    return await this.client.request<{ subscribed: boolean }>("sessions.subscribe", {});
   }
 
   async listAgents() {

@@ -38,6 +38,10 @@ export type AgentEvent = {
 export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
 
 export type SessionInfo = {
+  status?: "running" | "done" | "failed" | "killed" | "timeout";
+  startedAt?: number;
+  endedAt?: number;
+  runtimeMs?: number;
   thinkingLevel?: string;
   fastMode?: boolean;
   verboseLevel?: string;
