@@ -35,6 +35,8 @@ final class TalkModeManager: NSObject {
     private static let defaultModelIdFallback = "eleven_v3"
     private static let defaultTalkProvider = "elevenlabs"
     private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
+    private static let pcm44k128 = Self.pcm44k128
+    private static let mp344k128 = Self.mp344k128
     private static let redactedConfigSentinel = "__OPENCLAW_REDACTED__"
     var isEnabled: Bool = false
     var isListening: Bool = false
@@ -1078,7 +1080,7 @@ final class TalkModeManager: NSObject {
                     self.lastPlaybackWasPCM = true
                     var playback = await self.pcmPlayer.play(stream: stream, sampleRate: sampleRate)
                     if !playback.finished, playback.interruptedAt == nil {
-                        let mp3Format = ElevenLabsTTSClient.validatedOutputFormat("mp3_44100_128")
+                        let mp3Format = ElevenLabsTTSClient.validatedOutputFormat(Self.mp344k128)
                         self.logger.warning("pcm playback failed; retrying mp3")
                         if Self.isPCMFormatRejectedByAPI(streamFailure.value) {
                             self.pcmFormatUnavailable = true
@@ -1418,7 +1420,7 @@ final class TalkModeManager: NSObject {
 
     private func resolveIncrementalPrefetchOutputFormat(context: IncrementalSpeechContext) -> String? {
         if TalkTTSValidation.pcmSampleRate(from: context.outputFormat) != nil {
-            return ElevenLabsTTSClient.validatedOutputFormat("mp3_44100_128")
+            return ElevenLabsTTSClient.validatedOutputFormat(Self.mp344k128)
         }
         return context.outputFormat
     }
@@ -1564,7 +1566,7 @@ final class TalkModeManager: NSObject {
 
     /// Returns `mp3_44100_128` when the API has already rejected PCM, otherwise `pcm_44100`.
     private var effectiveDefaultOutputFormat: String {
-        self.pcmFormatUnavailable ? "mp3_44100_128" : "pcm_44100"
+        self.pcmFormatUnavailable ? Self.mp344k128 : Self.pcm44k128
     }
 
     private static func monitorStreamFailures(
@@ -1661,7 +1663,7 @@ final class TalkModeManager: NSObject {
                     self.pcmFormatUnavailable = true
                 }
                 self.lastPlaybackWasPCM = false
-                let mp3Format = ElevenLabsTTSClient.validatedOutputFormat("mp3_44100_128")
+                let mp3Format = ElevenLabsTTSClient.validatedOutputFormat(Self.mp344k128)
                 let mp3Stream = client.streamSynthesize(
                     voiceId: voiceId,
                     request: self.makeIncrementalTTSRequest(
