@@ -9,6 +9,20 @@ import { transcribeSenseAudioAudio } from "./media-understanding-provider.js";
 installPinnedHostnameTestHooks();
 
 describe("transcribeSenseAudioAudio", () => {
+  it("uses SenseAudio base URL by default", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
+
+    await transcribeSenseAudioAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "note.mp3",
+      apiKey: "test-key",
+      timeoutMs: 1000,
+      fetchFn,
+    });
+
+    expect(getRequest().url).toBe("https://api.senseaudio.cn/v1/audio/transcriptions");
+  });
+
   it("respects lowercase authorization header overrides", async () => {
     const { fetchFn, getAuthHeader } = createAuthCaptureJsonFetch({ text: "ok" });
 
