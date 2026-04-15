@@ -43,6 +43,11 @@ OpenClaw has three public release lanes:
 - Run `pnpm release:check` before every tagged release
 - Release checks now run in a separate manual workflow:
   `OpenClaw Release Checks`
+- Cross-OS install and upgrade runtime validation is dispatched from the
+  private caller workflow
+  `openclaw/releases-private/.github/workflows/openclaw-cross-os-release-checks.yml`,
+  which invokes the reusable public workflow
+  `.github/workflows/openclaw-cross-os-release-checks-reusable.yml`
 - This split is intentional: keep the real npm release path short,
   deterministic, and artifact-focused, while slower live checks stay in their
   own lane so they do not stall or block publish
@@ -165,6 +170,7 @@ documented and operator-visible.
 
 - [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml)
 - [`.github/workflows/openclaw-release-checks.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-release-checks.yml)
+- [`.github/workflows/openclaw-cross-os-release-checks-reusable.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-cross-os-release-checks-reusable.yml)
 - [`scripts/openclaw-npm-release-check.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/openclaw-npm-release-check.ts)
 - [`scripts/package-mac-dist.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-dist.sh)
 - [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)

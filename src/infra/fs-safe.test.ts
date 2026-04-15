@@ -172,7 +172,7 @@ describe("fs-safe", () => {
 
         const resolved = await resolveOpenedFileRealPathForHandle(handle, originalPath);
 
-        expect(resolved).toBe(movedPath);
+        await expect(fs.realpath(movedPath)).resolves.toBe(resolved);
         await expect(handle.readFile({ encoding: "utf8" })).resolves.toBe("inside");
       } finally {
         await handle.close().catch(() => {});
