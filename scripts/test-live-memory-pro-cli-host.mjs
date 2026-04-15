@@ -128,12 +128,12 @@ function extractVersion(text) {
   return match?.[0] ?? null;
 }
 
-function extractProfiledCliMetadataPlugins(text) {
+function extractProfiledPlugins(text) {
   const plugins = [];
-  const regex = /^\[plugin-load-profile\] phase=cli-metadata plugin=([^\s]+)\s/mg;
+  const regex = /^\[plugin-load-profile\] phase=([^\s]+) plugin=([^\s]+)\s/mg;
   let match = regex.exec(text);
   while (match) {
-    plugins.push(match[1]);
+    plugins.push({ phase: match[1], plugin: match[2] });
     match = regex.exec(text);
   }
   return plugins;
@@ -183,15 +183,21 @@ function extractFirstJsonObject(text) {
 }
 
 function assertOnlyOwnerPlugin(result, label) {
-  const plugins = extractProfiledCliMetadataPlugins(result.combined);
-  const unique = [...new Set(plugins)];
+  const profiled = extractProfiledPlugins(result.combined);
+  const unique = [...new Set(profiled.map((entry) => entry.plugin))];
+  if (unique.length === 0) {
+    fail(`${label} did not emit any plugin-load-profile lines`, { result });
+  }
   if (unique.length !== 1 || unique[0] !== "memory-lancedb-pro") {
     fail(`${label} loaded unexpected cli-metadata plugins`, {
-      plugins,
+      plugins: profiled,
       result,
     });
   }
-  return unique;
+  return {
+    plugins: unique,
+    phases: [...new Set(profiled.map((entry) => entry.phase))],
+  };
 }
 
 function buildSummary(results) {
@@ -238,22 +244,24 @@ async function main() {
     env: { OPENCLAW_PLUGIN_LOAD_PROFILE: "1" },
   });
   assertCommandSucceeded(profiledVersion, "profiled memory-pro version");
-  const versionPlugins = assertOnlyOwnerPlugin(profiledVersion, "profiled memory-pro version");
+  const versionProfile = assertOnlyOwnerPlugin(profiledVersion, "profiled memory-pro version");
   checks.push({
     name: "profiled memory-pro version",
     elapsedMs: profiledVersion.elapsedMs,
-    cliMetadataPlugins: versionPlugins,
+    profiledPlugins: versionProfile.plugins,
+    profilePhases: versionProfile.phases,
   });
 
   const profiledStats = await runOpenClaw(["memory-pro", "stats", "--json"], {
     env: { OPENCLAW_PLUGIN_LOAD_PROFILE: "1" },
   });
   assertCommandSucceeded(profiledStats, "profiled memory-pro stats --json");
-  const statsPlugins = assertOnlyOwnerPlugin(profiledStats, "profiled memory-pro stats --json");
+  const statsProfile = assertOnlyOwnerPlugin(profiledStats, "profiled memory-pro stats --json");
   checks.push({
     name: "profiled memory-pro stats --json",
     elapsedMs: profiledStats.elapsedMs,
-    cliMetadataPlugins: statsPlugins,
+    profiledPlugins: statsProfile.plugins,
+    profilePhases: statsProfile.phases,
   });
 
   console.log(JSON.stringify(buildSummary(checks), null, 2));
