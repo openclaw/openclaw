@@ -61,6 +61,8 @@ type MatrixQaScenarioResult = {
   title: string;
 };
 
+type MatrixQaScenarioConfigEntry = MatrixQaSummary["config"]["scenarios"][number];
+
 type MatrixQaSummary = {
   checks: QaReportCheck[];
   config: {
@@ -119,6 +121,61 @@ function formatMatrixQaScenarioDetails(params: { details: string; configSummary?
     return params.details;
   }
   return [`effective config: ${params.configSummary}`, params.details].join("\n");
+}
+
+function buildMatrixQaScenarioConfigEntry(params: {
+  gatewayConfigParams: {
+    driverUserId: string;
+    homeserver: string;
+    observerUserId: string;
+    sutAccessToken: string;
+    sutAccountId: string;
+    sutDeviceId?: string;
+    sutUserId: string;
+    topology: MatrixQaProvisionResult["topology"];
+  };
+  scenario: (typeof MATRIX_QA_SCENARIOS)[number];
+}): {
+  entry: MatrixQaScenarioConfigEntry;
+  summary?: string;
+} {
+  const snapshot = buildMatrixQaConfigSnapshot({
+    ...params.gatewayConfigParams,
+    overrides: params.scenario.configOverrides,
+  });
+  return {
+    entry: {
+      config: snapshot,
+      id: params.scenario.id,
+      title: params.scenario.title,
+    },
+    summary:
+      params.scenario.configOverrides === undefined
+        ? undefined
+        : summarizeMatrixQaConfigSnapshot(snapshot),
+  };
+}
+
+function buildMatrixQaScenarioResult(params: {
+  artifacts?: MatrixQaScenarioArtifacts;
+  configSummary?: string;
+  details: string;
+  scenario: {
+    id: string;
+    title: string;
+  };
+  status: "fail" | "pass";
+}): MatrixQaScenarioResult {
+  return {
+    artifacts: params.artifacts,
+    id: params.scenario.id,
+    title: params.scenario.title,
+    status: params.status,
+    details: formatMatrixQaScenarioDetails({
+      details: params.details,
+      configSummary: params.configSummary,
+    }),
+  };
 }
 
 export type MatrixQaRunResult = {
@@ -321,6 +378,7 @@ export async function runMatrixQaLive(params: {
   const gatewayConfigParams = {
     driverUserId: provisioning.driver.userId,
     homeserver: harness.baseUrl,
+    observerUserId: provisioning.observer.userId,
     sutAccessToken: provisioning.sut.accessToken,
     sutAccountId,
     sutDeviceId: provisioning.sut.deviceId,
@@ -328,7 +386,7 @@ export async function runMatrixQaLive(params: {
     topology: provisioning.topology,
   };
   const defaultConfigSnapshot = buildMatrixQaConfigSnapshot(gatewayConfigParams);
-  const scenarioConfigSnapshots: MatrixQaSummary["config"]["scenarios"] = [];
+  const scenarioConfigSnapshots: MatrixQaScenarioConfigEntry[] = [];
 
   try {
     const ensureGatewayHarness = async (overrides?: MatrixQaConfigOverrides) => {
@@ -403,19 +461,12 @@ export async function runMatrixQaLive(params: {
 
     if (!canaryFailed) {
       for (const scenario of scenarios) {
-        const scenarioConfigSnapshot = buildMatrixQaConfigSnapshot({
-          ...gatewayConfigParams,
-          overrides: scenario.configOverrides,
-        });
-        const scenarioConfigSummary =
-          scenario.configOverrides === undefined
-            ? undefined
-            : summarizeMatrixQaConfigSnapshot(scenarioConfigSnapshot);
-        scenarioConfigSnapshots.push({
-          config: scenarioConfigSnapshot,
-          id: scenario.id,
-          title: scenario.title,
-        });
+        const { entry: scenarioConfigEntry, summary: scenarioConfigSummary } =
+          buildMatrixQaScenarioConfigEntry({
+            gatewayConfigParams,
+            scenario,
+          });
+        scenarioConfigSnapshots.push(scenarioConfigEntry);
         try {
           const scenarioGateway = await ensureGatewayHarness(scenario.configOverrides);
           const result = await runMatrixQaScenario(scenario, {
@@ -446,26 +497,24 @@ export async function runMatrixQaLive(params: {
             timeoutMs: scenario.timeoutMs,
             topology: provisioning.topology,
           });
-          scenarioResults.push({
-            artifacts: result.artifacts,
-            id: scenario.id,
-            title: scenario.title,
-            status: "pass",
-            details: formatMatrixQaScenarioDetails({
+          scenarioResults.push(
+            buildMatrixQaScenarioResult({
+              artifacts: result.artifacts,
+              configSummary: scenarioConfigSummary,
               details: result.details,
-              configSummary: scenarioConfigSummary,
+              scenario,
+              status: "pass",
             }),
-          });
+          );
         } catch (error) {
-          scenarioResults.push({
-            id: scenario.id,
-            title: scenario.title,
-            status: "fail",
-            details: formatMatrixQaScenarioDetails({
-              details: formatErrorMessage(error),
+          scenarioResults.push(
+            buildMatrixQaScenarioResult({
               configSummary: scenarioConfigSummary,
+              details: formatErrorMessage(error),
+              scenario,
+              status: "fail",
             }),
-          });
+          );
         }
       }
     }

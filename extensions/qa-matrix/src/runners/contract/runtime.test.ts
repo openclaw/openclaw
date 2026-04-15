@@ -21,6 +21,7 @@ describe("matrix live qa runtime", () => {
     const next = liveTesting.buildMatrixQaConfig(baseCfg, {
       driverUserId: "@driver:matrix-qa.test",
       homeserver: "http://127.0.0.1:28008/",
+      observerUserId: "@observer:matrix-qa.test",
       sutAccessToken: "syt_sut",
       sutAccountId: "sut",
       sutDeviceId: "DEVICE123",
@@ -84,6 +85,7 @@ describe("matrix live qa runtime", () => {
       {
         driverUserId: "@driver:matrix-qa.test",
         homeserver: "http://127.0.0.1:28008/",
+        observerUserId: "@observer:matrix-qa.test",
         sutAccessToken: "syt_sut",
         sutAccountId: "sut",
         sutUserId: "@sut:matrix-qa.test",
@@ -156,6 +158,7 @@ describe("matrix live qa runtime", () => {
         config: {
           default: liveTesting.buildMatrixQaConfigSnapshot({
             driverUserId: "@driver:matrix-qa.test",
+            observerUserId: "@observer:matrix-qa.test",
             sutUserId: "@sut:matrix-qa.test",
             topology: {
               defaultRoomId: "!room:matrix-qa.test",
@@ -183,6 +186,7 @@ describe("matrix live qa runtime", () => {
               title: "Matrix threadReplies always keeps room replies threaded",
               config: liveTesting.buildMatrixQaConfigSnapshot({
                 driverUserId: "@driver:matrix-qa.test",
+                observerUserId: "@observer:matrix-qa.test",
                 overrides: {
                   threadReplies: "always",
                 },
@@ -258,6 +262,7 @@ describe("matrix live qa runtime", () => {
         config: {
           default: liveTesting.buildMatrixQaConfigSnapshot({
             driverUserId: "@driver:matrix-qa.test",
+            observerUserId: "@observer:matrix-qa.test",
             sutUserId: "@sut:matrix-qa.test",
             topology: {
               defaultRoomId: "!room:matrix-qa.test",
