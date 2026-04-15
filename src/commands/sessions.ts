@@ -232,8 +232,12 @@ export async function sessionsCommand(
 
   for (const row of rows) {
     const model = resolveSessionDisplayModel(cfg, row);
+    // When the last run used a fallback model, ignore its stored context
+    // window — compute from the displayed (primary/override) model instead.
+    // See #47705.
+    const storedContextTokens = row.modelIsFromFallback ? undefined : row.contextTokens;
     const contextTokens =
-      row.contextTokens ??
+      storedContextTokens ??
       configuredContextTokens ??
       (await lookupContextTokensForDisplay(model)) ??
       configContextTokens;

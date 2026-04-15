@@ -203,7 +203,11 @@ export async function getStatusSummary(
             cfg,
             provider: resolvedModel.provider,
             model,
-            contextTokensOverride: entry?.contextTokens,
+            // When the last run used a fallback model, ignore its stored
+            // context window so utilization is computed against the displayed
+            // (primary/override) model's window. See #47705.
+            contextTokensOverride:
+              entry && entry.modelIsFromFallback ? undefined : entry?.contextTokens,
             fallbackContextTokens: configContextTokens ?? undefined,
             allowAsyncLoad: false,
           }) ?? null;
