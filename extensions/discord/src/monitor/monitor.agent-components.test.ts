@@ -1,5 +1,10 @@
-import type { ButtonInteraction, ComponentData, StringSelectMenuInteraction } from "@buape/carbon";
-import { ChannelType } from "discord-api-types/v10";
+import type {
+  ButtonInteraction,
+  ComponentData,
+  ModalInteraction,
+  StringSelectMenuInteraction,
+} from "@buape/carbon";
+import { ChannelType, ComponentType } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -12,7 +17,10 @@ import {
   resetDiscordComponentRuntimeMocks,
   upsertPairingRequestMock,
 } from "../test-support/component-runtime.js";
-import { resolveComponentInteractionContext } from "./agent-components-helpers.js";
+import {
+  resolveComponentInteractionContext,
+  resolveModalFieldValues,
+} from "./agent-components-helpers.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
@@ -68,6 +76,20 @@ describe("agent components", () => {
       defer,
       reply,
     };
+  };
+
+  const createModalInteraction = (overrides: Record<string, unknown> = {}) => {
+    const interaction = {
+      fields: {
+        getText: vi.fn(),
+        getStringSelect: vi.fn(),
+        getRoleSelect: vi.fn(),
+        getUserSelect: vi.fn(),
+      },
+      rawData: { data: { components: [] } },
+      ...overrides,
+    };
+    return interaction as unknown as ModalInteraction;
   };
 
   const createBaseGroupDmInteraction = (overrides: Record<string, unknown> = {}) => {
@@ -261,6 +283,55 @@ describe("agent components", () => {
       dmPolicy: "open",
       expectPairingStoreRead: false,
     });
+  });
+
+  it("reads radio modal values from the raw Discord interaction payload", () => {
+    const interaction = createModalInteraction({
+      rawData: {
+        data: {
+          components: [
+            {
+              type: ComponentType.Label,
+              component: {
+                type: ComponentType.RadioGroup,
+                custom_id: "priority",
+                value: "high",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(
+      resolveModalFieldValues(
+        {
+          id: "priority",
+          label: "Priority",
+          type: "radio",
+          options: [{ label: "High", value: "high" }],
+        } as never,
+        interaction,
+      ),
+    ).toEqual(["High"]);
+  });
+
+  it("returns an empty radio selection when raw modal components are missing", () => {
+    const interaction = createModalInteraction({
+      rawData: {},
+    });
+
+    expect(
+      resolveModalFieldValues(
+        {
+          id: "priority",
+          label: "Priority",
+          type: "radio",
+          options: [{ label: "High", value: "high" }],
+        } as never,
+        interaction,
+      ),
+    ).toEqual([]);
   });
 
   it("uses user conversation ids for direct-message component originating targets", () => {

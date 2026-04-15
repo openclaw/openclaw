@@ -738,7 +738,15 @@ function resolveRadioGroupValueFromRaw(
   interaction: ModalInteraction,
   fieldId: string,
 ): string | null {
-  for (const component of interaction.rawData.data.components ?? []) {
+  const rawData = interaction.rawData;
+  const components =
+    rawData && typeof rawData === "object"
+      ? (rawData as { data?: { components?: unknown } }).data?.components
+      : undefined;
+  if (!Array.isArray(components)) {
+    return null;
+  }
+  for (const component of components) {
     if (component.type === ComponentType.Label) {
       const sub = (component as ModalSubmitLabelComponent).component;
       if (sub?.custom_id === fieldId && sub.type === ComponentType.RadioGroup) {
@@ -768,6 +776,8 @@ export function resolveModalFieldValues(
       case "radio": {
         const value = resolveRadioGroupValueFromRaw(interaction, field.id);
         if (required && !value) {
+          // Discord enforces required selections in the modal UI; this throw is
+          // only a defensive fallback when the payload is unexpectedly incomplete.
           throw new Error(`Missing required field: ${field.id}`);
         }
         return value ? mapOptionLabels(optionLabels, [value]) : [];
@@ -802,6 +812,7 @@ export function resolveModalFieldValues(
         return [];
     }
   } catch (err) {
+    // Keep modal submissions non-fatal when Carbon/raw payload parsing drifts.
     logError(`agent modal: failed to read field ${field.id}: ${String(err)}`);
     return [];
   }
