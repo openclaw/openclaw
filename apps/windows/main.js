@@ -37,7 +37,7 @@ async function checkHealth() {
     } else {
       throw new Error("unhealthy");
     }
-  } catch (e) {
+  } catch (_e) {
     statusIndicator.textContent = 'OFFLINE';
     statusIndicator.className = 'indicator offline';
     startBtn.classList.remove('hidden');
@@ -45,8 +45,8 @@ async function checkHealth() {
   }
 }
 
-setInterval(checkHealth, 2000);
-checkHealth();
+setInterval(() => { void checkHealth(); }, 2000);
+void checkHealth();
 
 startBtn.addEventListener('click', async () => {
    try {
