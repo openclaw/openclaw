@@ -3590,7 +3590,8 @@ module.exports = {
     );
   });
 
-  it("rejects mismatched bundled runtime plugin ids during setup-runtime merge", () => {
+  it("rejects mismatched bundled runtime entry ids before applying setup-runtime setters", () => {
+    const runtimeMarker = path.join(makeTempDir(), "setup-runtime-mismatch.txt");
     const built = createSetupEntryChannelPluginFixture({
       id: "setup-runtime-mismatch-test",
       bundledFullEntryId: "wrong-runtime-id",
@@ -3601,7 +3602,7 @@ module.exports = {
       configured: false,
       useBundledFullEntryContract: true,
       useBundledSetupEntryContract: true,
-      bundledFullRuntimeMarker: path.join(makeTempDir(), "setup-runtime-mismatch.txt"),
+      bundledFullRuntimeMarker: runtimeMarker,
     });
 
     const registry = loadOpenClawPlugins({
@@ -3619,8 +3620,9 @@ module.exports = {
     ).toBe("error");
     expect(
       registry.plugins.find((entry) => entry.id === "setup-runtime-mismatch-test")?.error,
-    ).toContain('runtime export uses "wrong-runtime-id"');
+    ).toContain('runtime entry uses "wrong-runtime-id"');
     expect(registry.channels).toHaveLength(0);
+    expect(fs.existsSync(runtimeMarker)).toBe(false);
   });
 
   it("isolates loadSetupPlugin errors as per-plugin diagnostics instead of crashing registry load", () => {

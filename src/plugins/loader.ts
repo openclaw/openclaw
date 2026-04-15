@@ -684,6 +684,7 @@ function mergeSetupRuntimeChannelPlugin(
 }
 
 function resolveBundledRuntimeChannelRegistration(moduleExport: unknown): {
+  id?: string;
   loadChannelPlugin?: () => ChannelPlugin;
   loadChannelSecrets?: () => ChannelPlugin["secrets"] | undefined;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
@@ -694,17 +695,20 @@ function resolveBundledRuntimeChannelRegistration(moduleExport: unknown): {
   }
   const entryRecord = resolved as {
     kind?: unknown;
+    id?: unknown;
     loadChannelPlugin?: unknown;
     loadChannelSecrets?: unknown;
     setChannelRuntime?: unknown;
   };
   if (
     entryRecord.kind !== "bundled-channel-entry" ||
+    typeof entryRecord.id !== "string" ||
     typeof entryRecord.loadChannelPlugin !== "function"
   ) {
     return {};
   }
   return {
+    id: entryRecord.id,
     loadChannelPlugin: entryRecord.loadChannelPlugin as () => ChannelPlugin,
     ...(typeof entryRecord.loadChannelSecrets === "function"
       ? {
@@ -1850,6 +1854,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               continue;
             }
             const runtimeRegistration = resolveBundledRuntimeChannelRegistration(runtimeMod);
+            if (runtimeRegistration.id && runtimeRegistration.id !== record.id) {
+              pushPluginLoadError(
+                `plugin id mismatch (config uses "${record.id}", runtime entry uses "${runtimeRegistration.id}")`,
+              );
+              continue;
+            }
             if (runtimeRegistration.setChannelRuntime) {
               try {
                 runtimeRegistration.setChannelRuntime(api.runtime);
