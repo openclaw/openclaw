@@ -336,10 +336,7 @@ describe("matrix live qa scenarios", () => {
         eventId: "$sut-reply",
         sender: "@sut:matrix-qa.test",
         type: "m.room.message",
-        body: String(sendTextMessage.mock.calls[0]?.[0]?.body).replace(
-          "@sut:matrix-qa.test reply with only this exact marker: ",
-          "",
-        ),
+        body: "observer sender accepted",
       },
       since: "observer-sync-next",
     }));
@@ -380,6 +377,9 @@ describe("matrix live qa scenarios", () => {
       artifacts: {
         actorUserId: "@observer:matrix-qa.test",
         driverEventId: "$observer-allow-trigger",
+        reply: {
+          tokenMatched: false,
+        },
       },
     });
 
@@ -707,7 +707,21 @@ describe("matrix live qa scenarios", () => {
         topology: {
           defaultRoomId: "!main:matrix-qa.test",
           defaultRoomKey: "main",
-          rooms: [],
+          rooms: [
+            {
+              key: "block",
+              kind: "group",
+              memberRoles: ["driver", "observer", "sut"],
+              memberUserIds: [
+                "@driver:matrix-qa.test",
+                "@observer:matrix-qa.test",
+                "@sut:matrix-qa.test",
+              ],
+              name: "Block",
+              requireMention: true,
+              roomId: "!block:matrix-qa.test",
+            },
+          ],
         },
       }),
     ).resolves.toMatchObject({
@@ -720,7 +734,7 @@ describe("matrix live qa scenarios", () => {
     expect(sendTextMessage).toHaveBeenCalledWith({
       body: expect.stringContaining("Matrix block streaming QA check"),
       mentionUserIds: ["@sut:matrix-qa.test"],
-      roomId: "!main:matrix-qa.test",
+      roomId: "!block:matrix-qa.test",
     });
     expect(waitForRoomEvent).toHaveBeenNthCalledWith(
       2,
