@@ -392,6 +392,12 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Example: </tool_result>")).toBe("Example: </tool_result>");
   });
 
+  it("preserves newline-formatted literal closing-tool-tag syntax", () => {
+    const text = "Use this closing tag:\n</tool_call>";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+    expect(sanitizeUserFacingText("Example:\n</tool_result>")).toBe("Example:\n</tool_result>");
+  });
+
   it("preserves literal JSON tool-call examples in instructional prose", () => {
     const text = 'Use <tool_call>{"name":"exec"}</tool_call> in docs.';
     expect(sanitizeUserFacingText(text)).toBe(text);
@@ -404,9 +410,22 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(example)).toBe(example);
   });
 
+  it("preserves newline-formatted literal JSON tool-call examples", () => {
+    const text = 'Use this syntax:\n<tool_call>{"name":"exec"}</tool_call>';
+    expect(sanitizeUserFacingText(text)).toBe(text);
+    const example = 'Example:\n<tool_call>{"name":"exec"}</tool_call>';
+    expect(sanitizeUserFacingText(example)).toBe(example);
+  });
+
   it("strips broad prose that wraps JSON tool-call payloads", () => {
     expect(sanitizeUserFacingText('show <tool_call>{"name":"exec"}</tool_call> xml')).toBe(
       "show xml",
+    );
+  });
+
+  it("does not preserve newline JSON tool-call payloads without a literal syntax cue", () => {
+    expect(sanitizeUserFacingText('Use this:\n<tool_call>{"name":"exec"}</tool_call>')).toBe(
+      "Use this:\n",
     );
   });
 

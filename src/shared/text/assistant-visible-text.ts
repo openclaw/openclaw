@@ -206,6 +206,8 @@ interface LiteralToolBlockEnd {
 
 const LITERAL_TOOL_TAG_BEFORE_RE =
   /\b(?:use|type|write|include|document|example|literal(?:ly)?|syntax)\b[^.!?\n]*$/i;
+const LITERAL_TOOL_TAG_MULTILINE_BEFORE_RE =
+  /(?:^|[\n.!?]\s*)(?:(?:use|type|write|include|document)\b[^.!?\n]*\b(?:close|closing|example|literal(?:ly)?|syntax|tag)\b|(?:example|syntax)\b[^.!?\n]*)[ \t:;]*(?:\r?\n[ \t]*)$/i;
 const LITERAL_TOOL_TAG_AFTER_RE =
   /^[^.!?\n]*\b(?:close|closing|docs?|documentation|example|literal(?:ly)?|syntax|tag)\b/i;
 const LITERAL_TOOL_PAYLOAD_AFTER_RE =
@@ -218,7 +220,8 @@ function looksLikeLiteralToolTagContext(text: string, start: number, end: number
   const before = text.slice(Math.max(0, start - 80), start);
   const after = text.slice(end, Math.min(text.length, end + 80));
   return (
-    LITERAL_TOOL_TAG_BEFORE_RE.test(before) &&
+    (LITERAL_TOOL_TAG_BEFORE_RE.test(before) ||
+      LITERAL_TOOL_TAG_MULTILINE_BEFORE_RE.test(before)) &&
     (LITERAL_TOOL_TAG_AFTER_RE.test(after) || LITERAL_TOOL_SENTENCE_END_AFTER_RE.test(after))
   );
 }
@@ -226,8 +229,12 @@ function looksLikeLiteralToolTagContext(text: string, start: number, end: number
 function looksLikeLiteralToolPayloadContext(text: string, start: number, end: number): boolean {
   const before = text.slice(Math.max(0, start - 80), start);
   const after = text.slice(end, Math.min(text.length, end + 80));
+  const hasLiteralBefore =
+    LITERAL_TOOL_TAG_BEFORE_RE.test(before) || LITERAL_TOOL_TAG_MULTILINE_BEFORE_RE.test(before);
   return (
-    (LITERAL_TOOL_TAG_BEFORE_RE.test(before) && LITERAL_TOOL_PAYLOAD_AFTER_RE.test(after)) ||
+    (hasLiteralBefore && LITERAL_TOOL_PAYLOAD_AFTER_RE.test(after)) ||
+    (LITERAL_TOOL_TAG_MULTILINE_BEFORE_RE.test(before) &&
+      LITERAL_TOOL_SENTENCE_END_AFTER_RE.test(after)) ||
     (LITERAL_TOOL_PAYLOAD_SENTENCE_END_BEFORE_RE.test(before) &&
       LITERAL_TOOL_SENTENCE_END_AFTER_RE.test(after))
   );

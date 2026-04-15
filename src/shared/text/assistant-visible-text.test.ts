@@ -233,6 +233,14 @@ describe("stripAssistantInternalScaffolding", () => {
       expectVisibleText("Example: </tool_result>", "Example: </tool_result>");
     });
 
+    it("preserves newline-formatted literal closing-tag syntax", () => {
+      expectVisibleText(
+        "Use this closing tag:\n</tool_call>",
+        "Use this closing tag:\n</tool_call>",
+      );
+      expectVisibleText("Example:\n</tool_result>", "Example:\n</tool_result>");
+    });
+
     it("preserves literal JSON tool-call examples in instructional prose", () => {
       expectVisibleText(
         'Use <tool_call>{"name":"exec"}</tool_call> in docs.',
@@ -255,8 +263,23 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
+    it("preserves newline-formatted literal JSON tool-call examples", () => {
+      expectVisibleText(
+        'Use this syntax:\n<tool_call>{"name":"exec"}</tool_call>',
+        'Use this syntax:\n<tool_call>{"name":"exec"}</tool_call>',
+      );
+      expectVisibleText(
+        'Example:\n<tool_call>{"name":"exec"}</tool_call>',
+        'Example:\n<tool_call>{"name":"exec"}</tool_call>',
+      );
+    });
+
     it("strips broad prose that wraps JSON tool-call payloads", () => {
       expectVisibleText('show <tool_call>{"name":"exec"}</tool_call> xml', "show  xml");
+    });
+
+    it("does not preserve newline JSON tool-call payloads without a literal syntax cue", () => {
+      expectVisibleText('Use this:\n<tool_call>{"name":"exec"}</tool_call>', "Use this:\n");
     });
 
     it("strips self-closing <tool_call/> tags", () => {
