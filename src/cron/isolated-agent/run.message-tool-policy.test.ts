@@ -34,19 +34,6 @@ function makeParams() {
 describe("runCronIsolatedAgentTurn message tool policy", () => {
   let previousFastTestEnv: string | undefined;
 
-  async function expectMessageToolDisabledForPlan(plan: {
-    requested: boolean;
-    mode: "none" | "announce";
-    channel?: string;
-    to?: string;
-  }) {
-    mockRunCronFallbackPassthrough();
-    resolveCronDeliveryPlanMock.mockReturnValue(plan);
-    await runCronIsolatedAgentTurn(makeParams());
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(true);
-  }
-
   beforeEach(() => {
     previousFastTestEnv = clearFastTestEnv();
     resetRunCronIsolatedAgentTurnHarness();
@@ -63,20 +50,46 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     restoreFastTestEnv(previousFastTestEnv);
   });
 
-  it('disables the message tool when delivery.mode is "none"', async () => {
-    await expectMessageToolDisabledForPlan({
+  it("keeps the message tool enabled for cron-owned runs regardless of delivery mode", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
       requested: false,
       mode: "none",
     });
+    await runCronIsolatedAgentTurn(makeParams());
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
   });
 
-  it("disables the message tool when cron delivery is active", async () => {
-    await expectMessageToolDisabledForPlan({
+  it("keeps the message tool enabled for cron-owned runs when delivery is active", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
       requested: true,
       mode: "announce",
       channel: "telegram",
       to: "123",
     });
+    await runCronIsolatedAgentTurn(makeParams());
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
+  });
+
+  it("disables the message tool for shared callers when delivery is requested", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      deliveryContract: "shared",
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(true);
   });
 
   it("keeps the message tool enabled for shared callers when delivery is not requested", async () => {
@@ -185,7 +198,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     restoreFastTestEnv(previousFastTestEnv);
   });
 
-  it("appends a plain-text delivery instruction to the prompt when delivery is requested", async () => {
+  it("appends an explicit delivery target instruction when delivery is requested", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
       requested: true,
@@ -198,8 +211,10 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
-    expect(prompt).toContain("Return your response as plain text");
-    expect(prompt).toContain("it will be delivered automatically");
+    expect(prompt).toContain("When using the message tool for this cron delivery");
+    expect(prompt).toContain('channel to "telegram"');
+    expect(prompt).toContain('target to "123"');
+    expect(prompt).toContain("NO_REPLY");
   });
 
   it("does not append a delivery instruction when delivery is not requested", async () => {
@@ -210,8 +225,8 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
-    expect(prompt).not.toContain("Return your response as plain text");
-    expect(prompt).not.toContain("it will be delivered automatically");
+    expect(prompt).not.toContain("When using the message tool for this cron delivery");
+    expect(prompt).not.toContain("NO_REPLY");
   });
 
   it("does not instruct the agent to summarize when delivery is requested", async () => {
