@@ -1099,7 +1099,9 @@ function renderGroupedMessage(
 
   // Suppress empty bubbles when tool cards are the only content and toggle is off
   const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
+  // Never suppress streaming bubbles — streaming text may arrive after tool-only content
   if (
+    !opts.isStreaming &&
     !markdown &&
     !visibleToolCards &&
     !hasImages &&
