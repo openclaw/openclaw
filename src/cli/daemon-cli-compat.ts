@@ -81,13 +81,20 @@ export function resolveLegacyDaemonCliRunnerAccessors(
   const runDaemonStatus = aliases.get("runDaemonStatus");
   const runDaemonStop = aliases.get("runDaemonStop");
   const runDaemonUninstall = aliases.get("runDaemonUninstall");
-  if (!runDaemonRestart) {
+  if (
+    !runDaemonInstall &&
+    !runDaemonRestart &&
+    !runDaemonStart &&
+    !runDaemonStatus &&
+    !runDaemonStop &&
+    !runDaemonUninstall
+  ) {
     return null;
   }
 
   return {
     ...(runDaemonInstall ? { runDaemonInstall } : {}),
-    runDaemonRestart,
+    ...(runDaemonRestart ? { runDaemonRestart } : {}),
     ...(runDaemonStart ? { runDaemonStart } : {}),
     ...(runDaemonStatus ? { runDaemonStatus } : {}),
     ...(runDaemonStop ? { runDaemonStop } : {}),
@@ -100,13 +107,13 @@ export function resolveLegacyDaemonCliAccessors(
 ): LegacyDaemonCliAccessors | null {
   const registerDaemonCli = resolveLegacyDaemonCliRegisterAccessor(bundleSource);
   const runnerAccessors = resolveLegacyDaemonCliRunnerAccessors(bundleSource);
-  if (!registerDaemonCli || !runnerAccessors) {
+  if (!registerDaemonCli || !runnerAccessors?.runDaemonRestart) {
     return null;
   }
 
   const accessors: LegacyDaemonCliAccessors = {
     registerDaemonCli,
-    runDaemonRestart: runnerAccessors.runDaemonRestart!,
+    runDaemonRestart: runnerAccessors.runDaemonRestart,
   };
   if (runnerAccessors.runDaemonInstall) {
     accessors.runDaemonInstall = runnerAccessors.runDaemonInstall;

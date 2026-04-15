@@ -5,7 +5,7 @@ import {
   matchesExactOrPrefix,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
+import { OPENAI_RESPONSES_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
@@ -32,9 +32,6 @@ type SyntheticOpenAIModelCatalogEntry = {
 };
 
 export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
-export const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks(
-  "openai-responses-defaults",
-);
 
 export function toOpenAIDataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
@@ -42,22 +39,6 @@ export function toOpenAIDataUrl(buffer: Buffer, mimeType: string): string {
 
 export function resolveConfiguredOpenAIBaseUrl(cfg: OpenClawConfig | undefined): string {
   return normalizeOptionalString(cfg?.models?.providers?.openai?.baseUrl) ?? OPENAI_API_BASE_URL;
-}
-
-export function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
-  const trimmed = normalizeOptionalString(baseUrl);
-  if (!trimmed) {
-    return false;
-  }
-  return /^https?:\/\/api\.openai\.com(?:\/v1)?\/?$/i.test(trimmed);
-}
-
-export function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
-  const trimmed = normalizeOptionalString(baseUrl);
-  if (!trimmed) {
-    return false;
-  }
-  return /^https?:\/\/chatgpt\.com\/backend-api\/?$/i.test(trimmed);
 }
 
 function hasSupportedOpenAIResponsesTransport(

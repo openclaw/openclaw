@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import { isOpenAIApiBaseUrl, isOpenAICodexBaseUrl } from "./base-url.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
 import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
@@ -28,8 +29,6 @@ import {
   buildOpenAISyntheticCatalogEntry,
   cloneFirstTemplateModel,
   findCatalogTemplate,
-  isOpenAIApiBaseUrl,
-  isOpenAICodexBaseUrl,
   matchesExactOrPrefix,
 } from "./shared.js";
 

@@ -63,4 +63,23 @@ describe("resolveLegacyDaemonCliAccessors", () => {
       runDaemonUninstall: "i",
     });
   });
+
+  it("resolves partial runner bundles for split runtime chunks", () => {
+    const installRuntimeBundle = `
+      export { runDaemonInstall };
+    `;
+    const lifecycleRuntimeBundle = `
+      export { runDaemonRestart as t, runDaemonStart as n, runDaemonStop as r, runDaemonUninstall as i };
+    `;
+
+    expect(resolveLegacyDaemonCliRunnerAccessors(installRuntimeBundle)).toEqual({
+      runDaemonInstall: "runDaemonInstall",
+    });
+    expect(resolveLegacyDaemonCliRunnerAccessors(lifecycleRuntimeBundle)).toEqual({
+      runDaemonRestart: "t",
+      runDaemonStart: "n",
+      runDaemonStop: "r",
+      runDaemonUninstall: "i",
+    });
+  });
 });

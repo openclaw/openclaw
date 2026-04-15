@@ -6,7 +6,7 @@ import { formatDocsLink } from "../../terminal/links.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { inheritOptionFromParent } from "../command-options.js";
-import { addGatewayServiceCommands } from "../daemon-cli.js";
+import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { formatHelpExamples } from "../help-format.js";
 import { withProgress } from "../progress.js";
 import { callGatewayCli, gatewayCallOpts } from "./call.js";
@@ -20,7 +20,9 @@ import {
 } from "./discover.js";
 import { addGatewayRunCommand } from "./run.js";
 
-let configModulePromise: Promise<typeof import("../../config/config.js")> | undefined;
+let configModulePromise:
+  | Promise<typeof import("../../config/read-best-effort-config.runtime.js")>
+  | undefined;
 let gatewayStatusModulePromise:
   | Promise<typeof import("../../commands/gateway-status.js")>
   | undefined;
@@ -33,7 +35,7 @@ let healthStyleModulePromise: Promise<typeof import("../../terminal/health-style
 let usageFormatModulePromise: Promise<typeof import("../../utils/usage-format.js")> | undefined;
 
 function loadConfigModule() {
-  configModulePromise ??= import("../../config/config.js");
+  configModulePromise ??= import("../../config/read-best-effort-config.runtime.js");
   return configModulePromise;
 }
 
@@ -166,10 +168,8 @@ export function registerGatewayCli(program: Command) {
       .action(async (method, opts, command) => {
         await runGatewayCommand(async () => {
           const rpcOpts = resolveGatewayRpcOptions(opts, command);
-          const { readBestEffortConfig } = await loadConfigModule();
-          const config = await readBestEffortConfig();
           const params = JSON.parse(String(opts.params ?? "{}"));
-          const result = await callGatewayCli(method, { ...rpcOpts, config }, params);
+          const result = await callGatewayCli(method, rpcOpts, params);
           if (rpcOpts.json) {
             defaultRuntime.writeJson(result);
             return;
@@ -192,9 +192,7 @@ export function registerGatewayCli(program: Command) {
         await runGatewayCommand(async () => {
           const rpcOpts = resolveGatewayRpcOptions(opts, command);
           const days = parseDaysOption(opts.days);
-          const { readBestEffortConfig } = await loadConfigModule();
-          const config = await readBestEffortConfig();
-          const result = await callGatewayCli("usage.cost", { ...rpcOpts, config }, { days });
+          const result = await callGatewayCli("usage.cost", rpcOpts, { days });
           if (rpcOpts.json) {
             defaultRuntime.writeJson(result);
             return;
@@ -215,17 +213,11 @@ export function registerGatewayCli(program: Command) {
       .action(async (opts, command) => {
         await runGatewayCommand(async () => {
           const rpcOpts = resolveGatewayRpcOptions(opts, command);
-          const [
-            { readBestEffortConfig },
-            { formatHealthChannelLines },
-            { styleHealthChannelLine },
-          ] = await Promise.all([
-            loadConfigModule(),
+          const [{ formatHealthChannelLines }, { styleHealthChannelLine }] = await Promise.all([
             loadGatewayHealthModule(),
             loadHealthStyleModule(),
           ]);
-          const config = await readBestEffortConfig();
-          const result = await callGatewayCli("health", { ...rpcOpts, config });
+          const result = await callGatewayCli("health", rpcOpts);
           if (rpcOpts.json) {
             defaultRuntime.writeJson(result);
             return;
@@ -273,7 +265,7 @@ export function registerGatewayCli(program: Command) {
     .action(async (opts: GatewayDiscoverOpts) => {
       await runGatewayCommand(async () => {
         const [
-          { readBestEffortConfig },
+          { readSourceConfigBestEffort },
           { discoverGatewayBeacons },
           { resolveWideAreaDiscoveryDomain },
         ] = await Promise.all([
@@ -281,7 +273,7 @@ export function registerGatewayCli(program: Command) {
           loadBonjourDiscoveryModule(),
           loadWideAreaDnsModule(),
         ]);
-        const cfg = await readBestEffortConfig();
+        const cfg = await readSourceConfigBestEffort();
         const wideAreaDomain = resolveWideAreaDiscoveryDomain({
           configDomain: cfg.discovery?.wideArea?.domain,
         });
