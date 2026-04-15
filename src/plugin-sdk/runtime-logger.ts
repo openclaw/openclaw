@@ -46,7 +46,7 @@ export function resolveRuntimeEnv(params: {
   runtime?: RuntimeEnv;
   logger: LoggerLike;
   exitError?: (code: number) => Error;
-}): RuntimeEnv | OutputRuntimeEnv {
+}): RuntimeEnv {
   return params.runtime ?? createLoggerBackedRuntime(params);
 }
 
@@ -65,7 +65,7 @@ export function resolveRuntimeEnvWithUnavailableExit(params: {
   runtime?: RuntimeEnv;
   logger: LoggerLike;
   unavailableMessage?: string;
-}): RuntimeEnv | OutputRuntimeEnv {
+}): RuntimeEnv {
   if (params.runtime) {
     return resolveRuntimeEnv({
       runtime: params.runtime,
