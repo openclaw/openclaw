@@ -3,7 +3,7 @@ import {
   applyProviderConfigWithModelCatalog,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
-import { discoverZenmuxModels, ZENMUX_BASE_URL } from "./zenmux-models.js";
+import { ZENMUX_BASE_URL } from "./zenmux-models.js";
 
 export const ZENMUX_DEFAULT_MODEL_REF = "zenmux/openai/gpt-5.2";
 
