@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { listBundledChannelPluginIdsForRoot } from "./bundled-ids.js";
-import { resolveBundledChannelPackageRoot } from "./bundled-root.js";
+import { resolveBundledChannelRootScope } from "./bundled-root.js";
 import {
   getBundledChannelPlugin,
   getBundledChannelSecrets,
@@ -69,11 +69,11 @@ function mergeBootstrapPlugin(
 }
 
 function buildBootstrapPlugins(
-  packageRoot: string,
+  cacheKey: string,
   env: NodeJS.ProcessEnv = process.env,
 ): CachedBootstrapPlugins {
   return {
-    sortedIds: listBundledChannelPluginIdsForRoot(packageRoot, env),
+    sortedIds: listBundledChannelPluginIdsForRoot(cacheKey, env),
     byId: new Map(),
     secretsById: new Map(),
     missingIds: new Set(),
@@ -81,20 +81,20 @@ function buildBootstrapPlugins(
 }
 
 function getBootstrapPlugins(
-  packageRoot = resolveBundledChannelPackageRoot(),
+  cacheKey = resolveBundledChannelRootScope().cacheKey,
   env: NodeJS.ProcessEnv = process.env,
 ): CachedBootstrapPlugins {
-  const cached = cachedBootstrapPluginsByRoot.get(packageRoot);
+  const cached = cachedBootstrapPluginsByRoot.get(cacheKey);
   if (cached) {
     return cached;
   }
-  const created = buildBootstrapPlugins(packageRoot, env);
-  cachedBootstrapPluginsByRoot.set(packageRoot, created);
+  const created = buildBootstrapPlugins(cacheKey, env);
+  cachedBootstrapPluginsByRoot.set(cacheKey, created);
   return created;
 }
 
 function resolveActiveBootstrapPlugins(): CachedBootstrapPlugins {
-  return getBootstrapPlugins(resolveBundledChannelPackageRoot());
+  return getBootstrapPlugins(resolveBundledChannelRootScope().cacheKey);
 }
 
 export function listBootstrapChannelPluginIds(): readonly string[] {

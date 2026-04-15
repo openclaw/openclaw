@@ -13,12 +13,14 @@ const OPENCLAW_PACKAGE_ROOT =
     ? path.resolve(fileURLToPath(new URL("../../..", import.meta.url)))
     : process.cwd());
 
-export function derivePackageRootFromBundledPluginsDir(pluginsDir: string): string {
-  const resolvedDir = path.resolve(pluginsDir);
-  if (path.basename(resolvedDir) !== "extensions") {
-    return resolvedDir;
-  }
-  const parentDir = path.dirname(resolvedDir);
+export type BundledChannelRootScope = {
+  packageRoot: string;
+  cacheKey: string;
+  pluginsDir?: string;
+};
+
+function derivePackageRootFromExtensionsDir(extensionsDir: string): string {
+  const parentDir = path.dirname(extensionsDir);
   const parentBase = path.basename(parentDir);
   if (parentBase === "dist" || parentBase === "dist-runtime") {
     return path.dirname(parentDir);
@@ -26,10 +28,23 @@ export function derivePackageRootFromBundledPluginsDir(pluginsDir: string): stri
   return parentDir;
 }
 
-export function resolveBundledChannelPackageRoot(env: NodeJS.ProcessEnv = process.env): string {
+export function resolveBundledChannelRootScope(
+  env: NodeJS.ProcessEnv = process.env,
+): BundledChannelRootScope {
   const bundledPluginsDir = resolveBundledPluginsDir(env);
-  if (bundledPluginsDir) {
-    return derivePackageRootFromBundledPluginsDir(bundledPluginsDir);
+  if (!bundledPluginsDir) {
+    return {
+      packageRoot: OPENCLAW_PACKAGE_ROOT,
+      cacheKey: OPENCLAW_PACKAGE_ROOT,
+    };
   }
-  return OPENCLAW_PACKAGE_ROOT;
+  const resolvedPluginsDir = path.resolve(bundledPluginsDir);
+  return {
+    packageRoot:
+      path.basename(resolvedPluginsDir) === "extensions"
+        ? derivePackageRootFromExtensionsDir(resolvedPluginsDir)
+        : resolvedPluginsDir,
+    cacheKey: resolvedPluginsDir,
+    pluginsDir: resolvedPluginsDir,
+  };
 }

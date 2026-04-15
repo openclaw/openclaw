@@ -165,6 +165,97 @@ describe("bundled channel entry shape guards", () => {
     }
   });
 
+  it("treats direct bundled plugin-tree overrides as scan roots", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-direct-override-"));
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const pluginsRoot = path.join(tempRoot, "bundled-plugins");
+    const pluginDir = path.join(pluginsRoot, "alpha");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      [
+        "globalThis.__bundledOverrideRuntime = undefined;",
+        "const plugin = { id: 'alpha', meta: {}, capabilities: {}, config: {} };",
+        "export default {",
+        "  kind: 'bundled-channel-entry',",
+        "  id: 'alpha',",
+        "  name: 'Alpha',",
+        "  description: 'Alpha',",
+        "  register() {},",
+        "  loadChannelPlugin() { return plugin; },",
+        "  setChannelRuntime(runtime) { globalThis.__bundledOverrideRuntime = runtime.marker; },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    let metadataScanDir: string | undefined;
+    let generatedRootDir: string | undefined;
+    let generatedScanDir: string | undefined;
+
+    vi.doMock("../../plugins/bundled-channel-runtime.js", () => ({
+      listBundledChannelPluginMetadata: (params?: { rootDir?: string; scanDir?: string }) => {
+        metadataScanDir = params?.scanDir;
+        return [
+          {
+            dirName: "alpha",
+            manifest: {
+              id: "alpha",
+              channels: ["alpha"],
+            },
+            source: {
+              source: "./index.js",
+              built: "./index.js",
+            },
+          },
+        ];
+      },
+      resolveBundledChannelGeneratedPath: (
+        rootDir: string,
+        entry: { built?: string; source?: string },
+        pluginDirName?: string,
+        scanDir?: string,
+      ) => {
+        generatedRootDir = rootDir;
+        generatedScanDir = scanDir;
+        return path.join(
+          scanDir ?? path.join(rootDir, "dist", "extensions"),
+          pluginDirName ?? "alpha",
+          (entry.built ?? entry.source ?? "./index.js").replace(/^\.\//u, ""),
+        );
+      },
+    }));
+
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = pluginsRoot;
+
+      const bundled = await importFreshModule<typeof import("./bundled.js")>(
+        import.meta.url,
+        "./bundled.js?scope=bundled-direct-override-root",
+      );
+
+      bundled.setBundledChannelRuntime("alpha", { marker: "ok" } as never);
+      const testGlobal = globalThis as typeof globalThis & {
+        __bundledOverrideRuntime?: unknown;
+      };
+
+      expect(metadataScanDir).toBe(pluginsRoot);
+      expect(generatedRootDir).toBe(pluginsRoot);
+      expect(generatedScanDir).toBe(pluginsRoot);
+      expect(testGlobal.__bundledOverrideRuntime).toBe("ok");
+      expect(bundled.requireBundledChannelPlugin("alpha").id).toBe("alpha");
+    } finally {
+      if (previousBundledPluginsDir === undefined) {
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+      }
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+      delete (globalThis as { __bundledOverrideRuntime?: unknown }).__bundledOverrideRuntime;
+    }
+  });
+
   it("partitions bundled channel lazy caches by active bundled root without re-importing", async () => {
     const rootA = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-root-a-"));
     const rootB = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-root-b-"));

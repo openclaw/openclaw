@@ -1,5 +1,5 @@
 import { listChannelCatalogEntries } from "../../plugins/channel-catalog-registry.js";
-import { resolveBundledChannelPackageRoot } from "./bundled-root.js";
+import { resolveBundledChannelRootScope } from "./bundled-root.js";
 
 const bundledChannelPluginIdsByRoot = new Map<string, string[]>();
 
@@ -19,5 +19,5 @@ export function listBundledChannelPluginIdsForRoot(
 }
 
 export function listBundledChannelPluginIds(): string[] {
-  return listBundledChannelPluginIdsForRoot(resolveBundledChannelPackageRoot());
+  return listBundledChannelPluginIdsForRoot(resolveBundledChannelRootScope().cacheKey);
 }

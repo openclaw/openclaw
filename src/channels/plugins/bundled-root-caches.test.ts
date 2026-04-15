@@ -79,11 +79,11 @@ describe("bundled root-aware caches", () => {
     const rootB = makeBundledRoot("openclaw-bootstrap-b-");
 
     vi.doMock("./bundled-ids.js", () => ({
-      listBundledChannelPluginIdsForRoot: (packageRoot: string) => {
-        if (packageRoot === rootA.root) {
+      listBundledChannelPluginIdsForRoot: (cacheKey: string) => {
+        if (cacheKey === rootA.pluginsDir) {
           return ["alpha"];
         }
-        if (packageRoot === rootB.root) {
+        if (cacheKey === rootB.pluginsDir) {
           return ["beta"];
         }
         return [];
