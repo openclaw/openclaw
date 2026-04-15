@@ -64,12 +64,18 @@ export function createPluginRuntimeStore<T>(options: string | PluginRuntimeStore
   getRuntime: () => T;
 } {
   const resolved = resolvePluginRuntimeStoreOptions(options);
-  const registry = getPluginRuntimeStoreRegistry();
-  let slot = registry.get(resolved.key);
-  if (!slot) {
-    slot = { runtime: null };
-    registry.set(resolved.key, slot);
-  }
+  const slot =
+    typeof options === "string"
+      ? { runtime: null }
+      : (() => {
+          const registry = getPluginRuntimeStoreRegistry();
+          let existingSlot = registry.get(resolved.key);
+          if (!existingSlot) {
+            existingSlot = { runtime: null };
+            registry.set(resolved.key, existingSlot);
+          }
+          return existingSlot;
+        })();
 
   return {
     setRuntime(next: T) {

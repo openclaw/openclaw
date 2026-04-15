@@ -40,7 +40,7 @@ describe("createPluginRuntimeStore", () => {
     expect(rightStore.tryGetRuntime()).toBeNull();
   });
 
-  test("keeps legacy string callers working", () => {
+  test("keeps legacy string callers isolated per store", () => {
     const firstStore = createPluginRuntimeStore<{ value: string }>(
       "legacy runtime not initialized",
     );
@@ -51,7 +51,8 @@ describe("createPluginRuntimeStore", () => {
     firstStore.clearRuntime();
     firstStore.setRuntime({ value: "legacy" });
 
-    expect(secondStore.getRuntime()).toEqual({ value: "legacy" });
+    expect(firstStore.getRuntime()).toEqual({ value: "legacy" });
+    expect(secondStore.tryGetRuntime()).toBeNull();
   });
 
   test("still supports explicit custom store keys", () => {

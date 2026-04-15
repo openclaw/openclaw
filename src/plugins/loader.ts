@@ -1889,6 +1889,15 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               continue;
             }
             if (runtimePluginRegistration.plugin) {
+              if (
+                runtimePluginRegistration.plugin.id &&
+                runtimePluginRegistration.plugin.id !== record.id
+              ) {
+                pushPluginLoadError(
+                  `plugin id mismatch (config uses "${record.id}", runtime export uses "${runtimePluginRegistration.plugin.id}")`,
+                );
+                continue;
+              }
               mergedSetupRegistration = {
                 ...setupRegistration,
                 plugin: mergeSetupRuntimeChannelPlugin(

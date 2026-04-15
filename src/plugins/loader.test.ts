@@ -523,6 +523,7 @@ function createSetupEntryChannelPluginFixture(params: {
   configured: boolean;
   startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
   useBundledFullEntryContract?: boolean;
+  bundledFullEntryId?: string;
   useBundledSetupEntryContract?: boolean;
   splitBundledSetupSecrets?: boolean;
   bundledSetupRuntimeMarker?: string;
@@ -580,7 +581,7 @@ function createSetupEntryChannelPluginFixture(params: {
       ? `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
 module.exports = {
   kind: "bundled-channel-entry",
-  id: ${JSON.stringify(params.id)},
+  id: ${JSON.stringify(params.bundledFullEntryId ?? params.id)},
   name: ${JSON.stringify(params.label)},
   description: ${JSON.stringify(params.fullBlurb)},
   loadChannelPlugin: () => {
@@ -592,12 +593,12 @@ module.exports = {
         : ""
     }
     return {
-      id: ${JSON.stringify(params.id)},
+      id: ${JSON.stringify(params.bundledFullEntryId ?? params.id)},
       meta: {
-        id: ${JSON.stringify(params.id)},
+        id: ${JSON.stringify(params.bundledFullEntryId ?? params.id)},
         label: ${JSON.stringify(params.label)},
         selectionLabel: ${JSON.stringify(params.label)},
-        docsPath: ${JSON.stringify(`/channels/${params.id}`)},
+        docsPath: ${JSON.stringify(`/channels/${params.bundledFullEntryId ?? params.id}`)},
         blurb: ${JSON.stringify(params.fullBlurb)},
       },
       capabilities: { chatTypes: ["direct"] },
@@ -3587,6 +3588,39 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "setup-runtime-helper-test")?.status).toBe(
       "loaded",
     );
+  });
+
+  it("rejects mismatched bundled runtime plugin ids during setup-runtime merge", () => {
+    const built = createSetupEntryChannelPluginFixture({
+      id: "setup-runtime-mismatch-test",
+      bundledFullEntryId: "wrong-runtime-id",
+      label: "Setup Runtime Mismatch Test",
+      packageName: "@openclaw/setup-runtime-mismatch-test",
+      fullBlurb: "full runtime plugin",
+      setupBlurb: "setup runtime override",
+      configured: false,
+      useBundledFullEntryContract: true,
+      useBundledSetupEntryContract: true,
+      bundledFullRuntimeMarker: path.join(makeTempDir(), "setup-runtime-mismatch.txt"),
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [built.pluginDir] },
+          allow: ["setup-runtime-mismatch-test"],
+        },
+      },
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "setup-runtime-mismatch-test")?.status,
+    ).toBe("error");
+    expect(
+      registry.plugins.find((entry) => entry.id === "setup-runtime-mismatch-test")?.error,
+    ).toContain('runtime export uses "wrong-runtime-id"');
+    expect(registry.channels).toHaveLength(0);
   });
 
   it("isolates loadSetupPlugin errors as per-plugin diagnostics instead of crashing registry load", () => {
