@@ -629,6 +629,7 @@ describe("prepareSlackMessage sender prefix", () => {
       teamId: "T1",
       apiAppId: "A1",
       historyLimit: 0,
+      dmHistoryLimit: 0,
       channelHistories: new Map(),
       sessionScope: "per-sender",
       mainKey: "agent:main:main",

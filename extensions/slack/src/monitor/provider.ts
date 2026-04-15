@@ -257,6 +257,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       cfg.messages?.groupChat?.historyLimit ??
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
+  const dmHistoryLimit = Math.max(0, account.config.dmHistoryLimit ?? 0);
 
   const sessionCfg = cfg.session;
   const sessionScope: SessionScope = sessionCfg?.scope ?? "per-sender";
@@ -408,6 +409,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     teamId,
     apiAppId,
     historyLimit,
+    dmHistoryLimit,
     sessionScope,
     mainKey,
     dmEnabled,

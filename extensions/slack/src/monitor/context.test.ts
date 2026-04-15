@@ -18,6 +18,7 @@ function createTestContext() {
     teamId: "T_EXPECTED",
     apiAppId: "A_EXPECTED",
     historyLimit: 0,
+    dmHistoryLimit: 0,
     sessionScope: "per-sender",
     mainKey: "main",
     dmEnabled: true,

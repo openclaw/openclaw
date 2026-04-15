@@ -23,6 +23,7 @@ export function createInboundSlackTestContext(params: {
     teamId: "T1",
     apiAppId: "A1",
     historyLimit: 0,
+    dmHistoryLimit: 0,
     sessionScope: "per-sender",
     mainKey: "main",
     dmEnabled: true,

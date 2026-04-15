@@ -516,6 +516,10 @@ export async function prepareSlackMessage(params: {
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+  // Pick the active history limit for the current chat shape: rooms/group DMs
+  // use `historyLimit`; true 1:1 DMs use `dmHistoryLimit` (0 disables).
+  const activeHistoryLimit = isRoomish ? ctx.historyLimit : ctx.dmHistoryLimit;
+  const historyEnabled = activeHistoryLimit > 0;
   if (isRoom && shouldRequireMention && mentionDecision.shouldSkip) {
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     const pendingText = (message.text ?? "").trim();
@@ -528,7 +532,7 @@ export async function prepareSlackMessage(params: {
     recordPendingHistoryEntryIfEnabled({
       historyMap: ctx.channelHistories,
       historyKey,
-      limit: ctx.historyLimit,
+      limit: activeHistoryLimit,
       entry: pendingBody
         ? {
             sender: await resolveSenderName(),
@@ -653,11 +657,11 @@ export async function prepareSlackMessage(params: {
   });
 
   let combinedBody = body;
-  if (isRoomish && ctx.historyLimit > 0) {
+  if (historyEnabled) {
     combinedBody = buildPendingHistoryContextFromMap({
       historyMap: ctx.channelHistories,
       historyKey,
-      limit: ctx.historyLimit,
+      limit: activeHistoryLimit,
       currentMessage: combinedBody,
       formatEntry: (entry) =>
         formatInboundEnvelope({
@@ -709,14 +713,13 @@ export async function prepareSlackMessage(params: {
   const effectiveMedia = effectiveDirectMedia ?? threadStarterMedia;
   const firstMedia = effectiveMedia?.[0];
 
-  const inboundHistory =
-    isRoomish && ctx.historyLimit > 0
-      ? (ctx.channelHistories.get(historyKey) ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
-      : undefined;
+  const inboundHistory = historyEnabled
+    ? (ctx.channelHistories.get(historyKey) ?? []).map((entry) => ({
+        sender: entry.sender,
+        body: entry.body,
+        timestamp: entry.timestamp,
+      }))
+    : undefined;
   const commandBody = textForCommandDetection.trim();
 
   const ctxPayload = finalizeInboundContext({
@@ -837,6 +840,7 @@ export async function prepareSlackMessage(params: {
     replyToMode,
     isDirectMessage,
     isRoomish,
+    activeHistoryLimit,
     historyKey,
     preview,
     ackReactionMessageTs,

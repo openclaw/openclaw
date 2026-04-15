@@ -671,11 +671,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   if (!anyReplyDelivered) {
     await draftStream?.clear();
-    if (prepared.isRoomish) {
+    if (prepared.activeHistoryLimit > 0) {
       clearHistoryEntriesIfEnabled({
         historyMap: ctx.channelHistories,
         historyKey: prepared.historyKey,
-        limit: ctx.historyLimit,
+        limit: prepared.activeHistoryLimit,
       });
     }
     return;
@@ -714,11 +714,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     });
   }
 
-  if (prepared.isRoomish) {
+  if (prepared.activeHistoryLimit > 0) {
     clearHistoryEntriesIfEnabled({
       historyMap: ctx.channelHistories,
       historyKey: prepared.historyKey,
-      limit: ctx.historyLimit,
+      limit: prepared.activeHistoryLimit,
     });
   }
 }

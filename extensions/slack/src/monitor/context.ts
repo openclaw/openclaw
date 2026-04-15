@@ -35,6 +35,7 @@ export type SlackMonitorContext = {
   apiAppId: string;
 
   historyLimit: number;
+  dmHistoryLimit: number;
   channelHistories: Map<string, HistoryEntry[]>;
   sessionScope: SessionScope;
   mainKey: string;
@@ -102,6 +103,7 @@ export function createSlackMonitorContext(params: {
   apiAppId: string;
 
   historyLimit: number;
+  dmHistoryLimit: number;
   sessionScope: SessionScope;
   mainKey: string;
 
@@ -402,6 +404,7 @@ export function createSlackMonitorContext(params: {
     teamId: params.teamId,
     apiAppId: params.apiAppId,
     historyLimit: params.historyLimit,
+    dmHistoryLimit: params.dmHistoryLimit,
     channelHistories,
     sessionScope: params.sessionScope,
     mainKey: params.mainKey,

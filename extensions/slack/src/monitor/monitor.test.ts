@@ -116,6 +116,7 @@ const baseParams = () => ({
   teamId: "T1",
   apiAppId: "A1",
   historyLimit: 0,
+  dmHistoryLimit: 0,
   sessionScope: "per-sender" as const,
   mainKey: "main",
   dmEnabled: true,
