@@ -277,7 +277,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: {} as never,
       chatId: "oc_chat",
       replyToMessageId: "om_parent",
-      messageCreateTimeMs: Date.now() - 3 * 60_000,
+      messageCreateTimeMs: Date.now() - 6 * 60_000,
     });
 
     const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
@@ -293,7 +293,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: {} as never,
       chatId: "oc_chat",
       replyToMessageId: "om_parent",
-      messageCreateTimeMs: Math.floor((Date.now() - 3 * 60_000) / 1000),
+      messageCreateTimeMs: Math.floor((Date.now() - 6 * 60_000) / 1000),
     });
 
     const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];

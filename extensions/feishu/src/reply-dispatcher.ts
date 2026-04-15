@@ -47,7 +47,7 @@ function shouldUseCard(text: string): boolean {
 
 /** Maximum age (ms) for a message to receive a typing indicator reaction.
  * Messages older than this are likely replays after context compaction (#30418). */
-const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
+const TYPING_INDICATOR_MAX_AGE_MS = 5 * 60_000;
 const MS_EPOCH_MIN = 1_000_000_000_000;
 
 function resolveFinalDeliveryContent(text: string, mediaUrls: string[]): string {
