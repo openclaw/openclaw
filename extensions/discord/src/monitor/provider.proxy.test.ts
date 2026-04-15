@@ -236,6 +236,48 @@ describe("createDiscordGatewayPlugin", () => {
     resetLastAgent();
   });
 
+  it("leaves reconnect baseDelay on Carbon defaults when accountId is omitted", () => {
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime: createRuntime(),
+    }) as unknown as {
+      options: { reconnect?: { maxAttempts?: number; baseDelay?: number } };
+    };
+
+    expect(plugin.options.reconnect?.maxAttempts).toBe(50);
+    expect(plugin.options.reconnect?.baseDelay).toBeUndefined();
+  });
+
+  it("adds deterministic per-account reconnect jitter on top of the Carbon baseline", () => {
+    const runtime = createRuntime();
+    const first = createDiscordGatewayPlugin({
+      accountId: "discord-account-alpha",
+      discordConfig: {},
+      runtime,
+    }) as unknown as {
+      options: { reconnect?: { baseDelay?: number } };
+    };
+    const second = createDiscordGatewayPlugin({
+      accountId: "discord-account-beta",
+      discordConfig: {},
+      runtime,
+    }) as unknown as {
+      options: { reconnect?: { baseDelay?: number } };
+    };
+    const firstRepeat = createDiscordGatewayPlugin({
+      accountId: "discord-account-alpha",
+      discordConfig: {},
+      runtime,
+    }) as unknown as {
+      options: { reconnect?: { baseDelay?: number } };
+    };
+
+    expect(first.options.reconnect?.baseDelay).toBeGreaterThanOrEqual(1000);
+    expect(first.options.reconnect?.baseDelay).toBeLessThanOrEqual(1250);
+    expect(first.options.reconnect?.baseDelay).toBe(firstRepeat.options.reconnect?.baseDelay);
+    expect(first.options.reconnect?.baseDelay).not.toBe(second.options.reconnect?.baseDelay);
+  });
+
   it("uses safe gateway metadata lookup without proxy", async () => {
     const runtime = createRuntime();
     const plugin = createDiscordGatewayPlugin({
