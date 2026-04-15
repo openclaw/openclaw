@@ -149,13 +149,16 @@ function parseSenderPolicyKey(rawKey: string): ParsedSenderPolicyKey | undefined
   }
 
   // Channel-scoped compound key: <channel>:<senderId> (e.g. "discord:123456789012345678").
-  // Any key containing ":" that didn't match a typed prefix is treated as a platform-scoped id.
-  // This allows matching a specific user on a specific platform without cross-platform id collisions.
+  // Only keys whose left side looks like a valid channel identifier (lowercase letters, digits,
+  // hyphens; no "@", ".", or other special chars) are treated as platform-scoped.
+  // This preserves backward compatibility with untyped sender IDs that happen to contain colons,
+  // such as Matrix-style IDs (@alice:example.org), which fall through to the legacy id path.
   const colonIdx = trimmed.indexOf(":");
   if (colonIdx > 0) {
-    const channelPart = normalizeSenderKey(trimmed.slice(0, colonIdx));
+    const rawChannelPart = trimmed.slice(0, colonIdx);
+    const channelPart = normalizeSenderKey(rawChannelPart);
     const idPart = normalizeSenderKey(trimmed.slice(colonIdx + 1));
-    if (channelPart && idPart) {
+    if (channelPart && idPart && /^[a-z][a-z0-9-]*$/.test(channelPart)) {
       return {
         kind: "typed",
         type: "channel",
