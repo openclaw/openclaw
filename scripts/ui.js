@@ -48,7 +48,7 @@ function which(cmd) {
 function resolveRunner() {
   const pnpm = which("pnpm");
   if (pnpm) {
-    return { cmd: pnpm, kind: "pnpm" };
+    return { cmd: path.basename(pnpm), kind: "pnpm" };
   }
   return null;
 }
