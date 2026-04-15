@@ -41,6 +41,12 @@ const LEGACY_UPDATE_COMPAT_SIDECARS = [
     content:
       "// Compatibility stub for older OpenClaw updaters. QA Lab is not packaged.\nexport {};\n",
   },
+  {
+    path: "dist/extensions/qa-channel/runtime-api.js",
+    removedPrefix: "dist/extensions/qa-channel/",
+    content:
+      "// Compatibility stub for older OpenClaw updaters. The QA channel implementation is not packaged.\nexport {};\n",
+  },
 ];
 const BAILEYS_MEDIA_FILE = join(
   "node_modules",
