@@ -30,6 +30,14 @@ function gh(args, { json = true, allowFailure = false } = {}) {
   if (proc.status !== 0 && !allowFailure) {
     fail(`gh ${args.slice(0, 3).join(" ")} failed:\n${(proc.stderr || proc.stdout || "").trim()}`);
   }
+  if (proc.status !== 0) {
+    return {
+      gh_failed: true,
+      status: proc.status,
+      stdout: proc.stdout,
+      stderr: proc.stderr,
+    };
+  }
   if (!json) return proc.stdout;
   try {
     return JSON.parse(proc.stdout);
@@ -40,6 +48,16 @@ function gh(args, { json = true, allowFailure = false } = {}) {
 
 function ghGraphQL(query, options = {}) {
   return gh(["api", "graphql", "-f", `query=${query}`], options);
+}
+
+function failOnGraphQLFailure(result, message) {
+  if (result?.gh_failed) {
+    const details = (result.stderr || result.stdout || `gh exited with status ${result.status}`).trim();
+    fail(`${message}: ${details}`);
+  }
+  if (Array.isArray(result?.errors) && result.errors.length > 0) {
+    fail(`${message}: ${JSON.stringify(result.errors)}`);
+  }
 }
 
 function escapeGraphQLString(value) {
@@ -130,6 +148,7 @@ function fetchDiscussionComment(discussionNumber, discussionCommentDbId) {
       }`,
       { allowFailure: true },
     );
+    failOnGraphQLFailure(gql, `Failed to fetch discussion #${discussionNumber}`);
 
     const discussion = gql?.data?.repository?.discussion;
     if (!discussion)
@@ -150,6 +169,7 @@ function fetchDiscussionComment(discussionNumber, discussionCommentDbId) {
 
       while (!reply && hasMoreReplies) {
         const replyPage = fetchDiscussionReplyPage(topLevelComment.id, replyCursor);
+        failOnGraphQLFailure(replyPage, `Failed to fetch replies for discussion comment ${topLevelComment.id}`);
         const replies = replyPage?.data?.node?.replies;
         if (!replies) fail(`Failed to paginate replies for discussion comment ${topLevelComment.id}`);
 
