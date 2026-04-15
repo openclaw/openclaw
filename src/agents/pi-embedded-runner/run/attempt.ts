@@ -79,6 +79,7 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
+import { applyPiCompactionSettingsFromConfig } from "../../pi-settings.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import {
@@ -1030,6 +1031,13 @@ export async function runEmbeddedAttempt(
           extensionFactories,
         });
         await resourceLoader.reload();
+        // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
+        // compaction overrides applied in createPreparedEmbeddedPiSettingsManager.
+        applyPiCompactionSettingsFromConfig({
+          settingsManager,
+          cfg: params.config,
+          contextTokenBudget: params.contextTokenBudget,
+        });
       }
 
       // Get hook runner early so it's available when creating tools
