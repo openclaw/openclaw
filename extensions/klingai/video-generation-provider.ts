@@ -1,5 +1,9 @@
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  createProviderOperationDeadline,
+  resolveProviderOperationTimeoutMs,
+} from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
@@ -23,6 +27,7 @@ const OMNI_VIDEO_ENDPOINT = "/v1/videos/omni-video";
 const DEFAULT_VIDEO_DURATION_SECONDS = 5;
 const MIN_VIDEO_DURATION_SECONDS = 3;
 const MAX_VIDEO_DURATION_SECONDS = 15;
+const DEFAULT_POLL_TIMEOUT_MS = 600_000;
 const DEFAULT_VIDEO_ASPECT_RATIO = "16:9";
 const DEFAULT_VIDEO_MODE = "pro";
 const DEFAULT_RETURN_URL_ONLY = false;
@@ -196,6 +201,10 @@ export function buildKlingaiVideoGenerationProvider(): VideoGenerationProvider {
             : TEXT_TO_VIDEO_ENDPOINT;
       const mode = resolveVideoModeFromResolution(req.resolution);
       const resolvedAspectRatio = normalizeOptionalString(req.aspectRatio);
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs,
+        label: "KlingAI video generation",
+      });
       const isDefaultModelImageToVideo = model === DEFAULT_KLING_VIDEO_MODEL && Boolean(inputImage);
       const isOmniModelImageToVideo = model === OMNI_KLING_VIDEO_MODEL && Boolean(inputImage);
       const body: Record<string, unknown> = {
@@ -236,7 +245,10 @@ export function buildKlingaiVideoGenerationProvider(): VideoGenerationProvider {
         endpointPath,
         body,
         headers,
-        timeoutMs: req.timeoutMs,
+        timeoutMs: resolveProviderOperationTimeoutMs({
+          deadline,
+          defaultTimeoutMs: 30_000,
+        }),
         fetchFn,
         allowPrivateNetwork,
         dispatcherPolicy,
@@ -247,13 +259,18 @@ export function buildKlingaiVideoGenerationProvider(): VideoGenerationProvider {
         queryPath: `${baseUrl}${endpointPath}`,
         taskId,
         headers,
-        timeoutMs: req.timeoutMs,
+        timeoutMs: resolveProviderOperationTimeoutMs({
+          deadline,
+          defaultTimeoutMs: DEFAULT_POLL_TIMEOUT_MS,
+        }),
         fetchFn,
         allowPrivateNetwork,
         dispatcherPolicy,
         context: "KlingAI video generation",
       });
-      const outputUrl = resolveKlingVideoUrl(completed);
+      const outputUrl = resolveKlingVideoUrl(completed, {
+        preferWatermarkUrl: req.watermark === true,
+      });
       if (!outputUrl) {
         throw new Error("KlingAI video generation completed without output URL");
       }
@@ -269,7 +286,10 @@ export function buildKlingaiVideoGenerationProvider(): VideoGenerationProvider {
       } else {
         const downloaded = await downloadKlingBinaryAsset({
           url: outputUrl,
-          timeoutMs: req.timeoutMs,
+          timeoutMs: resolveProviderOperationTimeoutMs({
+            deadline,
+            defaultTimeoutMs: 30_000,
+          }),
           fetchFn,
           allowPrivateNetwork,
           dispatcherPolicy,

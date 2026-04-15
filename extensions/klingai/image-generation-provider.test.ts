@@ -7,6 +7,8 @@ const {
   postJsonRequestMock,
   fetchWithTimeoutGuardedMock,
   assertOkOrThrowHttpErrorMock,
+  createProviderOperationDeadlineMock,
+  resolveProviderOperationTimeoutMsMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "kling-test-key" })),
   resolveProviderHttpRequestConfigMock: vi.fn((params): any => ({
@@ -18,6 +20,25 @@ const {
   postJsonRequestMock: vi.fn(),
   fetchWithTimeoutGuardedMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+  createProviderOperationDeadlineMock: vi.fn((params: { timeoutMs?: number; label: string }) =>
+    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs) && params.timeoutMs > 0
+      ? {
+          deadlineAtMs: Date.now() + Math.floor(params.timeoutMs),
+          label: params.label,
+          timeoutMs: Math.floor(params.timeoutMs),
+        }
+      : { label: params.label },
+  ),
+  resolveProviderOperationTimeoutMsMock: vi.fn(
+    (params: { deadline: { deadlineAtMs?: number }; defaultTimeoutMs: number }) => {
+      const deadlineAtMs = params.deadline.deadlineAtMs;
+      if (typeof deadlineAtMs !== "number") {
+        return params.defaultTimeoutMs;
+      }
+      const remainingMs = deadlineAtMs - Date.now();
+      return Math.max(1, Math.min(params.defaultTimeoutMs, remainingMs));
+    },
+  ),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
@@ -29,6 +50,8 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   postJsonRequest: postJsonRequestMock,
   fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock,
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+  createProviderOperationDeadline: createProviderOperationDeadlineMock,
+  resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
 }));
 
 describe("klingai image generation provider", () => {
@@ -380,13 +403,19 @@ describe("klingai image generation provider", () => {
     expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledWith(
       "https://proxy.kling.ai/v1/images/generations/task-img-policy-1",
       expect.objectContaining({ method: "GET" }),
-      5_000,
+      expect.any(Number),
       fetch,
       {
         ssrfPolicy: { allowPrivateNetwork: true },
         dispatcherPolicy,
       },
     );
+    expect(
+      Number(fetchWithTimeoutGuardedMock.mock.calls[0]?.[2] ?? 0),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      Number(fetchWithTimeoutGuardedMock.mock.calls[0]?.[2] ?? Number.POSITIVE_INFINITY),
+    ).toBeLessThanOrEqual(5_000);
   });
 
   it("fails fast when api key is missing", async () => {

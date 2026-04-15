@@ -7,6 +7,8 @@ const {
   postJsonRequestMock,
   fetchWithTimeoutGuardedMock,
   assertOkOrThrowHttpErrorMock,
+  createProviderOperationDeadlineMock,
+  resolveProviderOperationTimeoutMsMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "kling-video-key" })),
   resolveProviderHttpRequestConfigMock: vi.fn((params): any => ({
@@ -18,6 +20,25 @@ const {
   postJsonRequestMock: vi.fn(),
   fetchWithTimeoutGuardedMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+  createProviderOperationDeadlineMock: vi.fn((params: { timeoutMs?: number; label: string }) =>
+    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs) && params.timeoutMs > 0
+      ? {
+          deadlineAtMs: Date.now() + Math.floor(params.timeoutMs),
+          label: params.label,
+          timeoutMs: Math.floor(params.timeoutMs),
+        }
+      : { label: params.label },
+  ),
+  resolveProviderOperationTimeoutMsMock: vi.fn(
+    (params: { deadline: { deadlineAtMs?: number }; defaultTimeoutMs: number }) => {
+      const deadlineAtMs = params.deadline.deadlineAtMs;
+      if (typeof deadlineAtMs !== "number") {
+        return params.defaultTimeoutMs;
+      }
+      const remainingMs = deadlineAtMs - Date.now();
+      return Math.max(1, Math.min(params.defaultTimeoutMs, remainingMs));
+    },
+  ),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
@@ -29,6 +50,8 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   postJsonRequest: postJsonRequestMock,
   fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock,
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+  createProviderOperationDeadline: createProviderOperationDeadlineMock,
+  resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
 }));
 
 describe("klingai video generation provider", () => {
@@ -305,6 +328,101 @@ describe("klingai video generation provider", () => {
         }),
       }),
     );
+  });
+
+  it("prefers watermark_url when watermark is enabled", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ code: 0, data: { task_id: "task-vid-watermark-on-1" } }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          code: 0,
+          data: {
+            task_status: "succeed",
+            task_result: {
+              videos: [
+                {
+                  url: "https://cdn.kling.ai/output/video-watermark-on-1-clean.mp4",
+                  watermark_url: "https://cdn.kling.ai/output/video-watermark-on-1-marked.mp4",
+                },
+              ],
+            },
+          },
+        }),
+        headers: new Headers({ "content-type": "application/json" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildKlingaiVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "klingai",
+      model: "kling-v3",
+      prompt: "watermark on test",
+      cfg: {},
+      watermark: true,
+      providerOptions: {
+        return_url_only: true,
+      },
+    });
+
+    expect(result.videos).toEqual([
+      {
+        url: "https://cdn.kling.ai/output/video-watermark-on-1-marked.mp4",
+        mimeType: "video/mp4",
+        fileName: "video-1.mp4",
+      },
+    ]);
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to url when watermark_url is missing", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ code: 0, data: { task_id: "task-vid-watermark-fallback-1" } }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          code: 0,
+          data: {
+            task_status: "succeed",
+            task_result: {
+              videos: [{ url: "https://cdn.kling.ai/output/video-watermark-fallback-1.mp4" }],
+            },
+          },
+        }),
+        headers: new Headers({ "content-type": "application/json" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildKlingaiVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "klingai",
+      model: "kling-v3",
+      prompt: "watermark fallback test",
+      cfg: {},
+      watermark: true,
+      providerOptions: {
+        return_url_only: true,
+      },
+    });
+
+    expect(result.videos).toEqual([
+      {
+        url: "https://cdn.kling.ai/output/video-watermark-fallback-1.mp4",
+        mimeType: "video/mp4",
+        fileName: "video-1.mp4",
+      },
+    ]);
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(1);
   });
 
   it("maps 720P resolution to std mode", async () => {
@@ -637,13 +755,19 @@ describe("klingai video generation provider", () => {
     expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledWith(
       "https://proxy.kling.ai/v1/videos/text2video/task-vid-policy-1",
       expect.objectContaining({ method: "GET" }),
-      5_000,
+      expect.any(Number),
       fetch,
       {
         ssrfPolicy: { allowPrivateNetwork: true },
         dispatcherPolicy,
       },
     );
+    expect(
+      Number(fetchWithTimeoutGuardedMock.mock.calls[0]?.[2] ?? 0),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      Number(fetchWithTimeoutGuardedMock.mock.calls[0]?.[2] ?? Number.POSITIVE_INFINITY),
+    ).toBeLessThanOrEqual(5_000);
   });
 
   it("omits aspect_ratio for kling-v3 image-to-video requests", async () => {

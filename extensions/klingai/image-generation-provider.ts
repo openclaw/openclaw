@@ -4,6 +4,10 @@ import type {
 } from "openclaw/plugin-sdk/image-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  createProviderOperationDeadline,
+  resolveProviderOperationTimeoutMs,
+} from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   downloadKlingBinaryAsset,
@@ -16,6 +20,7 @@ import {
 
 const DEFAULT_KLING_IMAGE_MODEL = "kling-v3";
 const OMNI_KLING_IMAGE_MODEL = "kling-v3-omni";
+const DEFAULT_POLL_TIMEOUT_MS = 600_000;
 const BASIC_IMAGE_ENDPOINT = "/v1/images/generations";
 const OMNI_IMAGE_ENDPOINT = "/v1/images/omni-image";
 const SUPPORTED_ASPECT_RATIOS = ["16:9", "9:16", "1:1"] as const;
@@ -120,6 +125,10 @@ export function buildKlingaiImageGenerationProvider(): ImageGenerationProvider {
         model === OMNI_KLING_IMAGE_MODEL ? OMNI_IMAGE_ENDPOINT : BASIC_IMAGE_ENDPOINT;
       const resolvedAspectRatio = normalizeOptionalString(req.aspectRatio);
       const resolvedResolution = req.resolution ? mapImageResolution(req.resolution) : undefined;
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs,
+        label: "KlingAI image generation",
+      });
       if (model === DEFAULT_KLING_IMAGE_MODEL && resolvedResolution === "4k") {
         throw new Error(
           "KlingAI image model kling-v3 does not support 4K. Use model kling-v3-omni for 4K image generation.",
@@ -164,7 +173,10 @@ export function buildKlingaiImageGenerationProvider(): ImageGenerationProvider {
         endpointPath,
         body,
         headers,
-        timeoutMs: req.timeoutMs,
+        timeoutMs: resolveProviderOperationTimeoutMs({
+          deadline,
+          defaultTimeoutMs: 30_000,
+        }),
         fetchFn,
         allowPrivateNetwork,
         dispatcherPolicy,
@@ -175,7 +187,10 @@ export function buildKlingaiImageGenerationProvider(): ImageGenerationProvider {
         queryPath: `${baseUrl}${endpointPath}`,
         taskId,
         headers,
-        timeoutMs: req.timeoutMs,
+        timeoutMs: resolveProviderOperationTimeoutMs({
+          deadline,
+          defaultTimeoutMs: DEFAULT_POLL_TIMEOUT_MS,
+        }),
         fetchFn,
         allowPrivateNetwork,
         dispatcherPolicy,
@@ -189,7 +204,10 @@ export function buildKlingaiImageGenerationProvider(): ImageGenerationProvider {
       for (const [index, url] of urls.entries()) {
         const downloaded = await downloadKlingBinaryAsset({
           url,
-          timeoutMs: req.timeoutMs,
+          timeoutMs: resolveProviderOperationTimeoutMs({
+            deadline,
+            defaultTimeoutMs: 30_000,
+          }),
           fetchFn,
           allowPrivateNetwork,
           dispatcherPolicy,

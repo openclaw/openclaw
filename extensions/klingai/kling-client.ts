@@ -1,14 +1,16 @@
 import {
   assertOkOrThrowHttpError,
+  createProviderOperationDeadline,
   fetchWithTimeoutGuarded,
   postJsonRequest,
+  resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_KLING_BASE_URL = "https://api-singapore.klingai.com";
 const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
-const DEFAULT_TASK_TIMEOUT_MS = 600_000;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const KLINGAI_EXTENSION_USER_AGENT = "openclaw-extensions-klingai/2026.4.8";
 
@@ -186,18 +188,6 @@ async function queryKlingTask(params: {
   }
 }
 
-function resolvePollingRequestTimeoutMs(params: {
-  pollTimeoutMs: number | undefined;
-  deadline: number;
-}): number {
-  const remainingMs = Math.max(1, params.deadline - Date.now());
-  const requestedMs = params.pollTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
-  if (!Number.isFinite(requestedMs) || requestedMs <= 0) {
-    return remainingMs;
-  }
-  return Math.max(1, Math.min(requestedMs, remainingMs));
-}
-
 export async function pollKlingTaskUntilComplete(params: {
   queryPath: string;
   taskId: string;
@@ -209,15 +199,22 @@ export async function pollKlingTaskUntilComplete(params: {
   context: string;
   pollIntervalMs?: number;
 }): Promise<KlingTaskData> {
-  const timeoutMs = params.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs,
+    label: params.context,
+  });
   const pollIntervalMs = params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   let lastStatus = "unknown";
-  while (Date.now() < deadline) {
-    const requestTimeoutMs = resolvePollingRequestTimeoutMs({
-      pollTimeoutMs: params.timeoutMs,
-      deadline,
-    });
+  while (true) {
+    let requestTimeoutMs: number;
+    try {
+      requestTimeoutMs = resolveProviderOperationTimeoutMs({
+        deadline,
+        defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
+      });
+    } catch {
+      break;
+    }
     const data = await queryKlingTask({
       queryPath: params.queryPath,
       taskId: params.taskId,
@@ -240,11 +237,11 @@ export async function pollKlingTaskUntilComplete(params: {
         `${params.context} failed: ${normalizeOptionalString(data.task_status_msg) || "task failed"}`,
       );
     }
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
+    try {
+      await waitProviderOperationPollInterval({ deadline, pollIntervalMs });
+    } catch {
       break;
     }
-    await new Promise((resolve) => setTimeout(resolve, Math.min(pollIntervalMs, remainingMs)));
   }
   throw new Error(`${params.context} timed out while waiting for task completion (${lastStatus})`);
 }
@@ -300,8 +297,18 @@ export function listKlingImageUrls(taskData: KlingTaskData): string[] {
   return [...urls];
 }
 
-export function resolveKlingVideoUrl(taskData: KlingTaskData): string | undefined {
-  const direct = normalizeOptionalString(taskData.task_result?.videos?.[0]?.url);
+export function resolveKlingVideoUrl(
+  taskData: KlingTaskData,
+  options?: { preferWatermarkUrl?: boolean },
+): string | undefined {
+  const firstVideo = taskData.task_result?.videos?.[0];
+  const direct = normalizeOptionalString(firstVideo?.url);
+  if (options?.preferWatermarkUrl) {
+    const watermarkUrl = normalizeOptionalString(firstVideo?.watermark_url);
+    if (watermarkUrl) {
+      return watermarkUrl;
+    }
+  }
   if (direct) {
     return direct;
   }
