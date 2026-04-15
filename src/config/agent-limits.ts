@@ -27,5 +27,7 @@ export function resolveNestedMaxConcurrent(cfg?: OpenClawConfig): number {
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return Math.max(1, Math.floor(raw));
   }
-  return DEFAULT_NESTED_MAX_CONCURRENT;
+  // Fall back to agent-level maxConcurrent so nested lane scales with the
+  // overall concurrency setting without requiring a separate config entry.
+  return resolveAgentMaxConcurrent(cfg);
 }
