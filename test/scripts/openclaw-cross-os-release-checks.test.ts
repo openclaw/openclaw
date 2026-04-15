@@ -4,6 +4,7 @@ import {
   normalizeWindowsInstalledCliPath,
   parseArgs,
   readRunnerOverrideEnv,
+  resolveRepairGlobalInstallArgs,
   resolveRequestedSuites,
   resolveRunnerMatrix,
   resolveStaticFileContentType,
@@ -114,6 +115,18 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         String.raw`C:\Users\runner\AppData\Roaming\npm\openclaw.cmd`,
       ),
     ).toBe(String.raw`C:\Users\runner\AppData\Roaming\npm\openclaw.cmd`);
+  });
+
+  it("uses a real global link when repairing git installs outside Windows", () => {
+    expect(resolveRepairGlobalInstallArgs("darwin", "/tmp/openclaw")).toEqual(["link"]);
+    expect(resolveRepairGlobalInstallArgs("linux", "/tmp/openclaw")).toEqual(["link"]);
+    expect(resolveRepairGlobalInstallArgs("win32", String.raw`C:\temp\openclaw`)).toEqual([
+      "install",
+      "-g",
+      String.raw`C:\temp\openclaw`,
+      "--no-fund",
+      "--no-audit",
+    ]);
   });
 
   it("accepts a git main dev-channel update status payload", () => {

@@ -893,6 +893,10 @@ async function runDevUpdateSuite(params) {
   const cleanup = [];
   const installVersion = resolveBaselineVersion(params.baselineSpec);
   const usesManagedGateway = shouldUseManagedGatewayService();
+  // Keep dev-update on a manual gateway even on Windows. The packaged lanes
+  // already cover the Scheduled Task path, while repaired git installs live in
+  // an ephemeral checkout that has proven flaky as a managed service in CI.
+  const useManagedGatewayAfterDevUpdate = usesManagedGateway && process.platform !== "win32";
   const requestedRef = resolveExpectedDevUpdateRef(params.ref);
   const manualGateway = { current: null };
   try {
@@ -964,11 +968,11 @@ async function runDevUpdateSuite(params) {
       cliPath: verifiedShell.cliPath,
       env,
       providerConfig: params.providerConfig,
-      installDaemon: usesManagedGateway,
+      installDaemon: useManagedGatewayAfterDevUpdate,
       logPath: join(params.logsDir, "dev-update-onboard.log"),
     });
 
-    if (!usesManagedGateway) {
+    if (!useManagedGatewayAfterDevUpdate) {
       logLanePhase(lane, "gateway-start");
       const gateway = await startManualGatewayFromInstalledCli({
         lane,
@@ -1159,6 +1163,13 @@ export function normalizeWindowsInstalledCliPath(cliPath) {
     return cliPath;
   }
   return cliPath.replace(/\.ps1$/iu, ".cmd");
+}
+
+export function resolveRepairGlobalInstallArgs(platform = process.platform, gitRoot) {
+  if (platform === "win32") {
+    return ["install", "-g", gitRoot, "--no-fund", "--no-audit"];
+  }
+  return ["link"];
 }
 
 async function runPosixShellScript(script, options) {
@@ -1403,7 +1414,7 @@ async function repairLegacyDevUpdateInstall(params) {
     logPath: join(params.logsDir, "dev-update-repair-ui-build.log"),
     timeoutMs: updateTimeoutMs(),
   });
-  await runCommand(npmCommand(), ["install", "-g", gitRoot, "--no-fund", "--no-audit"], {
+  await runCommand(npmCommand(), resolveRepairGlobalInstallArgs(process.platform, gitRoot), {
     cwd: gitRoot,
     env: params.env,
     logPath: join(params.logsDir, "dev-update-repair-global-install.log"),
