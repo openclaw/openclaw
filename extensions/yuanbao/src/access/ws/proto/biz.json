@@ -1,0 +1,483 @@
+{
+  "options": {
+    "syntax": "proto3"
+  },
+  "nested": {
+    "trpc": {
+      "nested": {
+        "yuanbao": {
+          "nested": {
+            "yuanbao_conn": {
+              "nested": {
+                "yuanbao_openclaw_proxy": {
+                  "nested": {
+                    "ImMsgSeq": {
+                      "fields": {
+                        "msgSeq": {
+                          "type": "uint64",
+                          "id": 1
+                        },
+                        "msgId": {
+                          "type": "string",
+                          "id": 2
+                        }
+                      }
+                    },
+                    "ImImageInfoArray": {
+                      "fields": {
+                        "type": {
+                          "type": "uint32",
+                          "id": 1
+                        },
+                        "size": {
+                          "type": "uint32",
+                          "id": 2
+                        },
+                        "width": {
+                          "type": "uint32",
+                          "id": 3
+                        },
+                        "height": {
+                          "type": "uint32",
+                          "id": 4
+                        },
+                        "url": {
+                          "type": "string",
+                          "id": 5
+                        }
+                      }
+                    },
+                    "MsgContent": {
+                      "fields": {
+                        "text": {
+                          "type": "string",
+                          "id": 1
+                        },
+                        "uuid": {
+                          "type": "string",
+                          "id": 2
+                        },
+                        "imageFormat": {
+                          "type": "uint32",
+                          "id": 3
+                        },
+                        "data": {
+                          "type": "string",
+                          "id": 4
+                        },
+                        "desc": {
+                          "type": "string",
+                          "id": 5
+                        },
+                        "ext": {
+                          "type": "string",
+                          "id": 6
+                        },
+                        "sound": {
+                          "type": "string",
+                          "id": 7
+                        },
+                        "imageInfoArray": {
+                          "rule": "repeated",
+                          "type": "ImImageInfoArray",
+                          "id": 8
+                        },
+                        "index": {
+                          "type": "uint32",
+                          "id": 9
+                        },
+                        "url": {
+                          "type": "string",
+                          "id": 10
+                        },
+                        "fileSize": {
+                          "type": "uint32",
+                          "id": 11
+                        },
+                        "fileName": {
+                          "type": "string",
+                          "id": 12
+                        }
+                      }
+                    },
+                    "MsgBodyElement": {
+                      "fields": {
+                        "msgType": {
+                          "type": "string",
+                          "id": 1
+                        },
+                        "msgContent": {
+                          "type": "MsgContent",
+                          "id": 2
+                        }
+                      }
+                    },
+                    "LogInfoExt": {
+                      "fields": {
+                        "traceId": {
+                          "type": "string",
+                          "id": 1
+                        }
+                      }
+                    },
+                    "SendC2CMessageReq": {
+                      "fields": {
+                        "msgId": {
+                          "type": "string",
+                          "id": 1
+                        },
+                        "toAccount": {
+                          "type": "string",
+                          "id": 2
+                        },
+                        "fromAccount": {
+                          "type": "string",
+                          "id": 3
+                        },
+                        "msgRandom": {
+                          "type": "uint32",
+                          "id": 4
+                        },
+                        "msgBody": {
+                          "rule": "repeated",
+                          "type": "MsgBodyElement",
+                          "id": 5
+                        },
+                        "groupCode": {
+                          "type": "string",
+                          "id": 6
+                        },
+                        "msgSeq": {
+                          "type": "uint64",
+                          "id": 7
+                        },
+                        "logExt": {
+                          "type": "LogInfoExt",
+                          "id": 8
+                        }
+                      }
+                    },
+                    "SendC2CMessageRsp": {
+                      "fields": {
+                        "code": {
+                          "type": "int32",
+                          "id": 1
+                        },
+                        "message": {
+                          "type": "string",
+                          "id": 2
+                        }
+                      }
+                    },
+                    "SendGroupMessageReq": {
+                      "fields": {
+                        "msgId": {
+                          "type": "string",
+                          "id": 1
+                        },
+                        "groupCode": {
+                          "type": "string",
+                          "id": 2
+                        },
+                        "fromAccount": {
+                          "type": "string",
+                          "id": 3
+                        },
+                        "toAccount": {
+                          "type": "string",
+                          "id": 4
+                        },
+                        "random": {
+                          "type": "string",
+                          "id": 5
+                        },
+                        "msgBody": {
+                          "rule": "repeated",
+                          "type": "MsgBodyElement",
+                          "id": 6
+                        },
+                        "refMsgId": {
+                          "type": "string",
+                          "id": 7
+                        },
+                        "msgSeq": {
+                          "type": "uint64",
+                          "id": 8
+                        },
+                        "logExt": {
+                          "type": "LogInfoExt",
+                          "id": 9
+                        }
+                      }
+                    },
+                    "SendGroupMessageRsp": {
+                      "fields": {
+                        "code": {
+                          "type": "int32",
+                          "id": 1
+                        },
+                        "message": {
+                          "type": "string",
+                          "id": 2
+                        }
+                      }
+                    },
+                    "EnumCLawMsgType": {
+                      "values": {
+                        "CLAW_MSG_UNKNOWN": 0,
+                        "CLAW_MSG_GROUP": 1,
+                        "CLAW_MSG_PRIVATE": 2
+                      }
+                    },
+                    "InboundMessagePush": {
+                      "fields": {
+                        "callbackCommand": {
+                          "type": "string",
+                          "id": 1
+                        },
+                        "fromAccount": {
+                          "type": "string",
+                          "id": 2
+                        },
+                        "toAccount": {
+                          "type": "string",
+                          "id": 3
+                        },
+                        "senderNickname": {
+                          "type": "string",
+                          "id": 4
+                        },
+                        "groupId": {
+                          "type": "string",
+                          "id": 5
+                        },
+                        "groupCode": {
+                          "type": "string",
+                          "id": 6
+                        },
+                        "groupName": {
+                          "type": "string",
+                          "id": 7
+                        },
+                        "msgSeq": {
+                          "type": "uint32",
+                          "id": 8
+                        },
+                        "msgRandom": {
+                          "type": "uint32",
+                          "id": 9
+                        },
+                        "msgTime": {
+                          "type": "uint32",
+                          "id": 10
+                        },
+                        "msgKey": {
+                          "type": "string",
+                          "id": 11
+                        },
+                        "msgId": {
+                          "type": "string",
+                          "id": 12
+                        },
+                        "msgBody": {
+                          "rule": "repeated",
+                          "type": "MsgBodyElement",
+                          "id": 13
+                        },
+                        "cloudCustomData": {
+                          "type": "string",
+                          "id": 14
+                        },
+                        "eventTime": {
+                          "type": "uint32",
+                          "id": 15
+                        },
+                        "botOwnerId": {
+                          "type": "string",
+                          "id": 16
+                        },
+                        "recallMsgSeqList": {
+                          "rule": "repeated",
+                          "type": "ImMsgSeq",
+                          "id": 17
+                        },
+                        "clawMsgType": {
+                          "type": "EnumCLawMsgType",
+                          "id": 18
+                        },
+                        "privateFromGroupCode": {
+                          "type": "string",
+                          "id": 19
+                        },
+                        "logExt": {
+                          "type": "LogInfoExt",
+                          "id": 20
+                        }
+                      }
+                    },
+                    "GetGroupMemberListReq": {
+                      "fields": {
+                        "groupCode": {
+                          "type": "string",
+                          "id": 1
+                        }
+                      }
+                    },
+                    "GetGroupMemberListRsp": {
+                      "fields": {
+                        "code": {
+                          "type": "int32",
+                          "id": 1
+                        },
+                        "message": {
+                          "type": "string",
+                          "id": 2
+                        },
+                        "memberList": {
+                          "rule": "repeated",
+                          "type": "Member",
+                          "id": 3
+                        }
+                      }
+                    },
+                    "Member": {
+                      "fields": {
+                        "userId": {
+                          "type": "string",
+                          "id": 1
+                        },
+                        "nickName": {
+                          "type": "string",
+                          "id": 2
+                        },
+                        "userType": {
+                          "type": "int32",
+                          "id": 3
+                        }
+                      }
+                    },
+                    "QueryGroupInfoReq": {
+                      "fields": {
+                        "groupCode": {
+                          "type": "string",
+                          "id": 1
+                        }
+                      }
+                    },
+                    "QueryGroupInfoRsp": {
+                      "fields": {
+                        "code": {
+                          "type": "int32",
+                          "id": 1
+                        },
+                        "msg": {
+                          "type": "string",
+                          "id": 2
+                        },
+                        "groupInfo": {
+                          "type": "GroupInfo",
+                          "id": 3
+                        }
+                      }
+                    },
+                    "GroupInfo": {
+                      "fields": {
+                        "groupName": {
+                          "type": "string",
+                          "id": 1
+                        },
+                        "groupOwnerUserId": {
+                          "type": "string",
+                          "id": 2
+                        },
+                        "groupOwnerNickname": {
+                          "type": "string",
+                          "id": 3
+                        },
+                        "groupSize": {
+                          "type": "int32",
+                          "id": 4
+                        }
+                      }
+                    },
+                    "EnumHeartbeat": {
+                      "values": {
+                        "HEARTBEAT_UNKNOWN": 0,
+                        "HEARTBEAT_RUNNING": 1,
+                        "HEARTBEAT_FINISH": 2
+                      }
+                    },
+                    "SendPrivateHeartbeatReq": {
+                      "fields": {
+                        "fromAccount": {
+                          "type": "string",
+                          "id": 1
+                        },
+                        "toAccount": {
+                          "type": "string",
+                          "id": 2
+                        },
+                        "heartbeat": {
+                          "type": "EnumHeartbeat",
+                          "id": 3
+                        }
+                      }
+                    },
+                    "SendPrivateHeartbeatRsp": {
+                      "fields": {
+                        "code": {
+                          "type": "int32",
+                          "id": 1
+                        },
+                        "msg": {
+                          "type": "string",
+                          "id": 2
+                        }
+                      }
+                    },
+                    "SendGroupHeartbeatReq": {
+                      "fields": {
+                        "fromAccount": {
+                          "type": "string",
+                          "id": 1
+                        },
+                        "toAccount": {
+                          "type": "string",
+                          "id": 2
+                        },
+                        "groupCode": {
+                          "type": "string",
+                          "id": 3
+                        },
+                        "sendTime": {
+                          "type": "int64",
+                          "id": 4
+                        },
+                        "heartbeat": {
+                          "type": "EnumHeartbeat",
+                          "id": 5
+                        }
+                      }
+                    },
+                    "SendGroupHeartbeatRsp": {
+                      "fields": {
+                        "code": {
+                          "type": "int32",
+                          "id": 1
+                        },
+                        "msg": {
+                          "type": "string",
+                          "id": 2
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

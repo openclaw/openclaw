@@ -1,0 +1,391 @@
+{
+  "options": {
+    "syntax": "proto3"
+  },
+  "nested": {
+    "trpc": {
+      "nested": {
+        "yuanbao": {
+          "nested": {
+            "conn_common": {
+              "options": {
+                "go_package": "git.woa.com/ifBookProtocol/hunyuanbot/yuanbao_conn/conn_common"
+              },
+              "nested": {
+                "RetCode": {
+                  "values": {
+                    "SUCCESS": 0,
+                    "PARAMS_INVALID": 40011,
+                    "AUTH_FAIL": 40100,
+                    "UNKNOWN_ROUTE": 40300,
+                    "ALREADY_AUTH": 41101,
+                    "SAME_KIND_DEV_LOGIN": 41102,
+                    "AUTH_TOKEN_INVALID": 41103,
+                    "AUTH_TOKEN_EXPIRED": 41104,
+                    "AUTH_USER_NOT_REGISTERED": 41105,
+                    "AUTH_USER_FORBIDDEN": 41106,
+                    "AUTH_USER_UNQUALIFIED": 41107,
+                    "AUTH_TOKEN_FORCED_EXPIRATION": 41108,
+                    "PROHIBIT_APP_VERSION": 41109,
+                    "PACKAGE_SIGN_ILLEGAL": 41110,
+                    "INNER_SVR_FAIL": 50400,
+                    "OVERLOAD_CONTROL": 50503,
+                    "SET_STATE_CONFLICT": 51001,
+                    "CONN_OVER_LIMIT": 51002,
+                    "NO_USER_ONLINE": 51003,
+                    "PARTIAL_FAIL": 51004,
+                    "NET_FAIL": 90001,
+                    "BACKEND_RETURN_FAIL": 90003,
+                    "USER_OFFLINE": 20001,
+                    "USER_NOT_EXIST": 20002
+                  }
+                },
+                "HeadMeta": {
+                  "fields": {
+                    "key": {
+                      "type": "string",
+                      "id": 1
+                    },
+                    "value": {
+                      "type": "string",
+                      "id": 2
+                    }
+                  }
+                },
+                "Head": {
+                  "fields": {
+                    "cmdType": {
+                      "type": "uint32",
+                      "id": 1
+                    },
+                    "cmd": {
+                      "type": "string",
+                      "id": 2
+                    },
+                    "seqNo": {
+                      "type": "uint32",
+                      "id": 3
+                    },
+                    "msgId": {
+                      "type": "string",
+                      "id": 4
+                    },
+                    "module": {
+                      "type": "string",
+                      "id": 5
+                    },
+                    "needAck": {
+                      "type": "bool",
+                      "id": 6
+                    },
+                    "meta": {
+                      "rule": "repeated",
+                      "type": "HeadMeta",
+                      "id": 7
+                    },
+                    "status": {
+                      "type": "int32",
+                      "id": 10
+                    }
+                  }
+                },
+                "ConnMsg": {
+                  "fields": {
+                    "head": {
+                      "type": "Head",
+                      "id": 1
+                    },
+                    "data": {
+                      "type": "bytes",
+                      "id": 2
+                    }
+                  }
+                },
+                "DirectedPush": {
+                  "fields": {
+                    "type": {
+                      "type": "uint32",
+                      "id": 1
+                    },
+                    "content": {
+                      "type": "string",
+                      "id": 2
+                    }
+                  }
+                },
+                "AuthInfo": {
+                  "fields": {
+                    "uid": {
+                      "type": "string",
+                      "id": 1
+                    },
+                    "source": {
+                      "type": "string",
+                      "id": 2
+                    },
+                    "token": {
+                      "type": "string",
+                      "id": 3
+                    }
+                  }
+                },
+                "DeviceInfo": {
+                  "fields": {
+                    "appVersion": {
+                      "type": "string",
+                      "id": 1
+                    },
+                    "appOperationSystem": {
+                      "type": "string",
+                      "id": 2
+                    },
+                    "appBundleId": {
+                      "type": "string",
+                      "id": 3
+                    },
+                    "qimei": {
+                      "type": "string",
+                      "id": 4
+                    },
+                    "qimei36": {
+                      "type": "string",
+                      "id": 5
+                    },
+                    "h38": {
+                      "type": "string",
+                      "id": 6
+                    },
+                    "language": {
+                      "type": "string",
+                      "id": 7
+                    },
+                    "deviceId": {
+                      "type": "string",
+                      "id": 8
+                    },
+                    "deviceName": {
+                      "type": "string",
+                      "id": 9
+                    },
+                    "instanceId": {
+                      "type": "string",
+                      "id": 10
+                    },
+                    "tid": {
+                      "type": "string",
+                      "id": 11
+                    },
+                    "uskey": {
+                      "type": "string",
+                      "id": 12
+                    },
+                    "busParamsMd5": {
+                      "type": "string",
+                      "id": 13
+                    },
+                    "packageType": {
+                      "type": "string",
+                      "id": 14
+                    },
+                    "appPublishChannel": {
+                      "type": "string",
+                      "id": 15
+                    },
+                    "signVersion": {
+                      "type": "string",
+                      "id": 16
+                    },
+                    "packageSignature": {
+                      "type": "string",
+                      "id": 17
+                    },
+                    "brand": {
+                      "type": "string",
+                      "id": 18
+                    },
+                    "h42": {
+                      "type": "string",
+                      "id": 19
+                    },
+                    "xDeviceId": {
+                      "type": "string",
+                      "id": 20
+                    },
+                    "xPlatform": {
+                      "type": "string",
+                      "id": 21
+                    },
+                    "dialToken": {
+                      "type": "string",
+                      "id": 22
+                    },
+                    "qimei36Token": {
+                      "type": "string",
+                      "id": 23
+                    },
+                    "botVersion": {
+                      "type": "string",
+                      "id": 24
+                    }
+                  }
+                },
+                "Container": {
+                  "fields": {
+                    "type": {
+                      "type": "int32",
+                      "id": 1
+                    },
+                    "uniqueKey": {
+                      "type": "string",
+                      "id": 2
+                    }
+                  }
+                },
+                "AuthBindReq": {
+                  "fields": {
+                    "bizId": {
+                      "type": "string",
+                      "id": 1
+                    },
+                    "authInfo": {
+                      "type": "AuthInfo",
+                      "id": 2
+                    },
+                    "deviceInfo": {
+                      "type": "DeviceInfo",
+                      "id": 3
+                    },
+                    "containerInfo": {
+                      "type": "Container",
+                      "id": 4
+                    },
+                    "envName": {
+                      "type": "string",
+                      "id": 5
+                    },
+                    "bindMode": {
+                      "type": "uint32",
+                      "id": 6
+                    },
+                    "forceToken": {
+                      "type": "string",
+                      "id": 7
+                    }
+                  }
+                },
+                "AuthBindRsp": {
+                  "fields": {
+                    "code": {
+                      "type": "int32",
+                      "id": 1
+                    },
+                    "message": {
+                      "type": "string",
+                      "id": 2
+                    },
+                    "connectId": {
+                      "type": "string",
+                      "id": 3
+                    },
+                    "timestamp": {
+                      "type": "uint64",
+                      "id": 4
+                    },
+                    "clientIp": {
+                      "type": "string",
+                      "id": 5
+                    }
+                  }
+                },
+                "PingReq": {
+                  "fields": {}
+                },
+                "PingRsp": {
+                  "fields": {
+                    "heartInterval": {
+                      "type": "uint32",
+                      "id": 1
+                    },
+                    "timestamp": {
+                      "type": "uint64",
+                      "id": 2
+                    }
+                  }
+                },
+                "KickoutMsg": {
+                  "fields": {
+                    "status": {
+                      "type": "int32",
+                      "id": 1
+                    },
+                    "reason": {
+                      "type": "string",
+                      "id": 2
+                    },
+                    "otherDeviceName": {
+                      "type": "string",
+                      "id": 3
+                    }
+                  }
+                },
+                "Meta": {
+                  "fields": {
+                    "key": {
+                      "type": "string",
+                      "id": 1
+                    },
+                    "value": {
+                      "type": "string",
+                      "id": 2
+                    }
+                  }
+                },
+                "UpdateMetaReq": {
+                  "fields": {
+                    "metaInfos": {
+                      "rule": "repeated",
+                      "type": "Meta",
+                      "id": 1
+                    }
+                  }
+                },
+                "UpdateMetaRsp": {
+                  "fields": {
+                    "code": {
+                      "type": "int32",
+                      "id": 1
+                    },
+                    "message": {
+                      "type": "string",
+                      "id": 2
+                    }
+                  }
+                },
+                "PushMsg": {
+                  "fields": {
+                    "cmd": {
+                      "type": "string",
+                      "id": 1
+                    },
+                    "module": {
+                      "type": "string",
+                      "id": 2
+                    },
+                    "msgId": {
+                      "type": "string",
+                      "id": 3
+                    },
+                    "data": {
+                      "type": "bytes",
+                      "id": 4
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "name": "@openclaw/yuanbao",
+  "version": "2026.4.14",
+  "private": true,
+  "description": "OpenClaw YuanBao channel plugin",
+  "type": "module",
+  "dependencies": {
+    "cos-nodejs-sdk-v5": "^2.15.4",
+    "protobufjs": "^7.5.4",
+    "uuid": "^13.0.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.37",
+    "@types/ws": "^8.18.1",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.14"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "yuanbao",
+      "label": "元宝 Bot",
+      "selectionLabel": "元宝 Bot (yuanbao)",
+      "detailLabel": "元宝 Bot",
+      "docsPath": "/channels/yuanbao",
+      "docsLabel": "yuanbao",
+      "blurb": "YuanBao bot via WebSocket.",
+      "aliases": [
+        "yuanbao",
+        "元宝",
+        "即时通信"
+      ],
+      "order": 85,
+      "quickstartAllowFrom": true
+    },
+    "bundle": {
+      "stageRuntimeDependencies": true
+    }
+  }
+}

@@ -1,0 +1,542 @@
+[
+  {
+    "emoji_id": "278",
+    "emoji_pack_id": "1003",
+    "name": "六六六",
+    "description": "666 厉害 牛 棒 绝了 好强 awesome",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "262",
+    "emoji_pack_id": "1003",
+    "name": "我想开了",
+    "description": "想开 佛系 释怀 顿悟 看淡了 无所谓",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "130",
+    "emoji_pack_id": "1003",
+    "name": "害羞",
+    "description": "腼腆 不好意思 脸红 娇羞 羞涩 捂脸",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "252",
+    "emoji_pack_id": "1003",
+    "name": "比心",
+    "description": "笔芯 爱你 爱心手势 love heart 喜欢你",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "125",
+    "emoji_pack_id": "1003",
+    "name": "委屈",
+    "description": "难过 想哭 可怜巴巴 瘪嘴 受伤 被欺负",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "146",
+    "emoji_pack_id": "1003",
+    "name": "亲亲",
+    "description": "么么 mua 亲一下 kiss 飞吻 啵",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "131",
+    "emoji_pack_id": "1003",
+    "name": "酷",
+    "description": "帅 墨镜 cool 高冷 有型 swagger",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "145",
+    "emoji_pack_id": "1003",
+    "name": "睡",
+    "description": "睡觉 困 zzZ 打盹 躺平 休眠 sleepy",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "152",
+    "emoji_pack_id": "1003",
+    "name": "发呆",
+    "description": "懵 愣住 放空 呆滞 出神 脑子空白",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "157",
+    "emoji_pack_id": "1003",
+    "name": "可怜",
+    "description": "卖萌 求饶 委屈巴巴 弱小 拜托 眼巴巴",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "200",
+    "emoji_pack_id": "1003",
+    "name": "摊手",
+    "description": "无奈 没办法 耸肩 随便 那咋整 whatever",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "213",
+    "emoji_pack_id": "1003",
+    "name": "头大",
+    "description": "头疼 烦恼 郁闷 难搞 崩溃 一团乱",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "256",
+    "emoji_pack_id": "1003",
+    "name": "吓",
+    "description": "害怕 惊恐 震惊 吓一跳 恐怖 怂",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "203",
+    "emoji_pack_id": "1003",
+    "name": "吐血",
+    "description": "无语 崩溃 被雷 内伤 一口老血 屮",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "185",
+    "emoji_pack_id": "1003",
+    "name": "哼",
+    "description": "傲娇 生气 不满 撇嘴 不理 赌气",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "220",
+    "emoji_pack_id": "1003",
+    "name": "嘿嘿",
+    "description": "坏笑 猥琐笑 偷笑 憨笑 得意 你懂的",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "218",
+    "emoji_pack_id": "1003",
+    "name": "头秃",
+    "description": "程序员 加班 焦虑 没头发 秃了 肝爆",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "221",
+    "emoji_pack_id": "1003",
+    "name": "暗中观察",
+    "description": "窥屏 潜水 偷偷看 角落 围观 屏住呼吸",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "224",
+    "emoji_pack_id": "1003",
+    "name": "我酸了",
+    "description": "嫉妒 柠檬精 羡慕 吃柠檬 眼红 恰柠檬",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "246",
+    "emoji_pack_id": "1003",
+    "name": "打call",
+    "description": "应援 加油 支持 喝彩 助威 call",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "251",
+    "emoji_pack_id": "1003",
+    "name": "庆祝",
+    "description": "祝贺 开心 耶 party 胜利 干杯",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "151",
+    "emoji_pack_id": "1003",
+    "name": "奋斗",
+    "description": "努力 加油 拼搏 冲 干劲 卷起来",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "143",
+    "emoji_pack_id": "1003",
+    "name": "惊讶",
+    "description": "震惊 哇 不敢相信 OMG 居然 这么离谱",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "144",
+    "emoji_pack_id": "1003",
+    "name": "疑问",
+    "description": "问号 不懂 啥 为什么 啥情况 懵逼问",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "248",
+    "emoji_pack_id": "1003",
+    "name": "仔细分析",
+    "description": "思考 推敲 认真 研究 琢磨 让我想想",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "184",
+    "emoji_pack_id": "1003",
+    "name": "撅嘴",
+    "description": "嘟嘴 卖萌 不高兴 撒娇 嘴翘",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "199",
+    "emoji_pack_id": "1003",
+    "name": "泪奔",
+    "description": "大哭 伤心 破防 感动哭 泪流满面 呜呜",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "276",
+    "emoji_pack_id": "1003",
+    "name": "尊嘟假嘟",
+    "description": "真的假的 真假 可爱问 你骗我 是不是",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "113",
+    "emoji_pack_id": "1003",
+    "name": "略略略",
+    "description": "调皮 吐舌 不服 略 气死你 鬼脸",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "180",
+    "emoji_pack_id": "1003",
+    "name": "困",
+    "description": "想睡 倦 打哈欠 睁不开眼 好困啊 sleepy",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "181",
+    "emoji_pack_id": "1003",
+    "name": "折磨",
+    "description": "难受 痛苦 煎熬 蚌埠住了 受不了 要命",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "182",
+    "emoji_pack_id": "1003",
+    "name": "抠鼻",
+    "description": "不屑 无聊 淡定 无所谓 鄙视 挖鼻",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "183",
+    "emoji_pack_id": "1003",
+    "name": "鼓掌",
+    "description": "拍手 叫好 赞同 666 喝彩 掌声",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "204",
+    "emoji_pack_id": "1003",
+    "name": "斜眼笑",
+    "description": "滑稽 坏笑 doge 意味深长 阴阳怪气 嘿嘿嘿",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "215",
+    "emoji_pack_id": "1003",
+    "name": "泪奔",
+    "description": "流泪 大哭 崩溃哭 嚎啕 伤心欲绝 撑不住",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "216",
+    "emoji_pack_id": "1003",
+    "name": "辣眼睛",
+    "description": "看不下去 cringe 毁三观 太丑了 瞎了",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "217",
+    "emoji_pack_id": "1003",
+    "name": "哦哟",
+    "description": "惊讶 起哄 哇哦 有戏 不简单 哟",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "222",
+    "emoji_pack_id": "1003",
+    "name": "吃瓜",
+    "description": "围观 看戏 八卦 路人 看热闹 板凳",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "225",
+    "emoji_pack_id": "1003",
+    "name": "狗头",
+    "description": "doge 保命 开玩笑 滑稽 反讽 懂的都懂",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "227",
+    "emoji_pack_id": "1003",
+    "name": "敬礼",
+    "description": "salute 尊重 收到 遵命 致敬 报告",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "231",
+    "emoji_pack_id": "1003",
+    "name": "哦",
+    "description": "知道了 明白 敷衍 嗯 这样啊 收到",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "236",
+    "emoji_pack_id": "1003",
+    "name": "拿到红包",
+    "description": "红包 谢谢老板 发财 开心 抢到了 欧气",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "239",
+    "emoji_pack_id": "1003",
+    "name": "牛吖",
+    "description": "牛 厉害 强 666 佩服 大佬",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "272",
+    "emoji_pack_id": "1003",
+    "name": "贴贴",
+    "description": "抱抱 亲昵 蹭蹭 亲密 靠靠 撒娇贴",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "138",
+    "emoji_pack_id": "1003",
+    "name": "爱心",
+    "description": "心 love 喜欢你 红心 示爱 么么哒",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "170",
+    "emoji_pack_id": "1003",
+    "name": "晚安",
+    "description": "好梦 睡了 night 早点休息 安啦 moon",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "176",
+    "emoji_pack_id": "1003",
+    "name": "太阳",
+    "description": "晴天 早上好 阳光 morning 好天气 日",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "266",
+    "emoji_pack_id": "1003",
+    "name": "柠檬",
+    "description": "酸 嫉妒 柠檬精 羡慕 我酸 恰柠檬",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "267",
+    "emoji_pack_id": "1003",
+    "name": "大冤种",
+    "description": "倒霉 吃亏 自嘲 好心没好报 背锅 工具人",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "132",
+    "emoji_pack_id": "1003",
+    "name": "吐了",
+    "description": "恶心 yue 受不了 嫌弃 想吐 生理不适",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "134",
+    "emoji_pack_id": "1003",
+    "name": "怒",
+    "description": "生气 愤怒 火大 暴躁 气炸 怼",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "165",
+    "emoji_pack_id": "1003",
+    "name": "玫瑰",
+    "description": "花 示爱 表白 浪漫 送你花 情人节",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "119",
+    "emoji_pack_id": "1003",
+    "name": "凋谢",
+    "description": "花谢 失恋 难过 枯萎 心碎 凉了",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "159",
+    "emoji_pack_id": "1003",
+    "name": "点赞",
+    "description": "赞 认同 好棒 good like 大拇指 顶",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "164",
+    "emoji_pack_id": "1003",
+    "name": "握手",
+    "description": "合作 你好 商务 hello deal 成交 友好",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "163",
+    "emoji_pack_id": "1003",
+    "name": "抱拳",
+    "description": "谢谢 失敬 江湖 承让 拜托 有礼",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "169",
+    "emoji_pack_id": "1003",
+    "name": "ok",
+    "description": "好的 收到 没问题 okay 行 可以 懂了",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "174",
+    "emoji_pack_id": "1003",
+    "name": "拳头",
+    "description": "加油 干 冲 fight 力量 击拳 硬气",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "191",
+    "emoji_pack_id": "1003",
+    "name": "鞭炮",
+    "description": "过年 喜庆 爆竹 春节 噼里啪啦 红",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  },
+  {
+    "emoji_id": "258",
+    "emoji_pack_id": "1003",
+    "name": "烟花",
+    "description": "庆典 漂亮 新年 嘭 绽放 节日快乐",
+    "width": 128,
+    "height": 128,
+    "formats": "png"
+  }
+]
