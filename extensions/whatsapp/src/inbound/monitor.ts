@@ -26,7 +26,8 @@ import {
 } from "./extract.js";
 import { attachEmitterListener, closeInboundMonitorSocket } from "./lifecycle.js";
 import { downloadInboundMedia } from "./media.js";
-import { formatError, getStatusCode, saveMediaBuffer } from "./runtime-api.js";
+import { saveMediaBuffer } from "./runtime-api.js";
+import { formatError, getStatusCode } from "../session.js";
 import { createWebSendApi } from "./send-api.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
 
