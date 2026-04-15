@@ -279,7 +279,7 @@ describe("MatrixCryptoBootstrapper", () => {
 
   it("does not mutate secret storage before forced repair fails on password UIA without a password", async () => {
     const deps = createBootstrapperDeps();
-    deps.getPassword = vi.fn(() => undefined);
+    deps.getPassword = vi.fn((): string | undefined => undefined);
     const bootstrapCrossSigning = vi.fn<
       ({
         authUploadDeviceSigningKeys,
