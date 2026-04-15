@@ -10,7 +10,6 @@ import {
   readRunnerOverrideEnv,
   resolveExplicitBaselineVersion,
   resolveInstalledPrefixDirFromCliPath,
-  resolveInstallerRequestedTarget,
   resolveRepairGlobalInstallArgs,
   resolveRequestedSuites,
   resolveRunnerMatrix,
@@ -214,20 +213,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolveExplicitBaselineVersion("openclaw@latest")).toBe("");
     expect(resolveExplicitBaselineVersion("openclaw@2026.4.10")).toBe("2026.4.10");
     expect(resolveExplicitBaselineVersion("2026.4.10")).toBe("2026.4.10");
-  });
-
-  it("resolves installer fresh targets from the requested public ref", () => {
-    expect(resolveInstallerRequestedTarget("refs/heads/main")).toBe("main");
-    expect(resolveInstallerRequestedTarget("refs/tags/v2026.4.14")).toBe("2026.4.14");
-    expect(resolveInstallerRequestedTarget("refs/tags/test-tag")).toBe(
-      "github:openclaw/openclaw#test-tag",
-    );
-    expect(resolveInstallerRequestedTarget("codex/cross-os-release-checks-full-native-e2e")).toBe(
-      "github:openclaw/openclaw#codex/cross-os-release-checks-full-native-e2e",
-    );
-    expect(resolveInstallerRequestedTarget("96e6f8ba5f94a4f509f833bf8a2f3260e48daa7c")).toBe(
-      "github:openclaw/openclaw#96e6f8ba5f94a4f509f833bf8a2f3260e48daa7c",
-    );
   });
 
   it("accepts a git main dev-channel update status payload", () => {

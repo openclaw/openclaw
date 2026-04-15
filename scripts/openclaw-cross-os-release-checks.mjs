@@ -344,7 +344,6 @@ async function main(argv) {
         logsDir,
         providerConfig: selectedProvider,
         providerSecretValue,
-        ref: inputRef || "main",
         runDiscordRoundtrip,
       });
     } else {
@@ -753,7 +752,6 @@ async function runUpgradeLane(params) {
 async function runInstallerFreshSuite(params) {
   const lane = createLaneState("installer-fresh");
   const cleanup = [];
-  const installTarget = resolveInstallerRequestedTarget(params.ref);
   const usesManagedGateway = shouldUseManagedGatewayService();
   const manualGateway = { current: null };
   try {
@@ -763,6 +761,13 @@ async function runInstallerFreshSuite(params) {
       logPath: join(params.logsDir, "installer-http-server.log"),
     });
     cleanup.push(() => installerServer.close());
+    // Drive the public installer against the exact candidate artifact built from the requested ref.
+    const candidateServer = await startStaticFileServer({
+      filePath: params.build.candidateTgz,
+      logPath: join(params.logsDir, "installer-candidate-http-server.log"),
+    });
+    cleanup.push(() => candidateServer.close());
+    const installTarget = candidateServer.url;
 
     logLanePhase(lane, "installer-run");
     await runInstallerSmoke({
@@ -1174,17 +1179,6 @@ export function buildRealUpdateEnv(env) {
   const updateEnv = { ...env };
   delete updateEnv.OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL;
   return updateEnv;
-}
-
-export function resolveInstallerRequestedTarget(ref) {
-  const requestedRef = normalizeRequestedRef(ref) || "main";
-  if (looksLikeReleaseVersionRef(requestedRef)) {
-    return requestedRef.replace(/^v/iu, "");
-  }
-  if (requestedRef === "main") {
-    return "main";
-  }
-  return `github:openclaw/openclaw#${requestedRef}`;
 }
 
 export function resolveExplicitBaselineVersion(baselineSpec) {
