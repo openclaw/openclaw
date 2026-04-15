@@ -1,12 +1,6 @@
-export * from "./src/active-listener.js";
-export * from "./src/action-runtime.js";
-export * from "./src/agent-tools-login.js";
-export * from "./src/auth-store.js";
-export * from "./src/auto-reply.js";
-export * from "./src/inbound.js";
-export * from "./src/login.js";
-export * from "./src/media.js";
-export * from "./src/send.js";
-export * from "./src/session.js";
+// Keep the public WhatsApp runtime sidecar narrow.
+// Heavy Baileys-backed runtime surfaces should stay behind lighter wrappers so
+// the root dist does not eagerly mirror plugin-private runtime deps.
+export * from "./src/runtime-api.js";
 export { setWhatsAppRuntime } from "./src/runtime.js";
 export { startWebLoginWithQr, waitForWebLogin } from "./login-qr-runtime.js";
