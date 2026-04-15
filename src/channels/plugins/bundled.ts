@@ -1,16 +1,14 @@
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   listBundledChannelPluginMetadata,
   resolveBundledChannelGeneratedPath,
   type BundledChannelPluginMetadata,
 } from "../../plugins/bundled-channel-runtime.js";
-import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
 import { unwrapDefaultModuleExport } from "../../plugins/module-export.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import { resolveBundledChannelPackageRoot } from "./bundled-root.js";
 import { isJavaScriptModulePath, loadChannelPluginModule } from "./module-loader.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
@@ -54,36 +52,6 @@ type BundledChannelCacheContext = {
 };
 
 const log = createSubsystemLogger("channels");
-const OPENCLAW_PACKAGE_ROOT =
-  resolveOpenClawPackageRootSync({
-    argv1: process.argv[1],
-    cwd: process.cwd(),
-    moduleUrl: import.meta.url.startsWith("file:") ? import.meta.url : undefined,
-  }) ??
-  (import.meta.url.startsWith("file:")
-    ? path.resolve(fileURLToPath(new URL("../../..", import.meta.url)))
-    : process.cwd());
-
-function derivePackageRootFromBundledPluginsDir(pluginsDir: string): string {
-  const resolvedDir = path.resolve(pluginsDir);
-  if (path.basename(resolvedDir) !== "extensions") {
-    return resolvedDir;
-  }
-  const parentDir = path.dirname(resolvedDir);
-  const parentBase = path.basename(parentDir);
-  if (parentBase === "dist" || parentBase === "dist-runtime") {
-    return path.dirname(parentDir);
-  }
-  return parentDir;
-}
-
-function resolveBundledChannelPackageRoot(): string {
-  const bundledPluginsDir = resolveBundledPluginsDir(process.env);
-  if (bundledPluginsDir) {
-    return derivePackageRootFromBundledPluginsDir(bundledPluginsDir);
-  }
-  return OPENCLAW_PACKAGE_ROOT;
-}
 
 function resolveChannelPluginModuleEntry(
   moduleExport: unknown,

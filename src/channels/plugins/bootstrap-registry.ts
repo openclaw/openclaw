@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { listBundledChannelPluginIds } from "./bundled-ids.js";
+import { listBundledChannelPluginIdsForRoot } from "./bundled-ids.js";
+import { resolveBundledChannelPackageRoot } from "./bundled-root.js";
 import {
   getBundledChannelPlugin,
   getBundledChannelSecrets,
@@ -16,7 +17,7 @@ type CachedBootstrapPlugins = {
   missingIds: Set<string>;
 };
 
-let cachedBootstrapPlugins: CachedBootstrapPlugins | null = null;
+const cachedBootstrapPluginsByRoot = new Map<string, CachedBootstrapPlugins>();
 
 function mergePluginSection<T>(
   runtimeValue: T | undefined,
@@ -63,18 +64,29 @@ function mergeBootstrapPlugin(
   } as ChannelPlugin;
 }
 
-function buildBootstrapPlugins(): CachedBootstrapPlugins {
+function buildBootstrapPlugins(
+  packageRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+): CachedBootstrapPlugins {
   return {
-    sortedIds: listBundledChannelPluginIds(),
+    sortedIds: listBundledChannelPluginIdsForRoot(packageRoot, env),
     byId: new Map(),
     secretsById: new Map(),
     missingIds: new Set(),
   };
 }
 
-function getBootstrapPlugins(): CachedBootstrapPlugins {
-  cachedBootstrapPlugins ??= buildBootstrapPlugins();
-  return cachedBootstrapPlugins;
+function getBootstrapPlugins(
+  packageRoot = resolveBundledChannelPackageRoot(),
+  env: NodeJS.ProcessEnv = process.env,
+): CachedBootstrapPlugins {
+  const cached = cachedBootstrapPluginsByRoot.get(packageRoot);
+  if (cached) {
+    return cached;
+  }
+  const created = buildBootstrapPlugins(packageRoot, env);
+  cachedBootstrapPluginsByRoot.set(packageRoot, created);
+  return created;
 }
 
 export function listBootstrapChannelPluginIds(): readonly string[] {
@@ -99,7 +111,7 @@ export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefi
   if (!resolvedId) {
     return undefined;
   }
-  const registry = getBootstrapPlugins();
+  const registry = getBootstrapPlugins(resolveBundledChannelPackageRoot());
   const cached = registry.byId.get(resolvedId);
   if (cached) {
     return cached;
@@ -126,7 +138,7 @@ export function getBootstrapChannelSecrets(id: ChannelId): ChannelPlugin["secret
   if (!resolvedId) {
     return undefined;
   }
-  const registry = getBootstrapPlugins();
+  const registry = getBootstrapPlugins(resolveBundledChannelPackageRoot());
   const cached = registry.secretsById.get(resolvedId);
   if (cached) {
     return cached;
@@ -142,5 +154,5 @@ export function getBootstrapChannelSecrets(id: ChannelId): ChannelPlugin["secret
 }
 
 export function clearBootstrapChannelPluginCache(): void {
-  cachedBootstrapPlugins = null;
+  cachedBootstrapPluginsByRoot.clear();
 }
