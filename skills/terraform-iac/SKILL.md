@@ -50,6 +50,10 @@ Supported resources: `s3`, `vpc`, `ec2`, `sg`, `lambda`, `iam-user`, `iam-role`,
 
 Interactive wizards (vpc, ec2, sg, lambda, iam-user, budget, cloudtrail, cloudwatch, efs, landing-zone) will prompt for configuration with design guidance.
 
+**VPC CIDR requirement:** The VPC and landing-zone wizards derive /24 subnets from the provided CIDR using proper network arithmetic. The CIDR must be large enough to fit the required subnets (e.g. a /16 or /21 works; a /24 only yields one subnet and will be rejected if multiple AZs are requested).
+
+**Go Lambda:** When the Go runtime is selected, the wizard cross-compiles the function to a Linux/amd64 `bootstrap` binary (requires the Go toolchain on PATH). If Go is not installed, the source is packaged instead with a warning to compile manually before deploying.
+
 See `{baseDir}/references/aws.md` and `{baseDir}/references/azure.md` for provider patterns.
 
 ### Step 3: Run plan

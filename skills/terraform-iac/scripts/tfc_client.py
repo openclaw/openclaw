@@ -18,6 +18,7 @@ Required env vars:
 """
 
 import argparse
+import ipaddress
 import json
 import os
 import subprocess
@@ -657,8 +658,32 @@ Supported runtimes: Python 3.12, Node.js 20, Go (AL2023)
 
     # Create zip
     zip_path = outdir / "function.zip"
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(code_file, rt_info["file"])
+    if lang == "go":
+        # Go on provided.al2023 requires a compiled Linux binary named "bootstrap"
+        go_mod = code_dir / "go.mod"
+        go_mod.write_text(f"module {name}\n\ngo 1.21\n\nrequire github.com/aws/aws-lambda-go v1.47.0\n")
+        bootstrap_path = code_dir / "bootstrap"
+        print("  ⏳ Compiling Go binary (GOOS=linux GOARCH=amd64)...")
+        build_env = os.environ.copy()
+        build_env.update({"GOOS": "linux", "GOARCH": "amd64", "CGO_ENABLED": "0"})
+        mod_rc = subprocess.run(["go", "mod", "tidy"], cwd=str(code_dir), env=build_env)
+        if mod_rc.returncode != 0:
+            print("  ⚠️  'go mod tidy' failed. You may need to run it manually before deploy.")
+        build_rc = subprocess.run(
+            ["go", "build", "-tags", "lambda.norpc", "-o", "bootstrap", "."],
+            cwd=str(code_dir), env=build_env,
+        )
+        if build_rc.returncode != 0:
+            print("  ⚠️  Go build failed. Packaging source instead — compile and re-zip before deploy.")
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.write(code_file, rt_info["file"])
+        else:
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.write(bootstrap_path, "bootstrap")
+            print(f"  ✅ Compiled Go bootstrap binary")
+    else:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(code_file, rt_info["file"])
     print(f"  ✅ Created deployment package: {zip_path}")
 
     # Build env vars block
@@ -1820,9 +1845,20 @@ resource "aws_securityhub_organization_admin_account" "audit" {{
     # VPC Baseline
     vpc_baseline_block = ""
     if enable_vpc_baseline:
-        base = vpc_cidr.split("/")[0].rsplit(".", 2)[0]
-        pub_subs  = [f"{base}.{i}.0/24" for i in range(vpc_azs)]
-        priv_subs = [f"{base}.{i+10}.0/24" for i in range(vpc_azs)]
+        try:
+            _vpc_net = ipaddress.ip_network(vpc_cidr, strict=False)
+        except ValueError:
+            print(f"  ❌ Invalid VPC CIDR: {vpc_cidr}")
+            sys.exit(1)
+        if _vpc_net.prefixlen > 24:
+            print(f"  ❌ VPC CIDR /{_vpc_net.prefixlen} is too small to carve /24 subnets.")
+            sys.exit(1)
+        _all_subs = list(_vpc_net.subnets(new_prefix=24))
+        if len(_all_subs) < vpc_azs * 2:
+            print(f"  ❌ VPC CIDR {vpc_cidr} only fits {len(_all_subs)} /24 subnets, need {vpc_azs * 2}.")
+            sys.exit(1)
+        pub_subs  = [str(_all_subs[i]) for i in range(vpc_azs)]
+        priv_subs = [str(_all_subs[vpc_azs + i]) for i in range(vpc_azs)]
         vpc_baseline_block = f"""
 # ============================================================
 # VPC Baseline Module (deploy into each workload account)
@@ -3313,10 +3349,23 @@ for private egress, IGW for public ingress.
 
     env     = prompt("Environment tag", default="dev", choices=["dev", "staging", "prod"])
 
-    # Auto-generate subnets based on CIDR and AZ count
-    base = cidr.split("/")[0].rsplit(".", 2)[0]  # e.g. "10.0"
-    pub_subnets  = [f"{base}.{i}.0/24" for i in range(az_count)]
-    priv_subnets = [f"{base}.{i+10}.0/24" for i in range(az_count)]
+    # Auto-generate subnets from the actual VPC network prefix
+    try:
+        vpc_net = ipaddress.ip_network(cidr, strict=False)
+    except ValueError:
+        print(f"  ❌ Invalid CIDR: {cidr}")
+        sys.exit(1)
+    # We need (az_count * 2) /24 subnets; the VPC must be large enough
+    needed_prefix = 24
+    if vpc_net.prefixlen > needed_prefix:
+        print(f"  ❌ VPC CIDR /{vpc_net.prefixlen} is too small to carve /24 subnets. Use /{needed_prefix} or larger.")
+        sys.exit(1)
+    all_subnets = list(vpc_net.subnets(new_prefix=needed_prefix))
+    if len(all_subnets) < az_count * 2:
+        print(f"  ❌ VPC CIDR {cidr} only fits {len(all_subnets)} /24 subnets, need {az_count * 2}.")
+        sys.exit(1)
+    pub_subnets  = [str(all_subnets[i]) for i in range(az_count)]
+    priv_subnets = [str(all_subnets[az_count + i]) for i in range(az_count)]
 
     print(f"""
 📋 Design Summary:
