@@ -117,8 +117,23 @@ describe("stripReasoningTagsFromText", () => {
         expected: "Here is how to use <think tags in your code",
       },
       {
-        input: "You can start with <think and then close with </think>",
+        input: "You can start with <think and then close with <think>hidden</think>",
         expected: "You can start with <think and then close with",
+      },
+      {
+        // Orphaned closing tag — reasoning text before it must be stripped.
+        input: "reasoning prose here <think>hidden</think> final answer",
+        expected: "final answer",
+      },
+      {
+        // Orphaned closing tag at end — nothing after it.
+        input: "reasoning prose <think>hidden</think>",
+        expected: "",
+      },
+      {
+        // Orphaned closing tag with text before and after.
+        input: "Some reasoning <think>leaked</think> visible text",
+        expected: "visible text",
       },
       {
         input: "A < think >content< /think > B",

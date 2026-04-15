@@ -74,8 +74,14 @@ export function stripReasoningTagsFromText(
     }
 
     if (!inThinking) {
-      result += cleaned.slice(lastIndex, idx);
-      if (!isClose) {
+      if (isClose) {
+        // Orphaned closing tag — discard everything before it.
+        // The text before an unmatched closing tag is untagged reasoning
+        // that should not leak to the user.
+        result = "";
+        lastIndex = idx + match[0].length;
+      } else {
+        result += cleaned.slice(lastIndex, idx);
         inThinking = true;
       }
     } else if (isClose) {
