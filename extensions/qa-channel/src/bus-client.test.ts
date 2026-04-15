@@ -1,10 +1,12 @@
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { pollQaBus } from "./bus-client.js";
+import { getQaBusState, pollQaBus } from "./bus-client.js";
 
-async function startJsonServer(handler: () => { statusCode?: number; body: string }) {
-  const server = createServer((_req, res) => {
-    const response = handler();
+async function startJsonServer(
+  handler: (req: { url?: string | undefined }) => { statusCode?: number; body: string },
+) {
+  const server = createServer((req, res) => {
+    const response = handler({ url: req.url });
     res.writeHead(response.statusCode ?? 200, {
       "content-type": "application/json; charset=utf-8",
     });
@@ -52,5 +54,27 @@ describe("qa-bus client", () => {
         timeoutMs: 0,
       }),
     ).rejects.toThrow(SyntaxError);
+  });
+
+  it("preserves baseUrl path prefixes when composing bus URLs", async () => {
+    const server = await startJsonServer((req) => ({
+      statusCode: req.url === "/qa-bus/v1/state" ? 200 : 404,
+      body:
+        req.url === "/qa-bus/v1/state"
+          ? JSON.stringify({
+              cursor: 1,
+              conversations: [],
+              threads: [],
+              messages: [],
+              events: [],
+            })
+          : JSON.stringify({ error: `unexpected path: ${req.url}` }),
+    }));
+    stops.push(server.stop);
+
+    await expect(getQaBusState(`${server.baseUrl}/qa-bus`)).resolves.toMatchObject({
+      cursor: 1,
+      events: [],
+    });
   });
 });

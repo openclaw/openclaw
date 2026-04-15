@@ -34,13 +34,18 @@ export type {
 
 type JsonResult<T> = Promise<T>;
 
+function buildQaBusUrl(baseUrl: string, path: string): URL {
+  const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+  return new URL(path.replace(/^\/+/, ""), normalizedBaseUrl);
+}
+
 async function postJson<T>(
   baseUrl: string,
   path: string,
   body: unknown,
   signal?: AbortSignal,
 ): JsonResult<T> {
-  const url = new URL(path, baseUrl);
+  const url = buildQaBusUrl(baseUrl, path);
   const payload = JSON.stringify(body);
   const client = url.protocol === "https:" ? https : http;
 
@@ -266,7 +271,7 @@ export async function injectQaBusInboundMessage(params: {
 }
 
 export async function getQaBusState(baseUrl: string): Promise<QaBusStateSnapshot> {
-  const response = await fetch(`${baseUrl}/v1/state`);
+  const response = await fetch(buildQaBusUrl(baseUrl, "/v1/state"));
   if (!response.ok) {
     throw new Error(`qa-bus request failed: ${response.status}`);
   }

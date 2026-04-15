@@ -121,6 +121,21 @@ describe("qa-bus state", () => {
     await expect(pending).resolves.toBeUndefined();
   });
 
+  it("wakes default-account cursor waits when accountId is omitted", async () => {
+    const state = createQaBusState();
+    const pending = state.waitForCursorAdvance(0, 500, (snapshot) => {
+      return snapshot.events.some((event) => event.accountId === "default" && event.cursor > 0);
+    });
+
+    state.addInboundMessage({
+      conversation: { id: "target", kind: "direct" },
+      senderId: "default-user",
+      text: "matched",
+    });
+
+    await expect(pending).resolves.toBeUndefined();
+  });
+
   it("preserves inline attachments and lets search match attachment metadata", () => {
     const state = createQaBusState();
 
