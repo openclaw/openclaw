@@ -243,7 +243,7 @@ describe("createTelegramBot", () => {
     expect(harness.sequentializeKey?.(ctx)).toBe(getTelegramSequentialKey(ctx));
   });
 
-  it.each(["steer", "steer-backlog", "interrupt"] as const)(
+  it.each(["steer", "queued", "steer-backlog", "interrupt"] as const)(
     "routes busy %s-mode Telegram messages onto a session control lane",
     (mode) => {
       loadConfig.mockReturnValue({

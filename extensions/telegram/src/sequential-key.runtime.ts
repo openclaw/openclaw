@@ -39,7 +39,7 @@ function normalizeQueueMode(value: unknown): QueueMode | undefined {
   if (!normalized) {
     return undefined;
   }
-  if (normalized === "queue" || normalized === "steering") {
+  if (normalized === "queue" || normalized === "queued" || normalized === "steering") {
     return "steer";
   }
   if (normalized === "interrupts" || normalized === "abort") {
