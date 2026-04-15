@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildProviderReplayFamilyHooks } from "./provider-model-shared.js";
+import {
+  ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
+  buildProviderReplayFamilyHooks,
+  NATIVE_ANTHROPIC_REPLAY_HOOKS,
+  OPENAI_COMPATIBLE_REPLAY_HOOKS,
+  PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+} from "./provider-model-shared.js";
 
 describe("buildProviderReplayFamilyHooks", () => {
   it("covers the replay family matrix", async () => {
@@ -170,5 +176,58 @@ describe("buildProviderReplayFamilyHooks", () => {
         modelId: "amazon.nova-pro-v1",
       } as never),
     ).not.toHaveProperty("dropThinkingBlocks");
+  });
+
+  it("exposes canonical replay hooks for reused provider families", () => {
+    expect(
+      OPENAI_COMPATIBLE_REPLAY_HOOKS.buildReplayPolicy?.({
+        provider: "xai",
+        modelApi: "openai-completions",
+        modelId: "grok-4",
+      } as never),
+    ).toMatchObject({
+      sanitizeToolCallIds: true,
+      applyAssistantFirstOrderingFix: true,
+      validateGeminiTurns: true,
+    });
+
+    expect(
+      PASSTHROUGH_GEMINI_REPLAY_HOOKS.buildReplayPolicy?.({
+        provider: "openrouter",
+        modelApi: "openai-completions",
+        modelId: "gemini-2.5-pro",
+      } as never),
+    ).toMatchObject({
+      applyAssistantFirstOrderingFix: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
+      sanitizeThoughtSignatures: {
+        allowBase64Only: true,
+        includeCamelCase: true,
+      },
+    });
+
+    expect(
+      ANTHROPIC_BY_MODEL_REPLAY_HOOKS.buildReplayPolicy?.({
+        provider: "amazon-bedrock",
+        modelApi: "bedrock-converse-stream",
+        modelId: "claude-sonnet-4-6",
+      } as never),
+    ).toMatchObject({
+      validateAnthropicTurns: true,
+      repairToolUseResultPairing: true,
+    });
+
+    expect(
+      NATIVE_ANTHROPIC_REPLAY_HOOKS.buildReplayPolicy?.({
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId: "claude-sonnet-4-6",
+      } as never),
+    ).toMatchObject({
+      preserveNativeAnthropicToolUseIds: true,
+      preserveSignatures: true,
+      validateAnthropicTurns: true,
+    });
   });
 });

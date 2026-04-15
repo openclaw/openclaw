@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { createJiti } from "jiti";
 import {
   clearAgentHarnesses,
   listRegisteredAgentHarnesses,
@@ -46,6 +45,7 @@ import {
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
+import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import type { PluginManifestContracts } from "./manifest.js";
@@ -277,7 +277,7 @@ function toSafeImportPath(specifier: string): string {
 }
 
 function createPluginJitiLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
-  const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+  const jitiLoaders: PluginJitiLoaderCache = new Map();
   return (modulePath: string) => {
     const tryNative = shouldPreferNativeJiti(modulePath);
     const aliasMap = buildPluginLoaderAliasMap(
@@ -286,24 +286,18 @@ function createPluginJitiLoader(options: Pick<PluginLoadOptions, "pluginSdkResol
       import.meta.url,
       options.pluginSdkResolution,
     );
-    const cacheKey = JSON.stringify({
-      tryNative,
-      aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
-    });
-    const cached = jitiLoaders.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const loader = createJiti(import.meta.url, {
-      ...buildPluginLoaderJitiOptions(aliasMap),
+    return getCachedPluginJitiLoader({
+      cache: jitiLoaders,
+      modulePath,
+      importerUrl: import.meta.url,
+      jitiFilename: import.meta.url,
+      aliasMap,
       // Source .ts runtime shims import sibling ".js" specifiers that only exist
       // after build. Disable native loading for source entries so Jiti rewrites
       // those imports against the source graph, while keeping native dist/*.js
       // loading for the canonical built module graph.
       tryNative,
     });
-    jitiLoaders.set(cacheKey, loader);
-    return loader;
   };
 }
 

@@ -160,3 +160,19 @@ export function buildProviderReplayFamilyHooks(
   }
   throw new Error("Unsupported provider replay family");
 }
+
+export const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "openai-compatible",
+});
+
+export const ANTHROPIC_BY_MODEL_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "anthropic-by-model",
+});
+
+export const NATIVE_ANTHROPIC_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "native-anthropic-by-model",
+});
+
+export const PASSTHROUGH_GEMINI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "passthrough-gemini",
+});

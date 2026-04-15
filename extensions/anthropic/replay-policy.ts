@@ -1,8 +1,6 @@
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { NATIVE_ANTHROPIC_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 
-const { buildReplayPolicy } = buildProviderReplayFamilyHooks({
-  family: "native-anthropic-by-model",
-});
+const { buildReplayPolicy } = NATIVE_ANTHROPIC_REPLAY_HOOKS;
 
 if (!buildReplayPolicy) {
   throw new Error("Expected native Anthropic replay hooks to expose buildReplayPolicy.");

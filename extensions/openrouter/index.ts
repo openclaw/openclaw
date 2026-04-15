@@ -5,8 +5,8 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
-  buildProviderReplayFamilyHooks,
   DEFAULT_CONTEXT_TOKENS,
+  PASSTHROUGH_GEMINI_REPLAY_HOOKS,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   getOpenRouterModelCapabilities,
@@ -26,9 +26,6 @@ const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
   "moonshotai/",
   "zai/",
 ] as const;
-const PASSTHROUGH_GEMINI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "passthrough-gemini",
-});
 
 export default definePluginEntry({
   id: "openrouter",
