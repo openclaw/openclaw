@@ -51,8 +51,12 @@ export async function compactEmbeddedPiSession(
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
   });
   ensureContextEnginesInitialized();
-  const contextEngine = await resolveContextEngine(params.config);
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const contextEngine = await resolveContextEngine(params.config, {
+    agentDir,
+    workspaceDir: resolveUserPath(params.workspaceDir),
+    sessionKey: params.sessionKey,
+  });
   let contextTokenBudget = params.contextTokenBudget;
   if (!contextTokenBudget || !Number.isFinite(contextTokenBudget) || contextTokenBudget <= 0) {
     const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({

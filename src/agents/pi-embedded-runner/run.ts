@@ -740,7 +740,11 @@ export async function runEmbeddedPiAgent(
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
       ensureContextEnginesInitialized();
-      const contextEngine = await resolveContextEngine(params.config);
+      const contextEngine = await resolveContextEngine(params.config, {
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        sessionKey: params.sessionKey,
+      });
       try {
         let activeSessionId = params.sessionId;
         let activeSessionFile = params.sessionFile;
