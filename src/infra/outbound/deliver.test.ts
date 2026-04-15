@@ -664,16 +664,33 @@ describe("deliverOutboundPayloads", () => {
     // normalizeEmptyPayloadForDelivery must run on the sanitized payload so that
     // the resulting whitespace-only text is caught and the payload dropped rather
     // than forwarded to Telegram as a blank message (which causes a 400 error).
-    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
-    await withEnvAsync({ TELEGRAM_BOT_TOKEN: "" }, async () => {
-      const results = await deliverTelegramPayload({
-        sendTelegram,
-        payload: { text: "<br>" },
-      });
+    const sendText = vi.fn().mockResolvedValue({ channel: "telegram", messageId: "m1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+              sanitizeText: ({ text }) => text.replace(/<br\s*\/?>/gi, "\n"),
+            },
+          }),
+        },
+      ]),
+    );
 
-      expect(sendTelegram).not.toHaveBeenCalled();
-      expect(results).toEqual([]);
+    const results = await deliverOutboundPayloads({
+      cfg: { channels: { telegram: { botToken: "tok" } } },
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "<br>" }],
     });
+
+    expect(sendText).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
   });
 
   it("preserves fenced blocks for markdown chunkers in newline mode", async () => {
