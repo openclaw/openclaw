@@ -2035,4 +2035,143 @@ describe("openai transport stream", () => {
     expect((toolCallBlock as { id: string; name: string }).name).toBe("get_weather");
     expect((toolCallBlock as { arguments: { city?: string } }).arguments.city).toBe("Paris");
   });
+
+  it("preserves an active tool_call id/name when a later chunk adds reasoning_details + arg continuation", async () => {
+    const model = {
+      id: "qwen/qwen3-235b-a22b",
+      name: "Qwen3 235B A22B",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 256000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [] as Array<Record<string, unknown>>,
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream = { push: () => {} };
+
+    // Chunk 1 opens a tool_call with id+name and partial args.
+    // Chunk 2 has BOTH non-empty reasoning_details AND a tool_call continuation
+    //   (OpenAI-style delta: no `id`/`name`, only more arguments). Before the
+    //   fix, reasoning_details finalized the tool_call block and the
+    //   continuation opened a new tool_call with empty id/name — producing
+    //   malformed, split tool-call state.
+    // Chunk 3 closes the stream with finish_reason: "tool_calls".
+    const mockChunks = [
+      {
+        id: "chatcmpl-split-tool-call",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              role: "assistant" as const,
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_split",
+                  type: "function" as const,
+                  function: { name: "get_weather", arguments: '{"city":"' },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-split-tool-call",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [
+                { type: "reasoning.text", text: "Finalizing args.", format: "unknown", index: 0 },
+              ],
+              tool_calls: [
+                {
+                  index: 0,
+                  // No id/name — this is a continuation of the active call.
+                  function: { arguments: 'Paris"}' },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-split-tool-call",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: { tool_calls: [] as never[] },
+            logprobs: null,
+            finish_reason: "tool_calls" as const,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output as never, model, stream);
+
+    const toolCallBlocks = output.content.filter(
+      (block) => (block as { type?: string }).type === "toolCall",
+    );
+    // The active tool-call must remain a single block carrying full id/name
+    // and the concatenated arguments — not be split across two toolCall blocks.
+    expect(toolCallBlocks).toHaveLength(1);
+    const toolCallBlock = toolCallBlocks[0] as {
+      id: string;
+      name: string;
+      arguments: { city?: string };
+      partialArgs: string;
+    };
+    expect(toolCallBlock.id).toBe("call_split");
+    expect(toolCallBlock.name).toBe("get_weather");
+    expect(toolCallBlock.partialArgs).toBe('{"city":"Paris"}');
+    expect(toolCallBlock.arguments.city).toBe("Paris");
+
+    const thinkingBlock = output.content.find(
+      (block) => (block as { type?: string }).type === "thinking",
+    );
+    expect(thinkingBlock).toBeDefined();
+    expect((thinkingBlock as { thinking: string }).thinking).toBe("Finalizing args.");
+  });
 });

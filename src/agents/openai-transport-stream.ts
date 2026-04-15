@@ -1127,45 +1127,13 @@ async function processOpenAICompletionsStream(
       });
       continue;
     }
-    // OpenRouter returns Qwen3-style thinking as an array of reasoning_details
-    // entries ({ type: "reasoning.text", text, ... }) instead of a top-level
-    // reasoning_content string. Without this, streams that carry reasoning in
-    // reasoning_details produce zero assistant content blocks and the turn
-    // fails with `payloads=0`. Falls through to the tool_calls branch below so
-    // a chunk that carries both reasoning_details and tool_calls still lands
-    // tool-call id/argument fragments (regression noted during review).
-    const reasoningDetails = (choice.delta as Record<string, unknown>).reasoning_details;
-    if (Array.isArray(reasoningDetails)) {
-      let reasoningDelta = "";
-      for (const entry of reasoningDetails) {
-        if (!entry || typeof entry !== "object") {
-          continue;
-        }
-        const text = (entry as Record<string, unknown>).text;
-        if (typeof text === "string" && text.length > 0) {
-          reasoningDelta += text;
-        }
-      }
-      if (reasoningDelta.length > 0) {
-        if (!currentBlock || currentBlock.type !== "thinking") {
-          finishCurrentBlock();
-          currentBlock = {
-            type: "thinking",
-            thinking: "",
-            thinkingSignature: "reasoning_details",
-          };
-          output.content.push(currentBlock);
-          stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
-        }
-        currentBlock.thinking += reasoningDelta;
-        stream.push({
-          type: "thinking_delta",
-          contentIndex: blockIndex(),
-          delta: reasoningDelta,
-          partial: output,
-        });
-      }
-    }
+    // Process tool_calls before reasoning_details so a chunk that carries both
+    // an active tool-call continuation (where OpenAI-style deltas often omit
+    // `id`/`name` after the opening fragment) and non-empty reasoning_details
+    // still appends the continuation to the live tool-call block first. If we
+    // finished the tool-call block to open a thinking block first, the
+    // continuation would start a fresh toolCall with empty id/name and split
+    // one logical call into two blocks with malformed arguments.
     if (choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {
       for (const toolCall of choice.delta.tool_calls) {
         if (
@@ -1203,6 +1171,45 @@ async function processOpenAICompletionsStream(
             partial: output,
           });
         }
+      }
+    }
+    // OpenRouter returns Qwen3-style thinking as an array of reasoning_details
+    // entries ({ type: "reasoning.text", text, ... }) instead of a top-level
+    // reasoning_content string. Without this, streams that carry reasoning in
+    // reasoning_details produce zero assistant content blocks and the turn
+    // fails with `payloads=0`. Runs after the tool_calls branch above so a
+    // chunk that carries both still preserves any active tool-call block
+    // before a new thinking block is opened.
+    const reasoningDetails = (choice.delta as Record<string, unknown>).reasoning_details;
+    if (Array.isArray(reasoningDetails)) {
+      let reasoningDelta = "";
+      for (const entry of reasoningDetails) {
+        if (!entry || typeof entry !== "object") {
+          continue;
+        }
+        const text = (entry as Record<string, unknown>).text;
+        if (typeof text === "string" && text.length > 0) {
+          reasoningDelta += text;
+        }
+      }
+      if (reasoningDelta.length > 0) {
+        if (!currentBlock || currentBlock.type !== "thinking") {
+          finishCurrentBlock();
+          currentBlock = {
+            type: "thinking",
+            thinking: "",
+            thinkingSignature: "reasoning_details",
+          };
+          output.content.push(currentBlock);
+          stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+        }
+        currentBlock.thinking += reasoningDelta;
+        stream.push({
+          type: "thinking_delta",
+          contentIndex: blockIndex(),
+          delta: reasoningDelta,
+          partial: output,
+        });
       }
     }
   }
