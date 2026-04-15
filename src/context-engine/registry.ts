@@ -19,12 +19,13 @@ export type ContextEngineFactoryContext = {
  * A factory that creates a ContextEngine instance.
  * Supports async creation for engines that need DB connections etc.
  *
- * Factories may accept an optional {@link ContextEngineFactoryContext} parameter
- * for runtime context. No-arg factories remain supported for backward compatibility
- * since the parameter is optional.
+ * The factory receives a {@link ContextEngineFactoryContext} with runtime
+ * environment context (config, paths). Existing no-arg factories remain
+ * backward compatible because TypeScript permits assigning functions with
+ * fewer parameters to wider signatures.
  */
 export type ContextEngineFactory = (
-  ctx?: ContextEngineFactoryContext,
+  ctx: ContextEngineFactoryContext,
 ) => ContextEngine | Promise<ContextEngine>;
 export type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
 

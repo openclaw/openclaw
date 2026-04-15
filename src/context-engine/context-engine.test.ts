@@ -360,7 +360,7 @@ describe("Engine contract tests", () => {
     const resolved = getContextEngineFactory("mock");
     expect(resolved).toBe(factory);
 
-    const engine = await resolved!();
+    const engine = await resolved!({});
     expect(engine).toBeInstanceOf(MockContextEngine);
     expect(engine.info.id).toBe("mock");
   });
@@ -706,7 +706,7 @@ describe("Factory context passing", () => {
     const engineId = `factory-ctx-${Date.now().toString(36)}`;
     let receivedCtx: ContextEngineFactoryContext | undefined;
 
-    const factory: ContextEngineFactory = (ctx?: ContextEngineFactoryContext) => {
+    const factory: ContextEngineFactory = (ctx: ContextEngineFactoryContext) => {
       receivedCtx = ctx;
       return {
         info: { id: engineId, name: "Ctx Engine" },
@@ -771,7 +771,7 @@ describe("Factory context passing", () => {
     // Override the default "legacy" engine to intercept the no-config path
     registerContextEngineForOwner(
       "legacy",
-      (ctx?: ContextEngineFactoryContext) => {
+      (ctx: ContextEngineFactoryContext) => {
         receivedCtx = ctx;
         return {
           info: { id: "legacy", name: "NoConfig Engine", version: "1" },
