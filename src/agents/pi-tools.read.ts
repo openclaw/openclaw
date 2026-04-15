@@ -727,6 +727,24 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
     },
     writeFile: async (absolutePath: string, content: string) => {
       await params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content });
+      // Post-write verification: ensure file was actually created
+      const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
+      if (!stat) {
+        throw new Error(
+          `Write verification failed: file does not exist after write (${absolutePath})`,
+        );
+      }
+      if (stat.type !== "file") {
+        throw new Error(
+          `Write verification failed: path is not a file after write (${absolutePath})`,
+        );
+      }
+      const expectedSize = Buffer.byteLength(content, "utf-8");
+      if (stat.size !== expectedSize) {
+        throw new Error(
+          `Write verification failed: expected ${expectedSize} bytes but file has ${stat.size} bytes (${absolutePath})`,
+        );
+      }
     },
   } as const;
 }
@@ -735,8 +753,27 @@ function createSandboxEditOperations(params: SandboxToolParams) {
   return {
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
-    writeFile: (absolutePath: string, content: string) =>
-      params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content }),
+    writeFile: async (absolutePath: string, content: string) => {
+      await params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content });
+      // Post-write verification: ensure file was actually written
+      const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
+      if (!stat) {
+        throw new Error(
+          `Write verification failed: file does not exist after write (${absolutePath})`,
+        );
+      }
+      if (stat.type !== "file") {
+        throw new Error(
+          `Write verification failed: path is not a file after write (${absolutePath})`,
+        );
+      }
+      const expectedSize = Buffer.byteLength(content, "utf-8");
+      if (stat.size !== expectedSize) {
+        throw new Error(
+          `Write verification failed: expected ${expectedSize} bytes but file has ${stat.size} bytes (${absolutePath})`,
+        );
+      }
+    },
     access: async (absolutePath: string) => {
       const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
       if (!stat) {
@@ -750,6 +787,25 @@ async function writeHostFile(absolutePath: string, content: string) {
   const resolved = path.resolve(absolutePath);
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   await fs.writeFile(resolved, content, "utf-8");
+  // Post-write verification: ensure file was actually created
+  let stat;
+  try {
+    stat = await fs.stat(resolved);
+  } catch (err) {
+    throw new Error(
+      `Write verification failed: file does not exist after write (${absolutePath})`,
+      { cause: err },
+    );
+  }
+  if (!stat.isFile()) {
+    throw new Error(`Write verification failed: path is not a file after write (${absolutePath})`);
+  }
+  const expectedSize = Buffer.byteLength(content, "utf-8");
+  if (stat.size !== expectedSize) {
+    throw new Error(
+      `Write verification failed: expected ${expectedSize} bytes but file has ${stat.size} bytes (${absolutePath})`,
+    );
+  }
 }
 
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
