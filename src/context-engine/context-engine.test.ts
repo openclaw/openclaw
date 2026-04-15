@@ -727,14 +727,12 @@ describe("Factory context passing", () => {
     await resolveContextEngine(cfg, {
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
-      sessionKey: "agent:main:test",
     });
 
     expect(receivedCtx).toBeDefined();
     expect(receivedCtx!.config).toBe(cfg);
     expect(receivedCtx!.agentDir).toBe("/tmp/agent");
     expect(receivedCtx!.workspaceDir).toBe("/tmp/workspace");
-    expect(receivedCtx!.sessionKey).toBe("agent:main:test");
   });
 
   it("no-arg factories still work when context is passed", async () => {
@@ -761,7 +759,6 @@ describe("Factory context passing", () => {
     const engine = await resolveContextEngine(configWithSlot(engineId), {
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
-      sessionKey: "agent:main:test",
     });
 
     expect(called).toBe(true);
@@ -797,7 +794,6 @@ describe("Factory context passing", () => {
     expect(receivedCtx!.config).toBeDefined();
     expect(receivedCtx!.agentDir).toBeUndefined();
     expect(receivedCtx!.workspaceDir).toBeUndefined();
-    expect(receivedCtx!.sessionKey).toBeUndefined();
   });
 });
 

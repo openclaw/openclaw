@@ -13,7 +13,6 @@ export type ContextEngineFactoryContext = {
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
-  sessionKey?: string;
 };
 
 /**
@@ -479,7 +478,6 @@ function describeResolvedContextEngineContractError(
 export type ResolveContextEngineOptions = {
   agentDir?: string;
   workspaceDir?: string;
-  sessionKey?: string;
 };
 
 /**
@@ -490,7 +488,7 @@ export type ResolveContextEngineOptions = {
  *   2. Default slot value ("legacy")
  *
  * When `config` is provided it is forwarded to the factory as part of a
- * {@link ContextEngineFactoryContext}. Additional runtime paths and keys
+ * {@link ContextEngineFactoryContext}. Additional runtime paths
  * can be supplied via `options`. No-arg factories still work — the context
  * parameter is silently ignored by factories that don't declare it.
  *
@@ -515,7 +513,6 @@ export async function resolveContextEngine(
     config: config ?? ({} as OpenClawConfig),
     agentDir: options?.agentDir,
     workspaceDir: options?.workspaceDir,
-    sessionKey: options?.sessionKey,
   };
 
   const entry = getContextEngineRegistryState().engines.get(engineId);
