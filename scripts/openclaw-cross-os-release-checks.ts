@@ -11,7 +11,6 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { mkdtempSync } from "node:fs";
@@ -136,7 +135,7 @@ export function resolveRequestedSuites(mode, ref) {
   }
   if (mode === "upgrade" || mode === "both") {
     suites.push("packaged-upgrade");
-    if (!isImmutableReleaseRef(ref)) {
+    if (shouldRunMainChannelDevUpdate(ref)) {
       suites.push("dev-update");
     }
   }
@@ -945,6 +944,11 @@ async function runDevUpdateSuite(params) {
   // an ephemeral checkout that has proven flaky as a managed service in CI.
   const useManagedGatewayAfterDevUpdate = usesManagedGateway && process.platform !== "win32";
   const requestedRef = resolveExpectedDevUpdateRef(params.ref);
+  if (!shouldRunMainChannelDevUpdate(requestedRef)) {
+    throw new Error(
+      `The dev-update suite only supports main. Received ${normalizeRequestedRef(params.ref) || "<empty>"}.`,
+    );
+  }
   const verificationRef = resolveDevUpdateVerificationRef(params.ref, params.sourceSha);
   const manualGateway = { current: null };
   try {
@@ -969,16 +973,14 @@ async function runDevUpdateSuite(params) {
     });
 
     logLanePhase(lane, "update-dev");
-    if (shouldRunMainChannelDevUpdate(requestedRef)) {
-      await runInstalledCli({
-        cliPath: baselineShell.cliPath,
-        args: ["update", "--channel", "dev", "--yes", "--json"],
-        env,
-        cwd: lane.homeDir,
-        logPath: join(params.logsDir, "dev-update.log"),
-        timeoutMs: updateTimeoutMs(),
-      });
-    }
+    await runInstalledCli({
+      cliPath: baselineShell.cliPath,
+      args: ["update", "--channel", "dev", "--yes", "--json"],
+      env,
+      cwd: lane.homeDir,
+      logPath: join(params.logsDir, "dev-update.log"),
+      timeoutMs: updateTimeoutMs(),
+    });
 
     logLanePhase(lane, "fresh-shell-updated");
     const updatedShell = await verifyFreshShellCommand({
@@ -1304,13 +1306,6 @@ function resolveInstalledCliInvocation(cliPath, platform = process.platform) {
   return { command: normalizedCliPath, argsPrefix: [], shell: true };
 }
 
-export function resolveRepairGlobalInstallArgs(platform = process.platform, gitRoot) {
-  if (platform === "win32") {
-    return ["install", "-g", gitRoot, "--no-fund", "--no-audit"];
-  }
-  return ["link"];
-}
-
 async function runPosixShellScript(script, options) {
   return runCommand("/bin/bash", ["-lc", script], options);
 }
@@ -1465,115 +1460,17 @@ async function readInstalledUpdateStatus(params) {
 }
 
 async function ensureDevUpdateGitInstall(params) {
-  try {
-    const updateStatus = await readInstalledUpdateStatus({
-      cliPath: params.cliPath,
-      cwd: params.lane.homeDir,
-      env: params.env,
-      logPath: join(params.logsDir, "dev-update-status.log"),
-    });
-    if (!shouldRepairDevUpdateInstall(updateStatus.stdout, { ref: params.requestedRef })) {
-      return { cliPath: params.cliPath };
-    }
-  } catch {
-    // Fall through to the legacy repair path when the in-place status probe is unusable.
-  }
-
-  await repairLegacyDevUpdateInstall({
-    activeCliPath: params.cliPath,
-    lane: params.lane,
-    env: params.env,
-    logsDir: params.logsDir,
-    requestedRef: params.requestedRef,
-  });
-  const repairedShell = await verifyFreshShellCommand({
-    lane: params.lane,
-    env: params.env,
-    expectedNeedle: "OpenClaw",
-    logPath: join(params.logsDir, "dev-update-repair-shell.log"),
-  });
-  const repairedStatus = await readInstalledUpdateStatus({
-    cliPath: repairedShell.cliPath,
+  const updateStatus = await readInstalledUpdateStatus({
+    cliPath: params.cliPath,
     cwd: params.lane.homeDir,
     env: params.env,
-    logPath: join(params.logsDir, "dev-update-status-after-repair.log"),
+    logPath: join(params.logsDir, "dev-update-status.log"),
   });
-  verifyDevUpdateStatus(repairedStatus.stdout, { ref: params.requestedRef });
-  return repairedShell;
-}
-
-async function repairLegacyDevUpdateInstall(params) {
-  const gitRoot = join(params.lane.homeDir, "openclaw");
-  const requestedRef = resolveExpectedDevUpdateRef(params.requestedRef);
-  rmSync(gitRoot, { recursive: true, force: true });
-
-  const cloneArgs = ["clone"];
-  if (!looksLikeCommitSha(requestedRef)) {
-    cloneArgs.push("--depth", "1", "--branch", requestedRef);
-  }
-  cloneArgs.push("https://github.com/openclaw/openclaw.git", gitRoot);
-
-  await runCommand(gitCommand(), cloneArgs, {
-    cwd: params.lane.homeDir,
-    env: params.env,
-    logPath: join(params.logsDir, "dev-update-repair-git-clone.log"),
-    timeoutMs: updateTimeoutMs(),
-  });
-  if (looksLikeCommitSha(requestedRef)) {
-    await runCommand(gitCommand(), ["-C", gitRoot, "checkout", "--detach", requestedRef], {
-      cwd: gitRoot,
-      env: params.env,
-      logPath: join(params.logsDir, "dev-update-repair-git-checkout.log"),
-      timeoutMs: updateTimeoutMs(),
-    });
-  }
-  await runCommand(pnpmCommand(), ["install"], {
-    cwd: gitRoot,
-    env: params.env,
-    logPath: join(params.logsDir, "dev-update-repair-deps.log"),
-    timeoutMs: updateTimeoutMs(),
-  });
-  await runCommand(pnpmCommand(), ["build"], {
-    cwd: gitRoot,
-    env: params.env,
-    logPath: join(params.logsDir, "dev-update-repair-build.log"),
-    timeoutMs: updateTimeoutMs(),
-  });
-  if (packageHasScript(gitRoot, "ui:build")) {
-    await runCommand(pnpmCommand(), ["ui:build"], {
-      cwd: gitRoot,
-      env: params.env,
-      logPath: join(params.logsDir, "dev-update-repair-ui-build.log"),
-      timeoutMs: updateTimeoutMs(),
-    });
-  }
-  await runCommand(npmCommand(), resolveRepairGlobalInstallArgs(process.platform, gitRoot), {
-    cwd: gitRoot,
-    env: params.env,
-    logPath: join(params.logsDir, "dev-update-repair-global-install.log"),
-    timeoutMs: updateTimeoutMs(),
-  });
-  if (process.platform !== "win32") {
-    repointPosixActiveOpenClawCli({
-      activeCliPath: params.activeCliPath,
-      gitRoot,
-      logsDir: params.logsDir,
-    });
-  }
-}
-
-function repointPosixActiveOpenClawCli(params) {
-  if (!params.activeCliPath?.trim()) {
-    throw new Error("Missing active CLI path for POSIX dev-update repair.");
-  }
-  mkdirSync(dirname(params.activeCliPath), { recursive: true });
-  rmSync(params.activeCliPath, { force: true, recursive: true });
-  symlinkSync(join(params.gitRoot, "openclaw.mjs"), params.activeCliPath);
-  writeFileSync(
-    join(params.logsDir, "dev-update-repair-cli-link.log"),
-    `${params.activeCliPath} -> ${join(params.gitRoot, "openclaw.mjs")}\n`,
-    "utf8",
-  );
+  // The dev-update lane must prove that `openclaw update --channel dev` landed on
+  // the expected git checkout. Falling back to a manual repair here would hide
+  // updater regressions and turn the suite into a false green.
+  verifyDevUpdateStatus(updateStatus.stdout, { ref: params.requestedRef });
+  return { cliPath: params.cliPath };
 }
 
 async function runOnboardWithInstalledCli(params) {
@@ -1795,15 +1692,6 @@ export function verifyDevUpdateStatus(stdout, options = {}) {
     throw new Error(
       `Dev update status did not report branch=${expectedRef}. Found ${branch ?? "<missing>"}.`,
     );
-  }
-}
-
-export function shouldRepairDevUpdateInstall(stdout, options = {}) {
-  try {
-    verifyDevUpdateStatus(stdout, options);
-    return false;
-  } catch {
-    return true;
   }
 }
 

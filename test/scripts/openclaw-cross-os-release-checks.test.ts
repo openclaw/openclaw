@@ -18,11 +18,9 @@ import {
   resolveDevUpdateVerificationRef,
   resolveInstalledPrefixDirFromCliPath,
   resolvePublishedInstallerUrl,
-  resolveRepairGlobalInstallArgs,
   resolveRequestedSuites,
   resolveRunnerMatrix,
   resolveStaticFileContentType,
-  shouldRepairDevUpdateInstall,
   shouldSkipInstallerDaemonHealthCheck,
   shouldStopManagedGatewayBeforeManualFallback,
   shouldRunMainChannelDevUpdate,
@@ -73,8 +71,16 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ]);
   });
 
-  it("includes all native suites for branch validation refs", () => {
+  it("skips dev-update for non-main branch validation refs", () => {
     expect(resolveRequestedSuites("both", "codex/cross-os-release-checks")).toEqual([
+      "packaged-fresh",
+      "installer-fresh",
+      "packaged-upgrade",
+    ]);
+  });
+
+  it("keeps dev-update enabled for main validation refs", () => {
+    expect(resolveRequestedSuites("both", "main")).toEqual([
       "packaged-fresh",
       "installer-fresh",
       "packaged-upgrade",
@@ -203,18 +209,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(
       resolveInstalledPrefixDirFromCliPath("/Users/runner/.npm-global/bin/openclaw", "darwin"),
     ).toBe("/Users/runner/.npm-global");
-  });
-
-  it("uses a real global link when repairing git installs outside Windows", () => {
-    expect(resolveRepairGlobalInstallArgs("darwin", "/tmp/openclaw")).toEqual(["link"]);
-    expect(resolveRepairGlobalInstallArgs("linux", "/tmp/openclaw")).toEqual(["link"]);
-    expect(resolveRepairGlobalInstallArgs("win32", String.raw`C:\temp\openclaw`)).toEqual([
-      "install",
-      "-g",
-      String.raw`C:\temp\openclaw`,
-      "--no-fund",
-      "--no-audit",
-    ]);
   });
 
   it("writes Discord smoke config using the strict guild channel schema", () => {
@@ -360,38 +354,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         { ref: "08753A1D793C040B101C8A26C43445DBBAB14995" },
       ),
     ).not.toThrow();
-  });
-
-  it("only repairs dev updates when the status payload is not already the requested git lane", () => {
-    expect(
-      shouldRepairDevUpdateInstall(
-        JSON.stringify({
-          update: {
-            installKind: "git",
-            git: {
-              branch: "main",
-            },
-          },
-          channel: {
-            value: "dev",
-          },
-        }),
-        { ref: "main" },
-      ),
-    ).toBe(false);
-    expect(
-      shouldRepairDevUpdateInstall(
-        JSON.stringify({
-          update: {
-            installKind: "package",
-          },
-          channel: {
-            value: "stable",
-          },
-        }),
-        { ref: "main" },
-      ),
-    ).toBe(true);
   });
 
   it("rejects update status payloads that are not on dev/main git", () => {
