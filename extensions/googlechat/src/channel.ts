@@ -124,6 +124,8 @@ export const googlechatPlugin = createChatChannelPlugin({
           configured: account.credentialSource !== "none",
           extra: {
             credentialSource: account.credentialSource,
+            audienceType: account.config.audienceType,
+            audience: account.config.audience,
           },
         }),
     },

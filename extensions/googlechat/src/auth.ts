@@ -130,7 +130,9 @@ export async function verifyGoogleChatRequest(params: {
       if (!expectedAddOnPrincipal) {
         return { ok: false, reason: "missing add-on principal binding" };
       }
-      const tokenPrincipal = normalizeLowercaseStringOrEmpty(payload?.sub ?? "");
+      const tokenPrincipal = expectedAddOnPrincipal.includes("@")
+        ? email
+        : normalizeLowercaseStringOrEmpty(payload?.sub ?? "");
       if (!tokenPrincipal || tokenPrincipal !== expectedAddOnPrincipal) {
         return {
           ok: false,
