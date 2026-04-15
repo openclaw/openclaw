@@ -675,14 +675,11 @@ function readEditReplacements(params: unknown): { path?: string; edits: EditRepl
 }
 
 function readToolParameterSchema(tool: AnyAgentTool): ToolSchemaRecord | undefined {
-  return tool.parameters && typeof tool.parameters === "object"
-    ? (tool.parameters as ToolSchemaRecord)
-    : undefined;
+  return getToolParamsRecord(tool.parameters);
 }
 
 function readToolSchemaProperties(schema: ToolSchemaRecord | undefined): ToolSchemaRecord | undefined {
-  const properties = schema?.properties;
-  return properties && typeof properties === "object" ? (properties as ToolSchemaRecord) : undefined;
+  return getToolParamsRecord(schema?.properties);
 }
 
 function toolAcceptsCanonicalEditParams(tool: AnyAgentTool): boolean {

@@ -242,7 +242,7 @@ describe("Agent-specific tool filtering", () => {
     try {
       const cfg: OpenClawConfig = {
         tools: {
-          allow: ["read", "exec"],
+          allow: ["read", "write", "exec"],
           fs: { workspaceOnly: true },
           exec: {
             applyPatch: {
