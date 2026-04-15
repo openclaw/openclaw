@@ -17,6 +17,8 @@ export type MatrixQaScenarioId =
   | "matrix-thread-isolation"
   | "matrix-top-level-reply-shape"
   | "matrix-room-thread-reply-override"
+  | "matrix-room-quiet-streaming-preview"
+  | "matrix-room-block-streaming"
   | "matrix-dm-reply-shape"
   | "matrix-dm-shared-session-notice"
   | "matrix-dm-thread-reply-override"
@@ -29,6 +31,7 @@ export type MatrixQaScenarioId =
   | "matrix-room-membership-loss"
   | "matrix-homeserver-restart-resume"
   | "matrix-mention-gating"
+  | "matrix-observer-allowlist-override"
   | "matrix-allowlist-block";
 
 export type MatrixQaScenarioDefinition = LiveTransportScenarioDefinition<MatrixQaScenarioId> & {
@@ -135,6 +138,23 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     },
   },
   {
+    id: "matrix-room-quiet-streaming-preview",
+    timeoutMs: 45_000,
+    title: "Matrix quiet streaming emits notice previews before finalizing",
+    configOverrides: {
+      streaming: "quiet",
+    },
+  },
+  {
+    id: "matrix-room-block-streaming",
+    timeoutMs: 45_000,
+    title: "Matrix block streaming preserves completed quiet preview blocks",
+    configOverrides: {
+      blockStreaming: true,
+      streaming: "quiet",
+    },
+  },
+  {
     id: "matrix-dm-reply-shape",
     timeoutMs: 45_000,
     title: "Matrix DM reply stays top-level without a mention",
@@ -225,6 +245,14 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     standardId: "mention-gating",
     timeoutMs: 8_000,
     title: "Matrix room message without mention does not trigger",
+  },
+  {
+    id: "matrix-observer-allowlist-override",
+    timeoutMs: 45_000,
+    title: "Matrix sender allowlist override lets observer messages trigger replies",
+    configOverrides: {
+      groupAllowRoles: ["driver", "observer"],
+    },
   },
   {
     id: "matrix-allowlist-block",
