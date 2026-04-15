@@ -487,6 +487,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       queryText,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
+      ftsTokenizer: this.settings.store.fts.tokenizer,
       ensureVectorReady: async (dimensions) => await this.ensureVectorReady(dimensions),
       sourceFilterVec: this.buildSourceFilter("c"),
       sourceFilterChunks: this.buildSourceFilter(),

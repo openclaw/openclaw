@@ -221,6 +221,7 @@ export async function searchVector(params: {
   queryText: string;
   limit: number;
   snippetMaxChars: number;
+  ftsTokenizer?: "unicode61" | "trigram";
   ensureVectorReady: (dimensions: number) => Promise<boolean>;
   sourceFilterVec: { sql: string; params: SearchSource[] };
   sourceFilterChunks: { sql: string; params: SearchSource[] };
@@ -259,6 +260,7 @@ export async function searchVector(params: {
         row.text,
         params.queryText,
         params.snippetMaxChars,
+        params.ftsTokenizer,
       );
       // Session chunks use sparse remapped line numbers (from JSONL lineMap)
       // that are not contiguous, so applying a text-based offset can produce
@@ -308,6 +310,7 @@ export async function searchVector(params: {
         entry.chunk.text,
         params.queryText,
         params.snippetMaxChars,
+        params.ftsTokenizer,
       );
       // Session chunks use sparse remapped line numbers; skip offset adjustment.
       const isSessionSource = entry.chunk.source === "sessions";
