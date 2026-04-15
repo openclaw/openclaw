@@ -8,7 +8,7 @@ import {
 const log = createSubsystemLogger("chutes-models");
 
 export const CHUTES_BASE_URL = "https://llm.chutes.ai/v1";
-export const CHUTES_DEFAULT_MODEL_ID = "zai-org/GLM-5.1-TEE";
+export const CHUTES_DEFAULT_MODEL_ID = "zai-org/GLM-4.7-TEE";
 export const CHUTES_DEFAULT_MODEL_REF = `chutes/${CHUTES_DEFAULT_MODEL_ID}`;
 
 const CHUTES_DEFAULT_CONTEXT_WINDOW = 128000;
