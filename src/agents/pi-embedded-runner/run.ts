@@ -302,7 +302,7 @@ export async function runEmbeddedPiAgent(
 
       const attachments = (params.images ?? []).map((img) => ({
         kind: "image" as const,
-        mimeType: img.media_type,
+        mimeType: img.mimeType,
       }));
 
       const hookSelection = await resolveHookModelSelection({
