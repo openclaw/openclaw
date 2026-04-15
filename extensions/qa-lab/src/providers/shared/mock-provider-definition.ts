@@ -32,7 +32,15 @@ export function createMockQaProviderDefinition(
       transport: "sse",
       openaiWsWarmup: false,
     }),
-    resolveTurnTimeoutMs: ({ fallbackMs }) => fallbackMs,
+    resolveTurnTimeoutMs: ({ fallbackMs, modelRef }) => {
+      if (params.mode === "mock-openai") {
+        const ref = modelRef ?? "";
+        if (ref.startsWith("openai/") && ref.slice("openai/".length).startsWith("gpt-5")) {
+          return Math.max(fallbackMs, 45_000);
+        }
+      }
+      return fallbackMs;
+    },
     buildGatewayModels: ({ providerBaseUrl }) => ({
       mode: "replace",
       providers: createMockProviderMap(params.mode, providerBaseUrl),
