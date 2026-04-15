@@ -4,6 +4,7 @@ import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
   DEFAULT_SANDBOX_IMAGE,
+  probeSandboxCapabilities,
   resolveSandboxScope,
 } from "../agents/sandbox.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -104,6 +105,51 @@ function resolveSandboxBrowserImage(cfg: OpenClawConfig): string {
   return image ? image : DEFAULT_SANDBOX_BROWSER_IMAGE;
 }
 
+function describeCapabilityProbe(probe: ReturnType<typeof probeSandboxCapabilities>): string[] {
+  const details = [
+    `- platform=${probe.platform}`,
+    `- dockerCliAvailable=${probe.dockerCliAvailable ? "yes" : "no"}`,
+    `- unshareBinaryAvailable=${probe.unshareBinaryAvailable ? "yes" : "no"}`,
+    `- userNamespaceSupport=${probe.userNamespaceSupport}`,
+  ];
+  return details;
+}
+
+export function noteSandboxCapabilityReadiness(cfg: OpenClawConfig): void {
+  const sandbox = cfg.agents?.defaults?.sandbox;
+  const mode = sandbox?.mode ?? "off";
+  if (!sandbox || mode === "off") {
+    return;
+  }
+  const backend = resolveSandboxBackend(cfg);
+  const probe = probeSandboxCapabilities();
+  const lines: string[] = [
+    `Sandbox readiness: mode="${mode}", backend="${backend}"`,
+    ...describeCapabilityProbe(probe),
+  ];
+
+  if (backend === "docker") {
+    if (probe.dockerCliAvailable) {
+      lines.push("- status=ready (docker CLI detected)");
+    } else {
+      lines.push("- status=degraded (docker CLI missing)");
+      lines.push("- fix: Install Docker and restart the gateway.");
+      lines.push(
+        "- fallback: Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
+      );
+    }
+  } else if (probe.supportsSandbox) {
+    lines.push("- status=backend-specific (local sandbox capability detected)");
+  } else {
+    lines.push("- status=backend-specific-degraded (no local sandbox runtime detected)");
+    lines.push(
+      "- hint: if this backend depends on a remote runtime, verify remote sandbox prerequisites.",
+    );
+  }
+
+  note(lines.join("\n"), "Sandbox");
+}
+
 function updateSandboxDockerImage(cfg: OpenClawConfig, image: string): OpenClawConfig {
   return {
     ...cfg,
@@ -192,6 +238,20 @@ export async function maybeRepairSandboxImages(
   }
   const backend = resolveSandboxBackend(cfg);
   if (backend !== "docker") {
+    const probe = probeSandboxCapabilities();
+    if (!probe.supportsSandbox) {
+      note(
+        [
+          `Sandbox mode is enabled (mode: "${mode}", backend: "${backend}") but host capability probe found no local sandbox runtime.`,
+          "This host currently lacks Docker and Linux user-namespace sandbox support.",
+          "Capability probe:",
+          ...describeCapabilityProbe(probe),
+          "",
+          "If this backend depends on a remote runtime, ensure remote sandbox prerequisites are met.",
+        ].join("\n"),
+        "Sandbox",
+      );
+    }
     if (sandbox.browser?.enabled) {
       note(
         `Sandbox backend "${backend}" selected. Docker browser health checks are skipped; browser sandbox currently requires the docker backend.`,
@@ -203,10 +263,13 @@ export async function maybeRepairSandboxImages(
 
   const dockerAvailable = await isDockerAvailable();
   if (!dockerAvailable) {
+    const probe = probeSandboxCapabilities();
     const lines = [
       `Sandbox mode is enabled (mode: "${mode}") but Docker is not available.`,
       "Docker is required for sandbox mode to function.",
       "Isolated sessions (cron jobs, sub-agents) will fail without Docker.",
+      "Capability probe:",
+      ...describeCapabilityProbe(probe),
       "",
       "Options:",
       "- Install Docker and restart the gateway",

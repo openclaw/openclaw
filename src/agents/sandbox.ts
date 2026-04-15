@@ -33,6 +33,12 @@ export {
 } from "./sandbox/runtime-status.js";
 
 export { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+export {
+  probeSandboxCapabilities,
+  supportsSandboxEnvironment,
+  type SandboxCapabilityProbeOptions,
+  type SandboxCapabilityProbeResult,
+} from "./sandbox/capability-probe.js";
 export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./sandbox/fs-bridge.js";
 export {
   buildExecRemoteCommand,

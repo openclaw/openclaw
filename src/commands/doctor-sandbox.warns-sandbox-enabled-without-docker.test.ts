@@ -6,6 +6,7 @@ import type { DoctorRepairMode } from "./doctor-repair-mode.js";
 
 const runExec = vi.fn();
 const note = vi.fn();
+const probeSandboxCapabilities = vi.fn();
 
 vi.mock("../process/exec.js", () => ({
   runExec,
@@ -16,6 +17,7 @@ vi.mock("../agents/sandbox.js", () => ({
   DEFAULT_SANDBOX_BROWSER_IMAGE: "browser-image",
   DEFAULT_SANDBOX_COMMON_IMAGE: "common-image",
   DEFAULT_SANDBOX_IMAGE: "default-image",
+  probeSandboxCapabilities,
   resolveSandboxScope: vi.fn(() => "shared"),
 }));
 
@@ -23,7 +25,9 @@ vi.mock("../terminal/note.js", () => ({
   note,
 }));
 
-const { maybeRepairSandboxImages } = await import("./doctor-sandbox.js");
+const { maybeRepairSandboxImages, noteSandboxCapabilityReadiness } = await import(
+  "./doctor-sandbox.js"
+);
 
 describe("maybeRepairSandboxImages", () => {
   const mockRuntime: RuntimeEnv = {
@@ -45,6 +49,13 @@ describe("maybeRepairSandboxImages", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    probeSandboxCapabilities.mockReturnValue({
+      platform: "darwin",
+      dockerCliAvailable: true,
+      unshareBinaryAvailable: false,
+      userNamespaceSupport: "unknown",
+      supportsSandbox: true,
+    });
   });
 
   function createSandboxConfig(mode: "off" | "all" | "non-main"): OpenClawConfig {
@@ -81,6 +92,7 @@ describe("maybeRepairSandboxImages", () => {
 
     // The message should warn that sandbox mode won't function, not just "skipping checks"
     expect(message).toMatch(/sandbox.*mode.*enabled|sandbox.*won.*work|docker.*required/i);
+    expect(message).toContain("Capability probe:");
     // Should NOT just say "skipping sandbox image checks" - that's too mild
     expect(message).not.toBe("Docker not available; skipping sandbox image checks.");
   });
@@ -112,5 +124,63 @@ describe("maybeRepairSandboxImages", () => {
         typeof call[0] === "string" && call[0].toLowerCase().includes("docker not available"),
     );
     expect(dockerUnavailableWarning).toBeUndefined();
+  });
+
+  it("warns with capability probe details for non-docker backends that have no local sandbox support", async () => {
+    runExec.mockResolvedValue({ stdout: "24.0.0", stderr: "" });
+    probeSandboxCapabilities.mockReturnValue({
+      platform: "linux",
+      dockerCliAvailable: false,
+      unshareBinaryAvailable: false,
+      userNamespaceSupport: "disabled",
+      supportsSandbox: false,
+    });
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "ssh",
+          },
+        },
+      },
+    };
+    await maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain('backend: "ssh"');
+    expect(message).toContain("Capability probe:");
+    expect(message).toContain("dockerCliAvailable=no");
+    expect(message).toContain("unshareBinaryAvailable=no");
+  });
+});
+
+describe("noteSandboxCapabilityReadiness", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("emits a unified sandbox readiness note when sandbox mode is enabled", () => {
+    probeSandboxCapabilities.mockReturnValue({
+      platform: "linux",
+      dockerCliAvailable: true,
+      unshareBinaryAvailable: true,
+      userNamespaceSupport: "enabled",
+      supportsSandbox: true,
+    });
+    noteSandboxCapabilityReadiness({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "docker",
+          },
+        },
+      },
+    });
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    const title = String(note.mock.calls[0]?.[1] ?? "");
+    expect(title).toBe("Sandbox");
+    expect(message).toContain('Sandbox readiness: mode="all", backend="docker"');
+    expect(message).toContain("status=ready");
   });
 });

@@ -1,0 +1,87 @@
+[
+  {
+    "lane": 1,
+    "laneName": "bash_validation",
+    "status": "present",
+    "summary": "Dedicated bash validation module wired into exec.",
+    "evidence": [
+      "src/agents/bash-validation.ts",
+      "src/agents/bash-tools.exec.ts"
+    ]
+  },
+  {
+    "lane": 2,
+    "laneName": "ci_sandbox_capability_probe",
+    "status": "present",
+    "summary": "Sandbox capability probing markers detected.",
+    "evidence": [
+      "src/agents/sandbox.ts"
+    ]
+  },
+  {
+    "lane": 3,
+    "laneName": "file_tool_hardening",
+    "status": "present",
+    "summary": "File mutation payload limits and text/binary guards are in place.",
+    "evidence": [
+      "src/agents/pi-tools.read.ts"
+    ]
+  },
+  {
+    "lane": 4,
+    "laneName": "task_registry_runtime",
+    "status": "present",
+    "summary": "Task registry runtime core is present.",
+    "evidence": [
+      "src/tasks/task-registry.ts"
+    ]
+  },
+  {
+    "lane": 5,
+    "laneName": "task_tool_wiring",
+    "status": "present",
+    "summary": "Task tool wiring markers are present in agent tools.",
+    "evidence": [
+      "src/agents/tools/task-tool.ts"
+    ]
+  },
+  {
+    "lane": 6,
+    "laneName": "team_cron_runtime",
+    "status": "present",
+    "summary": "Team + cron runtime tool surfaces are present.",
+    "evidence": [
+      "src/agents/openclaw-tools.ts",
+      "src/agents/tools/cron-tool.ts"
+    ]
+  },
+  {
+    "lane": 7,
+    "laneName": "mcp_lifecycle_bridge",
+    "status": "present",
+    "summary": "Bundle MCP runtime bridge markers detected.",
+    "evidence": [
+      "src/agents/pi-bundle-mcp-runtime.ts"
+    ]
+  },
+  {
+    "lane": 8,
+    "laneName": "lsp_client_dispatch",
+    "status": "present",
+    "summary": "Bundle LSP runtime dispatch markers detected.",
+    "evidence": [
+      "src/agents/pi-bundle-lsp-runtime.ts"
+    ]
+  },
+  {
+    "lane": 9,
+    "laneName": "permission_enforcement",
+    "status": "present",
+    "summary": "permission_denied standardization is wired across core fs paths.",
+    "evidence": [
+      "src/agents/fs-permission-denied.ts",
+      "src/agents/apply-patch.ts",
+      "src/agents/sandbox/fs-bridge-path-safety.ts"
+    ]
+  }
+]

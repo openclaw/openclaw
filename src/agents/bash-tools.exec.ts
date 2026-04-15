@@ -19,6 +19,7 @@ import {
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { markBackgrounded } from "./bash-process-registry.js";
+import { validateBashCommand } from "./bash-validation.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
@@ -1505,6 +1506,15 @@ export function createExecTool(
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
       rejectExecApprovalShellCommand(params.command);
+      warnings.push(
+        ...validateBashCommand({
+          command: params.command,
+          workdir,
+          security,
+          ask,
+          platform: process.platform,
+        }),
+      );
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const hostEnvResult =

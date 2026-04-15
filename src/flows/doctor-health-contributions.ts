@@ -37,7 +37,11 @@ import {
 } from "../commands/doctor-platform-notes.js";
 import { maybeRepairLegacyPluginManifestContracts } from "../commands/doctor-plugin-manifests.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
-import { maybeRepairSandboxImages, noteSandboxScopeWarnings } from "../commands/doctor-sandbox.js";
+import {
+  maybeRepairSandboxImages,
+  noteSandboxCapabilityReadiness,
+  noteSandboxScopeWarnings,
+} from "../commands/doctor-sandbox.js";
 import { noteSecurityWarnings } from "../commands/doctor-security.js";
 import { noteSessionLockHealth } from "../commands/doctor-session-locks.js";
 import { noteStateIntegrity, noteWorkspaceBackupTip } from "../commands/doctor-state-integrity.js";
@@ -277,6 +281,7 @@ async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> 
 }
 
 async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  noteSandboxCapabilityReadiness(ctx.cfg);
   ctx.cfg = await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
   noteSandboxScopeWarnings(ctx.cfg);
 }

@@ -49,6 +49,15 @@ describe("doctor command", () => {
         if (title !== "Sandbox" || typeof message !== "string") {
           return false;
         }
+        return message.includes('Sandbox readiness: mode="all", backend="docker"');
+      }),
+    ).toBe(true);
+
+    expect(
+      terminalNoteMock.mock.calls.some(([message, title]) => {
+        if (title !== "Sandbox" || typeof message !== "string") {
+          return false;
+        }
         const normalized = message.replace(/\s+/g, " ").trim();
         return (
           normalized.includes('agents.list (id "work") sandbox docker') &&
