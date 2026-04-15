@@ -150,6 +150,7 @@ async function deliverTextReply(params: {
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = messageId;
       }
+      return undefined;
     },
   });
   return firstDeliveredMessageId;
@@ -198,6 +199,7 @@ async function sendPendingFollowUpText(params: {
       if (messageId == null) {
         return false;
       }
+      return undefined;
     },
   });
 }
@@ -230,13 +232,8 @@ async function sendTelegramVoiceFallbackText(opts: {
   replyQuoteText?: string;
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
-<<<<<<< HEAD
   const chunks = filterEmptyTelegramTextChunks(opts.chunkText(opts.text));
-  let appliedReplyTo = false;
-=======
-  const chunks = opts.chunkText(opts.text);
   let sentAnyChunk = false;
->>>>>>> 577dc1a325 (fix(telegram): silently skip empty-text chunks to prevent 400 delivery failures)
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
     if (!chunk || (!chunk.html?.trim() && !chunk.text?.trim())) {
