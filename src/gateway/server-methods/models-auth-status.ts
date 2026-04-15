@@ -105,11 +105,18 @@ function providerDisplayName(provider: string): string {
  * For the dashboard's OAuth-health signal, token profiles are a separate
  * concern — we want "is OAuth healthy?", not "is every credential healthy?"
  *
+ * `expectsOAuth` surfaces the configured-OAuth-but-no-oauth-profile case as
+ * `missing` instead of silently falling back to the provider's rollup (which
+ * would report `static` if only api_key credentials exist). Without this,
+ * switching a provider from api_key to oauth in config but forgetting to
+ * login hides behind the residual api_key profile until runtime fails.
+ *
  * Exported for direct unit testing of the rollup rules.
  */
 export function aggregateOAuthStatus(
   prov: AuthProviderHealth,
   now: number = Date.now(),
+  expectsOAuth = false,
 ): {
   status: AuthProviderHealthStatus;
   expiresAt?: number;
@@ -117,6 +124,9 @@ export function aggregateOAuthStatus(
 } {
   const oauth = prov.profiles.filter((p) => p.type === "oauth");
   if (oauth.length === 0) {
+    if (expectsOAuth) {
+      return { status: "missing" };
+    }
     return { status: prov.status, expiresAt: prov.expiresAt, remainingMs: prov.remainingMs };
   }
   const statuses = new Set<AuthProfileHealthStatus>(oauth.map((p) => p.status));
@@ -150,10 +160,11 @@ export function aggregateOAuthStatus(
 function mapProvider(
   prov: AuthProviderHealth,
   usageByProvider: Map<string, { windows: UsageWindow[]; plan?: string }>,
+  expectsOAuthSet: Set<string>,
 ): ModelAuthStatusProvider {
   const usageKey = resolveUsageProviderId(prov.provider);
   const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
-  const rollup = aggregateOAuthStatus(prov);
+  const rollup = aggregateOAuthStatus(prov, Date.now(), expectsOAuthSet.has(prov.provider));
   return {
     provider: prov.provider,
     displayName: providerDisplayName(prov.provider),
@@ -176,9 +187,20 @@ function mapProvider(
  * their credentials don't expire on a schedule this endpoint can meaningfully
  * monitor, and surfacing them here would flash a red alert on a healthy
  * API-key setup.
+ *
+ * Providers with `models.providers.<id>.apiKey` set (commonly via a
+ * SecretRef env binding) are excluded from the "missing" synthesis even
+ * when their `auth` mode is `oauth` or `token` — an env-backed credential
+ * is already present, so flagging the dashboard as missing would cry wolf
+ * for a working auth path. They can still show up with real status if the
+ * profile store has an entry for them.
  */
-function resolveConfiguredProviders(cfg: OpenClawConfig): string[] {
+function resolveConfiguredProviders(cfg: OpenClawConfig): {
+  providers: string[];
+  expectsOAuth: Set<string>;
+} {
   const out = new Set<string>();
+  const expectsOAuth = new Set<string>();
   for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
     if (!id) {
       continue;
@@ -186,8 +208,17 @@ function resolveConfiguredProviders(cfg: OpenClawConfig): string[] {
     // Only include providers whose configured auth mode is refreshable.
     // `undefined` / "api-key" / "aws-sdk" are deliberately skipped.
     const mode = provider?.auth;
-    if (mode === "oauth" || mode === "token") {
-      out.add(id);
+    if (mode !== "oauth" && mode !== "token") {
+      continue;
+    }
+    // Env-backed credential escape hatch — see JSDoc.
+    const hasEnvCredential = provider?.apiKey !== undefined && provider?.apiKey !== null;
+    if (hasEnvCredential) {
+      continue;
+    }
+    out.add(id);
+    if (mode === "oauth") {
+      expectsOAuth.add(id);
     }
   }
   // auth.profiles entries explicitly opt into the refreshable set via
@@ -201,9 +232,12 @@ function resolveConfiguredProviders(cfg: OpenClawConfig): string[] {
       (mode === "oauth" || mode === "token")
     ) {
       out.add(provider);
+      if (mode === "oauth") {
+        expectsOAuth.add(provider);
+      }
     }
   }
-  return Array.from(out);
+  return { providers: Array.from(out), expectsOAuth };
 }
 
 export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
@@ -222,7 +256,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const authHealth: AuthHealthSummary = buildAuthHealthSummary({
         store,
         cfg,
-        providers: configured.length > 0 ? configured : undefined,
+        providers: configured.providers.length > 0 ? configured.providers : undefined,
       });
 
       // Usage queries only for refreshable credentials.
@@ -256,7 +290,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         }
       }
 
-      const providers = authHealth.providers.map((prov) => mapProvider(prov, usageByProvider));
+      const providers = authHealth.providers.map((prov) =>
+        mapProvider(prov, usageByProvider, configured.expectsOAuth),
+      );
       const result: ModelAuthStatusResult = { ts: now, providers };
       cached = { ts: now, result };
       respond(true, result, undefined);

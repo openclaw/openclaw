@@ -296,6 +296,61 @@ describe("models.authStatus", () => {
     expect(serialised).not.toContain("rt-SECRET-REFRESH");
   });
 
+  it("skips env-backed OAuth providers (apiKey set in config) from missing synthesis", async () => {
+    // Provider configured `auth: "oauth"` with `apiKey` present (env-backed)
+    // must not be forwarded to buildAuthHealthSummary — doing so would flag
+    // it as missing even though env auth already satisfies it.
+    mocks.loadConfig.mockReturnValue({
+      models: {
+        providers: {
+          "openai-codex": { auth: "oauth", apiKey: { env: "OPENAI_OAUTH_TOKEN" } },
+        },
+      },
+    });
+    await handler(createOptions());
+    // When the only configured provider is env-backed, we pass `undefined`
+    // (meaning "no filter"), not a filter containing it.
+    const call = mocks.buildAuthHealthSummary.mock.calls[0] as unknown as
+      | [{ providers?: string[] }]
+      | undefined;
+    expect(call?.[0]?.providers).toBeUndefined();
+  });
+
+  it("flags provider configured auth:oauth but with only api_key profile as missing", async () => {
+    // Config says provider should use OAuth; store has only an api_key
+    // credential (e.g. operator switched modes but forgot to login).
+    mocks.loadConfig.mockReturnValue({
+      models: { providers: { anthropic: { auth: "oauth" } } },
+    });
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [],
+      providers: [
+        {
+          provider: "anthropic",
+          status: "static",
+          profiles: [
+            {
+              profileId: "anthropic:default",
+              provider: "anthropic",
+              type: "api_key",
+              status: "static",
+              source: "store",
+              label: "anthropic:default",
+            },
+          ],
+        },
+      ],
+    });
+
+    const opts = createOptions();
+    await handler(opts);
+    const [, payload] = opts.respond.mock.calls[0] ?? [];
+    const result = payload as ModelAuthStatusResult;
+    expect(result.providers[0]?.status).toBe("missing");
+  });
+
   it("responds with UNAVAILABLE when buildAuthHealthSummary throws", async () => {
     mocks.buildAuthHealthSummary.mockImplementation(() => {
       throw new Error("boom");
