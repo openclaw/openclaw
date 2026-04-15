@@ -37,9 +37,10 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     ]);
   });
 
-  it("splits the agentic lane into control-plane and agent/plugin shards", () => {
+  it("splits the agentic lane into control-plane, commands, and agent/plugin shards", () => {
     const shards = createNodeTestShards();
     const controlPlaneShard = shards.find((shard) => shard.shardName === "agentic-control-plane");
+    const commandsShard = shards.find((shard) => shard.shardName === "agentic-commands");
     const agentPluginShard = shards.find((shard) => shard.shardName === "agentic-agents-plugins");
 
     expect(controlPlaneShard).toEqual({
@@ -50,10 +51,17 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         "test/vitest/vitest.gateway-client.config.ts",
         "test/vitest/vitest.gateway-methods.config.ts",
         "test/vitest/vitest.gateway-server.config.ts",
+        "test/vitest/vitest.daemon.config.ts",
+      ],
+      requiresDist: false,
+    });
+    expect(commandsShard).toEqual({
+      checkName: "checks-node-agentic-commands",
+      shardName: "agentic-commands",
+      configs: [
         "test/vitest/vitest.cli.config.ts",
         "test/vitest/vitest.commands-light.config.ts",
         "test/vitest/vitest.commands.config.ts",
-        "test/vitest/vitest.daemon.config.ts",
       ],
       requiresDist: false,
     });

@@ -1725,9 +1725,11 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     );
 
     const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
-    const stream = wrapped({ api: "google-gemini" } as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
+    const stream = wrapped(
+      { api: "google-gemini" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
@@ -2836,6 +2838,8 @@ describe("buildAfterTurnRuntimeContext", () => {
       },
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
+      tokenBudget: 1050000,
+      currentTokenCount: 232393,
     });
 
     expect(legacy).toMatchObject({
@@ -2844,6 +2848,8 @@ describe("buildAfterTurnRuntimeContext", () => {
       model: "gpt-5.4",
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
+      tokenBudget: 1050000,
+      currentTokenCount: 232393,
     });
   });
 

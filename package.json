@@ -30,7 +30,9 @@
     "!dist/**/*.map",
     "!dist/plugin-sdk/.tsbuildinfo",
     "!dist/extensions/qa-channel/**",
+    "dist/extensions/qa-channel/runtime-api.js",
     "!dist/extensions/qa-lab/**",
+    "dist/extensions/qa-lab/runtime-api.js",
     "!dist/extensions/qa-matrix/**",
     "docs/",
     "!docs/.generated/**",
@@ -765,9 +767,9 @@
       "types": "./dist/plugin-sdk/matrix-thread-bindings.d.ts",
       "default": "./dist/plugin-sdk/matrix-thread-bindings.js"
     },
-    "./plugin-sdk/qa-lab-runtime": {
-      "types": "./dist/plugin-sdk/qa-lab-runtime.d.ts",
-      "default": "./dist/plugin-sdk/qa-lab-runtime.js"
+    "./plugin-sdk/qa-runtime": {
+      "types": "./dist/plugin-sdk/qa-runtime.d.ts",
+      "default": "./dist/plugin-sdk/qa-runtime.js"
     },
     "./plugin-sdk/qa-runner-runtime": {
       "types": "./dist/plugin-sdk/qa-runner-runtime.d.ts",
@@ -1124,6 +1126,7 @@
     "android:test:third-party": "cd apps/android && ./gradlew :app:testThirdPartyDebugUnitTest",
     "audit:seams": "node scripts/audit-seams.mjs",
     "build": "node scripts/build-all.mjs",
+    "build:ci-artifacts": "node scripts/build-all.mjs ciArtifacts",
     "build:docker": "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --experimental-strip-types scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
     "build:strict-smoke": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs",

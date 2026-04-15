@@ -21,11 +21,29 @@ describe("matrix live qa runtime", () => {
     const next = liveTesting.buildMatrixQaConfig(baseCfg, {
       driverUserId: "@driver:matrix-qa.test",
       homeserver: "http://127.0.0.1:28008/",
-      roomId: "!room:matrix-qa.test",
       sutAccessToken: "syt_sut",
       sutAccountId: "sut",
       sutDeviceId: "DEVICE123",
       sutUserId: "@sut:matrix-qa.test",
+      topology: {
+        defaultRoomId: "!room:matrix-qa.test",
+        defaultRoomKey: "main",
+        rooms: [
+          {
+            key: "main",
+            kind: "group",
+            memberRoles: ["driver", "observer", "sut"],
+            memberUserIds: [
+              "@driver:matrix-qa.test",
+              "@observer:matrix-qa.test",
+              "@sut:matrix-qa.test",
+            ],
+            name: "Matrix QA",
+            requireMention: true,
+            roomId: "!room:matrix-qa.test",
+          },
+        ],
+      },
     });
 
     expect(next.plugins?.allow).toContain("matrix");
@@ -60,88 +78,172 @@ describe("matrix live qa runtime", () => {
     });
   });
 
-  it("redacts Matrix observed event content by default in artifacts", () => {
-    expect(
-      liveTesting.buildObservedEventsArtifact({
-        includeContent: false,
-        observedEvents: [
-          {
-            roomId: "!room:matrix-qa.test",
-            eventId: "$event",
-            sender: "@sut:matrix-qa.test",
-            type: "m.room.message",
-            body: "secret",
-            formattedBody: "<p>secret</p>",
-            msgtype: "m.text",
-            originServerTs: 1_700_000_000_000,
-            relatesTo: {
-              relType: "m.thread",
-              eventId: "$root",
-              inReplyToId: "$driver",
-              isFallingBack: true,
-            },
-          },
-        ],
-      }),
-    ).toEqual([
+  it("derives Matrix DM + multi-room config from provisioned topology", () => {
+    const next = liveTesting.buildMatrixQaConfig(
+      {},
       {
-        roomId: "!room:matrix-qa.test",
-        eventId: "$event",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        msgtype: "m.text",
-        originServerTs: 1_700_000_000_000,
-        relatesTo: {
-          relType: "m.thread",
-          eventId: "$root",
-          inReplyToId: "$driver",
-          isFallingBack: true,
+        driverUserId: "@driver:matrix-qa.test",
+        homeserver: "http://127.0.0.1:28008/",
+        sutAccessToken: "syt_sut",
+        sutAccountId: "sut",
+        sutUserId: "@sut:matrix-qa.test",
+        topology: {
+          defaultRoomId: "!room-a:matrix-qa.test",
+          defaultRoomKey: "main",
+          rooms: [
+            {
+              key: "main",
+              kind: "group",
+              memberRoles: ["driver", "observer", "sut"],
+              memberUserIds: [
+                "@driver:matrix-qa.test",
+                "@observer:matrix-qa.test",
+                "@sut:matrix-qa.test",
+              ],
+              name: "Matrix QA A",
+              requireMention: true,
+              roomId: "!room-a:matrix-qa.test",
+            },
+            {
+              key: "secondary",
+              kind: "group",
+              memberRoles: ["driver", "sut"],
+              memberUserIds: ["@driver:matrix-qa.test", "@sut:matrix-qa.test"],
+              name: "Matrix QA B",
+              requireMention: false,
+              roomId: "!room-b:matrix-qa.test",
+            },
+            {
+              key: "sut-dm",
+              kind: "dm",
+              memberRoles: ["driver", "sut"],
+              memberUserIds: ["@driver:matrix-qa.test", "@sut:matrix-qa.test"],
+              name: "Matrix QA DM",
+              requireMention: false,
+              roomId: "!dm:matrix-qa.test",
+            },
+          ],
         },
       },
-    ]);
+    );
+
+    expect(next.channels?.matrix?.accounts?.sut?.dm).toEqual({
+      allowFrom: ["@driver:matrix-qa.test"],
+      enabled: true,
+      policy: "allowlist",
+    });
+    expect(next.channels?.matrix?.accounts?.sut?.groups).toEqual({
+      "!room-a:matrix-qa.test": {
+        enabled: true,
+        requireMention: true,
+      },
+      "!room-b:matrix-qa.test": {
+        enabled: true,
+        requireMention: false,
+      },
+    });
   });
 
-  it("keeps reaction metadata in redacted Matrix observed-event artifacts", () => {
+  it("records default and per-scenario Matrix config snapshots in the summary", () => {
     expect(
-      liveTesting.buildObservedEventsArtifact({
-        includeContent: false,
-        observedEvents: [
-          {
-            roomId: "!room:matrix-qa.test",
-            eventId: "$reaction",
-            sender: "@driver:matrix-qa.test",
-            type: "m.reaction",
-            reaction: {
-              eventId: "$reply",
-              key: "👍",
-            },
-            relatesTo: {
-              relType: "m.annotation",
-              eventId: "$reply",
-            },
-          },
-        ],
-      }),
-    ).toEqual([
-      {
-        roomId: "!room:matrix-qa.test",
-        eventId: "$reaction",
-        sender: "@driver:matrix-qa.test",
-        type: "m.reaction",
-        originServerTs: undefined,
-        msgtype: undefined,
-        membership: undefined,
-        relatesTo: {
-          relType: "m.annotation",
-          eventId: "$reply",
+      liveTesting.buildMatrixQaSummary({
+        artifactPaths: {
+          observedEvents: "/tmp/observed.json",
+          report: "/tmp/report.md",
+          summary: "/tmp/summary.json",
         },
-        mentions: undefined,
-        reaction: {
-          eventId: "$reply",
-          key: "👍",
+        checks: [{ name: "Matrix harness ready", status: "pass" }],
+        config: {
+          default: liveTesting.buildMatrixQaConfigSnapshot({
+            driverUserId: "@driver:matrix-qa.test",
+            sutUserId: "@sut:matrix-qa.test",
+            topology: {
+              defaultRoomId: "!room:matrix-qa.test",
+              defaultRoomKey: "main",
+              rooms: [
+                {
+                  key: "main",
+                  kind: "group",
+                  memberRoles: ["driver", "observer", "sut"],
+                  memberUserIds: [
+                    "@driver:matrix-qa.test",
+                    "@observer:matrix-qa.test",
+                    "@sut:matrix-qa.test",
+                  ],
+                  name: "Matrix QA",
+                  requireMention: true,
+                  roomId: "!room:matrix-qa.test",
+                },
+              ],
+            },
+          }),
+          scenarios: [
+            {
+              id: "matrix-room-thread-reply-override",
+              title: "Matrix threadReplies always keeps room replies threaded",
+              config: liveTesting.buildMatrixQaConfigSnapshot({
+                driverUserId: "@driver:matrix-qa.test",
+                overrides: {
+                  threadReplies: "always",
+                },
+                sutUserId: "@sut:matrix-qa.test",
+                topology: {
+                  defaultRoomId: "!room:matrix-qa.test",
+                  defaultRoomKey: "main",
+                  rooms: [
+                    {
+                      key: "main",
+                      kind: "group",
+                      memberRoles: ["driver", "observer", "sut"],
+                      memberUserIds: [
+                        "@driver:matrix-qa.test",
+                        "@observer:matrix-qa.test",
+                        "@sut:matrix-qa.test",
+                      ],
+                      name: "Matrix QA",
+                      requireMention: true,
+                      roomId: "!room:matrix-qa.test",
+                    },
+                  ],
+                },
+              }),
+            },
+          ],
         },
+        finishedAt: "2026-04-10T10:05:00.000Z",
+        harness: {
+          baseUrl: "http://127.0.0.1:28008/",
+          composeFile: "/tmp/docker-compose.yml",
+          dmRoomIds: [],
+          image: "ghcr.io/matrix-construct/tuwunel:v1.5.1",
+          roomId: "!room:matrix-qa.test",
+          roomIds: ["!room:matrix-qa.test"],
+          serverName: "matrix-qa.test",
+        },
+        observedEventCount: 0,
+        scenarios: [],
+        startedAt: "2026-04-10T10:00:00.000Z",
+        sutAccountId: "sut",
+        userIds: {
+          driver: "@driver:matrix-qa.test",
+          observer: "@observer:matrix-qa.test",
+          sut: "@sut:matrix-qa.test",
+        },
+      }).config,
+    ).toMatchObject({
+      default: {
+        replyToMode: "off",
+        threadReplies: "inbound",
       },
-    ]);
+      scenarios: [
+        {
+          id: "matrix-room-thread-reply-override",
+          config: {
+            threadReplies: "always",
+          },
+        },
+      ],
+    });
   });
 
   it("preserves negative-scenario artifacts in the Matrix summary", () => {
@@ -153,12 +255,26 @@ describe("matrix live qa runtime", () => {
           summary: "/tmp/summary.json",
         },
         checks: [{ name: "Matrix harness ready", status: "pass" }],
+        config: {
+          default: liveTesting.buildMatrixQaConfigSnapshot({
+            driverUserId: "@driver:matrix-qa.test",
+            sutUserId: "@sut:matrix-qa.test",
+            topology: {
+              defaultRoomId: "!room:matrix-qa.test",
+              defaultRoomKey: "main",
+              rooms: [],
+            },
+          }),
+          scenarios: [],
+        },
         finishedAt: "2026-04-10T10:05:00.000Z",
         harness: {
           baseUrl: "http://127.0.0.1:28008/",
           composeFile: "/tmp/docker-compose.yml",
+          dmRoomIds: [],
           image: "ghcr.io/matrix-construct/tuwunel:v1.5.1",
           roomId: "!room:matrix-qa.test",
+          roomIds: ["!room:matrix-qa.test"],
           serverName: "matrix-qa.test",
         },
         observedEventCount: 4,
