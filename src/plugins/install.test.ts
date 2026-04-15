@@ -1355,8 +1355,8 @@ describe("installPluginFromArchive", () => {
 
         expect(result.ok).toBe(false);
         if (!result.ok) {
-          expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
-          expect(result.error).toContain("manifest dependency scan could not read");
+          expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+          expect(result.error).toContain("plain-crypto-js");
           expect(result.error).toContain("vendor/sealed");
         }
       } finally {
@@ -1425,6 +1425,21 @@ describe("installPluginFromArchive", () => {
         ),
       ),
     ).toBe(true);
+  });
+
+  it("does not flag the real qa-matrix plugin as dangerous install code", async () => {
+    const pluginDir = path.resolve(process.cwd(), "extensions", "qa-matrix");
+
+    const scanResult = await installSecurityScan.scanPackageInstallSource({
+      extensions: ["./index.ts"],
+      logger: { warn: vi.fn() },
+      packageDir: pluginDir,
+      pluginId: "qa-matrix",
+      packageName: "@openclaw/qa-matrix",
+      manifestId: "qa-matrix",
+    });
+
+    expect(scanResult?.blocked).toBeUndefined();
   });
 
   it("keeps blocked dependency package checks active when forced unsafe install is set", async () => {
