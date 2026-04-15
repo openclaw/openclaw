@@ -342,17 +342,25 @@ export const skillsHandlers: GatewayRequestHandlers = {
     };
     await writeConfigFile(nextConfig);
     const redacted = { ...current };
-    if (redacted.apiKey) {
-      redacted.apiKey = "**REDACTED**";
-    }
+    delete redacted.apiKey;
+    const secretKeyPattern = /key|secret|token|password|credential/i;
     if (redacted.env && typeof redacted.env === "object") {
       const safeEnv: Record<string, string> = {};
       for (const [key, value] of Object.entries(redacted.env)) {
-        safeEnv[key] = /key|secret|token|password|credential/i.test(key)
-          ? "**REDACTED**"
-          : value;
+        if (!secretKeyPattern.test(key)) {
+          safeEnv[key] = value;
+        }
       }
       redacted.env = safeEnv;
+    }
+    if (redacted.config && typeof redacted.config === "object") {
+      const safeConfig: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(redacted.config as Record<string, unknown>)) {
+        if (typeof value !== "string" || !secretKeyPattern.test(key)) {
+          safeConfig[key] = value;
+        }
+      }
+      redacted.config = safeConfig;
     }
     respond(true, { ok: true, skillKey: p.skillKey, config: redacted }, undefined);
   },
