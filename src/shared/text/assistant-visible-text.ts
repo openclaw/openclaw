@@ -233,32 +233,6 @@ function looksLikeLiteralToolPayloadContext(text: string, start: number, end: nu
   );
 }
 
-function isOnIndentedMarkdownCodeLine(text: string, index: number): boolean {
-  const lineStart = text.lastIndexOf("\n", Math.max(0, index - 1)) + 1;
-  if (!text.startsWith("    ", lineStart) && !text.startsWith("\t", lineStart)) {
-    return false;
-  }
-
-  let blockStart = lineStart;
-  while (blockStart > 0) {
-    const previousLineEnd = blockStart - 1;
-    const previousLineStart = text.lastIndexOf("\n", Math.max(0, previousLineEnd - 1)) + 1;
-    const previousLine = text.slice(previousLineStart, previousLineEnd);
-    if (!previousLine.startsWith("    ") && !previousLine.startsWith("\t")) {
-      break;
-    }
-    blockStart = previousLineStart;
-  }
-
-  if (blockStart === 0) {
-    return false;
-  }
-
-  const previousLineEnd = blockStart - 1;
-  const previousLineStart = text.lastIndexOf("\n", Math.max(0, previousLineEnd - 1)) + 1;
-  return text.slice(previousLineStart, previousLineEnd).trim().length === 0;
-}
-
 function findLiteralToolBlockEnd(
   text: string,
   openTag: ParsedToolCallTag,
@@ -316,10 +290,7 @@ export function stripToolCallXmlTags(text: string, options?: StripToolCallXmlTag
     if (text[idx] !== "<") {
       continue;
     }
-    if (
-      !inToolCallBlock &&
-      (isInsideCode(idx, codeRegions) || isOnIndentedMarkdownCodeLine(text, idx))
-    ) {
+    if (!inToolCallBlock && isInsideCode(idx, codeRegions)) {
       continue;
     }
 

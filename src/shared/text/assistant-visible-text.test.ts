@@ -421,14 +421,18 @@ describe("stripAssistantInternalScaffolding", () => {
       expectVisibleText(input, input);
     });
 
-    it("preserves tool-call tags inside indented code blocks", () => {
+    it("strips tool-call tags inside indented code blocks", () => {
       const input = [
         "Code:",
         "",
         '    <tool_call>{"name":"find","arguments":{"query":"x"}}</tool_call>',
         "After",
       ].join("\n");
-      expectVisibleText(input, input);
+      expectVisibleText(input, ["Code:", "", "    ", "After"].join("\n"));
+      expectVisibleText(
+        ["Before", "", '    <tool_call>{"name":"exec"}</tool_call>', "After"].join("\n"),
+        ["Before", "", "    ", "After"].join("\n"),
+      );
     });
 
     it("strips tool-call tags from ordinary indented prose", () => {

@@ -410,14 +410,19 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
-  it("preserves tool-call tags inside indented code blocks", () => {
+  it("strips tool-call tags inside indented code blocks", () => {
     const text = [
       "Code:",
       "",
       '    <tool_call>{"name":"find","arguments":{"query":"x"}}</tool_call>',
       "After",
     ].join("\n");
-    expect(sanitizeUserFacingText(text)).toBe(text);
+    expect(sanitizeUserFacingText(text)).toBe(["Code:", "", "    ", "After"].join("\n"));
+    expect(
+      sanitizeUserFacingText(
+        ["Before", "", '    <tool_call>{"name":"exec"}</tool_call>', "After"].join("\n"),
+      ),
+    ).toBe(["Before", "", "    ", "After"].join("\n"));
   });
 
   it("strips tool-call tags from ordinary indented prose", () => {
