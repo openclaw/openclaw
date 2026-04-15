@@ -132,6 +132,16 @@ describe("shouldTriggerSkillsRefresh", () => {
     ).toBe(true);
   });
 
+  it("accepts unlinkDir for the watch root itself", () => {
+    expect(
+      refreshModule.shouldTriggerSkillsRefresh({
+        event: "unlinkDir",
+        eventPath: skillRoot,
+        roots,
+      }),
+    ).toBe(true);
+  });
+
   it("rejects unlinkDir for nested directories under a skill", () => {
     expect(
       refreshModule.shouldTriggerSkillsRefresh({

@@ -95,6 +95,9 @@ export function shouldTriggerSkillsRefresh(params: {
   const eventPath = path.resolve(params.eventPath);
   for (const root of params.roots) {
     const rootResolved = path.resolve(root);
+    if (params.event === "unlinkDir" && eventPath === rootResolved) {
+      return true;
+    }
     if (eventPath === rootResolved) {
       continue;
     }

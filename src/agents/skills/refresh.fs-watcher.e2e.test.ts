@@ -67,6 +67,42 @@ describe("skills watcher (real chokidar)", () => {
     );
     expect(afterDelete).toBeGreaterThan(afterAdd);
   }, 30_000);
+
+  it("bumps getSkillsSnapshotVersion when the watched skills root itself is deleted", async () => {
+    refreshMod = await import("./refresh.js");
+    tmpWorkspace = await mkdtemp(path.join(os.tmpdir(), "openclaw-skills-watch-root-"));
+    const skillsRoot = path.join(tmpWorkspace, "skills");
+    const skillDir = path.join(skillsRoot, `root-delete-e2e-${Date.now()}`);
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(
+      path.join(skillDir, "SKILL.md"),
+      ["---", "name: root-delete-e2e", "description: fs watcher root delete", "---", "# x"].join(
+        "\n",
+      ),
+      "utf8",
+    );
+
+    const cfg = {
+      skills: {
+        load: {
+          watch: true,
+          watchDebounceMs: 50,
+        },
+      },
+    } as OpenClawConfig;
+
+    refreshMod.ensureSkillsWatcher({ workspaceDir: tmpWorkspace, config: cfg });
+
+    const v0 = refreshMod.getSkillsSnapshotVersion(tmpWorkspace);
+    await rm(skillsRoot, { recursive: true, force: true });
+
+    const afterDelete = await waitForVersionAbove(
+      tmpWorkspace,
+      v0,
+      refreshMod.getSkillsSnapshotVersion,
+    );
+    expect(afterDelete).toBeGreaterThan(v0);
+  }, 30_000);
 });
 
 async function waitForVersionAbove(
