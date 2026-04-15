@@ -1816,15 +1816,14 @@ describe("openai transport stream", () => {
 
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
+    const thinkingBlock = output.content[0] as { type: string; thinking: string };
+    const textBlock = output.content[1] as { type: string; text: string };
+
     expect(output.content.length).toBe(2);
-    expect(output.content[0].type).toBe("thinking");
-    expect((output.content[0] as { type: string; thinking: string }).thinking).toBe(
-      "I need to think about this. Let me analyze.",
-    );
-    expect(output.content[1].type).toBe("text");
-    expect((output.content[1] as { type: string; text: string }).text).toBe(
-      " Hello! How can I help you?",
-    );
+    expect(thinkingBlock.type).toBe("thinking");
+    expect(thinkingBlock.thinking).toBe("I need to think about this. Let me analyze.");
+    expect(textBlock.type).toBe("text");
+    expect(textBlock.text).toBe(" Hello! How can I help you?");
   });
 
   it("keeps tool calls when reasoning_details and tool_calls share a chunk", async () => {
