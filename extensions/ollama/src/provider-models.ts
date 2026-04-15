@@ -32,6 +32,10 @@ const OLLAMA_SHOW_CONCURRENCY = 8;
 const MAX_OLLAMA_SHOW_CACHE_ENTRIES = 256;
 const ollamaModelShowInfoCache = new Map<string, Promise<OllamaModelShowInfo>>();
 
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
 export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
   const trimmed = baseUrl.trim();
   if (!trimmed) {
@@ -43,8 +47,8 @@ export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
       return undefined;
     }
     return {
-      allowedHostnames: [parsed.hostname],
       hostnameAllowlist: [parsed.hostname],
+      ...(isLoopbackHostname(parsed.hostname) ? { allowPrivateNetwork: true } : {}),
     };
   } catch {
     return undefined;
