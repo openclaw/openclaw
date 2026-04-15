@@ -73,7 +73,7 @@ function readMinimaxProviderConfig(config: SpeechProviderConfig): MinimaxTtsProv
 }
 
 function readMinimaxOverrides(
-  overrides?: MinimaxTtsProviderOverrides,
+  overrides: Record<string, unknown> | undefined,
 ): MinimaxTtsProviderOverrides {
   if (!overrides) {
     return {};
