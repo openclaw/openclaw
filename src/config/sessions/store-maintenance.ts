@@ -582,6 +582,10 @@ async function readHeaderAndTailLines(
       for await (const line of rl) {
         if (lineIndex === 0) {
           headerLine = line;
+          // If no tail lines needed, we can stop after reading the header
+          if (!shouldCollectTail) {
+            break;
+          }
         } else if (shouldCollectTail && buf) {
           buf[head] = line;
           head = (head + 1) % maxTailLines;
