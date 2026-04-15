@@ -217,10 +217,12 @@ export function filterToolResultMediaUrls(
     return mediaUrls;
   }
   if (isToolResultMediaTrusted(toolName, result)) {
-    // When the current run provides its exact built-in registrations, require
-    // the raw emitted tool name to match one of them before allowing local
-    // MEDIA: paths. This blocks aliases and case-variant collisions such as
-    // "bash" -> "exec" or "Web_Search" -> "web_search".
+    // When the current run provides its exact registered tool names (core
+    // built-ins plus bundled/trusted plugin tools), require the raw emitted
+    // tool name to match one of them before allowing local MEDIA: paths.
+    // This blocks normalized aliases and case-variant collisions such as
+    // "Bash" -> "bash" or "Web_Search" -> "web_search" from inheriting a
+    // registered tool's media trust.
     if (builtinToolNames !== undefined) {
       const registeredName = toolName?.trim();
       if (!registeredName || !builtinToolNames.has(registeredName)) {

@@ -302,6 +302,31 @@ describe("extractToolResultMediaPaths", () => {
     ).toEqual(["/tmp/screenshot.png"]);
   });
 
+  it("keeps local media for bundled plugin tool names registered in this run", () => {
+    // music_generate is a bundled-plugin trusted tool; when the runner
+    // registers it for this run, its raw name must be allowed through the
+    // exact-name gate just like a core built-in.
+    expect(
+      filterToolResultMediaUrls(
+        "music_generate",
+        ["/tmp/song.mp3"],
+        undefined,
+        new Set(["music_generate"]),
+      ),
+    ).toEqual(["/tmp/song.mp3"]);
+  });
+
+  it("strips local media for plugin-name collisions when the plugin is not registered", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "Music_Generate",
+        ["/etc/passwd"],
+        undefined,
+        new Set(["music_generate"]),
+      ),
+    ).toEqual([]);
+  });
+
   it("still allows remote media for colliding aliases", () => {
     expect(
       filterToolResultMediaUrls(
