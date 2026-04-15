@@ -3,6 +3,7 @@ import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
@@ -140,6 +141,16 @@ export function createGatewayReloadHandlers(params: {
     setCommandLaneConcurrency(CommandLane.Cron, nextConfig.cron?.maxConcurrentRuns ?? 1);
     setCommandLaneConcurrency(CommandLane.Main, resolveAgentMaxConcurrent(nextConfig));
     setCommandLaneConcurrency(CommandLane.Subagent, resolveSubagentMaxConcurrent(nextConfig));
+
+    // logging.file is a no-op path (kind: "none" in reload rules), so it reaches
+    // here with plan.noopPaths = ["logging", "logging.file"]. Invalidate the
+    // runtime config snapshot so the next resolveSettings() call (via
+    // readLoggingConfig → loadConfig → loadPinnedRuntimeConfig) sees the updated
+    // logging.file value instead of the stale startup snapshot.
+    const loggingChanged = plan.noopPaths.some((p) => p === "logging" || p.startsWith("logging."));
+    if (loggingChanged) {
+      setRuntimeConfigSnapshot(nextConfig);
+    }
 
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);
