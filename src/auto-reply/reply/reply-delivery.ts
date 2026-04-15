@@ -76,9 +76,6 @@ async function sendDirectBlockReply(params: {
   params.directlySentBlockKeys.add(createBlockReplyContentKey(params.trackingPayload));
   await params.onBlockReply(params.payload);
 }
-const hasRenderableMedia = (payload: ReplyPayload): boolean =>
-  Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0 || Boolean(payload.sticker);
-
 
 export function createBlockReplyDeliveryHandler(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
@@ -178,6 +175,7 @@ export function createBlockReplyDeliveryHandler(params: {
         trackingPayload: blockPayload,
         payload: { ...blockPayload, text: undefined },
       });
-    // When streaming is disabled entirely, text-only blocks are accumulated in final text.
+      // When streaming is disabled entirely, text-only blocks are accumulated in final text.
+    }
   };
 }
