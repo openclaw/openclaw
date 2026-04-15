@@ -246,6 +246,28 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("does not trust an unverified busy port when schtasks still says not-yet-run", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      await writeGatewayScript(env);
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 4242, command: "node.exe" }],
+        hints: [],
+      });
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
+      );
+
+      await expect(readScheduledTaskRuntime(env)).resolves.toMatchObject({
+        status: "stopped",
+        state: "Ready",
+        lastRunResult: "267011",
+      });
+    });
+  });
+
   it("treats an installed Startup-folder launcher as loaded", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses();

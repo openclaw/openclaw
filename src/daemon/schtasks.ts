@@ -411,14 +411,14 @@ async function resolveListenerBackedScheduledTaskRuntime(
   if (!port) {
     return null;
   }
-  const pids = await resolveScheduledTaskGatewayListenerPids(port);
+  const pids = findVerifiedGatewayListenerPidsOnPortSync(port);
   if (pids.length === 0) {
     return null;
   }
   return {
     status: "running",
     pid: pids[0],
-    detail: `Gateway listener detected on port ${port} even though schtasks did not report a running task.`,
+    detail: `Verified gateway listener detected on port ${port} even though schtasks did not report a running task.`,
   };
 }
 

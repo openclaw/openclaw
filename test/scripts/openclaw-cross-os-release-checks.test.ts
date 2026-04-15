@@ -90,12 +90,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ]);
   });
 
-  it("keeps dev-update enabled for pinned main commit refs", () => {
+  it("skips dev-update for pinned commit refs", () => {
     expect(resolveRequestedSuites("both", "08753a1d793c040b101c8a26c43445dbbab14995")).toEqual([
       "packaged-fresh",
       "installer-fresh",
       "packaged-upgrade",
-      "dev-update",
     ]);
   });
 
@@ -242,26 +241,26 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
-  it("keeps the dev-update lane for main and pinned main-commit refs", () => {
+  it("keeps the dev-update lane for main only", () => {
     expect(shouldRunMainChannelDevUpdate("main")).toBe(true);
-    expect(shouldRunMainChannelDevUpdate("08753a1d793c040b101c8a26c43445dbbab14995")).toBe(true);
+    expect(shouldRunMainChannelDevUpdate("08753a1d793c040b101c8a26c43445dbbab14995")).toBe(false);
     expect(shouldRunMainChannelDevUpdate(" codex/cross-os-release-checks-full-native-e2e ")).toBe(
       false,
     );
     expect(shouldRunMainChannelDevUpdate("v2026.4.14")).toBe(false);
   });
 
-  it("pins main dev-update verification to the prepared source sha", () => {
+  it("verifies main dev updates against the live main branch", () => {
     expect(resolveDevUpdateVerificationRef("main")).toBe("main");
     expect(
       resolveDevUpdateVerificationRef("main", "08753a1d793c040b101c8a26c43445dbbab14995"),
-    ).toBe("08753a1d793c040b101c8a26c43445dbbab14995");
+    ).toBe("main");
     expect(
       resolveDevUpdateVerificationRef(
         "refs/heads/main",
         "08753a1d793c040b101c8a26c43445dbbab14995",
       ),
-    ).toBe("08753a1d793c040b101c8a26c43445dbbab14995");
+    ).toBe("main");
     expect(resolveDevUpdateVerificationRef("codex/cross-os-release-checks-full-native-e2e")).toBe(
       "codex/cross-os-release-checks-full-native-e2e",
     );

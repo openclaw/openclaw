@@ -804,7 +804,12 @@ async function runInstallerFreshSuite(params) {
           timeoutMs: 2 * 60 * 1000,
           check: false,
         });
-        await sleep(2_000);
+        await waitForInstalledGatewayToStop({
+          lane,
+          cliPath: freshShell.cliPath,
+          env,
+          logPath: join(params.logsDir, "installer-fresh-gateway-stop-managed-status.log"),
+        });
       }
       logLanePhase(lane, "gateway-start");
       const gateway = await startManualGatewayFromInstalledCli({
@@ -1137,19 +1142,15 @@ function resolveExpectedDevUpdateRef(ref) {
 }
 
 export function resolveDevUpdateVerificationRef(ref, sourceSha) {
-  const expectedRef = resolveExpectedDevUpdateRef(ref);
-  if (expectedRef === "main" && looksLikeCommitSha(sourceSha || "")) {
-    return sourceSha.trim();
-  }
-  return expectedRef;
+  void sourceSha;
+  return resolveExpectedDevUpdateRef(ref);
 }
 
 export function shouldRunMainChannelDevUpdate(ref) {
   if (isImmutableReleaseRef(ref)) {
     return false;
   }
-  const expectedRef = resolveExpectedDevUpdateRef(ref);
-  return expectedRef === "main" || looksLikeCommitSha(expectedRef);
+  return resolveExpectedDevUpdateRef(ref) === "main";
 }
 
 export function shouldSkipInstallerDaemonHealthCheck(platform = process.platform) {
@@ -1558,6 +1559,34 @@ async function waitForInstalledGateway(params) {
     await sleep(2_000);
   }
   throw new Error(`Gateway did not become ready on port ${params.lane.gatewayPort}.`);
+}
+
+async function waitForInstalledGatewayToStop(params) {
+  const statusArgs = await resolveInstalledGatewayStatusArgs({
+    cliPath: params.cliPath,
+    cwd: params.lane.homeDir,
+    env: params.env,
+    logPath: params.logPath,
+  });
+  const deadline = Date.now() + gatewayReadyDeadlineMs();
+  while (Date.now() < deadline) {
+    const result = await runInstalledCli({
+      cliPath: params.cliPath,
+      args: statusArgs,
+      cwd: params.lane.homeDir,
+      env: params.env,
+      logPath: params.logPath,
+      timeoutMs: 20_000,
+      check: false,
+    });
+    if (result.exitCode !== 0) {
+      return;
+    }
+    await sleep(2_000);
+  }
+  throw new Error(
+    `Managed gateway did not stop on port ${params.lane.gatewayPort} before manual fallback.`,
+  );
 }
 
 async function ensureManagedGatewayReady(params) {
