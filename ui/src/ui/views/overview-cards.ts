@@ -141,9 +141,24 @@ export function renderOverviewCards(props: OverviewCardsProps) {
 
   // Model auth card — show providers whose auth needs monitoring.
   // See isMonitoredAuthProvider for the exact predicate.
+  //
+  // Rendered while loading (modelAuthStatus === null) so the card slot stays
+  // in the grid instead of snapping in on data arrival, matching the cron
+  // card's N/A-placeholder pattern. Still hidden entirely for api-key-only
+  // setups post-load (nothing to monitor), which accepts a one-time hide
+  // rather than the recurring load-time layout shift.
+  const authLoading = props.modelAuthStatus === null;
   const authProviders = props.modelAuthStatus?.providers ?? [];
   const monitoredProviders = authProviders.filter(isMonitoredAuthProvider);
-  if (monitoredProviders.length > 0) {
+  if (authLoading) {
+    cards.push({
+      kind: "auth",
+      tab: "overview",
+      label: t("overview.cards.modelAuth"),
+      value: t("common.na"),
+      hint: "",
+    });
+  } else if (monitoredProviders.length > 0) {
     const expired = monitoredProviders.filter(
       (p) => p.status === "expired" || p.status === "missing",
     ).length;
