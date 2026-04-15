@@ -4,7 +4,6 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
-import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "../src/infra/npm-update-compat-sidecars.ts";
 import {
   compareReleaseVersions as compareReleaseVersionsBase,
   resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase,
