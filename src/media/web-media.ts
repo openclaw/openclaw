@@ -91,6 +91,22 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
 const HOST_READ_TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/markdown"]);
 const MB = 1024 * 1024;
 
+// Returns true only if every byte in the buffer is text-safe: no null bytes and no C0
+// control characters other than the standard whitespace group (tab 0x09, LF 0x0A,
+// VT 0x0B, FF 0x0C, CR 0x0D). This is the same heuristic used by `git` and `file` to
+// distinguish text from binary. Bytes ≥ 0x80 are allowed so that UTF-8, Latin-1, and
+// Windows-1252 encoded files all pass.
+function looksLikeText(buffer: Buffer): boolean {
+  for (let i = 0; i < buffer.length; i++) {
+    const b = buffer[i]!;
+    // Reject null (0x00–0x08) and remaining C0 controls (0x0E–0x1F) and DEL (0x7F).
+    if (b < 0x09 || (b >= 0x0e && b <= 0x1f) || b === 0x7f) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function formatMb(bytes: number, digits = 2): string {
   return (bytes / MB).toFixed(digits);
 }
@@ -143,13 +159,13 @@ function assertHostReadMediaAllowed(params: {
   // plain-text buffers that have no binary magic bytes. Allow these formats when:
   // - sniffedMime is undefined (no binary signature detected by file-type)
   // - The extension-derived MIME is text/csv or text/markdown (operator intent)
-  // - The full buffer contains no null bytes (rules out binary data with no known signature)
+  // - Every byte in the buffer passes the text-safety check (no binary control chars)
   if (
     !sniffedMime &&
     normalizedMime &&
     HOST_READ_TEXT_PLAIN_ALIASES.has(normalizedMime) &&
     params.buffer &&
-    !params.buffer.includes(0x00)
+    looksLikeText(params.buffer)
   ) {
     return;
   }
