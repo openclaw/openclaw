@@ -13,6 +13,9 @@ const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
 const GEMMA_PREFIX = "gemma-";
+// Gemma models have much smaller context windows than Gemini flash (1M).
+// Use 128k as a safe default to avoid inheriting the template's 1M window.
+const GEMMA_DEFAULT_CONTEXT_WINDOW = 131_072;
 const GEMINI_2_5_PRO_TEMPLATE_IDS = ["gemini-2.5-pro"] as const;
 const GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS = ["gemini-2.5-flash-lite"] as const;
 const GEMINI_2_5_FLASH_TEMPLATE_IDS = ["gemini-2.5-flash"] as const;
@@ -151,8 +154,9 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       googleTemplateIds: GEMMA_TEMPLATE_IDS,
       cliTemplateIds: GEMMA_TEMPLATE_IDS,
     };
+    patch = { contextWindow: GEMMA_DEFAULT_CONTEXT_WINDOW };
     if (lower.startsWith("gemma-4")) {
-      patch = { reasoning: true };
+      patch = { ...patch, reasoning: true };
     }
   } else {
     return undefined;

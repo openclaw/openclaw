@@ -255,4 +255,22 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       reasoning: false,
     });
   });
+
+  it("does not inherit the template's 1M context window for gemma models", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google",
+      ctx: createContext({
+        provider: "google",
+        modelId: "gemma-4-26b-a4b-it",
+        models: [
+          createTemplateModel("google", "gemini-3-flash-preview", {
+            contextWindow: 1_048_576,
+          }),
+        ],
+      }),
+    });
+
+    expect(model).toBeDefined();
+    expect(model!.contextWindow).toBe(131_072);
+  });
 });
