@@ -199,6 +199,44 @@ function Ensure-Git {
     return Install-Git
 }
 
+function Read-TrimmedFileText {
+    param([string]$Path)
+
+    if (!(Test-Path -LiteralPath $Path)) {
+        return ""
+    }
+
+    return ((Get-Content -LiteralPath $Path -Raw) -replace "(\r?\n)+$", "")
+}
+
+function Invoke-NativeCommandCapture {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [string[]]$Arguments = @()
+    )
+
+    $stdoutPath = [System.IO.Path]::GetTempFileName()
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+
+    try {
+        $process = Start-Process -FilePath $FilePath `
+            -ArgumentList $Arguments `
+            -Wait `
+            -PassThru `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath
+
+        return @{
+            ExitCode = $process.ExitCode
+            Stdout = Read-TrimmedFileText -Path $stdoutPath
+            Stderr = Read-TrimmedFileText -Path $stderrPath
+        }
+    } finally {
+        Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Install-OpenClawNpm {
     param([string]$Target = "latest")
 
@@ -207,16 +245,23 @@ function Install-OpenClawNpm {
     Write-Host "Installing OpenClaw ($installSpec)..." -Level info
     
     try {
-        # PowerShell surfaces native stderr as error records, so treat npm's
-        # actual exit code as the install result instead of warning noise.
-        $installOutput = & npm install -g $installSpec --no-fund --no-audit 2>&1
-        $exitCode = $LASTEXITCODE
-        $installText = ($installOutput | Out-String).TrimEnd()
-        if ($installText) {
-            Microsoft.PowerShell.Utility\Write-Output $installText
+        # Run npm out-of-process so warning chatter on stderr does not get
+        # promoted into a terminating PowerShell error while the install succeeds.
+        $installResult = Invoke-NativeCommandCapture -FilePath "npm.cmd" -Arguments @(
+            "install",
+            "-g",
+            $installSpec,
+            "--no-fund",
+            "--no-audit"
+        )
+        if ($installResult.Stdout) {
+            Microsoft.PowerShell.Utility\Write-Output $installResult.Stdout
         }
-        if ($exitCode -ne 0) {
-            Write-Host "npm install failed with exit code $exitCode" -Level error
+        if ($installResult.Stderr) {
+            Microsoft.PowerShell.Utility\Write-Output $installResult.Stderr
+        }
+        if ($installResult.ExitCode -ne 0) {
+            Write-Host "npm install failed with exit code $($installResult.ExitCode)" -Level error
             return $false
         }
         Write-Host "OpenClaw installed" -Level success
