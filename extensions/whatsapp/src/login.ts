@@ -5,7 +5,6 @@ import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env
 import { logInfo } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { closeWaSocketSoon, waitForWhatsAppLoginResult } from "./connection-controller.js";
-import { createWaSocket, waitForWaConnection } from "./session.js";
 
 export async function loginWeb(
   verbose: boolean,
@@ -13,9 +12,12 @@ export async function loginWeb(
   runtime: RuntimeEnv = defaultRuntime,
   accountId?: string,
 ) {
+  const { createWaSocket: _create, waitForWaConnection: _wait } = await import("./session.js");
+  const createSocket = _create;
+  const waitForConn = waitForConnection ?? _wait;
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId });
-  let sock = await createWaSocket(true, verbose, {
+  let sock = await createSocket(true, verbose, {
     authDir: account.authDir,
   });
   logInfo("Waiting for WhatsApp connection...", runtime);
@@ -26,7 +28,7 @@ export async function loginWeb(
       isLegacyAuthDir: account.isLegacyAuthDir,
       verbose,
       runtime,
-      waitForConnection,
+      waitForConnection: waitForConn,
       onSocketReplaced: (replacementSock) => {
         sock = replacementSock;
       },

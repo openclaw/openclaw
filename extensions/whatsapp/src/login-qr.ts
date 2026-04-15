@@ -10,9 +10,16 @@ import {
   WHATSAPP_LOGGED_OUT_QR_MESSAGE,
 } from "./connection-controller.js";
 import { renderQrPngBase64 } from "./qr-image.js";
-import { createWaSocket, readWebSelfId, webAuthExists } from "./session.js";
+import { readWebSelfId, webAuthExists } from "./session.js";
 
-type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
+// WaSocket type — defined locally to avoid needing createWaSocket at module scope
+type WaSocket = {
+  ws?: { close?: () => void };
+  sendMessage?: (jid: string, content: unknown) => Promise<unknown>;
+  updateMediaMessage?: (msg: unknown) => Promise<unknown>;
+  groupMetadata?: (jid: string) => Promise<{ participants?: Array<{ id?: string }> }>;
+};
+
 
 type ActiveLogin = {
   accountId: string;
@@ -141,6 +148,7 @@ export async function startWebLoginWithQr(
   let sock: WaSocket;
   let pendingQr: string | null = null;
   try {
+    const { createWaSocket } = await import("./session.js");
     sock = await createWaSocket(false, Boolean(opts.verbose), {
       authDir: account.authDir,
       onQr: (qr: string) => {
