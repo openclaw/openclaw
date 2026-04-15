@@ -7,7 +7,6 @@ import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { readWebSelfIdentity } from "../auth-store.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
 import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
-import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from "../session.js";
 import { resolveJidToE164 } from "../text-runtime.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import {
@@ -27,15 +26,16 @@ import {
 } from "./extract.js";
 import { attachEmitterListener, closeInboundMonitorSocket } from "./lifecycle.js";
 import { downloadInboundMedia } from "./media.js";
-import { DisconnectReason, isJidGroup, saveMediaBuffer } from "./runtime-api.js";
+import { formatError, getStatusCode, saveMediaBuffer } from "./runtime-api.js";
 import { createWebSendApi } from "./send-api.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
 
-const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+const LOGGED_OUT_STATUS = 401;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
 
 function isGroupJid(jid: string): boolean {
-  return (typeof isJidGroup === "function" ? isJidGroup(jid) : jid.endsWith("@g.us")) === true;
+  // Group jids end with @g.us — no Baileys runtime dependency needed
+  return jid.endsWith("@g.us");
 }
 
 function isRetryableSendDisconnectError(err: unknown): boolean {
@@ -694,6 +694,7 @@ export async function attachWebInboxToSocket(
 }
 
 export async function monitorWebInbox(options: MonitorWebInboxOptions) {
+  const { createWaSocket, waitForWaConnection } = await import("../session.js");
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
   });

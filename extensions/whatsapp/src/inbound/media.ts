@@ -1,11 +1,10 @@
 import type { proto, WAMessage } from "@whiskeysockets/baileys";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { createWaSocket } from "../session.js";
-import { downloadMediaMessage, normalizeMessageContent } from "./runtime-api.js";
 
-function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
-  const normalized = normalizeMessageContent(message);
-  return normalized;
+async function unwrapMessage(message: proto.IMessage | undefined): Promise<proto.IMessage | undefined> {
+  const { normalizeMessageContent } = await import("@whiskeysockets/baileys");
+  return normalizeMessageContent(message);
 }
 
 /**
@@ -43,7 +42,7 @@ export async function downloadInboundMedia(
   msg: proto.IWebMessageInfo,
   sock: Awaited<ReturnType<typeof createWaSocket>>,
 ): Promise<{ buffer: Buffer; mimetype?: string; fileName?: string } | undefined> {
-  const message = unwrapMessage(msg.message as proto.IMessage | undefined);
+  const message = await unwrapMessage(msg.message as proto.IMessage | undefined);
   if (!message) {
     return undefined;
   }
@@ -59,7 +58,8 @@ export async function downloadInboundMedia(
     return undefined;
   }
   try {
-    const buffer = await downloadMediaMessage(
+    const { downloadMediaMessage: _dl } = await import("@whiskeysockets/baileys");
+    const buffer = await _dl(
       msg as WAMessage,
       "buffer",
       {},

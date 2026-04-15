@@ -1,4 +1,3 @@
-import { DisconnectReason, type WASocket } from "@whiskeysockets/baileys";
 import { info } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -8,15 +7,13 @@ import {
 import type { ActiveWebListener, WebListenerCloseReason } from "./inbound/types.js";
 import { computeBackoff, sleepWithAbort, type ReconnectPolicy } from "./reconnect.js";
 import {
-  createWaSocket,
   formatError,
   getStatusCode,
   logoutWeb,
   waitForCredsSaveQueueWithTimeout,
-  waitForWaConnection,
 } from "./session.js";
 
-const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+const LOGGED_OUT_STATUS = 401;
 const WHATSAPP_LOGIN_RESTART_MESSAGE =
   "WhatsApp asked for a restart after pairing (code 515); waiting for creds to save…";
 export const WHATSAPP_LOGGED_OUT_RELINK_MESSAGE =
@@ -36,7 +33,7 @@ export type ManagedWhatsAppListener = ActiveWebListener & {
 export type WhatsAppLiveConnection = {
   connectionId: string;
   startedAt: number;
-  sock: WASocket;
+  sock: WaSocket;
   listener: ManagedWhatsAppListener;
   heartbeat: TimerHandle | null;
   watchdogTimer: TimerHandle | null;
@@ -79,7 +76,7 @@ function createNeverResolvePromise<T>(): Promise<T> {
 
 function createLiveConnection(params: {
   connectionId: string;
-  sock: WASocket;
+  sock: WaSocket;
   listener: ManagedWhatsAppListener;
 }): WhatsAppLiveConnection {
   let closeResolved = false;
@@ -156,8 +153,11 @@ export async function waitForWhatsAppLoginResult(params: {
   createSocket?: typeof createWaSocket;
   onSocketReplaced?: (sock: WaSocket) => void;
 }): Promise<WhatsAppLoginWaitResult> {
-  const wait = params.waitForConnection ?? waitForWaConnection;
-  const createSocket = params.createSocket ?? createWaSocket;
+  const { waitForWaConnection: _waitDefault, createWaSocket: _createDefault } = await import(
+    "./session.js",
+  );
+  const wait = params.waitForConnection ?? _waitDefault;
+  const createSocket = params.createSocket ?? _createDefault;
   let currentSock = params.sock;
   let restarted = false;
 
@@ -219,7 +219,7 @@ export async function waitForWhatsAppLoginResult(params: {
 export class WhatsAppConnectionController {
   readonly accountId: string;
   readonly authDir: string;
-  readonly socketRef: { current: WASocket | null };
+  readonly socketRef: { current: WaSocket | null };
 
   private readonly reconnectPolicy: ReconnectPolicy;
   private readonly heartbeatSeconds: number;
@@ -334,12 +334,13 @@ export class WhatsAppConnectionController {
   async openConnection(params: {
     connectionId: string;
     createListener: (context: {
-      sock: WASocket;
+      sock: WaSocket;
       connection: WhatsAppLiveConnection;
     }) => Promise<ManagedWhatsAppListener>;
     onHeartbeat?: (snapshot: WhatsAppConnectionSnapshot) => void;
     onWatchdogTimeout?: (snapshot: WhatsAppConnectionSnapshot) => void;
   }): Promise<WhatsAppLiveConnection> {
+    const { createWaSocket, waitForWaConnection } = await import("./session.js");
     if (this.current) {
       await this.closeCurrentConnection();
     }
