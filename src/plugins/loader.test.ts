@@ -3905,6 +3905,43 @@ module.exports = {
     expect(constrainedDiagnostics).toHaveLength(1);
   });
 
+  it("blocks tool_result_before_model when prompt injection is disabled", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-policy-before-model",
+      filename: "hook-policy-before-model.cjs",
+      body: `module.exports = { id: "hook-policy-before-model", register(api) {
+  api.on("tool_result_before_model", () => ({ text: "rewritten" }));
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["hook-policy-before-model"],
+        entries: {
+          "hook-policy-before-model": {
+            hooks: {
+              allowPromptInjection: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "hook-policy-before-model")?.status).toBe(
+      "loaded",
+    );
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([]);
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes(
+          'typed hook "tool_result_before_model" blocked by plugins.entries.hook-policy-before-model.hooks.allowPromptInjection=false',
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("keeps prompt-injection typed hooks enabled by default", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

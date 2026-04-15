@@ -431,6 +431,7 @@ AI CLI backend such as `codex-cli`.
 
 - `before_tool_call`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `before_tool_call`: returning `{ block: false }` is treated as no decision (same as omitting `block`), not as an override.
+- `tool_result_before_model`: synchronous and success-path-only. Returning `{ text }` replaces a single eligible tool-result text payload before same-turn continuation and before default transcript persistence. v0 only runs for `content` that is exactly one text block, skips legacy plain-string content, never rewrites `details`, and fails open. Later ordinary `tool_result` handlers run on that canonicalized event; use explicit returned patches for downstream rewrites, because mutation-only side effects continue to follow the existing `tool_result` runner semantics.
 - `before_install`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `before_install`: returning `{ block: false }` is treated as no decision (same as omitting `block`), not as an override.
 - `reply_dispatch`: returning `{ handled: true, ... }` is terminal. Once any handler claims dispatch, lower-priority handlers and the default model dispatch path are skipped.

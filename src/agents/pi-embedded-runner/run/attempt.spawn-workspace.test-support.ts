@@ -270,6 +270,7 @@ vi.mock("../../pi-settings.js", () => ({
 
 vi.mock("../extensions.js", () => ({
   buildEmbeddedExtensionFactories: () => [],
+  buildEmbeddedExtensionsOverride: () => undefined,
 }));
 
 vi.mock("../replay-history.js", () => ({

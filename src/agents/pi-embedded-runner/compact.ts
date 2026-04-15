@@ -106,7 +106,7 @@ import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
-import { buildEmbeddedExtensionFactories } from "./extensions.js";
+import { buildEmbeddedExtensionFactories, buildEmbeddedExtensionsOverride } from "./extensions.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { log } from "./logger.js";
@@ -790,6 +790,7 @@ export async function compactEmbeddedPiSessionDirect(
         cfg: params.config,
         contextTokenBudget: ctxInfo.tokens,
       });
+      const globalHookRunner = getGlobalHookRunner() ?? undefined;
       // Sets compaction/pruning runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
       const extensionFactories = buildEmbeddedExtensionFactories({
@@ -798,6 +799,14 @@ export async function compactEmbeddedPiSessionDirect(
         provider,
         modelId,
         model,
+        hookRunner: globalHookRunner,
+        agentId: sessionAgentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        runId,
+      });
+      const extensionsOverride = buildEmbeddedExtensionsOverride({
+        hasToolResultBeforeModelBridge: !!globalHookRunner?.hasHooks("tool_result_before_model"),
       });
       // Only create an explicit resource loader when there are extension factories
       // to register; otherwise let createAgentSession use its built-in default.
@@ -808,6 +817,7 @@ export async function compactEmbeddedPiSessionDirect(
           agentDir,
           settingsManager,
           extensionFactories,
+          extensionsOverride,
         });
         await resourceLoader.reload();
       }
@@ -928,7 +938,7 @@ export async function compactEmbeddedPiSessionDirect(
           if (limited.length > 0) {
             session.agent.state.messages = limited;
           }
-          const hookRunner = asCompactionHookRunner(getGlobalHookRunner());
+          const hookRunner = asCompactionHookRunner(globalHookRunner);
           const observedTokenCount = normalizeObservedTokenCount(params.currentTokenCount);
           const beforeHookMetrics = buildBeforeCompactionHookMetrics({
             originalMessages,

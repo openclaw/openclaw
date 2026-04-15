@@ -754,6 +754,61 @@ describe("handleToolExecutionEnd derived tool events", () => {
     );
   });
 
+  it("keeps exec live output sourced from aggregated details when content is present", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-canonical-live-output",
+        args: { command: "ls" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-canonical-live-output",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "canonical summary" }],
+          details: {
+            status: "completed",
+            aggregated: "raw stdout that should not drive live output",
+            exitCode: 0,
+            durationMs: 10,
+            cwd: "/tmp/work",
+          },
+        },
+      } as never,
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "command_output",
+        data: expect.objectContaining({
+          itemId: "command:tool-exec-canonical-live-output",
+          phase: "end",
+          output: "raw stdout that should not drive live output",
+          exitCode: 0,
+          cwd: "/tmp/work",
+        }),
+      }),
+    );
+    expect(onAgentEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "command_output",
+        data: expect.objectContaining({
+          output: "canonical summary",
+        }),
+      }),
+    );
+  });
+
   it("emits patch summary events for apply_patch results", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 
