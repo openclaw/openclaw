@@ -87,6 +87,12 @@ on:
         required: false
       MINIMAX_API_KEY:
         required: false
+      OPENCLAW_DISCORD_SMOKE_BOT_TOKEN:
+        required: false
+      OPENCLAW_DISCORD_SMOKE_GUILD_ID:
+        required: false
+      OPENCLAW_DISCORD_SMOKE_CHANNEL_ID:
+        required: false
 
 permissions: read-all
 
@@ -305,9 +311,16 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          OPENCLAW_DISCORD_SMOKE_BOT_TOKEN: ${{ secrets.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN }}
+          OPENCLAW_DISCORD_SMOKE_GUILD_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_GUILD_ID }}
+          OPENCLAW_DISCORD_SMOKE_CHANNEL_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_CHANNEL_ID }}
           OPENCLAW_RELEASE_CHECK_OS: ${{ matrix.os_id }}
           OPENCLAW_RELEASE_CHECK_RUNNER: ${{ matrix.runner }}
         run: |
+          DISCORD_ARGS=()
+          if [[ -n "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_GUILD_ID}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_CHANNEL_ID}" ]]; then
+            DISCORD_ARGS+=(--run-discord-roundtrip true)
+          fi
           node source/scripts/openclaw-cross-os-release-checks.mjs \
             --candidate-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/candidate/${{ needs.prepare.outputs.candidate_file_name }}" \
             --candidate-version "${{ needs.prepare.outputs.candidate_version }}" \
@@ -318,6 +331,7 @@ jobs:
             --mode "${{ matrix.lane }}" \
             --suite "${{ matrix.suite }}" \
             --ref "${{ inputs.ref }}" \
+            "${DISCORD_ARGS[@]}" \
             --output-dir "$RUNNER_TEMP/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}"
 
       - name: Summarize release checks
