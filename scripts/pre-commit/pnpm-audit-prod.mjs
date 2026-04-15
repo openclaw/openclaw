@@ -170,8 +170,45 @@ function parseInlineYamlMap(rawValue) {
   return result;
 }
 
+function findYamlMappingSeparator(line) {
+  let quote = null;
+  let depth = 0;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (quote) {
+      if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === "{" || character === "[" || character === "(") {
+      depth += 1;
+      continue;
+    }
+    if (character === "}" || character === "]" || character === ")") {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (character !== ":" || depth !== 0) {
+      continue;
+    }
+
+    const nextCharacter = line[index + 1];
+    if (nextCharacter === undefined || /\s/u.test(nextCharacter)) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
 function parseYamlMappingLine(line) {
-  const separatorIndex = line.indexOf(":");
+  const separatorIndex = findYamlMappingSeparator(line);
   if (separatorIndex === -1) {
     return null;
   }
