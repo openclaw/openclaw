@@ -1045,7 +1045,29 @@ export async function spawnAcpDirect(
     });
   }
 
-  const sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
+  let sessionKey: string | undefined;
+  let wasResolved = false;
+  if (params.label && spawnMode === "session") {
+    try {
+      const resolved = await callGateway({
+        method: "sessions.resolve",
+        params: { label: params.label, agentId: targetAgentId },
+        timeoutMs: 5000,
+      });
+      if (resolved?.ok && resolved.key) {
+        const storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
+        const store = loadSessionStore(storePath);
+        const entry = store[resolved.key] as SessionEntry | undefined;
+        if (!entry?.acp?.mode || entry.acp.mode === "persistent") {
+          sessionKey = resolved.key;
+          wasResolved = true;
+        }
+      }
+    } catch {
+      // resolve failure → fall through to new UUID
+    }
+  }
+  if (!sessionKey) sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
   const runtimeMode = resolveAcpSessionMode(spawnMode);
   const resolvedCwd = resolveSpawnedWorkspaceInheritance({
     config: cfg,
@@ -1095,7 +1117,7 @@ export async function spawnAcpDirect(
       method: "sessions.patch",
       params: {
         key: sessionKey,
-        spawnedBy: requesterInternalKey,
+        ...(wasResolved ? {} : { spawnedBy: requesterInternalKey }),
         ...(params.label ? { label: params.label } : {}),
       },
       timeoutMs: 10_000,
@@ -1125,8 +1147,8 @@ export async function spawnAcpDirect(
     await cleanupFailedAcpSpawn({
       cfg,
       sessionKey,
-      shouldDeleteSession: sessionCreated,
-      deleteTranscript: true,
+      shouldDeleteSession: sessionCreated && !wasResolved,
+      deleteTranscript: !wasResolved,
       runtimeCloseHandle: initializedRuntime,
     });
     return createAcpSpawnFailure({
@@ -1203,8 +1225,8 @@ export async function spawnAcpDirect(
     await cleanupFailedAcpSpawn({
       cfg,
       sessionKey,
-      shouldDeleteSession: true,
-      deleteTranscript: true,
+      shouldDeleteSession: !wasResolved,
+      deleteTranscript: !wasResolved,
     });
     return createAcpSpawnFailure({
       status: "error",
