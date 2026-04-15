@@ -86,12 +86,7 @@ function mergeHeaders(
   if (requestHeaders === undefined && initHeaders === undefined) {
     return undefined;
   }
-  const merged = new Headers(requestHeaders);
-  if (initHeaders !== undefined) {
-    new Headers(initHeaders).forEach((value, key) => {
-      merged.set(key, value);
-    });
-  }
+  const merged = new Headers(initHeaders ?? requestHeaders);
   // Strip hop-by-hop and framing headers so they cannot be injected into
   // the upstream request and cause request smuggling.
   for (const key of Array.from(merged.keys())) {
@@ -123,9 +118,14 @@ function toRequestLikeInit(
     merged.body = body;
   }
 
-  const signal = init?.signal ?? input.signal ?? undefined;
-  if (signal !== undefined) {
-    merged.signal = signal;
+  if (init && Object.hasOwn(init, "signal")) {
+    if (init.signal == null) {
+      delete merged.signal;
+    } else {
+      merged.signal = init.signal;
+    }
+  } else if (input.signal !== undefined) {
+    merged.signal = input.signal;
   }
 
   if (init?.redirect !== undefined) {

@@ -294,6 +294,43 @@ describe("makeProxyFetch — Request object normalization", () => {
     expect(init.method).toBe("POST");
   });
 
+  it("replaces inherited Request headers when init.headers is provided", async () => {
+    undiciFetch.mockResolvedValue({ ok: true });
+    const proxyFetch = makeProxyFetch("http://proxy.test:8080");
+    const req = new Request("https://api.example.com/data", {
+      headers: {
+        authorization: "Bearer inherited",
+        "x-inherited": "keep",
+      },
+    });
+
+    await proxyFetch(req, {
+      headers: {
+        "x-replaced": "1",
+      },
+    });
+
+    const [, init] = undiciFetch.mock.calls[0] as [string, { headers: Headers }];
+    expect(init.headers.get("authorization")).toBeNull();
+    expect(init.headers.get("x-inherited")).toBeNull();
+    expect(init.headers.get("x-replaced")).toBe("1");
+  });
+
+  it("detaches inherited Request signals when init.signal is null", async () => {
+    undiciFetch.mockResolvedValue({ ok: true });
+    const proxyFetch = makeProxyFetch("http://proxy.test:8080");
+    const controller = new AbortController();
+    controller.abort();
+    const req = new Request("https://api.example.com/data", {
+      signal: controller.signal,
+    });
+
+    await proxyFetch(req, { signal: null });
+
+    const [, init] = undiciFetch.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBeUndefined();
+  });
+
   it("strips hop-by-hop headers when merging Request headers", async () => {
     undiciFetch.mockResolvedValue({ ok: true });
     const proxyFetch = makeProxyFetch("http://proxy.test:8080");
