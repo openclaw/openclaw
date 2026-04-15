@@ -3,6 +3,12 @@
     "productName": "OpenClaw",
     "version": "1.0.0"
   },
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devPath": "http://localhost:5173",
+    "distDir": "../dist"
+  },
   "tauri": {
     "allowlist": {
       "shell": {
@@ -15,9 +21,6 @@
             "args": ["gateway", "run"]
           }
         ]
-      },
-      "dialog": {
-        "all": true
       },
       "notification": {
         "all": true
@@ -50,13 +53,13 @@
       }
     },
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:18789; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      "csp": "default-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:18789 ws://localhost:18789; img-src 'self' data: blob:;"
     },
     "windows": [
       {
         "label": "main",
-        "title": "OpenClaw — Aliyev Ecosystem",
-        "url": "http://localhost:18789",
+        "title": "OpenClaw",
+        "url": "../dist/index.html",
         "width": 1200,
         "height": 800,
         "resizable": true,

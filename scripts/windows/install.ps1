@@ -12,6 +12,7 @@ if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     $arguments = "& '" + $myinvocation.mycommand.definition + "'"
     if ($Uninstall) { $arguments += " -Uninstall" }
     if ($Silent) { $arguments += " -Silent" }
+    $arguments += " -InstallPath `"$InstallPath`""
     Start-Process powershell -Verb RunAs -ArgumentList $arguments
     exit
 }
@@ -46,6 +47,9 @@ if ($Uninstall) {
     Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OpenClaw" -Recurse -Force -ErrorAction SilentlyContinue
     Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "OpenClaw" -ErrorAction SilentlyContinue
     
+    # Remove Firewall
+    Remove-NetFirewallRule -DisplayName "OpenClaw Gateway" -ErrorAction SilentlyContinue
+    
     Write-Host "OpenClaw has been successfully removed." -ForegroundColor Green
     exit
 }
@@ -74,13 +78,21 @@ if (-not $wv2) {
 # 2. Tools (Node.js & OpenClaw CLI)
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
     winget install OpenJS.NodeJS.LTS --silent
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 }
-npm install -g openclaw@latest
+if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    & "$env:ProgramFiles\nodejs\npm.cmd" install -g openclaw@latest
+} else {
+    npm install -g openclaw@latest
+}
 
 # 3. Installation
 Write-Step "Installing files to $InstallPath..."
 New-Item -ItemType Directory -Force -Path $InstallPath | Out-Null
-Copy-Item "OpenClaw_*.exe" $InstallPath -Force -ErrorAction SilentlyContinue
+$srcExe = Get-ChildItem -Path "OpenClaw_*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($srcExe) {
+    Copy-Item $srcExe.FullName -Destination (Join-Path $InstallPath "OpenClaw.exe") -Force
+}
 
 # Persistent Uninstaller
 $UninstallerTarget = Join-Path $InstallPath "uninstall.ps1"
@@ -112,5 +124,10 @@ Write-OK "Registry updated."
 # 6. Autostart
 $RunPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
 Set-ItemProperty -Path $RunPath -Name "OpenClaw" -Value "`"$ExePath`""
+
+# 7. Firewall Rules
+Write-Step "Configuring Windows Firewall for OpenClaw Gateway..."
+New-NetFirewallRule -DisplayName "OpenClaw Gateway" -Direction Inbound -LocalPort 18789 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue | Out-Null
+New-NetFirewallRule -DisplayName "OpenClaw Gateway" -Direction Outbound -LocalPort 18789 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue | Out-Null
 
 Write-Host "`nOpenClaw installation complete! Launch it from your desktop." -ForegroundColor Green

@@ -1,0 +1,113 @@
+:root {
+  --neon-blue: #0ff;
+  --dark-bg: #050510;
+  --glass-bg: rgba(10, 20, 30, 0.6);
+  --glass-border: rgba(0, 255, 255, 0.2);
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, sans-serif;
+  background-color: var(--dark-bg);
+  color: #fff;
+  overflow: hidden;
+  user-select: none;
+}
+
+.cyber-container {
+  padding: 2rem;
+  height: 100vh;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+.header h1 {
+  font-weight: 300;
+  letter-spacing: 2px;
+  margin-top: 0;
+}
+
+.neon-text {
+  color: var(--neon-blue);
+  text-shadow: 0 0 5px var(--neon-blue);
+  font-weight: 700;
+}
+
+.dashboard {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 2rem;
+  flex: 1;
+  min-height: 0;
+}
+
+.card {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(10px);
+  border-radius: 8px;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.card h2 {
+  margin-top: 0;
+  font-size: 1.2rem;
+  color: #88ccee;
+  border-bottom: 1px solid var(--glass-border);
+  padding-bottom: 0.5rem;
+}
+
+.indicator {
+  font-size: 2.2rem;
+  font-weight: bold;
+  margin: 1.5rem 0;
+  text-align: center;
+  text-shadow: 0 0 10px currentColor;
+  letter-spacing: 2px;
+}
+.indicator.online { color: #0f0; }
+.indicator.offline { color: #f00; }
+.indicator.checking { color: #ffaa00; }
+
+.cyber-btn {
+  background: transparent;
+  border: 1px solid var(--neon-blue);
+  color: var(--neon-blue);
+  padding: 1rem;
+  font-size: 1.1rem;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.2s;
+  margin-top: auto;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.cyber-btn:hover {
+  background: var(--neon-blue);
+  color: #000;
+  box-shadow: 0 0 15px var(--neon-blue);
+}
+
+.hidden {
+  display: none !important;
+}
+
+.terminal-logs {
+  flex: 1;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 1rem;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.95rem;
+  color: #00ff00;
+  border-radius: 4px;
+}
+
+.log-line.error {
+  color: #ff3333;
+}

@@ -3,13 +3,18 @@ name = "openclaw-desktop"
 version = "1.0.0"
 edition = "2021"
 description = "Official OpenClaw native Windows wrapper"
-authors = ["OpenClaw Contributors"]
+authors = ["OpenClaw Project"]
 
 [dependencies]
-tauri = { version = "1.5", features = ["system-tray", "devtools", "dialog-all", "notification-all", "process-exit", "process-relaunch", "shell-sidecar"] }
+tauri = { version = "1.5", features = ["system-tray", "devtools", "notification-all", "process-exit", "process-relaunch", "shell-sidecar", "window-all"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs = "5.0"
+ureq = "2.9"
+sysinfo = "0.30"
+chrono = "0.4"
+fern = "0.6"
+log = "0.4"
 
 [build-dependencies]
 tauri-build = { version = "1.5", features = [] }

@@ -1,18 +1,16 @@
 {
-  "name": "@openclaw/windows-wrapper",
-  "version": "1.0.0",
+  "name": "openclaw-desktop-ui",
   "private": true,
+  "version": "1.0.0",
+  "type": "module",
   "scripts": {
-    "tauri": "tauri",
-    "dev": "tauri dev",
-    "build": "tauri build",
-    "build:debug": "tauri build --debug",
-    "icon:generate": "tauri icon src-tauri/icons/openclaw.png"
-  },
-  "dependencies": {
-    "@tauri-apps/api": "^1.5.0"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^1.5.0"
+    "@tauri-apps/api": "^1.5.1",
+    "@tauri-apps/cli": "^1.5.0",
+    "vite": "^5.0.0"
   }
 }
