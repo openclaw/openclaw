@@ -507,43 +507,60 @@ git commit -m "autoresearch: add budget tracker"
 ```javascript
 // lib/anthropic-client.mjs
 // Thin wrapper around @mariozechner/pi-ai. One function per call pattern we use.
-import { completeText } from '@mariozechner/pi-ai';
+import { completeSimple, getModel } from '@mariozechner/pi-ai';
 
-const MODELS = {
+const MODEL_IDS = {
   haiku: 'claude-haiku-4-5-20251001',
   sonnet: 'claude-sonnet-4-6',
   opus: 'claude-opus-4-6',
 };
 
-export async function routeSkill({ message, skillsList, model = 'haiku', apiKey }) {
-  const prompt = buildRouterPrompt(message, skillsList);
-  const result = await completeText({
-    apiKey,
-    model: MODELS[model],
-    maxTokens: 50,
-    messages: [{ role: 'user', content: prompt }],
-  });
-  const predicted = (result.text || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+function resolveModel(tier) {
+  const id = MODEL_IDS[tier];
+  if (!id) throw new Error(`Unknown model tier: ${tier}`);
+  return getModel('anthropic', id);
+}
+
+function extractText(res) {
+  return (res.content || [])
+    .filter(b => b?.type === 'text' && typeof b.text === 'string')
+    .map(b => b.text)
+    .join('')
+    .trim();
+}
+
+export async function completeOnce({ prompt, model = 'haiku', maxTokens, apiKey }) {
+  const res = await completeSimple(
+    resolveModel(model),
+    { messages: [{ role: 'user', content: prompt, timestamp: Date.now() }] },
+    { apiKey, maxTokens },
+  );
   return {
-    predicted,
-    inputTokens: result.usage?.inputTokens ?? 0,
-    outputTokens: result.usage?.outputTokens ?? 0,
+    text: extractText(res),
+    inputTokens: res.usage?.input ?? 0,
+    outputTokens: res.usage?.output ?? 0,
   };
 }
 
-export async function proposeEdit({ skill, currentDesc, misroutes, model, apiKey }) {
-  const prompt = buildHypothesisPrompt(skill, currentDesc, misroutes);
-  const result = await completeText({
+export async function routeSkill({ message, skillsList, model = 'haiku', apiKey }) {
+  const { text, inputTokens, outputTokens } = await completeOnce({
+    prompt: buildRouterPrompt(message, skillsList),
+    model,
+    maxTokens: 50,
     apiKey,
-    model: MODELS[model],
-    maxTokens: 300,
-    messages: [{ role: 'user', content: prompt }],
   });
-  return {
-    newDescription: (result.text || '').trim(),
-    inputTokens: result.usage?.inputTokens ?? 0,
-    outputTokens: result.usage?.outputTokens ?? 0,
-  };
+  const predicted = text.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+  return { predicted, inputTokens, outputTokens };
+}
+
+export async function proposeEdit({ skill, currentDesc, misroutes, model, apiKey }) {
+  const { text, inputTokens, outputTokens } = await completeOnce({
+    prompt: buildHypothesisPrompt(skill, currentDesc, misroutes),
+    model,
+    maxTokens: 300,
+    apiKey,
+  });
+  return { newDescription: text, inputTokens, outputTokens };
 }
 
 function buildRouterPrompt(message, skillsList) {
@@ -1067,7 +1084,7 @@ import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import { completeText } from '@mariozechner/pi-ai';
+import { completeOnce } from './lib/anthropic-client.mjs';
 import { listSkills, readSkillDescription } from './lib/skills-io.mjs';
 import { runEval } from './evaluate.mjs';
 
@@ -1082,8 +1099,8 @@ async function generateEvalPairs(skillName, description, apiKey) {
 - Last 10: NEGATIVE adversarial near-misses — messages that sound similar but should NOT route to this skill.
 
 Output ONLY a JSON array of 20 objects: [{"message": "...", "should_route": true|false}, ...]`;
-  const res = await completeText({ apiKey, model: 'claude-opus-4-6', maxTokens: 1500, messages: [{ role: 'user', content: prompt }] });
-  const raw = res.text.match(/\[[\s\S]*\]/)?.[0];
+  const { text } = await completeOnce({ prompt, model: 'opus', maxTokens: 1500, apiKey });
+  const raw = text.match(/\[[\s\S]*\]/)?.[0];
   if (!raw) throw new Error(`Bad JSON from Opus for ${skillName}`);
   return JSON.parse(raw);
 }
