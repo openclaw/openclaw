@@ -12,6 +12,7 @@ import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalStringifiedId,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
@@ -27,9 +28,21 @@ function normalizeDeliveryTarget(channel: string, to: string): string {
   return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
 }
 
+function resolveMessagingTargetThreadId(params: {
+  to?: string;
+  threadId?: string | number;
+}): string | undefined {
+  const explicitThreadId = normalizeOptionalStringifiedId(params.threadId);
+  if (explicitThreadId) {
+    return explicitThreadId;
+  }
+  const topicThreadId = normalizeOptionalString(params.to)?.match(/:topic:(\d+)$/i)?.[1];
+  return normalizeOptionalStringifiedId(topicThreadId);
+}
+
 export function matchesMessagingToolDeliveryTarget(
-  target: { provider?: string; to?: string; accountId?: string },
-  delivery: { channel?: string; to?: string; accountId?: string },
+  target: { provider?: string; to?: string; accountId?: string; threadId?: string | number },
+  delivery: { channel?: string; to?: string; accountId?: string; threadId?: string | number },
 ): boolean {
   if (!delivery.channel || !delivery.to || !target.to) {
     return false;
@@ -40,6 +53,11 @@ export function matchesMessagingToolDeliveryTarget(
     return false;
   }
   if (target.accountId && delivery.accountId && target.accountId !== delivery.accountId) {
+    return false;
+  }
+  const normalizedTargetThreadId = resolveMessagingTargetThreadId(target);
+  const normalizedDeliveryThreadId = normalizeOptionalStringifiedId(delivery.threadId);
+  if (normalizedTargetThreadId !== normalizedDeliveryThreadId) {
     return false;
   }
   // Strip :topic:NNN from message targets and normalize Feishu/Lark prefixes on

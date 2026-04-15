@@ -50,7 +50,7 @@ describe("matchesMessagingToolDeliveryTarget", () => {
     expect(
       matchesMessagingToolDeliveryTarget(
         { provider: "telegram", to: "-1003597428309:topic:462" },
-        { channel: "telegram", to: "-1003597428309" },
+        { channel: "telegram", to: "-1003597428309", threadId: 462 },
       ),
     ).toBe(true);
   });
@@ -69,6 +69,24 @@ describe("matchesMessagingToolDeliveryTarget", () => {
       matchesMessagingToolDeliveryTarget(
         { provider: "telegram", to: "123456", accountId: "bot-a" },
         { channel: "telegram", to: "123456", accountId: "bot-b" },
+      ),
+    ).toBe(false);
+  });
+
+  it("matches when threadIds agree", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "telegram", to: "123456", threadId: "42" },
+        { channel: "telegram", to: "123456", threadId: 42 },
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects when threadIds differ", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "telegram", to: "123456", threadId: "43" },
+        { channel: "telegram", to: "123456", threadId: 42 },
       ),
     ).toBe(false);
   });

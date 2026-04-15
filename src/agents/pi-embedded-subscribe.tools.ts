@@ -5,6 +5,7 @@ import { pluginRegistrationContractRegistry } from "../plugins/contracts/registr
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeOptionalStringifiedId,
   readStringValue,
 } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -391,6 +392,7 @@ export function extractMessagingToolSend(
   // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
   const action = normalizeOptionalString(args.action) ?? "";
   const accountId = normalizeOptionalString(args.accountId);
+  const threadId = normalizeOptionalStringifiedId(args.threadId);
   if (toolName === "message") {
     if (action !== "send" && action !== "thread-reply") {
       return undefined;
@@ -405,7 +407,7 @@ export function extractMessagingToolSend(
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
     const to = normalizeTargetForProvider(provider, toRaw);
-    return to ? { tool: toolName, provider, accountId, to } : undefined;
+    return to ? { tool: toolName, provider, accountId, to, threadId } : undefined;
   }
   const providerId = normalizeChannelId(toolName);
   if (!providerId) {
@@ -418,11 +420,12 @@ export function extractMessagingToolSend(
   }
   const to = normalizeTargetForProvider(providerId, extracted.to);
   return to
-    ? {
-        tool: toolName,
-        provider: providerId,
-        accountId: extracted.accountId ?? accountId,
-        to,
-      }
+      ? {
+          tool: toolName,
+          provider: providerId,
+          accountId: extracted.accountId ?? accountId,
+          threadId: extracted.threadId ?? threadId,
+          to,
+        }
     : undefined;
 }

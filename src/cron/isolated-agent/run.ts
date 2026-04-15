@@ -678,9 +678,7 @@ async function finalizeCronRun(params: {
     matchesMessagingToolDeliveryTarget,
     resolveCronDeliveryBestEffort,
   } = await loadCronDeliveryRuntime();
-  const didHandoffFinalDelivery =
-    finalRunResult.didSendViaMessagingTool === true &&
-    isSilentReplyText(synthesizedText, SILENT_REPLY_TOKEN);
+  const didHandoffFinalDelivery = isSilentReplyText(synthesizedText, SILENT_REPLY_TOKEN);
   const skipMessagingToolDelivery =
     prepared.deliveryRequested &&
     didHandoffFinalDelivery &&
@@ -689,6 +687,7 @@ async function finalizeCronRun(params: {
         channel: prepared.resolvedDelivery.channel,
         to: prepared.resolvedDelivery.to,
         accountId: prepared.resolvedDelivery.accountId,
+        threadId: prepared.resolvedDelivery.threadId,
       }),
     );
   const deliveryResult = await dispatchCronDelivery({
