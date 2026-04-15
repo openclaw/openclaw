@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerWikiCli, runWikiChatGptImport, runWikiChatGptRollback } from "./cli.js";
+import {
+  registerWikiCli,
+  runWikiBridgeImport,
+  runWikiChatGptImport,
+  runWikiChatGptRollback,
+} from "./cli.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -246,5 +251,57 @@ cli note
         .readdir(path.join(rootDir, "sources"))
         .then((entries) => entries.filter((entry) => entry !== "index.md")),
     ).resolves.toEqual([]);
+  });
+
+  // Regression test for https://github.com/openclaw/openclaw/issues/67190:
+  // CLI must route through the gateway RPC because memory-core's capability is
+  // only populated inside the gateway daemon process.
+  describe("runWikiBridgeImport", () => {
+    it("calls the wiki.bridge.import gateway RPC and renders the result", async () => {
+      const { config } = await createCliVault({ initialize: true });
+      const callGateway = vi.fn(async () => ({
+        importedCount: 3,
+        updatedCount: 1,
+        skippedCount: 2,
+        removedCount: 0,
+        artifactCount: 6,
+        workspaces: 2,
+        pagePaths: [],
+        indexesRefreshed: true,
+        indexUpdatedFiles: ["a.md", "b.md"],
+        indexRefreshReason: "synced" as const,
+      }));
+      const writes: string[] = [];
+      const stdout = {
+        write: (chunk: string | Uint8Array) => {
+          writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+          return true;
+        },
+      };
+
+      const result = await runWikiBridgeImport({
+        config,
+        gatewayOpts: { url: "ws://127.0.0.1:18789", token: "tok" },
+        stdout,
+        callGateway: callGateway as never,
+      });
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(callGateway).toHaveBeenCalledWith(
+        "wiki.bridge.import",
+        expect.objectContaining({ url: "ws://127.0.0.1:18789", token: "tok" }),
+        {},
+      );
+      expect(result.artifactCount).toBe(6);
+      expect(writes.join("")).toContain("Bridge import synced 6 artifacts");
+    });
+
+    it("throws a clear error when the gateway returns no result", async () => {
+      const { config } = await createCliVault({ initialize: true });
+      const callGateway = vi.fn(async () => undefined);
+      await expect(
+        runWikiBridgeImport({ config, callGateway: callGateway as never }),
+      ).rejects.toThrow(/gateway running/);
+    });
   });
 });

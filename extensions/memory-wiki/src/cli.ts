@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
+import {
+  addGatewayClientOptions,
+  callGatewayFromCli,
+  type GatewayRpcOpts,
+} from "openclaw/plugin-sdk/browser-node-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation } from "./apply.js";
 import {
@@ -26,7 +31,10 @@ import {
   runObsidianSearch,
 } from "./obsidian.js";
 import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
-import { syncMemoryWikiImportedSources } from "./source-sync.js";
+import {
+  syncMemoryWikiImportedSources,
+  type MemoryWikiImportedSourceSyncResult,
+} from "./source-sync.js";
 import {
   buildMemoryWikiDoctorReport,
   renderMemoryWikiDoctor,
@@ -96,7 +104,7 @@ type WikiApplyMetadataCommandOptions = {
   status?: string;
 };
 
-type WikiBridgeImportCommandOptions = {
+type WikiBridgeImportCommandOptions = GatewayRpcOpts & {
   json?: boolean;
 };
 
@@ -502,17 +510,31 @@ export async function runWikiApplyMetadata(params: {
 export async function runWikiBridgeImport(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
+  gatewayOpts?: GatewayRpcOpts;
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
+  // Injectable for tests; production code routes through the gateway RPC so the
+  // command sees the memory-core capability that is only registered inside the
+  // gateway daemon process (issue #67190).
+  callGateway?: typeof callGatewayFromCli;
 }) {
+  const call = params.callGateway ?? callGatewayFromCli;
   return runWikiCommandWithSummary({
     json: params.json,
     stdout: params.stdout,
-    run: () =>
-      syncMemoryWikiImportedSources({
-        config: params.config,
-        appConfig: params.appConfig,
-      }),
+    run: async () => {
+      const result = (await call(
+        "wiki.bridge.import",
+        { ...params.gatewayOpts, json: params.json },
+        {},
+      )) as MemoryWikiImportedSourceSyncResult | undefined;
+      if (!result) {
+        throw new Error(
+          "wiki bridge import returned no result from the gateway (is the gateway running?)",
+        );
+      }
+      return result;
+    },
     render: (value) =>
       `Bridge import synced ${value.artifactCount} artifacts across ${value.workspaces} workspaces (${value.importedCount} new, ${value.updatedCount} updated, ${value.skippedCount} unchanged, ${value.removedCount} removed). Indexes ${value.indexesRefreshed ? `refreshed (${value.indexUpdatedFiles.length} files)` : `not refreshed (${value.indexRefreshReason})`}.`,
   });
@@ -814,13 +836,25 @@ export function registerWikiCli(
   const bridge = wiki
     .command("bridge")
     .description("Import public memory artifacts into the wiki vault");
-  bridge
-    .command("import")
-    .description("Sync bridge-backed memory artifacts into wiki source pages")
-    .option("--json", "Print JSON")
-    .action(async (opts: WikiBridgeImportCommandOptions) => {
-      await runWikiBridgeImport({ config, appConfig, json: opts.json });
+  addGatewayClientOptions(
+    bridge
+      .command("import")
+      .description("Sync bridge-backed memory artifacts into wiki source pages")
+      .option("--json", "Print JSON"),
+  ).action(async (opts: WikiBridgeImportCommandOptions) => {
+    await runWikiBridgeImport({
+      config,
+      appConfig,
+      gatewayOpts: {
+        url: opts.url,
+        token: opts.token,
+        timeout: opts.timeout,
+        expectFinal: opts.expectFinal,
+        json: opts.json,
+      },
+      json: opts.json,
     });
+  });
 
   const unsafeLocal = wiki
     .command("unsafe-local")
