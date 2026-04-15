@@ -84,6 +84,56 @@ snapshots:
     });
   });
 
+  it("reads inline importer dependency maps without repo dependencies", () => {
+    const lockfile = `lockfileVersion: '9.0'
+
+importers:
+  .:
+    dependencies:
+      axios: {specifier: ^1.0.0, version: 1.0.0}
+      '@scope/pkg': {'version': '2.0.0(peer@4.0.0)'}
+
+snapshots:
+  axios@1.0.0: {}
+  '@scope/pkg@2.0.0(peer@4.0.0)': {}
+`;
+
+    const payload = createBulkAdvisoryPayload(collectProdResolvedPackagesFromLockfile(lockfile));
+    expect(payload).toEqual({
+      "@scope/pkg": ["2.0.0"],
+      axios: ["1.0.0"],
+    });
+  });
+
+  it("resolves quoted snapshot keys that contain tarball URLs", () => {
+    const lockfile = `lockfileVersion: '9.0'
+
+importers:
+  .:
+    dependencies:
+      wrapper:
+        version: 1.0.0
+
+snapshots:
+  wrapper@1.0.0:
+    dependencies:
+      libsignal: '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/abc123'
+  '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/abc123':
+    dependencies:
+      curve25519-js: 0.0.4
+  curve25519-js@0.0.4: {}
+`;
+
+    const payload = createBulkAdvisoryPayload(collectProdResolvedPackagesFromLockfile(lockfile));
+    expect(payload).toEqual({
+      "@whiskeysockets/libsignal-node": [
+        "https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/abc123",
+      ],
+      "curve25519-js": ["0.0.4"],
+      wrapper: ["1.0.0"],
+    });
+  });
+
   it("filters advisory findings by minimum severity", () => {
     const findings = filterFindingsBySeverity(
       {

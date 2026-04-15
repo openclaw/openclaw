@@ -32,7 +32,7 @@ BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 
 TIMEOUT_SNAPSHOT_S=180
 TIMEOUT_BOOTSTRAP_S=600
-TIMEOUT_INSTALL_S=1200
+TIMEOUT_INSTALL_S=300
 TIMEOUT_VERIFY_S=90
 TIMEOUT_ONBOARD_S=180
 TIMEOUT_AGENT_S=180
@@ -693,7 +693,9 @@ EOF
 }
 
 verify_bad_plugin_diagnostic() {
-  guest_exec grep -F "failed to load setup entry" /tmp/openclaw-parallels-linux-gateway.log
+  guest_bash_script <<'EOF'
+grep -F "failed to load setup entry" /tmp/openclaw-parallels-linux-gateway.log
+EOF
 }
 
 start_gateway_background() {

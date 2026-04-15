@@ -274,6 +274,45 @@ describe("bundled plugin metadata", () => {
     );
   });
 
+  it("scans direct plugin-tree overrides and resolves generated paths from that scan dir", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-direct-tree-");
+    const pluginsDir = path.join(tempRoot, "bundled-plugins");
+    const pluginRoot = path.join(pluginsDir, "alpha");
+
+    writeJson(path.join(pluginRoot, "package.json"), {
+      name: "@openclaw/alpha",
+      version: "0.0.1",
+      openclaw: {
+        extensions: ["./index.ts"],
+      },
+    });
+    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+      id: "alpha",
+      channels: ["alpha"],
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export const source = true;\n", "utf8");
+
+    clearBundledPluginMetadataCache();
+    expect(
+      listBundledPluginMetadata({
+        rootDir: tempRoot,
+        scanDir: pluginsDir,
+      }).map((entry) => entry.manifest.id),
+    ).toEqual(["alpha"]);
+    expect(
+      resolveBundledPluginGeneratedPath(
+        tempRoot,
+        {
+          source: "./index.ts",
+          built: "index.js",
+        },
+        "alpha",
+        pluginsDir,
+      ),
+    ).toBe(path.join(pluginRoot, "index.ts"));
+  });
+
   it("resolves bundled repo entry paths from dist before workspace source", () => {
     const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-repo-entry-");
     const pluginRoot = path.join(tempRoot, "extensions", "alpha");
