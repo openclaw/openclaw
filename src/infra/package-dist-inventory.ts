@@ -81,15 +81,23 @@ export async function readPackageDistInventory(packageRoot: string): Promise<str
   );
 }
 
-export async function collectPackageDistInventoryErrors(packageRoot: string): Promise<string[]> {
-  let expectedFiles: string[];
+export async function readPackageDistInventoryIfPresent(
+  packageRoot: string,
+): Promise<string[] | null> {
   try {
-    expectedFiles = await readPackageDistInventory(packageRoot);
+    return await readPackageDistInventory(packageRoot);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [`missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`];
+      return null;
     }
     throw error;
+  }
+}
+
+export async function collectPackageDistInventoryErrors(packageRoot: string): Promise<string[]> {
+  const expectedFiles = await readPackageDistInventoryIfPresent(packageRoot);
+  if (expectedFiles === null) {
+    return [`missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`];
   }
 
   const actualFiles = await collectPackageDistInventory(packageRoot);

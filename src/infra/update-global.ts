@@ -2,12 +2,12 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
+import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "../../scripts/lib/npm-update-compat-sidecars.mjs";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { pathExists } from "../utils.js";
 import {
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  collectPackageDistInventoryErrors,
+  collectPackageDistInventory,
+  readPackageDistInventoryIfPresent,
 } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
@@ -39,7 +39,6 @@ const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
   "--omit=optional",
   ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
 ] as const;
-const MISSING_PACKAGE_DIST_INVENTORY_ERROR = `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`;
 
 function normalizePackageTarget(value: string): string {
   return value.trim();
@@ -94,20 +93,53 @@ export async function collectInstalledGlobalPackageErrors(params: {
       `expected installed version ${params.expectedVersion}, found ${installedVersion ?? "<missing>"}`,
     );
   }
-  const distErrors = await collectPackageDistInventoryErrors(params.packageRoot);
-  if (distErrors.length === 1 && distErrors[0] === MISSING_PACKAGE_DIST_INVENTORY_ERROR) {
-    errors.push(...(await collectLegacyInstalledGlobalPackageErrors(params.packageRoot)));
-    return errors;
-  }
-  errors.push(...distErrors);
+  errors.push(...(await collectInstalledPackageDistErrors(params.packageRoot)));
   return errors;
 }
 
-async function collectLegacyInstalledGlobalPackageErrors(packageRoot: string): Promise<string[]> {
+async function collectInstalledPackageDistErrors(packageRoot: string): Promise<string[]> {
+  const inventoryFiles = await readPackageDistInventoryIfPresent(packageRoot);
+  if (inventoryFiles !== null) {
+    return await collectInstalledPathErrors({
+      packageRoot,
+      expectedFiles: inventoryFiles,
+      actualFiles: await collectPackageDistInventory(packageRoot),
+      missingMessage: (relativePath) => `missing packaged dist file ${relativePath}`,
+      unexpectedMessage: (relativePath) => `unexpected packaged dist file ${relativePath}`,
+    });
+  }
+  return await collectInstalledPathErrors({
+    packageRoot,
+    expectedFiles: [...NPM_UPDATE_COMPAT_SIDECAR_PATHS],
+    actualFiles: null,
+    missingMessage: (relativePath) => `missing bundled runtime sidecar ${relativePath}`,
+  });
+}
+
+async function collectInstalledPathErrors(params: {
+  packageRoot: string;
+  expectedFiles: string[];
+  actualFiles: string[] | null;
+  missingMessage: (relativePath: string) => string;
+  unexpectedMessage?: ((relativePath: string) => string) | undefined;
+}): Promise<string[]> {
   const errors: string[] = [];
-  for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
-    if (!(await pathExists(path.join(packageRoot, relativePath)))) {
-      errors.push(`missing bundled runtime sidecar ${relativePath}`);
+  const actualSet = params.actualFiles ? new Set(params.actualFiles) : null;
+  for (const relativePath of params.expectedFiles) {
+    const exists =
+      actualSet !== null
+        ? actualSet.has(relativePath)
+        : await pathExists(path.join(params.packageRoot, relativePath));
+    if (!exists) {
+      errors.push(params.missingMessage(relativePath));
+    }
+  }
+  if (actualSet !== null && params.unexpectedMessage) {
+    const expectedSet = new Set(params.expectedFiles);
+    for (const relativePath of params.actualFiles ?? []) {
+      if (!expectedSet.has(relativePath)) {
+        errors.push(params.unexpectedMessage(relativePath));
+      }
     }
   }
   return errors;
