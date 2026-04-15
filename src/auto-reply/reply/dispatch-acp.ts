@@ -1,4 +1,3 @@
-import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import { resolveRuntimeOptionsFromMeta } from "../../acp/control-plane/runtime-options.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { formatAcpRuntimeErrorText } from "../../acp/runtime/error-text.js";
