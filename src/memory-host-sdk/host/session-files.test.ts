@@ -197,6 +197,36 @@ describe("buildSessionEntry", () => {
     expect(contentLines[1]).toBe("Assistant: 好的,我来查一下");
   });
 
+  it("strips inbound metadata when a user envelope is split across text blocks", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: "Conversation info (untrusted metadata):" },
+            { type: "text", text: "```json" },
+            { type: "text", text: '{"message_id":"msg-100","chat_id":"-100123"}' },
+            { type: "text", text: "```" },
+            { type: "text", text: "" },
+            { type: "text", text: "Sender (untrusted metadata):" },
+            { type: "text", text: "```json" },
+            { type: "text", text: '{"label":"Chris","id":"42"}' },
+            { type: "text", text: "```" },
+            { type: "text", text: "" },
+            { type: "text", text: "Actual user text" },
+          ],
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "enveloped-session-array.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+    expect(entry).not.toBeNull();
+    expect(entry!.content).toBe("User: Actual user text");
+  });
+
   it("preserves assistant messages that happen to contain sentinel-like text", async () => {
     // Assistant role must NOT be stripped — only user messages carry inbound
     // envelopes, and assistants may legitimately discuss metadata formats.

@@ -69,6 +69,26 @@ function normalizeSessionText(value: string): string {
     .trim();
 }
 
+function collectRawSessionText(content: unknown): string | null {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as { type?: unknown; text?: unknown };
+    if (record.type === "text" && typeof record.text === "string") {
+      parts.push(record.text);
+    }
+  }
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
 /**
  * Strip OpenClaw-injected inbound metadata envelopes from a raw text block
  * on user-role messages before normalization. See the authoritative
@@ -86,33 +106,13 @@ export function extractSessionText(
   content: unknown,
   role: "user" | "assistant" = "assistant",
 ): string | null {
-  if (typeof content === "string") {
-    const stripped = stripInboundMetadataForUserRole(content, role);
-    const normalized = normalizeSessionText(stripped);
-    return normalized ? normalized : null;
-  }
-  if (!Array.isArray(content)) {
+  const rawText = collectRawSessionText(content);
+  if (rawText === null) {
     return null;
   }
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const record = block as { type?: unknown; text?: unknown };
-    if (record.type !== "text" || typeof record.text !== "string") {
-      continue;
-    }
-    const stripped = stripInboundMetadataForUserRole(record.text, role);
-    const normalized = normalizeSessionText(stripped);
-    if (normalized) {
-      parts.push(normalized);
-    }
-  }
-  if (parts.length === 0) {
-    return null;
-  }
-  return parts.join(" ");
+  const stripped = stripInboundMetadataForUserRole(rawText, role);
+  const normalized = normalizeSessionText(stripped);
+  return normalized ? normalized : null;
 }
 
 export async function buildSessionEntry(absPath: string): Promise<SessionFileEntry | null> {
