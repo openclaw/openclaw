@@ -200,6 +200,43 @@ interface StripToolCallXmlTagsOptions {
   collapseRemovedInlineWhitespace?: boolean;
 }
 
+interface LiteralToolBlockEnd {
+  closeTagEnd: number;
+}
+
+const LITERAL_TOOL_TAG_BEFORE_RE =
+  /\b(?:use|type|write|include|show|document|example|literal(?:ly)?|syntax)\b[^.!?\n]*$/i;
+const LITERAL_TOOL_TAG_AFTER_RE =
+  /^[^.!?\n]*\b(?:close|closing|docs?|documentation|example|literal(?:ly)?|syntax|tag|xml)\b/i;
+
+function looksLikeLiteralToolTagContext(text: string, start: number, end: number): boolean {
+  const before = text.slice(Math.max(0, start - 80), start);
+  const after = text.slice(end, Math.min(text.length, end + 80));
+  return LITERAL_TOOL_TAG_BEFORE_RE.test(before) && LITERAL_TOOL_TAG_AFTER_RE.test(after);
+}
+
+function findLiteralToolBlockEnd(
+  text: string,
+  openTag: ParsedToolCallTag,
+): LiteralToolBlockEnd | null {
+  for (let idx = openTag.end; idx < text.length; idx += 1) {
+    if (text[idx] !== "<") {
+      continue;
+    }
+    const tag = parseToolCallTagAt(text, idx);
+    if (
+      tag?.isClose &&
+      tag.tagName === openTag.tagName &&
+      !endsInsideQuotedString(text, openTag.end, idx)
+    ) {
+      return {
+        closeTagEnd: tag.end,
+      };
+    }
+  }
+  return null;
+}
+
 function appendVisibleToolText(
   result: string,
   segment: string,
@@ -258,6 +295,8 @@ export function stripToolCallXmlTags(text: string, options?: StripToolCallXmlTag
         if (balance > 0) {
           result = appendVisibleToolText(result, text.slice(idx, tag.end), options);
           visibleTagBalance.set(tag.tagName, balance - 1);
+        } else if (looksLikeLiteralToolTagContext(text, idx, tag.end)) {
+          result = appendVisibleToolText(result, text.slice(idx, tag.end), options);
         }
         lastIndex = tag.end;
         idx = Math.max(idx, tag.end - 1);
@@ -277,6 +316,23 @@ export function stripToolCallXmlTags(text: string, options?: StripToolCallXmlTag
             : null;
       const shouldStripStandaloneFunction =
         tag.tagName !== "function" || isLikelyStandaloneFunctionToolCall(text, idx, tag);
+      const literalToolBlockEnd =
+        !tag.isClose && payloadKind && shouldStripStandaloneFunction
+          ? findLiteralToolBlockEnd(text, tag)
+          : null;
+      if (
+        literalToolBlockEnd &&
+        looksLikeLiteralToolTagContext(text, idx, literalToolBlockEnd.closeTagEnd)
+      ) {
+        result = appendVisibleToolText(
+          result,
+          text.slice(idx, literalToolBlockEnd.closeTagEnd),
+          options,
+        );
+        lastIndex = literalToolBlockEnd.closeTagEnd;
+        idx = Math.max(idx, literalToolBlockEnd.closeTagEnd - 1);
+        continue;
+      }
       if (!tag.isClose && payloadKind && shouldStripStandaloneFunction) {
         inToolCallBlock = true;
         toolCallBlockContentStart = tag.end;

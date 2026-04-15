@@ -227,6 +227,17 @@ describe("stripAssistantInternalScaffolding", () => {
       expectVisibleText("Use <tool_call> to invoke tools.", "Use <tool_call> to invoke tools.");
     });
 
+    it("preserves literal closing-tag syntax in instructional prose", () => {
+      expectVisibleText("Use </tool_call> to close the tag.", "Use </tool_call> to close the tag.");
+    });
+
+    it("preserves literal JSON tool-call examples in instructional prose", () => {
+      expectVisibleText(
+        'Use <tool_call>{"name":"exec"}</tool_call> in docs.',
+        'Use <tool_call>{"name":"exec"}</tool_call> in docs.',
+      );
+    });
+
     it("strips self-closing <tool_call/> tags", () => {
       expectVisibleText("prefix <tool_call/> suffix", "prefix  suffix");
     });

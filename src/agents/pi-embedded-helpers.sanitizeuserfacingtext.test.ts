@@ -385,6 +385,16 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(text)).toBe(text);
   });
 
+  it("preserves literal closing-tool-tag syntax in instructional prose", () => {
+    const text = "Use </tool_call> to close the tag.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("preserves literal JSON tool-call examples in instructional prose", () => {
+    const text = 'Use <tool_call>{"name":"exec"}</tool_call> in docs.';
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
   it("does not collapse unrelated formatting when no tool tags are stripped", () => {
     const text = "Code:\n    indented\nA  B\t\tC";
     expect(sanitizeUserFacingText(text)).toBe(text);
