@@ -92,4 +92,17 @@ describe("install-sh smoke runner", () => {
     expect(runner).toContain("==> Direct npm global install candidate");
     expect(runner).toContain("==> Direct npm global update candidate");
   });
+
+  it("mounts prepared tgzs into the npm-global smoke container instead of reusing the host-served URLs", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain('UPDATE_MOUNT_DIR="/tmp/openclaw-install-smoke-tgz"');
+    expect(script).toContain('-v "${UPDATE_DIR}:${UPDATE_MOUNT_DIR}:ro"');
+    expect(script).toContain(
+      '-e OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL="${UPDATE_MOUNT_DIR}/${BASELINE_TGZ_FILE}"',
+    );
+    expect(script).toContain(
+      '-e OPENCLAW_INSTALL_UPDATE_TAG_URL="${UPDATE_MOUNT_DIR}/${UPDATE_TGZ_FILE}"',
+    );
+  });
 });
