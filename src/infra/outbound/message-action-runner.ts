@@ -6,6 +6,7 @@ import {
   readStringParam,
 } from "../../agents/tools/common.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { isSilentReplyText } from "../../auto-reply/tokens.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -472,6 +473,31 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   });
 
   const mediaUrl = readStringParam(params, "media", { trim: false });
+  const isAccidentalSilentSend =
+    isSilentReplyText(message) &&
+    !mediaUrl &&
+    mergedMediaUrls.length === 0 &&
+    !hasButtons &&
+    !hasCard &&
+    !hasComponents &&
+    !hasBlocks &&
+    !params.interactive;
+  if (isAccidentalSilentSend) {
+    return {
+      kind: "send",
+      channel,
+      action,
+      to,
+      handledBy: "core",
+      payload: {
+        suppressed: true,
+        reason: "silent-token",
+        channel,
+        to,
+      },
+      dryRun,
+    };
+  }
   if (
     !hasReplyPayloadContent(
       {

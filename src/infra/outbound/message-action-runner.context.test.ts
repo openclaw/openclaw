@@ -299,6 +299,86 @@ describe("runMessageAction context isolation", () => {
     ).rejects.toThrow(/message required/i);
   });
 
+  it("suppresses exact NO_REPLY sends as a handled no-op", async () => {
+    const result = await runDrySend({
+      cfg: slackConfig,
+      actionParams: {
+        channel: "slack",
+        target: "#C12345678",
+        message: "NO_REPLY",
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    });
+
+    expect(result.kind).toBe("send");
+    if (result.kind !== "send") {
+      throw new Error("expected send result");
+    }
+    expect(result.sendResult).toBeUndefined();
+    expect(result.payload).toEqual({
+      suppressed: true,
+      reason: "silent-token",
+      channel: "slack",
+      to: "C12345678",
+    });
+  });
+
+  it("does not suppress substantive text containing NO_REPLY", async () => {
+    const result = await runDrySend({
+      cfg: slackConfig,
+      actionParams: {
+        channel: "slack",
+        target: "#C12345678",
+        message: "NO_REPLY -- nope",
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    });
+
+    expect(result.kind).toBe("send");
+    if (result.kind !== "send") {
+      throw new Error("expected send result");
+    }
+    expect(result.sendResult?.dryRun).toBe(true);
+  });
+
+  it("does not suppress exact NO_REPLY when media is attached", async () => {
+    const result = await runDrySend({
+      cfg: slackConfig,
+      actionParams: {
+        channel: "slack",
+        target: "#C12345678",
+        message: "NO_REPLY",
+        media: "https://example.com/note.ogg",
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    });
+
+    expect(result.kind).toBe("send");
+    if (result.kind !== "send") {
+      throw new Error("expected send result");
+    }
+    expect(result.sendResult?.dryRun).toBe(true);
+  });
+
+  it("does not suppress exact NO_REPLY when components are attached", async () => {
+    const result = await runDrySend({
+      cfg: slackConfig,
+      actionParams: {
+        channel: "slack",
+        target: "#C12345678",
+        message: "NO_REPLY",
+        blocks: [{ type: "divider" }],
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    });
+
+    expect(result.kind).toBe("send");
+    if (result.kind !== "send") {
+      throw new Error("expected send result");
+    }
+    expect(result.sendResult?.dryRun).toBe(true);
+  });
+
   it("allows send when only shared interactive payloads are provided", async () => {
     const result = await runDrySend({
       cfg: {
