@@ -280,6 +280,10 @@ export const dispatchTelegramMessage = async ({
   const reasoningLane = lanes.reasoning;
   let splitReasoningOnNextStream = false;
   let skipNextAnswerMessageStartRotation = false;
+  // If compaction interrupts a still-transient answer preview, keep the next
+  // assistant-message boundary on that same preview instead of materializing a
+  // duplicate retry message.
+  let pendingCompactionReplayBoundary = false;
   let draftLaneEventQueue = Promise.resolve();
   const reasoningStepState = createTelegramReasoningStepState();
   const enqueueDraftLaneEvent = (task: () => Promise<void>): Promise<void> => {
@@ -612,6 +616,7 @@ export const dispatchTelegramMessage = async ({
             // Assistant callbacks are fire-and-forget; ensure queued boundary
             // rotations/partials are applied before final delivery mapping.
             await enqueueDraftLaneEvent(async () => {});
+            skipNextAnswerMessageStartRotation = false;
           }
           if (
             shouldSuppressLocalTelegramExecApprovalPrompt({
@@ -693,6 +698,9 @@ export const dispatchTelegramMessage = async ({
             }
           }
           if (segments.length > 0) {
+            if (info.kind === "final") {
+              pendingCompactionReplayBoundary = false;
+            }
             return;
           }
           if (split.suppressedReasoningOnly) {
@@ -703,6 +711,7 @@ export const dispatchTelegramMessage = async ({
             }
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();
+              pendingCompactionReplayBoundary = false;
             }
             return;
           }
@@ -716,12 +725,14 @@ export const dispatchTelegramMessage = async ({
           if (!canSendAsIs) {
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();
+              pendingCompactionReplayBoundary = false;
             }
             return;
           }
           await sendPayload(payload);
           if (info.kind === "final") {
             await flushBufferedFinalAnswer();
+            pendingCompactionReplayBoundary = false;
           }
         },
         onSkip: (payload, info) => {
@@ -793,6 +804,12 @@ export const dispatchTelegramMessage = async ({
                   retainPreviewOnCleanupByLane.answer = false;
                   return;
                 }
+                if (pendingCompactionReplayBoundary) {
+                  pendingCompactionReplayBoundary = false;
+                  activePreviewLifecycleByLane.answer = "transient";
+                  retainPreviewOnCleanupByLane.answer = false;
+                  return;
+                }
                 await rotateAnswerLaneForNewAssistantMessage();
                 // Message-start is an explicit assistant-message boundary.
                 // Even when no forceNewMessage happened (e.g. prior answer had no
@@ -817,9 +834,20 @@ export const dispatchTelegramMessage = async ({
               }
             }
           : undefined,
-        onCompactionStart: statusReactionController
-          ? () => statusReactionController.setCompacting()
-          : undefined,
+        onCompactionStart:
+          statusReactionController || answerLane.stream
+            ? async () => {
+                if (
+                  answerLane.hasStreamedMessage &&
+                  activePreviewLifecycleByLane.answer === "transient"
+                ) {
+                  pendingCompactionReplayBoundary = true;
+                }
+                if (statusReactionController) {
+                  await statusReactionController.setCompacting();
+                }
+              }
+            : undefined,
         onCompactionEnd: statusReactionController
           ? async () => {
               statusReactionController.cancelPending();
