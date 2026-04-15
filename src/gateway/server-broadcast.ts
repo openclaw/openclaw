@@ -15,6 +15,8 @@ import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
+const OPERATOR_ONLY_EVENTS = new Set(["agent", "chat", "chat.side_result"]);
+
 const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "exec.approval.requested": [APPROVALS_SCOPE],
   "exec.approval.resolved": [APPROVALS_SCOPE],
@@ -37,11 +39,15 @@ export type {
 } from "./server-broadcast-types.js";
 
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
+  const role = client.connect.role ?? "operator";
+  if (OPERATOR_ONLY_EVENTS.has(event) && role !== "operator") {
+    return false;
+  }
+
   const required = EVENT_SCOPE_GUARDS[event];
   if (!required) {
     return true;
   }
-  const role = client.connect.role ?? "operator";
   if (role !== "operator") {
     return false;
   }
