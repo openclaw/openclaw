@@ -3000,7 +3000,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.context_management).toEqual([
       {
         type: "compaction",
-        compact_threshold: 140_000,
+        compact_threshold: 180_000,
       },
     ]);
   });
