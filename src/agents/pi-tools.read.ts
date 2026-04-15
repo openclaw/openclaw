@@ -229,10 +229,40 @@ function mapContainerPathToWorkspaceRoot(params: {
   let candidate = params.filePath.startsWith("@") ? params.filePath.slice(1) : params.filePath;
   if (/^file:\/\//i.test(candidate)) {
     const localFilePath = trySafeFileURLToPath(candidate);
-    if (!localFilePath) {
-      return params.filePath;
+    if (localFilePath) {
+      candidate = localFilePath;
+    } else {
+      // Windows fallback: handle container-style file:///workspace/... paths
+      let parsed: URL;
+      try {
+        parsed = new URL(candidate);
+      } catch {
+        return params.filePath;
+      }
+      if (parsed.protocol !== "file:") {
+        return params.filePath;
+      }
+      const host = parsed.hostname.trim().toLowerCase();
+      if (host && host !== "localhost") {
+        return params.filePath;
+      }
+      let normalizedPathname: string;
+      try {
+        normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
+      } catch {
+        return params.filePath;
+      }
+      // Only map if the path is within the container workdir
+      if (
+        normalizedPathname === normalizedWorkdir ||
+        normalizedPathname.startsWith(`${normalizedWorkdir}/`)
+      ) {
+        candidate = normalizedPathname;
+      } else {
+        // Not a container workdir path, keep original
+        return params.filePath;
+      }
     }
-    candidate = localFilePath;
   }
 
   const normalizedCandidate = candidate.replace(/\\/g, "/");
@@ -482,7 +512,7 @@ export function createOpenClawReadTool(
           ? await bridge.stat({ filePath: inputPath, cwd: rootDir })
           : await fs.stat(inputPath);
 
-        if (stats.isDirectory()) {
+        if ('type' in stats ? stats.type === 'directory' : stats.isDirectory()) {
           if (signal?.aborted) throw new Error("Read operation aborted");
 
           const files = bridge

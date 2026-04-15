@@ -5,7 +5,8 @@ import { createWriteStream } from 'fs';
 import path from 'path';
 import os from 'os';
 import https from 'https';
-import { ClientRequest } from 'http'; // FIX: Import ClientRequest type
+import http from 'http'; // Added missing import
+import { ClientRequest } from 'http';
 import crypto from 'crypto';
 import type { AgentToolResult, AgentToolUpdateCallback } from '@mariozechner/pi-agent-core';
 
@@ -30,22 +31,36 @@ const CHECKSUMS_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download
 
 /**
  * Downloads text content from URL with redirect following
+ * FIX: Proper abort handling with AbortController
  */
 async function downloadTextContent(url: string, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted();
     
-    let req: ClientRequest | null = null; // FIX: Use imported ClientRequest type
+    let currentRequest: ClientRequest | null = null;
+    let currentResponse: http.IncomingMessage | null = null;
+    
+    const cleanup = () => {
+      if (currentResponse) {
+        currentResponse.destroy();
+        currentResponse = null;
+      }
+      if (currentRequest) {
+        currentRequest.destroy();
+        currentRequest = null;
+      }
+    };
     
     const abortHandler = () => {
-      req?.destroy();
+      cleanup();
       reject(new DOMException('The operation was aborted', 'AbortError'));
     };
     
-    signal?.addEventListener('abort', abortHandler);
+    signal?.addEventListener('abort', abortHandler, { once: true });
     
     function doGet(currentUrl: string, redirectsLeft: number): void {
       if (signal?.aborted) {
+        cleanup();
         return reject(new DOMException('The operation was aborted', 'AbortError'));
       }
       
@@ -54,14 +69,19 @@ async function downloadTextContent(url: string, signal?: AbortSignal): Promise<s
         return reject(new Error(`Too many redirects: ${url}`));
       }
 
-      req = https.get(currentUrl, (response) => {
+      currentRequest = https.get(currentUrl, (response) => {
+        currentResponse = response;
+        
         if ((response.statusCode === 301 || response.statusCode === 302) && response.headers.location) {
+          const redirectUrl = response.headers.location;
           response.resume();
-          return doGet(response.headers.location, redirectsLeft - 1);
+          response.destroy();
+          return doGet(redirectUrl, redirectsLeft - 1);
         }
 
         if (response.statusCode !== 200) {
           response.resume();
+          response.destroy();
           signal?.removeEventListener('abort', abortHandler);
           return reject(new Error(`HTTP ${response.statusCode} downloading checksums`));
         }
@@ -70,15 +90,17 @@ async function downloadTextContent(url: string, signal?: AbortSignal): Promise<s
         response.on('data', (chunk) => chunks.push(chunk));
         response.on('end', () => {
           signal?.removeEventListener('abort', abortHandler);
+          currentRequest = null;
+          currentResponse = null;
           resolve(Buffer.concat(chunks).toString('utf-8'));
         });
         response.on('error', (err) => {
+          cleanup();
           signal?.removeEventListener('abort', abortHandler);
           reject(err);
         });
-        
-        signal?.addEventListener('abort', () => response.destroy(), { once: true });
       }).on('error', (err) => {
+        cleanup();
         signal?.removeEventListener('abort', abortHandler);
         reject(err);
       });
@@ -151,6 +173,7 @@ async function verifyFileChecksum(filePath: string, expectedHash: string): Promi
 
 /**
  * Downloads binary file with redirect following and checksum verification
+ * FIX: Robust abort handling that properly terminates all resources
  */
 async function downloadFileWithVerification(
   url: string, 
@@ -162,58 +185,101 @@ async function downloadFileWithVerification(
   
   signal?.throwIfAborted();
   
+  // Create internal AbortController that can be triggered by external signal
+  const abortController = new AbortController();
+  
+  // Link external signal to internal controller
+  if (signal) {
+    if (signal.aborted) {
+      abortController.abort();
+    } else {
+      signal.addEventListener('abort', () => abortController.abort(), { once: true });
+    }
+  }
+  
+  const combinedSignal = abortController.signal;
+  
   try {
-    await new Promise((resolve, reject) => {
-      let req: ClientRequest | null = null; // FIX: Use imported ClientRequest type
+    await new Promise<void>((resolve, reject) => {
+      let currentRequest: ClientRequest | null = null;
+      let currentResponse: http.IncomingMessage | null = null;
+      let currentFileStream: ReturnType<typeof createWriteStream> | null = null;
+      
+      const cleanup = () => {
+        // Clean up file stream
+        if (currentFileStream) {
+          currentFileStream.destroy();
+          currentFileStream = null;
+        }
+        // Clean up response
+        if (currentResponse) {
+          currentResponse.destroy();
+          currentResponse = null;
+        }
+        // Clean up request
+        if (currentRequest) {
+          currentRequest.destroy();
+          currentRequest = null;
+        }
+      };
       
       const abortHandler = () => {
-        req?.destroy();
+        cleanup();
         reject(new DOMException('The operation was aborted', 'AbortError'));
       };
       
-      signal?.addEventListener('abort', abortHandler);
+      combinedSignal.addEventListener('abort', abortHandler, { once: true });
       
       function doGet(currentUrl: string, redirectsLeft: number): void {
-        if (signal?.aborted) {
+        if (combinedSignal.aborted) {
+          cleanup();
           return reject(new DOMException('The operation was aborted', 'AbortError'));
         }
         
         if (redirectsLeft <= 0) {
-          signal?.removeEventListener('abort', abortHandler);
+          combinedSignal.removeEventListener('abort', abortHandler);
           return reject(new Error(`Too many redirects: ${url}`));
         }
 
-        req = https.get(currentUrl, (response) => {
+        currentRequest = https.get(currentUrl, (response) => {
+          currentResponse = response;
+          
           if ((response.statusCode === 301 || response.statusCode === 302) && response.headers.location) {
+            const redirectUrl = response.headers.location;
             response.resume();
-            return doGet(response.headers.location, redirectsLeft - 1);
+            response.destroy();
+            currentResponse = null;
+            return doGet(redirectUrl, redirectsLeft - 1);
           }
 
           if (response.statusCode !== 200) {
             response.resume();
-            signal?.removeEventListener('abort', abortHandler);
+            response.destroy();
+            combinedSignal.removeEventListener('abort', abortHandler);
             return reject(new Error(`HTTP ${response.statusCode} downloading binary`));
           }
 
           const file = createWriteStream(tempDest);
+          currentFileStream = file;
           const hash = crypto.createHash('sha256');
           
           response.on('data', (chunk) => hash.update(chunk));
           response.pipe(file);
 
           file.on('error', (err) => {
-            file.close();
-            signal?.removeEventListener('abort', abortHandler);
+            cleanup();
+            combinedSignal.removeEventListener('abort', abortHandler);
             reject(err);
           });
 
-          signal?.addEventListener('abort', () => {
-            file.destroy();
-            response.destroy();
-          }, { once: true });
-
           file.on('close', async () => {
-            signal?.removeEventListener('abort', abortHandler);
+            combinedSignal.removeEventListener('abort', abortHandler);
+            
+            // Check if we were aborted during file writing
+            if (combinedSignal.aborted) {
+              await fs.unlink(tempDest).catch(() => {});
+              return;
+            }
             
             try {
               const actualHash = hash.digest('hex');
@@ -238,6 +304,10 @@ async function downloadFileWithVerification(
                   console.warn(`Warning: Could not set executable permissions on ${dest}:`, chmodError);
                 }
               }
+              
+              currentRequest = null;
+              currentResponse = null;
+              currentFileStream = null;
               resolve(undefined);
             } catch (error) {
               await fs.unlink(tempDest).catch(() => {});
@@ -245,15 +315,22 @@ async function downloadFileWithVerification(
             }
           });
         }).on('error', (err) => {
-          signal?.removeEventListener('abort', abortHandler);
+          cleanup();
+          combinedSignal.removeEventListener('abort', abortHandler);
           reject(err);
         });
       }
       doGet(url, 10);
     });
   } catch (error) {
+    // Always clean up temp file on error or abort
     await fs.unlink(tempDest).catch(() => {});
     throw error;
+  } finally {
+    // Clean up the abort controller
+    if (!abortController.signal.aborted) {
+      abortController.abort();
+    }
   }
 }
 
@@ -268,8 +345,18 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
   
   signal?.throwIfAborted();
   
+  // Create a child process that can be killed on abort
+  const abortController = new AbortController();
+  if (signal) {
+    if (signal.aborted) {
+      abortController.abort();
+    } else {
+      signal.addEventListener('abort', () => abortController.abort(), { once: true });
+    }
+  }
+  
   try {
-    await execFileAsync(ytDlpPath, ['--version'], { signal });
+    await execFileAsync(ytDlpPath, ['--version'], { signal: abortController.signal });
     
     let integrityCheckPassed = false;
     try {
@@ -314,6 +401,10 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
     
     console.log('yt-dlp binary downloaded and verified successfully');
     return ytDlpPath;
+  } finally {
+    if (!abortController.signal.aborted) {
+      abortController.abort();
+    }
   }
 }
 
@@ -368,9 +459,23 @@ export const downloadVideoTool = {
     required: ["url"]
   },
   execute: async (toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>): Promise<AgentToolResult<unknown>> => {
+    // Create a child process controller that can properly kill yt-dlp
+    const abortController = new AbortController();
+    
     try {
+      // Link external signal to internal controller
+      if (signal) {
+        if (signal.aborted) {
+          abortController.abort();
+        } else {
+          signal.addEventListener('abort', () => {
+            abortController.abort();
+          }, { once: true });
+        }
+      }
+      
       await ensureFfmpeg();
-      const ytDlpPath = await ensureYtDlp(signal);
+      const ytDlpPath = await ensureYtDlp(abortController.signal);
       const workspaceRoot = await findWorkspaceFolder();
 
       const typedParams = params as Record<string, unknown>;
@@ -388,7 +493,7 @@ export const downloadVideoTool = {
       const { stdout: rawTitle } = await execFileAsync(
         ytDlpPath, 
         ['--get-title', '--no-playlist', typedParams.url as string],
-        { signal }
+        { signal: abortController.signal }
       );
       
       let sanitized = rawTitle.trim()
@@ -431,7 +536,7 @@ export const downloadVideoTool = {
         cwd: workspaceRoot, 
         timeout: 300000,
         maxBuffer: 100 * 1024 * 1024,
-        signal
+        signal: abortController.signal
       });
 
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -525,6 +630,11 @@ export const downloadVideoTool = {
         content: [{ type: "text", text: `❌ Error: ${error.message}` }],
         details: { error: error.message, status: "failed" }
       };
+    } finally {
+      // Always clean up the abort controller
+      if (!abortController.signal.aborted) {
+        abortController.abort();
+      }
     }
   }
 };
