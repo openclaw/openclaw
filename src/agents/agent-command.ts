@@ -10,30 +10,30 @@ import {
   supportsXHighThinking,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
-import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getAgentRuntimeCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
-import {
-  loadConfig,
-  readConfigFileSnapshotForWrite,
-  setRuntimeConfigSnapshot,
-} from "../config/config.js";
-import { resolveAgentIdFromSessionKey, type SessionEntry } from "../config/sessions.js";
-import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
+import { loadConfig, readConfigFileSnapshotForWrite } from "../config/io.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isSecretRef } from "../config/types.secrets.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
   registerAgentRunContext,
 } from "../infra/agent-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import {
@@ -47,21 +47,10 @@ import {
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { clearSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import {
-  buildAcpResult,
-  createAcpVisibleTextAccumulator,
-  emitAcpAssistantDelta,
-  emitAcpLifecycleEnd,
-  emitAcpLifecycleError,
-  emitAcpLifecycleStart,
-  persistAcpTurnTranscript,
   persistSessionEntry as persistSessionEntryBase,
   prependInternalEventContext,
-  runAgentAttempt,
-  sessionFileHasContent,
-} from "./command/attempt-execution.js";
-import { deliverAgentCommandResult } from "./command/delivery.js";
+} from "./command/attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./command/run-context.js";
-import { updateSessionStoreAfterAgentRun } from "./command/session-store.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
@@ -87,6 +76,35 @@ import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
 
 const log = createSubsystemLogger("agents/agent-command");
+type AttemptExecutionRuntime = typeof import("./command/attempt-execution.runtime.js");
+type DeliveryRuntime = typeof import("./command/delivery.runtime.js");
+type SessionStoreRuntime = typeof import("./command/session-store.runtime.js");
+type TranscriptResolveRuntime = typeof import("../config/sessions/transcript-resolve.runtime.js");
+
+let attemptExecutionRuntimePromise: Promise<AttemptExecutionRuntime> | undefined;
+let deliveryRuntimePromise: Promise<DeliveryRuntime> | undefined;
+let sessionStoreRuntimePromise: Promise<SessionStoreRuntime> | undefined;
+let transcriptResolveRuntimePromise: Promise<TranscriptResolveRuntime> | undefined;
+
+function loadAttemptExecutionRuntime(): Promise<AttemptExecutionRuntime> {
+  attemptExecutionRuntimePromise ??= import("./command/attempt-execution.runtime.js");
+  return attemptExecutionRuntimePromise;
+}
+
+function loadDeliveryRuntime(): Promise<DeliveryRuntime> {
+  deliveryRuntimePromise ??= import("./command/delivery.runtime.js");
+  return deliveryRuntimePromise;
+}
+
+function loadSessionStoreRuntime(): Promise<SessionStoreRuntime> {
+  sessionStoreRuntimePromise ??= import("./command/session-store.runtime.js");
+  return sessionStoreRuntimePromise;
+}
+
+function loadTranscriptResolveRuntime(): Promise<TranscriptResolveRuntime> {
+  transcriptResolveRuntimePromise ??= import("../config/sessions/transcript-resolve.runtime.js");
+  return transcriptResolveRuntimePromise;
+}
 
 type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
@@ -125,6 +143,101 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
     ...params,
     clearedFields: OVERRIDE_FIELDS_CLEARED_BY_DELETE,
   });
+}
+
+async function resolveAgentRuntimeConfig(
+  runtime: RuntimeEnv,
+  params?: { runtimeTargetsChannelSecrets?: boolean },
+): Promise<{
+  loadedRaw: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+  cfg: OpenClawConfig;
+}> {
+  const loadedRaw = loadConfig();
+  const sourceConfig = await (async () => {
+    try {
+      const { snapshot } = await readConfigFileSnapshotForWrite();
+      if (snapshot.valid) {
+        return snapshot.resolved;
+      }
+    } catch {
+      // Fall back to runtime-loaded config when source snapshot is unavailable.
+    }
+    return loadedRaw;
+  })();
+  const includeChannelTargets = params?.runtimeTargetsChannelSecrets === true;
+  const cfg = hasAgentRuntimeSecretRefs({
+    config: loadedRaw,
+    includeChannelTargets,
+  })
+    ? (
+        await (
+          await import("../cli/command-config-resolution.runtime.js")
+        ).resolveCommandConfigWithSecrets({
+          config: loadedRaw,
+          commandName: "agent",
+          targetIds: getAgentRuntimeCommandSecretTargetIds({
+            includeChannelTargets,
+          }),
+          runtime,
+        })
+      ).resolvedConfig
+    : loadedRaw;
+  setRuntimeConfigSnapshot(cfg, sourceConfig);
+  return { loadedRaw, sourceConfig, cfg };
+}
+
+function hasNestedSecretRef(value: unknown): boolean {
+  if (isSecretRef(value)) {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasNestedSecretRef(entry));
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  return Object.values(value).some((entry) => hasNestedSecretRef(entry));
+}
+
+function hasAgentRuntimeSecretRefs(params: {
+  config: OpenClawConfig;
+  includeChannelTargets: boolean;
+}): boolean {
+  const { config } = params;
+  if (hasNestedSecretRef(config.models?.providers)) {
+    return true;
+  }
+  if (hasNestedSecretRef(config.agents?.defaults?.memorySearch?.remote?.apiKey)) {
+    return true;
+  }
+  if (
+    Array.isArray(config.agents?.list) &&
+    config.agents.list.some((agent) => hasNestedSecretRef(agent?.memorySearch?.remote?.apiKey))
+  ) {
+    return true;
+  }
+  if (hasNestedSecretRef(config.messages?.tts?.providers)) {
+    return true;
+  }
+  if (hasNestedSecretRef(config.skills?.entries)) {
+    return true;
+  }
+  if (hasNestedSecretRef(config.tools?.web?.search)) {
+    return true;
+  }
+  if (
+    config.plugins?.entries &&
+    Object.values(config.plugins.entries).some((entry) =>
+      hasNestedSecretRef({
+        webSearch: entry?.config?.webSearch,
+        webFetch: entry?.config?.webFetch,
+      }),
+    )
+  ) {
+    return true;
+  }
+  return params.includeChannelTargets ? hasNestedSecretRef(config.channels) : false;
 }
 
 function containsControlCharacters(value: string): boolean {
@@ -168,25 +281,9 @@ async function prepareAgentCommandExecution(
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
 
-  const loadedRaw = loadConfig();
-  const sourceConfig = await (async () => {
-    try {
-      const { snapshot } = await readConfigFileSnapshotForWrite();
-      if (snapshot.valid) {
-        return snapshot.resolved;
-      }
-    } catch {
-      // Fall back to runtime-loaded config when source snapshot is unavailable.
-    }
-    return loadedRaw;
-  })();
-  const { resolvedConfig: cfg } = await resolveCommandConfigWithSecrets({
-    config: loadedRaw,
-    commandName: "agent",
-    targetIds: getAgentRuntimeCommandSecretTargetIds(),
-    runtime,
+  const { cfg } = await resolveAgentRuntimeConfig(runtime, {
+    runtimeTargetsChannelSecrets: opts.deliver === true,
   });
-  setRuntimeConfigSnapshot(cfg, sourceConfig);
   const normalizedSpawned = normalizeSpawnedRunMetadata({
     spawnedBy: opts.spawnedBy,
     groupId: opts.groupId,
@@ -234,14 +331,11 @@ async function prepareAgentCommandExecution(
     throw new Error('Invalid verbose level. Use "on", "full", or "off".');
   }
 
-  const laneRaw = typeof opts.lane === "string" ? opts.lane.trim() : "";
-  const isSubagentLane = laneRaw === String(AGENT_LANE_SUBAGENT);
+  const laneRaw = normalizeOptionalString(opts.lane) ?? "";
+  const subagentLane: string = AGENT_LANE_SUBAGENT;
+  const isSubagentLane = laneRaw === subagentLane;
   const timeoutSecondsRaw =
-    opts.timeout !== undefined
-      ? Number.parseInt(String(opts.timeout), 10)
-      : isSubagentLane
-        ? 0
-        : undefined;
+    opts.timeout !== undefined ? Number.parseInt(opts.timeout, 10) : isSubagentLane ? 0 : undefined;
   if (
     timeoutSecondsRaw !== undefined &&
     (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw < 0)
@@ -378,13 +472,14 @@ async function agentCommandInternal(
     }
 
     if (acpResolution?.kind === "ready" && sessionKey) {
+      const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
       const startedAt = Date.now();
       registerAgentRunContext(runId, {
         sessionKey,
       });
-      emitAcpLifecycleStart({ runId, startedAt });
+      attemptExecutionRuntime.emitAcpLifecycleStart({ runId, startedAt });
 
-      const visibleTextAccumulator = createAcpVisibleTextAccumulator();
+      const visibleTextAccumulator = attemptExecutionRuntime.createAcpVisibleTextAccumulator();
       let stopReason: string | undefined;
       try {
         const dispatchPolicyError = resolveAcpDispatchPolicyError(cfg);
@@ -424,7 +519,7 @@ async function agentCommandInternal(
             if (!visibleUpdate) {
               return;
             }
-            emitAcpAssistantDelta({
+            attemptExecutionRuntime.emitAcpAssistantDelta({
               runId,
               text: visibleUpdate.text,
               delta: visibleUpdate.delta,
@@ -437,19 +532,19 @@ async function agentCommandInternal(
           fallbackCode: "ACP_TURN_FAILED",
           fallbackMessage: "ACP turn failed before completion.",
         });
-        emitAcpLifecycleError({
+        attemptExecutionRuntime.emitAcpLifecycleError({
           runId,
           message: acpError.message,
         });
         throw acpError;
       }
 
-      emitAcpLifecycleEnd({ runId });
+      attemptExecutionRuntime.emitAcpLifecycleEnd({ runId });
 
       const finalTextRaw = visibleTextAccumulator.finalizeRaw();
       const finalText = visibleTextAccumulator.finalize();
       try {
-        sessionEntry = await persistAcpTurnTranscript({
+        sessionEntry = await attemptExecutionRuntime.persistAcpTurnTranscript({
           body,
           finalText: finalTextRaw,
           sessionId,
@@ -463,17 +558,18 @@ async function agentCommandInternal(
         });
       } catch (error) {
         log.warn(
-          `ACP transcript persistence failed for ${sessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+          `ACP transcript persistence failed for ${sessionKey}: ${formatErrorMessage(error)}`,
         );
       }
 
-      const result = buildAcpResult({
+      const result = attemptExecutionRuntime.buildAcpResult({
         payloadText: finalText,
         startedAt,
         stopReason,
         abortSignal: opts.abortSignal,
       });
       const payloads = result.payloads;
+      const { deliverAgentCommandResult } = await loadDeliveryRuntime();
 
       return await deliverAgentCommandResult({
         cfg,
@@ -715,6 +811,7 @@ async function agentCommandInternal(
         });
       }
     }
+    const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
     let sessionFile: string | undefined;
     if (sessionStore && sessionKey) {
       const resolvedSessionFile = await resolveSessionTranscriptFile({
@@ -744,8 +841,9 @@ async function agentCommandInternal(
 
     const startedAt = Date.now();
     let lifecycleEnded = false;
+    const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
 
-    let result: Awaited<ReturnType<typeof runAgentAttempt>>;
+    let result: Awaited<ReturnType<AttemptExecutionRuntime["runAgentAttempt"]>>;
     let fallbackProvider = provider;
     let fallbackModel = model;
     const MAX_LIVE_SWITCH_RETRIES = 5;
@@ -775,7 +873,7 @@ async function agentCommandInternal(
           run: async (providerOverride, modelOverride, runOptions) => {
             const isFallbackRetry = fallbackAttemptIndex > 0;
             fallbackAttemptIndex += 1;
-            return runAgentAttempt({
+            return attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
               cfg,
@@ -801,7 +899,8 @@ async function agentCommandInternal(
               sessionStore,
               storePath,
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-              sessionHasHistory: !isNewSession || (await sessionFileHasContent(sessionFile)),
+              sessionHasHistory:
+                !isNewSession || (await attemptExecutionRuntime.sessionFileHasContent(sessionFile)),
               onAgentEvent: (evt) => {
                 if (
                   evt.stream === "lifecycle" &&
@@ -929,6 +1028,7 @@ async function agentCommandInternal(
 
     // Update token+model fields in the session store.
     if (sessionStore && sessionKey) {
+      const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
       await updateSessionStoreAfterAgentRun({
         cfg,
         contextTokensOverride: agentCfg?.contextTokens,
@@ -945,6 +1045,7 @@ async function agentCommandInternal(
     }
 
     const payloads = result.payloads ?? [];
+    const { deliverAgentCommandResult } = await loadDeliveryRuntime();
     return await deliverAgentCommandResult({
       cfg,
       deps,
@@ -1003,3 +1104,8 @@ export async function agentCommandFromIngress(
     deps,
   );
 }
+
+export const __testing = {
+  resolveAgentRuntimeConfig,
+  prepareAgentCommandExecution,
+};

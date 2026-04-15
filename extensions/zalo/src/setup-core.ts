@@ -9,8 +9,15 @@ import {
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
 import { resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
+import { promptZaloAllowFrom } from "./setup-allow-from.js";
 
 const channel = "zalo" as const;
+
+type ZaloAccountSetupConfig = {
+  enabled?: boolean;
+  dmPolicy?: string;
+  allowFrom?: Array<string | number> | ReadonlyArray<string | number>;
+};
 
 export const zaloSetupAdapter = createPatchedAccountSetupAdapter({
   channelKey: channel,
@@ -78,6 +85,9 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
         },
       };
     }
+    const currentAccount = cfg.channels?.zalo?.accounts?.[resolvedAccountId] as
+      | ZaloAccountSetupConfig
+      | undefined;
     return {
       ...cfg,
       channels: {
@@ -88,8 +98,8 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
           accounts: {
             ...cfg.channels?.zalo?.accounts,
             [resolvedAccountId]: {
-              ...cfg.channels?.zalo?.accounts?.[resolvedAccountId],
-              enabled: cfg.channels?.zalo?.accounts?.[resolvedAccountId]?.enabled ?? true,
+              ...currentAccount,
+              enabled: currentAccount?.enabled ?? true,
               dmPolicy: policy,
               ...(policy === "open"
                 ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) }
@@ -100,13 +110,13 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
       },
     };
   },
-  promptAllowFrom: async (params) =>
-    (await loadZaloSetupWizard()).dmPolicy?.promptAllowFrom?.(params) ?? params.cfg,
+  promptAllowFrom: async ({ cfg, prompter, accountId }) =>
+    promptZaloAllowFrom({
+      cfg,
+      prompter,
+      accountId: accountId ?? resolveDefaultZaloAccountId(cfg),
+    }),
 };
-
-async function loadZaloSetupWizard(): Promise<ChannelSetupWizard> {
-  return (await import("./setup-surface.js")).zaloSetupWizard;
-}
 
 export function createZaloSetupWizardProxy(
   loadWizard: () => Promise<ChannelSetupWizard>,

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   AcpRuntime,
   OpenClawPluginService,
@@ -90,6 +91,11 @@ export function createAcpxRuntimeService(
   return {
     id: "acpx-runtime",
     async start(ctx: OpenClawPluginServiceContext): Promise<void> {
+      if (process.env.OPENCLAW_SKIP_ACPX_RUNTIME === "1") {
+        ctx.logger.info("skipping embedded acpx runtime backend (OPENCLAW_SKIP_ACPX_RUNTIME=1)");
+        return;
+      }
+
       const pluginConfig = resolveAcpxPluginConfig({
         rawConfig: params.pluginConfig,
         workspaceDir: ctx.workspaceDir,
@@ -112,6 +118,10 @@ export function createAcpxRuntimeService(
         healthy: () => runtime?.isHealthy() ?? false,
       });
       ctx.logger.info(`embedded acpx runtime backend registered (cwd: ${pluginConfig.cwd})`);
+
+      if (process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE === "1") {
+        return;
+      }
 
       lifecycleRevision += 1;
       const currentRevision = lifecycleRevision;
@@ -136,9 +146,7 @@ export function createAcpxRuntimeService(
           if (currentRevision !== lifecycleRevision) {
             return;
           }
-          ctx.logger.warn(
-            `embedded acpx runtime setup failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          ctx.logger.warn(`embedded acpx runtime setup failed: ${formatErrorMessage(err)}`);
         }
       })();
     },

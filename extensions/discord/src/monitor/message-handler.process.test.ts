@@ -158,6 +158,9 @@ vi.spyOn(configRuntimeModule, "resolveStorePath").mockImplementation(
   ) => configSessionsMocks.resolveStorePath(path, opts) as never) as never,
 );
 
+const clientModule = await import("../client.js");
+const createDiscordRestClientSpy = vi.spyOn(clientModule, "createDiscordRestClient");
+
 const BASE_CHANNEL_ROUTE = {
   agentId: "main",
   channel: "discord",
@@ -214,6 +217,7 @@ beforeEach(() => {
   recordInboundSession.mockClear();
   readSessionUpdatedAt.mockClear();
   resolveStorePath.mockClear();
+  createDiscordRestClientSpy.mockClear();
   dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
   recordInboundSession.mockResolvedValue(undefined);
   readSessionUpdatedAt.mockReturnValue(undefined);
@@ -278,7 +282,7 @@ function expectAckReactionRuntimeOptions(params?: {
     messages.removeAckAfterReply = params.removeAckAfterReply;
   }
   return expect.objectContaining({
-    rest: {},
+    rest: expect.anything(),
     ...(Object.keys(messages).length > 0
       ? { cfg: expect.objectContaining({ messages: expect.objectContaining(messages) }) }
       : {}),
@@ -337,7 +341,7 @@ function expectSinglePreviewEdit() {
     "c1",
     "preview-1",
     { content: "Hello\nWorld" },
-    { rest: {} },
+    expect.objectContaining({ rest: expect.anything() }),
   );
   expect(deliverDiscordReply).not.toHaveBeenCalled();
 }
@@ -395,6 +399,39 @@ describe("processDiscordMessage ack reactions", () => {
       accountId: "default",
       ackReaction: "👀",
     });
+  });
+
+  it("uses separate REST clients for feedback and reply delivery", async () => {
+    const feedbackRest = { post: vi.fn(async () => undefined) };
+    const deliveryRest = { post: vi.fn(async () => undefined) };
+    createDiscordRestClientSpy
+      .mockReturnValueOnce({
+        token: "feedback-token",
+        rest: feedbackRest as never,
+        account: { config: {} } as never,
+      })
+      .mockReturnValueOnce({
+        token: "delivery-token",
+        rest: deliveryRest as never,
+        account: { config: {} } as never,
+      });
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "hello" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext();
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(sendMocks.reactMessageDiscord).toHaveBeenCalled();
+    expect(sendMocks.reactMessageDiscord.mock.calls[0]?.[3]).toEqual(
+      expect.objectContaining({ rest: feedbackRest }),
+    );
+    expect(deliverDiscordReply).toHaveBeenCalledWith(
+      expect.objectContaining({ rest: deliveryRest }),
+    );
+    expect(feedbackRest).not.toBe(deliveryRest);
   });
 
   it("debounces intermediate phase reactions and jumps to done for short runs", async () => {
@@ -733,7 +770,7 @@ describe("processDiscordMessage draft streaming", () => {
       "c1",
       "preview-1",
       { content: longReply },
-      { rest: {} },
+      expect.objectContaining({ rest: expect.anything() }),
     );
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });

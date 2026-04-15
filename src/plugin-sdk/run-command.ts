@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../infra/errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 
 export type PluginCommandRunResult = {
@@ -40,7 +41,7 @@ export async function runPluginCommandWithTimeout(
     return {
       code: 1,
       stdout: "",
-      stderr: error instanceof Error ? error.message : String(error),
+      stderr: formatErrorMessage(error),
     };
   }
 }

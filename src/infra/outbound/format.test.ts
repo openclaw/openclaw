@@ -8,6 +8,7 @@ import {
 const getChannelPluginMock = vi.hoisted(() => vi.fn((_channel: unknown) => undefined));
 
 vi.mock("../../channels/plugins/index.js", () => ({
+  getLoadedChannelPlugin: getChannelPluginMock,
   getChannelPlugin: getChannelPluginMock,
 }));
 describe("formatOutboundDeliverySummary", () => {
@@ -56,7 +57,7 @@ describe("formatOutboundDeliverySummary", () => {
         messageId: "t1",
         conversationId: "conv-1",
       },
-      expected: "✅ Sent via msteams. Message ID: t1 (conversation conv-1)",
+      expected: "✅ Sent via Microsoft Teams. Message ID: t1 (conversation conv-1)",
     },
   ])("formats delivery summary for %j", ({ channel, result, expected }) => {
     expect(formatOutboundDeliverySummary(channel, result)).toBe(expected);

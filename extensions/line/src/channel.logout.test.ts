@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
-import { linePlugin } from "./channel.js";
+import { lineGatewayAdapter } from "./gateway.js";
 import { setLineRuntime } from "./runtime.js";
 
 const DEFAULT_ACCOUNT_ID = "default";
@@ -53,13 +53,13 @@ function resolveAccount(
 }
 
 async function runLogoutScenario(params: { cfg: OpenClawConfig; accountId: string }): Promise<{
-  result: Awaited<ReturnType<NonNullable<NonNullable<typeof linePlugin.gateway>["logoutAccount"]>>>;
+  result: Awaited<ReturnType<NonNullable<typeof lineGatewayAdapter.logoutAccount>>>;
   mocks: LineRuntimeMocks;
 }> {
   const { runtime, mocks } = createRuntime();
   setLineRuntime(runtime);
   const account = resolveAccount(mocks.resolveLineAccount, params.cfg, params.accountId);
-  const result = await linePlugin.gateway!.logoutAccount!({
+  const result = await lineGatewayAdapter.logoutAccount!({
     accountId: params.accountId,
     cfg: params.cfg,
     account,

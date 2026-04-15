@@ -8,6 +8,8 @@ import {
 
 describe("classifyDiscordGatewayEvent", () => {
   it("maps current Carbon gateway errors onto domain events", () => {
+    const transientTypeError = new TypeError();
+    transientTypeError.stack = "TypeError\n    at gatewayCrash (discord-gateway.js:12:34)";
     const reconnectEvent = classifyDiscordGatewayEvent({
       err: new Error("Max reconnect attempts (0) reached after close code 1006"),
       isDisallowedIntentsError: () => false,
@@ -21,7 +23,7 @@ describe("classifyDiscordGatewayEvent", () => {
       isDisallowedIntentsError: (err) => String(err).includes("4014"),
     });
     const transientEvent = classifyDiscordGatewayEvent({
-      err: new TypeError(),
+      err: transientTypeError,
       isDisallowedIntentsError: () => false,
     });
 
@@ -30,20 +32,24 @@ describe("classifyDiscordGatewayEvent", () => {
     expect(fatalEvent.type).toBe("fatal");
     expect(disallowedEvent.type).toBe("disallowed-intents");
     expect(transientEvent.type).toBe("fatal");
-    expect(transientEvent.message).toBe("TypeError");
+    expect(transientEvent.message).toBe("TypeError @ gatewayCrash (discord-gateway.js:12:34)");
     expect(transientEvent.shouldStopLifecycle).toBe(true);
   });
 
   it("wraps fatal lifecycle stops with discord-specific context", () => {
+    const transientTypeError = new TypeError();
+    transientTypeError.stack = "TypeError\n    at gatewayCrash (discord-gateway.js:12:34)";
     const event = classifyDiscordGatewayEvent({
-      err: new TypeError(),
+      err: transientTypeError,
       isDisallowedIntentsError: () => false,
     });
 
     const wrapped = new DiscordGatewayLifecycleError(event);
 
     expect(wrapped.name).toBe("DiscordGatewayLifecycleError");
-    expect(wrapped.message).toBe("discord gateway fatal: TypeError");
+    expect(wrapped.message).toBe(
+      "discord gateway fatal: TypeError @ gatewayCrash (discord-gateway.js:12:34)",
+    );
     expect(wrapped.eventType).toBe("fatal");
     expect(wrapped.cause).toBeInstanceOf(TypeError);
   });
@@ -127,12 +133,18 @@ describe("createDiscordGatewaySupervisor", () => {
     });
 
     supervisor.dispose();
-    emitter.emit("error", new TypeError());
-    emitter.emit("error", new TypeError());
+    const first = new TypeError();
+    first.stack = "TypeError\n    at gatewayCrash (discord-gateway.js:12:34)";
+    const second = new TypeError();
+    second.stack = "TypeError\n    at gatewayCrash (discord-gateway.js:12:34)";
+    emitter.emit("error", first);
+    emitter.emit("error", second);
 
     expect(runtime.error).toHaveBeenCalledTimes(1);
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("suppressed late gateway fatal error after dispose: TypeError"),
+      expect.stringContaining(
+        "suppressed late gateway fatal error after dispose: TypeError @ gatewayCrash (discord-gateway.js:12:34)",
+      ),
     );
   });
 });

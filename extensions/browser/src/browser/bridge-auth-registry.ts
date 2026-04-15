@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+
 type BridgeAuth = {
   token?: string;
   password?: string;
@@ -11,8 +13,8 @@ export function setBridgeAuthForPort(port: number, auth: BridgeAuth): void {
   if (!Number.isFinite(port) || port <= 0) {
     return;
   }
-  const token = typeof auth.token === "string" ? auth.token.trim() : "";
-  const password = typeof auth.password === "string" ? auth.password.trim() : "";
+  const token = normalizeOptionalString(auth.token) ?? "";
+  const password = normalizeOptionalString(auth.password) ?? "";
   authByPort.set(port, {
     token: token || undefined,
     password: password || undefined,

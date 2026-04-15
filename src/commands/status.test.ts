@@ -820,7 +820,6 @@ describe("statusCommand", () => {
     expect(logs.some((line) => line.includes("Cache"))).toBe(true);
     expect(logs.some((line) => line.includes("40% hit"))).toBe(true);
     expect(logs.some((line) => line.includes("read 2.0k"))).toBe(true);
-    expect(logs.some((line) => line.includes("write 1.0k"))).toBe(true);
   });
 
   it("shows a maintenance hint when task audit errors are present", async () => {

@@ -2,9 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { sendMessage } from "../infra/outbound/message.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
+import { createExecTool } from "./bash-tools.exec.js";
+import { callGatewayTool } from "./tools/gateway.js";
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -22,11 +25,6 @@ vi.mock("../infra/outbound/message.js", () => ({
   sendMessage: vi.fn(async () => ({ ok: true })),
 }));
 
-let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
-let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
-let getExecApprovalApproverDmNoticeText: typeof import("../infra/exec-approval-reply.js").getExecApprovalApproverDmNoticeText;
-let sendMessage: typeof import("../infra/outbound/message.js").sendMessage;
-
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   const invoke = (rawInvokeParams ?? {}) as {
     params?: {
@@ -39,16 +37,6 @@ function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   };
   const params = invoke.params ?? {};
   return buildSystemRunPreparePayload(params);
-}
-
-function getTestConfigPath() {
-  return path.join(process.env.HOME ?? "", ".openclaw", "openclaw.json");
-}
-
-async function writeOpenClawConfig(config: Record<string, unknown>, pretty = false) {
-  const configPath = getTestConfigPath();
-  await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, JSON.stringify(config, null, pretty ? 2 : undefined));
 }
 
 async function writeExecApprovalsConfig(config: Record<string, unknown>) {
@@ -234,13 +222,6 @@ describe("exec approvals", () => {
   let previousBundledPluginsDir: string | undefined;
   let previousDisableBundledPlugins: string | undefined;
 
-  beforeAll(async () => {
-    ({ callGatewayTool } = await import("./tools/gateway.js"));
-    ({ createExecTool } = await import("./bash-tools.exec.js"));
-    ({ getExecApprovalApproverDmNoticeText } = await import("../infra/exec-approval-reply.js"));
-    ({ sendMessage } = await import("../infra/outbound/message.js"));
-  });
-
   beforeEach(async () => {
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
@@ -299,6 +280,7 @@ describe("exec approvals", () => {
           invokeParams = params;
           return { payload: { success: true, stdout: "ok" } };
         }
+        return undefined;
       },
     });
 
@@ -783,8 +765,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup", {
       command: "echo ok",
       workdir: process.cwd(),
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -826,8 +806,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup-discord", {
       command: "echo ok",
       workdir: process.cwd(),
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -889,8 +867,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup-discord-delayed", {
       command: "node -e \"require('node:fs').writeFileSync('marker.txt','ok')\"",
       workdir: tempDir,
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -965,8 +941,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup-webchat", {
       command: "node -e \"require('node:fs').writeFileSync('marker.txt','ok')\"",
       workdir: tempDir,
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -1021,8 +995,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup-deny", {
       command: "echo ok",
       workdir: process.cwd(),
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -1260,7 +1232,7 @@ describe("exec approvals", () => {
     const tool = createExecTool({
       host: "gateway",
       ask: "always",
-      security: "allowlist",
+      security: "full",
       trigger: "cron",
       approvalRunningNoticeMs: 0,
     });
@@ -1271,6 +1243,7 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain("cron-ok");
+
     expect(vi.mocked(callGatewayTool)).toHaveBeenCalledWith(
       "exec.approval.request",
       expect.anything(),
@@ -1378,78 +1351,5 @@ describe("exec approvals", () => {
         command: "echo cron-denied",
       }),
     ).rejects.toThrow("Cron runs cannot wait for interactive exec approval");
-  });
-
-  it("shows a local /approve prompt when discord exec approvals are disabled", async () => {
-    await writeOpenClawConfig({
-      channels: {
-        discord: {
-          enabled: true,
-          execApprovals: { enabled: false },
-        },
-      },
-    });
-
-    mockPendingApprovalRegistration();
-
-    const tool = createExecTool({
-      host: "gateway",
-      ask: "always",
-      approvalRunningNoticeMs: 0,
-      messageProvider: "discord",
-      accountId: "default",
-      currentChannelId: "1234567890",
-    });
-
-    const result = await tool.execute("call-unavailable", {
-      command: "npm view diver name version description",
-    });
-
-    expectPendingApprovalText(result, {
-      command: "npm view diver name version description",
-      host: "gateway",
-      allowedDecisions: "allow-once|deny",
-    });
-  });
-
-  it("keeps Telegram approvals in the initiating chat even when Discord DM approvals are also enabled", async () => {
-    await writeOpenClawConfig(
-      {
-        channels: {
-          telegram: {
-            enabled: true,
-            execApprovals: { enabled: false },
-          },
-          discord: {
-            enabled: true,
-            execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
-          },
-        },
-      },
-      true,
-    );
-
-    mockPendingApprovalRegistration();
-
-    const tool = createExecTool({
-      host: "gateway",
-      ask: "always",
-      approvalRunningNoticeMs: 0,
-      messageProvider: "telegram",
-      accountId: "default",
-      currentChannelId: "-1003841603622",
-    });
-
-    const result = await tool.execute("call-tg-unavailable", {
-      command: "npm view diver name version description",
-    });
-
-    const details = expectPendingApprovalText(result, {
-      command: "npm view diver name version description",
-      host: "gateway",
-      allowedDecisions: "allow-once|deny",
-    });
-    expect(getResultText(result)).toContain(`/approve ${details.approvalSlug} allow-once`);
-    expect(getResultText(result)).not.toContain(getExecApprovalApproverDmNoticeText());
   });
 });

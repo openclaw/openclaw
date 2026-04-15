@@ -126,7 +126,6 @@ describe("amazon-bedrock provider plugin", () => {
       repairToolUseResultPairing: true,
       validateAnthropicTurns: true,
       allowSyntheticToolResults: true,
-      dropThinkingBlocks: true,
     });
   });
 

@@ -152,6 +152,24 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
+    it("strips Qwen-style <tool_call> with nested <function=...> XML", () => {
+      expectVisibleText(
+        "prefix\n<tool_call><function=read><parameter=path>/home/user</parameter></function></tool_call>\nsuffix",
+        "prefix\n\nsuffix",
+      );
+    });
+
+    it("strips Qwen-style <tool_call> with whitespace before nested XML", () => {
+      expectVisibleText(
+        "prefix\n<tool_call>\n<function=search><parameter=query>test</parameter></function>\n</tool_call>\nsuffix",
+        "prefix\n\nsuffix",
+      );
+    });
+
+    it("strips dangling Qwen-style <tool_call> with nested XML to end", () => {
+      expectVisibleText("prefix\n<tool_call><function=read><parameter=path>/home", "prefix\n");
+    });
+
     it("does not close early on </tool_call> text inside JSON strings", () => {
       expectVisibleText(
         [
@@ -312,7 +330,7 @@ describe("stripAssistantInternalScaffolding", () => {
 
   describe("model special token stripping", () => {
     it("strips Kimi/GLM special tokens in isolation", () => {
-      expectVisibleText("<|assistant|>Here is the answer<|end|>", "Here is the answer ");
+      expectVisibleText("<|assistant|>Here is the answer<|end|>", "Here is the answer");
     });
 
     it("strips full-width pipe DeepSeek tokens", () => {
@@ -322,7 +340,7 @@ describe("stripAssistantInternalScaffolding", () => {
     it("strips special tokens mixed with normal text", () => {
       expectVisibleText(
         "Start <|tool_call_result_begin|>middle<|tool_call_result_end|> end",
-        "Start  middle  end",
+        "Start middle end",
       );
     });
 
@@ -392,8 +410,8 @@ describe("stripAssistantInternalScaffolding", () => {
     });
 
     it("resets special-token regex state between calls", () => {
-      expect(stripModelSpecialTokens("prefix <|assistant|>")).toBe("prefix  ");
-      expect(stripModelSpecialTokens("<|assistant|>short")).toBe(" short");
+      expect(stripModelSpecialTokens("prefix <|assistant|>")).toBe("prefix ");
+      expect(stripModelSpecialTokens("<|assistant|>short")).toBe("short");
     });
   });
 });

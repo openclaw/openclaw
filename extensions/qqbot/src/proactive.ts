@@ -6,6 +6,7 @@
  */
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   getAccessToken,
   sendC2CImageMessage,
@@ -163,7 +164,7 @@ export async function sendProactive(
       timestamp: result.timestamp,
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     debugError(`[qqbot:proactive] Failed to send message: ${message}`);
 
     return {
@@ -304,7 +305,7 @@ export async function sendProactiveMessageDirect(
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 }

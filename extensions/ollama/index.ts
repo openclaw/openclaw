@@ -6,7 +6,12 @@ import {
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildApiKeyCredential } from "openclaw/plugin-sdk/provider-auth";
+import {
+  OPENAI_COMPATIBLE_REPLAY_HOOKS,
+  type ModelProviderConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import {
   buildOllamaProvider,
   configureOllamaNonInteractive,
@@ -29,9 +34,6 @@ import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
 
 const PROVIDER_ID = "ollama";
 const DEFAULT_API_KEY = "ollama-local";
-const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
 
 type OllamaPluginConfig = {
   discovery?: {
@@ -39,19 +41,56 @@ type OllamaPluginConfig = {
   };
 };
 
+type OllamaProviderLikeConfig = ModelProviderConfig;
+
 function resolveOllamaDiscoveryApiKey(params: {
   env: NodeJS.ProcessEnv;
   explicitApiKey?: string;
   resolvedApiKey?: string;
 }): string {
   const envApiKey = params.env.OLLAMA_API_KEY?.trim() ? "OLLAMA_API_KEY" : undefined;
-  const explicitApiKey = params.explicitApiKey?.trim() || undefined;
-  const resolvedApiKey = params.resolvedApiKey?.trim() || undefined;
+  const explicitApiKey = normalizeOptionalString(params.explicitApiKey);
+  const resolvedApiKey = normalizeOptionalString(params.resolvedApiKey);
   return envApiKey ?? explicitApiKey ?? resolvedApiKey ?? DEFAULT_API_KEY;
 }
 
 function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.VITEST) || env.NODE_ENV === "test";
+}
+
+function hasMeaningfulExplicitOllamaConfig(providerConfig?: OllamaProviderLikeConfig): boolean {
+  if (!providerConfig) {
+    return false;
+  }
+  if (Array.isArray(providerConfig.models) && providerConfig.models.length > 0) {
+    return true;
+  }
+  if (typeof providerConfig.baseUrl === "string" && providerConfig.baseUrl.trim()) {
+    return resolveOllamaApiBase(providerConfig.baseUrl) !== OLLAMA_DEFAULT_BASE_URL;
+  }
+  if (readStringValue(providerConfig.apiKey)) {
+    return true;
+  }
+  if (providerConfig.auth) {
+    return true;
+  }
+  if (typeof providerConfig.authHeader === "boolean") {
+    return true;
+  }
+  if (
+    providerConfig.headers &&
+    typeof providerConfig.headers === "object" &&
+    Object.keys(providerConfig.headers).length > 0
+  ) {
+    return true;
+  }
+  if (providerConfig.request) {
+    return true;
+  }
+  if (typeof providerConfig.injectNumCtxForOpenAICompat === "boolean") {
+    return true;
+  }
+  return false;
 }
 
 export default definePluginEntry({
@@ -76,19 +115,27 @@ export default definePluginEntry({
           run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
             const result = await promptAndConfigureOllama({
               cfg: ctx.config,
+              env: ctx.env,
+              opts: ctx.opts as Record<string, unknown> | undefined,
               prompter: ctx.prompter,
-              isRemote: ctx.isRemote,
-              openUrl: ctx.openUrl,
+              secretInputMode: ctx.secretInputMode,
+              allowSecretRefPrompt: ctx.allowSecretRefPrompt,
             });
             return {
               profiles: [
                 {
                   profileId: "ollama:default",
-                  credential: {
-                    type: "api_key",
-                    provider: PROVIDER_ID,
-                    key: DEFAULT_API_KEY,
-                  },
+                  credential: buildApiKeyCredential(
+                    PROVIDER_ID,
+                    result.credential,
+                    undefined,
+                    result.credentialMode
+                      ? {
+                          secretInputMode: result.credentialMode,
+                          config: ctx.config,
+                        }
+                      : undefined,
+                  ),
                 },
               ],
               configPatch: result.config,
@@ -112,13 +159,18 @@ export default definePluginEntry({
         run: async (ctx: ProviderDiscoveryContext) => {
           const explicit = ctx.config.models?.providers?.ollama;
           const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
+          const hasMeaningfulExplicitConfig = hasMeaningfulExplicitOllamaConfig(explicit);
           const discoveryEnabled =
             pluginConfig.discovery?.enabled ?? ctx.config.models?.ollamaDiscovery?.enabled;
           if (!hasExplicitModels && discoveryEnabled === false) {
             return null;
           }
           const ollamaKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          const explicitApiKey = typeof explicit?.apiKey === "string" ? explicit.apiKey : undefined;
+          const hasRealOllamaKey =
+            typeof ollamaKey === "string" &&
+            ollamaKey.trim().length > 0 &&
+            ollamaKey.trim() !== DEFAULT_API_KEY;
+          const explicitApiKey = readStringValue(explicit?.apiKey);
           if (hasExplicitModels && explicit) {
             return {
               provider: {
@@ -136,12 +188,16 @@ export default definePluginEntry({
               },
             };
           }
-          if (!ollamaKey && !explicit && shouldSkipAmbientOllamaDiscovery(ctx.env)) {
+          if (
+            !hasRealOllamaKey &&
+            !hasMeaningfulExplicitConfig &&
+            shouldSkipAmbientOllamaDiscovery(ctx.env)
+          ) {
             return null;
           }
 
           const provider = await buildOllamaProvider(explicit?.baseUrl, {
-            quiet: !ollamaKey && !explicit,
+            quiet: !hasRealOllamaKey && !hasMeaningfulExplicitConfig,
           });
           if (provider.models.length === 0 && !ollamaKey && !explicit?.apiKey) {
             return null;
@@ -209,11 +265,7 @@ export default definePluginEntry({
         /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
         /\btruncating input\b.*\btoo long\b/i.test(errorMessage),
       resolveSyntheticAuth: ({ providerConfig }) => {
-        const hasApiConfig =
-          Boolean(providerConfig?.api?.trim()) ||
-          Boolean(providerConfig?.baseUrl?.trim()) ||
-          (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
-        if (!hasApiConfig) {
+        if (!hasMeaningfulExplicitOllamaConfig(providerConfig)) {
           return undefined;
         }
         return {

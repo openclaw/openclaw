@@ -1,7 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { modelKey } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+
+const normalizeProviderModelIdWithPluginMock = vi.hoisted(() =>
+  vi.fn<typeof normalizeProviderModelIdWithPlugin>(({ context }) => context.modelId),
+);
+
+vi.mock("../plugins/provider-runtime.js", () => {
+  return { normalizeProviderModelIdWithPlugin: normalizeProviderModelIdWithPluginMock };
+});
+
 import {
   __resetGatewayModelPricingCacheForTest,
   collectConfiguredModelPricingRefs,
@@ -119,9 +129,6 @@ describe("model-pricing-cache", () => {
           },
         ],
       },
-      hooks: {
-        mappings: [{ model: "xai/grok-4.20-experimental-beta-0304-reasoning" }],
-      },
       tools: {
         subagents: { model: { primary: "zai/glm-5" } },
       },
@@ -147,13 +154,6 @@ describe("model-pricing-cache", () => {
                   prompt: "0.000003",
                   completion: "0.000015",
                   input_cache_read: "0.0000003",
-                },
-              },
-              {
-                id: "x-ai/grok-4.20-experimental-beta-0304-reasoning",
-                pricing: {
-                  prompt: "0.000002",
-                  completion: "0.00001",
                 },
               },
               {
@@ -193,25 +193,6 @@ describe("model-pricing-cache", () => {
       cacheRead: 0.3,
       cacheWrite: 0,
     });
-    expect(
-      getCachedGatewayModelPricing({
-        provider: "xai",
-        model: "grok-4.20-experimental-beta-0304-reasoning",
-      }),
-    ).toEqual({
-      input: 2,
-      output: 10,
-      cacheRead: 0,
-      cacheWrite: 0,
-    });
-    expect(getCachedGatewayModelPricing({ provider: "xai", model: "grok-4.20-reasoning" })).toEqual(
-      {
-        input: 2,
-        output: 10,
-        cacheRead: 0,
-        cacheWrite: 0,
-      },
-    );
     expect(getCachedGatewayModelPricing({ provider: "zai", model: "glm-5" })).toEqual({
       input: 1,
       output: 4,

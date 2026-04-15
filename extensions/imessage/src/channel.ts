@@ -34,6 +34,7 @@ import {
   imessageSecurityAdapter,
   imessageSetupWizard,
 } from "./shared.js";
+import { probeIMessageStatusAccount } from "./status-core.js";
 import {
   inferIMessageTargetChatType,
   looksLikeIMessageExplicitTargetId,
@@ -196,12 +197,11 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             dbPath: snapshot.dbPath ?? null,
           }),
         probeAccount: async ({ account, timeoutMs }) =>
-          await (
-            await loadIMessageChannelRuntime()
-          ).probeIMessageAccount({
+          await probeIMessageStatusAccount({
+            account,
             timeoutMs,
-            cliPath: account.config.cliPath,
-            dbPath: account.config.dbPath,
+            probeIMessageAccount: async (params) =>
+              await (await loadIMessageChannelRuntime()).probeIMessageAccount(params),
           }),
         resolveAccountSnapshot: ({ account, runtime }) => ({
           accountId: account.accountId,

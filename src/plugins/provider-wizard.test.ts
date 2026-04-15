@@ -10,6 +10,7 @@ import type { ProviderPlugin } from "./types.js";
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 vi.mock("./providers.runtime.js", () => ({
+  isPluginProvidersLoadInFlight: () => false,
   resolvePluginProviders,
 }));
 

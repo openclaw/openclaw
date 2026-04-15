@@ -657,6 +657,31 @@ for usage/billing and raise limits as needed.
     OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). Onboarding can run the OAuth flow and will set the default model to `openai-codex/gpt-5.4` when appropriate. See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
   </Accordion>
 
+  <Accordion title="Why does ChatGPT GPT-5.4 not unlock openai/gpt-5.4 in OpenClaw?">
+    OpenClaw treats the two routes separately:
+
+    - `openai-codex/gpt-5.4` = ChatGPT/Codex OAuth
+    - `openai/gpt-5.4` = direct OpenAI Platform API
+
+    In OpenClaw, ChatGPT/Codex sign-in is wired to the `openai-codex/*` route,
+    not the direct `openai/*` route. If you want the direct API path in
+    OpenClaw, set `OPENAI_API_KEY` (or the equivalent OpenAI provider config).
+    If you want ChatGPT/Codex sign-in in OpenClaw, use `openai-codex/*`.
+
+  </Accordion>
+
+  <Accordion title="Why can Codex OAuth limits differ from ChatGPT web?">
+    `openai-codex/*` uses the Codex OAuth route, and its usable quota windows are
+    OpenAI-managed and plan-dependent. In practice, those limits can differ from
+    the ChatGPT website/app experience, even when both are tied to the same account.
+
+    OpenClaw can show the currently visible provider usage/quota windows in
+    `openclaw models status`, but it does not invent or normalize ChatGPT-web
+    entitlements into direct API access. If you want the direct OpenAI Platform
+    billing/limit path, use `openai/*` with an API key.
+
+  </Accordion>
+
   <Accordion title="Do you support OpenAI subscription auth (Codex OAuth)?">
     Yes. OpenClaw fully supports **OpenAI Code (Codex) subscription OAuth**.
     OpenAI explicitly allows subscription OAuth usage in external tools/workflows
@@ -676,7 +701,7 @@ for usage/billing and raise limits as needed.
        - npm: `npm install -g @google/gemini-cli`
     2. Enable the plugin: `openclaw plugins enable google`
     3. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
-    4. Default model after login: `google-gemini-cli/gemini-3.1-pro-preview`
+    4. Default model after login: `google-gemini-cli/gemini-3-flash-preview`
     5. If requests fail, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host
 
     This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
@@ -1791,8 +1816,8 @@ for usage/billing and raise limits as needed.
 
     - `config.schema.lookup`: inspect one config subtree with its shallow schema node, matched UI hint, and immediate child summaries before writing
     - `config.get`: fetch the current snapshot + hash
-    - `config.patch`: safe partial update (preferred for most RPC edits)
-    - `config.apply`: validate + replace the full config, then restart
+    - `config.patch`: safe partial update (preferred for most RPC edits); hot-reloads when possible and restarts when required
+    - `config.apply`: validate + replace the full config; hot-reloads when possible and restarts when required
     - The owner-only `gateway` runtime tool still refuses to rewrite `tools.exec.ask` / `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the same protected exec paths
 
   </Accordion>
@@ -2229,7 +2254,7 @@ for usage/billing and raise limits as needed.
     Quickest setup:
 
     1. Install Ollama from `https://ollama.com/download`
-    2. Pull a local model such as `ollama pull glm-4.7-flash`
+    2. Pull a local model such as `ollama pull gemma4`
     3. If you want cloud models too, run `ollama signin`
     4. Run `openclaw onboard` and choose `Ollama`
     5. Pick `Local` or `Cloud + Local`
@@ -3167,13 +3192,14 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
 <AccordionGroup>
   <Accordion title="How do I stop internal system messages from showing in chat?">
-    Most internal or tool messages only appear when **verbose** or **reasoning** is enabled
+    Most internal or tool messages only appear when **verbose**, **trace**, or **reasoning** is enabled
     for that session.
 
     Fix in the chat where you see it:
 
     ```
     /verbose off
+    /trace off
     /reasoning off
     ```
 

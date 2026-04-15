@@ -18,7 +18,7 @@ import type {
 
 /** Extract the channel config from the full OpenClaw config object. */
 function getChannelConfig(cfg: OpenClawConfig): SynologyChatChannelConfig | undefined {
-  return cfg?.channels?.["synology-chat"];
+  return cfg?.channels?.["synology-chat"] as SynologyChatChannelConfig | undefined;
 }
 
 function resolveImplicitAccountId(channelCfg: SynologyChatChannelConfig): string | undefined {

@@ -1,13 +1,9 @@
-import type { RuntimeEnv } from "../../api.js";
-import { extractCites, extractMessageText, type ParsedCite } from "./utils.js";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { asRecord, extractCites, extractMessageText, type ParsedCite } from "./utils.js";
 
 type TlonScryApi = {
   scry: (path: string) => Promise<unknown>;
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
 
 export function createTlonCitationResolver(params: { api: TlonScryApi; runtime: RuntimeEnv }) {
   const { api, runtime } = params;

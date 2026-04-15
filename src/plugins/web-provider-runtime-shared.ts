@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withActivatedPluginIds } from "./activation-context.js";
 import {
   buildPluginSnapshotCacheEnvKey,
@@ -6,12 +6,14 @@ import {
   shouldUsePluginSnapshotCache,
 } from "./cache-controls.js";
 import {
+  isPluginRegistryLoadInFlight,
   loadOpenClawPlugins,
   resolveCompatibleRuntimePluginRegistry,
   resolveRuntimePluginRegistry,
 } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { hasExplicitPluginIdScope, normalizePluginIdScope } from "./plugin-scope.js";
 import type { PluginRegistry } from "./registry.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import {
@@ -86,13 +88,15 @@ function resolveWebProviderLoadOptions<TEntry>(
       workspaceDir,
       env,
     });
-  const onlyPluginIds = deps.resolveCandidatePluginIds({
-    config,
-    workspaceDir,
-    env,
-    onlyPluginIds: params.onlyPluginIds,
-    origin: params.origin,
-  });
+  const onlyPluginIds = normalizePluginIdScope(
+    deps.resolveCandidatePluginIds({
+      config,
+      workspaceDir,
+      env,
+      onlyPluginIds: params.onlyPluginIds,
+      origin: params.origin,
+    }),
+  );
   return buildPluginRuntimeLoadOptionsFromValues(
     {
       env,
@@ -105,7 +109,7 @@ function resolveWebProviderLoadOptions<TEntry>(
     {
       cache: params.cache ?? false,
       activate: params.activate ?? false,
-      ...(onlyPluginIds ? { onlyPluginIds } : {}),
+      ...(hasExplicitPluginIdScope(onlyPluginIds) ? { onlyPluginIds } : {}),
     },
   );
 }
@@ -170,15 +174,10 @@ export function resolvePluginWebProviders<TEntry>(
       return cached.providers;
     }
   }
-
-  const loadOptions = resolveWebProviderLoadOptions(params, deps);
-  const resolved = deps.mapRegistryProviders({
-    registry:
-      resolveCompatibleRuntimePluginRegistry(loadOptions) ?? loadOpenClawPlugins(loadOptions),
-    onlyPluginIds: params.onlyPluginIds,
-  });
-
-  if (cacheOwnerConfig && shouldMemoizeSnapshot) {
+  const memoizeSnapshot = (providers: TEntry[]) => {
+    if (!cacheOwnerConfig || !shouldMemoizeSnapshot) {
+      return;
+    }
     const ttlMs = resolvePluginSnapshotCacheTtlMs(env);
     let configCache = deps.snapshotCache.get(cacheOwnerConfig);
     if (!configCache) {
@@ -195,10 +194,28 @@ export function resolvePluginWebProviders<TEntry>(
     }
     envCache.set(cacheKey, {
       expiresAt: Date.now() + ttlMs,
-      providers: resolved,
+      providers,
     });
-  }
+  };
 
+  const loadOptions = resolveWebProviderLoadOptions(params, deps);
+  const compatible = resolveCompatibleRuntimePluginRegistry(loadOptions);
+  if (compatible) {
+    const resolved = deps.mapRegistryProviders({
+      registry: compatible,
+      onlyPluginIds: params.onlyPluginIds,
+    });
+    memoizeSnapshot(resolved);
+    return resolved;
+  }
+  if (isPluginRegistryLoadInFlight(loadOptions)) {
+    return [];
+  }
+  const resolved = deps.mapRegistryProviders({
+    registry: loadOpenClawPlugins(loadOptions),
+    onlyPluginIds: params.onlyPluginIds,
+  });
+  memoizeSnapshot(resolved);
   return resolved;
 }
 
@@ -206,9 +223,9 @@ export function resolveRuntimeWebProviders<TEntry>(
   params: Omit<ResolvePluginWebProvidersParams, "activate" | "cache" | "mode">,
   deps: ResolveWebProviderRuntimeDeps<TEntry>,
 ): TEntry[] {
-  const runtimeRegistry = resolveRuntimePluginRegistry(
-    params.config === undefined ? undefined : resolveWebProviderLoadOptions(params, deps),
-  );
+  const loadOptions =
+    params.config === undefined ? undefined : resolveWebProviderLoadOptions(params, deps);
+  const runtimeRegistry = resolveRuntimePluginRegistry(loadOptions);
   if (runtimeRegistry) {
     return deps.mapRegistryProviders({
       registry: runtimeRegistry,

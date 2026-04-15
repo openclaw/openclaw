@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
 IMAGE_NAME="openclaw-openwebui-e2e"
 OPENWEBUI_IMAGE="${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.8.10}"
@@ -40,7 +41,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Building Docker image..."
-docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+run_logged openwebui-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 
 echo "Pulling Open WebUI image: $OPENWEBUI_IMAGE"
 docker pull "$OPENWEBUI_IMAGE" >/dev/null
@@ -90,7 +91,7 @@ NODE
     rm -f "$batch_file"
 
     exec node "$entry" gateway --port '"$PORT"' --bind lan --allow-unconfigured > /tmp/openwebui-gateway.log 2>&1
-  '
+  ' >/dev/null
 
 echo "Waiting for gateway HTTP surface..."
 gateway_ready=0
@@ -170,15 +171,13 @@ if ! docker exec \
   -e "OPENWEBUI_EXPECTED_NONCE=$PROMPT_NONCE" \
   -e "OPENWEBUI_PROMPT=$PROMPT" \
   "$GW_NAME" \
-  node /app/scripts/e2e/openwebui-probe.mjs; then
+  node /app/scripts/e2e/openwebui-probe.mjs >/tmp/openwebui-probe.log 2>&1; then
+  cat /tmp/openwebui-probe.log 2>/dev/null || true
   echo "Open WebUI probe failed; gateway log tail:"
   docker exec "$GW_NAME" bash -lc 'tail -n 200 /tmp/openwebui-gateway.log' || true
   echo "Open WebUI container logs:"
   docker logs "$OW_NAME" 2>&1 | tail -n 200 || true
   exit 1
 fi
-
-echo "Open WebUI container logs:"
-docker logs "$OW_NAME" 2>&1 | tail -n 80 || true
 
 echo "OK"

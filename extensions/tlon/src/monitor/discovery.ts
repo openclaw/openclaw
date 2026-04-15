@@ -1,14 +1,6 @@
-import type { RuntimeEnv } from "../../api.js";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { Foreigns } from "../urbit/foreigns.js";
-import { formatChangesDate } from "./utils.js";
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
-function formatErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+import { asRecord, formatChangesDate, formatErrorMessage } from "./utils.js";
 
 export async function fetchGroupChanges(
   api: { scry: (path: string) => Promise<unknown> },

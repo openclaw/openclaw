@@ -119,6 +119,7 @@ targets:
             CFBundleURLSchemes:
               - openclaw
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        OpenClawCanonicalVersion: "$(OPENCLAW_IOS_VERSION)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         UILaunchScreen: {}
         UIApplicationSceneManifest:

@@ -19,11 +19,13 @@ import {
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
 import type {
   TelegramMediaRef,
   TelegramMessageContextOptions,
+  TelegramMessageContextSessionRuntimeOverrides,
 } from "./bot-message-context.types.js";
 import {
   buildGroupLabel,
@@ -41,6 +43,49 @@ import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 type FinalizedTelegramInboundContext = ReturnType<
   typeof import("./bot-message-context.session.runtime.js").finalizeInboundContext
 >;
+
+type TelegramMessageContextSessionRuntime =
+  typeof import("./bot-message-context.session.runtime.js");
+
+const sessionRuntimeMethods = [
+  "finalizeInboundContext",
+  "readSessionUpdatedAt",
+  "recordInboundSession",
+  "resolveInboundLastRouteSessionKey",
+  "resolvePinnedMainDmOwnerFromAllowlist",
+  "resolveStorePath",
+] as const satisfies readonly (keyof TelegramMessageContextSessionRuntime)[];
+
+function hasCompleteSessionRuntime(
+  runtime: TelegramMessageContextSessionRuntimeOverrides | undefined,
+): runtime is TelegramMessageContextSessionRuntime {
+  return Boolean(
+    runtime && sessionRuntimeMethods.every((method) => typeof runtime[method] === "function"),
+  );
+}
+
+async function loadTelegramMessageContextSessionRuntime(
+  runtime: TelegramMessageContextSessionRuntimeOverrides | undefined,
+): Promise<TelegramMessageContextSessionRuntime> {
+  if (hasCompleteSessionRuntime(runtime)) {
+    return runtime;
+  }
+  return {
+    ...(await import("./bot-message-context.session.runtime.js")),
+    ...runtime,
+  };
+}
+
+export async function resolveTelegramMessageContextStorePath(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
+}): Promise<string> {
+  const sessionRuntime = await loadTelegramMessageContextSessionRuntime(params.sessionRuntime);
+  return sessionRuntime.resolveStorePath(params.cfg.session?.store, {
+    agentId: params.agentId,
+  });
+}
 
 export async function buildTelegramInboundContextPayload(params: {
   cfg: OpenClawConfig;
@@ -71,6 +116,8 @@ export async function buildTelegramInboundContextPayload(params: {
   options?: TelegramMessageContextOptions;
   dmAllowFrom?: Array<string | number>;
   effectiveGroupAllow?: NormalizedAllowFrom;
+  topicName?: string;
+  sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
 }): Promise<{
   ctxPayload: FinalizedTelegramInboundContext;
   skillFilter: string[] | undefined;
@@ -104,6 +151,8 @@ export async function buildTelegramInboundContextPayload(params: {
     options,
     dmAllowFrom,
     effectiveGroupAllow,
+    topicName,
+    sessionRuntime: sessionRuntimeOverride,
   } = params;
   const replyTarget = describeReplyTarget(msg);
   const forwardOrigin = normalizeForwardedContext(msg);
@@ -172,14 +221,29 @@ export async function buildTelegramInboundContextPayload(params: {
           : ""
       }]\n`
     : "";
+  const buildReplySupplementalLines = (params: { body?: string }) => {
+    const lines: string[] = [];
+    const forwardAnnotation = replyForwardAnnotation.trimEnd();
+    if (forwardAnnotation) {
+      lines.push(forwardAnnotation);
+    }
+    if (params.body) {
+      lines.push(params.body);
+    }
+    return lines.length > 0 ? `\n${lines.join("\n")}` : "";
+  };
   const replySuffix = visibleReplyTarget
     ? visibleReplyTarget.kind === "quote"
       ? `\n\n[Quoting ${visibleReplyTarget.sender}${
           visibleReplyTarget.id ? ` id:${visibleReplyTarget.id}` : ""
-        }]\n${replyForwardAnnotation}"${visibleReplyTarget.body}"\n[/Quoting]`
+        }]${buildReplySupplementalLines({
+          body: visibleReplyTarget.body ? `"${visibleReplyTarget.body}"` : undefined,
+        })}\n[/Quoting]`
       : `\n\n[Replying to ${visibleReplyTarget.sender}${
           visibleReplyTarget.id ? ` id:${visibleReplyTarget.id}` : ""
-        }]\n${replyForwardAnnotation}${visibleReplyTarget.body}\n[/Replying]`
+        }]${buildReplySupplementalLines({
+          body: visibleReplyTarget.body,
+        })}\n[/Replying]`
     : "";
   const forwardPrefix = visibleForwardOrigin
     ? `[Forwarded from ${visibleForwardOrigin.from}${
@@ -193,9 +257,11 @@ export async function buildTelegramInboundContextPayload(params: {
   const conversationLabel = isGroup
     ? (groupLabel ?? `group:${chatId}`)
     : buildSenderLabel(msg, senderId || chatId);
-  const sessionRuntime = await import("./bot-message-context.session.runtime.js");
-  const storePath = sessionRuntime.resolveStorePath(cfg.session?.store, {
+  const sessionRuntime = await loadTelegramMessageContextSessionRuntime(sessionRuntimeOverride);
+  const storePath = await resolveTelegramMessageContextStorePath({
+    cfg,
     agentId: route.agentId,
+    sessionRuntime: sessionRuntimeOverride,
   });
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
   const previousTimestamp = sessionRuntime.readSessionUpdatedAt({
@@ -241,7 +307,7 @@ export async function buildTelegramInboundContextPayload(params: {
     topicConfig,
   });
   const commandBody = normalizeCommandBody(rawBody, {
-    botUsername: primaryCtx.me?.username?.toLowerCase(),
+    botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
   });
   const inboundHistory =
     isGroup && historyKey && historyLimit > 0
@@ -313,6 +379,7 @@ export async function buildTelegramInboundContextPayload(params: {
     CommandSource: options?.commandSource,
     MessageThreadId: threadSpec.id,
     IsForum: isForum,
+    TopicName: isForum && topicName ? topicName : undefined,
     OriginatingChannel: "telegram" as const,
     OriginatingTo: `telegram:${chatId}`,
   });
@@ -375,7 +442,7 @@ export async function buildTelegramInboundContextPayload(params: {
   });
 
   if (visibleReplyTarget && shouldLogVerbose()) {
-    const preview = visibleReplyTarget.body.replace(/\s+/g, " ").slice(0, 120);
+    const preview = (visibleReplyTarget.body ?? "").replace(/\s+/g, " ").slice(0, 120);
     logVerbose(
       `telegram reply-context: replyToId=${visibleReplyTarget.id} replyToSender=${visibleReplyTarget.sender} replyToBody="${preview}"`,
     );

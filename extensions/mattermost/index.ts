@@ -6,7 +6,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contra
 
 function registerSlashCommandRoute(api: OpenClawPluginApi): void {
   const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./runtime-api.js",
+    specifier: "./slash-route-api.js",
     exportName: "registerSlashCommandRoute",
   });
   register(api);
@@ -20,6 +20,10 @@ export default defineBundledChannelEntry({
   plugin: {
     specifier: "./channel-plugin-api.js",
     exportName: "mattermostPlugin",
+  },
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
   },
   runtime: {
     specifier: "./runtime-api.js",

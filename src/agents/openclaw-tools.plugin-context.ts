@@ -1,7 +1,8 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
+import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 export type OpenClawPluginToolOptions = {
@@ -13,6 +14,7 @@ export type OpenClawPluginToolOptions = {
   agentDir?: string;
   workspaceDir?: string;
   config?: OpenClawConfig;
+  fsPolicy?: ToolFsPolicy;
   requesterSenderId?: string | null;
   senderIsOwner?: boolean;
   sessionId?: string;
@@ -48,6 +50,7 @@ export function resolveOpenClawPluginToolInputs(params: {
     context: {
       config: options?.config,
       runtimeConfig,
+      fsPolicy: options?.fsPolicy,
       workspaceDir,
       agentDir: options?.agentDir,
       agentId: sessionAgentId,

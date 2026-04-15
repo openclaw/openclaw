@@ -16,6 +16,31 @@ enum StatusActivityBuilder {
                 tint: .orange)
         }
 
+        if let gatewayProblem = appModel.lastGatewayProblem {
+            switch gatewayProblem.kind {
+            case .pairingRequired,
+                .pairingRoleUpgradeRequired,
+                .pairingScopeUpgradeRequired,
+                .pairingMetadataUpgradeRequired:
+                return StatusPill.Activity(
+                    title: "Approval pending",
+                    systemImage: "person.crop.circle.badge.clock",
+                    tint: .orange)
+            case .timeout, .connectionRefused, .reachabilityFailed, .websocketCancelled:
+                return StatusPill.Activity(
+                    title: "Check network",
+                    systemImage: "wifi.exclamationmark",
+                    tint: .orange)
+            default:
+                if gatewayProblem.pauseReconnect {
+                    return StatusPill.Activity(
+                        title: "Action required",
+                        systemImage: "exclamationmark.triangle.fill",
+                        tint: .orange)
+                }
+            }
+        }
+
         let gatewayStatus = appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         let gatewayLower = gatewayStatus.lowercased()
         if gatewayLower.contains("repair") {

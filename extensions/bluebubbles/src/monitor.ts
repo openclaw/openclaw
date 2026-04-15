@@ -1,8 +1,15 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { resolveBlueBubblesEffectiveAllowPrivateNetwork } from "./accounts.js";
+import { runBlueBubblesCatchup } from "./catchup.js";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
-import { normalizeWebhookMessage, normalizeWebhookReaction } from "./monitor-normalize.js";
+import {
+  asRecord,
+  normalizeWebhookMessage,
+  normalizeWebhookReaction,
+} from "./monitor-normalize.js";
 import { logVerbose, processMessage, processReaction } from "./monitor-processing.js";
 import {
   _resetBlueBubblesShortIdState,
@@ -88,15 +95,9 @@ function parseBlueBubblesWebhookPayload(
     try {
       return { ok: true, value: JSON.parse(payload) as unknown };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, error: formatErrorMessage(error) };
     }
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function maskSecret(value: string): string {
@@ -111,7 +112,7 @@ function normalizeAuthToken(raw: string): string {
   if (!value) {
     return "";
   }
-  if (value.toLowerCase().startsWith("bearer ")) {
+  if (normalizeLowercaseStringOrEmpty(value).startsWith("bearer ")) {
     return value.slice("bearer ".length).trim();
   }
   return value;
@@ -321,6 +322,10 @@ export async function monitorBlueBubblesProvider(
   const { account, config, runtime, abortSignal, statusSink } = options;
   const core = getBlueBubblesRuntime();
   const path = options.webhookPath?.trim() || DEFAULT_WEBHOOK_PATH;
+  const allowPrivateNetwork = resolveBlueBubblesEffectiveAllowPrivateNetwork({
+    baseUrl: account.baseUrl,
+    config: account.config,
+  });
 
   // Fetch and cache server info (for macOS version detection in action gating)
   const serverInfo = await fetchBlueBubblesServerInfo({
@@ -328,7 +333,7 @@ export async function monitorBlueBubblesProvider(
     password: account.config.password,
     accountId: account.accountId,
     timeoutMs: 5000,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+    allowPrivateNetwork,
   }).catch(() => null);
   if (serverInfo?.os_version) {
     runtime.log?.(`[${account.accountId}] BlueBubbles server macOS ${serverInfo.os_version}`);
@@ -339,14 +344,15 @@ export async function monitorBlueBubblesProvider(
     );
   }
 
-  const unregister = registerBlueBubblesWebhookTarget({
+  const target: WebhookTarget = {
     account,
     config,
     runtime,
     core,
     path,
     statusSink,
-  });
+  };
+  const unregister = registerBlueBubblesWebhookTarget(target);
 
   return await new Promise((resolve) => {
     const stop = () => {
@@ -363,6 +369,17 @@ export async function monitorBlueBubblesProvider(
     runtime.log?.(
       `[${account.accountId}] BlueBubbles webhook listening on ${normalizeWebhookPath(path)}`,
     );
+
+    // Kick off a catchup pass for messages delivered while the webhook
+    // target wasn't reachable. Fire-and-forget; the catchup runs through the
+    // same processMessage path webhooks use, and #66230's inbound dedupe
+    // drops any GUID that was already handled, so this is safe even if a
+    // live webhook raced the startup replay. See #66721.
+    runBlueBubblesCatchup(target).catch((err) => {
+      runtime.error?.(
+        `[${account.accountId}] BlueBubbles catchup: unexpected failure: ${String(err)}`,
+      );
+    });
   });
 }
 

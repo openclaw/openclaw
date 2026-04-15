@@ -131,8 +131,12 @@ Direct generation example:
 | `filename`        | string   | Output filename hint                                                                              |
 
 Not all providers support all parameters. OpenClaw still validates hard limits
-such as input counts before submission, but unsupported optional hints are
-ignored with a warning when the selected provider or model cannot honor them.
+such as input counts before submission. When a provider supports duration but
+uses a shorter maximum than the requested value, OpenClaw automatically clamps
+to the closest supported duration. Truly unsupported optional hints are ignored
+with a warning when the selected provider or model cannot honor them.
+
+Tool results report the applied settings. When OpenClaw clamps duration during provider fallback, the returned `durationSeconds` reflects the submitted value and `details.normalization.durationSeconds` shows the requested-to-applied mapping.
 
 ## Async behavior for the shared provider-backed path
 
@@ -143,6 +147,25 @@ ignored with a warning when the selected provider or model cannot honor them.
 - Completion wake: OpenClaw injects an internal completion event back into the same session so the model can write the user-facing follow-up itself.
 - Prompt hint: later user/manual turns in the same session get a small runtime hint when a music task is already in flight so the model does not blindly call `music_generate` again.
 - No-session fallback: direct/local contexts without a real agent session still run inline and return the final audio result in the same turn.
+
+### Task lifecycle
+
+Each `music_generate` request moves through four states:
+
+1. **queued** -- task created, waiting for the provider to accept it.
+2. **running** -- provider is processing (typically 30 seconds to 3 minutes depending on provider and duration).
+3. **succeeded** -- track ready; the agent wakes and posts it to the conversation.
+4. **failed** -- provider error or timeout; the agent wakes with error details.
+
+Check status from the CLI:
+
+```bash
+openclaw tasks list
+openclaw tasks show <taskId>
+openclaw tasks cancel <taskId>
+```
+
+Duplicate prevention: if a music task is already `queued` or `running` for the current session, `music_generate` returns the existing task status instead of starting a new one. Use `action: "status"` to check explicitly without triggering a new generation.
 
 ## Configuration
 
@@ -174,6 +197,10 @@ When generating music, OpenClaw tries providers in this order:
 
 If a provider fails, the next candidate is tried automatically. If all fail, the
 error includes details from each attempt.
+
+Set `agents.defaults.mediaGenerationAutoProviderFallback: false` if you want
+music generation to use only the explicit `model`, `primary`, and `fallbacks`
+entries.
 
 ## Provider notes
 
@@ -227,6 +254,12 @@ Opt-in live coverage for the shared bundled providers:
 
 ```bash
 OPENCLAW_LIVE_TEST=1 pnpm test:live -- extensions/music-generation-providers.live.test.ts
+```
+
+Repo wrapper:
+
+```bash
+pnpm test:live:media music
 ```
 
 This live file loads missing provider env vars from `~/.profile`, prefers

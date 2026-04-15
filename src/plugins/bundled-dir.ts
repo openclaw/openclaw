@@ -3,12 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 
 const DISABLED_BUNDLED_PLUGINS_DIR = path.join(os.tmpdir(), "openclaw-empty-bundled-plugins");
 
 function bundledPluginsDisabled(env: NodeJS.ProcessEnv): boolean {
-  const raw = env.OPENCLAW_DISABLE_BUNDLED_PLUGINS?.trim().toLowerCase();
+  const raw = normalizeOptionalLowercaseString(env.OPENCLAW_DISABLE_BUNDLED_PLUGINS);
   return raw === "1" || raw === "true";
 }
 
@@ -25,12 +26,63 @@ function isSourceCheckoutRoot(packageRoot: string): boolean {
   );
 }
 
+function hasUsableBundledPluginTree(pluginsDir: string): boolean {
+  if (!fs.existsSync(pluginsDir)) {
+    return false;
+  }
+  try {
+    return fs.readdirSync(pluginsDir, { withFileTypes: true }).some((entry) => {
+      if (!entry.isDirectory()) {
+        return false;
+      }
+      const pluginDir = path.join(pluginsDir, entry.name);
+      return (
+        fs.existsSync(path.join(pluginDir, "package.json")) ||
+        fs.existsSync(path.join(pluginDir, "openclaw.plugin.json"))
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+function runningSourceTypeScriptProcess(): boolean {
+  const argv1 = process.argv[1]?.toLowerCase();
+  if (
+    argv1?.endsWith(".ts") ||
+    argv1?.endsWith(".tsx") ||
+    argv1?.endsWith(".mts") ||
+    argv1?.endsWith(".cts")
+  ) {
+    return true;
+  }
+
+  for (let index = 0; index < process.execArgv.length; index += 1) {
+    const arg = process.execArgv[index]?.toLowerCase();
+    if (!arg) {
+      continue;
+    }
+    if (arg === "tsx" || arg.includes("tsx/register")) {
+      return true;
+    }
+    if ((arg === "--import" || arg === "--loader") && process.execArgv[index + 1]) {
+      const next = process.execArgv[index + 1].toLowerCase();
+      if (next === "tsx" || next.includes("tsx/")) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function resolveBundledDirFromPackageRoot(
   packageRoot: string,
   preferSourceCheckout: boolean,
 ): string | undefined {
   const sourceExtensionsDir = path.join(packageRoot, "extensions");
   const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
+  const sourceCheckout = isSourceCheckoutRoot(packageRoot);
   if (preferSourceCheckout && fs.existsSync(sourceExtensionsDir)) {
     return sourceExtensionsDir;
   }
@@ -38,13 +90,19 @@ function resolveBundledDirFromPackageRoot(
   // dist-runtime/. Prefer that over source extensions only when the paired
   // dist/ tree exists; otherwise wrappers can drift ahead of the last build.
   const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
-  if (fs.existsSync(runtimeExtensionsDir) && fs.existsSync(builtExtensionsDir)) {
+  const hasUsableRuntimeTree = sourceCheckout
+    ? hasUsableBundledPluginTree(runtimeExtensionsDir)
+    : fs.existsSync(runtimeExtensionsDir);
+  const hasUsableBuiltTree = sourceCheckout
+    ? hasUsableBundledPluginTree(builtExtensionsDir)
+    : fs.existsSync(builtExtensionsDir);
+  if (hasUsableRuntimeTree && hasUsableBuiltTree) {
     return runtimeExtensionsDir;
   }
-  if (fs.existsSync(builtExtensionsDir)) {
+  if (hasUsableBuiltTree) {
     return builtExtensionsDir;
   }
-  if (isSourceCheckoutRoot(packageRoot) && fs.existsSync(sourceExtensionsDir)) {
+  if (sourceCheckout && fs.existsSync(sourceExtensionsDir)) {
     return sourceExtensionsDir;
   }
   return undefined;
@@ -78,7 +136,7 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     return resolvedOverride;
   }
 
-  const preferSourceCheckout = Boolean(env.VITEST);
+  const preferSourceCheckout = Boolean(env.VITEST) || runningSourceTypeScriptProcess();
 
   try {
     const packageRoots = [

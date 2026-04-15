@@ -84,6 +84,10 @@
     "target": "Diffs"
   },
   {
+    "source": "Dreaming",
+    "target": "Dreaming"
+  },
+  {
     "source": "Capability Cookbook",
     "target": "能力扩展手册"
   },
@@ -182,6 +186,14 @@
   {
     "source": "Doctor",
     "target": "Doctor"
+  },
+  {
+    "source": "Memory Wiki",
+    "target": "Memory Wiki"
+  },
+  {
+    "source": "wiki",
+    "target": "wiki"
   },
   {
     "source": "Polls",

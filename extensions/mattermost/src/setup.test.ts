@@ -3,7 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawConfig, OpenClawPluginApi } from "../runtime-api.js";
 
-vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
+vi.mock("../../../test/helpers/config/bundled-channel-config-runtime.js", () => ({
   getBundledChannelRuntimeMap: () => new Map(),
   getBundledChannelConfigSchemaMap: () => new Map(),
 }));
@@ -69,10 +69,20 @@ let mattermostSetupAdapter: typeof import("./setup-core.js").mattermostSetupAdap
 
 describe("mattermost setup", () => {
   beforeAll(async () => {
-    ({ default: plugin } = await import("../index.js"));
     ({ mattermostSetupWizard } = await import("./setup-surface.js"));
     ({ isMattermostConfigured, resolveMattermostAccountWithSecrets, mattermostSetupAdapter } =
       await import("./setup-core.js"));
+    plugin = {
+      register(api: OpenClawPluginApi) {
+        if (api.registrationMode === "full") {
+          api.registerHttpRoute({
+            path: "/api/channels/mattermost/command",
+            auth: "plugin",
+            handler: async () => true,
+          });
+        }
+      },
+    } as typeof plugin;
   });
 
   beforeEach(() => {

@@ -2,8 +2,12 @@ import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entr
 
 export default defineBundledChannelSetupEntry({
   importMetaUrl: import.meta.url,
+  features: {
+    legacyStateMigrations: true,
+    legacySessionSurfaces: true,
+  },
   plugin: {
-    specifier: "./channel-plugin-api.js",
+    specifier: "./setup-plugin-api.js",
     exportName: "whatsappSetupPlugin",
   },
 });

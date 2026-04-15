@@ -70,6 +70,24 @@ function primeAccountClientMocks(params?: {
   return { mainAuth, opsAuth, mainClient, opsClient };
 }
 
+function createPendingSharedStartup(mainAuth = authFor("main")) {
+  let resolveStartup: (() => void) | undefined;
+  const mainClient = {
+    ...createMockClient("main"),
+    start: vi.fn(
+      async () =>
+        await new Promise<void>((resolve) => {
+          resolveStartup = resolve;
+        }),
+    ),
+  };
+
+  resolveMatrixAuthMock.mockResolvedValue(mainAuth);
+  createMatrixClientMock.mockResolvedValue(mainClient);
+
+  return { mainClient, resolveStartup: () => resolveStartup?.() };
+}
+
 describe("resolveSharedMatrixClient", () => {
   beforeAll(async () => {
     ({
@@ -231,6 +249,58 @@ describe("resolveSharedMatrixClient", () => {
         startClient: false,
       }),
     ).rejects.toThrow("Matrix shared client account mismatch");
+  });
+
+  it("lets a later waiter abort while shared startup continues for the owner", async () => {
+    const { mainClient, resolveStartup } = createPendingSharedStartup();
+
+    const ownerPromise = resolveSharedMatrixClient({ accountId: "main" });
+    await vi.waitFor(() => {
+      expect(mainClient.start).toHaveBeenCalledTimes(1);
+    });
+
+    const abortController = new AbortController();
+    const canceledWaiter = resolveSharedMatrixClient({
+      accountId: "main",
+      abortSignal: abortController.signal,
+    });
+    abortController.abort();
+
+    await expect(canceledWaiter).rejects.toMatchObject({
+      message: "Matrix startup aborted",
+      name: "AbortError",
+    });
+
+    resolveStartup();
+    await expect(ownerPromise).resolves.toBe(mainClient);
+  });
+
+  it("keeps the shared startup lock while an aborted waiter exits early", async () => {
+    const { mainClient, resolveStartup } = createPendingSharedStartup();
+
+    const ownerPromise = resolveSharedMatrixClient({ accountId: "main" });
+    await vi.waitFor(() => {
+      expect(mainClient.start).toHaveBeenCalledTimes(1);
+    });
+
+    const abortController = new AbortController();
+    const abortedWaiter = resolveSharedMatrixClient({
+      accountId: "main",
+      abortSignal: abortController.signal,
+    });
+    abortController.abort();
+    await expect(abortedWaiter).rejects.toMatchObject({
+      message: "Matrix startup aborted",
+      name: "AbortError",
+    });
+
+    const followerPromise = resolveSharedMatrixClient({ accountId: "main" });
+    expect(mainClient.start).toHaveBeenCalledTimes(1);
+
+    resolveStartup();
+    await expect(ownerPromise).resolves.toBe(mainClient);
+    await expect(followerPromise).resolves.toBe(mainClient);
+    expect(mainClient.start).toHaveBeenCalledTimes(1);
   });
 
   it("recreates the shared client when dispatcherPolicy changes", async () => {

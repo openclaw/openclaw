@@ -1,4 +1,4 @@
-import type { ChannelId } from "../channels/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SecretInputMode } from "../plugins/provider-auth-types.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
@@ -9,89 +9,11 @@ export type OnboardMode = "local" | "remote";
  */
 export type BuiltInAuthChoice =
   // Legacy alias for `setup-token` (kept for backwards CLI compatibility).
-  | "oauth"
-  | "setup-token"
-  | "token"
-  | "chutes"
-  | "deepseek-api-key"
-  | "openai-codex"
-  | "openai-api-key"
-  | "openrouter-api-key"
-  | "kilocode-api-key"
-  | "litellm-api-key"
-  | "ai-gateway-api-key"
-  | "cloudflare-ai-gateway-api-key"
-  | "moonshot-api-key"
-  | "moonshot-api-key-cn"
-  | "kimi-code-api-key"
-  | "synthetic-api-key"
-  | "venice-api-key"
-  | "together-api-key"
-  | "huggingface-api-key"
-  | "apiKey"
-  | "gemini-api-key"
-  | "google-gemini-cli"
-  | "zai-api-key"
-  | "zai-coding-global"
-  | "zai-coding-cn"
-  | "zai-global"
-  | "zai-cn"
-  | "xiaomi-api-key"
-  | "minimax-global-oauth"
-  | "minimax-global-api"
-  | "minimax-cn-oauth"
-  | "minimax-cn-api"
-  | "opencode-zen"
-  | "opencode-go"
-  | "github-copilot"
-  | "copilot-proxy"
-  | "xai-api-key"
-  | "mistral-api-key"
-  | "volcengine-api-key"
-  | "byteplus-api-key"
-  | "qianfan-api-key"
-  | "qwen-standard-api-key-cn"
-  | "qwen-standard-api-key"
-  | "qwen-api-key-cn"
-  | "qwen-api-key"
-  | "modelstudio-standard-api-key-cn"
-  | "modelstudio-standard-api-key"
-  | "modelstudio-api-key-cn"
-  | "modelstudio-api-key"
-  | "custom-api-key"
-  | "skip";
+  "oauth" | "setup-token" | "token" | "apiKey" | "custom-api-key" | "skip";
 export type AuthChoice = BuiltInAuthChoice | (string & {});
 
-export type BuiltInAuthChoiceGroupId =
-  | "openai"
-  | "anthropic"
-  | "chutes"
-  | "deepseek"
-  | "google"
-  | "copilot"
-  | "openrouter"
-  | "kilocode"
-  | "litellm"
-  | "ai-gateway"
-  | "cloudflare-ai-gateway"
-  | "moonshot"
-  | "zai"
-  | "xiaomi"
-  | "opencode"
-  | "minimax"
-  | "synthetic"
-  | "venice"
-  | "mistral"
-  | "together"
-  | "huggingface"
-  | "qianfan"
-  | "qwen"
-  | "modelstudio"
-  | "xai"
-  | "volcengine"
-  | "byteplus"
-  | "custom";
-export type AuthChoiceGroupId = BuiltInAuthChoiceGroupId | (string & {});
+/** Auth choice groups are plugin-owned ids plus the core `custom` bucket. */
+export type AuthChoiceGroupId = "custom" | (string & {});
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
@@ -131,10 +53,12 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   tokenExpiresIn?: string;
   /** API key persistence mode for setup flows (default: plaintext). */
   secretInputMode?: SecretInputMode;
+  arceeaiApiKey?: string;
   cloudflareAiGatewayAccountId?: string;
   cloudflareAiGatewayGatewayId?: string;
   customBaseUrl?: string;
   customApiKey?: string;
+  lmstudioApiKey?: string;
   customModelId?: string;
   customProviderId?: string;
   customCompatibility?: "openai" | "anthropic";

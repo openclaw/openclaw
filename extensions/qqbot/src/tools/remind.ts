@@ -1,4 +1,5 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 interface RemindParams {
   action: "add" | "list" | "remove";
@@ -63,7 +64,7 @@ function json(data: unknown) {
 }
 
 function parseRelativeTime(timeStr: string): number | null {
-  const s = timeStr.trim().toLowerCase();
+  const s = normalizeLowercaseStringOrEmpty(timeStr);
   if (/^\d+$/.test(s)) {
     return parseInt(s, 10) * 60_000;
   }

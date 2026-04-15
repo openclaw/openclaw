@@ -1,6 +1,6 @@
 import type { Mock } from "vitest";
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -39,10 +39,16 @@ vi.mock("../config/config.js", async () => {
 export const runtime = createTestRuntime();
 
 let agentsCommandModulePromise: Promise<typeof import("./agents.js")> | undefined;
+let agentsBindCommandModulePromise: Promise<typeof import("./agents.commands.bind.js")> | undefined;
 
 export async function loadFreshAgentsCommandModuleForTest() {
   agentsCommandModulePromise ??= import("./agents.js");
   return await agentsCommandModulePromise;
+}
+
+export async function loadFreshAgentsBindCommandModuleForTest() {
+  agentsBindCommandModulePromise ??= import("./agents.commands.bind.js");
+  return await agentsBindCommandModulePromise;
 }
 
 export function resetAgentsBindTestHarness(): void {
