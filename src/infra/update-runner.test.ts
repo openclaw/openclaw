@@ -6,6 +6,7 @@ import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { pathExists } from "../utils.js";
+import { NPM_UPDATE_COMPAT_SIDECARS } from "./npm-update-compat-sidecars.js";
 import { writePackageDistInventory } from "./package-dist-inventory.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import { runGatewayUpdate } from "./update-runner.js";
@@ -261,6 +262,11 @@ describe("runGatewayUpdate", () => {
       const absolutePath = path.join(pkgRoot, relativePath);
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+    }
+    for (const sidecar of NPM_UPDATE_COMPAT_SIDECARS) {
+      const absolutePath = path.join(pkgRoot, sidecar.path);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, sidecar.content, "utf-8");
     }
   }
 

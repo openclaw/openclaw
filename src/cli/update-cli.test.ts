@@ -99,6 +99,21 @@ vi.mock("../infra/update-check.js", () => ({
 
 vi.mock("../infra/runtime-guard.js", () => ({
   nodeVersionSatisfiesEngine,
+  isAtLeast: (
+    version: { major: number; minor: number; patch: number } | null,
+    minimum: { major: number; minor: number; patch: number },
+  ) => {
+    if (!version) {
+      return false;
+    }
+    if (version.major !== minimum.major) {
+      return version.major > minimum.major;
+    }
+    if (version.minor !== minimum.minor) {
+      return version.minor > minimum.minor;
+    }
+    return version.patch >= minimum.patch;
+  },
   parseSemver: (version: string | null) => {
     if (!version) {
       return null;
