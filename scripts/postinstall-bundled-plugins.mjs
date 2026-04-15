@@ -30,6 +30,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
+const DIST_INVENTORY_PATH = join("dist", "postinstall-inventory.json");
 const BAILEYS_MEDIA_FILE = join(
   "node_modules",
   "@whiskeysockets",
@@ -102,6 +103,111 @@ const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
+}
+
+function normalizeRelativePath(filePath) {
+  return filePath.replace(/\\/g, "/");
+}
+
+function readInstalledDistInventory(params = {}) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const pathExists = params.existsSync ?? existsSync;
+  const readFile = params.readFileSync ?? readFileSync;
+  const inventoryPath = join(packageRoot, DIST_INVENTORY_PATH);
+  if (!pathExists(inventoryPath)) {
+    throw new Error(`missing dist inventory: ${DIST_INVENTORY_PATH}`);
+  }
+  const parsed = JSON.parse(readFile(inventoryPath, "utf8"));
+  if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "string")) {
+    throw new Error(`invalid dist inventory: ${DIST_INVENTORY_PATH}`);
+  }
+  return new Set(parsed.map(normalizeRelativePath));
+}
+
+function listInstalledDistFiles(params = {}) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const pathExists = params.existsSync ?? existsSync;
+  const readDir = params.readdirSync ?? readdirSync;
+  const distDir = join(packageRoot, "dist");
+  if (!pathExists(distDir)) {
+    return [];
+  }
+  const pending = [distDir];
+  const files = [];
+  while (pending.length > 0) {
+    const currentDir = pending.pop();
+    if (!currentDir) {
+      continue;
+    }
+    for (const entry of readDir(currentDir, { withFileTypes: true })) {
+      const entryPath = join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(entryPath);
+        continue;
+      }
+      if (!entry.isFile() && !entry.isSymbolicLink()) {
+        continue;
+      }
+      const relativePath = normalizeRelativePath(relative(packageRoot, entryPath));
+      if (relativePath === DIST_INVENTORY_PATH) {
+        continue;
+      }
+      files.push(relativePath);
+    }
+  }
+  return files.toSorted((left, right) => left.localeCompare(right));
+}
+
+function pruneEmptyDistDirectories(params = {}) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const pathExists = params.existsSync ?? existsSync;
+  const readDir = params.readdirSync ?? readdirSync;
+  const removePath = params.rmSync ?? rmSync;
+  const distDir = join(packageRoot, "dist");
+  if (!pathExists(distDir)) {
+    return;
+  }
+
+  function prune(currentDir) {
+    for (const entry of readDir(currentDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      prune(join(currentDir, entry.name));
+    }
+    if (currentDir === distDir) {
+      return;
+    }
+    if (readDir(currentDir).length === 0) {
+      removePath(currentDir, { recursive: true, force: true });
+    }
+  }
+
+  prune(distDir);
+}
+
+export function pruneInstalledPackageDist(params = {}) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const removePath = params.rmSync ?? rmSync;
+  const log = params.log ?? console;
+  const expectedFiles = params.expectedFiles ?? readInstalledDistInventory(params);
+  const installedFiles = listInstalledDistFiles(params);
+  const removed = [];
+
+  for (const relativePath of installedFiles) {
+    if (expectedFiles.has(relativePath)) {
+      continue;
+    }
+    removePath(join(packageRoot, relativePath), { recursive: true, force: true });
+    removed.push(relativePath);
+  }
+
+  pruneEmptyDistDirectories(params);
+
+  if (removed.length > 0) {
+    log.log(`[postinstall] pruned stale dist files: ${removed.join(", ")}`);
+  }
+  return removed;
 }
 
 function dependencySentinelPath(depName) {
@@ -458,6 +564,14 @@ export function runBundledPluginPostinstall(params = {}) {
     });
     return;
   }
+  pruneInstalledPackageDist({
+    packageRoot,
+    existsSync: pathExists,
+    readFileSync: params.readFileSync,
+    readdirSync: params.readdirSync,
+    rmSync: params.rmSync,
+    log,
+  });
   if (
     !shouldRunBundledPluginPostinstall({
       env,
