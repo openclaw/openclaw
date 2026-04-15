@@ -187,7 +187,7 @@ export async function sessionsCommand(
             totalTokensFresh:
               typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
             contextTokens:
-              r.contextTokens ??
+              (r.modelIsFromFallback ? undefined : r.contextTokens) ??
               configuredContextTokens ??
               (await lookupContextTokensForDisplay(model)) ??
               configContextTokens ??
