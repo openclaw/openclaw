@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withAudioFixture, withVideoFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, VideoDescriptionRequest } from "./types.js";
@@ -180,7 +181,7 @@ describe("runCapability proxy fetch passthrough", () => {
   });
 
   it("passes allowPrivateNetwork to audio provider when set in providerConfig.request", async () => {
-    let seenRequest: AudioTranscriptionRequest["request"];
+    let seenRequest: ModelProviderRequestTransportOverrides | undefined;
 
     await withAudioFixture("openclaw-audio-allowprivatenetwork", async ({ ctx, media, cache }) => {
       const providerRegistry = buildProviderRegistry({
@@ -188,7 +189,7 @@ describe("runCapability proxy fetch passthrough", () => {
           id: "openai",
           capabilities: ["audio"],
           transcribeAudio: async (req: AudioTranscriptionRequest) => {
-            seenRequest = req.request;
+            seenRequest = req.request as ModelProviderRequestTransportOverrides | undefined;
             return { text: "ok", model: req.model };
           },
         },
