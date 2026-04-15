@@ -196,11 +196,10 @@ export function resolveCronPayloadOutcome(params: {
   // denial that never propagated to a payload `isError` flag. Covers the
   // `SYSTEM_RUN_DENIED` / `INVALID_REQUEST` / "approval cannot safely bind"
   // path that `runIsolatedAgentJob` surfaces without marking any payload.
-  const firstPayloadText = params.payloads[0]?.text ?? "";
   const summaryDenialToken =
     detectCronDenialToken(fallbackSummary) ??
     detectCronDenialToken(fallbackOutputText) ??
-    detectCronDenialToken(firstPayloadText);
+    detectCronDenialToken(firstText);
   const hasFatalErrorPayload = hasFatalErrorPayloadByFlag || Boolean(summaryDenialToken);
   const normalizedFinalAssistantVisibleText = normalizeOptionalString(
     params.finalAssistantVisibleText,
@@ -236,7 +235,7 @@ export function resolveCronPayloadOutcome(params: {
   const embeddedRunError = hasFatalErrorPayload
     ? (lastErrorPayloadText ??
       (summaryDenialToken
-        ? `cron isolated run denied (detected \"${summaryDenialToken}\" in summary)`
+        ? `cron isolated run denied (detected "${summaryDenialToken}" in summary)`
         : "cron isolated run returned an error payload"))
     : undefined;
   return {
