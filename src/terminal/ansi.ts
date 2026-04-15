@@ -28,6 +28,11 @@ export function splitGraphemes(input: string): string[] {
   }
 }
 
+const _c0Start = String.fromCharCode(0x00);
+const _c0End = String.fromCharCode(0x1f);
+const _del = String.fromCharCode(0x7f);
+const CONTROL_CHARS_REGEX = new RegExp(`[${_c0Start}-${_c0End}${_del}]`, "g");
+
 /**
  * Sanitize a value for safe interpolation into log messages.
  * Strips ANSI escape sequences, C0 control characters (U+0000–U+001F),
@@ -36,11 +41,7 @@ export function splitGraphemes(input: string): string[] {
 export function sanitizeForLog(v: string): string {
   // Pattern built at runtime so the source file stays free of literal control
   // characters AND the linter cannot statically detect them (no-control-regex).
-  const c0Start = String.fromCharCode(0x00);
-  const c0End = String.fromCharCode(0x1f);
-  const del = String.fromCharCode(0x7f);
-  const controlCharsRegex = new RegExp(`[${c0Start}-${c0End}${del}]`, "g");
-  return stripAnsi(v).replace(controlCharsRegex, "");
+  return stripAnsi(v).replace(CONTROL_CHARS_REGEX, "");
 }
 
 function isZeroWidthCodePoint(codePoint: number): boolean {

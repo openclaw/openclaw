@@ -19,8 +19,13 @@ export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal) {
   }
   try {
     await delay(ms, undefined, { signal: abortSignal });
-  } catch (error: any) {
-    if (error?.name === "AbortError" || error?.code === "ABORT_ERR") {
+  } catch (error: unknown) {
+    if (
+      error != null &&
+      typeof error === "object" &&
+      (("name" in error && (error as { name?: unknown }).name === "AbortError") ||
+        ("code" in error && (error as { code?: unknown }).code === "ABORT_ERR"))
+    ) {
       throw new Error("aborted", { cause: abortSignal?.reason ?? new Error("aborted") });
     }
     throw error;
