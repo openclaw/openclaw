@@ -1,4 +1,5 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { FollowupRun } from "../../../auto-reply/reply/queue/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
@@ -76,6 +77,7 @@ export async function handleAssistantFailover(params: {
   }) => void;
   maybeBackoffBeforeOverloadFailover: (reason: FailoverReason | null) => Promise<void>;
   advanceAuthProfile: () => Promise<boolean>;
+  scheduleFollowupDrain?: (key: string, runFollowup: (run: FollowupRun) => Promise<void>) => void;
 }): Promise<AssistantFailoverOutcome> {
   let overloadProfileRotations = params.overloadProfileRotations;
   let decision = params.initialDecision;
@@ -225,6 +227,11 @@ export async function handleAssistantFailover(params: {
       return sameModelIdleTimeoutRetry();
     }
     params.logAssistantFailoverDecision("surface_error");
+    // When surfacing an error (e.g. timeout), ensure queued followup messages
+    // are still drained so they are not silently dropped.
+    if (params.sessionKey && params.timedOut && params.scheduleFollowupDrain) {
+      params.scheduleFollowupDrain(params.sessionKey, async () => {});
+    }
   }
 
   return {
