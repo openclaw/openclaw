@@ -22,6 +22,7 @@ type CursorWaiter = {
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
   afterCursor: number;
+  shouldResolve?: (snapshot: QaBusStateSnapshot) => boolean;
 };
 
 function createQaBusMatcher(
@@ -79,6 +80,9 @@ export function createQaBusWaiterStore(getSnapshot: () => QaBusStateSnapshot) {
         if (snapshot.cursor <= waiter.afterCursor) {
           continue;
         }
+        if (waiter.shouldResolve && !waiter.shouldResolve(snapshot)) {
+          continue;
+        }
         clearTimeout(waiter.timer);
         cursorWaiters.delete(waiter);
         waiter.resolve();
@@ -104,8 +108,13 @@ export function createQaBusWaiterStore(getSnapshot: () => QaBusStateSnapshot) {
         waiters.add(waiter);
       });
     },
-    async waitForCursorAdvance(afterCursor: number, timeoutMs: number) {
-      if (getSnapshot().cursor > afterCursor) {
+    async waitForCursorAdvance(
+      afterCursor: number,
+      timeoutMs: number,
+      shouldResolve?: (snapshot: QaBusStateSnapshot) => boolean,
+    ) {
+      const snapshot = getSnapshot();
+      if (snapshot.cursor > afterCursor && (!shouldResolve || shouldResolve(snapshot))) {
         return;
       }
       return await new Promise<void>((resolve, reject) => {
@@ -113,6 +122,7 @@ export function createQaBusWaiterStore(getSnapshot: () => QaBusStateSnapshot) {
           resolve,
           reject,
           afterCursor,
+          shouldResolve,
           timer: setTimeout(() => {
             cursorWaiters.delete(waiter);
             reject(new Error(`qa-bus wait timeout after ${timeoutMs}ms`));

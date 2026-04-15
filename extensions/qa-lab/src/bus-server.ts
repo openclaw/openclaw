@@ -140,7 +140,11 @@ export async function handleQaBusRequest(params: {
           return true;
         }
         try {
-          await params.state.waitForCursorAdvance(input.cursor ?? 0, timeoutMs);
+          await params.state.waitForCursorAdvance(input.cursor ?? 0, timeoutMs, (snapshot) => {
+            return snapshot.events.some(
+              (event) => event.accountId === input.accountId && event.cursor > (input.cursor ?? 0),
+            );
+          });
         } catch {
           // timeout ok for long-poll
         }

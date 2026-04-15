@@ -69,7 +69,13 @@ async function postJson<T>(
         });
         response.on("end", () => {
           const text = Buffer.concat(chunks).toString("utf8");
-          const parsed = text ? (JSON.parse(text) as T | { error?: string }) : ({} as T);
+          let parsed: T | { error?: string };
+          try {
+            parsed = text ? (JSON.parse(text) as T | { error?: string }) : ({} as T);
+          } catch (error) {
+            reject(error);
+            return;
+          }
           if ((response.statusCode ?? 500) < 200 || (response.statusCode ?? 500) >= 300) {
             const error =
               typeof parsed === "object" && parsed && "error" in parsed ? parsed.error : undefined;
