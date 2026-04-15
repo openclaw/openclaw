@@ -6,6 +6,11 @@ const PACKAGED_QA_RUNTIME_PATHS = new Set([
   "dist/extensions/qa-channel/runtime-api.js",
   "dist/extensions/qa-lab/runtime-api.js",
 ]);
+const OMITTED_QA_EXTENSION_PREFIXES = [
+  "dist/extensions/qa-channel/",
+  "dist/extensions/qa-lab/",
+  "dist/extensions/qa-matrix/",
+];
 
 function normalizeRelativePath(value: string): string {
   return value.replace(/\\/g, "/");
@@ -24,10 +29,7 @@ function isPackagedDistPath(relativePath: string): boolean {
   if (relativePath === "dist/plugin-sdk/.tsbuildinfo") {
     return false;
   }
-  if (
-    relativePath.startsWith("dist/extensions/qa-channel/") ||
-    relativePath.startsWith("dist/extensions/qa-lab/")
-  ) {
+  if (OMITTED_QA_EXTENSION_PREFIXES.some((prefix) => relativePath.startsWith(prefix))) {
     return PACKAGED_QA_RUNTIME_PATHS.has(relativePath);
   }
   return true;
