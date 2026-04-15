@@ -493,6 +493,31 @@ function hasRuntimeDeps(packageJson) {
   );
 }
 
+function collectRuntimeDependencyGroups(packageJson) {
+  const readRuntimeGroup = (group) =>
+    Object.fromEntries(
+      Object.entries(group ?? {}).filter(
+        (entry) => typeof entry[0] === "string" && typeof entry[1] === "string",
+      ),
+    );
+  return {
+    dependencies: readRuntimeGroup(packageJson.dependencies),
+    optionalDependencies: readRuntimeGroup(packageJson.optionalDependencies),
+  };
+}
+
+export function collectRuntimeDependencyInstallSpecs(packageJson) {
+  const runtimeGroups = collectRuntimeDependencyGroups(packageJson);
+  return {
+    dependencies: Object.entries(runtimeGroups.dependencies).flatMap(([name, version]) =>
+      typeof version === "string" ? [`${name}@${version}`] : [],
+    ),
+    optionalDependencies: Object.entries(runtimeGroups.optionalDependencies).flatMap(
+      ([name, version]) => (typeof version === "string" ? [`${name}@${version}`] : []),
+    ),
+  };
+}
+
 function shouldStageRuntimeDeps(packageJson) {
   return packageJson.openclaw?.bundle?.stageRuntimeDependencies === true;
 }
@@ -522,6 +547,30 @@ function sanitizeBundledManifestForRuntimeInstall(pluginDir) {
   }
 
   return packageJson;
+}
+
+function createRuntimeInstallManifest(pluginId) {
+  return {
+    name: `openclaw-runtime-deps-${sanitizeTempPrefixSegment(pluginId)}`,
+    private: true,
+    version: "0.0.0",
+  };
+}
+
+function runNpmInstall(params) {
+  const result = spawnSync(params.npmRunner.command, params.npmRunner.args, {
+    cwd: params.cwd,
+    encoding: "utf8",
+    env: params.npmRunner.env,
+    stdio: "pipe",
+    shell: params.npmRunner.shell,
+    windowsVerbatimArguments: params.npmRunner.windowsVerbatimArguments,
+  });
+  if (result.status === 0) {
+    return;
+  }
+  const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+  throw new Error(output || "npm install failed");
 }
 
 function resolveRuntimeDepsStampPath(pluginDir) {
@@ -645,37 +694,54 @@ function installPluginRuntimeDeps(params) {
     os.tmpdir(),
     `openclaw-runtime-deps-${sanitizeTempPrefixSegment(pluginId)}-`,
   );
-  const npmRunner = resolveNpmRunner({
-    npmArgs: [
-      "install",
-      "--omit=dev",
-      "--silent",
-      "--ignore-scripts",
-      "--legacy-peer-deps",
-      "--package-lock=false",
-    ],
-  });
+  const installSpecs = collectRuntimeDependencyInstallSpecs(packageJson);
+  const requiredSpecs = installSpecs.dependencies;
+  const optionalSpecs = installSpecs.optionalDependencies;
   try {
-    writeJson(path.join(tempInstallDir, "package.json"), packageJson);
-    const result = spawnSync(npmRunner.command, npmRunner.args, {
-      cwd: tempInstallDir,
-      encoding: "utf8",
-      env: npmRunner.env,
-      stdio: "pipe",
-      shell: npmRunner.shell,
-      windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
-    });
-    if (result.status !== 0) {
-      const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
-      throw new Error(
-        `failed to stage bundled runtime deps for ${pluginId}: ${output || "npm install failed"}`,
-      );
+    writeJson(path.join(tempInstallDir, "package.json"), createRuntimeInstallManifest(pluginId));
+    if (requiredSpecs.length > 0) {
+      runNpmInstall({
+        cwd: tempInstallDir,
+        npmRunner: resolveNpmRunner({
+          npmArgs: [
+            "install",
+            "--omit=dev",
+            "--silent",
+            "--ignore-scripts",
+            "--legacy-peer-deps",
+            "--package-lock=false",
+            "--no-save",
+            ...requiredSpecs,
+          ],
+        }),
+      });
+    }
+    if (optionalSpecs.length > 0) {
+      try {
+        runNpmInstall({
+          cwd: tempInstallDir,
+          npmRunner: resolveNpmRunner({
+            npmArgs: [
+              "install",
+              "--omit=dev",
+              "--silent",
+              "--ignore-scripts",
+              "--legacy-peer-deps",
+              "--package-lock=false",
+              "--no-save",
+              ...optionalSpecs,
+            ],
+          }),
+        });
+      } catch {
+        // Optional runtime deps should not block package staging on unsupported platforms.
+      }
     }
 
     const stagedNodeModulesDir = path.join(tempInstallDir, "node_modules");
     if (!fs.existsSync(stagedNodeModulesDir)) {
       throw new Error(
-        `failed to stage bundled runtime deps for ${pluginId}: npm install produced no node_modules directory`,
+        `failed to stage bundled runtime deps for ${pluginId}: explicit npm install produced no node_modules directory`,
       );
     }
 

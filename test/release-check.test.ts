@@ -122,6 +122,14 @@ describe("bundled plugin root runtime mirrors", () => {
   function makeBundledSpecs() {
     return new Map([
       ["@larksuiteoapi/node-sdk", { conflicts: [], pluginIds: ["feishu"], spec: "^1.60.0" }],
+      [
+        "@matrix-org/matrix-sdk-crypto-nodejs",
+        { conflicts: [], pluginIds: ["matrix"], spec: "^0.4.0" },
+      ],
+      [
+        "@matrix-org/matrix-sdk-crypto-wasm",
+        { conflicts: [], pluginIds: ["matrix"], spec: "18.0.0" },
+      ],
     ]);
   }
 
@@ -156,8 +164,18 @@ describe("bundled plugin root runtime mirrors", () => {
         distDir,
       });
 
-      expect([...mirrors.keys()]).toEqual(["@larksuiteoapi/node-sdk"]);
+      expect([...mirrors.keys()].toSorted((left, right) => left.localeCompare(right))).toEqual([
+        "@larksuiteoapi/node-sdk",
+        "@matrix-org/matrix-sdk-crypto-nodejs",
+        "@matrix-org/matrix-sdk-crypto-wasm",
+      ]);
       expect([...mirrors.get("@larksuiteoapi/node-sdk")!.importers]).toEqual(["probe-Cz2PiFtC.js"]);
+      expect([...mirrors.get("@matrix-org/matrix-sdk-crypto-nodejs")!.importers]).toEqual([
+        "<curated root runtime surface>",
+      ]);
+      expect([...mirrors.get("@matrix-org/matrix-sdk-crypto-wasm")!.importers]).toEqual([
+        "<curated root runtime surface>",
+      ]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }

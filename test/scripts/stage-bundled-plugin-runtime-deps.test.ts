@@ -1,12 +1,32 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { stageBundledPluginRuntimeDeps } from "../../scripts/stage-bundled-plugin-runtime-deps.mjs";
+import {
+  collectRuntimeDependencyInstallSpecs,
+  stageBundledPluginRuntimeDeps,
+} from "../../scripts/stage-bundled-plugin-runtime-deps.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
 describe("stageBundledPluginRuntimeDeps", () => {
+  it("splits required and optional specs for explicit npm fallback installs", () => {
+    expect(
+      collectRuntimeDependencyInstallSpecs({
+        dependencies: {
+          "@aws-sdk/client-bedrock": "3.1028.0",
+          "left-pad": "1.3.0",
+        },
+        optionalDependencies: {
+          "@discordjs/opus": "^0.10.0",
+        },
+      }),
+    ).toEqual({
+      dependencies: ["@aws-sdk/client-bedrock@3.1028.0", "left-pad@1.3.0"],
+      optionalDependencies: ["@discordjs/opus@^0.10.0"],
+    });
+  });
+
   function createBundledPluginFixture(params: {
     packageJson: Record<string, unknown>;
     pluginId?: string;

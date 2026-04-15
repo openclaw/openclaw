@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw LINE channel plugin",
   "type": "module",
+  "dependencies": {
+    "@line/bot-sdk": "^11.0.0"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"

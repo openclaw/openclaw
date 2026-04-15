@@ -6,12 +6,8 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "bluebubbles", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "discord",
-    mirroredRootRuntimeDeps: [
-      "@buape/carbon",
-      "@discordjs/opus",
-      "https-proxy-agent",
-      "opusscript",
-    ],
+    pluginLocalRuntimeDeps: ["@buape/carbon", "@discordjs/opus", "discord-api-types", "opusscript"],
+    mirroredRootRuntimeDeps: ["https-proxy-agent"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
@@ -36,6 +32,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "msteams", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "nostr", minHostVersionBaseline: "2026.3.22" },
+  { pluginId: "openshell", pluginLocalRuntimeDeps: ["openshell"] },
   {
     pluginId: "slack",
     mirroredRootRuntimeDeps: ["@slack/bolt", "@slack/web-api", "https-proxy-agent"],
