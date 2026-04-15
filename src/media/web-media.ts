@@ -89,7 +89,6 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
 // file-type returns undefined (no magic bytes) for plain-text formats like CSV and
 // Markdown, so host-read needs an explicit "this really decodes as text" fallback.
 const HOST_READ_TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/markdown"]);
-const HOST_READ_TEXT_SAMPLE_BYTES = 8192;
 const MB = 1024 * 1024;
 const WORDISH_CHAR = /[\p{L}\p{N}]/u;
 
@@ -155,30 +154,29 @@ function getTextStats(text: string): { printableRatio: number; wordishRatio: num
   return { printableRatio: printable / total, wordishRatio: wordish / total };
 }
 
-function decodeHostReadTextSample(buffer: Buffer): string | undefined {
-  const sample = buffer.subarray(0, Math.min(buffer.length, HOST_READ_TEXT_SAMPLE_BYTES));
-  if (sample.length === 0) {
+function decodeHostReadText(buffer: Buffer): string | undefined {
+  if (buffer.length === 0) {
     return "";
   }
-  const utf16Charset = resolveUtf16Charset(sample);
+  const utf16Charset = resolveUtf16Charset(buffer);
   try {
     if (utf16Charset === "utf-16be") {
-      const evenSample = sample.length % 2 === 0 ? sample : sample.subarray(0, sample.length - 1);
-      if (evenSample.length === 0) {
+      const evenBuffer = buffer.length % 2 === 0 ? buffer : buffer.subarray(0, buffer.length - 1);
+      if (evenBuffer.length === 0) {
         return "";
       }
-      const swapped = Buffer.alloc(evenSample.length);
-      for (let i = 0; i + 1 < evenSample.length; i += 2) {
-        swapped[i] = evenSample[i + 1];
-        swapped[i + 1] = evenSample[i];
+      const swapped = Buffer.alloc(evenBuffer.length);
+      for (let i = 0; i + 1 < evenBuffer.length; i += 2) {
+        swapped[i] = evenBuffer[i + 1];
+        swapped[i + 1] = evenBuffer[i];
       }
       return new TextDecoder("utf-16le").decode(swapped);
     }
     if (utf16Charset === "utf-16le") {
-      const evenSample = sample.length % 2 === 0 ? sample : sample.subarray(0, sample.length - 1);
-      return new TextDecoder("utf-16le").decode(evenSample);
+      const evenBuffer = buffer.length % 2 === 0 ? buffer : buffer.subarray(0, buffer.length - 1);
+      return new TextDecoder("utf-16le").decode(evenBuffer);
     }
-    return new TextDecoder("utf-8", { fatal: true }).decode(sample);
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
   } catch {
     return undefined;
   }
@@ -191,7 +189,7 @@ function isValidatedHostReadText(buffer?: Buffer): boolean {
   if (buffer.length === 0) {
     return true;
   }
-  const text = decodeHostReadTextSample(buffer);
+  const text = decodeHostReadText(buffer);
   if (text === undefined) {
     return false;
   }

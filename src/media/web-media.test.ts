@@ -250,6 +250,30 @@ describe("loadWebMedia", () => {
     });
   });
 
+  it.each([
+    { label: "CSV", fileName: "prefix-tail.csv" },
+    { label: "Markdown", fileName: "prefix-tail.md" },
+  ])(
+    "rejects %s files with a text prefix and binary tail after the old sample window",
+    async ({ fileName }) => {
+      const fakeTextFile = path.join(fixtureRoot, fileName);
+      const textPrefix = Buffer.from(`name,value\n${"row,1\n".repeat(1400)}`, "utf8");
+      expect(textPrefix.length).toBeGreaterThan(8192);
+      const binaryTail = Buffer.from([0x00, 0xff, 0x10, 0x80]);
+      await fs.writeFile(fakeTextFile, Buffer.concat([textPrefix, binaryTail]));
+      await expect(
+        loadWebMedia(fakeTextFile, {
+          maxBytes: 1024 * 1024,
+          localRoots: "any",
+          readFile: async (filePath) => await fs.readFile(filePath),
+          hostReadCapability: true,
+        }),
+      ).rejects.toMatchObject({
+        code: "path-not-allowed",
+      });
+    },
+  );
+
   it("rejects traversal-style canvas media paths before filesystem access", async () => {
     await expect(
       loadWebMedia(`${CANVAS_HOST_PATH}/documents/../collection.media/tiny.png`),
