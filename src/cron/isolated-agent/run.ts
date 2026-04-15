@@ -1,3 +1,4 @@
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
@@ -195,11 +196,27 @@ function appendCronDeliveryInstruction(params: {
   if (!params.deliveryRequested) {
     return params.commandBody;
   }
+  const serializedChannel =
+    params.resolvedDelivery.ok && params.resolvedDelivery.channel
+      ? JSON.stringify(params.resolvedDelivery.channel)
+      : undefined;
+  const serializedTarget =
+    params.resolvedDelivery.ok && params.resolvedDelivery.to
+      ? JSON.stringify(params.resolvedDelivery.to)
+      : undefined;
+  const serializedThreadId =
+    params.resolvedDelivery.ok && params.resolvedDelivery.threadId !== undefined
+      ? JSON.stringify(params.resolvedDelivery.threadId)
+      : undefined;
+  const serializedAccountId =
+    params.resolvedDelivery.ok && params.resolvedDelivery.accountId
+      ? JSON.stringify(params.resolvedDelivery.accountId)
+      : undefined;
   const explicitTargetInstruction =
-    params.resolvedDelivery.ok && params.resolvedDelivery.channel && params.resolvedDelivery.to
-      ? `When using the message tool for this cron delivery, set channel to "${params.resolvedDelivery.channel}" and target to "${params.resolvedDelivery.to}"${params.resolvedDelivery.accountId ? ` with accountId "${params.resolvedDelivery.accountId}"` : ""}.`
+    serializedChannel && serializedTarget
+      ? `When using the message tool for this cron delivery, set channel to ${serializedChannel} and target to ${serializedTarget}${serializedThreadId ? ` with threadId ${serializedThreadId}` : ""}${serializedAccountId ? ` with accountId ${serializedAccountId}` : ""}.`
       : "When using the message tool for this cron delivery, include an explicit channel and target.";
-  return `${params.commandBody}\n\n${explicitTargetInstruction} Plain-text summaries are delivered automatically only when you do not send the final result yourself. If you use the message tool for the final delivery (for example attachments, media, richer components, or a different recipient), send everything there and then return exactly NO_REPLY.`.trim();
+  return `${params.commandBody}\n\n${explicitTargetInstruction} Plain-text summaries are delivered automatically only when you do not send the final result yourself. If you use the message tool for the final delivery (for example attachments, media, richer components, or a different recipient), send everything there and then return exactly ${SILENT_REPLY_TOKEN}.`.trim();
 }
 
 function resolvePositiveContextTokens(value: unknown): number | undefined {
@@ -661,9 +678,12 @@ async function finalizeCronRun(params: {
     matchesMessagingToolDeliveryTarget,
     resolveCronDeliveryBestEffort,
   } = await loadCronDeliveryRuntime();
+  const didHandoffFinalDelivery =
+    finalRunResult.didSendViaMessagingTool === true &&
+    isSilentReplyText(synthesizedText, SILENT_REPLY_TOKEN);
   const skipMessagingToolDelivery =
     prepared.deliveryRequested &&
-    finalRunResult.didSendViaMessagingTool === true &&
+    didHandoffFinalDelivery &&
     (finalRunResult.messagingToolSentTargets ?? []).some((target) =>
       matchesMessagingToolDeliveryTarget(target, {
         channel: prepared.resolvedDelivery.channel,
