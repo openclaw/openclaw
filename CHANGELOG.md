@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- fix(webchat): reject remote-host file:// URLs in media embedding path [AI-assisted]. (#67293) Thanks @pgondhi987.
 - fix(gateway): enforce localRoots containment on webchat audio embedding path [AI-assisted]. (#67298) Thanks @pgondhi987.
 - fix(matrix): block DM pairing-store entries from authorizing room control commands [AI-assisted]. (#67294) Thanks @pgondhi987.
 - Docker/build: verify `@matrix-org/matrix-sdk-crypto-nodejs` native bindings with `find` under `node_modules` instead of a hardcoded `.pnpm/...` path so pnpm v10+ virtual-store layouts no longer fail the image build. (#67143) thanks @ly85206559.
@@ -31,6 +32,7 @@ Docs: https://docs.openclaw.ai
 - Docs/showcase: add a scannable hero, complete section jump links, and a responsive video grid for community examples. (#48493) Thanks @jchopard69.
 
 ### Fixes
+
 - Security/approvals: redact secrets in exec approval prompts so inline approval review can no longer leak credential material in rendered prompt content. (#61077, #64790)
 - CLI/configure: re-read the persisted config hash after writes so config updates stop failing with stale-hash races. (#64188, #66528)
 - CLI/update: prune stale packaged `dist` chunks after npm upgrades and keep downgrade/verify inventory checks compat-safe so global upgrades stop failing on stale chunk imports. (#66959) Thanks @obviyus.
