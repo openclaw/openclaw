@@ -766,12 +766,16 @@ export async function registerSlackMonitorSlashCommands(params: {
     ctx.app.command(
       buildSlackSlashCommandMatcher(slashCommand.name),
       async ({ command, ack, respond, body }: SlackCommandMiddlewareArgs) => {
+        // Prepend "/" so that plugin command dispatch (matchPluginCommand) can
+        // match subcommands like "run health" → "/run health".
+        // Falls through cleanly to the LLM agent when no command matches.
+        const rawText = command.text?.trim() ?? "";
         await handleSlashCommand({
           command,
           ack,
           respond,
           body,
-          prompt: command.text?.trim() ?? "",
+          prompt: rawText ? `/${rawText}` : "",
         });
       },
     );
