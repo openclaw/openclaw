@@ -14,10 +14,16 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "../accounts.js";
-import {
-  WhatsAppConnectionController,
-  type ManagedWhatsAppListener,
-} from "../connection-controller.js";
+type ManagedWhatsAppListener = import("../connection-controller.js").ManagedWhatsAppListener;
+
+let connectionControllerRuntimePromise:
+  | Promise<typeof import("../connection-controller.js")>
+  | null = null;
+
+function loadConnectionControllerRuntime() {
+  connectionControllerRuntimePromise ??= import("../connection-controller.js");
+  return connectionControllerRuntimePromise;
+}
 import { attachWebInboxToSocket } from "../inbound/monitor.js";
 import {
   newConnectionId,
@@ -145,6 +151,7 @@ export async function monitorWebChannel(
 
   const messageTimeoutMs = tuning.messageTimeoutMs ?? 30 * 60 * 1000;
   const watchdogCheckMs = tuning.watchdogCheckMs ?? 60 * 1000;
+  const { WhatsAppConnectionController } = await loadConnectionControllerRuntime();
   const controller = new WhatsAppConnectionController({
     accountId: account.accountId,
     authDir: account.authDir,
