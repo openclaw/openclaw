@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { MatrixQaObservedEvent } from "./events.js";
 import { requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
@@ -474,7 +475,7 @@ async function joinRoomWithRetry(params: {
       return;
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+      await sleep(300 * attempt);
     }
   }
   throw new Error(`Matrix join retry failed: ${formatErrorMessage(lastError)}`);
@@ -504,40 +505,42 @@ async function provisionMatrixQaTopology(params: {
   fetchImpl?: MatrixQaFetchLike;
   spec: MatrixQaTopologySpec;
 }): Promise<MatrixQaProvisionedTopology> {
-  const rooms = [];
-
-  for (const room of params.spec.rooms) {
-    const members = resolveTopologyMemberAccounts(params.accounts, room.members);
-    const creator = members[0];
-    const invitees = members.slice(1);
-    const creatorClient = createMatrixQaClient({
-      accessToken: creator.account.accessToken,
-      baseUrl: params.baseUrl,
-      fetchImpl: params.fetchImpl,
-    });
-    const roomId = await creatorClient.createPrivateRoom({
-      inviteUserIds: invitees.map((entry) => entry.account.userId),
-      isDirect: room.kind === "dm",
-      name: room.name,
-    });
-    for (const invitee of invitees) {
-      await joinRoomWithRetry({
-        accessToken: invitee.account.accessToken,
+  const rooms = await Promise.all(
+    params.spec.rooms.map(async (room) => {
+      const members = resolveTopologyMemberAccounts(params.accounts, room.members);
+      const creator = members[0];
+      const invitees = members.slice(1);
+      const creatorClient = createMatrixQaClient({
+        accessToken: creator.account.accessToken,
         baseUrl: params.baseUrl,
         fetchImpl: params.fetchImpl,
-        roomId,
       });
-    }
-    rooms.push({
-      key: room.key,
-      kind: room.kind,
-      memberRoles: members.map((entry) => entry.role),
-      memberUserIds: members.map((entry) => entry.account.userId),
-      name: room.name,
-      requireMention: resolveProvisionedRoomRequireMention(room),
-      roomId,
-    });
-  }
+      const roomId = await creatorClient.createPrivateRoom({
+        inviteUserIds: invitees.map((entry) => entry.account.userId),
+        isDirect: room.kind === "dm",
+        name: room.name,
+      });
+      await Promise.all(
+        invitees.map((invitee) =>
+          joinRoomWithRetry({
+            accessToken: invitee.account.accessToken,
+            baseUrl: params.baseUrl,
+            fetchImpl: params.fetchImpl,
+            roomId,
+          }),
+        ),
+      );
+      return {
+        key: room.key,
+        kind: room.kind,
+        memberRoles: members.map((entry) => entry.role),
+        memberUserIds: members.map((entry) => entry.account.userId),
+        name: room.name,
+        requireMention: resolveProvisionedRoomRequireMention(room),
+        roomId,
+      };
+    }),
+  );
 
   const defaultRoom = findMatrixQaProvisionedRoom(
     {
@@ -569,24 +572,26 @@ export async function provisionMatrixQaRoom(params: {
     baseUrl: params.baseUrl,
     fetchImpl: params.fetchImpl,
   });
-  const driver = await anonClient.registerWithToken({
-    deviceName: "OpenClaw Matrix QA Driver",
-    localpart: params.driverLocalpart,
-    password: `driver-${randomUUID()}`,
-    registrationToken: params.registrationToken,
-  });
-  const sut = await anonClient.registerWithToken({
-    deviceName: "OpenClaw Matrix QA SUT",
-    localpart: params.sutLocalpart,
-    password: `sut-${randomUUID()}`,
-    registrationToken: params.registrationToken,
-  });
-  const observer = await anonClient.registerWithToken({
-    deviceName: "OpenClaw Matrix QA Observer",
-    localpart: params.observerLocalpart,
-    password: `observer-${randomUUID()}`,
-    registrationToken: params.registrationToken,
-  });
+  const [driver, sut, observer] = await Promise.all([
+    anonClient.registerWithToken({
+      deviceName: "OpenClaw Matrix QA Driver",
+      localpart: params.driverLocalpart,
+      password: `driver-${randomUUID()}`,
+      registrationToken: params.registrationToken,
+    }),
+    anonClient.registerWithToken({
+      deviceName: "OpenClaw Matrix QA SUT",
+      localpart: params.sutLocalpart,
+      password: `sut-${randomUUID()}`,
+      registrationToken: params.registrationToken,
+    }),
+    anonClient.registerWithToken({
+      deviceName: "OpenClaw Matrix QA Observer",
+      localpart: params.observerLocalpart,
+      password: `observer-${randomUUID()}`,
+      registrationToken: params.registrationToken,
+    }),
+  ]);
   const topology = await provisionMatrixQaTopology({
     accounts: {
       driver,

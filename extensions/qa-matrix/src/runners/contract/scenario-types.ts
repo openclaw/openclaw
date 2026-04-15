@@ -26,6 +26,7 @@ export type MatrixQaScenarioArtifacts = {
   recoveredDriverEventId?: string;
   recoveredReply?: MatrixQaReplyArtifact;
   roomKey?: string;
+  roomId?: string;
   restartSignal?: string;
   rootEventId?: string;
   threadDriverEventId?: string;
@@ -41,6 +42,9 @@ export type MatrixQaScenarioArtifacts = {
   membershipLeaveEventId?: string;
   noticeBodyPreview?: string;
   noticeEventId?: string;
+  previewBodyPreview?: string;
+  previewEventId?: string;
+  blockEventIds?: string[];
   transportInterruption?: string;
   joinedRoomId?: string;
 };
