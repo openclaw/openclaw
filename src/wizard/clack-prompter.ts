@@ -100,7 +100,7 @@ export function createClackPrompter(): WizardPrompter {
     },
     text: async (params) => {
       const validate = params.validate;
-      return guardCancel(
+      const result = guardCancel(
         await text({
           message: stylePromptMessage(params.message),
           initialValue: params.initialValue,
@@ -108,6 +108,12 @@ export function createClackPrompter(): WizardPrompter {
           validate: validate ? (value) => validate(value ?? "") : undefined,
         }),
       );
+      // `@clack/prompts` `text()` can resolve to `undefined` in edge cases
+      // (e.g. submitting an empty value with no `initialValue`/`placeholder`).
+      // The `WizardPrompter.text` contract is `Promise<string>`, so coerce
+      // nullish results to "" here rather than letting them escape and
+      // crash downstream `.trim()` / `.length` callers.
+      return typeof result === "string" ? result : "";
     },
     confirm: async (params) =>
       guardCancel(
