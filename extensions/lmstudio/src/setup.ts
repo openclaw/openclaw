@@ -393,9 +393,9 @@ export async function promptAndConfigureLmstudioInteractive(params: {
             config: params.config,
             provider: PROVIDER_ID,
             envLabel: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
-            promptMessage: `${LMSTUDIO_PROVIDER_LABEL} API key`,
+            promptMessage: `${LMSTUDIO_PROVIDER_LABEL} API key (leave blank for local instances)`,
             normalize: (value) => value.trim(),
-            validate: (value) => (value.trim() ? undefined : "Required"),
+            validate: (value) => (value?.trim() ? undefined : undefined),
             prompter: params.prompter,
             secretInputMode:
               params.allowSecretRefPrompt === false
@@ -408,9 +408,9 @@ export async function promptAndConfigureLmstudioInteractive(params: {
           })
         : String(
             await promptText({
-              message: `${LMSTUDIO_PROVIDER_LABEL} API key`,
-              placeholder: "sk-...",
-              validate: (value) => (value?.trim() ? undefined : "Required"),
+              message: `${LMSTUDIO_PROVIDER_LABEL} API key (leave blank for local instances)`,
+              placeholder: "sk-... (optional for local LM Studio)",
+              validate: () => undefined,
             }),
           ).trim();
   const credential = params.prompter
@@ -575,13 +575,8 @@ export async function configureLmstudioNonInteractive(
     })
       ? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER
       : undefined);
-  if (!setupDiscoveryApiKey && !hasAuthorizationHeader) {
-    normalizedCtx.runtime.error(
-      `LM Studio API key is required. Set ${LMSTUDIO_DEFAULT_API_KEY_ENV_VAR} or pass --lmstudio-api-key.`,
-    );
-    normalizedCtx.runtime.exit(1);
-    return null;
-  }
+  // Note: LM Studio local instances do not require an API key. If the server
+  // requires auth and none is provided, discovery will fail with a clear error.
   const setupDiscovery = await discoverLmstudioSetupModels({
     baseUrl,
     apiKey: setupDiscoveryApiKey,
