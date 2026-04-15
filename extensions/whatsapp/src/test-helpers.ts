@@ -7,8 +7,9 @@ import { formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestam
 import type { MockBaileysSocket } from "../../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
 
-// Use globalThis to store the mock config so it survives vi.mock hoisting
+// Use globalThis to store mock state so it survives vi.mock hoisting
 const CONFIG_KEY = Symbol.for("openclaw:testConfigMock");
+const BAILEYS_MOD_KEY = Symbol.for("openclaw:baileysMockModule");
 const DEFAULT_CONFIG = {
   channels: {
     whatsapp: {
@@ -581,13 +582,22 @@ vi.mock("./auth-store.runtime.js", () => ({
   resolveOAuthDir: () => "/tmp/openclaw-oauth",
 }));
 
-vi.mock("./session.runtime.js", () => {
+function getBaileysMockModule() {
+  const current = (globalThis as Record<PropertyKey, unknown>)[BAILEYS_MOD_KEY];
+  if (current) {
+    return current as ReturnType<typeof createMockBaileys>["mod"];
+  }
   const created = createMockBaileys();
+  (globalThis as Record<PropertyKey, unknown>)[BAILEYS_MOD_KEY] = created.mod;
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
     created.lastSocket;
+  return created.mod;
+}
+
+vi.mock("./session.runtime.js", () => {
+  const mod = getBaileysMockModule();
   return {
-    ...created.mod,
-    loadBaileysRuntime: async () => created.mod,
+    loadBaileysRuntime: async () => mod,
   };
 });
 
@@ -596,7 +606,7 @@ vi.mock("qrcode-terminal", () => ({
   generate: vi.fn(),
 }));
 
-export const baileys = await import("./session.runtime.js");
+export const baileys = getBaileysMockModule();
 
 function resetMockExport<T extends (...args: never[]) => unknown>(params: {
   current: T;
