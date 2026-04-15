@@ -110,4 +110,54 @@ describe("security audit workspace skill path escape findings", () => {
       realpathSpy.mockRestore();
     }
   });
+
+  it("surfaces scan_truncated finding when BFS visit cap is hit", async () => {
+    const tmp = await makeTmpDir("workspace-skill-bfs-truncated");
+    const workspaceDir = path.join(tmp, "workspace");
+    const skillsRoot = path.join(workspaceDir, "skills");
+    await fs.mkdir(skillsRoot, { recursive: true });
+
+    // Strategy: the first readdir (on skillsRoot) returns 41 001 unique subdir
+    // entries, filling the queue beyond the BFS visit cap
+    // (MAX_TOTAL_DIR_VISITS = 2000 * 20 = 40 000). All subsequent readdir calls
+    // return [] so no further queue growth occurs. After 40 000 dequeues the
+    // loop exits with ~1 001 entries still in queue → truncated = true.
+    //
+    // fs.realpath is also mocked to return paths immediately (no real I/O),
+    // keeping the 40 000 iterations fast (pure microtask overhead, <200 ms).
+    const FAKE_DIRS = 41_001;
+    const fakeDirEntries = Array.from({ length: FAKE_DIRS }, (_, i) => ({
+      name: `d${i}`,
+      isDirectory: () => true,
+      isFile: () => false,
+      isSymbolicLink: () => false,
+      isBlockDevice: () => false,
+      isCharacterDevice: () => false,
+      isFIFO: () => false,
+      isSocket: () => false,
+      parentPath: skillsRoot,
+      path: skillsRoot,
+    })) as unknown as Awaited<ReturnType<typeof fs.readdir>>;
+
+    let readdirCalls = 0;
+    const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation(async () => {
+      return readdirCalls++ === 0 ? fakeDirEntries : ([] as unknown as typeof fakeDirEntries);
+    });
+    const realpathSpy = vi
+      .spyOn(fs, "realpath")
+      .mockImplementation(async (p: unknown) => String(p));
+
+    try {
+      const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
+        cfg: { agents: { defaults: { workspace: workspaceDir } } } satisfies OpenClawConfig,
+      });
+      const truncFinding = findings.find((f) => f.checkId === "skills.workspace.scan_truncated");
+      expect(truncFinding).toBeDefined();
+      expect(truncFinding?.severity).toBe("warn");
+      expect(truncFinding?.detail).toContain(workspaceDir);
+    } finally {
+      readdirSpy.mockRestore();
+      realpathSpy.mockRestore();
+    }
+  });
 });

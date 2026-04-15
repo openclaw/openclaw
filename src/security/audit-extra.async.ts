@@ -25,7 +25,7 @@ import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   normalizeOptionalLowercaseString,
@@ -426,11 +426,13 @@ async function getCodeSafetySummary(params: {
   });
 }
 
-async function listWorkspaceSkillMarkdownFiles(workspaceDir: string): Promise<string[]> {
+async function listWorkspaceSkillMarkdownFiles(
+  workspaceDir: string,
+): Promise<{ skillFilePaths: string[]; truncated: boolean }> {
   const skillsRoot = path.join(workspaceDir, "skills");
   const rootStat = await safeStat(skillsRoot);
   if (!rootStat.ok || !rootStat.isDir) {
-    return [];
+    return { skillFilePaths: [], truncated: false };
   }
 
   const skillFiles: string[] = [];
@@ -484,7 +486,7 @@ async function listWorkspaceSkillMarkdownFiles(workspaceDir: string): Promise<st
     }
   }
 
-  return skillFiles;
+  return { skillFilePaths: skillFiles, truncated: queue.length > 0 };
 }
 
 // --------------------------------------------------------------------------
@@ -695,13 +697,20 @@ export async function collectPluginsTrustFindings(params: {
       // legitimate allowlist targets.
       const installedPluginIds = new Set(pluginDirs.map((dir) => path.basename(dir).toLowerCase()));
       const bundledPluginIds = new Set(listChannelPlugins().map((p) => p.id.toLowerCase()));
-      const phantomEntries = allow.filter(
-        (entry) =>
-          typeof entry === "string" &&
-          entry !== "group:plugins" &&
-          !installedPluginIds.has(entry.toLowerCase()) &&
-          !bundledPluginIds.has(entry.toLowerCase()),
-      );
+      const phantomEntries = allow.filter((entry) => {
+        if (typeof entry !== "string" || entry === "group:plugins") {
+          return false;
+        }
+        const lower = entry.toLowerCase();
+        if (installedPluginIds.has(lower) || bundledPluginIds.has(lower)) {
+          return false;
+        }
+        // Also resolve via plugin alias / legacy-ID normalization so that entries
+        // like a provider ID or a renamed bundled plugin don't produce false-positive
+        // phantom warnings. normalizePluginId maps aliases to their canonical ID.
+        const canonicalId = normalizeOptionalLowercaseString(normalizePluginId(entry)) ?? "";
+        return !canonicalId || !bundledPluginIds.has(canonicalId);
+      });
       if (phantomEntries.length > 0) {
         findings.push({
           checkId: "plugins.allow_phantom_entries",
@@ -973,7 +982,25 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
   for (const workspaceDir of workspaceDirs) {
     const workspacePath = path.resolve(workspaceDir);
     const workspaceRealPath = (await realpathWithTimeout(workspacePath)) ?? workspacePath;
-    const skillFilePaths = await listWorkspaceSkillMarkdownFiles(workspacePath);
+    const { skillFilePaths, truncated } = await listWorkspaceSkillMarkdownFiles(workspacePath);
+
+    if (truncated) {
+      // The BFS visit cap was hit before the full skills/ tree was scanned.
+      // Escaped SKILL.md symlinks in the unvisited portion will not be detected.
+      // Surface this as a warning so the user knows coverage was incomplete.
+      findings.push({
+        checkId: "skills.workspace.scan_truncated",
+        severity: "warn",
+        title: "Workspace skill scan reached the directory visit limit",
+        detail:
+          `The skills/ directory scan in ${workspacePath} stopped early after reaching the ` +
+          `BFS visit cap. Skill files in the unscanned portion of the tree were not checked ` +
+          "for symlink escapes.",
+        remediation:
+          "Flatten or simplify the skills/ directory hierarchy to stay within the scan budget, " +
+          "or move deeply-nested skill collections to a managed skill location.",
+      });
+    }
 
     for (const skillFilePath of skillFilePaths) {
       const canonicalSkillPath = path.resolve(skillFilePath);
