@@ -22,6 +22,7 @@ import { resolveDiscordAccount } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import type { DiscordComponentMessageSpec } from "../components.types.js";
 import { isLikelyDiscordVideoMedia } from "../media-detection.js";
+import { rewriteDiscordKnownMentions } from "../mentions.js";
 import { createDiscordRetryRunner } from "../retry.js";
 import { sendDiscordComponentMessage } from "../send.components.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
@@ -462,12 +463,22 @@ export async function deliverDiscordReply(params: {
       | undefined;
     const rawComponentSpec =
       discordData?.components ?? buildDiscordInteractiveComponents(payload.interactive);
+    const componentSpecText = payload.text?.trim()
+      ? rewriteDiscordKnownMentions(convertMarkdownTables(payload.text, tableMode), {
+          accountId: params.accountId,
+        })
+      : undefined;
     const componentSpec = rawComponentSpec
       ? rawComponentSpec.text
-        ? rawComponentSpec
+        ? {
+            ...rawComponentSpec,
+            text: rewriteDiscordKnownMentions(rawComponentSpec.text, {
+              accountId: params.accountId,
+            }),
+          }
         : {
             ...rawComponentSpec,
-            text: payload.text?.trim() ? convertMarkdownTables(payload.text, tableMode) : undefined,
+            text: componentSpecText,
           }
       : undefined;
     if (!reply.hasMedia) {

@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { rememberDiscordDirectoryUser, __resetDiscordDirectoryCacheForTest } from "../directory-cache.js";
 import {
   __testing as threadBindingTesting,
   createThreadBindingManager,
@@ -151,6 +152,7 @@ describe("deliverDiscordReply", () => {
     });
     retryAsyncMock.mockClear();
     threadBindingTesting.resetThreadBindingsForTests();
+    __resetDiscordDirectoryCacheForTest();
   });
 
   it("routes audioAsVoice payloads through the voice API and sends text separately", async () => {
@@ -338,6 +340,45 @@ describe("deliverDiscordReply", () => {
     expect(spec.text?.startsWith("```")).toBe(true);
     expect(spec.text).toContain("| H | I |");
     expect(spec.text).toContain("| --- | --- |");
+  });
+
+  it("rewrites known mentions in component reply text", async () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789012345678",
+      handles: ["alice"],
+    });
+
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "hi @alice",
+          channelData: {
+            discord: {
+              components: {
+                blocks: [
+                  {
+                    type: "actions",
+                    buttons: [{ label: "Approve", callbackData: "approve", style: "success" }],
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+      target: "channel:654",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      replyToId: "reply-1",
+    });
+
+    const spec = sendDiscordComponentMessageMock.mock.calls.at(-1)?.[1] as {
+      text?: string;
+    };
+    expect(spec.text).toContain("<@123456789012345678>");
   });
 
   it("builds Discord components from interactive replies and attaches them to the first media send", async () => {
