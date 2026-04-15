@@ -14,6 +14,7 @@ import {
   flattenChromeMcpSnapshotToAriaNodes,
 } from "../chrome-mcp.snapshot.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
+import { tryHyprlandViewportCapture } from "../hyprland-capture.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
@@ -345,7 +346,7 @@ export function registerBrowserAgentSnapshotRoutes(
       const ref = toStringOrEmpty(body.ref) || undefined;
       const element = toStringOrEmpty(body.element) || undefined;
       const labels = toBoolean(body.labels) ?? false;
-      const type = body.type === "jpeg" ? "jpeg" : "png";
+      let type: "jpeg" | "png" = body.type === "jpeg" ? "jpeg" : "png";
       const timeoutMsRaw = toNumber(body.timeoutMs);
       const timeoutMs =
         timeoutMsRaw !== undefined
@@ -483,13 +484,26 @@ export function registerBrowserAgentSnapshotRoutes(
             });
             buffer = snap.buffer;
           } else {
-            buffer = await captureScreenshot({
-              wsUrl: tab.wsUrl ?? "",
-              fullPage,
-              format: type,
-              quality: type === "jpeg" ? 85 : undefined,
-              timeoutMs,
-            });
+            const browserPid =
+              !fullPage && !ctx.state().resolved.headless
+                ? (ctx.state().profiles.get(profileCtx.profile.name)?.running?.pid ?? null)
+                : null;
+            const hyprlandPng =
+              browserPid && browserPid > 0
+                ? await tryHyprlandViewportCapture({ browserPid, timeoutMs: 3000 })
+                : null;
+            if (hyprlandPng) {
+              type = "png";
+              buffer = hyprlandPng;
+            } else {
+              buffer = await captureScreenshot({
+                wsUrl: tab.wsUrl ?? "",
+                fullPage,
+                format: type,
+                quality: type === "jpeg" ? 85 : undefined,
+                timeoutMs,
+              });
+            }
           }
 
           await saveNormalizedScreenshotResponse({
