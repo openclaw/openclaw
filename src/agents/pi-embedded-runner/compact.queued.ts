@@ -35,6 +35,7 @@ import {
   setActiveEmbeddedRun,
 } from "./runs.js";
 import type { EmbeddedPiQueueHandle } from "./runs.js";
+import { abortReplyRunBySessionId } from "../../auto-reply/reply/reply-run-registry.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 
 /**
@@ -89,6 +90,9 @@ export async function compactEmbeddedPiSession(
         isCompacting: () => true,
         abort: () => {
           abortController.abort("user_abort");
+          // Cascade abort to any active reply operation for the same session,
+          // since abortEmbeddedPiRun returns after the first ACTIVE_EMBEDDED_RUNS hit.
+          abortReplyRunBySessionId(params.sessionId);
         },
       };
       setActiveEmbeddedRun(params.sessionId, compactHandle, params.sessionKey);
