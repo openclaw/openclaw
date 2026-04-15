@@ -37,11 +37,7 @@ import {
   isMediaPayload,
   type MediaPayload,
 } from "../utils/payload.js";
-import {
-  getQQBotDataDir,
-  normalizePath,
-  resolveQQBotPayloadLocalFilePath,
-} from "../utils/platform.js";
+import { normalizePath, resolveQQBotPayloadLocalFilePath } from "../utils/platform.js";
 import { normalizeLowercaseStringOrEmpty } from "../utils/string-normalize.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
 
@@ -49,18 +45,8 @@ import { sanitizeFileName } from "../utils/string-normalize.js";
 
 /** TTS provider interface — injected from the outer layer. */
 export interface TTSProvider {
-  /** Plugin-level TTS: text → SILK base64. */
-  textToSilk(
-    text: string,
-    ttsCfg: Record<string, unknown>,
-    outputDir: string,
-  ): Promise<{ silkBase64?: string; silkPath?: string; duration?: number }>;
-  /** Check whether a plugin-level TTS config exists. */
-  resolveTTSConfig(cfg: unknown): Record<string, unknown> | null;
-  /** Check whether the global TTS provider is available. */
-  isGlobalTTSAvailable(cfg: unknown): boolean;
-  /** Global TTS: text → audio file path. */
-  globalTextToSpeech(params: { text: string; cfg: unknown; channel: string }): Promise<{
+  /** Framework TTS: text → audio file path. */
+  textToSpeech(params: { text: string; cfg: unknown; channel: string }): Promise<{
     success: boolean;
     audioPath?: string;
     provider?: string;
@@ -69,8 +55,6 @@ export interface TTSProvider {
   }>;
   /** Convert any audio file to SILK base64. */
   audioFileToSilkBase64(audioPath: string): Promise<string | undefined>;
-  /** Format a duration in seconds to a human-readable string. */
-  formatDuration(seconds: number): string;
 }
 
 /** Dependencies injected into reply-dispatcher functions. */
@@ -480,67 +464,30 @@ async function handleAudioPayload(
       return;
     }
 
-    let silkBase64: string | undefined;
-    let silkPath: string | undefined;
-    let duration: number | undefined;
-    let providerLabel: string | undefined;
-
-    // Strategy 1: Plugin-specific TTS.
-    const ttsCfg = deps.tts.resolveTTSConfig(cfg);
-    if (ttsCfg) {
-      const modelName = typeof ttsCfg.model === "string" ? ttsCfg.model : "unknown";
-      log?.info(
-        `[qqbot:${account.accountId}] TTS (plugin): "${ttsText.slice(0, 50)}..." via ${modelName}`,
-      );
-      const ttsDir = getQQBotDataDir("tts");
-      const result = await deps.tts.textToSilk(ttsText, ttsCfg, ttsDir);
-      silkBase64 = result.silkBase64;
-      silkPath = result.silkPath;
-      duration = result.duration;
-      providerLabel = typeof ttsCfg.model === "string" ? ttsCfg.model : "plugin";
-    } else {
-      // Strategy 2: Global TTS provider.
-      if (!deps.tts.isGlobalTTSAvailable(cfg)) {
-        log?.error(
-          `[qqbot:${account.accountId}] TTS not configured (neither plugin channels.qqbot.tts nor global messages.tts)`,
-        );
-        return;
-      }
-      log?.info(`[qqbot:${account.accountId}] TTS (global fallback): "${ttsText.slice(0, 50)}..."`);
-      const globalResult = await deps.tts.globalTextToSpeech({
-        text: ttsText,
-        cfg,
-        channel: "qqbot",
-      });
-      if (!globalResult.success || !globalResult.audioPath) {
-        log?.error(
-          `[qqbot:${account.accountId}] Global TTS failed: ${globalResult.error ?? "unknown"}`,
-        );
-        return;
-      }
-      log?.info(
-        `[qqbot:${account.accountId}] Global TTS returned: provider=${globalResult.provider}, format=${globalResult.outputFormat}, path=${globalResult.audioPath}`,
-      );
-      providerLabel = globalResult.provider ?? "global";
-
-      const base64 = await deps.tts.audioFileToSilkBase64(globalResult.audioPath);
-      if (!base64) {
-        log?.error(`[qqbot:${account.accountId}] Failed to convert global TTS audio to SILK`);
-        return;
-      }
-      silkBase64 = base64;
-      silkPath = globalResult.audioPath;
-      duration = 0;
-    }
-
-    if (!silkBase64) {
-      log?.error(`[qqbot:${account.accountId}] TTS produced no audio output`);
+    log?.info(`[qqbot:${account.accountId}] TTS: "${ttsText.slice(0, 50)}..."`);
+    const ttsResult = await deps.tts.textToSpeech({
+      text: ttsText,
+      cfg,
+      channel: "qqbot",
+    });
+    if (!ttsResult.success || !ttsResult.audioPath) {
+      log?.error(`[qqbot:${account.accountId}] TTS failed: ${ttsResult.error ?? "unknown"}`);
       return;
     }
 
+    const providerLabel = ttsResult.provider ?? "unknown";
     log?.info(
-      `[qqbot:${account.accountId}] TTS done (${providerLabel}): ${duration ? deps.tts.formatDuration(duration) : "N/A"}, file: ${silkPath ?? "N/A"}`,
+      `[qqbot:${account.accountId}] TTS returned: provider=${providerLabel}, format=${ttsResult.outputFormat}, path=${ttsResult.audioPath}`,
     );
+
+    const silkBase64 = await deps.tts.audioFileToSilkBase64(ttsResult.audioPath);
+    if (!silkBase64) {
+      log?.error(`[qqbot:${account.accountId}] Failed to convert TTS audio to SILK`);
+      return;
+    }
+    const silkPath = ttsResult.audioPath;
+
+    log?.info(`[qqbot:${account.accountId}] TTS done (${providerLabel}), file: ${silkPath}`);
 
     await sendWithTokenRetry(
       account.appId,

@@ -13,26 +13,16 @@ const AudioFormatPolicySchema = z
   })
   .optional();
 
-const QQBotSpeechQueryParamsSchema = z.record(z.string(), z.string()).optional();
-
-const QQBotSpeechProviderSchema = z.object({
-  enabled: z.boolean().optional(),
-  provider: z.string().optional(),
-  baseUrl: z.string().optional(),
-  apiKey: z.string().optional(),
-  model: z.string().optional(),
-});
-
-const QQBotTtsSchema = QQBotSpeechProviderSchema.extend({
-  voice: z.string().optional(),
-  authStyle: z.enum(["bearer", "api-key"]).optional(),
-  queryParams: QQBotSpeechQueryParamsSchema,
-  speed: z.number().optional(),
-})
+const QQBotSttSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    provider: z.string().optional(),
+    baseUrl: z.string().optional(),
+    apiKey: z.string().optional(),
+    model: z.string().optional(),
+  })
   .strict()
   .optional();
-
-const QQBotSttSchema = QQBotSpeechProviderSchema.strict().optional();
 
 const QQBotStreamingSchema = z
   .union([
@@ -66,7 +56,6 @@ const QQBotAccountSchema = z
   .passthrough();
 
 export const QQBotConfigSchema = QQBotAccountSchema.extend({
-  tts: QQBotTtsSchema,
   stt: QQBotSttSchema,
   accounts: z.object({}).catchall(QQBotAccountSchema.passthrough()).optional(),
   defaultAccount: z.string().optional(),

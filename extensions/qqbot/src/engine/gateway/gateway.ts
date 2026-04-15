@@ -15,7 +15,6 @@
 import path from "node:path";
 import WebSocket from "ws";
 import {
-  textToSilk,
   audioFileToSilkBase64,
   formatDuration,
   convertSilkToWav,
@@ -86,7 +85,6 @@ import { clearSession, loadSession, saveSession } from "./session-store.js";
 // ---- Upper-layer files NOT yet migrated to core/ (heavy I/O) ----
 import { matchSlashCommand } from "./slash-commands-impl.js";
 import type { SlashCommandContext } from "./slash-commands.js";
-import { resolveTTSConfig, isGlobalTTSAvailable } from "./tts-config.js";
 import type { CoreGatewayContext, OutboundResult, RefAttachmentSummary } from "./types.js";
 import { TypingKeepAlive, TYPING_INPUT_SECOND } from "./typing-keepalive.js";
 
@@ -214,25 +212,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       ...(attachments.length > 0 ? { attachments } : {}),
     });
   });
-
-  // Log TTS configuration state for diagnostics.
-  const ttsCfg = resolveTTSConfig(cfg as Record<string, unknown>);
-  if (ttsCfg) {
-    const maskedKey =
-      ttsCfg.apiKey.length > 8
-        ? `${ttsCfg.apiKey.slice(0, 4)}****${ttsCfg.apiKey.slice(-4)}`
-        : "****";
-    log?.info(
-      `[qqbot:${account.accountId}] TTS configured (plugin): model=${ttsCfg.model}, voice=${ttsCfg.voice}, baseUrl=${ttsCfg.baseUrl}`,
-    );
-    log?.info(`[qqbot:${account.accountId}] TTS apiKey: ${maskedKey}`);
-  } else if (isGlobalTTSAvailable(cfg)) {
-    log?.info(`[qqbot:${account.accountId}] TTS configured (global fallback)`);
-  } else {
-    log?.info(
-      `[qqbot:${account.accountId}] TTS not configured (voice messages will be unavailable)`,
-    );
-  }
 
   let reconnectAttempts = 0;
   let isAborted = false;
@@ -632,9 +611,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
             ? `qqbot:dm:${event.guildId}`
             : `qqbot:c2c:${event.senderId}`;
 
-        const hasTTS =
-          !!resolveTTSConfig(cfg as Record<string, unknown>) || isGlobalTTSAvailable(cfg);
-
         let quotePart = "";
         if (replyToIsQuote) {
           quotePart = replyToBody
@@ -642,11 +618,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
             : `[Quoted message begins]\nOriginal content unavailable\n[Quoted message ends]\n`;
         }
 
-        const staticParts: string[] = [`[QQBot] to=${qualifiedTarget}`];
-        if (hasTTS) {
-          staticParts.push("voice synthesis enabled");
-        }
-        systemPrompts.unshift(staticParts.join(" | "));
+        systemPrompts.unshift(`[QQBot] to=${qualifiedTarget}`);
 
         const dynLines: string[] = [];
         if (imageUrls.length > 0) {
@@ -960,17 +932,9 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
                   });
                 const replyDeps: ReplyDispatcherDeps = {
                   tts: {
-                    textToSilk: (text, ttsCfg2, dir) => textToSilk(text, ttsCfg2 as never, dir),
-                    resolveTTSConfig: (c) =>
-                      resolveTTSConfig(c as Record<string, unknown>) as Record<
-                        string,
-                        unknown
-                      > | null,
-                    isGlobalTTSAvailable: (c) => isGlobalTTSAvailable(c),
-                    globalTextToSpeech: (params) => runtime.tts.textToSpeech(params),
+                    textToSpeech: (params) => runtime.tts.textToSpeech(params),
                     audioFileToSilkBase64: async (p) =>
                       (await audioFileToSilkBase64(p)) ?? undefined,
-                    formatDuration,
                   },
                 };
                 const handled = await handleStructuredPayload(
