@@ -7,18 +7,28 @@ describe("buildOllamaBaseUrlSsrFPolicy", () => {
       hostnameAllowlist: ["127.0.0.1"],
       allowPrivateNetwork: true,
     });
+    expect(buildOllamaBaseUrlSsrFPolicy("http://192.168.1.10:11434")).toEqual({
+      hostnameAllowlist: ["192.168.1.10"],
+      allowPrivateNetwork: true,
+    });
     expect(buildOllamaBaseUrlSsrFPolicy("https://ollama.example.com/v1")).toEqual({
       hostnameAllowlist: ["ollama.example.com"],
+      allowPrivateNetwork: true,
     });
   });
 
-  it("only opts into private-network access for loopback hosts", () => {
+  it("opts into private-network access for explicit Ollama hosts", () => {
     expect(buildOllamaBaseUrlSsrFPolicy("http://localhost:11434")).toEqual({
       hostnameAllowlist: ["localhost"],
       allowPrivateNetwork: true,
     });
-    expect(buildOllamaBaseUrlSsrFPolicy("http://192.168.1.10:11434")).toEqual({
-      hostnameAllowlist: ["192.168.1.10"],
+    expect(buildOllamaBaseUrlSsrFPolicy("http://[fd00::1]:11434")).toEqual({
+      hostnameAllowlist: ["[fd00::1]"],
+      allowPrivateNetwork: true,
+    });
+    expect(buildOllamaBaseUrlSsrFPolicy("https://ollama.local:11434")).toEqual({
+      hostnameAllowlist: ["ollama.local"],
+      allowPrivateNetwork: true,
     });
   });
 
