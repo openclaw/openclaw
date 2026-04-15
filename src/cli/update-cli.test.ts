@@ -479,6 +479,31 @@ describe("update-cli", () => {
     expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
+  it("keeps downgrade post-update work in the current process", async () => {
+    setupUpdatedRootRefresh({
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: createCaseDir("openclaw-downgraded-root"),
+          before: { version: "2026.4.14" },
+          after: { version: "2026.4.10" },
+        }),
+    });
+    readPackageVersion.mockResolvedValue("2026.4.14");
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2026.4.10",
+    });
+
+    await updateCommand({ yes: true, tag: "2026.4.10" });
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(syncPluginsForUpdateChannel).toHaveBeenCalled();
+    expect(updateNpmInstalledPlugins).toHaveBeenCalled();
+    expect(runDaemonInstall).toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
   it("fails the update when the fresh process exits non-zero", async () => {
     setupUpdatedRootRefresh();
     spawn.mockImplementationOnce(() => {
