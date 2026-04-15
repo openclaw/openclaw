@@ -59,7 +59,7 @@
       {
         "label": "main",
         "title": "OpenClaw",
-        "url": "../dist/index.html",
+        "url": "index.html",
         "width": 1200,
         "height": 800,
         "resizable": true,

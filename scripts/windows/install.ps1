@@ -120,7 +120,7 @@ Set-ItemProperty $RegPath "DisplayVersion"  "1.0.0"
 Set-ItemProperty $RegPath "Publisher"       "OpenClaw Project"
 Set-ItemProperty $RegPath "InstallLocation" $InstallPath
 Set-ItemProperty $RegPath "DisplayIcon"     $ExePath
-Set-ItemProperty $RegPath "UninstallString" "powershell.exe -ExecutionPolicy Bypass -File `"$UninstallerTarget`" -Uninstall"
+Set-ItemProperty $RegPath "UninstallString" "powershell.exe -ExecutionPolicy Bypass -File `"$UninstallerTarget`" -Uninstall -InstallPath `"$InstallPath`""
 Write-OK "Registry updated."
 
 # 6. Autostart
