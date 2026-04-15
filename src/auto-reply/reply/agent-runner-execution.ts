@@ -996,8 +996,8 @@ export async function runAgentTurnWithFallback(params: {
                 ...(params.followupRun.run.senderUsername != null && { senderUsername: params.followupRun.run.senderUsername }),
                 ...(params.followupRun.run.senderE164 != null && { senderE164: params.followupRun.run.senderE164 }),
                 ...(params.followupRun.run.senderIsOwner != null && { senderIsOwner: params.followupRun.run.senderIsOwner }),
-                sourceProvider: params.followupRun.run.sourceProvider,
-                spawnedBy: params.followupRun.run.spawnedBy,
+                ...(params.followupRun.run.sourceProvider != null && { sourceProvider: params.followupRun.run.sourceProvider }),
+                ...(params.followupRun.run.spawnedBy != null && { spawnedBy: params.followupRun.run.spawnedBy }),
                 // Pin delivery routing to stored run values so queued runs
                 // always use the original channel and account credentials,
                 // not whatever the live session template reflects at execution
