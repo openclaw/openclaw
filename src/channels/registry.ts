@@ -103,10 +103,11 @@ export function formatChannelSelectionLine(
   docsLink: (path: string, label?: string) => string,
 ): string {
   const docsPrefix = meta.selectionDocsPrefix ?? "Docs:";
+  const docsPath = meta.docsPath ?? `/channels/${meta.id}`;
   const docsLabel = meta.docsLabel ?? meta.id;
   const docs = meta.selectionDocsOmitLabel
-    ? docsLink(meta.docsPath)
-    : docsLink(meta.docsPath, docsLabel);
+    ? docsLink(docsPath)
+    : docsLink(docsPath, docsLabel);
   const extras = (meta.selectionExtras ?? []).filter(Boolean).join(" ");
   return `${meta.label} — ${meta.blurb} ${docsPrefix ? `${docsPrefix} ` : ""}${docs}${extras ? ` ${extras}` : ""}`;
 }

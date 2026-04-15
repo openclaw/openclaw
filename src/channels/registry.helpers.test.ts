@@ -66,6 +66,12 @@ describe("channel registry helpers", () => {
     expect(normalizeAnyChannelId("weixin")).toBe("openclaw-weixin");
   });
 
+  it("falls back to /channels/{id} when meta.docsPath is undefined", () => {
+    const meta = { id: "test-channel", label: "Test", blurb: "A test channel" };
+    const line = formatChannelSelectionLine(meta as never, (path) => path);
+    expect(line).toContain("/channels/test-channel");
+  });
+
   it("falls back to the active registry when the pinned channel registry has no channels", () => {
     const startupRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(startupRegistry);
