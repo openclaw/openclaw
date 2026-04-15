@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -441,7 +442,12 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     respond(true, result, undefined);
   },
-  "config.set": async ({ params, respond, context }) => {
+  "config.set": async ({ params, respond, client, context }) => {
+    const setScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    if (!setScopes.includes(ADMIN_SCOPE)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "config.set requires operator.admin scope"));
+      return;
+    }
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
     }
@@ -469,6 +475,11 @@ export const configHandlers: GatewayRequestHandlers = {
     queueSharedGatewayAuthGenerationRefresh(true, parsed.config, context);
   },
   "config.patch": async ({ params, respond, client, context }) => {
+    const patchScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    if (!patchScopes.includes(ADMIN_SCOPE)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "config.patch requires operator.admin scope"));
+      return;
+    }
     if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {
       return;
     }
@@ -627,6 +638,11 @@ export const configHandlers: GatewayRequestHandlers = {
     queueSharedGatewayAuthDisconnect(disconnectSharedAuthClients, context);
   },
   "config.apply": async ({ params, respond, client, context }) => {
+    const applyScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    if (!applyScopes.includes(ADMIN_SCOPE)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "config.apply requires operator.admin scope"));
+      return;
+    }
     if (!assertValidParams(params, validateConfigApplyParams, "config.apply", respond)) {
       return;
     }

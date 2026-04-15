@@ -171,4 +171,6 @@ export type ConfigFileSnapshot = {
   issues: ConfigValidationIssue[];
   warnings: ConfigValidationIssue[];
   legacyIssues: LegacyConfigIssue[];
+  /** Set when HMAC integrity check detects external modification. */
+  integrityWarning?: string;
 };

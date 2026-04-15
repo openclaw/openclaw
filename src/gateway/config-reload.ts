@@ -224,6 +224,14 @@ export function startGatewayConfigReloader(opts: {
       if (handleInvalidSnapshot(snapshot)) {
         return;
       }
+      // HMAC integrity check: reject externally-modified configs.
+      if (snapshot.integrityWarning) {
+        opts.log.error(
+          `config reload REJECTED: external modification detected. ` +
+            `Use the gateway API (config.patch) to modify config.`,
+        );
+        return;
+      }
       await applySnapshot(snapshot.config);
     } catch (err) {
       opts.log.error(`config reload failed: ${String(err)}`);
