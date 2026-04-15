@@ -208,4 +208,32 @@ describe("redactSensitiveLines", () => {
     expect(joined).toContain("…redacted…");
     expect(joined).not.toContain("ABCDEF1234567890");
   });
+
+  it("masks generic JWT tokens", () => {
+    const jwt =
+      "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+    const input = `Authorization: Bearer ${jwt}`;
+    const output = redactSensitiveText(input, { mode: "tools", patterns: defaults });
+    expect(output).not.toContain("eyJzdWIiOiIxMjM0NTY3ODkwIn0");
+  });
+
+  it("masks Basic auth headers", () => {
+    const input = "Authorization: Basic dXNlcm5hbWU6cGFzc3dvcmQ=";
+    const output = redactSensitiveText(input, { mode: "tools", patterns: defaults });
+    expect(output).not.toContain("dXNlcm5hbWU6cGFzc3dvcmQ=");
+  });
+
+  it("masks X-OpenClaw-Token headers", () => {
+    const input = 'X-OpenClaw-Token: oc_abcdef1234567890ghijklmn';
+    const output = redactSensitiveText(input, { mode: "tools", patterns: defaults });
+    expect(output).not.toContain("oc_abcdef1234567890ghijklmn");
+  });
+
+  it("masks x-pomerium-jwt-assertion headers", () => {
+    const jwt =
+      "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyQGV4YW1wbGUuY29tIn0.abc123def456ghi789jkl";
+    const input = `x-pomerium-jwt-assertion: ${jwt}`;
+    const output = redactSensitiveText(input, { mode: "tools", patterns: defaults });
+    expect(output).not.toContain("eyJzdWIiOiJ1c2VyQGV4YW1wbGUuY29tIn0");
+  });
 });
