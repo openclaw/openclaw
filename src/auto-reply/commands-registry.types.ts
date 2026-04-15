@@ -1,4 +1,7 @@
 import type { OpenClawConfig } from "../config/types.js";
+import type { CommandArgValues } from "./commands-args.types.js";
+
+export type { CommandArgValue, CommandArgValues, CommandArgs } from "./commands-args.types.js";
 
 export type CommandScope = "text" | "native" | "both";
 
@@ -31,20 +34,13 @@ export type CommandArgDefinition = {
   type: CommandArgType;
   required?: boolean;
   choices?: CommandArgChoice[] | CommandArgChoicesProvider;
+  preferAutocomplete?: boolean;
   captureRemaining?: boolean;
 };
 
 export type CommandArgMenuSpec = {
   arg: string;
   title?: string;
-};
-
-export type CommandArgValue = string | number | boolean | bigint;
-export type CommandArgValues = Record<string, CommandArgValue>;
-
-export type CommandArgs = {
-  raw?: string;
-  values?: CommandArgValues;
 };
 
 export type CommandArgsParsing = "none" | "positional";

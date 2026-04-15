@@ -4,6 +4,10 @@ import { promptYesNo } from "../cli/prompt.js";
 import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { ensureBinary } from "./binaries.js";
 
@@ -149,7 +153,25 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
  */
 let cachedTailscaleBinary: string | null = null;
 
+export function getTestTailscaleBinaryOverride(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const forcedBinary = env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim();
+  if (!forcedBinary) {
+    return null;
+  }
+  if (env.VITEST || env.NODE_ENV === "test") {
+    return forcedBinary;
+  }
+  return null;
+}
+
 export async function getTailscaleBinary(): Promise<string> {
+  const forcedBinary = getTestTailscaleBinaryOverride();
+  if (forcedBinary) {
+    cachedTailscaleBinary = forcedBinary;
+    return forcedBinary;
+  }
   if (cachedTailscaleBinary) {
     return cachedTailscaleBinary;
   }
@@ -253,7 +275,7 @@ function isPermissionDeniedError(err: unknown): boolean {
   if (code.toUpperCase() === "EACCES") {
     return true;
   }
-  const combined = `${stdout}\n${stderr}\n${message}`.toLowerCase();
+  const combined = normalizeLowercaseStringOrEmpty(`${stdout}\n${stderr}\n${message}`);
   return (
     combined.includes("permission denied") ||
     combined.includes("access denied") ||
@@ -416,10 +438,6 @@ export async function disableTailscaleFunnel(exec: typeof runExec = runExec) {
   });
 }
 
-function getString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
@@ -428,20 +446,20 @@ function parseWhoisIdentity(payload: Record<string, unknown>): TailscaleWhoisIde
   const userProfile =
     readRecord(payload.UserProfile) ?? readRecord(payload.userProfile) ?? readRecord(payload.User);
   const login =
-    getString(userProfile?.LoginName) ??
-    getString(userProfile?.Login) ??
-    getString(userProfile?.login) ??
-    getString(payload.LoginName) ??
-    getString(payload.login);
+    normalizeOptionalString(userProfile?.LoginName) ??
+    normalizeOptionalString(userProfile?.Login) ??
+    normalizeOptionalString(userProfile?.login) ??
+    normalizeOptionalString(payload.LoginName) ??
+    normalizeOptionalString(payload.login);
   if (!login) {
     return null;
   }
   const name =
-    getString(userProfile?.DisplayName) ??
-    getString(userProfile?.Name) ??
-    getString(userProfile?.displayName) ??
-    getString(payload.DisplayName) ??
-    getString(payload.name);
+    normalizeOptionalString(userProfile?.DisplayName) ??
+    normalizeOptionalString(userProfile?.Name) ??
+    normalizeOptionalString(userProfile?.displayName) ??
+    normalizeOptionalString(payload.DisplayName) ??
+    normalizeOptionalString(payload.name);
   return { login, name };
 }
 

@@ -1,27 +1,129 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  readStringValue,
+} from "../shared/string-coerce.js";
+import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
+import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
+import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
+import { requestJsonlSocket } from "./jsonl-socket.js";
+export * from "./exec-approvals-analysis.js";
+export * from "./exec-approvals-allowlist.js";
+export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
+export type ExecTarget = "auto" | ExecHost;
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
+
+export function normalizeExecHost(value?: string | null): ExecHost | null {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
+    return normalized;
+  }
+  return null;
+}
+
+export function normalizeExecTarget(value?: string | null): ExecTarget | null {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (normalized === "auto") {
+    return normalized;
+  }
+  return normalizeExecHost(normalized);
+}
+
+/** Coerce a raw JSON field to string, returning undefined for non-string types. */
+const toStringOrUndefined = readStringValue;
+
+export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
+    return normalized;
+  }
+  return null;
+}
+
+export function normalizeExecAsk(value?: string | null): ExecAsk | null {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
+    return normalized;
+  }
+  return null;
+}
+
+export type SystemRunApprovalBinding = {
+  argv: string[];
+  cwd: string | null;
+  agentId: string | null;
+  sessionKey: string | null;
+  envHash: string | null;
+};
+
+export type SystemRunApprovalFileOperand = {
+  argvIndex: number;
+  path: string;
+  sha256: string;
+};
+
+export type SystemRunApprovalPlan = {
+  argv: string[];
+  cwd: string | null;
+  commandText: string;
+  commandPreview?: string | null;
+  agentId: string | null;
+  sessionKey: string | null;
+  mutableFileOperand?: SystemRunApprovalFileOperand | null;
+};
+
+export type ExecApprovalRequestPayload = {
+  command: string;
+  commandPreview?: string | null;
+  commandArgv?: string[];
+  // Optional UI-safe env key preview for approval prompts.
+  envKeys?: string[];
+  systemRunBinding?: SystemRunApprovalBinding | null;
+  systemRunPlan?: SystemRunApprovalPlan | null;
+  cwd?: string | null;
+  nodeId?: string | null;
+  host?: string | null;
+  security?: string | null;
+  ask?: string | null;
+  allowedDecisions?: readonly ExecApprovalDecision[];
+  agentId?: string | null;
+  resolvedPath?: string | null;
+  sessionKey?: string | null;
+  turnSourceChannel?: string | null;
+  turnSourceTo?: string | null;
+  turnSourceAccountId?: string | null;
+  turnSourceThreadId?: string | number | null;
+};
+
+export type ExecApprovalRequest = {
+  id: string;
+  request: ExecApprovalRequestPayload;
+  createdAtMs: number;
+  expiresAtMs: number;
+};
+
+export type ExecApprovalResolved = {
+  id: string;
+  decision: ExecApprovalDecision;
+  resolvedBy?: string | null;
+  ts: number;
+  request?: ExecApprovalRequest["request"];
+};
 
 export type ExecApprovalsDefaults = {
   security?: ExecSecurity;
   ask?: ExecAsk;
   askFallback?: ExecSecurity;
   autoAllowSkills?: boolean;
-};
-
-export type ExecAllowlistEntry = {
-  id?: string;
-  pattern: string;
-  lastUsedAt?: number;
-  lastUsedCommand?: string;
-  lastResolvedPath?: string;
 };
 
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
@@ -52,17 +154,24 @@ export type ExecApprovalsResolved = {
   token: string;
   defaults: Required<ExecApprovalsDefaults>;
   agent: Required<ExecApprovalsDefaults>;
+  agentSources: {
+    security: string | null;
+    ask: string | null;
+    askFallback: string | null;
+  };
   allowlist: ExecAllowlistEntry[];
   file: ExecApprovalsFile;
 };
 
-const DEFAULT_SECURITY: ExecSecurity = "deny";
-const DEFAULT_ASK: ExecAsk = "on-miss";
-const DEFAULT_ASK_FALLBACK: ExecSecurity = "deny";
+// Keep CLI + gateway defaults in sync.
+export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 1_800_000;
+
+const DEFAULT_SECURITY: ExecSecurity = "full";
+const DEFAULT_ASK: ExecAsk = "off";
+export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "full";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
 const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
-export const DEFAULT_SAFE_BINS = ["jq", "grep", "cut", "sort", "uniq", "head", "tail", "tr", "wc"];
 
 function hashExecApprovalsRaw(raw: string | null): string {
   return crypto
@@ -71,30 +180,17 @@ function hashExecApprovalsRaw(raw: string | null): string {
     .digest("hex");
 }
 
-function expandHome(value: string): string {
-  if (!value) {
-    return value;
-  }
-  if (value === "~") {
-    return os.homedir();
-  }
-  if (value.startsWith("~/")) {
-    return path.join(os.homedir(), value.slice(2));
-  }
-  return value;
-}
-
 export function resolveExecApprovalsPath(): string {
-  return expandHome(DEFAULT_FILE);
+  return expandHomePrefix(DEFAULT_FILE);
 }
 
 export function resolveExecApprovalsSocketPath(): string {
-  return expandHome(DEFAULT_SOCKET);
+  return expandHomePrefix(DEFAULT_SOCKET);
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {
-  const trimmed = value?.trim() ?? "";
-  return trimmed ? trimmed.toLowerCase() : null;
+  const trimmed = normalizeOptionalString(value) ?? "";
+  return trimmed ? normalizeLowercaseStringOrEmpty(trimmed) : null;
 }
 
 function mergeLegacyAgent(
@@ -104,8 +200,12 @@ function mergeLegacyAgent(
   const allowlist: ExecAllowlistEntry[] = [];
   const seen = new Set<string>();
   const pushEntry = (entry: ExecAllowlistEntry) => {
-    const key = normalizeAllowlistPattern(entry.pattern);
-    if (!key || seen.has(key)) {
+    const patternKey = normalizeAllowlistPattern(entry.pattern);
+    if (!patternKey) {
+      return;
+    }
+    const key = `${patternKey}\x00${entry.argPattern?.trim() ?? ""}`;
+    if (seen.has(key)) {
       return;
     }
     seen.add(key);
@@ -129,7 +229,53 @@ function mergeLegacyAgent(
 
 function ensureDir(filePath: string) {
   const dir = path.dirname(filePath);
+  assertNoSymlinkPathComponents(dir, resolveRequiredHomeDir());
   fs.mkdirSync(dir, { recursive: true });
+  const dirStat = fs.lstatSync(dir);
+  if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+    throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
+  }
+  return dir;
+}
+
+function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string): void {
+  const resolvedTarget = path.resolve(targetPath);
+  const resolvedRoot = path.resolve(trustedRoot);
+  if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}${path.sep}`)) {
+    return;
+  }
+
+  const relative = path.relative(resolvedRoot, resolvedTarget);
+  const segments = relative && relative !== "." ? relative.split(path.sep) : [];
+  let current = resolvedRoot;
+  for (const segment of [".", ...segments]) {
+    if (segment !== ".") {
+      current = path.join(current, segment);
+    }
+    try {
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Refusing to traverse symlink in exec approvals path: ${current}`);
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+  }
+}
+
+function assertSafeExecApprovalsDestination(filePath: string): void {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing to write exec approvals via symlink: ${filePath}`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
 }
 
 // Coerce legacy/corrupted allowlists into `ExecAllowlistEntry[]` before we spread
@@ -180,6 +326,42 @@ function ensureAllowlistIds(
   return changed ? next : allowlist;
 }
 
+function stripAllowlistCommandText(
+  allowlist: ExecAllowlistEntry[] | undefined,
+): ExecAllowlistEntry[] | undefined {
+  if (!Array.isArray(allowlist) || allowlist.length === 0) {
+    return allowlist;
+  }
+  let changed = false;
+  const next = allowlist.map((entry) => {
+    if (typeof entry.commandText !== "string") {
+      return entry;
+    }
+    changed = true;
+    const { commandText: _commandText, ...rest } = entry;
+    return rest;
+  });
+  return changed ? next : allowlist;
+}
+
+function sanitizeExecApprovalPolicy(
+  policy: ExecApprovalsDefaults | ExecApprovalsAgent | undefined,
+): ExecApprovalsDefaults {
+  const security = toStringOrUndefined(policy?.security)?.trim();
+  const ask = toStringOrUndefined(policy?.ask)?.trim();
+  const askFallback = toStringOrUndefined(policy?.askFallback)?.trim();
+  return {
+    security:
+      security === "deny" || security === "allowlist" || security === "full" ? security : undefined,
+    ask: ask === "off" || ask === "on-miss" || ask === "always" ? ask : undefined,
+    askFallback:
+      askFallback === "deny" || askFallback === "allowlist" || askFallback === "full"
+        ? askFallback
+        : undefined,
+    autoAllowSkills: policy?.autoAllowSkills,
+  };
+}
+
 export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
   const socketPath = file.socket?.path?.trim();
   const token = file.socket?.token?.trim();
@@ -192,11 +374,25 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
   }
   for (const [key, agent] of Object.entries(agents)) {
     const coerced = coerceAllowlistEntries(agent.allowlist);
-    const allowlist = ensureAllowlistIds(coerced);
-    if (allowlist !== agent.allowlist) {
-      agents[key] = { ...agent, allowlist };
+    const withIds = ensureAllowlistIds(coerced);
+    const allowlist = stripAllowlistCommandText(withIds);
+    const sanitizedPolicy = sanitizeExecApprovalPolicy(agent);
+    const agentChanged =
+      allowlist !== agent.allowlist ||
+      sanitizedPolicy.security !== agent.security ||
+      sanitizedPolicy.ask !== agent.ask ||
+      sanitizedPolicy.askFallback !== agent.askFallback;
+    if (agentChanged) {
+      agents[key] = {
+        ...agent,
+        allowlist,
+        security: sanitizedPolicy.security,
+        ask: sanitizedPolicy.ask,
+        askFallback: sanitizedPolicy.askFallback,
+      };
     }
   }
+  const sanitizedDefaults = sanitizeExecApprovalPolicy(file.defaults);
   const normalized: ExecApprovalsFile = {
     version: 1,
     socket: {
@@ -204,14 +400,29 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
       token: token && token.length > 0 ? token : undefined,
     },
     defaults: {
-      security: file.defaults?.security,
-      ask: file.defaults?.ask,
-      askFallback: file.defaults?.askFallback,
-      autoAllowSkills: file.defaults?.autoAllowSkills,
+      ...sanitizedDefaults,
     },
     agents,
   };
   return normalized;
+}
+
+export function mergeExecApprovalsSocketDefaults(params: {
+  normalized: ExecApprovalsFile;
+  current?: ExecApprovalsFile;
+}): ExecApprovalsFile {
+  const currentSocketPath = params.current?.socket?.path?.trim();
+  const currentToken = params.current?.socket?.token?.trim();
+  const socketPath =
+    params.normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
+  const token = params.normalized.socket?.token?.trim() ?? currentToken ?? "";
+  return {
+    ...params.normalized,
+    socket: {
+      path: socketPath,
+      token,
+    },
+  };
 }
 
 function generateToken(): string {
@@ -269,13 +480,41 @@ export function loadExecApprovals(): ExecApprovalsFile {
 
 export function saveExecApprovals(file: ExecApprovalsFile) {
   const filePath = resolveExecApprovalsPath();
-  ensureDir(filePath);
-  fs.writeFileSync(filePath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+  const raw = `${JSON.stringify(file, null, 2)}\n`;
+  writeExecApprovalsRaw(filePath, raw);
+}
+
+function writeExecApprovalsRaw(filePath: string, raw: string) {
+  const dir = ensureDir(filePath);
+  assertSafeExecApprovalsDestination(filePath);
+  const tempPath = path.join(dir, `.exec-approvals.${process.pid}.${crypto.randomUUID()}.tmp`);
+  let tempWritten = false;
+  try {
+    fs.writeFileSync(tempPath, raw, { mode: 0o600, flag: "wx" });
+    tempWritten = true;
+    fs.renameSync(tempPath, filePath);
+  } finally {
+    if (tempWritten && fs.existsSync(tempPath)) {
+      fs.rmSync(tempPath, { force: true });
+    }
+  }
   try {
     fs.chmodSync(filePath, 0o600);
   } catch {
     // best-effort on platforms without chmod
   }
+}
+
+export function restoreExecApprovalsSnapshot(snapshot: ExecApprovalsSnapshot): void {
+  if (!snapshot.exists) {
+    fs.rmSync(snapshot.path, { force: true });
+    return;
+  }
+  if (snapshot.raw !== null) {
+    writeExecApprovalsRaw(snapshot.path, snapshot.raw);
+    return;
+  }
+  saveExecApprovals(snapshot.file);
 }
 
 export function ensureExecApprovals(): ExecApprovalsFile {
@@ -294,18 +533,131 @@ export function ensureExecApprovals(): ExecApprovalsFile {
   return updated;
 }
 
-function normalizeSecurity(value: ExecSecurity | undefined, fallback: ExecSecurity): ExecSecurity {
-  if (value === "allowlist" || value === "full" || value === "deny") {
-    return value;
-  }
-  return fallback;
+function isExecSecurity(value: unknown): value is ExecSecurity {
+  return value === "allowlist" || value === "full" || value === "deny";
 }
 
-function normalizeAsk(value: ExecAsk | undefined, fallback: ExecAsk): ExecAsk {
-  if (value === "always" || value === "off" || value === "on-miss") {
-    return value;
+function isExecAsk(value: unknown): value is ExecAsk {
+  return value === "always" || value === "off" || value === "on-miss";
+}
+
+function normalizeSecurity(value: unknown, fallback: ExecSecurity): ExecSecurity {
+  return isExecSecurity(value) ? value : fallback;
+}
+
+function normalizeAsk(value: unknown, fallback: ExecAsk): ExecAsk {
+  return isExecAsk(value) ? value : fallback;
+}
+
+type ResolvedExecPolicyField<TValue extends ExecSecurity | ExecAsk> = {
+  value: TValue;
+  source: string | null;
+};
+
+function resolveDefaultSecurityField(params: {
+  field: "security" | "askFallback";
+  defaults: ExecApprovalsDefaults;
+  fallback: ExecSecurity;
+}): ResolvedExecPolicyField<ExecSecurity> {
+  const defaultValue = params.defaults[params.field];
+  if (isExecSecurity(defaultValue)) {
+    return {
+      value: defaultValue,
+      source: `defaults.${params.field}`,
+    };
   }
-  return fallback;
+  return {
+    value: params.fallback,
+    source: null,
+  };
+}
+
+function resolveDefaultAskField(params: {
+  defaults: ExecApprovalsDefaults;
+  fallback: ExecAsk;
+}): ResolvedExecPolicyField<ExecAsk> {
+  if (isExecAsk(params.defaults.ask)) {
+    return {
+      value: params.defaults.ask,
+      source: "defaults.ask",
+    };
+  }
+  return {
+    value: params.fallback,
+    source: null,
+  };
+}
+
+function resolveAgentSecurityField(params: {
+  field: "security" | "askFallback";
+  defaults: ExecApprovalsDefaults;
+  agent: ExecApprovalsAgent;
+  rawAgent: ExecApprovalsAgent;
+  wildcard: ExecApprovalsAgent;
+  rawWildcard: ExecApprovalsAgent;
+  agentKey: string;
+  fallback: ExecSecurity;
+}): ResolvedExecPolicyField<ExecSecurity> {
+  const fallbackField = resolveDefaultSecurityField({
+    field: params.field,
+    defaults: params.defaults,
+    fallback: params.fallback,
+  });
+  const rawAgentValue = params.rawAgent[params.field];
+  if (rawAgentValue != null) {
+    if (isExecSecurity(params.agent[params.field])) {
+      return {
+        value: params.agent[params.field] as ExecSecurity,
+        source: `agents.${params.agentKey}.${params.field}`,
+      };
+    }
+    return fallbackField;
+  }
+  const rawWildcardValue = params.rawWildcard[params.field];
+  if (rawWildcardValue != null) {
+    if (isExecSecurity(params.wildcard[params.field])) {
+      return {
+        value: params.wildcard[params.field] as ExecSecurity,
+        source: `agents.*.${params.field}`,
+      };
+    }
+    return fallbackField;
+  }
+  return fallbackField;
+}
+
+function resolveAgentAskField(params: {
+  defaults: ExecApprovalsDefaults;
+  agent: ExecApprovalsAgent;
+  rawAgent: ExecApprovalsAgent;
+  wildcard: ExecApprovalsAgent;
+  rawWildcard: ExecApprovalsAgent;
+  agentKey: string;
+  fallback: ExecAsk;
+}): ResolvedExecPolicyField<ExecAsk> {
+  const fallbackField = resolveDefaultAskField({
+    defaults: params.defaults,
+    fallback: params.fallback,
+  });
+  if (params.rawAgent.ask != null) {
+    if (isExecAsk(params.agent.ask)) {
+      return {
+        value: params.agent.ask,
+        source: `agents.${params.agentKey}.ask`,
+      };
+    }
+    return fallbackField;
+  }
+  if (params.rawWildcard.ask != null) {
+    if (isExecAsk(params.wildcard.ask)) {
+      return {
+        value: params.wildcard.ask,
+        source: "agents.*.ask",
+      };
+    }
+    return fallbackField;
+  }
+  return fallbackField;
 }
 
 export type ExecApprovalsDefaultOverrides = {
@@ -325,7 +677,7 @@ export function resolveExecApprovals(
     agentId,
     overrides,
     path: resolveExecApprovalsPath(),
-    socketPath: expandHome(file.socket?.path ?? resolveExecApprovalsSocketPath()),
+    socketPath: expandHomePrefix(file.socket?.path ?? resolveExecApprovalsSocketPath()),
     token: file.socket?.token ?? "",
   });
 }
@@ -338,14 +690,17 @@ export function resolveExecApprovalsFromFile(params: {
   socketPath?: string;
   token?: string;
 }): ExecApprovalsResolved {
+  const rawFile = params.file;
   const file = normalizeExecApprovals(params.file);
   const defaults = file.defaults ?? {};
   const agentKey = params.agentId ?? DEFAULT_AGENT_ID;
   const agent = file.agents?.[agentKey] ?? {};
   const wildcard = file.agents?.["*"] ?? {};
+  const rawAgent = rawFile.agents?.[agentKey] ?? {};
+  const rawWildcard = rawFile.agents?.["*"] ?? {};
   const fallbackSecurity = params.overrides?.security ?? DEFAULT_SECURITY;
   const fallbackAsk = params.overrides?.ask ?? DEFAULT_ASK;
-  const fallbackAskFallback = params.overrides?.askFallback ?? DEFAULT_ASK_FALLBACK;
+  const fallbackAskFallback = params.overrides?.askFallback ?? DEFAULT_EXEC_APPROVAL_ASK_FALLBACK;
   const fallbackAutoAllowSkills = params.overrides?.autoAllowSkills ?? DEFAULT_AUTO_ALLOW_SKILLS;
   const resolvedDefaults: Required<ExecApprovalsDefaults> = {
     security: normalizeSecurity(defaults.security, fallbackSecurity),
@@ -354,21 +709,43 @@ export function resolveExecApprovalsFromFile(params: {
       defaults.askFallback ?? fallbackAskFallback,
       fallbackAskFallback,
     ),
-    autoAllowSkills: Boolean(defaults.autoAllowSkills ?? fallbackAutoAllowSkills),
+    autoAllowSkills: defaults.autoAllowSkills ?? fallbackAutoAllowSkills,
   };
+  const resolvedAgentSecurity = resolveAgentSecurityField({
+    field: "security",
+    defaults,
+    agent,
+    rawAgent,
+    wildcard,
+    rawWildcard,
+    agentKey,
+    fallback: resolvedDefaults.security,
+  });
+  const resolvedAgentAsk = resolveAgentAskField({
+    defaults,
+    agent,
+    rawAgent,
+    wildcard,
+    rawWildcard,
+    agentKey,
+    fallback: resolvedDefaults.ask,
+  });
+  const resolvedAgentAskFallback = resolveAgentSecurityField({
+    field: "askFallback",
+    defaults,
+    agent,
+    rawAgent,
+    wildcard,
+    rawWildcard,
+    agentKey,
+    fallback: resolvedDefaults.askFallback,
+  });
   const resolvedAgent: Required<ExecApprovalsDefaults> = {
-    security: normalizeSecurity(
-      agent.security ?? wildcard.security ?? resolvedDefaults.security,
-      resolvedDefaults.security,
-    ),
-    ask: normalizeAsk(agent.ask ?? wildcard.ask ?? resolvedDefaults.ask, resolvedDefaults.ask),
-    askFallback: normalizeSecurity(
-      agent.askFallback ?? wildcard.askFallback ?? resolvedDefaults.askFallback,
-      resolvedDefaults.askFallback,
-    ),
-    autoAllowSkills: Boolean(
+    security: resolvedAgentSecurity.value,
+    ask: resolvedAgentAsk.value,
+    askFallback: resolvedAgentAskFallback.value,
+    autoAllowSkills:
       agent.autoAllowSkills ?? wildcard.autoAllowSkills ?? resolvedDefaults.autoAllowSkills,
-    ),
   };
   const allowlist = [
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
@@ -376,1027 +753,19 @@ export function resolveExecApprovalsFromFile(params: {
   ];
   return {
     path: params.path ?? resolveExecApprovalsPath(),
-    socketPath: expandHome(
+    socketPath: expandHomePrefix(
       params.socketPath ?? file.socket?.path ?? resolveExecApprovalsSocketPath(),
     ),
     token: params.token ?? file.socket?.token ?? "",
     defaults: resolvedDefaults,
     agent: resolvedAgent,
+    agentSources: {
+      security: resolvedAgentSecurity.source,
+      ask: resolvedAgentAsk.source,
+      askFallback: resolvedAgentAskFallback.source,
+    },
     allowlist,
     file,
-  };
-}
-
-type CommandResolution = {
-  rawExecutable: string;
-  resolvedPath?: string;
-  executableName: string;
-};
-
-function isExecutableFile(filePath: string): boolean {
-  try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile()) {
-      return false;
-    }
-    if (process.platform !== "win32") {
-      fs.accessSync(filePath, fs.constants.X_OK);
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function parseFirstToken(command: string): string | null {
-  const trimmed = command.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const first = trimmed[0];
-  if (first === '"' || first === "'") {
-    const end = trimmed.indexOf(first, 1);
-    if (end > 1) {
-      return trimmed.slice(1, end);
-    }
-    return trimmed.slice(1);
-  }
-  const match = /^[^\s]+/.exec(trimmed);
-  return match ? match[0] : null;
-}
-
-function resolveExecutablePath(rawExecutable: string, cwd?: string, env?: NodeJS.ProcessEnv) {
-  const expanded = rawExecutable.startsWith("~") ? expandHome(rawExecutable) : rawExecutable;
-  if (expanded.includes("/") || expanded.includes("\\")) {
-    if (path.isAbsolute(expanded)) {
-      return isExecutableFile(expanded) ? expanded : undefined;
-    }
-    const base = cwd && cwd.trim() ? cwd.trim() : process.cwd();
-    const candidate = path.resolve(base, expanded);
-    return isExecutableFile(candidate) ? candidate : undefined;
-  }
-  const envPath = env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? "";
-  const entries = envPath.split(path.delimiter).filter(Boolean);
-  const hasExtension = process.platform === "win32" && path.extname(expanded).length > 0;
-  const extensions =
-    process.platform === "win32"
-      ? hasExtension
-        ? [""]
-        : (
-            env?.PATHEXT ??
-            env?.Pathext ??
-            process.env.PATHEXT ??
-            process.env.Pathext ??
-            ".EXE;.CMD;.BAT;.COM"
-          )
-            .split(";")
-            .map((ext) => ext.toLowerCase())
-      : [""];
-  for (const entry of entries) {
-    for (const ext of extensions) {
-      const candidate = path.join(entry, expanded + ext);
-      if (isExecutableFile(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return undefined;
-}
-
-export function resolveCommandResolution(
-  command: string,
-  cwd?: string,
-  env?: NodeJS.ProcessEnv,
-): CommandResolution | null {
-  const rawExecutable = parseFirstToken(command);
-  if (!rawExecutable) {
-    return null;
-  }
-  const resolvedPath = resolveExecutablePath(rawExecutable, cwd, env);
-  const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
-  return { rawExecutable, resolvedPath, executableName };
-}
-
-export function resolveCommandResolutionFromArgv(
-  argv: string[],
-  cwd?: string,
-  env?: NodeJS.ProcessEnv,
-): CommandResolution | null {
-  const rawExecutable = argv[0]?.trim();
-  if (!rawExecutable) {
-    return null;
-  }
-  const resolvedPath = resolveExecutablePath(rawExecutable, cwd, env);
-  const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
-  return { rawExecutable, resolvedPath, executableName };
-}
-
-function normalizeMatchTarget(value: string): string {
-  if (process.platform === "win32") {
-    const stripped = value.replace(/^\\\\[?.]\\/, "");
-    return stripped.replace(/\\/g, "/").toLowerCase();
-  }
-  return value.replace(/\\\\/g, "/").toLowerCase();
-}
-
-function tryRealpath(value: string): string | null {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return null;
-  }
-}
-
-function globToRegExp(pattern: string): RegExp {
-  let regex = "^";
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern[i];
-    if (ch === "*") {
-      const next = pattern[i + 1];
-      if (next === "*") {
-        regex += ".*";
-        i += 2;
-        continue;
-      }
-      regex += "[^/]*";
-      i += 1;
-      continue;
-    }
-    if (ch === "?") {
-      regex += ".";
-      i += 1;
-      continue;
-    }
-    regex += ch.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&");
-    i += 1;
-  }
-  regex += "$";
-  return new RegExp(regex, "i");
-}
-
-function matchesPattern(pattern: string, target: string): boolean {
-  const trimmed = pattern.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const expanded = trimmed.startsWith("~") ? expandHome(trimmed) : trimmed;
-  const hasWildcard = /[*?]/.test(expanded);
-  let normalizedPattern = expanded;
-  let normalizedTarget = target;
-  if (process.platform === "win32" && !hasWildcard) {
-    normalizedPattern = tryRealpath(expanded) ?? expanded;
-    normalizedTarget = tryRealpath(target) ?? target;
-  }
-  normalizedPattern = normalizeMatchTarget(normalizedPattern);
-  normalizedTarget = normalizeMatchTarget(normalizedTarget);
-  const regex = globToRegExp(normalizedPattern);
-  return regex.test(normalizedTarget);
-}
-
-function resolveAllowlistCandidatePath(
-  resolution: CommandResolution | null,
-  cwd?: string,
-): string | undefined {
-  if (!resolution) {
-    return undefined;
-  }
-  if (resolution.resolvedPath) {
-    return resolution.resolvedPath;
-  }
-  const raw = resolution.rawExecutable?.trim();
-  if (!raw) {
-    return undefined;
-  }
-  const expanded = raw.startsWith("~") ? expandHome(raw) : raw;
-  if (!expanded.includes("/") && !expanded.includes("\\")) {
-    return undefined;
-  }
-  if (path.isAbsolute(expanded)) {
-    return expanded;
-  }
-  const base = cwd && cwd.trim() ? cwd.trim() : process.cwd();
-  return path.resolve(base, expanded);
-}
-
-export function matchAllowlist(
-  entries: ExecAllowlistEntry[],
-  resolution: CommandResolution | null,
-): ExecAllowlistEntry | null {
-  if (!entries.length || !resolution?.resolvedPath) {
-    return null;
-  }
-  const resolvedPath = resolution.resolvedPath;
-  for (const entry of entries) {
-    const pattern = entry.pattern?.trim();
-    if (!pattern) {
-      continue;
-    }
-    const hasPath = pattern.includes("/") || pattern.includes("\\") || pattern.includes("~");
-    if (!hasPath) {
-      continue;
-    }
-    if (matchesPattern(pattern, resolvedPath)) {
-      return entry;
-    }
-  }
-  return null;
-}
-
-export type ExecCommandSegment = {
-  raw: string;
-  argv: string[];
-  resolution: CommandResolution | null;
-};
-
-export type ExecCommandAnalysis = {
-  ok: boolean;
-  reason?: string;
-  segments: ExecCommandSegment[];
-  chains?: ExecCommandSegment[][]; // Segments grouped by chain operator (&&, ||, ;)
-};
-
-const DISALLOWED_PIPELINE_TOKENS = new Set([">", "<", "`", "\n", "\r", "(", ")"]);
-const DOUBLE_QUOTE_ESCAPES = new Set(["\\", '"', "$", "`", "\n", "\r"]);
-const WINDOWS_UNSUPPORTED_TOKENS = new Set([
-  "&",
-  "|",
-  "<",
-  ">",
-  "^",
-  "(",
-  ")",
-  "%",
-  "!",
-  "\n",
-  "\r",
-]);
-
-function isDoubleQuoteEscape(next: string | undefined): next is string {
-  return Boolean(next && DOUBLE_QUOTE_ESCAPES.has(next));
-}
-
-type IteratorAction = "split" | "skip" | "include" | { reject: string };
-
-/**
- * Iterates through a command string while respecting shell quoting rules.
- * The callback receives each character and the next character, and returns an action:
- * - "split": push current buffer as a segment and start a new one
- * - "skip": skip this character (and optionally the next via skip count)
- * - "include": add this character to the buffer
- * - { reject: reason }: abort with an error
- */
-function iterateQuoteAware(
-  command: string,
-  onChar: (ch: string, next: string | undefined, index: number) => IteratorAction,
-): { ok: true; parts: string[]; hasSplit: boolean } | { ok: false; reason: string } {
-  const parts: string[] = [];
-  let buf = "";
-  let inSingle = false;
-  let inDouble = false;
-  let escaped = false;
-  let hasSplit = false;
-
-  const pushPart = () => {
-    const trimmed = buf.trim();
-    if (trimmed) {
-      parts.push(trimmed);
-    }
-    buf = "";
-  };
-
-  for (let i = 0; i < command.length; i += 1) {
-    const ch = command[i];
-    const next = command[i + 1];
-
-    if (escaped) {
-      buf += ch;
-      escaped = false;
-      continue;
-    }
-    if (!inSingle && !inDouble && ch === "\\") {
-      escaped = true;
-      buf += ch;
-      continue;
-    }
-    if (inSingle) {
-      if (ch === "'") {
-        inSingle = false;
-      }
-      buf += ch;
-      continue;
-    }
-    if (inDouble) {
-      if (ch === "\\" && isDoubleQuoteEscape(next)) {
-        buf += ch;
-        buf += next;
-        i += 1;
-        continue;
-      }
-      if (ch === "$" && next === "(") {
-        return { ok: false, reason: "unsupported shell token: $()" };
-      }
-      if (ch === "`") {
-        return { ok: false, reason: "unsupported shell token: `" };
-      }
-      if (ch === "\n" || ch === "\r") {
-        return { ok: false, reason: "unsupported shell token: newline" };
-      }
-      if (ch === '"') {
-        inDouble = false;
-      }
-      buf += ch;
-      continue;
-    }
-    if (ch === "'") {
-      inSingle = true;
-      buf += ch;
-      continue;
-    }
-    if (ch === '"') {
-      inDouble = true;
-      buf += ch;
-      continue;
-    }
-
-    const action = onChar(ch, next, i);
-    if (typeof action === "object" && "reject" in action) {
-      return { ok: false, reason: action.reject };
-    }
-    if (action === "split") {
-      pushPart();
-      hasSplit = true;
-      continue;
-    }
-    if (action === "skip") {
-      continue;
-    }
-    buf += ch;
-  }
-
-  if (escaped || inSingle || inDouble) {
-    return { ok: false, reason: "unterminated shell quote/escape" };
-  }
-  pushPart();
-  return { ok: true, parts, hasSplit };
-}
-
-function splitShellPipeline(command: string): { ok: boolean; reason?: string; segments: string[] } {
-  let emptySegment = false;
-  const result = iterateQuoteAware(command, (ch, next) => {
-    if (ch === "|" && next === "|") {
-      return { reject: "unsupported shell token: ||" };
-    }
-    if (ch === "|" && next === "&") {
-      return { reject: "unsupported shell token: |&" };
-    }
-    if (ch === "|") {
-      emptySegment = true;
-      return "split";
-    }
-    if (ch === "&" || ch === ";") {
-      return { reject: `unsupported shell token: ${ch}` };
-    }
-    if (DISALLOWED_PIPELINE_TOKENS.has(ch)) {
-      return { reject: `unsupported shell token: ${ch}` };
-    }
-    if (ch === "$" && next === "(") {
-      return { reject: "unsupported shell token: $()" };
-    }
-    emptySegment = false;
-    return "include";
-  });
-
-  if (!result.ok) {
-    return { ok: false, reason: result.reason, segments: [] };
-  }
-  if (emptySegment || result.parts.length === 0) {
-    return {
-      ok: false,
-      reason: result.parts.length === 0 ? "empty command" : "empty pipeline segment",
-      segments: [],
-    };
-  }
-  return { ok: true, segments: result.parts };
-}
-
-function findWindowsUnsupportedToken(command: string): string | null {
-  for (const ch of command) {
-    if (WINDOWS_UNSUPPORTED_TOKENS.has(ch)) {
-      if (ch === "\n" || ch === "\r") {
-        return "newline";
-      }
-      return ch;
-    }
-  }
-  return null;
-}
-
-function tokenizeWindowsSegment(segment: string): string[] | null {
-  const tokens: string[] = [];
-  let buf = "";
-  let inDouble = false;
-
-  const pushToken = () => {
-    if (buf.length > 0) {
-      tokens.push(buf);
-      buf = "";
-    }
-  };
-
-  for (let i = 0; i < segment.length; i += 1) {
-    const ch = segment[i];
-    if (ch === '"') {
-      inDouble = !inDouble;
-      continue;
-    }
-    if (!inDouble && /\s/.test(ch)) {
-      pushToken();
-      continue;
-    }
-    buf += ch;
-  }
-
-  if (inDouble) {
-    return null;
-  }
-  pushToken();
-  return tokens.length > 0 ? tokens : null;
-}
-
-function analyzeWindowsShellCommand(params: {
-  command: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-}): ExecCommandAnalysis {
-  const unsupported = findWindowsUnsupportedToken(params.command);
-  if (unsupported) {
-    return {
-      ok: false,
-      reason: `unsupported windows shell token: ${unsupported}`,
-      segments: [],
-    };
-  }
-  const argv = tokenizeWindowsSegment(params.command);
-  if (!argv || argv.length === 0) {
-    return { ok: false, reason: "unable to parse windows command", segments: [] };
-  }
-  return {
-    ok: true,
-    segments: [
-      {
-        raw: params.command,
-        argv,
-        resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
-      },
-    ],
-  };
-}
-
-function isWindowsPlatform(platform?: string | null): boolean {
-  const normalized = String(platform ?? "")
-    .trim()
-    .toLowerCase();
-  return normalized.startsWith("win");
-}
-
-function tokenizeShellSegment(segment: string): string[] | null {
-  const tokens: string[] = [];
-  let buf = "";
-  let inSingle = false;
-  let inDouble = false;
-  let escaped = false;
-
-  const pushToken = () => {
-    if (buf.length > 0) {
-      tokens.push(buf);
-      buf = "";
-    }
-  };
-
-  for (let i = 0; i < segment.length; i += 1) {
-    const ch = segment[i];
-    if (escaped) {
-      buf += ch;
-      escaped = false;
-      continue;
-    }
-    if (!inSingle && !inDouble && ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (inSingle) {
-      if (ch === "'") {
-        inSingle = false;
-      } else {
-        buf += ch;
-      }
-      continue;
-    }
-    if (inDouble) {
-      const next = segment[i + 1];
-      if (ch === "\\" && isDoubleQuoteEscape(next)) {
-        buf += next;
-        i += 1;
-        continue;
-      }
-      if (ch === '"') {
-        inDouble = false;
-      } else {
-        buf += ch;
-      }
-      continue;
-    }
-    if (ch === "'") {
-      inSingle = true;
-      continue;
-    }
-    if (ch === '"') {
-      inDouble = true;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      pushToken();
-      continue;
-    }
-    buf += ch;
-  }
-
-  if (escaped || inSingle || inDouble) {
-    return null;
-  }
-  pushToken();
-  return tokens;
-}
-
-function parseSegmentsFromParts(
-  parts: string[],
-  cwd?: string,
-  env?: NodeJS.ProcessEnv,
-): ExecCommandSegment[] | null {
-  const segments: ExecCommandSegment[] = [];
-  for (const raw of parts) {
-    const argv = tokenizeShellSegment(raw);
-    if (!argv || argv.length === 0) {
-      return null;
-    }
-    segments.push({
-      raw,
-      argv,
-      resolution: resolveCommandResolutionFromArgv(argv, cwd, env),
-    });
-  }
-  return segments;
-}
-
-export function analyzeShellCommand(params: {
-  command: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  platform?: string | null;
-}): ExecCommandAnalysis {
-  if (isWindowsPlatform(params.platform)) {
-    return analyzeWindowsShellCommand(params);
-  }
-  // First try splitting by chain operators (&&, ||, ;)
-  const chainParts = splitCommandChain(params.command);
-  if (chainParts) {
-    const chains: ExecCommandSegment[][] = [];
-    const allSegments: ExecCommandSegment[] = [];
-
-    for (const part of chainParts) {
-      const pipelineSplit = splitShellPipeline(part);
-      if (!pipelineSplit.ok) {
-        return { ok: false, reason: pipelineSplit.reason, segments: [] };
-      }
-      const segments = parseSegmentsFromParts(pipelineSplit.segments, params.cwd, params.env);
-      if (!segments) {
-        return { ok: false, reason: "unable to parse shell segment", segments: [] };
-      }
-      chains.push(segments);
-      allSegments.push(...segments);
-    }
-
-    return { ok: true, segments: allSegments, chains };
-  }
-
-  // No chain operators, parse as simple pipeline
-  const split = splitShellPipeline(params.command);
-  if (!split.ok) {
-    return { ok: false, reason: split.reason, segments: [] };
-  }
-  const segments = parseSegmentsFromParts(split.segments, params.cwd, params.env);
-  if (!segments) {
-    return { ok: false, reason: "unable to parse shell segment", segments: [] };
-  }
-  return { ok: true, segments };
-}
-
-export function analyzeArgvCommand(params: {
-  argv: string[];
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-}): ExecCommandAnalysis {
-  const argv = params.argv.filter((entry) => entry.trim().length > 0);
-  if (argv.length === 0) {
-    return { ok: false, reason: "empty argv", segments: [] };
-  }
-  return {
-    ok: true,
-    segments: [
-      {
-        raw: argv.join(" "),
-        argv,
-        resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
-      },
-    ],
-  };
-}
-
-function isPathLikeToken(value: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (trimmed === "-") {
-    return false;
-  }
-  if (trimmed.startsWith("./") || trimmed.startsWith("../") || trimmed.startsWith("~")) {
-    return true;
-  }
-  if (trimmed.startsWith("/")) {
-    return true;
-  }
-  return /^[A-Za-z]:[\\/]/.test(trimmed);
-}
-
-function defaultFileExists(filePath: string): boolean {
-  try {
-    return fs.existsSync(filePath);
-  } catch {
-    return false;
-  }
-}
-
-export function normalizeSafeBins(entries?: string[]): Set<string> {
-  if (!Array.isArray(entries)) {
-    return new Set();
-  }
-  const normalized = entries
-    .map((entry) => entry.trim().toLowerCase())
-    .filter((entry) => entry.length > 0);
-  return new Set(normalized);
-}
-
-export function resolveSafeBins(entries?: string[] | null): Set<string> {
-  if (entries === undefined) {
-    return normalizeSafeBins(DEFAULT_SAFE_BINS);
-  }
-  return normalizeSafeBins(entries ?? []);
-}
-
-export function isSafeBinUsage(params: {
-  argv: string[];
-  resolution: CommandResolution | null;
-  safeBins: Set<string>;
-  cwd?: string;
-  fileExists?: (filePath: string) => boolean;
-}): boolean {
-  if (params.safeBins.size === 0) {
-    return false;
-  }
-  const resolution = params.resolution;
-  const execName = resolution?.executableName?.toLowerCase();
-  if (!execName) {
-    return false;
-  }
-  const matchesSafeBin =
-    params.safeBins.has(execName) ||
-    (process.platform === "win32" && params.safeBins.has(path.parse(execName).name));
-  if (!matchesSafeBin) {
-    return false;
-  }
-  if (!resolution?.resolvedPath) {
-    return false;
-  }
-  const cwd = params.cwd ?? process.cwd();
-  const exists = params.fileExists ?? defaultFileExists;
-  const argv = params.argv.slice(1);
-  for (let i = 0; i < argv.length; i += 1) {
-    const token = argv[i];
-    if (!token) {
-      continue;
-    }
-    if (token === "-") {
-      continue;
-    }
-    if (token.startsWith("-")) {
-      const eqIndex = token.indexOf("=");
-      if (eqIndex > 0) {
-        const value = token.slice(eqIndex + 1);
-        if (value && (isPathLikeToken(value) || exists(path.resolve(cwd, value)))) {
-          return false;
-        }
-      }
-      continue;
-    }
-    if (isPathLikeToken(token)) {
-      return false;
-    }
-    if (exists(path.resolve(cwd, token))) {
-      return false;
-    }
-  }
-  return true;
-}
-
-export type ExecAllowlistEvaluation = {
-  allowlistSatisfied: boolean;
-  allowlistMatches: ExecAllowlistEntry[];
-};
-
-function evaluateSegments(
-  segments: ExecCommandSegment[],
-  params: {
-    allowlist: ExecAllowlistEntry[];
-    safeBins: Set<string>;
-    cwd?: string;
-    skillBins?: Set<string>;
-    autoAllowSkills?: boolean;
-  },
-): { satisfied: boolean; matches: ExecAllowlistEntry[] } {
-  const matches: ExecAllowlistEntry[] = [];
-  const allowSkills = params.autoAllowSkills === true && (params.skillBins?.size ?? 0) > 0;
-
-  const satisfied = segments.every((segment) => {
-    const candidatePath = resolveAllowlistCandidatePath(segment.resolution, params.cwd);
-    const candidateResolution =
-      candidatePath && segment.resolution
-        ? { ...segment.resolution, resolvedPath: candidatePath }
-        : segment.resolution;
-    const match = matchAllowlist(params.allowlist, candidateResolution);
-    if (match) {
-      matches.push(match);
-    }
-    const safe = isSafeBinUsage({
-      argv: segment.argv,
-      resolution: segment.resolution,
-      safeBins: params.safeBins,
-      cwd: params.cwd,
-    });
-    const skillAllow =
-      allowSkills && segment.resolution?.executableName
-        ? params.skillBins?.has(segment.resolution.executableName)
-        : false;
-    return Boolean(match || safe || skillAllow);
-  });
-
-  return { satisfied, matches };
-}
-
-export function evaluateExecAllowlist(params: {
-  analysis: ExecCommandAnalysis;
-  allowlist: ExecAllowlistEntry[];
-  safeBins: Set<string>;
-  cwd?: string;
-  skillBins?: Set<string>;
-  autoAllowSkills?: boolean;
-}): ExecAllowlistEvaluation {
-  const allowlistMatches: ExecAllowlistEntry[] = [];
-  if (!params.analysis.ok || params.analysis.segments.length === 0) {
-    return { allowlistSatisfied: false, allowlistMatches };
-  }
-
-  // If the analysis contains chains, evaluate each chain part separately
-  if (params.analysis.chains) {
-    for (const chainSegments of params.analysis.chains) {
-      const result = evaluateSegments(chainSegments, {
-        allowlist: params.allowlist,
-        safeBins: params.safeBins,
-        cwd: params.cwd,
-        skillBins: params.skillBins,
-        autoAllowSkills: params.autoAllowSkills,
-      });
-      if (!result.satisfied) {
-        return { allowlistSatisfied: false, allowlistMatches: [] };
-      }
-      allowlistMatches.push(...result.matches);
-    }
-    return { allowlistSatisfied: true, allowlistMatches };
-  }
-
-  // No chains, evaluate all segments together
-  const result = evaluateSegments(params.analysis.segments, {
-    allowlist: params.allowlist,
-    safeBins: params.safeBins,
-    cwd: params.cwd,
-    skillBins: params.skillBins,
-    autoAllowSkills: params.autoAllowSkills,
-  });
-  return { allowlistSatisfied: result.satisfied, allowlistMatches: result.matches };
-}
-
-/**
- * Splits a command string by chain operators (&&, ||, ;) while respecting quotes.
- * Returns null when no chain is present or when the chain is malformed.
- */
-function splitCommandChain(command: string): string[] | null {
-  const parts: string[] = [];
-  let buf = "";
-  let inSingle = false;
-  let inDouble = false;
-  let escaped = false;
-  let foundChain = false;
-  let invalidChain = false;
-
-  const pushPart = () => {
-    const trimmed = buf.trim();
-    if (trimmed) {
-      parts.push(trimmed);
-      buf = "";
-      return true;
-    }
-    buf = "";
-    return false;
-  };
-
-  for (let i = 0; i < command.length; i += 1) {
-    const ch = command[i];
-    const next = command[i + 1];
-    if (escaped) {
-      buf += ch;
-      escaped = false;
-      continue;
-    }
-    if (!inSingle && !inDouble && ch === "\\") {
-      escaped = true;
-      buf += ch;
-      continue;
-    }
-    if (inSingle) {
-      if (ch === "'") {
-        inSingle = false;
-      }
-      buf += ch;
-      continue;
-    }
-    if (inDouble) {
-      if (ch === "\\" && isDoubleQuoteEscape(next)) {
-        buf += ch;
-        buf += next;
-        i += 1;
-        continue;
-      }
-      if (ch === '"') {
-        inDouble = false;
-      }
-      buf += ch;
-      continue;
-    }
-    if (ch === "'") {
-      inSingle = true;
-      buf += ch;
-      continue;
-    }
-    if (ch === '"') {
-      inDouble = true;
-      buf += ch;
-      continue;
-    }
-
-    if (ch === "&" && command[i + 1] === "&") {
-      if (!pushPart()) {
-        invalidChain = true;
-      }
-      i += 1;
-      foundChain = true;
-      continue;
-    }
-    if (ch === "|" && command[i + 1] === "|") {
-      if (!pushPart()) {
-        invalidChain = true;
-      }
-      i += 1;
-      foundChain = true;
-      continue;
-    }
-    if (ch === ";") {
-      if (!pushPart()) {
-        invalidChain = true;
-      }
-      foundChain = true;
-      continue;
-    }
-
-    buf += ch;
-  }
-
-  const pushedFinal = pushPart();
-  if (!foundChain) {
-    return null;
-  }
-  if (invalidChain || !pushedFinal) {
-    return null;
-  }
-  return parts.length > 0 ? parts : null;
-}
-
-export type ExecAllowlistAnalysis = {
-  analysisOk: boolean;
-  allowlistSatisfied: boolean;
-  allowlistMatches: ExecAllowlistEntry[];
-  segments: ExecCommandSegment[];
-};
-
-/**
- * Evaluates allowlist for shell commands (including &&, ||, ;) and returns analysis metadata.
- */
-export function evaluateShellAllowlist(params: {
-  command: string;
-  allowlist: ExecAllowlistEntry[];
-  safeBins: Set<string>;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  skillBins?: Set<string>;
-  autoAllowSkills?: boolean;
-  platform?: string | null;
-}): ExecAllowlistAnalysis {
-  const chainParts = isWindowsPlatform(params.platform) ? null : splitCommandChain(params.command);
-  if (!chainParts) {
-    const analysis = analyzeShellCommand({
-      command: params.command,
-      cwd: params.cwd,
-      env: params.env,
-      platform: params.platform,
-    });
-    if (!analysis.ok) {
-      return {
-        analysisOk: false,
-        allowlistSatisfied: false,
-        allowlistMatches: [],
-        segments: [],
-      };
-    }
-    const evaluation = evaluateExecAllowlist({
-      analysis,
-      allowlist: params.allowlist,
-      safeBins: params.safeBins,
-      cwd: params.cwd,
-      skillBins: params.skillBins,
-      autoAllowSkills: params.autoAllowSkills,
-    });
-    return {
-      analysisOk: true,
-      allowlistSatisfied: evaluation.allowlistSatisfied,
-      allowlistMatches: evaluation.allowlistMatches,
-      segments: analysis.segments,
-    };
-  }
-
-  const allowlistMatches: ExecAllowlistEntry[] = [];
-  const segments: ExecCommandSegment[] = [];
-
-  for (const part of chainParts) {
-    const analysis = analyzeShellCommand({
-      command: part,
-      cwd: params.cwd,
-      env: params.env,
-      platform: params.platform,
-    });
-    if (!analysis.ok) {
-      return {
-        analysisOk: false,
-        allowlistSatisfied: false,
-        allowlistMatches: [],
-        segments: [],
-      };
-    }
-
-    segments.push(...analysis.segments);
-    const evaluation = evaluateExecAllowlist({
-      analysis,
-      allowlist: params.allowlist,
-      safeBins: params.safeBins,
-      cwd: params.cwd,
-      skillBins: params.skillBins,
-      autoAllowSkills: params.autoAllowSkills,
-    });
-    allowlistMatches.push(...evaluation.allowlistMatches);
-    if (!evaluation.allowlistSatisfied) {
-      return {
-        analysisOk: true,
-        allowlistSatisfied: false,
-        allowlistMatches,
-        segments,
-      };
-    }
-  }
-
-  return {
-    analysisOk: true,
-    allowlistSatisfied: true,
-    allowlistMatches,
-    segments,
   };
 }
 
@@ -1405,12 +774,69 @@ export function requiresExecApproval(params: {
   security: ExecSecurity;
   analysisOk: boolean;
   allowlistSatisfied: boolean;
+  durableApprovalSatisfied?: boolean;
+}): boolean {
+  if (params.ask === "always") {
+    return true;
+  }
+  if (params.durableApprovalSatisfied === true) {
+    return false;
+  }
+  return (
+    params.ask === "on-miss" &&
+    params.security === "allowlist" &&
+    (!params.analysisOk || !params.allowlistSatisfied)
+  );
+}
+
+export function hasDurableExecApproval(params: {
+  analysisOk: boolean;
+  segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
+  allowlist?: readonly ExecAllowlistEntry[];
+  commandText?: string | null;
 }): boolean {
   return (
-    params.ask === "always" ||
-    (params.ask === "on-miss" &&
-      params.security === "allowlist" &&
-      (!params.analysisOk || !params.allowlistSatisfied))
+    hasExactCommandDurableExecApproval({
+      allowlist: params.allowlist,
+      commandText: params.commandText,
+    }) ||
+    hasSegmentDurableExecApproval({
+      analysisOk: params.analysisOk,
+      segmentAllowlistEntries: params.segmentAllowlistEntries,
+    })
+  );
+}
+
+function buildDurableCommandApprovalPattern(commandText: string): string {
+  const digest = crypto.createHash("sha256").update(commandText).digest("hex").slice(0, 16);
+  return `=command:${digest}`;
+}
+
+function hasExactCommandDurableExecApproval(params: {
+  allowlist?: readonly ExecAllowlistEntry[];
+  commandText?: string | null;
+}): boolean {
+  const normalizedCommand = params.commandText?.trim();
+  if (!normalizedCommand) {
+    return false;
+  }
+  const commandPattern = buildDurableCommandApprovalPattern(normalizedCommand);
+  return (params.allowlist ?? []).some(
+    (entry) =>
+      entry.source === "allow-always" &&
+      (entry.pattern === commandPattern ||
+        (typeof entry.commandText === "string" && entry.commandText.trim() === normalizedCommand)),
+  );
+}
+
+function hasSegmentDurableExecApproval(params: {
+  analysisOk: boolean;
+  segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
+}): boolean {
+  return (
+    params.analysisOk &&
+    params.segmentAllowlistEntries.length > 0 &&
+    params.segmentAllowlistEntries.every((entry) => entry?.source === "allow-always")
   );
 }
 
@@ -1426,7 +852,8 @@ export function recordAllowlistUse(
   const existing = agents[target] ?? {};
   const allowlist = Array.isArray(existing.allowlist) ? existing.allowlist : [];
   const nextAllowlist = allowlist.map((item) =>
-    item.pattern === entry.pattern
+    item.pattern === entry.pattern &&
+    (item.argPattern ?? undefined) === (entry.argPattern ?? undefined)
       ? {
           ...item,
           id: item.id ?? crypto.randomUUID(),
@@ -1441,10 +868,50 @@ export function recordAllowlistUse(
   saveExecApprovals(approvals);
 }
 
+function buildAllowlistEntryMatchKey(
+  entry: Pick<ExecAllowlistEntry, "pattern" | "argPattern">,
+): string {
+  return `${entry.pattern}\x00${entry.argPattern?.trim() ?? ""}`;
+}
+
+export function recordAllowlistMatchesUse(params: {
+  approvals: ExecApprovalsFile;
+  agentId: string | undefined;
+  matches: readonly ExecAllowlistEntry[];
+  command: string;
+  resolvedPath?: string;
+}): void {
+  if (params.matches.length === 0) {
+    return;
+  }
+  const seen = new Set<string>();
+  for (const match of params.matches) {
+    if (!match.pattern) {
+      continue;
+    }
+    const key = buildAllowlistEntryMatchKey(match);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    recordAllowlistUse(
+      params.approvals,
+      params.agentId,
+      match,
+      params.command,
+      params.resolvedPath,
+    );
+  }
+}
+
 export function addAllowlistEntry(
   approvals: ExecApprovalsFile,
   agentId: string | undefined,
   pattern: string,
+  options?: {
+    argPattern?: string;
+    source?: ExecAllowlistEntry["source"];
+  },
 ) {
   const target = agentId ?? DEFAULT_AGENT_ID;
   const agents = approvals.agents ?? {};
@@ -1454,13 +921,80 @@ export function addAllowlistEntry(
   if (!trimmed) {
     return;
   }
-  if (allowlist.some((entry) => entry.pattern === trimmed)) {
+  const trimmedArgPattern = normalizeOptionalString(options?.argPattern);
+  const existingEntry = allowlist.find(
+    (entry) => entry.pattern === trimmed && (entry.argPattern ?? undefined) === trimmedArgPattern,
+  );
+  if (existingEntry && (!options?.source || existingEntry.source === options.source)) {
     return;
   }
-  allowlist.push({ id: crypto.randomUUID(), pattern: trimmed, lastUsedAt: Date.now() });
-  agents[target] = { ...existing, allowlist };
+  const now = Date.now();
+  const nextAllowlist = existingEntry
+    ? allowlist.map((entry) =>
+        entry.pattern === trimmed
+          ? {
+              ...entry,
+              argPattern: trimmedArgPattern,
+              source: options?.source ?? entry.source,
+              lastUsedAt: now,
+            }
+          : entry,
+      )
+    : [
+        ...allowlist,
+        {
+          id: crypto.randomUUID(),
+          pattern: trimmed,
+          argPattern: trimmedArgPattern,
+          source: options?.source,
+          lastUsedAt: now,
+        },
+      ];
+  agents[target] = { ...existing, allowlist: nextAllowlist };
   approvals.agents = agents;
   saveExecApprovals(approvals);
+}
+
+export function addDurableCommandApproval(
+  approvals: ExecApprovalsFile,
+  agentId: string | undefined,
+  commandText: string,
+) {
+  const normalized = commandText.trim();
+  if (!normalized) {
+    return;
+  }
+  addAllowlistEntry(approvals, agentId, buildDurableCommandApprovalPattern(normalized), {
+    source: "allow-always",
+  });
+}
+
+export function persistAllowAlwaysPatterns(params: {
+  approvals: ExecApprovalsFile;
+  agentId: string | undefined;
+  segments: ExecCommandSegment[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: string | null;
+  strictInlineEval?: boolean;
+}): ReturnType<typeof resolveAllowAlwaysPatternEntries> {
+  const patterns = resolveAllowAlwaysPatternEntries({
+    segments: params.segments,
+    cwd: params.cwd,
+    env: params.env,
+    platform: params.platform,
+    strictInlineEval: params.strictInlineEval,
+  });
+  for (const pattern of patterns) {
+    if (!pattern.pattern) {
+      continue;
+    }
+    addAllowlistEntry(params.approvals, params.agentId, pattern.pattern, {
+      argPattern: pattern.argPattern,
+      source: "allow-always",
+    });
+  }
+  return patterns;
 }
 
 export function minSecurity(a: ExecSecurity, b: ExecSecurity): ExecSecurity {
@@ -1474,6 +1008,41 @@ export function maxAsk(a: ExecAsk, b: ExecAsk): ExecAsk {
 }
 
 export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
+export const DEFAULT_EXEC_APPROVAL_DECISIONS = [
+  "allow-once",
+  "allow-always",
+  "deny",
+] as const satisfies readonly ExecApprovalDecision[];
+
+export function resolveExecApprovalAllowedDecisions(params?: {
+  ask?: string | null;
+}): readonly ExecApprovalDecision[] {
+  const ask = normalizeExecAsk(params?.ask);
+  if (ask === "always") {
+    return ["allow-once", "deny"];
+  }
+  return DEFAULT_EXEC_APPROVAL_DECISIONS;
+}
+
+export function resolveExecApprovalRequestAllowedDecisions(params?: {
+  ask?: string | null;
+  allowedDecisions?: readonly ExecApprovalDecision[] | readonly string[] | null;
+}): readonly ExecApprovalDecision[] {
+  const explicit = Array.isArray(params?.allowedDecisions)
+    ? params.allowedDecisions.filter(
+        (decision): decision is ExecApprovalDecision =>
+          decision === "allow-once" || decision === "allow-always" || decision === "deny",
+      )
+    : [];
+  return explicit.length > 0 ? explicit : resolveExecApprovalAllowedDecisions({ ask: params?.ask });
+}
+
+export function isExecApprovalDecisionAllowed(params: {
+  decision: ExecApprovalDecision;
+  ask?: string | null;
+}): boolean {
+  return resolveExecApprovalAllowedDecisions({ ask: params.ask }).includes(params.decision);
+}
 
 export async function requestExecApprovalViaSocket(params: {
   socketPath: string;
@@ -1486,56 +1055,23 @@ export async function requestExecApprovalViaSocket(params: {
     return null;
   }
   const timeoutMs = params.timeoutMs ?? 15_000;
-  return await new Promise((resolve) => {
-    const client = new net.Socket();
-    let settled = false;
-    let buffer = "";
-    const finish = (value: ExecApprovalDecision | null) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      try {
-        client.destroy();
-      } catch {
-        // ignore
-      }
-      resolve(value);
-    };
+  const payload = JSON.stringify({
+    type: "request",
+    token,
+    id: crypto.randomUUID(),
+    request,
+  });
 
-    const timer = setTimeout(() => finish(null), timeoutMs);
-    const payload = JSON.stringify({
-      type: "request",
-      token,
-      id: crypto.randomUUID(),
-      request,
-    });
-
-    client.on("error", () => finish(null));
-    client.connect(socketPath, () => {
-      client.write(`${payload}\n`);
-    });
-    client.on("data", (data) => {
-      buffer += data.toString("utf8");
-      let idx = buffer.indexOf("\n");
-      while (idx !== -1) {
-        const line = buffer.slice(0, idx).trim();
-        buffer = buffer.slice(idx + 1);
-        idx = buffer.indexOf("\n");
-        if (!line) {
-          continue;
-        }
-        try {
-          const msg = JSON.parse(line) as { type?: string; decision?: ExecApprovalDecision };
-          if (msg?.type === "decision" && msg.decision) {
-            clearTimeout(timer);
-            finish(msg.decision);
-            return;
-          }
-        } catch {
-          // ignore
-        }
+  return await requestJsonlSocket({
+    socketPath,
+    requestLine: payload,
+    timeoutMs,
+    accept: (value) => {
+      const msg = value as { type?: string; decision?: ExecApprovalDecision };
+      if (msg?.type === "decision" && msg.decision) {
+        return msg.decision;
       }
-    });
+      return undefined;
+    },
   });
 }

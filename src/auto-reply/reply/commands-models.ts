@@ -1,41 +1,49 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type { ReplyPayload } from "../types.js";
-import type { CommandHandler } from "./commands-types.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
   buildModelAliasIndex,
   normalizeProviderId,
-  resolveConfiguredModelRef,
+  resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  buildModelsKeyboard,
-  buildProviderKeyboard,
-  calculateTotalPages,
-  getModelsPageSize,
-  type ProviderInfo,
-} from "../../telegram/model-buttons.js";
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import type { ReplyPayload } from "../types.js";
+import { rejectUnauthorizedCommand } from "./command-gates.js";
+import type { CommandHandler } from "./commands-types.js";
 
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
+type ModelsCommandSessionEntry = Partial<
+  Pick<SessionEntry, "authProfileOverride" | "modelProvider" | "model">
+>;
 
 export type ModelsProviderData = {
   byProvider: Map<string, Set<string>>;
   providers: string[];
   resolvedDefault: { provider: string; model: string };
+  /** Map from provider/model to human-readable display name (when different from model ID). */
+  modelNames: Map<string, string>;
 };
 
 /**
  * Build provider/model data from config and catalog.
  * Exported for reuse by callback handlers.
  */
-export async function buildModelsProviderData(cfg: OpenClawConfig): Promise<ModelsProviderData> {
-  const resolvedDefault = resolveConfiguredModelRef({
+export async function buildModelsProviderData(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): Promise<ModelsProviderData> {
+  const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+    agentId,
   });
 
   const catalog = await loadModelCatalog({ config: cfg });
@@ -44,6 +52,7 @@ export async function buildModelsProviderData(cfg: OpenClawConfig): Promise<Mode
     catalog,
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault.model,
+    agentId,
   });
 
   const aliasIndex = buildModelAliasIndex({
@@ -60,7 +69,7 @@ export async function buildModelsProviderData(cfg: OpenClawConfig): Promise<Mode
   };
 
   const addRawModelRef = (raw?: string) => {
-    const trimmed = raw?.trim();
+    const trimmed = normalizeOptionalString(raw);
     if (!trimmed) {
       return;
     }
@@ -113,7 +122,16 @@ export async function buildModelsProviderData(cfg: OpenClawConfig): Promise<Mode
 
   const providers = [...byProvider.keys()].toSorted();
 
-  return { byProvider, providers, resolvedDefault };
+  // Build a provider-scoped model display-name map so surfaces can show
+  // human-readable names without colliding across providers that share IDs.
+  const modelNames = new Map<string, string>();
+  for (const entry of catalog) {
+    if (entry.name && entry.name !== entry.id) {
+      modelNames.set(`${normalizeProviderId(entry.provider)}/${entry.id}`, entry.name);
+    }
+  }
+
+  return { byProvider, providers, resolvedDefault, modelNames };
 }
 
 function formatProviderLine(params: { provider: string; count: number }): string {
@@ -132,12 +150,12 @@ function parseModelsArgs(raw: string): {
   }
 
   const tokens = trimmed.split(/\s+/g).filter(Boolean);
-  const provider = tokens[0]?.trim();
+  const provider = normalizeOptionalString(tokens[0]);
 
   let page = 1;
   let all = false;
   for (const token of tokens.slice(1)) {
-    const lower = token.toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(token);
     if (lower === "all" || lower === "--all") {
       all = true;
       continue;
@@ -159,7 +177,7 @@ function parseModelsArgs(raw: string): {
 
   let pageSize = PAGE_SIZE_DEFAULT;
   for (const token of tokens) {
-    const lower = token.toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(token);
     if (lower.startsWith("limit=") || lower.startsWith("size=")) {
       const rawValue = lower.slice(lower.indexOf("=") + 1);
       const value = Number.parseInt(rawValue, 10);
@@ -177,11 +195,48 @@ function parseModelsArgs(raw: string): {
   };
 }
 
+function resolveProviderLabel(params: {
+  provider: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  sessionEntry?: ModelsCommandSessionEntry;
+}): string {
+  const authLabel = resolveModelAuthLabel({
+    provider: params.provider,
+    cfg: params.cfg,
+    sessionEntry: params.sessionEntry,
+    agentDir: params.agentDir,
+  });
+  if (!authLabel || authLabel === "unknown") {
+    return params.provider;
+  }
+  return `${params.provider} · 🔑 ${authLabel}`;
+}
+
+export function formatModelsAvailableHeader(params: {
+  provider: string;
+  total: number;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  sessionEntry?: ModelsCommandSessionEntry;
+}): string {
+  const providerLabel = resolveProviderLabel({
+    provider: params.provider,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    sessionEntry: params.sessionEntry,
+  });
+  return `Models (${providerLabel}) — ${params.total} available`;
+}
+
 export async function resolveModelsCommandReply(params: {
   cfg: OpenClawConfig;
   commandBodyNormalized: string;
   surface?: string;
   currentModel?: string;
+  agentId?: string;
+  agentDir?: string;
+  sessionEntry?: ModelsCommandSessionEntry;
 }): Promise<ReplyPayload | null> {
   const body = params.commandBodyNormalized.trim();
   if (!body.startsWith("/models")) {
@@ -191,26 +246,28 @@ export async function resolveModelsCommandReply(params: {
   const argText = body.replace(/^\/models\b/i, "").trim();
   const { provider, page, pageSize, all } = parseModelsArgs(argText);
 
-  const { byProvider, providers } = await buildModelsProviderData(params.cfg);
-  const isTelegram = params.surface === "telegram";
+  const { byProvider, providers, modelNames } = await buildModelsProviderData(
+    params.cfg,
+    params.agentId,
+  );
+  const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
 
   // Provider list (no provider specified)
   if (!provider) {
-    // For Telegram: show buttons if there are providers
-    if (isTelegram && providers.length > 0) {
-      const providerInfos: ProviderInfo[] = providers.map((p) => ({
-        id: p,
-        count: byProvider.get(p)?.size ?? 0,
-      }));
-      const buttons = buildProviderKeyboard(providerInfos);
-      const text = "Select a provider:";
+    const providerInfos = providers.map((p) => ({
+      id: p,
+      count: byProvider.get(p)?.size ?? 0,
+    }));
+    const channelData = commandPlugin?.commands?.buildModelsProviderChannelData?.({
+      providers: providerInfos,
+    });
+    if (channelData) {
       return {
-        text,
-        channelData: { telegram: { buttons } },
+        text: "Select a provider:",
+        channelData,
       };
     }
 
-    // Text fallback for non-Telegram surfaces
     const lines: string[] = [
       "Providers:",
       ...providers.map((p) =>
@@ -237,10 +294,16 @@ export async function resolveModelsCommandReply(params: {
 
   const models = [...(byProvider.get(provider) ?? new Set<string>())].toSorted();
   const total = models.length;
+  const providerLabel = resolveProviderLabel({
+    provider,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    sessionEntry: params.sessionEntry,
+  });
 
   if (total === 0) {
     const lines: string[] = [
-      `Models (${provider}) — none`,
+      `Models (${providerLabel}) — none`,
       "",
       "Browse: /models",
       "Switch: /model <provider/model>",
@@ -248,29 +311,32 @@ export async function resolveModelsCommandReply(params: {
     return { text: lines.join("\n") };
   }
 
-  // For Telegram: use button-based model list with inline keyboard pagination
-  if (isTelegram) {
-    const telegramPageSize = getModelsPageSize();
-    const totalPages = calculateTotalPages(total, telegramPageSize);
-    const safePage = Math.max(1, Math.min(page, totalPages));
-
-    const buttons = buildModelsKeyboard({
+  const interactivePageSize = 8;
+  const interactiveTotalPages = Math.max(1, Math.ceil(total / interactivePageSize));
+  const interactivePage = Math.max(1, Math.min(page, interactiveTotalPages));
+  const interactiveChannelData = commandPlugin?.commands?.buildModelsListChannelData?.({
+    provider,
+    models,
+    currentModel: params.currentModel,
+    currentPage: interactivePage,
+    totalPages: interactiveTotalPages,
+    pageSize: interactivePageSize,
+    modelNames,
+  });
+  if (interactiveChannelData) {
+    const text = formatModelsAvailableHeader({
       provider,
-      models,
-      currentModel: params.currentModel,
-      currentPage: safePage,
-      totalPages,
-      pageSize: telegramPageSize,
+      total,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      sessionEntry: params.sessionEntry,
     });
-
-    const text = `Models (${provider}) — ${total} available`;
     return {
       text,
-      channelData: { telegram: { buttons } },
+      channelData: interactiveChannelData,
     };
   }
 
-  // Text fallback for non-Telegram surfaces
   const effectivePageSize = all ? total : pageSize;
   const pageCount = effectivePageSize > 0 ? Math.ceil(total / effectivePageSize) : 1;
   const safePage = all ? 1 : Math.max(1, Math.min(page, pageCount));
@@ -289,7 +355,7 @@ export async function resolveModelsCommandReply(params: {
   const endIndexExclusive = Math.min(total, startIndex + effectivePageSize);
   const pageModels = models.slice(startIndex, endIndexExclusive);
 
-  const header = `Models (${provider}) — showing ${startIndex + 1}-${endIndexExclusive} of ${total} (page ${safePage}/${pageCount})`;
+  const header = `Models (${providerLabel}) — showing ${startIndex + 1}-${endIndexExclusive} of ${total} (page ${safePage}/${pageCount})`;
 
   const lines: string[] = [header];
   for (const id of pageModels) {
@@ -312,12 +378,36 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
   if (!allowTextCommands) {
     return null;
   }
+  const commandBodyNormalized = params.command.commandBodyNormalized.trim();
+  if (!commandBodyNormalized.startsWith("/models")) {
+    return null;
+  }
+  const unauthorized = rejectUnauthorizedCommand(params, "/models");
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const modelsAgentId = params.sessionKey
+    ? resolveSessionAgentId({
+        sessionKey: params.sessionKey,
+        config: params.cfg,
+      })
+    : (params.agentId ?? "main");
+  const currentAgentId = params.agentId ?? "main";
+  const modelsAgentDir =
+    modelsAgentId === currentAgentId && params.agentDir
+      ? params.agentDir
+      : resolveAgentDir(params.cfg, modelsAgentId);
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
 
   const reply = await resolveModelsCommandReply({
     cfg: params.cfg,
-    commandBodyNormalized: params.command.commandBodyNormalized,
+    commandBodyNormalized,
     surface: params.ctx.Surface,
     currentModel: params.model ? `${params.provider}/${params.model}` : undefined,
+    agentId: modelsAgentId,
+    agentDir: modelsAgentDir,
+    sessionEntry: targetSessionEntry,
   });
   if (!reply) {
     return null;

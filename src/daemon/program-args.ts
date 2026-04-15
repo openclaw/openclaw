@@ -1,5 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  buildGatewayDistEntrypointCandidates,
+  findFirstAccessibleGatewayEntrypoint,
+  isGatewayDistEntrypointPath,
+} from "./gateway-entrypoint.js";
+import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 
 type GatewayProgramArgs = {
   programArguments: string[];
@@ -7,16 +13,6 @@ type GatewayProgramArgs = {
 };
 
 type GatewayRuntimePreference = "auto" | "node" | "bun";
-
-function isNodeRuntime(execPath: string): boolean {
-  const base = path.basename(execPath).toLowerCase();
-  return base === "node" || base === "node.exe";
-}
-
-function isBunRuntime(execPath: string): boolean {
-  const base = path.basename(execPath).toLowerCase();
-  return base === "bun" || base === "bun.exe";
-}
 
 async function resolveCliEntrypointPathForService(): Promise<string> {
   const argv1 = process.argv[1];
@@ -26,15 +22,28 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
 
   const normalized = path.resolve(argv1);
   const resolvedPath = await resolveRealpathSafe(normalized);
-  const looksLikeDist = /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(resolvedPath);
+  const looksLikeDist = isGatewayDistEntrypointPath(resolvedPath);
   if (looksLikeDist) {
-    await fs.access(resolvedPath);
+    const preferredDistEntrypoint = await findFirstAccessibleGatewayEntrypoint(
+      buildGatewayDistEntrypointCandidates(normalized, resolvedPath),
+      async (candidate) => {
+        try {
+          await fs.access(candidate);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    );
+    if (preferredDistEntrypoint) {
+      return preferredDistEntrypoint;
+    }
     // Prefer the original (possibly symlinked) path over the resolved realpath.
     // This keeps LaunchAgent/systemd paths stable across package version updates,
     // since symlinks like node_modules/openclaw -> .pnpm/openclaw@X.Y.Z/...
     // are automatically updated by pnpm, while the resolved path contains
     // version-specific directories that break after updates.
-    const normalizedLooksLikeDist = /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(normalized);
+    const normalizedLooksLikeDist = isGatewayDistEntrypointPath(normalized);
     if (normalizedLooksLikeDist && normalized !== resolvedPath) {
       try {
         await fs.access(normalized);
@@ -132,7 +141,7 @@ function resolveRepoRootForDev(): string {
   const parts = normalized.split(path.sep);
   const srcIndex = parts.lastIndexOf("src");
   if (srcIndex === -1) {
-    throw new Error("Dev mode requires running from repo (src/index.ts)");
+    throw new Error("Dev mode requires running from repo (src/entry.ts)");
   }
   return parts.slice(0, srcIndex).join(path.sep);
 }
@@ -148,10 +157,10 @@ async function resolveNodePath(): Promise<string> {
 }
 
 async function resolveBinaryPath(binary: string): Promise<string> {
-  const { execSync } = await import("node:child_process");
+  const { execFileSync } = await import("node:child_process");
   const cmd = process.platform === "win32" ? "where" : "which";
   try {
-    const output = execSync(`${cmd} ${binary}`, { encoding: "utf8" }).trim();
+    const output = execFileSync(cmd, [binary], { encoding: "utf8" }).trim();
     const resolved = output.split(/\r?\n/)[0]?.trim();
     if (!resolved) {
       throw new Error("empty");
@@ -162,7 +171,9 @@ async function resolveBinaryPath(binary: string): Promise<string> {
     if (binary === "bun") {
       throw new Error("Bun not found in PATH. Install bun: https://bun.sh");
     }
-    throw new Error("Node not found in PATH. Install Node 22+.");
+    throw new Error(
+      "Node not found in PATH. Install Node 24 (recommended) or Node 22 LTS (22.14+).",
+    );
   }
 }
 
@@ -187,7 +198,7 @@ async function resolveCliProgramArguments(params: {
   if (runtime === "bun") {
     if (params.dev) {
       const repoRoot = resolveRepoRootForDev();
-      const devCliPath = path.join(repoRoot, "src", "index.ts");
+      const devCliPath = path.join(repoRoot, "src", "entry.ts");
       await fs.access(devCliPath);
       const bunPath = isBunRuntime(execPath) ? execPath : await resolveBunPath();
       return {
@@ -220,7 +231,7 @@ async function resolveCliProgramArguments(params: {
 
   // Dev mode: use bun to run TypeScript directly
   const repoRoot = resolveRepoRootForDev();
-  const devCliPath = path.join(repoRoot, "src", "index.ts");
+  const devCliPath = path.join(repoRoot, "src", "entry.ts");
   await fs.access(devCliPath);
 
   // If already running under bun, use current execPath

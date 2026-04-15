@@ -1,17 +1,16 @@
-import type { CliDeps } from "../cli/deps.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { listAgentIds } from "../agents/agent-scope.js";
-import { DEFAULT_CHAT_CHANNEL } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  normalizeMessageChannel,
-} from "../utils/message-channel.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { agentCommand } from "./agent.js";
 import { resolveSessionKeyForRequest } from "./agent/session.js";
 
@@ -30,6 +29,8 @@ type GatewayAgentResponse = {
   summary?: string;
   result?: AgentGatewayResult;
 };
+
+const NO_GATEWAY_TIMEOUT_MS = 2_147_000_000;
 
 export type AgentCliOpts = {
   message: string;
@@ -52,13 +53,13 @@ export type AgentCliOpts = {
   local?: boolean;
 };
 
-function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout?: string }) {
+function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
   const raw =
     opts.timeout !== undefined
-      ? Number.parseInt(String(opts.timeout), 10)
+      ? Number.parseInt(opts.timeout, 10)
       : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
-  if (Number.isNaN(raw) || raw <= 0) {
-    throw new Error("--timeout must be a positive integer (seconds)");
+  if (Number.isNaN(raw) || raw < 0) {
+    throw new Error("--timeout must be a non-negative integer (seconds; 0 means no timeout)");
   }
   return raw;
 }
@@ -68,16 +69,16 @@ function formatPayloadForLog(payload: {
   mediaUrls?: string[];
   mediaUrl?: string | null;
 }) {
+  const parts = resolveSendableOutboundReplyParts({
+    text: payload.text,
+    mediaUrls: payload.mediaUrls,
+    mediaUrl: typeof payload.mediaUrl === "string" ? payload.mediaUrl : undefined,
+  });
   const lines: string[] = [];
-  if (payload.text) {
-    lines.push(payload.text.trimEnd());
+  if (parts.text) {
+    lines.push(parts.text.trimEnd());
   }
-  const mediaUrl =
-    typeof payload.mediaUrl === "string" && payload.mediaUrl.trim()
-      ? payload.mediaUrl.trim()
-      : undefined;
-  const media = payload.mediaUrls ?? (mediaUrl ? [mediaUrl] : []);
-  for (const url of media) {
+  for (const url of parts.mediaUrls) {
     lines.push(`MEDIA:${url}`);
   }
   return lines.join("\n").trimEnd();
@@ -104,7 +105,10 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
     }
   }
   const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
-  const gatewayTimeoutMs = Math.max(10_000, (timeoutSeconds + 30) * 1000);
+  const gatewayTimeoutMs =
+    timeoutSeconds === 0
+      ? NO_GATEWAY_TIMEOUT_MS // no timeout (timer-safe max)
+      : Math.max(10_000, (timeoutSeconds + 30) * 1000);
 
   const sessionKey = resolveSessionKeyForRequest({
     cfg,
@@ -113,17 +117,17 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
     sessionId: opts.sessionId,
   }).sessionKey;
 
-  const channel = normalizeMessageChannel(opts.channel) ?? DEFAULT_CHAT_CHANNEL;
-  const idempotencyKey = opts.runId?.trim() || randomIdempotencyKey();
+  const channel = normalizeMessageChannel(opts.channel);
+  const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
 
-  const response = await withProgress(
+  const response: GatewayAgentResponse = await withProgress(
     {
       label: "Waiting for agent reply…",
       indeterminate: true,
       enabled: opts.json !== true,
     },
     async () =>
-      await callGateway<GatewayAgentResponse>({
+      await callGateway({
         method: "agent",
         params: {
           message: body,
@@ -137,6 +141,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
           channel,
           replyChannel: opts.replyChannel,
           replyAccountId: opts.replyAccount,
+          bestEffortDeliver: opts.bestEffortDeliver,
           timeout: timeoutSeconds,
           lane: opts.lane,
           extraSystemPrompt: opts.extraSystemPrompt,
@@ -150,7 +155,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   );
 
   if (opts.json) {
-    runtime.log(JSON.stringify(response, null, 2));
+    writeRuntimeJson(runtime, response);
     return response;
   }
 
@@ -158,7 +163,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   const payloads = result?.payloads ?? [];
 
   if (payloads.length === 0) {
-    runtime.log(response?.summary ? String(response.summary) : "No reply from agent.");
+    runtime.log(response?.summary ? response.summary : "No reply from agent.");
     return response;
   }
 
@@ -177,6 +182,7 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     ...opts,
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
+    cleanupBundleMcpOnRunEnd: opts.local === true,
   };
   if (opts.local === true) {
     return await agentCommand(localOpts, runtime, deps);

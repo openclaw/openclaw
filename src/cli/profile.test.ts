@@ -19,6 +19,29 @@ describe("parseCliProfileArgs", () => {
     expect(res.argv).toEqual(["node", "openclaw", "gateway", "--dev", "--allow-unconfigured"]);
   });
 
+  it("leaves gateway --dev for subcommands after leading root options", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "--no-color",
+      "gateway",
+      "--dev",
+      "--allow-unconfigured",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "--no-color",
+      "gateway",
+      "--dev",
+      "--allow-unconfigured",
+    ]);
+  });
+
   it("still accepts global --dev before subcommand", () => {
     const res = parseCliProfileArgs(["node", "openclaw", "--dev", "gateway"]);
     if (!res.ok) {
@@ -37,18 +60,35 @@ describe("parseCliProfileArgs", () => {
     expect(res.argv).toEqual(["node", "openclaw", "status"]);
   });
 
+  it("parses interleaved --profile after the command token", () => {
+    const res = parseCliProfileArgs(["node", "openclaw", "status", "--profile", "work", "--deep"]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "status", "--deep"]);
+  });
+
+  it("parses interleaved --dev after the command token", () => {
+    const res = parseCliProfileArgs(["node", "openclaw", "status", "--dev"]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("dev");
+    expect(res.argv).toEqual(["node", "openclaw", "status"]);
+  });
+
   it("rejects missing profile value", () => {
     const res = parseCliProfileArgs(["node", "openclaw", "--profile"]);
     expect(res.ok).toBe(false);
   });
 
-  it("rejects combining --dev with --profile (dev first)", () => {
-    const res = parseCliProfileArgs(["node", "openclaw", "--dev", "--profile", "work", "status"]);
-    expect(res.ok).toBe(false);
-  });
-
-  it("rejects combining --dev with --profile (profile first)", () => {
-    const res = parseCliProfileArgs(["node", "openclaw", "--profile", "work", "--dev", "status"]);
+  it.each([
+    ["--dev first", ["node", "openclaw", "--dev", "--profile", "work", "status"]],
+    ["--profile first", ["node", "openclaw", "--profile", "work", "--dev", "status"]],
+    ["interleaved after command", ["node", "openclaw", "status", "--profile", "work", "--dev"]],
+  ])("rejects combining --dev with --profile (%s)", (_name, argv) => {
+    const res = parseCliProfileArgs(argv);
     expect(res.ok).toBe(false);
   });
 });
@@ -103,38 +143,45 @@ describe("applyCliProfileEnv", () => {
 });
 
 describe("formatCliCommand", () => {
-  it("returns command unchanged when no profile is set", () => {
-    expect(formatCliCommand("openclaw doctor --fix", {})).toBe("openclaw doctor --fix");
-  });
-
-  it("returns command unchanged when profile is default", () => {
-    expect(formatCliCommand("openclaw doctor --fix", { OPENCLAW_PROFILE: "default" })).toBe(
-      "openclaw doctor --fix",
-    );
-  });
-
-  it("returns command unchanged when profile is Default (case-insensitive)", () => {
-    expect(formatCliCommand("openclaw doctor --fix", { OPENCLAW_PROFILE: "Default" })).toBe(
-      "openclaw doctor --fix",
-    );
-  });
-
-  it("returns command unchanged when profile is invalid", () => {
-    expect(formatCliCommand("openclaw doctor --fix", { OPENCLAW_PROFILE: "bad profile" })).toBe(
-      "openclaw doctor --fix",
-    );
-  });
-
-  it("returns command unchanged when --profile is already present", () => {
-    expect(
-      formatCliCommand("openclaw --profile work doctor --fix", { OPENCLAW_PROFILE: "work" }),
-    ).toBe("openclaw --profile work doctor --fix");
-  });
-
-  it("returns command unchanged when --dev is already present", () => {
-    expect(formatCliCommand("openclaw --dev doctor", { OPENCLAW_PROFILE: "dev" })).toBe(
-      "openclaw --dev doctor",
-    );
+  it.each([
+    {
+      name: "no profile is set",
+      cmd: "openclaw doctor --fix",
+      env: {},
+      expected: "openclaw doctor --fix",
+    },
+    {
+      name: "profile is default",
+      cmd: "openclaw doctor --fix",
+      env: { OPENCLAW_PROFILE: "default" },
+      expected: "openclaw doctor --fix",
+    },
+    {
+      name: "profile is Default (case-insensitive)",
+      cmd: "openclaw doctor --fix",
+      env: { OPENCLAW_PROFILE: "Default" },
+      expected: "openclaw doctor --fix",
+    },
+    {
+      name: "profile is invalid",
+      cmd: "openclaw doctor --fix",
+      env: { OPENCLAW_PROFILE: "bad profile" },
+      expected: "openclaw doctor --fix",
+    },
+    {
+      name: "--profile is already present",
+      cmd: "openclaw --profile work doctor --fix",
+      env: { OPENCLAW_PROFILE: "work" },
+      expected: "openclaw --profile work doctor --fix",
+    },
+    {
+      name: "--dev is already present",
+      cmd: "openclaw --dev doctor",
+      env: { OPENCLAW_PROFILE: "dev" },
+      expected: "openclaw --dev doctor",
+    },
+  ])("returns command unchanged when $name", ({ cmd, env, expected }) => {
+    expect(formatCliCommand(cmd, env)).toBe(expected);
   });
 
   it("inserts --profile flag when profile is set", () => {
@@ -159,5 +206,37 @@ describe("formatCliCommand", () => {
     expect(formatCliCommand("pnpm openclaw doctor", { OPENCLAW_PROFILE: "work" })).toBe(
       "pnpm openclaw --profile work doctor",
     );
+  });
+
+  it("inserts --container when a container hint is set", () => {
+    expect(
+      formatCliCommand("openclaw gateway status --deep", { OPENCLAW_CONTAINER_HINT: "demo" }),
+    ).toBe("openclaw --container demo gateway status --deep");
+  });
+
+  it("ignores unsafe container hints", () => {
+    expect(
+      formatCliCommand("openclaw gateway status --deep", {
+        OPENCLAW_CONTAINER_HINT: "demo; rm -rf /",
+      }),
+    ).toBe("openclaw gateway status --deep");
+  });
+
+  it("preserves both --container and --profile hints", () => {
+    expect(
+      formatCliCommand("openclaw doctor", {
+        OPENCLAW_CONTAINER_HINT: "demo",
+        OPENCLAW_PROFILE: "work",
+      }),
+    ).toBe("openclaw --container demo doctor");
+  });
+
+  it("does not prepend --container for update commands", () => {
+    expect(formatCliCommand("openclaw update", { OPENCLAW_CONTAINER_HINT: "demo" })).toBe(
+      "openclaw update",
+    );
+    expect(
+      formatCliCommand("pnpm openclaw update --channel beta", { OPENCLAW_CONTAINER_HINT: "demo" }),
+    ).toBe("pnpm openclaw update --channel beta");
   });
 });

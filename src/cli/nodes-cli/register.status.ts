@@ -1,20 +1,27 @@
 import type { Command } from "commander";
-import type { NodesRpcOpts } from "./types.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../../runtime.js";
-import { renderTable } from "../../terminal/table.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { shortenHomeInString } from "../../utils.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
+import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import type { NodesRpcOpts } from "./types.js";
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
   if (!trimmed) {
     return raw;
   }
-  if (trimmed.toLowerCase().startsWith("v")) {
+  if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("v")) {
     return trimmed;
   }
   return /^\d/.test(trimmed) ? `v${trimmed}` : trimmed;
@@ -26,8 +33,8 @@ function resolveNodeVersions(node: {
   coreVersion?: string;
   uiVersion?: string;
 }) {
-  const core = node.coreVersion?.trim() || undefined;
-  const ui = node.uiVersion?.trim() || undefined;
+  const core = normalizeOptionalString(node.coreVersion);
+  const ui = normalizeOptionalString(node.uiVersion);
   if (core || ui) {
     return { core, ui };
   }
@@ -35,7 +42,7 @@ function resolveNodeVersions(node: {
   if (!legacy) {
     return { core: undefined, ui: undefined };
   }
-  const platform = node.platform?.trim().toLowerCase() ?? "";
+  const platform = normalizeOptionalLowercaseString(node.platform) ?? "";
   const headless =
     platform === "darwin" || platform === "linux" || platform === "win32" || platform === "windows";
   return headless ? { core: legacy, ui: undefined } : { core: undefined, ui: legacy };
@@ -72,12 +79,20 @@ function formatPathEnv(raw?: string): string | null {
   return shortenHomeInString(display);
 }
 
+function formatClientLabel(node: { clientId?: string; clientMode?: string }): string | null {
+  const clientId = node.clientId?.trim();
+  const clientMode = node.clientMode?.trim();
+  if (clientId && clientMode) {
+    return `${clientId}/${clientMode}`;
+  }
+  return clientId || clientMode || null;
+}
+
 function parseSinceMs(raw: unknown, label: string): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
   }
-  const value =
-    typeof raw === "string" ? raw.trim() : typeof raw === "number" ? String(raw).trim() : null;
+  const value = normalizeOptionalString(raw) ?? (typeof raw === "number" ? String(raw) : null);
   if (value === null) {
     defaultRuntime.error(`${label}: invalid duration value`);
     defaultRuntime.exit(1);
@@ -89,7 +104,7 @@ function parseSinceMs(raw: unknown, label: string): number | undefined {
   try {
     return parseDurationMs(value);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     defaultRuntime.error(`${label}: ${message}`);
     defaultRuntime.exit(1);
     return undefined;
@@ -111,7 +126,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const obj: Record<string, unknown> =
             typeof result === "object" && result !== null ? result : {};
           const { ok, warn, muted } = getNodesTheme();
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const nodes = parseNodeList(result);
           const lastConnectedById =
@@ -146,7 +161,7 @@ export function registerNodesStatusCommands(nodes: Command) {
 
           if (opts.json) {
             const ts = typeof obj.ts === "number" ? obj.ts : Date.now();
-            defaultRuntime.log(JSON.stringify({ ...obj, ts, nodes: filtered }, null, 2));
+            defaultRuntime.writeJson({ ...obj, ts, nodes: filtered });
             return;
           }
 
@@ -165,7 +180,9 @@ export function registerNodesStatusCommands(nodes: Command) {
             const perms = formatPermissions(n.permissions);
             const versions = formatNodeVersions(n);
             const pathEnv = formatPathEnv(n.pathEnv);
+            const client = formatClientLabel(n);
             const detailParts = [
+              client ? `client: ${client}` : null,
               n.deviceFamily ? `device: ${n.deviceFamily}` : null,
               n.modelIdentifier ? `hw: ${n.modelIdentifier}` : null,
               perms ? `perms: ${perms}` : null,
@@ -217,12 +234,12 @@ export function registerNodesStatusCommands(nodes: Command) {
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("describe", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
+          const nodeId = await resolveNodeId(opts, opts.node ?? "");
           const result = await callGatewayCli("node.describe", opts, {
             nodeId,
           });
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
+            defaultRuntime.writeJson(result);
             return;
           }
 
@@ -240,6 +257,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const perms = formatPermissions(obj.permissions);
           const family = typeof obj.deviceFamily === "string" ? obj.deviceFamily : null;
           const model = typeof obj.modelIdentifier === "string" ? obj.modelIdentifier : null;
+          const client = formatClientLabel(obj as { clientId?: string; clientMode?: string });
           const ip = typeof obj.remoteIp === "string" ? obj.remoteIp : null;
           const pathEnv = typeof obj.pathEnv === "string" ? obj.pathEnv : null;
           const versions = formatNodeVersions(
@@ -255,10 +273,11 @@ export function registerNodesStatusCommands(nodes: Command) {
           const status = `${paired ? ok("paired") : warn("unpaired")} · ${
             connected ? ok("connected") : muted("disconnected")
           }`;
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           const rows = [
             { Field: "ID", Value: nodeId },
             displayName ? { Field: "Name", Value: displayName } : null,
+            client ? { Field: "Client", Value: client } : null,
             ip ? { Field: "IP", Value: ip } : null,
             family ? { Field: "Device", Value: family } : null,
             model ? { Field: "Model", Value: model } : null,
@@ -306,7 +325,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const result = await callGatewayCli("node.pair.list", opts, {});
           const { pending, paired } = parsePairingList(result);
           const { heading, muted, warn } = getNodesTheme();
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
           const pendingRows = hasFilters ? [] : pending;
@@ -349,38 +368,20 @@ export function registerNodesStatusCommands(nodes: Command) {
           );
 
           if (opts.json) {
-            defaultRuntime.log(
-              JSON.stringify({ pending: pendingRows, paired: filteredPaired }, null, 2),
-            );
+            defaultRuntime.writeJson({ pending: pendingRows, paired: filteredPaired });
             return;
           }
 
           if (pendingRows.length > 0) {
-            const pendingRowsRendered = pendingRows.map((r) => ({
-              Request: r.requestId,
-              Node: r.displayName?.trim() ? r.displayName.trim() : r.nodeId,
-              IP: r.remoteIp ?? "",
-              Requested:
-                typeof r.ts === "number"
-                  ? formatTimeAgo(Math.max(0, now - r.ts))
-                  : muted("unknown"),
-              Repair: r.isRepair ? warn("yes") : "",
-            }));
+            const rendered = renderPendingPairingRequestsTable({
+              pending: pendingRows,
+              now,
+              tableWidth,
+              theme: { heading, warn, muted },
+            });
             defaultRuntime.log("");
-            defaultRuntime.log(heading("Pending"));
-            defaultRuntime.log(
-              renderTable({
-                width: tableWidth,
-                columns: [
-                  { key: "Request", header: "Request", minWidth: 8 },
-                  { key: "Node", header: "Node", minWidth: 14, flex: true },
-                  { key: "IP", header: "IP", minWidth: 10 },
-                  { key: "Requested", header: "Requested", minWidth: 12 },
-                  { key: "Repair", header: "Repair", minWidth: 6 },
-                ],
-                rows: pendingRowsRendered,
-              }).trimEnd(),
-            );
+            defaultRuntime.log(rendered.heading);
+            defaultRuntime.log(rendered.table);
           }
 
           if (filteredPaired.length > 0) {

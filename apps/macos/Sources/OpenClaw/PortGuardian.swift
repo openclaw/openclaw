@@ -15,7 +15,7 @@ actor PortGuardian {
         let timestamp: TimeInterval
     }
 
-    struct Descriptor: Sendable {
+    struct Descriptor {
         let pid: Int32
         let command: String
         let executablePath: String?
@@ -23,6 +23,9 @@ actor PortGuardian {
 
     private var records: [Record] = []
     private let logger = Logger(subsystem: "ai.openclaw", category: "portguard")
+    #if DEBUG
+    private var testingDescriptors: [Int: Descriptor] = [:]
+    #endif
     private nonisolated static let appSupportDir: URL = {
         let base = FileManager().urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return base.appendingPathComponent("OpenClaw", isDirectory: true)
@@ -47,12 +50,20 @@ actor PortGuardian {
             let listeners = await self.listeners(on: port)
             guard !listeners.isEmpty else { continue }
             for listener in listeners {
-                if self.isExpected(listener, port: port, mode: mode) {
+                if Self.isExpected(listener, port: port, mode: mode) {
                     let message = """
                     port \(port) already served by expected \(listener.command)
                     (pid \(listener.pid)) — keeping
                     """
                     self.logger.info("\(message, privacy: .public)")
+                    continue
+                }
+                if mode == .remote {
+                    let message = """
+                    port \(port) held by \(listener.command)
+                    (pid \(listener.pid)) in remote mode — not killing
+                    """
+                    self.logger.warning(message)
                     continue
                 }
                 let killed = await self.kill(listener.pid)
@@ -103,7 +114,9 @@ actor PortGuardian {
         let status: Status
         let listeners: [ReportListener]
 
-        var id: Int { self.port }
+        var id: Int {
+            self.port
+        }
 
         var offenders: [ReportListener] {
             if case let .interference(_, offenders) = self.status { return offenders }
@@ -120,6 +133,11 @@ actor PortGuardian {
     }
 
     func describe(port: Int) async -> Descriptor? {
+        #if DEBUG
+        if let descriptor = self.testingDescriptors[port] {
+            return descriptor
+        }
+        #endif
         guard let listener = await self.listeners(on: port).first else { return nil }
         let path = Self.executablePath(for: listener.pid)
         return Descriptor(pid: listener.pid, command: listener.command, executablePath: path)
@@ -141,7 +159,9 @@ actor PortGuardian {
         let user: String?
         let expected: Bool
 
-        var id: Int32 { self.pid }
+        var id: Int32 {
+            self.pid
+        }
     }
 
     func diagnose(mode: AppState.ConnectionMode) async -> [PortReport] {
@@ -267,8 +287,8 @@ actor PortGuardian {
 
         switch mode {
         case .remote:
-            expectedDesc = "SSH tunnel to remote gateway"
-            okPredicate = { $0.command.lowercased().contains("ssh") }
+            expectedDesc = "Remote gateway (SSH tunnel, Docker, or direct)"
+            okPredicate = { _ in true }
         case .local:
             expectedDesc = "Gateway websocket (node/tsx)"
             okPredicate = { listener in
@@ -348,17 +368,20 @@ actor PortGuardian {
         return sigkill.ok
     }
 
-    private func isExpected(_ listener: Listener, port: Int, mode: AppState.ConnectionMode) -> Bool {
+    private static func isExpected(_ listener: Listener, port: Int, mode: AppState.ConnectionMode) -> Bool {
         let cmd = listener.command.lowercased()
         let full = listener.fullCommand.lowercased()
         switch mode {
         case .remote:
-            // Remote mode expects an SSH tunnel for the gateway WebSocket port.
-            if port == GatewayEnvironment.gatewayPort() { return cmd.contains("ssh") }
+            if port == GatewayEnvironment.gatewayPort() { return true }
             return false
         case .local:
-            // The gateway daemon may listen as `openclaw` or as its runtime (`node`, `bun`, etc).
-            if full.contains("gateway-daemon") { return true }
+            // Preserve both the legacy hidden alias and the current service process title.
+            if full.contains("gateway-daemon") || full.contains("openclaw-gateway")
+                || cmd.contains("openclaw-gateway")
+            {
+                return true
+            }
             // If args are unavailable, treat a CLI listener as expected.
             if cmd.contains("openclaw"), full == cmd { return true }
             return false
@@ -393,6 +416,18 @@ actor PortGuardian {
 
 #if DEBUG
 extension PortGuardian {
+    func setTestingDescriptor(_ descriptor: Descriptor?, forPort port: Int) {
+        if let descriptor {
+            self.testingDescriptors[port] = descriptor
+        } else {
+            self.testingDescriptors.removeValue(forKey: port)
+        }
+    }
+}
+#endif
+
+#if DEBUG
+extension PortGuardian {
     static func _testParseListeners(_ text: String) -> [(
         pid: Int32,
         command: String,
@@ -400,6 +435,16 @@ extension PortGuardian {
         user: String?)]
     {
         self.parseListeners(from: text).map { ($0.pid, $0.command, $0.fullCommand, $0.user) }
+    }
+
+    static func _testIsExpected(
+        command: String,
+        fullCommand: String,
+        port: Int,
+        mode: AppState.ConnectionMode) -> Bool
+    {
+        let listener = Listener(pid: 0, command: command, fullCommand: fullCommand, user: nil)
+        return Self.isExpected(listener, port: port, mode: mode)
     }
 
     static func _testBuildReport(

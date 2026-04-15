@@ -1,23 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../runtime.js";
+import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const configMocks = vi.hoisted(() => ({
-  readConfigFileSnapshot: vi.fn(),
-  writeConfigFile: vi.fn().mockResolvedValue(undefined),
-}));
+const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
+const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const replaceConfigFileMock = vi.hoisted(() =>
+  vi.fn(async (params: { nextConfig: unknown }) => await writeConfigFileMock(params.nextConfig)),
+);
 
 const wizardMocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
-    writeConfigFile: configMocks.writeConfigFile,
-  };
-});
+vi.mock("../config/config.js", async () => ({
+  ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
+  readConfigFileSnapshot: readConfigFileSnapshotMock,
+  writeConfigFile: writeConfigFileMock,
+  replaceConfigFile: replaceConfigFileMock,
+}));
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: wizardMocks.createClackPrompter,
@@ -26,45 +25,31 @@ vi.mock("../wizard/clack-prompter.js", () => ({
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { agentsAddCommand } from "./agents.js";
 
-const runtime: RuntimeEnv = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
-
-const baseSnapshot = {
-  path: "/tmp/openclaw.json",
-  exists: true,
-  raw: "{}",
-  parsed: {},
-  valid: true,
-  config: {},
-  issues: [],
-  legacyIssues: [],
-};
+const runtime = createTestRuntime();
 
 describe("agents add command", () => {
   beforeEach(() => {
-    configMocks.readConfigFileSnapshot.mockReset();
-    configMocks.writeConfigFile.mockClear();
-    wizardMocks.createClackPrompter.mockReset();
+    readConfigFileSnapshotMock.mockClear();
+    writeConfigFileMock.mockClear();
+    replaceConfigFileMock.mockClear();
+    wizardMocks.createClackPrompter.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
   });
 
   it("requires --workspace when flags are present", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseSnapshot });
+    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
 
     await agentsAddCommand({ name: "Work" }, runtime, { hasFlags: true });
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--workspace"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("requires --workspace in non-interactive mode", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseSnapshot });
+    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
 
     await agentsAddCommand({ name: "Work", nonInteractive: true }, runtime, {
       hasFlags: false,
@@ -72,11 +57,11 @@ describe("agents add command", () => {
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--workspace"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("exits with code 1 when the interactive wizard is cancelled", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseSnapshot });
+    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
     wizardMocks.createClackPrompter.mockReturnValue({
       intro: vi.fn().mockRejectedValue(new WizardCancelledError()),
       text: vi.fn(),
@@ -88,6 +73,6 @@ describe("agents add command", () => {
     await agentsAddCommand({}, runtime);
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 });

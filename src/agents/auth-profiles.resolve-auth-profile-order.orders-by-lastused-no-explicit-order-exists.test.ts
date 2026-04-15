@@ -2,30 +2,6 @@ import { describe, expect, it } from "vitest";
 import { resolveAuthProfileOrder } from "./auth-profiles.js";
 
 describe("resolveAuthProfileOrder", () => {
-  const _store: AuthProfileStore = {
-    version: 1,
-    profiles: {
-      "anthropic:default": {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-default",
-      },
-      "anthropic:work": {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-work",
-      },
-    },
-  };
-  const _cfg = {
-    auth: {
-      profiles: {
-        "anthropic:default": { provider: "anthropic", mode: "api_key" },
-        "anthropic:work": { provider: "anthropic", mode: "api_key" },
-      },
-    },
-  };
-
   it("orders by lastUsed when no explicit order exists", () => {
     const order = resolveAuthProfileOrder({
       store: {
@@ -85,8 +61,8 @@ describe("resolveAuthProfileOrder", () => {
         },
         usageStats: {
           "anthropic:ready": { lastUsed: 50 },
-          "anthropic:cool1": { cooldownUntil: now + 5_000 },
-          "anthropic:cool2": { cooldownUntil: now + 1_000 },
+          "anthropic:cool1": { cooldownUntil: now + 120_000 },
+          "anthropic:cool2": { cooldownUntil: now + 60_000 },
         },
       },
       provider: "anthropic",

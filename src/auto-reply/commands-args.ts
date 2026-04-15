@@ -1,3 +1,7 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { CommandArgValues } from "./commands-registry.types.js";
 
 export type CommandArgsFormatter = (values: CommandArgValues) => string | undefined;
@@ -8,13 +12,13 @@ function normalizeArgValue(value: unknown): string | undefined {
   }
   let text: string;
   if (typeof value === "string") {
-    text = value.trim();
+    text = normalizeOptionalString(value) ?? "";
   } else if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    text = String(value).trim();
+    text = normalizeOptionalString(String(value)) ?? "";
   } else if (typeof value === "symbol") {
-    text = value.toString().trim();
+    text = normalizeOptionalString(value.toString()) ?? "";
   } else if (typeof value === "function") {
-    text = value.toString().trim();
+    text = normalizeOptionalString(value.toString()) ?? "";
   } else {
     // Objects and arrays
     text = JSON.stringify(value);
@@ -22,55 +26,89 @@ function normalizeArgValue(value: unknown): string | undefined {
   return text ? text : undefined;
 }
 
-const formatConfigArgs: CommandArgsFormatter = (values) => {
-  const action = normalizeArgValue(values.action)?.toLowerCase();
+function formatActionArgs(
+  values: CommandArgValues,
+  params: {
+    formatKnownAction: (action: string, path: string | undefined) => string | undefined;
+  },
+): string | undefined {
+  const action = normalizeOptionalLowercaseString(normalizeArgValue(values.action));
   const path = normalizeArgValue(values.path);
   const value = normalizeArgValue(values.value);
   if (!action) {
     return undefined;
   }
-  if (action === "show" || action === "get") {
-    return path ? `${action} ${path}` : action;
+  const knownAction = params.formatKnownAction(action, path);
+  if (knownAction) {
+    return knownAction;
   }
-  if (action === "unset") {
-    return path ? `${action} ${path}` : action;
-  }
-  if (action === "set") {
-    if (!path) {
-      return action;
-    }
-    if (!value) {
-      return `${action} ${path}`;
-    }
-    return `${action} ${path}=${value}`;
-  }
-  return action;
-};
+  return formatSetUnsetArgAction(action, { path, value });
+}
 
-const formatDebugArgs: CommandArgsFormatter = (values) => {
-  const action = normalizeArgValue(values.action)?.toLowerCase();
-  const path = normalizeArgValue(values.path);
-  const value = normalizeArgValue(values.value);
-  if (!action) {
-    return undefined;
-  }
-  if (action === "show" || action === "reset") {
-    return action;
-  }
+const formatConfigArgs: CommandArgsFormatter = (values) =>
+  formatActionArgs(values, {
+    formatKnownAction: (action, path) => {
+      if (action === "show" || action === "get") {
+        return path ? `${action} ${path}` : action;
+      }
+      return undefined;
+    },
+  });
+
+const formatMcpArgs: CommandArgsFormatter = (values) =>
+  formatActionArgs(values, {
+    formatKnownAction: (action, path) => {
+      if (action === "show" || action === "get") {
+        return path ? `${action} ${path}` : action;
+      }
+      return undefined;
+    },
+  });
+
+const formatPluginsArgs: CommandArgsFormatter = (values) =>
+  formatActionArgs(values, {
+    formatKnownAction: (action, path) => {
+      if (action === "list") {
+        return "list";
+      }
+      if (action === "show" || action === "get") {
+        return path ? `${action} ${path}` : action;
+      }
+      if (action === "enable" || action === "disable") {
+        return path ? `${action} ${path}` : action;
+      }
+      return undefined;
+    },
+  });
+
+const formatDebugArgs: CommandArgsFormatter = (values) =>
+  formatActionArgs(values, {
+    formatKnownAction: (action) => {
+      if (action === "show" || action === "reset") {
+        return action;
+      }
+      return undefined;
+    },
+  });
+
+function formatSetUnsetArgAction(
+  action: string,
+  params: { path: string | undefined; value: string | undefined },
+): string {
   if (action === "unset") {
-    return path ? `${action} ${path}` : action;
+    return params.path ? `${action} ${params.path}` : action;
   }
   if (action === "set") {
-    if (!path) {
+    if (!params.path) {
       return action;
     }
-    if (!value) {
-      return `${action} ${path}`;
+    if (!params.value) {
+      return `${action} ${params.path}`;
     }
-    return `${action} ${path}=${value}`;
+    return `${action} ${params.path}=${params.value}`;
   }
   return action;
-};
+}
 
 const formatQueueArgs: CommandArgsFormatter = (values) => {
   const mode = normalizeArgValue(values.mode);
@@ -93,8 +131,32 @@ const formatQueueArgs: CommandArgsFormatter = (values) => {
   return parts.length > 0 ? parts.join(" ") : undefined;
 };
 
+const formatExecArgs: CommandArgsFormatter = (values) => {
+  const host = normalizeArgValue(values.host);
+  const security = normalizeArgValue(values.security);
+  const ask = normalizeArgValue(values.ask);
+  const node = normalizeArgValue(values.node);
+  const parts: string[] = [];
+  if (host) {
+    parts.push(`host=${host}`);
+  }
+  if (security) {
+    parts.push(`security=${security}`);
+  }
+  if (ask) {
+    parts.push(`ask=${ask}`);
+  }
+  if (node) {
+    parts.push(`node=${node}`);
+  }
+  return parts.length > 0 ? parts.join(" ") : undefined;
+};
+
 export const COMMAND_ARG_FORMATTERS: Record<string, CommandArgsFormatter> = {
   config: formatConfigArgs,
+  mcp: formatMcpArgs,
+  plugins: formatPluginsArgs,
   debug: formatDebugArgs,
   queue: formatQueueArgs,
+  exec: formatExecArgs,
 };

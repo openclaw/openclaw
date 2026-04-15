@@ -2,89 +2,105 @@ import { describe, expect, it } from "vitest";
 import { splitMediaFromOutput } from "./parse.js";
 
 describe("splitMediaFromOutput", () => {
-  it("detects audio_as_voice tag and strips it", () => {
-    const result = splitMediaFromOutput("Hello [[audio_as_voice]] world");
-    expect(result.audioAsVoice).toBe(true);
-    expect(result.text).toBe("Hello world");
-  });
-
-  it("accepts absolute media paths", () => {
-    const result = splitMediaFromOutput("MEDIA:/Users/pete/My File.png");
-    expect(result.mediaUrls).toEqual(["/Users/pete/My File.png"]);
-    expect(result.text).toBe("");
-  });
-
-  it("accepts quoted absolute media paths", () => {
-    const result = splitMediaFromOutput('MEDIA:"/Users/pete/My File.png"');
-    expect(result.mediaUrls).toEqual(["/Users/pete/My File.png"]);
-    expect(result.text).toBe("");
-  });
-
-  it("accepts tilde media paths", () => {
-    const result = splitMediaFromOutput("MEDIA:~/Pictures/My File.png");
-    expect(result.mediaUrls).toEqual(["~/Pictures/My File.png"]);
-    expect(result.text).toBe("");
-  });
-
-  it("accepts traversal-like media paths (validated at load time)", () => {
-    const result = splitMediaFromOutput("MEDIA:../../etc/passwd");
-    expect(result.mediaUrls).toEqual(["../../etc/passwd"]);
-    expect(result.text).toBe("");
-  });
-
-  it("captures safe relative media paths", () => {
-    const result = splitMediaFromOutput("MEDIA:./screenshots/image.png");
-    expect(result.mediaUrls).toEqual(["./screenshots/image.png"]);
-    expect(result.text).toBe("");
-  });
-
-  it("accepts sandbox-relative media paths", () => {
-    const result = splitMediaFromOutput("MEDIA:media/inbound/image.png");
-    expect(result.mediaUrls).toEqual(["media/inbound/image.png"]);
-    expect(result.text).toBe("");
-  });
-
-  it("keeps audio_as_voice detection stable across calls", () => {
-    const input = "Hello [[audio_as_voice]]";
-    const first = splitMediaFromOutput(input);
-    const second = splitMediaFromOutput(input);
-    expect(first.audioAsVoice).toBe(true);
-    expect(second.audioAsVoice).toBe(true);
-  });
-
-  it("keeps MEDIA mentions in prose", () => {
-    const input = "The MEDIA: tag fails to deliver";
+  function expectParsedMediaOutputCase(
+    input: string,
+    expected: {
+      mediaUrls?: string[];
+      text?: string;
+      audioAsVoice?: boolean;
+    },
+  ) {
     const result = splitMediaFromOutput(input);
-    expect(result.mediaUrls).toBeUndefined();
-    expect(result.text).toBe(input);
+    expect(result.text).toBe(expected.text ?? "");
+    if ("audioAsVoice" in expected) {
+      expect(result.audioAsVoice).toBe(expected.audioAsVoice);
+    } else {
+      expect(result.audioAsVoice).toBeUndefined();
+    }
+    if ("mediaUrls" in expected) {
+      expect(result.mediaUrls).toEqual(expected.mediaUrls);
+      expect(result.mediaUrl).toBe(expected.mediaUrls?.[0]);
+    } else {
+      expect(result.mediaUrls).toBeUndefined();
+      expect(result.mediaUrl).toBeUndefined();
+    }
+  }
+
+  function expectStableAudioAsVoiceDetectionCase(input: string) {
+    for (const output of [splitMediaFromOutput(input), splitMediaFromOutput(input)]) {
+      expect(output.audioAsVoice).toBe(true);
+    }
+  }
+
+  function expectAcceptedMediaPathCase(expectedPath: string, input: string) {
+    expectParsedMediaOutputCase(input, { mediaUrls: [expectedPath] });
+  }
+
+  function expectRejectedMediaPathCase(input: string) {
+    expectParsedMediaOutputCase(input, { mediaUrls: undefined });
+  }
+
+  it.each([
+    ["/Users/pete/My File.png", "MEDIA:/Users/pete/My File.png"],
+    ["/Users/pete/My File.png", 'MEDIA:"/Users/pete/My File.png"'],
+    ["./screenshots/image.png", "MEDIA:./screenshots/image.png"],
+    ["media/inbound/image.png", "MEDIA:media/inbound/image.png"],
+    ["./screenshot.png", "  MEDIA:./screenshot.png"],
+    ["C:\\Users\\pete\\Pictures\\snap.png", "MEDIA:C:\\Users\\pete\\Pictures\\snap.png"],
+    ["/tmp/tts-fAJy8C/voice-1770246885083.opus", "MEDIA:/tmp/tts-fAJy8C/voice-1770246885083.opus"],
+    ["image.png", "MEDIA:image.png"],
+  ] as const)("accepts supported media path variant: %s", (expectedPath, input) => {
+    expectAcceptedMediaPathCase(expectedPath, input);
   });
 
-  it("parses MEDIA tags with leading whitespace", () => {
-    const result = splitMediaFromOutput("  MEDIA:./screenshot.png");
-    expect(result.mediaUrls).toEqual(["./screenshot.png"]);
-    expect(result.text).toBe("");
+  it.each([
+    "MEDIA:../../../etc/passwd",
+    "MEDIA:../../.env",
+    "MEDIA:~/.ssh/id_rsa",
+    "MEDIA:~/Pictures/My File.png",
+    "MEDIA:./foo/../../../etc/shadow",
+  ] as const)("rejects traversal and home-dir path: %s", (input) => {
+    expectRejectedMediaPathCase(input);
   });
 
-  it("accepts Windows-style paths", () => {
-    const result = splitMediaFromOutput("MEDIA:C:\\Users\\pete\\Pictures\\snap.png");
-    expect(result.mediaUrls).toEqual(["C:\\Users\\pete\\Pictures\\snap.png"]);
-    expect(result.text).toBe("");
+  it.each([
+    {
+      name: "detects audio_as_voice tag and strips it",
+      input: "Hello [[audio_as_voice]] world",
+      expected: { audioAsVoice: true, text: "Hello world" },
+    },
+    {
+      name: "keeps MEDIA mentions in prose",
+      input: "The MEDIA: tag fails to deliver",
+      expected: { mediaUrls: undefined, text: "The MEDIA: tag fails to deliver" },
+    },
+    {
+      name: "rejects bare words without file extensions",
+      input: "MEDIA:screenshot",
+      expected: { mediaUrls: undefined, text: "MEDIA:screenshot" },
+    },
+    {
+      name: "keeps audio_as_voice detection stable across calls",
+      input: "Hello [[audio_as_voice]]",
+      expected: { audioAsVoice: true, text: "Hello" },
+      assertStable: true,
+    },
+  ] as const)("$name", ({ input, expected, assertStable }) => {
+    expectParsedMediaOutputCase(input, expected);
+    if (assertStable) {
+      expectStableAudioAsVoiceDetectionCase(input);
+    }
   });
 
-  it("accepts TTS temp file paths", () => {
-    const result = splitMediaFromOutput("MEDIA:/tmp/tts-fAJy8C/voice-1770246885083.opus");
-    expect(result.mediaUrls).toEqual(["/tmp/tts-fAJy8C/voice-1770246885083.opus"]);
-    expect(result.text).toBe("");
-  });
+  it("returns ordered text and media segments while ignoring fenced MEDIA lines", () => {
+    const result = splitMediaFromOutput(
+      "Before\nMEDIA:https://example.com/a.png\n```text\nMEDIA:https://example.com/ignored.png\n```\nAfter",
+    );
 
-  it("accepts bare filenames with extensions", () => {
-    const result = splitMediaFromOutput("MEDIA:image.png");
-    expect(result.mediaUrls).toEqual(["image.png"]);
-    expect(result.text).toBe("");
-  });
-
-  it("rejects bare words without file extensions", () => {
-    const result = splitMediaFromOutput("MEDIA:screenshot");
-    expect(result.mediaUrls).toBeUndefined();
+    expect(result.segments).toEqual([
+      { type: "text", text: "Before" },
+      { type: "media", url: "https://example.com/a.png" },
+      { type: "text", text: "```text\nMEDIA:https://example.com/ignored.png\n```\nAfter" },
+    ]);
   });
 });

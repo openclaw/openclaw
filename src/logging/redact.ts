@@ -1,9 +1,12 @@
-import { createRequire } from "node:module";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { compileConfigRegex } from "../security/config-regex.js";
+import { resolveNodeRequireFromMeta } from "./node-require.js";
+import { replacePatternBounded } from "./redact-bounded.js";
 
-const requireConfig = createRequire(import.meta.url);
+const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
 export type RedactSensitiveMode = "off" | "tools";
+type RedactPattern = string | RegExp;
 
 const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
 const DEFAULT_REDACT_MIN_LENGTH = 18;
@@ -16,7 +19,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   // JSON fields.
   String.raw`"(?:apiKey|token|secret|password|passwd|accessToken|refreshToken)"\s*:\s*"([^"]+)"`,
   // CLI flags.
-  String.raw`--(?:api[-_]?key|token|secret|password|passwd)\s+(["']?)([^\s"']+)\1`,
+  String.raw`--(?:api[-_]?key|hook[-_]?token|token|secret|password|passwd)\s+(["']?)([^\s"']+)\1`,
   // Authorization headers.
   String.raw`Authorization\s*[:=]\s*Bearer\s+([A-Za-z0-9._\-+=]+)`,
   String.raw`\bBearer\s+([A-Za-z0-9._\-+=]{18,})\b`,
@@ -32,35 +35,44 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`\b(AIza[0-9A-Za-z\-_]{20,})\b`,
   String.raw`\b(pplx-[A-Za-z0-9_-]{10,})\b`,
   String.raw`\b(npm_[A-Za-z0-9]{10,})\b`,
+  // Telegram Bot API URLs embed the token as `/bot<token>/...` (no word-boundary before digits).
+  String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
   String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
 ];
 
 type RedactOptions = {
   mode?: RedactSensitiveMode;
-  patterns?: string[];
+  patterns?: RedactPattern[];
+};
+
+export type ResolvedRedactOptions = {
+  mode: RedactSensitiveMode;
+  patterns: RegExp[];
 };
 
 function normalizeMode(value?: string): RedactSensitiveMode {
   return value === "off" ? "off" : DEFAULT_REDACT_MODE;
 }
 
-function parsePattern(raw: string): RegExp | null {
+function parsePattern(raw: RedactPattern): RegExp | null {
+  if (raw instanceof RegExp) {
+    if (raw.flags.includes("g")) {
+      return raw;
+    }
+    return new RegExp(raw.source, `${raw.flags}g`);
+  }
   if (!raw.trim()) {
     return null;
   }
   const match = raw.match(/^\/(.+)\/([gimsuy]*)$/);
-  try {
-    if (match) {
-      const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
-      return new RegExp(match[1], flags);
-    }
-    return new RegExp(raw, "gi");
-  } catch {
-    return null;
+  if (match) {
+    const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
+    return compileConfigRegex(match[1], flags)?.regex ?? null;
   }
+  return compileConfigRegex(raw, "gi")?.regex ?? null;
 }
 
-function resolvePatterns(value?: string[]): RegExp[] {
+function resolvePatterns(value?: RedactPattern[]): RegExp[] {
   const source = value?.length ? value : DEFAULT_REDACT_PATTERNS;
   return source.map(parsePattern).filter((re): re is RegExp => Boolean(re));
 }
@@ -86,8 +98,7 @@ function redactMatch(match: string, groups: string[]): string {
   if (match.includes("PRIVATE KEY-----")) {
     return redactPemBlock(match);
   }
-  const token =
-    groups.filter((value) => typeof value === "string" && value.length > 0).at(-1) ?? match;
+  const token = groups.findLast((value) => typeof value === "string" && value.length > 0) ?? match;
   const masked = maskToken(token);
   if (token === match) {
     return masked;
@@ -98,7 +109,7 @@ function redactMatch(match: string, groups: string[]): string {
 function redactText(text: string, patterns: RegExp[]): string {
   let next = text;
   for (const pattern of patterns) {
-    next = next.replace(pattern, (...args: string[]) =>
+    next = replacePatternBounded(next, pattern, (...args: string[]) =>
       redactMatch(args[0], args.slice(1, args.length - 2)),
     );
   }
@@ -108,10 +119,12 @@ function redactText(text: string, patterns: RegExp[]): string {
 function resolveConfigRedaction(): RedactOptions {
   let cfg: OpenClawConfig["logging"] | undefined;
   try {
-    const loaded = requireConfig("../config/config.js") as {
-      loadConfig?: () => OpenClawConfig;
-    };
-    cfg = loaded.loadConfig?.().logging;
+    const loaded = requireConfig?.("../config/config.js") as
+      | {
+          loadConfig?: () => OpenClawConfig;
+        }
+      | undefined;
+    cfg = loaded?.loadConfig?.().logging;
   } catch {
     cfg = undefined;
   }
@@ -121,19 +134,33 @@ function resolveConfigRedaction(): RedactOptions {
   };
 }
 
+export function resolveRedactOptions(options?: RedactOptions): ResolvedRedactOptions {
+  const resolved = options ?? resolveConfigRedaction();
+  const mode = normalizeMode(resolved.mode);
+  if (mode === "off") {
+    return {
+      mode,
+      patterns: [],
+    };
+  }
+  return {
+    mode,
+    patterns: resolvePatterns(resolved.patterns),
+  };
+}
+
 export function redactSensitiveText(text: string, options?: RedactOptions): string {
   if (!text) {
     return text;
   }
-  const resolved = options ?? resolveConfigRedaction();
-  if (normalizeMode(resolved.mode) === "off") {
+  const resolved = resolveRedactOptions(options);
+  if (resolved.mode === "off") {
     return text;
   }
-  const patterns = resolvePatterns(resolved.patterns);
-  if (!patterns.length) {
+  if (!resolved.patterns.length) {
     return text;
   }
-  return redactText(text, patterns);
+  return redactText(text, resolved.patterns);
 }
 
 export function redactToolDetail(detail: string): string {
@@ -146,4 +173,15 @@ export function redactToolDetail(detail: string): string {
 
 export function getDefaultRedactPatterns(): string[] {
   return [...DEFAULT_REDACT_PATTERNS];
+}
+
+// Applies already-resolved redaction to a batch of lines without re-resolving options.
+// Lines are joined before redacting so multiline patterns (e.g. PEM blocks) can match across
+// line boundaries, then split back. Use this instead of mapping redactSensitiveText when
+// options are resolved once per request.
+export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOptions): string[] {
+  if (resolved.mode === "off" || !resolved.patterns.length || lines.length === 0) {
+    return lines;
+  }
+  return redactText(lines.join("\n"), resolved.patterns).split("\n");
 }

@@ -1,65 +1,19 @@
-import type { ChannelId } from "../channels/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { SecretInputMode } from "../plugins/provider-auth-types.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export type OnboardMode = "local" | "remote";
-export type AuthChoice =
+/**
+ * Auth choices are plugin-owned contract ids plus a few legacy aliases that
+ * are normalized elsewhere (for example `oauth` -> `setup-token`).
+ */
+export type BuiltInAuthChoice =
   // Legacy alias for `setup-token` (kept for backwards CLI compatibility).
-  | "oauth"
-  | "setup-token"
-  | "claude-cli"
-  | "token"
-  | "chutes"
-  | "openai-codex"
-  | "openai-api-key"
-  | "openrouter-api-key"
-  | "litellm-api-key"
-  | "ai-gateway-api-key"
-  | "cloudflare-ai-gateway-api-key"
-  | "moonshot-api-key"
-  | "moonshot-api-key-cn"
-  | "kimi-code-api-key"
-  | "synthetic-api-key"
-  | "venice-api-key"
-  | "together-api-key"
-  | "codex-cli"
-  | "apiKey"
-  | "gemini-api-key"
-  | "google-antigravity"
-  | "google-gemini-cli"
-  | "zai-api-key"
-  | "xiaomi-api-key"
-  | "minimax-cloud"
-  | "minimax"
-  | "minimax-api"
-  | "minimax-api-lightning"
-  | "minimax-portal"
-  | "opencode-zen"
-  | "github-copilot"
-  | "copilot-proxy"
-  | "qwen-portal"
-  | "xai-api-key"
-  | "qianfan-api-key"
-  | "custom-api-key"
-  | "skip";
-export type AuthChoiceGroupId =
-  | "openai"
-  | "anthropic"
-  | "google"
-  | "copilot"
-  | "openrouter"
-  | "ai-gateway"
-  | "cloudflare-ai-gateway"
-  | "moonshot"
-  | "zai"
-  | "xiaomi"
-  | "opencode-zen"
-  | "minimax"
-  | "synthetic"
-  | "venice"
-  | "qwen"
-  | "qianfan"
-  | "xai"
-  | "custom";
+  "oauth" | "setup-token" | "token" | "apiKey" | "custom-api-key" | "skip";
+export type AuthChoice = BuiltInAuthChoice | (string & {});
+
+/** Auth choice groups are plugin-owned ids plus the core `custom` bucket. */
+export type AuthChoiceGroupId = "custom" | (string & {});
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
@@ -68,16 +22,26 @@ export type NodeManagerChoice = "npm" | "pnpm" | "bun";
 export type ChannelChoice = ChannelId;
 // Legacy alias (pre-rename).
 export type ProviderChoice = ChannelChoice;
+export type { SecretInputMode } from "../plugins/provider-auth-types.js";
 
-export type OnboardOptions = {
+type OnboardDynamicProviderOptions = {
+  /**
+   * Provider-specific non-interactive auth flags are plugin-owned and keyed by
+   * manifest `providerAuthChoices[].optionKey` values.
+   */
+  [optionKey: string]: unknown;
+};
+
+export type OnboardOptions = OnboardDynamicProviderOptions & {
   mode?: OnboardMode;
   /** "manual" is an alias for "advanced". */
   flow?: "quickstart" | "advanced" | "manual";
   workspace?: string;
   nonInteractive?: boolean;
-  /** Required for non-interactive onboarding; skips the interactive risk prompt when true. */
+  /** Required for non-interactive setup; skips the interactive risk prompt when true. */
   acceptRisk?: boolean;
   reset?: boolean;
+  resetScope?: ResetScope;
   authChoice?: AuthChoice;
   /** Used when `authChoice=token` in non-interactive mode. */
   tokenProvider?: string;
@@ -87,28 +51,14 @@ export type OnboardOptions = {
   tokenProfileId?: string;
   /** Used when `authChoice=token` in non-interactive mode. */
   tokenExpiresIn?: string;
-  anthropicApiKey?: string;
-  openaiApiKey?: string;
-  openrouterApiKey?: string;
-  litellmApiKey?: string;
-  aiGatewayApiKey?: string;
+  /** API key persistence mode for setup flows (default: plaintext). */
+  secretInputMode?: SecretInputMode;
+  arceeaiApiKey?: string;
   cloudflareAiGatewayAccountId?: string;
   cloudflareAiGatewayGatewayId?: string;
-  cloudflareAiGatewayApiKey?: string;
-  moonshotApiKey?: string;
-  kimiCodeApiKey?: string;
-  geminiApiKey?: string;
-  zaiApiKey?: string;
-  xiaomiApiKey?: string;
-  minimaxApiKey?: string;
-  syntheticApiKey?: string;
-  veniceApiKey?: string;
-  togetherApiKey?: string;
-  opencodeZenApiKey?: string;
-  xaiApiKey?: string;
-  qianfanApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;
+  lmstudioApiKey?: string;
   customModelId?: string;
   customProviderId?: string;
   customCompatibility?: "openai" | "anthropic";
@@ -116,6 +66,7 @@ export type OnboardOptions = {
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;
   gatewayToken?: string;
+  gatewayTokenRefEnv?: string;
   gatewayPassword?: string;
   tailscale?: TailscaleMode;
   tailscaleResetOnExit?: boolean;
@@ -125,6 +76,7 @@ export type OnboardOptions = {
   /** @deprecated Legacy alias for `skipChannels`. */
   skipProviders?: boolean;
   skipSkills?: boolean;
+  skipSearch?: boolean;
   skipHealth?: boolean;
   skipUi?: boolean;
   nodeManager?: NodeManagerChoice;

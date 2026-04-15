@@ -1,6 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 import type { IrcAccountConfig, IrcChannelConfig } from "./types.js";
 import type { IrcInboundMessage } from "./types.js";
-import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 
 export type IrcGroupMatch = {
   allowed: boolean;
@@ -36,8 +37,10 @@ export function resolveIrcGroupMatch(params: {
     };
   }
 
-  const targetLower = params.target.toLowerCase();
-  const directKey = Object.keys(groups).find((key) => key.toLowerCase() === targetLower);
+  const targetLower = normalizeLowercaseStringOrEmpty(params.target);
+  const directKey = Object.keys(groups).find(
+    (key) => normalizeLowercaseStringOrEmpty(key) === targetLower,
+  );
   if (directKey) {
     const matched = groups[directKey];
     if (matched) {
@@ -142,16 +145,25 @@ export function resolveIrcGroupSenderAllowed(params: {
   message: IrcInboundMessage;
   outerAllowFrom: string[];
   innerAllowFrom: string[];
+  allowNameMatching?: boolean;
 }): boolean {
   const policy = params.groupPolicy ?? "allowlist";
   const inner = normalizeIrcAllowlist(params.innerAllowFrom);
   const outer = normalizeIrcAllowlist(params.outerAllowFrom);
 
   if (inner.length > 0) {
-    return resolveIrcAllowlistMatch({ allowFrom: inner, message: params.message }).allowed;
+    return resolveIrcAllowlistMatch({
+      allowFrom: inner,
+      message: params.message,
+      allowNameMatching: params.allowNameMatching,
+    }).allowed;
   }
   if (outer.length > 0) {
-    return resolveIrcAllowlistMatch({ allowFrom: outer, message: params.message }).allowed;
+    return resolveIrcAllowlistMatch({
+      allowFrom: outer,
+      message: params.message,
+      allowNameMatching: params.allowNameMatching,
+    }).allowed;
   }
   return policy === "open";
 }

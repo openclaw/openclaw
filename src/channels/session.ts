@@ -1,18 +1,32 @@
 import type { MsgContext } from "../auto-reply/templating.js";
-import {
-  recordSessionMetaFromInbound,
-  type GroupKeyResolution,
-  type SessionEntry,
-  updateLastRoute,
-} from "../config/sessions.js";
+import type { GroupKeyResolution } from "../config/sessions/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import type { InboundLastRouteUpdate } from "./session.types.js";
+export type { InboundLastRouteUpdate, RecordInboundSession } from "./session.types.js";
 
-export type InboundLastRouteUpdate = {
-  sessionKey: string;
-  channel: SessionEntry["lastChannel"];
-  to: string;
-  accountId?: string;
-  threadId?: string | number;
-};
+let inboundSessionRuntimePromise: Promise<
+  typeof import("../config/sessions/inbound.runtime.js")
+> | null = null;
+
+function loadInboundSessionRuntime() {
+  inboundSessionRuntimePromise ??= import("../config/sessions/inbound.runtime.js");
+  return inboundSessionRuntimePromise;
+}
+
+function shouldSkipPinnedMainDmRouteUpdate(
+  pin: InboundLastRouteUpdate["mainDmOwnerPin"] | undefined,
+): boolean {
+  if (!pin) {
+    return false;
+  }
+  const owner = normalizeLowercaseStringOrEmpty(pin.ownerRecipient);
+  const sender = normalizeLowercaseStringOrEmpty(pin.senderRecipient);
+  if (!owner || !sender || owner === sender) {
+    return false;
+  }
+  pin.onSkip?.({ ownerRecipient: pin.ownerRecipient, senderRecipient: pin.senderRecipient });
+  return true;
+}
 
 export async function recordInboundSession(params: {
   storePath: string;
@@ -24,28 +38,37 @@ export async function recordInboundSession(params: {
   onRecordError: (err: unknown) => void;
 }): Promise<void> {
   const { storePath, sessionKey, ctx, groupResolution, createIfMissing } = params;
-  void recordSessionMetaFromInbound({
-    storePath,
-    sessionKey,
-    ctx,
-    groupResolution,
-    createIfMissing,
-  }).catch(params.onRecordError);
+  const canonicalSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  const runtime = await loadInboundSessionRuntime();
+  void runtime
+    .recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: canonicalSessionKey,
+      ctx,
+      groupResolution,
+      createIfMissing,
+    })
+    .catch(params.onRecordError);
 
   const update = params.updateLastRoute;
   if (!update) {
     return;
   }
-  await updateLastRoute({
+  if (shouldSkipPinnedMainDmRouteUpdate(update.mainDmOwnerPin)) {
+    return;
+  }
+  const targetSessionKey = normalizeLowercaseStringOrEmpty(update.sessionKey);
+  await runtime.updateLastRoute({
     storePath,
-    sessionKey: update.sessionKey,
+    sessionKey: targetSessionKey,
     deliveryContext: {
       channel: update.channel,
       to: update.to,
       accountId: update.accountId,
       threadId: update.threadId,
     },
-    ctx,
+    // Avoid leaking inbound origin metadata into a different target session.
+    ctx: targetSessionKey === canonicalSessionKey ? ctx : undefined,
     groupResolution,
   });
 }

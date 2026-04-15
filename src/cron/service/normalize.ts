@@ -1,6 +1,7 @@
-import type { CronPayload } from "../types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import type { CronPayload } from "../types.js";
 
 export function normalizeRequiredName(raw: unknown) {
   if (typeof raw !== "string") {
@@ -13,14 +14,6 @@ export function normalizeRequiredName(raw: unknown) {
   return name;
 }
 
-export function normalizeOptionalText(raw: unknown) {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function truncateText(input: string, maxLen: number) {
   if (input.length <= maxLen) {
     return input;
@@ -29,10 +22,7 @@ function truncateText(input: string, maxLen: number) {
 }
 
 export function normalizeOptionalAgentId(raw: unknown) {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const trimmed = raw.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return undefined;
   }

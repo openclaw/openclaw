@@ -27,8 +27,13 @@ Auth is supplied during the WebSocket handshake via:
 
 - `connect.params.auth.token`
 - `connect.params.auth.password`
-  The dashboard settings panel lets you store a token; passwords are not persisted.
-  The onboarding wizard generates a gateway token by default, so paste it here on first connect.
+- Tailscale Serve identity headers when `gateway.auth.allowTailscale: true`
+- trusted-proxy identity headers when `gateway.auth.mode: "trusted-proxy"`
+
+The dashboard settings panel keeps a token for the current browser tab session
+and selected gateway URL; passwords are not persisted. Onboarding usually
+generates a gateway token for shared-secret auth on first connect, but password
+auth works too when `gateway.auth.mode` is `"password"`.
 
 ## Device pairing (first connection)
 
@@ -49,32 +54,57 @@ openclaw devices list
 openclaw devices approve <requestId>
 ```
 
+If the browser retries pairing with changed auth details (role/scopes/public
+key), the previous pending request is superseded and a new `requestId` is
+created. Re-run `openclaw devices list` before approval.
+
 Once approved, the device is remembered and won't require re-approval unless
 you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 [Devices CLI](/cli/devices) for token rotation and revocation.
 
 **Notes:**
 
-- Local connections (`127.0.0.1`) are auto-approved.
-- Remote connections (LAN, Tailnet, etc.) require explicit approval.
+- Direct local loopback browser connections (`127.0.0.1` / `localhost`) are
+  auto-approved.
+- Tailnet and LAN browser connects still require explicit approval, even when
+  they originate from the same machine.
 - Each browser profile generates a unique device ID, so switching browsers or
   clearing browser data will require re-pairing.
+
+## Language support
+
+The Control UI can localize itself on first load based on your browser locale.
+To override it later, open **Overview -> Gateway Access -> Language**. The
+locale picker lives in the Gateway Access card, not under Appearance.
+
+- Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `tr`, `uk`, `id`, `pl`
+- Non-English translations are lazy-loaded in the browser.
+- The selected locale is saved in browser storage and reused on future visits.
+- Missing translation keys fall back to English.
 
 ## What it can do (today)
 
 - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
 - Stream tool calls + live tool output cards in Chat (agent events)
-- Channels: WhatsApp/Telegram/Discord/Slack + plugin channels (Mattermost, etc.) status + QR login + per-channel config (`channels.status`, `web.login.*`, `config.patch`)
+- Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: presence list + refresh (`system-presence`)
-- Sessions: list + per-session thinking/verbose overrides (`sessions.list`, `sessions.patch`)
-- Cron jobs: list/add/run/enable/disable + run history (`cron.*`)
+- Sessions: list + per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`)
+- Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`)
+- Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`)
 - Skills: status, enable/disable, install, API key updates (`skills.*`)
 - Nodes: list + caps (`node.list`)
 - Exec approvals: edit gateway or node allowlists + ask policy for `exec host=gateway/node` (`exec.approvals.*`)
 - Config: view/edit `~/.openclaw/openclaw.json` (`config.get`, `config.set`)
 - Config: apply + restart with validation (`config.apply`) and wake the last active session
 - Config writes include a base-hash guard to prevent clobbering concurrent edits
-- Config schema + form rendering (`config.schema`, including plugin + channel schemas); Raw JSON editor remains available
+- Config writes (`config.set`/`config.apply`/`config.patch`) also preflight active SecretRef resolution for refs in the submitted config payload; unresolved active submitted refs are rejected before write
+- Config schema + form rendering (`config.schema` / `config.schema.lookup`,
+  including field `title` / `description`, matched UI hints, immediate child
+  summaries, docs metadata on nested object/wildcard/array/composition nodes,
+  plus plugin + channel schemas when available); Raw JSON editor is
+  available only when the snapshot has a safe raw round-trip
+- If a snapshot cannot safely round-trip raw text, Control UI forces Form mode and disables Raw mode for that snapshot
+- Structured SecretRef object values are rendered read-only in form text inputs to prevent accidental object-to-string corruption
 - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`)
 - Logs: live tail of gateway file logs with filter/export (`logs.tail`)
 - Update: run a package/git update + restart (`update.run`) with a restart report
@@ -83,16 +113,62 @@ Cron jobs panel notes:
 
 - For isolated jobs, delivery defaults to announce summary. You can switch to none if you want internal-only runs.
 - Channel/target fields appear when announce is selected.
+- Webhook mode uses `delivery.mode = "webhook"` with `delivery.to` set to a valid HTTP(S) webhook URL.
+- For main-session jobs, webhook and none delivery modes are available.
+- Advanced edit controls include delete-after-run, clear agent override, cron exact/stagger options,
+  agent model/thinking overrides, and best-effort delivery toggles.
+- Form validation is inline with field-level errors; invalid values disable the save button until fixed.
+- Set `cron.webhookToken` to send a dedicated bearer token, if omitted the webhook is sent without an auth header.
+- Deprecated fallback: stored legacy jobs with `notify: true` can still use `cron.webhook` until migrated.
 
 ## Chat behavior
 
 - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
 - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
+- `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
+- `chat.history` also strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens, and omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply`.
 - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
+- The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
 - Stop:
   - Click **Stop** (calls `chat.abort`)
-  - Type `/stop` (or `stop|esc|abort|wait|exit|interrupt`) to abort out-of-band
+  - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band
   - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session
+- Abort partial retention:
+  - When a run is aborted, partial assistant text can still be shown in the UI
+  - Gateway persists aborted partial assistant text into transcript history when buffered output exists
+  - Persisted entries include abort metadata so transcript consumers can tell abort partials from normal completion output
+
+## Hosted embeds
+
+Assistant messages can render hosted web content inline with the `[embed ...]`
+shortcode. The iframe sandbox policy is controlled by
+`gateway.controlUi.embedSandbox`:
+
+- `strict`: disables script execution inside hosted embeds
+- `scripts`: allows interactive embeds while keeping origin isolation; this is
+  the default and is usually enough for self-contained browser games/widgets
+- `trusted`: adds `allow-same-origin` on top of `allow-scripts` for same-site
+  documents that intentionally need stronger privileges
+
+Example:
+
+```json5
+{
+  gateway: {
+    controlUi: {
+      embedSandbox: "scripts",
+    },
+  },
+}
+```
+
+Use `trusted` only when the embedded document genuinely needs same-origin
+behavior. For most agent-generated games and interactive canvases, `scripts` is
+the safer choice.
+
+Absolute external `http(s)` embed URLs stay blocked by default. If you
+intentionally want `[embed url="https://..."]` to load third-party pages, set
+`gateway.controlUi.allowExternalEmbedUrls: true`.
 
 ## Tailnet access (recommended)
 
@@ -108,13 +184,20 @@ Open:
 
 - `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
 
-By default, Serve requests can authenticate via Tailscale identity headers
+By default, Control UI/WebSocket Serve requests can authenticate via Tailscale identity headers
 (`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. OpenClaw
 verifies the identity by resolving the `x-forwarded-for` address with
 `tailscale whois` and matching it to the header, and only accepts these when the
 request hits loopback with Tailscale’s `x-forwarded-*` headers. Set
-`gateway.auth.allowTailscale: false` (or force `gateway.auth.mode: "password"`)
-if you want to require a token/password even for Serve traffic.
+`gateway.auth.allowTailscale: false` if you want to require explicit shared-secret
+credentials even for Serve traffic. Then use `gateway.auth.mode: "token"` or
+`"password"`.
+For that async Serve identity path, failed auth attempts for the same client IP
+and auth scope are serialized before rate-limit writes. Concurrent bad retries
+from the same browser can therefore show `retry later` on the second request
+instead of two plain mismatches racing in parallel.
+Tokenless Serve auth assumes the gateway host is trusted. If untrusted local
+code may run on that host, require token/password auth.
 
 ### Bind to tailnet + token
 
@@ -126,7 +209,8 @@ Then open:
 
 - `http://<tailscale-ip>:18789/` (or your configured `gateway.controlUi.basePath`)
 
-Paste the token into the UI settings (sent as `connect.params.auth.token`).
+Paste the matching shared secret into the UI settings (sent as
+`connect.params.auth.token` or `connect.params.auth.password`).
 
 ## Insecure HTTP
 
@@ -134,12 +218,18 @@ If you open the dashboard over plain HTTP (`http://<lan-ip>` or `http://<tailsca
 the browser runs in a **non-secure context** and blocks WebCrypto. By default,
 OpenClaw **blocks** Control UI connections without device identity.
 
+Documented exceptions:
+
+- localhost-only insecure HTTP compatibility with `gateway.controlUi.allowInsecureAuth=true`
+- successful operator Control UI auth through `gateway.auth.mode: "trusted-proxy"`
+- break-glass `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
+
 **Recommended fix:** use HTTPS (Tailscale Serve) or open the UI locally:
 
 - `https://<magicdns>/` (Serve)
 - `http://127.0.0.1:18789/` (on the gateway host)
 
-**Downgrade example (token-only over HTTP):**
+**Insecure-auth toggle behavior:**
 
 ```json5
 {
@@ -151,8 +241,35 @@ OpenClaw **blocks** Control UI connections without device identity.
 }
 ```
 
-This disables device identity + pairing for the Control UI (even on HTTPS). Use
-only if you trust the network.
+`allowInsecureAuth` is a local compatibility toggle only:
+
+- It allows localhost Control UI sessions to proceed without device identity in
+  non-secure HTTP contexts.
+- It does not bypass pairing checks.
+- It does not relax remote (non-localhost) device identity requirements.
+
+**Break-glass only:**
+
+```json5
+{
+  gateway: {
+    controlUi: { dangerouslyDisableDeviceAuth: true },
+    bind: "tailnet",
+    auth: { mode: "token", token: "replace-me" },
+  },
+}
+```
+
+`dangerouslyDisableDeviceAuth` disables Control UI device identity checks and is a
+severe security downgrade. Revert quickly after emergency use.
+
+Trusted-proxy note:
+
+- successful trusted-proxy auth can admit **operator** Control UI sessions without
+  device identity
+- this does **not** extend to node-role Control UI sessions
+- same-host loopback reverse proxies still do not satisfy trusted-proxy auth; see
+  [Trusted Proxy Auth](/gateway/trusted-proxy-auth)
 
 See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 
@@ -194,19 +311,25 @@ http://localhost:5173/?gatewayUrl=ws://<gateway-host>:18789
 Optional one-time auth (if needed):
 
 ```text
-http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789&token=<gateway-token>
+http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789#token=<gateway-token>
 ```
 
 Notes:
 
 - `gatewayUrl` is stored in localStorage after load and removed from the URL.
-- `token` is stored in localStorage; `password` is kept in memory only.
+- `token` should be passed via the URL fragment (`#token=...`) whenever possible. Fragments are not sent to the server, which avoids request-log and Referer leakage. Legacy `?token=` query params are still imported once for compatibility, but only as a fallback, and are stripped immediately after bootstrap.
+- `password` is kept in memory only.
 - When `gatewayUrl` is set, the UI does not fall back to config or environment credentials.
   Provide `token` (or `password`) explicitly. Missing explicit credentials is an error.
 - Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).
 - `gatewayUrl` is only accepted in a top-level window (not embedded) to prevent clickjacking.
-- For cross-origin dev setups (e.g. `pnpm ui:dev` to a remote Gateway), add the UI
-  origin to `gateway.controlUi.allowedOrigins`.
+- Non-loopback Control UI deployments must set `gateway.controlUi.allowedOrigins`
+  explicitly (full origins). This includes remote dev setups.
+- Do not use `gateway.controlUi.allowedOrigins: ["*"]` except for tightly controlled
+  local testing. It means allow any browser origin, not “match whatever host I am
+  using.”
+- `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables
+  Host-header origin fallback mode, but it is a dangerous security mode.
 
 Example:
 
@@ -221,3 +344,10 @@ Example:
 ```
 
 Remote access setup details: [Remote access](/gateway/remote).
+
+## Related
+
+- [Dashboard](/web/dashboard) — gateway dashboard
+- [WebChat](/web/webchat) — browser-based chat interface
+- [TUI](/web/tui) — terminal user interface
+- [Health Checks](/gateway/health) — gateway health monitoring

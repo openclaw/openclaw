@@ -1,61 +1,19 @@
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
-import type { SessionEntry } from "./types.js";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { resolveDefaultSessionStorePath, resolveSessionTranscriptPath } from "./paths.js";
-import { loadSessionStore, updateSessionStore } from "./store.js";
-
-function stripQuery(value: string): string {
-  const noHash = value.split("#")[0] ?? value;
-  return noHash.split("?")[0] ?? noHash;
-}
-
-function extractFileNameFromMediaUrl(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const cleaned = stripQuery(trimmed);
-  try {
-    const parsed = new URL(cleaned);
-    const base = path.basename(parsed.pathname);
-    if (!base) {
-      return null;
-    }
-    try {
-      return decodeURIComponent(base);
-    } catch {
-      return base;
-    }
-  } catch {
-    const base = path.basename(cleaned);
-    if (!base || base === "/" || base === ".") {
-      return null;
-    }
-    return base;
-  }
-}
-
-export function resolveMirroredTranscriptText(params: {
-  text?: string;
-  mediaUrls?: string[];
-}): string | null {
-  const mediaUrls = params.mediaUrls?.filter((url) => url && url.trim()) ?? [];
-  if (mediaUrls.length > 0) {
-    const names = mediaUrls
-      .map((url) => extractFileNameFromMediaUrl(url))
-      .filter((name): name is string => Boolean(name && name.trim()));
-    if (names.length > 0) {
-      return names.join(", ");
-    }
-    return "media";
-  }
-
-  const text = params.text ?? "";
-  const trimmed = text.trim();
-  return trimmed ? trimmed : null;
-}
+import {
+  resolveDefaultSessionStorePath,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+  resolveSessionTranscriptPath,
+} from "./paths.js";
+import { resolveAndPersistSessionFile } from "./session-file.js";
+import { loadSessionStore, normalizeStoreSessionKey } from "./store.js";
+import { parseSessionThreadInfo } from "./thread-info.js";
+import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
+import type { SessionEntry } from "./types.js";
 
 async function ensureSessionHeader(params: {
   sessionFile: string;
@@ -72,7 +30,65 @@ async function ensureSessionHeader(params: {
     timestamp: new Date().toISOString(),
     cwd: process.cwd(),
   };
-  await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, "utf-8");
+  await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+}
+
+export type SessionTranscriptAppendResult =
+  | { ok: true; sessionFile: string; messageId: string }
+  | { ok: false; reason: string };
+
+export type SessionTranscriptUpdateMode = "inline" | "file-only" | "none";
+
+export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
+  role: "assistant";
+};
+
+export async function resolveSessionTranscriptFile(params: {
+  sessionId: string;
+  sessionKey: string;
+  sessionEntry: SessionEntry | undefined;
+  sessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
+  agentId: string;
+  threadId?: string | number;
+}): Promise<{ sessionFile: string; sessionEntry: SessionEntry | undefined }> {
+  const sessionPathOpts = resolveSessionFilePathOptions({
+    agentId: params.agentId,
+    storePath: params.storePath,
+  });
+  let sessionFile = resolveSessionFilePath(params.sessionId, params.sessionEntry, sessionPathOpts);
+  let sessionEntry = params.sessionEntry;
+
+  if (params.sessionStore && params.storePath) {
+    const threadIdFromSessionKey = parseSessionThreadInfo(params.sessionKey).threadId;
+    const fallbackSessionFile = !sessionEntry?.sessionFile
+      ? resolveSessionTranscriptPath(
+          params.sessionId,
+          params.agentId,
+          params.threadId ?? threadIdFromSessionKey,
+        )
+      : undefined;
+    const resolvedSessionFile = await resolveAndPersistSessionFile({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionStore: params.sessionStore,
+      storePath: params.storePath,
+      sessionEntry,
+      agentId: sessionPathOpts?.agentId,
+      sessionsDir: sessionPathOpts?.sessionsDir,
+      fallbackSessionFile,
+    });
+    sessionFile = resolvedSessionFile.sessionFile;
+    sessionEntry = resolvedSessionFile.sessionEntry;
+  }
+
+  return {
+    sessionFile,
+    sessionEntry,
+  };
 }
 
 export async function appendAssistantMessageToSessionTranscript(params: {
@@ -80,9 +96,11 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   sessionKey: string;
   text?: string;
   mediaUrls?: string[];
+  idempotencyKey?: string;
   /** Optional override for store path (mostly for tests). */
   storePath?: string;
-}): Promise<{ ok: true; sessionFile: string } | { ok: false; reason: string }> {
+  updateMode?: SessionTranscriptUpdateMode;
+}): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return { ok: false, reason: "missing sessionKey" };
@@ -96,56 +114,141 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     return { ok: false, reason: "empty text" };
   }
 
-  const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
-  const store = loadSessionStore(storePath, { skipCache: true });
-  const entry = store[sessionKey] as SessionEntry | undefined;
-  if (!entry?.sessionId) {
-    return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
-  }
-
-  const sessionFile =
-    entry.sessionFile?.trim() || resolveSessionTranscriptPath(entry.sessionId, params.agentId);
-
-  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
-
-  const sessionManager = SessionManager.open(sessionFile);
-  sessionManager.appendMessage({
-    role: "assistant",
-    content: [{ type: "text", text: mirrorText }],
-    api: "openai-responses",
-    provider: "openclaw",
-    model: "delivery-mirror",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
+  return appendExactAssistantMessageToSessionTranscript({
+    agentId: params.agentId,
+    sessionKey,
+    storePath: params.storePath,
+    idempotencyKey: params.idempotencyKey,
+    updateMode: params.updateMode,
+    message: {
+      role: "assistant" as const,
+      content: [{ type: "text", text: mirrorText }],
+      api: "openai-responses",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      usage: {
         input: 0,
         output: 0,
         cacheRead: 0,
         cacheWrite: 0,
-        total: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
       },
+      stopReason: "stop" as const,
+      timestamp: Date.now(),
     },
-    stopReason: "stop",
-    timestamp: Date.now(),
   });
+}
 
-  if (!entry.sessionFile || entry.sessionFile !== sessionFile) {
-    await updateSessionStore(
-      storePath,
-      (current) => {
-        current[sessionKey] = {
-          ...entry,
-          sessionFile,
-        };
-      },
-      { activeSessionKey: sessionKey },
-    );
+export async function appendExactAssistantMessageToSessionTranscript(params: {
+  agentId?: string;
+  sessionKey: string;
+  message: SessionTranscriptAssistantMessage;
+  idempotencyKey?: string;
+  storePath?: string;
+  updateMode?: SessionTranscriptUpdateMode;
+}): Promise<SessionTranscriptAppendResult> {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return { ok: false, reason: "missing sessionKey" };
+  }
+  if (params.message.role !== "assistant") {
+    return { ok: false, reason: "message role must be assistant" };
   }
 
-  emitSessionTranscriptUpdate(sessionFile);
-  return { ok: true, sessionFile };
+  const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
+  const store = loadSessionStore(storePath, { skipCache: true });
+  const normalizedKey = normalizeStoreSessionKey(sessionKey);
+  const entry = (store[normalizedKey] ?? store[sessionKey]) as SessionEntry | undefined;
+  if (!entry?.sessionId) {
+    return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
+  }
+
+  let sessionFile: string;
+  try {
+    const resolvedSessionFile = await resolveAndPersistSessionFile({
+      sessionId: entry.sessionId,
+      sessionKey,
+      sessionStore: store,
+      storePath,
+      sessionEntry: entry,
+      agentId: params.agentId,
+      sessionsDir: path.dirname(storePath),
+    });
+    sessionFile = resolvedSessionFile.sessionFile;
+  } catch (err) {
+    return {
+      ok: false,
+      reason: formatErrorMessage(err),
+    };
+  }
+
+  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+
+  const explicitIdempotencyKey =
+    params.idempotencyKey ??
+    ((params.message as { idempotencyKey?: unknown }).idempotencyKey as string | undefined);
+  const existingMessageId = explicitIdempotencyKey
+    ? await transcriptHasIdempotencyKey(sessionFile, explicitIdempotencyKey)
+    : undefined;
+  if (existingMessageId) {
+    return { ok: true, sessionFile, messageId: existingMessageId };
+  }
+
+  const message = {
+    ...params.message,
+    ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
+  } as Parameters<SessionManager["appendMessage"]>[0];
+  const sessionManager = SessionManager.open(sessionFile);
+  const messageId = sessionManager.appendMessage(message);
+
+  switch (params.updateMode ?? "inline") {
+    case "inline":
+      emitSessionTranscriptUpdate({ sessionFile, sessionKey, message, messageId });
+      break;
+    case "file-only":
+      emitSessionTranscriptUpdate(sessionFile);
+      break;
+    case "none":
+      break;
+  }
+  return { ok: true, sessionFile, messageId };
+}
+
+async function transcriptHasIdempotencyKey(
+  transcriptPath: string,
+  idempotencyKey: string,
+): Promise<string | undefined> {
+  try {
+    const raw = await fs.promises.readFile(transcriptPath, "utf-8");
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line) as {
+          id?: unknown;
+          message?: { idempotencyKey?: unknown };
+        };
+        if (
+          parsed.message?.idempotencyKey === idempotencyKey &&
+          typeof parsed.id === "string" &&
+          parsed.id
+        ) {
+          return parsed.id;
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }

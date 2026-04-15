@@ -1,29 +1,32 @@
-import type { Command } from "commander";
 import fs from "node:fs/promises";
-import type { NodesRpcOpts } from "./types.js";
-import { randomIdempotencyKey } from "../../gateway/call.js";
+import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { shortenHomePath } from "../../utils.js";
 import { writeBase64ToFile } from "../nodes-camera.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../nodes-canvas.js";
-import { parseTimeoutMs } from "../nodes-run.js";
+import { parseTimeoutMs } from "../parse-timeout.js";
 import { buildA2UITextJsonl, validateA2UIJsonl } from "./a2ui-jsonl.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import { buildNodeInvokeParams, callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import type { NodesRpcOpts } from "./types.js";
 
 async function invokeCanvas(opts: NodesRpcOpts, command: string, params?: Record<string, unknown>) {
-  const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-  const invokeParams: Record<string, unknown> = {
-    nodeId,
-    command,
-    params,
-    idempotencyKey: randomIdempotencyKey(),
-  };
+  const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
   const timeoutMs = parseTimeoutMs(opts.invokeTimeout);
-  if (typeof timeoutMs === "number") {
-    invokeParams.timeoutMs = timeoutMs;
-  }
-  return await callGatewayCli("node.invoke", opts, invokeParams);
+  return await callGatewayCli(
+    "node.invoke",
+    opts,
+    buildNodeInvokeParams({
+      nodeId,
+      command,
+      params,
+      timeoutMs: typeof timeoutMs === "number" ? timeoutMs : undefined,
+    }),
+  );
 }
 
 export function registerNodesCanvasCommands(nodes: Command) {
@@ -42,37 +45,22 @@ export function registerNodesCanvasCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("canvas snapshot", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-          const formatOpt = String(opts.format ?? "jpg")
-            .trim()
-            .toLowerCase();
+          const formatOpt = normalizeLowercaseStringOrEmpty(
+            normalizeOptionalString(opts.format) ?? "jpg",
+          );
           const formatForParams =
             formatOpt === "jpg" ? "jpeg" : formatOpt === "jpeg" ? "jpeg" : "png";
           if (formatForParams !== "png" && formatForParams !== "jpeg") {
             throw new Error(`invalid format: ${String(opts.format)} (expected png|jpg|jpeg)`);
           }
 
-          const maxWidth = opts.maxWidth ? Number.parseInt(String(opts.maxWidth), 10) : undefined;
-          const quality = opts.quality ? Number.parseFloat(String(opts.quality)) : undefined;
-          const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
-            : undefined;
-
-          const invokeParams: Record<string, unknown> = {
-            nodeId,
-            command: "canvas.snapshot",
-            params: {
-              format: formatForParams,
-              maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,
-              quality: Number.isFinite(quality) ? quality : undefined,
-            },
-            idempotencyKey: randomIdempotencyKey(),
-          };
-          if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
-            invokeParams.timeoutMs = timeoutMs;
-          }
-
-          const raw = await callGatewayCli("node.invoke", opts, invokeParams);
+          const maxWidth = opts.maxWidth ? Number.parseInt(opts.maxWidth, 10) : undefined;
+          const quality = opts.quality ? Number.parseFloat(opts.quality) : undefined;
+          const raw = await invokeCanvas(opts, "canvas.snapshot", {
+            format: formatForParams,
+            maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,
+            quality: Number.isFinite(quality) ? quality : undefined,
+          });
           const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
           const payload = parseCanvasSnapshotPayload(res.payload);
           const filePath = canvasSnapshotTempPath({
@@ -81,9 +69,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
           await writeBase64ToFile(filePath, payload.base64);
 
           if (opts.json) {
-            defaultRuntime.log(
-              JSON.stringify({ file: { path: filePath, format: payload.format } }, null, 2),
-            );
+            defaultRuntime.writeJson({ file: { path: filePath, format: payload.format } });
             return;
           }
           defaultRuntime.log(`MEDIA:${shortenHomePath(filePath)}`);
@@ -113,7 +99,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
           };
           const params: Record<string, unknown> = {};
           if (opts.target) {
-            params.url = String(opts.target);
+            params.url = opts.target;
           }
           if (
             Number.isFinite(placement.x) ||
@@ -185,7 +171,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
             javaScript: js,
           });
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(raw, null, 2));
+            defaultRuntime.writeJson(raw);
             return;
           }
           const payload =
@@ -221,7 +207,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
           }
 
           const jsonl = hasText
-            ? buildA2UITextJsonl(String(opts.text ?? ""))
+            ? buildA2UITextJsonl(opts.text ?? "")
             : await fs.readFile(String(opts.jsonl), "utf8");
           const { version, messageCount } = validateA2UIJsonl(jsonl);
           if (version === "v0.9") {

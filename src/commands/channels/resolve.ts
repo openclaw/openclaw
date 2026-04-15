@@ -1,9 +1,19 @@
-import type { ChannelResolveKind, ChannelResolveResult } from "../../channels/plugins/types.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import { loadConfig } from "../../config/config.js";
+import type {
+  ChannelResolveKind,
+  ChannelResolveResult,
+} from "../../channels/plugins/types.adapters.js";
+import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
+import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
+import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 
 export type ChannelsResolveOptions = {
   channel?: string;
@@ -48,14 +58,48 @@ function detectAutoKind(input: string): ChannelResolveKind {
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
     return "user";
   }
-  if (
-    /^(user|discord|slack|matrix|msteams|teams|zalo|zalouser|googlechat|google-chat|gchat):/i.test(
-      trimmed,
-    )
-  ) {
+  if (/^user:/i.test(trimmed)) {
     return "user";
   }
   return "group";
+}
+
+function detectAutoKindForPlugin(
+  input: string,
+  plugin?: {
+    id: string;
+    meta?: {
+      aliases?: readonly string[];
+    };
+  },
+): ChannelResolveKind {
+  const generic = detectAutoKind(input);
+  if (generic === "user" || !plugin) {
+    return generic;
+  }
+  const trimmed = input.trim();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  const prefixes = [plugin.id, ...(plugin.meta?.aliases ?? [])]
+    .map((entry) => normalizeOptionalLowercaseString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  for (const prefix of prefixes) {
+    if (!lowered.startsWith(`${prefix}:`)) {
+      continue;
+    }
+    const remainder = lowered.slice(prefix.length + 1);
+    if (
+      remainder.startsWith("group:") ||
+      remainder.startsWith("channel:") ||
+      remainder.startsWith("room:") ||
+      remainder.startsWith("conversation:") ||
+      remainder.startsWith("spaces/") ||
+      remainder.startsWith("channels/")
+    ) {
+      return "group";
+    }
+    return "user";
+  }
+  return generic;
 }
 
 function formatResolveResult(result: ResolveResult): string {
@@ -68,19 +112,53 @@ function formatResolveResult(result: ResolveResult): string {
 }
 
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
-  const cfg = loadConfig();
+  const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
+  const loadedRaw = loadConfig();
+  let { effectiveConfig: cfg } = await resolveCommandConfigWithSecrets({
+    config: loadedRaw,
+    commandName: "channels resolve",
+    targetIds: getChannelsCommandSecretTargetIds(),
+    mode: "read_only_operational",
+    runtime,
+    autoEnable: true,
+  });
   const entries = (opts.entries ?? []).map((entry) => entry.trim()).filter(Boolean);
   if (entries.length === 0) {
     throw new Error("At least one entry is required.");
   }
 
-  const selection = await resolveMessageChannelSelection({
-    cfg,
-    channel: opts.channel ?? null,
-  });
-  const plugin = getChannelPlugin(selection.channel);
+  const explicitChannel = opts.channel?.trim();
+  const resolvedExplicit = explicitChannel
+    ? await resolveInstallableChannelPlugin({
+        cfg,
+        runtime,
+        rawChannel: explicitChannel,
+        allowInstall: true,
+        supports: (plugin) => Boolean(plugin.resolver?.resolveTargets),
+      })
+    : null;
+  if (resolvedExplicit?.configChanged) {
+    cfg = resolvedExplicit.cfg;
+    await replaceConfigFile({
+      nextConfig: cfg,
+      baseHash: (await sourceSnapshotPromise)?.hash,
+    });
+  }
+
+  const selection = explicitChannel
+    ? {
+        channel: resolvedExplicit?.channelId,
+      }
+    : await resolveMessageChannelSelection({
+        cfg,
+        channel: opts.channel ?? null,
+      });
+  const plugin =
+    (explicitChannel ? resolvedExplicit?.plugin : undefined) ??
+    (selection.channel ? getChannelPlugin(selection.channel) : undefined);
   if (!plugin?.resolver?.resolveTargets) {
-    throw new Error(`Channel ${selection.channel} does not support resolve.`);
+    const channelText = selection.channel ?? explicitChannel ?? "";
+    throw new Error(`Channel ${channelText} does not support resolve.`);
   }
   const preferredKind = resolvePreferredKind(opts.kind);
 
@@ -103,7 +181,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   } else {
     const byKind = new Map<ChannelResolveKind, string[]>();
     for (const entry of entries) {
-      const kind = detectAutoKind(entry);
+      const kind = detectAutoKindForPlugin(entry, plugin);
       byKind.set(kind, [...(byKind.get(kind) ?? []), entry]);
     }
     const resolved: ChannelResolveResult[] = [];
@@ -131,7 +209,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   }
 
   if (opts.json) {
-    runtime.log(JSON.stringify(results, null, 2));
+    writeRuntimeJson(runtime, results);
     return;
   }
 

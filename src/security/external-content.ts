@@ -1,3 +1,15 @@
+import { randomBytes } from "node:crypto";
+export {
+  isExternalHookSession,
+  mapHookExternalContentSource,
+  resolveHookExternalContentSource,
+  type HookExternalContentSource,
+} from "./external-content-source.js";
+import {
+  mapHookExternalContentSource,
+  resolveHookExternalContentSource,
+} from "./external-content-source.js";
+
 /**
  * Security utilities for handling untrusted external content.
  *
@@ -25,6 +37,8 @@ const SUSPICIOUS_PATTERNS = [
   /delete\s+all\s+(emails?|files?|data)/i,
   /<\/?system>/i,
   /\]\s*\n\s*\[?(system|assistant|user)\]?:/i,
+  /\[\s*(System\s*Message|System|Assistant|Internal)\s*\]/i,
+  /^\s*System:\s+/im,
 ];
 
 /**
@@ -43,9 +57,23 @@ export function detectSuspiciousPatterns(content: string): string[] {
 /**
  * Unique boundary markers for external content.
  * Using XML-style tags that are unlikely to appear in legitimate content.
+ * Each wrapper gets a unique random ID to prevent spoofing attacks where
+ * malicious content injects fake boundary markers.
  */
-const EXTERNAL_CONTENT_START = "<<<EXTERNAL_UNTRUSTED_CONTENT>>>";
-const EXTERNAL_CONTENT_END = "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>";
+const EXTERNAL_CONTENT_START_NAME = "EXTERNAL_UNTRUSTED_CONTENT";
+const EXTERNAL_CONTENT_END_NAME = "END_EXTERNAL_UNTRUSTED_CONTENT";
+
+function createExternalContentMarkerId(): string {
+  return randomBytes(8).toString("hex");
+}
+
+function createExternalContentStartMarker(id: string): string {
+  return `<<<${EXTERNAL_CONTENT_START_NAME} id="${id}">>>`;
+}
+
+function createExternalContentEndMarker(id: string): string {
+  return `<<<${EXTERNAL_CONTENT_END_NAME} id="${id}">>>`;
+}
 
 /**
  * Security warning prepended to external content.
@@ -67,6 +95,7 @@ export type ExternalContentSource =
   | "email"
   | "webhook"
   | "api"
+  | "browser"
   | "channel_metadata"
   | "web_search"
   | "web_fetch"
@@ -76,6 +105,7 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   email: "Email",
   webhook: "Webhook",
   api: "API",
+  browser: "Browser",
   channel_metadata: "Channel metadata",
   web_search: "Web Search",
   web_fetch: "Web Fetch",
@@ -83,8 +113,38 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
 };
 
 const FULLWIDTH_ASCII_OFFSET = 0xfee0;
-const FULLWIDTH_LEFT_ANGLE = 0xff1c;
-const FULLWIDTH_RIGHT_ANGLE = 0xff1e;
+
+// Map of Unicode angle bracket homoglyphs to their ASCII equivalents.
+const ANGLE_BRACKET_MAP: Record<number, string> = {
+  0xff1c: "<", // fullwidth <
+  0xff1e: ">", // fullwidth >
+  0x2329: "<", // left-pointing angle bracket
+  0x232a: ">", // right-pointing angle bracket
+  0x3008: "<", // CJK left angle bracket
+  0x3009: ">", // CJK right angle bracket
+  0x2039: "<", // single left-pointing angle quotation mark
+  0x203a: ">", // single right-pointing angle quotation mark
+  0x27e8: "<", // mathematical left angle bracket
+  0x27e9: ">", // mathematical right angle bracket
+  0xfe64: "<", // small less-than sign
+  0xfe65: ">", // small greater-than sign
+  0x00ab: "<", // left-pointing double angle quotation mark
+  0x00bb: ">", // right-pointing double angle quotation mark
+  0x300a: "<", // left double angle bracket
+  0x300b: ">", // right double angle bracket
+  0x27ea: "<", // mathematical left double angle bracket
+  0x27eb: ">", // mathematical right double angle bracket
+  0x27ec: "<", // mathematical left white tortoise shell bracket
+  0x27ed: ">", // mathematical right white tortoise shell bracket
+  0x27ee: "<", // mathematical left flattened parenthesis
+  0x27ef: ">", // mathematical right flattened parenthesis
+  0x276c: "<", // medium left-pointing angle bracket ornament
+  0x276d: ">", // medium right-pointing angle bracket ornament
+  0x276e: "<", // heavy left-pointing angle quotation mark ornament
+  0x276f: ">", // heavy right-pointing angle quotation mark ornament
+  0x02c2: "<", // modifier letter left arrowhead
+  0x02c3: ">", // modifier letter right arrowhead
+};
 
 function foldMarkerChar(char: string): string {
   const code = char.charCodeAt(0);
@@ -94,37 +154,83 @@ function foldMarkerChar(char: string): string {
   if (code >= 0xff41 && code <= 0xff5a) {
     return String.fromCharCode(code - FULLWIDTH_ASCII_OFFSET);
   }
-  if (code === FULLWIDTH_LEFT_ANGLE) {
-    return "<";
-  }
-  if (code === FULLWIDTH_RIGHT_ANGLE) {
-    return ">";
+  const bracket = ANGLE_BRACKET_MAP[code];
+  if (bracket) {
+    return bracket;
   }
   return char;
 }
 
-function foldMarkerText(input: string): string {
-  return input.replace(/[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E]/g, (char) => foldMarkerChar(char));
+function isMarkerIgnorableChar(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return (
+    code === 0x200b ||
+    code === 0x200c ||
+    code === 0x200d ||
+    code === 0x2060 ||
+    code === 0xfeff ||
+    code === 0x00ad
+  );
+}
+
+type FoldedMarkerMatch = {
+  folded: string;
+  originalStartByFoldedIndex: number[];
+  originalEndByFoldedIndex: number[];
+};
+
+function foldMarkerTextWithIndexMap(input: string): FoldedMarkerMatch {
+  let folded = "";
+  const originalStartByFoldedIndex: number[] = [];
+  const originalEndByFoldedIndex: number[] = [];
+
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index];
+    if (isMarkerIgnorableChar(char)) {
+      continue;
+    }
+    const foldedChar = foldMarkerChar(char);
+    folded += foldedChar;
+    originalStartByFoldedIndex.push(index);
+    originalEndByFoldedIndex.push(index + 1);
+  }
+
+  return { folded, originalStartByFoldedIndex, originalEndByFoldedIndex };
 }
 
 function replaceMarkers(content: string): string {
-  const folded = foldMarkerText(content);
-  if (!/external_untrusted_content/i.test(folded)) {
+  const { folded, originalStartByFoldedIndex, originalEndByFoldedIndex } =
+    foldMarkerTextWithIndexMap(content);
+  // Intentionally catch whitespace-delimited spoof variants (space, tab, newline) in addition
+  // to the legacy underscore form because LLMs may still parse them as trusted boundary markers.
+  if (!/external[\s_]+untrusted[\s_]+content/i.test(folded)) {
     return content;
   }
   const replacements: Array<{ start: number; end: number; value: string }> = [];
+  // Match markers with or without id attribute (handles both legacy and spoofed markers)
   const patterns: Array<{ regex: RegExp; value: string }> = [
-    { regex: /<<<EXTERNAL_UNTRUSTED_CONTENT>>>/gi, value: "[[MARKER_SANITIZED]]" },
-    { regex: /<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>/gi, value: "[[END_MARKER_SANITIZED]]" },
+    {
+      regex: /<<<\s*EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
+      value: "[[MARKER_SANITIZED]]",
+    },
+    {
+      regex: /<<<\s*END[\s_]+EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
+      value: "[[END_MARKER_SANITIZED]]",
+    },
   ];
 
   for (const pattern of patterns) {
     pattern.regex.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = pattern.regex.exec(folded)) !== null) {
+      const foldedStart = match.index;
+      const foldedEnd = match.index + match[0].length;
       replacements.push({
-        start: match.index,
-        end: match.index + match[0].length,
+        start: originalStartByFoldedIndex[foldedStart] ?? foldedStart,
+        end:
+          originalEndByFoldedIndex[foldedEnd - 1] ??
+          originalStartByFoldedIndex[foldedEnd] ??
+          foldedEnd,
         value: pattern.value,
       });
     }
@@ -182,24 +288,26 @@ export function wrapExternalContent(content: string, options: WrapExternalConten
   const sanitized = replaceMarkers(content);
   const sourceLabel = EXTERNAL_SOURCE_LABELS[source] ?? "External";
   const metadataLines: string[] = [`Source: ${sourceLabel}`];
+  const sanitizeMetadataValue = (value: string) => replaceMarkers(value).replace(/[\r\n]+/g, " ");
 
   if (sender) {
-    metadataLines.push(`From: ${sender}`);
+    metadataLines.push(`From: ${sanitizeMetadataValue(sender)}`);
   }
   if (subject) {
-    metadataLines.push(`Subject: ${subject}`);
+    metadataLines.push(`Subject: ${sanitizeMetadataValue(subject)}`);
   }
 
   const metadata = metadataLines.join("\n");
   const warningBlock = includeWarning ? `${EXTERNAL_CONTENT_WARNING}\n\n` : "";
+  const markerId = createExternalContentMarkerId();
 
   return [
     warningBlock,
-    EXTERNAL_CONTENT_START,
+    createExternalContentStartMarker(markerId),
     metadata,
     "---",
     sanitized,
-    EXTERNAL_CONTENT_END,
+    createExternalContentEndMarker(markerId),
   ].join("\n");
 }
 
@@ -242,30 +350,11 @@ export function buildSafeExternalPrompt(params: {
 }
 
 /**
- * Checks if a session key indicates an external hook source.
- */
-export function isExternalHookSession(sessionKey: string): boolean {
-  return (
-    sessionKey.startsWith("hook:gmail:") ||
-    sessionKey.startsWith("hook:webhook:") ||
-    sessionKey.startsWith("hook:") // Generic hook prefix
-  );
-}
-
-/**
  * Extracts the hook type from a session key.
  */
 export function getHookType(sessionKey: string): ExternalContentSource {
-  if (sessionKey.startsWith("hook:gmail:")) {
-    return "email";
-  }
-  if (sessionKey.startsWith("hook:webhook:")) {
-    return "webhook";
-  }
-  if (sessionKey.startsWith("hook:")) {
-    return "webhook";
-  }
-  return "unknown";
+  const source = resolveHookExternalContentSource(sessionKey);
+  return source ? mapHookExternalContentSource(source) : "unknown";
 }
 
 /**

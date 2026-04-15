@@ -1,10 +1,12 @@
-import type { ChannelAccountSnapshot, ChannelPlugin } from "../../channels/plugins/types.js";
 import { loadAuthProfileStore } from "../../agents/auth-profiles.js";
+import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { withProgress } from "../../cli/progress.js";
 import { formatUsageReportLines, loadProviderUsageSummary } from "../../infra/provider-usage.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
@@ -47,7 +49,7 @@ function formatLinked(value: boolean): string {
 }
 
 function shouldShowConfigured(channel: ChannelPlugin): boolean {
-  return channel.meta.showConfigured !== false;
+  return isChannelVisibleInConfiguredLists(channel.meta);
 }
 
 function formatAccountLine(params: {
@@ -126,7 +128,7 @@ export async function channelsListCommand(
       chat[plugin.id] = plugin.config.listAccountIds(cfg);
     }
     const payload = { chat, auth: authProfiles, ...(usage ? { usage } : {}) };
-    runtime.log(JSON.stringify(payload, null, 2));
+    writeRuntimeJson(runtime, payload);
     return;
   }
 

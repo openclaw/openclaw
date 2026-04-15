@@ -1,18 +1,24 @@
-import type { Logger as TsLogger } from "tslog";
 import { Chalk } from "chalk";
-import { CHAT_CHANNEL_ORDER } from "../channels/registry.js";
-import { isVerbose } from "../globals.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import type { Logger as TsLogger } from "tslog";
+import { normalizeChatChannelId } from "../channels/ids.js";
+import { isVerbose } from "../global-state.js";
+import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
-import { getConsoleSettings, shouldLogSubsystemToConsole } from "./console.js";
+import {
+  formatConsoleTimestamp,
+  getConsoleSettings,
+  shouldLogSubsystemToConsole,
+} from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
-import { getChildLogger } from "./logger.js";
+import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
 import { loggingState } from "./state.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
 
 export type SubsystemLogger = {
   subsystem: string;
+  isEnabled: (level: LogLevel, target?: "any" | "console" | "file") => boolean;
   trace: (message: string, meta?: Record<string, unknown>) => void;
   debug: (message: string, meta?: Record<string, unknown>) => void;
   info: (message: string, meta?: Record<string, unknown>) => void;
@@ -24,18 +30,54 @@ export type SubsystemLogger = {
 };
 
 function shouldLogToConsole(level: LogLevel, settings: { level: LogLevel }): boolean {
+  if (level === "silent") {
+    return false;
+  }
   if (settings.level === "silent") {
     return false;
   }
   const current = levelToMinLevel(level);
   const min = levelToMinLevel(settings.level);
-  return current <= min;
+  return current >= min;
 }
 
 type ChalkInstance = InstanceType<typeof Chalk>;
 
+const inspectValue: ((value: unknown) => string) | null = (() => {
+  const getBuiltinModule = (
+    process as NodeJS.Process & {
+      getBuiltinModule?: (id: string) => unknown;
+    }
+  ).getBuiltinModule;
+  if (typeof getBuiltinModule !== "function") {
+    return null;
+  }
+  try {
+    const utilNamespace = getBuiltinModule("util") as {
+      inspect?: (value: unknown) => string;
+    };
+    return typeof utilNamespace.inspect === "function" ? utilNamespace.inspect : null;
+  } catch {
+    return null;
+  }
+})();
+
+function formatRuntimeArg(arg: unknown): string {
+  if (typeof arg === "string") {
+    return arg;
+  }
+  if (inspectValue) {
+    return inspectValue(arg);
+  }
+  try {
+    return JSON.stringify(arg);
+  } catch {
+    return String(arg);
+  }
+}
+
 function isRichConsoleEnv(): boolean {
-  const term = (process.env.TERM ?? "").toLowerCase();
+  const term = normalizeLowercaseStringOrEmpty(process.env.TERM);
   if (process.env.COLORTERM || process.env.TERM_PROGRAM) {
     return true;
   }
@@ -50,7 +92,7 @@ function getColorForConsole(): ChalkInstance {
   if (process.env.NO_COLOR && !hasForceColor) {
     return new Chalk({ level: 0 });
   }
-  const hasTty = Boolean(process.stdout.isTTY || process.stderr.isTTY);
+  const hasTty = process.stdout.isTTY || process.stderr.isTTY;
   return hasTty || isRichConsoleEnv() ? new Chalk({ level: 1 }) : new Chalk({ level: 0 });
 }
 
@@ -60,7 +102,14 @@ const SUBSYSTEM_COLOR_OVERRIDES: Record<string, (typeof SUBSYSTEM_COLORS)[number
 };
 const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "channels", "providers"] as const;
 const SUBSYSTEM_MAX_SEGMENTS = 2;
-const CHANNEL_SUBSYSTEM_PREFIXES = new Set<string>(CHAT_CHANNEL_ORDER);
+
+function isChannelSubsystemPrefix(value: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  if (!normalized) {
+    return false;
+  }
+  return normalizeChatChannelId(normalized) === normalized || normalized === "webchat";
+}
 
 function pickSubsystemColor(color: ChalkInstance, subsystem: string): ChalkInstance {
   const override = SUBSYSTEM_COLOR_OVERRIDES[subsystem];
@@ -88,7 +137,7 @@ function formatSubsystemForConsole(subsystem: string): string {
   if (parts.length === 0) {
     return original;
   }
-  if (CHANNEL_SUBSYSTEM_PREFIXES.has(parts[0])) {
+  if (isChannelSubsystemPrefix(parts[0])) {
     return parts[0];
   }
   if (parts.length > SUBSYSTEM_MAX_SEGMENTS) {
@@ -110,7 +159,10 @@ export function stripRedundantSubsystemPrefixForConsole(
     const closeIdx = message.indexOf("]");
     if (closeIdx > 1) {
       const bracketTag = message.slice(1, closeIdx);
-      if (bracketTag.toLowerCase() === displaySubsystem.toLowerCase()) {
+      if (
+        normalizeLowercaseStringOrEmpty(bracketTag) ===
+        normalizeLowercaseStringOrEmpty(displaySubsystem)
+      ) {
         let i = closeIdx + 1;
         while (message[i] === " ") {
           i += 1;
@@ -121,7 +173,9 @@ export function stripRedundantSubsystemPrefixForConsole(
   }
 
   const prefix = message.slice(0, displaySubsystem.length);
-  if (prefix.toLowerCase() !== displaySubsystem.toLowerCase()) {
+  if (
+    normalizeLowercaseStringOrEmpty(prefix) !== normalizeLowercaseStringOrEmpty(displaySubsystem)
+  ) {
     return message;
   }
 
@@ -154,7 +208,7 @@ function formatConsoleLine(opts: {
     opts.style === "json" ? opts.subsystem : formatSubsystemForConsole(opts.subsystem);
   if (opts.style === "json") {
     return JSON.stringify({
-      time: new Date().toISOString(),
+      time: formatConsoleTimestamp("json"),
       level: opts.level,
       subsystem: displaySubsystem,
       message: opts.message,
@@ -175,10 +229,10 @@ function formatConsoleLine(opts: {
   const displayMessage = stripRedundantSubsystemPrefixForConsole(opts.message, displaySubsystem);
   const time = (() => {
     if (opts.style === "pretty") {
-      return color.gray(new Date().toISOString().slice(11, 19));
+      return color.gray(formatConsoleTimestamp("pretty"));
     }
     if (loggingState.consoleTimestampPrefix) {
-      return color.gray(new Date().toISOString());
+      return color.gray(formatConsoleTimestamp(opts.style));
     }
     return "";
   })();
@@ -201,6 +255,38 @@ function writeConsoleLine(level: LogLevel, line: string) {
   } else {
     (sink.log ?? console.log)(sanitized);
   }
+}
+
+function shouldSuppressProbeConsoleLine(params: {
+  level: LogLevel;
+  subsystem: string;
+  message: string;
+  meta?: Record<string, unknown>;
+}): boolean {
+  if (isVerbose()) {
+    return false;
+  }
+  if (params.level === "error" || params.level === "fatal") {
+    return false;
+  }
+  const isProbeSuppressedSubsystem =
+    params.subsystem === "agent/embedded" ||
+    params.subsystem.startsWith("agent/embedded/") ||
+    params.subsystem === "model-fallback" ||
+    params.subsystem.startsWith("model-fallback/");
+  if (!isProbeSuppressedSubsystem) {
+    return false;
+  }
+  const runLikeId =
+    typeof params.meta?.runId === "string"
+      ? params.meta.runId
+      : typeof params.meta?.sessionId === "string"
+        ? params.meta.sessionId
+        : undefined;
+  if (runLikeId?.startsWith("probe-")) {
+    return true;
+  }
+  return /(sessionId|runId)=probe-/.test(params.message);
 }
 
 function logToFile(
@@ -228,14 +314,16 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   let fileLogger: TsLogger<LogObj> | null = null;
-  const getFileLogger = () => {
-    if (!fileLogger) {
-      fileLogger = getChildLogger({ subsystem });
-    }
-    return fileLogger;
-  };
-  const emit = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
+
+  const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
+    const consoleEnabled =
+      shouldLogToConsole(level, { level: consoleSettings.level }) &&
+      shouldLogSubsystemToConsole(subsystem);
+    const fileEnabled = isFileLogLevelEnabled(level);
+    if (!consoleEnabled && !fileEnabled) {
+      return;
+    }
     let consoleMessageOverride: string | undefined;
     let fileMeta = meta;
     if (meta && Object.keys(meta).length > 0) {
@@ -247,53 +335,91 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       }
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
-    logToFile(getFileLogger(), level, message, fileMeta);
-    if (!shouldLogToConsole(level, { level: consoleSettings.level })) {
-      return;
+    if (fileEnabled) {
+      if (!fileLogger) {
+        fileLogger = getChildLogger({ subsystem });
+      }
+      logToFile(fileLogger, level, message, fileMeta);
     }
-    if (!shouldLogSubsystemToConsole(subsystem)) {
+    if (!consoleEnabled) {
       return;
     }
     const consoleMessage = consoleMessageOverride ?? message;
     if (
-      !isVerbose() &&
-      subsystem === "agent/embedded" &&
-      /(sessionId|runId)=probe-/.test(consoleMessage)
+      shouldSuppressProbeConsoleLine({
+        level,
+        subsystem,
+        message: consoleMessage,
+        meta: fileMeta,
+      })
     ) {
       return;
     }
-    const line = formatConsoleLine({
+    writeConsoleLine(
       level,
-      subsystem,
-      message: consoleSettings.style === "json" ? message : consoleMessage,
-      style: consoleSettings.style,
-      meta: fileMeta,
-    });
-    writeConsoleLine(level, line);
+      formatConsoleLine({
+        level,
+        subsystem,
+        message: consoleSettings.style === "json" ? message : consoleMessage,
+        style: consoleSettings.style,
+        meta: fileMeta,
+      }),
+    );
   };
 
   const logger: SubsystemLogger = {
     subsystem,
-    trace: (message, meta) => emit("trace", message, meta),
-    debug: (message, meta) => emit("debug", message, meta),
-    info: (message, meta) => emit("info", message, meta),
-    warn: (message, meta) => emit("warn", message, meta),
-    error: (message, meta) => emit("error", message, meta),
-    fatal: (message, meta) => emit("fatal", message, meta),
-    raw: (message) => {
-      logToFile(getFileLogger(), "info", message, { raw: true });
-      if (shouldLogSubsystemToConsole(subsystem)) {
-        if (
-          !isVerbose() &&
-          subsystem === "agent/embedded" &&
-          /(sessionId|runId)=probe-/.test(message)
-        ) {
+    isEnabled(level, target = "any") {
+      const isConsoleEnabled =
+        shouldLogToConsole(level, { level: getConsoleSettings().level }) &&
+        shouldLogSubsystemToConsole(subsystem);
+      const isFileEnabled = isFileLogLevelEnabled(level);
+      if (target === "console") {
+        return isConsoleEnabled;
+      }
+      if (target === "file") {
+        return isFileEnabled;
+      }
+      return isConsoleEnabled || isFileEnabled;
+    },
+    trace(message, meta) {
+      emitLog("trace", message, meta);
+    },
+    debug(message, meta) {
+      emitLog("debug", message, meta);
+    },
+    info(message, meta) {
+      emitLog("info", message, meta);
+    },
+    warn(message, meta) {
+      emitLog("warn", message, meta);
+    },
+    error(message, meta) {
+      emitLog("error", message, meta);
+    },
+    fatal(message, meta) {
+      emitLog("fatal", message, meta);
+    },
+    raw(message) {
+      if (isFileLogLevelEnabled("info")) {
+        if (!fileLogger) {
+          fileLogger = getChildLogger({ subsystem });
+        }
+        logToFile(fileLogger, "info", message, { raw: true });
+      }
+      if (
+        shouldLogToConsole("info", { level: getConsoleSettings().level }) &&
+        shouldLogSubsystemToConsole(subsystem)
+      ) {
+        if (shouldSuppressProbeConsoleLine({ level: "info", subsystem, message })) {
           return;
         }
         writeConsoleLine("info", message);
       }
     },
-    child: (name) => createSubsystemLogger(`${subsystem}/${name}`),
+    child(name) {
+      return createSubsystemLogger(`${subsystem}/${name}`);
+    },
   };
   return logger;
 }
@@ -301,10 +427,30 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
 export function runtimeForLogger(
   logger: SubsystemLogger,
   exit: RuntimeEnv["exit"] = defaultRuntime.exit,
-): RuntimeEnv {
+): OutputRuntimeEnv {
   return {
-    log: (message: string) => logger.info(message),
-    error: (message: string) => logger.error(message),
+    log(...args) {
+      logger.info(
+        args
+          .map((arg) => formatRuntimeArg(arg))
+          .join(" ")
+          .trim(),
+      );
+    },
+    error(...args) {
+      logger.error(
+        args
+          .map((arg) => formatRuntimeArg(arg))
+          .join(" ")
+          .trim(),
+      );
+    },
+    writeStdout(value) {
+      logger.info(value);
+    },
+    writeJson(value: unknown, space = 2) {
+      logger.info(JSON.stringify(value, null, space > 0 ? space : undefined));
+    },
     exit,
   };
 }
@@ -312,6 +458,6 @@ export function runtimeForLogger(
 export function createSubsystemRuntime(
   subsystem: string,
   exit: RuntimeEnv["exit"] = defaultRuntime.exit,
-): RuntimeEnv {
+): OutputRuntimeEnv {
   return runtimeForLogger(createSubsystemLogger(subsystem), exit);
 }

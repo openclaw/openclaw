@@ -1,12 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { hasBinary } from "../agents/skills.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizeServePath } from "./gmail.js";
 
 let cachedPythonPath: string | null | undefined;
 const MAX_OUTPUT_CHARS = 800;
+
+export function resetGmailSetupUtilsCachesForTest(): void {
+  cachedPythonPath = undefined;
+}
 
 function trimOutput(value: string): string {
   const trimmed = value.trim();
@@ -19,13 +24,17 @@ function trimOutput(value: string): string {
   return `${trimmed.slice(0, MAX_OUTPUT_CHARS)}…`;
 }
 
-function formatCommandFailure(command: string, result: SpawnResult): string {
+function formatCommandResultInternal(
+  command: string,
+  result: SpawnResult,
+  statusLabel: "failed" | "exited",
+): string {
   const code = result.code ?? "null";
   const signal = result.signal ? `, signal=${result.signal}` : "";
   const killed = result.killed ? ", killed=true" : "";
   const stderr = trimOutput(result.stderr);
   const stdout = trimOutput(result.stdout);
-  const lines = [`${command} failed (code=${code}${signal}${killed})`];
+  const lines = [`${command} ${statusLabel} (code=${code}${signal}${killed})`];
   if (stderr) {
     lines.push(`stderr: ${stderr}`);
   }
@@ -33,26 +42,18 @@ function formatCommandFailure(command: string, result: SpawnResult): string {
     lines.push(`stdout: ${stdout}`);
   }
   return lines.join("\n");
+}
+
+function formatCommandFailure(command: string, result: SpawnResult): string {
+  return formatCommandResultInternal(command, result, "failed");
 }
 
 function formatCommandResult(command: string, result: SpawnResult): string {
-  const code = result.code ?? "null";
-  const signal = result.signal ? `, signal=${result.signal}` : "";
-  const killed = result.killed ? ", killed=true" : "";
-  const stderr = trimOutput(result.stderr);
-  const stdout = trimOutput(result.stdout);
-  const lines = [`${command} exited (code=${code}${signal}${killed})`];
-  if (stderr) {
-    lines.push(`stderr: ${stderr}`);
-  }
-  if (stdout) {
-    lines.push(`stdout: ${stdout}`);
-  }
-  return lines.join("\n");
+  return formatCommandResultInternal(command, result, "exited");
 }
 
 function formatJsonParseFailure(command: string, result: SpawnResult, err: unknown): string {
-  const reason = err instanceof Error ? err.message : String(err);
+  const reason = formatErrorMessage(err);
   return `${command} returned invalid JSON: ${reason}\n${formatCommandResult(command, result)}`;
 }
 

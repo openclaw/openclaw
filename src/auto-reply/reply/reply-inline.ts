@@ -1,3 +1,6 @@
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { collapseInlineHorizontalWhitespace } from "./reply-inline-whitespace.js";
+
 const INLINE_SIMPLE_COMMAND_ALIASES = new Map<string, string>([
   ["/help", "/help"],
   ["/commands", "/commands"],
@@ -19,12 +22,12 @@ export function extractInlineSimpleCommand(body?: string): {
   if (!match || match.index === undefined) {
     return null;
   }
-  const alias = `/${match[1].toLowerCase()}`;
+  const alias = `/${normalizeLowercaseStringOrEmpty(match[1])}`;
   const command = INLINE_SIMPLE_COMMAND_ALIASES.get(alias);
   if (!command) {
     return null;
   }
-  const cleaned = body.replace(match[0], " ").replace(/\s+/g, " ").trim();
+  const cleaned = collapseInlineHorizontalWhitespace(body.replace(match[0], " ")).trim();
   return { command, cleaned };
 }
 
@@ -36,6 +39,8 @@ export function stripInlineStatus(body: string): {
   if (!trimmed) {
     return { cleaned: "", didStrip: false };
   }
-  const cleaned = trimmed.replace(INLINE_STATUS_RE, " ").replace(/\s+/g, " ").trim();
+  // Use [^\S\n]+ instead of \s+ to only collapse horizontal whitespace,
+  // preserving newlines so multi-line messages keep their paragraph structure.
+  const cleaned = collapseInlineHorizontalWhitespace(trimmed.replace(INLINE_STATUS_RE, " ")).trim();
   return { cleaned, didStrip: cleaned !== trimmed };
 }

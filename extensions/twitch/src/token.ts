@@ -9,8 +9,8 @@
  * 2. Environment variable: OPENCLAW_TWITCH_ACCESS_TOKEN (default account only)
  */
 
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/core";
 
 export type TwitchTokenSource = "env" | "config" | "none";
 

@@ -1,10 +1,17 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { estimateBase64DecodedBytes } from "../../media/base64.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { findNormalizedProviderValue } from "../model-selection.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
+import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
 
-export type ImageModelConfig = { primary?: string; fallbacks?: string[] };
+export type ImageModelConfig = ToolModelConfig;
 
-export function decodeDataUrl(dataUrl: string): {
+export function decodeDataUrl(
+  dataUrl: string,
+  opts?: { maxBytes?: number },
+): {
   buffer: Buffer;
   mimeType: string;
   kind: "image";
@@ -14,11 +21,14 @@ export function decodeDataUrl(dataUrl: string): {
   if (!match) {
     throw new Error("Invalid data URL (expected base64 data: URL).");
   }
-  const mimeType = (match[1] ?? "").trim().toLowerCase();
+  const mimeType = normalizeLowercaseStringOrEmpty(match[1]);
   if (!mimeType.startsWith("image/")) {
     throw new Error(`Unsupported data URL type: ${mimeType || "unknown"}`);
   }
   const b64 = (match[2] ?? "").trim();
+  if (typeof opts?.maxBytes === "number" && estimateBase64DecodedBytes(b64) > opts.maxBytes) {
+    throw new Error("Invalid data URL: payload exceeds size limit.");
+  }
   const buffer = Buffer.from(b64, "base64");
   if (buffer.length === 0) {
     throw new Error("Invalid data URL: empty payload.");
@@ -51,38 +61,19 @@ export function coerceImageAssistantText(params: {
 }
 
 export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
-  const imageModel = cfg?.agents?.defaults?.imageModel as
-    | { primary?: string; fallbacks?: string[] }
-    | string
-    | undefined;
-  const primary = typeof imageModel === "string" ? imageModel.trim() : imageModel?.primary;
-  const fallbacks = typeof imageModel === "object" ? (imageModel?.fallbacks ?? []) : [];
-  return {
-    ...(primary?.trim() ? { primary: primary.trim() } : {}),
-    ...(fallbacks.length > 0 ? { fallbacks } : {}),
-  };
+  return coerceToolModelConfig(cfg?.agents?.defaults?.imageModel);
 }
 
 export function resolveProviderVisionModelFromConfig(params: {
   cfg?: OpenClawConfig;
   provider: string;
 }): string | null {
-  const providerCfg = params.cfg?.models?.providers?.[params.provider] as unknown as
-    | { models?: Array<{ id?: string; input?: string[] }> }
-    | undefined;
+  const providerCfg = findNormalizedProviderValue(
+    params.cfg?.models?.providers,
+    params.provider,
+  ) as unknown as { models?: Array<{ id?: string; input?: string[] }> } | undefined;
   const models = providerCfg?.models ?? [];
-  const preferMinimaxVl =
-    params.provider === "minimax"
-      ? models.find(
-          (m) =>
-            (m?.id ?? "").trim() === "MiniMax-VL-01" &&
-            Array.isArray(m?.input) &&
-            m.input.includes("image"),
-        )
-      : null;
-  const picked =
-    preferMinimaxVl ??
-    models.find((m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"));
+  const picked = models.find((m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"));
   const id = (picked?.id ?? "").trim();
   return id ? `${params.provider}/${id}` : null;
 }

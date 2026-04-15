@@ -1,8 +1,14 @@
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import { loadAgentIdentity } from "../commands/agents.config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { coerceIdentityValue } from "../shared/assistant-identity-values.js";
+import {
+  isAvatarHttpUrl,
+  isAvatarImageDataUrl,
+  looksLikeAvatarPath,
+} from "../shared/avatar-policy.js";
 
 const MAX_ASSISTANT_NAME = 50;
 const MAX_ASSISTANT_AVATAR = 200;
@@ -21,29 +27,8 @@ export type AssistantIdentity = {
   emoji?: string;
 };
 
-function coerceIdentityValue(value: string | undefined, maxLength: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed.length <= maxLength) {
-    return trimmed;
-  }
-  return trimmed.slice(0, maxLength);
-}
-
 function isAvatarUrl(value: string): boolean {
-  return /^https?:\/\//i.test(value) || /^data:image\//i.test(value);
-}
-
-function looksLikeAvatarPath(value: string): boolean {
-  if (/[\\/]/.test(value)) {
-    return true;
-  }
-  return /\.(png|jpe?g|gif|webp|svg|ico)$/i.test(value);
+  return isAvatarHttpUrl(value) || isAvatarImageDataUrl(value);
 }
 
 function normalizeAvatarValue(value: string | undefined): string | undefined {

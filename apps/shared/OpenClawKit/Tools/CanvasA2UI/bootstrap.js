@@ -32,6 +32,66 @@ if (modalElement && Array.isArray(modalElement.styles)) {
   modalElement.styles = [...modalElement.styles, modalStyles];
 }
 
+const appendComponentStyles = (tagName, extraStyles) => {
+  const component = customElements.get(tagName);
+  if (!component) {
+    return;
+  }
+
+  const current = component.styles;
+  if (!current) {
+    component.styles = [extraStyles];
+    return;
+  }
+
+  component.styles = Array.isArray(current) ? [...current, extraStyles] : [current, extraStyles];
+};
+
+appendComponentStyles(
+  "a2ui-row",
+  css`
+    @media (max-width: 860px) {
+      section {
+        flex-wrap: wrap;
+        align-content: flex-start;
+      }
+
+      ::slotted(*) {
+        flex: 1 1 100%;
+        min-width: 100%;
+        width: 100%;
+        max-width: 100%;
+      }
+    }
+  `,
+);
+
+appendComponentStyles(
+  "a2ui-column",
+  css`
+    :host {
+      min-width: 0;
+    }
+
+    section {
+      min-width: 0;
+    }
+  `,
+);
+
+appendComponentStyles(
+  "a2ui-card",
+  css`
+    :host {
+      min-width: 0;
+    }
+
+    section {
+      min-width: 0;
+    }
+  `,
+);
+
 const emptyClasses = () => ({});
 const textHintStyles = () => ({ h1: {}, h2: {}, h3: {}, h4: {}, h5: {}, body: {}, caption: {} });
 
@@ -406,8 +466,10 @@ class OpenClawA2UIHost extends LitElement {
       try {
         // WebKit message handlers support structured objects; Android's JS interface expects strings.
         if (handler === globalThis.openclawCanvasA2UIAction) {
+          // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Native app message handler, not Window.postMessage.
           handler.postMessage(JSON.stringify({ userAction }));
         } else {
+          // oxlint-disable-next-line unicorn/require-post-message-target-origin -- WebKit message handler, not Window.postMessage.
           handler.postMessage({ userAction });
         }
       } catch (e) {
@@ -451,7 +513,6 @@ class OpenClawA2UIHost extends LitElement {
     if (this.surfaces.length === 0) {
       return html`<div class="empty">
         <div class="empty-title">Canvas (A2UI)</div>
-        <div>Waiting for A2UI messages…</div>
       </div>`;
     }
 

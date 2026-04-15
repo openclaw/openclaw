@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
 
 export type VoiceWakeConfig = {
   triggers: string[];
@@ -17,42 +17,12 @@ function resolvePath(baseDir?: string) {
 
 function sanitizeTriggers(triggers: string[] | undefined | null): string[] {
   const cleaned = (triggers ?? [])
-    .map((w) => (typeof w === "string" ? w.trim() : ""))
+    .map((w) => normalizeOptionalString(w) ?? "")
     .filter((w) => w.length > 0);
   return cleaned.length > 0 ? cleaned : DEFAULT_TRIGGERS;
 }
 
-async function readJSON<T>(filePath: string): Promise<T | null> {
-  try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
-async function writeJSONAtomic(filePath: string, value: unknown) {
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true });
-  const tmp = `${filePath}.${randomUUID()}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(value, null, 2), "utf8");
-  await fs.rename(tmp, filePath);
-}
-
-let lock: Promise<void> = Promise.resolve();
-async function withLock<T>(fn: () => Promise<T>): Promise<T> {
-  const prev = lock;
-  let release: (() => void) | undefined;
-  lock = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await prev;
-  try {
-    return await fn();
-  } finally {
-    release?.();
-  }
-}
+const withLock = createAsyncLock();
 
 export function defaultVoiceWakeTriggers() {
   return [...DEFAULT_TRIGGERS];
@@ -60,7 +30,7 @@ export function defaultVoiceWakeTriggers() {
 
 export async function loadVoiceWakeConfig(baseDir?: string): Promise<VoiceWakeConfig> {
   const filePath = resolvePath(baseDir);
-  const existing = await readJSON<VoiceWakeConfig>(filePath);
+  const existing = await readJsonFile<VoiceWakeConfig>(filePath);
   if (!existing) {
     return { triggers: defaultVoiceWakeTriggers(), updatedAtMs: 0 };
   }
@@ -84,7 +54,7 @@ export async function setVoiceWakeTriggers(
       triggers: sanitized,
       updatedAtMs: Date.now(),
     };
-    await writeJSONAtomic(filePath, next);
+    await writeJsonAtomic(filePath, next);
     return next;
   });
 }

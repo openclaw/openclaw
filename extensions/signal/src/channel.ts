@@ -1,321 +1,408 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
-  applyAccountNameToChannelSection,
-  buildChannelConfigSchema,
-  DEFAULT_ACCOUNT_ID,
-  deleteAccountFromConfigSection,
-  formatPairingApproveHint,
-  getChatChannelMeta,
-  listSignalAccountIds,
-  looksLikeSignalTargetId,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
-  normalizeE164,
-  normalizeSignalMessagingTarget,
-  PAIRING_APPROVED_MESSAGE,
-  resolveChannelMediaMaxBytes,
-  resolveDefaultSignalAccountId,
-  resolveSignalAccount,
-  setAccountEnabledInConfigSection,
-  signalOnboardingAdapter,
-  SignalConfigSchema,
-  type ChannelMessageActionAdapter,
-  type ChannelPlugin,
-  type ResolvedSignalAccount,
-} from "openclaw/plugin-sdk";
-import { getSignalRuntime } from "./runtime.js";
+  attachChannelToResult,
+  attachChannelToResults,
+} from "openclaw/plugin-sdk/channel-send-result";
+import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
+import { chunkText, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
+import {
+  buildBaseChannelStatusSummary,
+  collectStatusIssuesFromLastError,
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
+import { signalApprovalAuth } from "./approval-auth.js";
+import { markdownToSignalTextChunks } from "./format.js";
+import { signalMessageActions } from "./message-actions.js";
+import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
+import { resolveSignalOutboundTarget } from "./outbound-session.js";
+import { resolveSignalReactionLevel } from "./reaction-level.js";
+import { signalSetupAdapter } from "./setup-core.js";
+import {
+  createSignalPluginBase,
+  signalConfigAdapter,
+  signalSecurityAdapter,
+  signalSetupWizard,
+} from "./shared.js";
+type SignalSendFn = typeof import("./send.runtime.js").sendMessageSignal;
+type SignalProbe = import("./probe.js").SignalProbe;
 
-const signalMessageActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) => getSignalRuntime().channel.signal.messageActions?.listActions?.(ctx) ?? [],
-  supportsAction: (ctx) =>
-    getSignalRuntime().channel.signal.messageActions?.supportsAction?.(ctx) ?? false,
-  handleAction: async (ctx) => {
-    const ma = getSignalRuntime().channel.signal.messageActions;
-    if (!ma?.handleAction) {
-      throw new Error("Signal message actions not available");
-    }
-    return ma.handleAction(ctx);
-  },
-};
+let signalMonitorModulePromise: Promise<typeof import("./monitor.js")> | null = null;
+let signalProbeModulePromise: Promise<typeof import("./probe.js")> | null = null;
+let signalSendRuntimePromise: Promise<typeof import("./send.runtime.js")> | null = null;
 
-const meta = getChatChannelMeta("signal");
+async function loadSignalMonitorModule() {
+  signalMonitorModulePromise ??= import("./monitor.js");
+  return await signalMonitorModulePromise;
+}
 
-export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
-  id: "signal",
-  meta: {
-    ...meta,
-  },
-  onboarding: signalOnboardingAdapter,
-  pairing: {
-    idLabel: "signalNumber",
-    normalizeAllowEntry: (entry) => entry.replace(/^signal:/i, ""),
-    notifyApproval: async ({ id }) => {
-      await getSignalRuntime().channel.signal.sendMessageSignal(id, PAIRING_APPROVED_MESSAGE);
-    },
-  },
-  capabilities: {
-    chatTypes: ["direct", "group"],
-    media: true,
-    reactions: true,
-  },
-  actions: signalMessageActions,
-  streaming: {
-    blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
-  },
-  reload: { configPrefixes: ["channels.signal"] },
-  configSchema: buildChannelConfigSchema(SignalConfigSchema),
-  config: {
-    listAccountIds: (cfg) => listSignalAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveSignalAccount({ cfg, accountId }),
-    defaultAccountId: (cfg) => resolveDefaultSignalAccountId(cfg),
-    setAccountEnabled: ({ cfg, accountId, enabled }) =>
-      setAccountEnabledInConfigSection({
-        cfg,
-        sectionKey: "signal",
-        accountId,
-        enabled,
-        allowTopLevel: true,
+async function loadSignalProbeModule() {
+  signalProbeModulePromise ??= import("./probe.js");
+  return await signalProbeModulePromise;
+}
+
+async function loadSignalSendRuntime() {
+  signalSendRuntimePromise ??= import("./send.runtime.js");
+  return await signalSendRuntimePromise;
+}
+
+async function resolveSignalSendContext(params: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  accountId?: string;
+  deps?: { [channelId: string]: unknown };
+}) {
+  const send =
+    resolveOutboundSendDep<SignalSendFn>(params.deps, "signal") ??
+    (await loadSignalSendRuntime()).sendMessageSignal;
+  const maxBytes = resolveChannelMediaMaxBytes({
+    cfg: params.cfg,
+    resolveChannelLimitMb: ({ cfg, accountId }) =>
+      cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ?? cfg.channels?.signal?.mediaMaxMb,
+    accountId: params.accountId,
+  });
+  return { send, maxBytes };
+}
+
+async function sendSignalOutbound(params: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  to: string;
+  text: string;
+  mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  accountId?: string;
+  deps?: { [channelId: string]: unknown };
+}) {
+  const { send, maxBytes } = await resolveSignalSendContext(params);
+  return await send(params.to, params.text, {
+    cfg: params.cfg,
+    ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
+    maxBytes,
+    accountId: params.accountId ?? undefined,
+  });
+}
+
+function inferSignalTargetChatType(rawTo: string) {
+  let to = rawTo.trim();
+  if (!to) {
+    return undefined;
+  }
+  if (/^signal:/i.test(to)) {
+    to = to.replace(/^signal:/i, "").trim();
+  }
+  if (!to) {
+    return undefined;
+  }
+  const lower = normalizeLowercaseStringOrEmpty(to);
+  if (lower.startsWith("group:")) {
+    return "group" as const;
+  }
+  if (lower.startsWith("username:") || lower.startsWith("u:")) {
+    return "direct" as const;
+  }
+  return "direct" as const;
+}
+
+function parseSignalExplicitTarget(raw: string) {
+  const normalized = normalizeSignalMessagingTarget(raw);
+  if (!normalized) {
+    return null;
+  }
+  return {
+    to: normalized,
+    chatType: inferSignalTargetChatType(normalized),
+  };
+}
+
+function buildSignalBaseSessionKey(params: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  agentId: string;
+  accountId?: string | null;
+  peer: RoutePeer;
+}) {
+  return buildOutboundBaseSessionKey({ ...params, channel: "signal" });
+}
+
+function resolveSignalOutboundSessionRoute(params: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  agentId: string;
+  accountId?: string | null;
+  target: string;
+}) {
+  const resolved = resolveSignalOutboundTarget(params.target);
+  if (!resolved) {
+    return null;
+  }
+  const baseSessionKey = buildSignalBaseSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    accountId: params.accountId,
+    peer: resolved.peer,
+  });
+  return {
+    sessionKey: baseSessionKey,
+    baseSessionKey,
+    ...resolved,
+  };
+}
+
+async function sendFormattedSignalText(ctx: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  to: string;
+  text: string;
+  accountId?: string | null;
+  deps?: { [channelId: string]: unknown };
+  abortSignal?: AbortSignal;
+}) {
+  const { send, maxBytes } = await resolveSignalSendContext({
+    cfg: ctx.cfg,
+    accountId: ctx.accountId ?? undefined,
+    deps: ctx.deps,
+  });
+  const limit = resolveTextChunkLimit(ctx.cfg, "signal", ctx.accountId ?? undefined, {
+    fallbackLimit: 4000,
+  });
+  const tableMode = resolveMarkdownTableMode({
+    cfg: ctx.cfg,
+    channel: "signal",
+    accountId: ctx.accountId ?? undefined,
+  });
+  let chunks =
+    limit === undefined
+      ? markdownToSignalTextChunks(ctx.text, Number.POSITIVE_INFINITY, { tableMode })
+      : markdownToSignalTextChunks(ctx.text, limit, { tableMode });
+  if (chunks.length === 0 && ctx.text) {
+    chunks = [{ text: ctx.text, styles: [] }];
+  }
+  const results = [];
+  for (const chunk of chunks) {
+    ctx.abortSignal?.throwIfAborted();
+    const result = await send(ctx.to, chunk.text, {
+      cfg: ctx.cfg,
+      maxBytes,
+      accountId: ctx.accountId ?? undefined,
+      textMode: "plain",
+      textStyles: chunk.styles,
+    });
+    results.push(result);
+  }
+  return attachChannelToResults("signal", results);
+}
+
+async function sendFormattedSignalMedia(ctx: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  to: string;
+  text: string;
+  mediaUrl: string;
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  accountId?: string | null;
+  deps?: { [channelId: string]: unknown };
+  abortSignal?: AbortSignal;
+}) {
+  ctx.abortSignal?.throwIfAborted();
+  const { send, maxBytes } = await resolveSignalSendContext({
+    cfg: ctx.cfg,
+    accountId: ctx.accountId ?? undefined,
+    deps: ctx.deps,
+  });
+  const tableMode = resolveMarkdownTableMode({
+    cfg: ctx.cfg,
+    channel: "signal",
+    accountId: ctx.accountId ?? undefined,
+  });
+  const formatted = markdownToSignalTextChunks(ctx.text, Number.POSITIVE_INFINITY, {
+    tableMode,
+  })[0] ?? {
+    text: ctx.text,
+    styles: [],
+  };
+  const result = await send(ctx.to, formatted.text, {
+    cfg: ctx.cfg,
+    mediaUrl: ctx.mediaUrl,
+    mediaLocalRoots: ctx.mediaLocalRoots,
+    ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
+    maxBytes,
+    accountId: ctx.accountId ?? undefined,
+    textMode: "plain",
+    textStyles: formatted.styles,
+  });
+  return attachChannelToResult("signal", result);
+}
+
+export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
+  createChatChannelPlugin({
+    base: {
+      ...createSignalPluginBase({
+        setupWizard: signalSetupWizard,
+        setup: signalSetupAdapter,
       }),
-    deleteAccount: ({ cfg, accountId }) =>
-      deleteAccountFromConfigSection({
-        cfg,
-        sectionKey: "signal",
-        accountId,
-        clearBaseFields: ["account", "httpUrl", "httpHost", "httpPort", "cliPath", "name"],
+      actions: signalMessageActions,
+      approvalCapability: signalApprovalAuth,
+      allowlist: buildDmGroupAccountAllowlistAdapter({
+        channelId: "signal",
+        resolveAccount: resolveSignalAccount,
+        normalize: ({ cfg, accountId, values }) =>
+          signalConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+        resolveDmAllowFrom: (account) => account.config.allowFrom,
+        resolveGroupAllowFrom: (account) => account.config.groupAllowFrom,
+        resolveDmPolicy: (account) => account.config.dmPolicy,
+        resolveGroupPolicy: (account) => account.config.groupPolicy,
       }),
-    isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      baseUrl: account.baseUrl,
-    }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-        String(entry),
-      ),
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
-        .filter(Boolean),
-  },
-  security: {
-    resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.signal?.accounts?.[resolvedAccountId]);
-      const basePath = useAccountPath
-        ? `channels.signal.accounts.${resolvedAccountId}.`
-        : "channels.signal.";
-      return {
-        policy: account.config.dmPolicy ?? "pairing",
-        allowFrom: account.config.allowFrom ?? [],
-        policyPath: `${basePath}dmPolicy`,
-        allowFromPath: basePath,
-        approveHint: formatPairingApproveHint("signal"),
-        normalizeEntry: (raw) => normalizeE164(raw.replace(/^signal:/i, "").trim()),
-      };
-    },
-    collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
-      if (groupPolicy !== "open") {
-        return [];
-      }
-      return [
-        `- Signal groups: groupPolicy="open" allows any member to trigger the bot. Set channels.signal.groupPolicy="allowlist" + channels.signal.groupAllowFrom to restrict senders.`,
-      ];
-    },
-  },
-  messaging: {
-    normalizeTarget: normalizeSignalMessagingTarget,
-    targetResolver: {
-      looksLikeId: looksLikeSignalTargetId,
-      hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
-    },
-  },
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "signal",
-        accountId,
-        name,
-      }),
-    validateInput: ({ input }) => {
-      if (
-        !input.signalNumber &&
-        !input.httpUrl &&
-        !input.httpHost &&
-        !input.httpPort &&
-        !input.cliPath
-      ) {
-        return "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "signal",
-        accountId,
-        name: input.name,
-      });
-      const next =
-        accountId !== DEFAULT_ACCOUNT_ID
-          ? migrateBaseNameToDefaultAccount({
-              cfg: namedConfig,
-              channelKey: "signal",
-            })
-          : namedConfig;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            signal: {
-              ...next.channels?.signal,
-              enabled: true,
-              ...(input.signalNumber ? { account: input.signalNumber } : {}),
-              ...(input.cliPath ? { cliPath: input.cliPath } : {}),
-              ...(input.httpUrl ? { httpUrl: input.httpUrl } : {}),
-              ...(input.httpHost ? { httpHost: input.httpHost } : {}),
-              ...(input.httpPort ? { httpPort: Number(input.httpPort) } : {}),
-            },
-          },
-        };
-      }
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          signal: {
-            ...next.channels?.signal,
-            enabled: true,
-            accounts: {
-              ...next.channels?.signal?.accounts,
-              [accountId]: {
-                ...next.channels?.signal?.accounts?.[accountId],
-                enabled: true,
-                ...(input.signalNumber ? { account: input.signalNumber } : {}),
-                ...(input.cliPath ? { cliPath: input.cliPath } : {}),
-                ...(input.httpUrl ? { httpUrl: input.httpUrl } : {}),
-                ...(input.httpHost ? { httpHost: input.httpHost } : {}),
-                ...(input.httpPort ? { httpPort: Number(input.httpPort) } : {}),
-              },
-            },
-          },
+      agentPrompt: {
+        reactionGuidance: ({ cfg, accountId }) => {
+          const level = resolveSignalReactionLevel({
+            cfg,
+            accountId: accountId ?? undefined,
+          }).agentReactionGuidance;
+          return level ? { level, channelLabel: "Signal" } : undefined;
         },
-      };
-    },
-  },
-  outbound: {
-    deliveryMode: "direct",
-    chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
-    chunkerMode: "text",
-    textChunkLimit: 4000,
-    sendText: async ({ cfg, to, text, accountId, deps }) => {
-      const send = deps?.sendSignal ?? getSignalRuntime().channel.signal.sendMessageSignal;
-      const maxBytes = resolveChannelMediaMaxBytes({
-        cfg,
-        resolveChannelLimitMb: ({ cfg, accountId }) =>
-          cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ??
-          cfg.channels?.signal?.mediaMaxMb,
-        accountId,
-      });
-      const result = await send(to, text, {
-        maxBytes,
-        accountId: accountId ?? undefined,
-      });
-      return { channel: "signal", ...result };
-    },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps }) => {
-      const send = deps?.sendSignal ?? getSignalRuntime().channel.signal.sendMessageSignal;
-      const maxBytes = resolveChannelMediaMaxBytes({
-        cfg,
-        resolveChannelLimitMb: ({ cfg, accountId }) =>
-          cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ??
-          cfg.channels?.signal?.mediaMaxMb,
-        accountId,
-      });
-      const result = await send(to, text, {
-        mediaUrl,
-        maxBytes,
-        accountId: accountId ?? undefined,
-      });
-      return { channel: "signal", ...result };
-    },
-  },
-  status: {
-    defaultRuntime: {
-      accountId: DEFAULT_ACCOUNT_ID,
-      running: false,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null,
-    },
-    collectStatusIssues: (accounts) =>
-      accounts.flatMap((account) => {
-        const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
-        if (!lastError) {
-          return [];
-        }
-        return [
-          {
-            channel: "signal",
-            accountId: account.accountId,
-            kind: "runtime",
-            message: `Channel error: ${lastError}`,
+      },
+      messaging: {
+        normalizeTarget: normalizeSignalMessagingTarget,
+        parseExplicitTarget: ({ raw }) => parseSignalExplicitTarget(raw),
+        inferTargetChatType: ({ to }) => inferSignalTargetChatType(to),
+        resolveOutboundSessionRoute: (params) => resolveSignalOutboundSessionRoute(params),
+        targetResolver: {
+          looksLikeId: looksLikeSignalTargetId,
+          hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
+        },
+      },
+      status: createComputedAccountStatusAdapter<ResolvedSignalAccount, SignalProbe>({
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+        collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("signal", accounts),
+        buildChannelSummary: ({ snapshot }) =>
+          buildBaseChannelStatusSummary(snapshot, {
+            baseUrl: snapshot.baseUrl ?? null,
+            probe: snapshot.probe,
+            lastProbeAt: snapshot.lastProbeAt ?? null,
+          }),
+        probeAccount: async ({ account, timeoutMs }) => {
+          const baseUrl = account.baseUrl;
+          const { probeSignal } = await loadSignalProbeModule();
+          return await probeSignal(baseUrl, timeoutMs);
+        },
+        formatCapabilitiesProbe: ({ probe }) =>
+          probe?.version ? [{ text: `Signal daemon: ${probe.version}` }] : [],
+        resolveAccountSnapshot: ({ account }) => ({
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: account.configured,
+          extra: {
+            baseUrl: account.baseUrl,
           },
-        ];
+        }),
       }),
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      baseUrl: snapshot.baseUrl ?? null,
-      running: snapshot.running ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
-    probeAccount: async ({ account, timeoutMs }) => {
-      const baseUrl = account.baseUrl;
-      return await getSignalRuntime().channel.signal.probeSignal(baseUrl, timeoutMs);
+      gateway: {
+        startAccount: async (ctx) => {
+          const account = ctx.account;
+          ctx.setStatus({
+            accountId: account.accountId,
+            baseUrl: account.baseUrl,
+          });
+          ctx.log?.info(`[${account.accountId}] starting provider (${account.baseUrl})`);
+          const { monitorSignalProvider } = await loadSignalMonitorModule();
+          return await monitorSignalProvider({
+            accountId: account.accountId,
+            config: ctx.cfg,
+            runtime: ctx.runtime,
+            abortSignal: ctx.abortSignal,
+            mediaMaxMb: account.config.mediaMaxMb,
+          });
+        },
+      },
     },
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      baseUrl: account.baseUrl,
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
-      probe,
-      lastInboundAt: runtime?.lastInboundAt ?? null,
-      lastOutboundAt: runtime?.lastOutboundAt ?? null,
-    }),
-  },
-  gateway: {
-    startAccount: async (ctx) => {
-      const account = ctx.account;
-      ctx.setStatus({
-        accountId: account.accountId,
-        baseUrl: account.baseUrl,
-      });
-      ctx.log?.info(`[${account.accountId}] starting provider (${account.baseUrl})`);
-      // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
-      return getSignalRuntime().channel.signal.monitorSignalProvider({
-        accountId: account.accountId,
-        config: ctx.cfg,
-        runtime: ctx.runtime,
-        abortSignal: ctx.abortSignal,
-        mediaMaxMb: account.config.mediaMaxMb,
-      });
+    pairing: {
+      text: {
+        idLabel: "signalNumber",
+        message: PAIRING_APPROVED_MESSAGE,
+        normalizeAllowEntry: createPairingPrefixStripper(/^signal:/i),
+        notify: async ({ id, message }) => {
+          await (await loadSignalSendRuntime()).sendMessageSignal(id, message);
+        },
+      },
     },
-  },
-};
+    security: signalSecurityAdapter,
+    outbound: {
+      base: {
+        deliveryMode: "direct",
+        chunker: chunkText,
+        chunkerMode: "text",
+        textChunkLimit: 4000,
+        sendFormattedText: async ({ cfg, to, text, accountId, deps, abortSignal }) =>
+          await sendFormattedSignalText({
+            cfg,
+            to,
+            text,
+            accountId,
+            deps,
+            abortSignal,
+          }),
+        sendFormattedMedia: async ({
+          cfg,
+          to,
+          text,
+          mediaUrl,
+          mediaLocalRoots,
+          mediaReadFile,
+          accountId,
+          deps,
+          abortSignal,
+        }) =>
+          await sendFormattedSignalMedia({
+            cfg,
+            to,
+            text,
+            mediaUrl,
+            mediaLocalRoots,
+            mediaReadFile,
+            accountId,
+            deps,
+            abortSignal,
+          }),
+      },
+      attachedResults: {
+        channel: "signal",
+        sendText: async ({ cfg, to, text, accountId, deps }) =>
+          await sendSignalOutbound({
+            cfg,
+            to,
+            text,
+            accountId: accountId ?? undefined,
+            deps,
+          }),
+        sendMedia: async ({
+          cfg,
+          to,
+          text,
+          mediaUrl,
+          mediaLocalRoots,
+          mediaReadFile,
+          accountId,
+          deps,
+        }) =>
+          await sendSignalOutbound({
+            cfg,
+            to,
+            text,
+            mediaUrl,
+            mediaLocalRoots,
+            mediaReadFile,
+            accountId: accountId ?? undefined,
+            deps,
+          }),
+      },
+    },
+  });

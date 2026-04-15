@@ -1,5 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { resolveBlueBubblesAccount } from "./accounts.js";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
+import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
 export type BlueBubblesReactionOpts = {
@@ -111,19 +113,7 @@ const REACTION_EMOJIS = new Map<string, string>([
 ]);
 
 function resolveAccount(params: BlueBubblesReactionOpts) {
-  const account = resolveBlueBubblesAccount({
-    cfg: params.cfg ?? {},
-    accountId: params.accountId,
-  });
-  const baseUrl = params.serverUrl?.trim() || account.config.serverUrl?.trim();
-  const password = params.password?.trim() || account.config.password?.trim();
-  if (!baseUrl) {
-    throw new Error("BlueBubbles serverUrl is required");
-  }
-  if (!password) {
-    throw new Error("BlueBubbles password is required");
-  }
-  return { baseUrl, password };
+  return resolveBlueBubblesServerAccount(params);
 }
 
 export function normalizeBlueBubblesReactionInput(emoji: string, remove?: boolean): string {
@@ -131,7 +121,7 @@ export function normalizeBlueBubblesReactionInput(emoji: string, remove?: boolea
   if (!trimmed) {
     throw new Error("BlueBubbles reaction requires an emoji or name.");
   }
-  let raw = trimmed.toLowerCase();
+  let raw = normalizeLowercaseStringOrEmpty(trimmed);
   if (raw.startsWith("-")) {
     raw = raw.slice(1);
   }
@@ -160,7 +150,12 @@ export async function sendBlueBubblesReaction(params: {
     throw new Error("BlueBubbles reaction requires messageGuid.");
   }
   const reaction = normalizeBlueBubblesReactionInput(params.emoji, params.remove);
-  const { baseUrl, password } = resolveAccount(params.opts ?? {});
+  const { baseUrl, password, accountId, allowPrivateNetwork } = resolveAccount(params.opts ?? {});
+  if (getCachedBlueBubblesPrivateApiStatus(accountId) === false) {
+    throw new Error(
+      "BlueBubbles reaction requires Private API, but it is disabled on the BlueBubbles server.",
+    );
+  }
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: "/api/v1/message/react",
@@ -172,6 +167,7 @@ export async function sendBlueBubblesReaction(params: {
     reaction,
     partIndex: typeof params.partIndex === "number" ? params.partIndex : 0,
   };
+  const ssrfPolicy = allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
   const res = await blueBubblesFetchWithTimeout(
     url,
     {
@@ -180,6 +176,7 @@ export async function sendBlueBubblesReaction(params: {
       body: JSON.stringify(payload),
     },
     params.opts?.timeoutMs,
+    ssrfPolicy,
   );
   if (!res.ok) {
     const errorText = await res.text();

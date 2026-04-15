@@ -23,9 +23,9 @@
  *   node --import tsx scripts/test-shell-completion.ts --force
  */
 
-import { confirm, isCancel } from "@clack/prompts";
 import os from "node:os";
 import path from "node:path";
+import { confirm, isCancel } from "@clack/prompts";
 import { installCompletion } from "../src/cli/completion-cli.js";
 import {
   checkShellCompletionStatus,

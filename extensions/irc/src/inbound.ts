@@ -1,12 +1,8 @@
 import {
-  createReplyPrefixOptions,
-  logInboundDrop,
-  resolveControlCommandGate,
-  type OpenClawConfig,
-  type RuntimeEnv,
-} from "openclaw/plugin-sdk";
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedIrcAccount } from "./accounts.js";
-import type { CoreConfig, IrcInboundMessage } from "./types.js";
 import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 import {
   resolveIrcMentionGate,
@@ -15,49 +11,75 @@ import {
   resolveIrcGroupSenderAllowed,
   resolveIrcRequireMention,
 } from "./policy.js";
+import {
+  GROUP_POLICY_BLOCKED_LABEL,
+  createChannelPairingController,
+  deliverFormattedTextWithAttachments,
+  dispatchInboundReplyWithBase,
+  logInboundDrop,
+  isDangerousNameMatchingEnabled,
+  readStoreAllowFromForDmPolicy,
+  resolveControlCommandGate,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  resolveEffectiveAllowFromLists,
+  warnMissingProviderGroupPolicyFallbackOnce,
+  type OutboundReplyPayload,
+  type OpenClawConfig,
+  type RuntimeEnv,
+} from "./runtime-api.js";
 import { getIrcRuntime } from "./runtime.js";
 import { sendMessageIrc } from "./send.js";
+import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
 const CHANNEL_ID = "irc" as const;
 
 const escapeIrcRegexLiteral = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+function resolveIrcEffectiveAllowlists(params: {
+  configAllowFrom: string[];
+  configGroupAllowFrom: string[];
+  storeAllowList: string[];
+  dmPolicy: string;
+}): {
+  effectiveAllowFrom: string[];
+  effectiveGroupAllowFrom: string[];
+} {
+  const { effectiveAllowFrom, effectiveGroupAllowFrom } = resolveEffectiveAllowFromLists({
+    allowFrom: params.configAllowFrom,
+    groupAllowFrom: params.configGroupAllowFrom,
+    storeAllowFrom: params.storeAllowList,
+    dmPolicy: params.dmPolicy,
+    // IRC intentionally requires explicit groupAllowFrom; do not fallback to allowFrom.
+    groupAllowFromFallbackToAllowFrom: false,
+  });
+  return { effectiveAllowFrom, effectiveGroupAllowFrom };
+}
+
 async function deliverIrcReply(params: {
-  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string; replyToId?: string };
+  payload: OutboundReplyPayload;
   target: string;
   accountId: string;
   sendReply?: (target: string, text: string, replyToId?: string) => Promise<void>;
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
 }) {
-  const text = params.payload.text ?? "";
-  const mediaList = params.payload.mediaUrls?.length
-    ? params.payload.mediaUrls
-    : params.payload.mediaUrl
-      ? [params.payload.mediaUrl]
-      : [];
-
-  if (!text.trim() && mediaList.length === 0) {
+  const delivered = await deliverFormattedTextWithAttachments({
+    payload: params.payload,
+    send: async ({ text, replyToId }) => {
+      if (params.sendReply) {
+        await params.sendReply(params.target, text, replyToId);
+      } else {
+        await sendMessageIrc(params.target, text, {
+          accountId: params.accountId,
+          replyTo: replyToId,
+        });
+      }
+      params.statusSink?.({ lastOutboundAt: Date.now() });
+    },
+  });
+  if (!delivered) {
     return;
   }
-
-  const mediaBlock = mediaList.length
-    ? mediaList.map((url) => `Attachment: ${url}`).join("\n")
-    : "";
-  const combined = text.trim()
-    ? mediaBlock
-      ? `${text.trim()}\n\n${mediaBlock}`
-      : text.trim()
-    : mediaBlock;
-
-  if (params.sendReply) {
-    await params.sendReply(params.target, combined, params.payload.replyToId);
-  } else {
-    await sendMessageIrc(params.target, combined, {
-      accountId: params.accountId,
-      replyTo: params.payload.replyToId,
-    });
-  }
-  params.statusSink?.({ lastOutboundAt: Date.now() });
 }
 
 export async function handleIrcInbound(params: {
@@ -71,6 +93,11 @@ export async function handleIrcInbound(params: {
 }): Promise<void> {
   const { message, account, config, runtime, connectedNick, statusSink } = params;
   const core = getIrcRuntime();
+  const pairing = createChannelPairingController({
+    core,
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
+  });
 
   const rawBody = message.text?.trim() ?? "";
   if (!rawBody) {
@@ -82,14 +109,32 @@ export async function handleIrcInbound(params: {
   const senderDisplay = message.senderHost
     ? `${message.senderNick}!${message.senderUser ?? "?"}@${message.senderHost}`
     : message.senderNick;
+  const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const defaultGroupPolicy = config.channels?.defaults?.groupPolicy;
-  const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
+  const { groupPolicy, providerMissingFallbackApplied } =
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent: config.channels?.irc !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy,
+    });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "irc",
+    accountId: account.accountId,
+    blockedLabel: GROUP_POLICY_BLOCKED_LABEL.channel,
+    log: (message) => runtime.log?.(message),
+  });
 
   const configAllowFrom = normalizeIrcAllowlist(account.config.allowFrom);
   const configGroupAllowFrom = normalizeIrcAllowlist(account.config.groupAllowFrom);
-  const storeAllowFrom = await core.channel.pairing.readAllowFromStore(CHANNEL_ID).catch(() => []);
+  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+    provider: CHANNEL_ID,
+    accountId: account.accountId,
+    dmPolicy,
+    readStore: pairing.readStoreForDmPolicy,
+  });
   const storeAllowList = normalizeIrcAllowlist(storeAllowFrom);
 
   const groupMatch = resolveIrcGroupMatch({
@@ -110,8 +155,12 @@ export async function handleIrcInbound(params: {
   const groupAllowFrom =
     directGroupAllowFrom.length > 0 ? directGroupAllowFrom : wildcardGroupAllowFrom;
 
-  const effectiveAllowFrom = [...configAllowFrom, ...storeAllowList].filter(Boolean);
-  const effectiveGroupAllowFrom = [...configGroupAllowFrom, ...storeAllowList].filter(Boolean);
+  const { effectiveAllowFrom, effectiveGroupAllowFrom } = resolveIrcEffectiveAllowlists({
+    configAllowFrom,
+    configGroupAllowFrom,
+    storeAllowList,
+    dmPolicy,
+  });
 
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
     cfg: config as OpenClawConfig,
@@ -121,6 +170,7 @@ export async function handleIrcInbound(params: {
   const senderAllowedForCommands = resolveIrcAllowlistMatch({
     allowFrom: message.isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom,
     message,
+    allowNameMatching,
   }).allowed;
   const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
   const commandGate = resolveControlCommandGate({
@@ -142,6 +192,7 @@ export async function handleIrcInbound(params: {
       message,
       outerAllowFrom: effectiveGroupAllowFrom,
       innerAllowFrom: groupAllowFrom,
+      allowNameMatching,
     });
     if (!senderAllowed) {
       runtime.log?.(`irc: drop group sender ${senderDisplay} (policy=${groupPolicy})`);
@@ -156,32 +207,27 @@ export async function handleIrcInbound(params: {
       const dmAllowed = resolveIrcAllowlistMatch({
         allowFrom: effectiveAllowFrom,
         message,
+        allowNameMatching,
       }).allowed;
       if (!dmAllowed) {
         if (dmPolicy === "pairing") {
-          const { code, created } = await core.channel.pairing.upsertPairingRequest({
-            channel: CHANNEL_ID,
-            id: senderDisplay.toLowerCase(),
+          await pairing.issueChallenge({
+            senderId: normalizeLowercaseStringOrEmpty(senderDisplay),
+            senderIdLine: `Your IRC id: ${senderDisplay}`,
             meta: { name: message.senderNick || undefined },
-          });
-          if (created) {
-            try {
-              const reply = core.channel.pairing.buildPairingReply({
-                channel: CHANNEL_ID,
-                idLine: `Your IRC id: ${senderDisplay}`,
-                code,
-              });
+            sendPairingReply: async (text) => {
               await deliverIrcReply({
-                payload: { text: reply },
+                payload: { text },
                 target: message.senderNick,
                 accountId: account.accountId,
                 sendReply: params.sendReply,
                 statusSink,
               });
-            } catch (err) {
+            },
+            onReplyError: (err) => {
               runtime.error?.(`irc: pairing reply failed for ${senderDisplay}: ${String(err)}`);
-            }
-          }
+            },
+          });
         }
         runtime.log?.(`irc: drop DM sender ${senderDisplay} (dmPolicy=${dmPolicy})`);
         return;
@@ -257,7 +303,7 @@ export async function handleIrcInbound(params: {
     body: rawBody,
   });
 
-  const groupSystemPrompt = groupMatch.groupConfig?.systemPrompt?.trim() || undefined;
+  const groupSystemPrompt = normalizeOptionalString(groupMatch.groupConfig?.systemPrompt);
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
@@ -283,48 +329,31 @@ export async function handleIrcInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
-  await core.channel.session.recordInboundSession({
+  await dispatchInboundReplyWithBase({
+    cfg: config as OpenClawConfig,
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
+    route,
     storePath,
-    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-    ctx: ctxPayload,
+    ctxPayload,
+    core,
+    deliver: async (payload) => {
+      await deliverIrcReply({
+        payload,
+        target: peerId,
+        accountId: account.accountId,
+        sendReply: params.sendReply,
+        statusSink,
+      });
+    },
     onRecordError: (err) => {
       runtime.error?.(`irc: failed updating session meta: ${String(err)}`);
     },
-  });
-
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
-    cfg: config as OpenClawConfig,
-    agentId: route.agentId,
-    channel: CHANNEL_ID,
-    accountId: account.accountId,
-  });
-
-  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
-    cfg: config as OpenClawConfig,
-    dispatcherOptions: {
-      ...prefixOptions,
-      deliver: async (payload) => {
-        await deliverIrcReply({
-          payload: payload as {
-            text?: string;
-            mediaUrls?: string[];
-            mediaUrl?: string;
-            replyToId?: string;
-          },
-          target: peerId,
-          accountId: account.accountId,
-          sendReply: params.sendReply,
-          statusSink,
-        });
-      },
-      onError: (err, info) => {
-        runtime.error?.(`irc ${info.kind} reply failed: ${String(err)}`);
-      },
+    onDispatchError: (err, info) => {
+      runtime.error?.(`irc ${info.kind} reply failed: ${String(err)}`);
     },
     replyOptions: {
       skillFilter: groupMatch.groupConfig?.skills,
-      onModelSelected,
       disableBlockStreaming:
         typeof account.config.blockStreaming === "boolean"
           ? !account.config.blockStreaming
@@ -332,3 +361,7 @@ export async function handleIrcInbound(params: {
     },
   });
 }
+
+export const __testing = {
+  resolveIrcEffectiveAllowlists,
+};

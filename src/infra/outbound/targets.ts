@@ -1,31 +1,42 @@
-import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
+import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.core.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeAccountId } from "../../routing/session-key.js";
+import {
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+} from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type {
   DeliverableMessageChannel,
   GatewayMessageChannel,
 } from "../../utils/message-channel.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import { formatCliCommand } from "../../cli/command-format.js";
-import { normalizeAccountId } from "../../routing/session-key.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
-  normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { missingTargetError } from "./target-errors.js";
+import {
+  normalizeDeliverableOutboundChannel,
+  resolveOutboundChannelPlugin,
+} from "./channel-resolution.js";
+import {
+  resolveOutboundTargetWithPlugin,
+  type OutboundTargetResolution,
+} from "./targets-resolve-shared.js";
 
-export type OutboundChannel = DeliverableMessageChannel | "none";
+export type OutboundChannel = DeliverableMessageChannel;
 
-export type HeartbeatTarget = OutboundChannel | "last";
+export type HeartbeatTarget = OutboundChannel;
 
 export type OutboundTarget = {
   channel: OutboundChannel;
   to?: string;
   reason?: string;
   accountId?: string;
+  threadId?: string | number;
   lastChannel?: DeliverableMessageChannel;
   lastAccountId?: string;
 };
@@ -36,84 +47,9 @@ export type HeartbeatSenderContext = {
   allowFrom: string[];
 };
 
-export type OutboundTargetResolution = { ok: true; to: string } | { ok: false; error: Error };
-
-export type SessionDeliveryTarget = {
-  channel?: DeliverableMessageChannel;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-  mode: ChannelOutboundTargetMode;
-  lastChannel?: DeliverableMessageChannel;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
-};
-
-export function resolveSessionDeliveryTarget(params: {
-  entry?: SessionEntry;
-  requestedChannel?: GatewayMessageChannel | "last";
-  explicitTo?: string;
-  explicitThreadId?: string | number;
-  fallbackChannel?: DeliverableMessageChannel;
-  allowMismatchedLastTo?: boolean;
-  mode?: ChannelOutboundTargetMode;
-}): SessionDeliveryTarget {
-  const context = deliveryContextFromSession(params.entry);
-  const lastChannel =
-    context?.channel && isDeliverableMessageChannel(context.channel) ? context.channel : undefined;
-  const lastTo = context?.to;
-  const lastAccountId = context?.accountId;
-  const lastThreadId = context?.threadId;
-
-  const rawRequested = params.requestedChannel ?? "last";
-  const requested = rawRequested === "last" ? "last" : normalizeMessageChannel(rawRequested);
-  const requestedChannel =
-    requested === "last"
-      ? "last"
-      : requested && isDeliverableMessageChannel(requested)
-        ? requested
-        : undefined;
-
-  const explicitTo =
-    typeof params.explicitTo === "string" && params.explicitTo.trim()
-      ? params.explicitTo.trim()
-      : undefined;
-  const explicitThreadId =
-    params.explicitThreadId != null && params.explicitThreadId !== ""
-      ? params.explicitThreadId
-      : undefined;
-
-  let channel = requestedChannel === "last" ? lastChannel : requestedChannel;
-  if (!channel && params.fallbackChannel && isDeliverableMessageChannel(params.fallbackChannel)) {
-    channel = params.fallbackChannel;
-  }
-
-  let to = explicitTo;
-  if (!to && lastTo) {
-    if (channel && channel === lastChannel) {
-      to = lastTo;
-    } else if (params.allowMismatchedLastTo) {
-      to = lastTo;
-    }
-  }
-
-  const accountId = channel && channel === lastChannel ? lastAccountId : undefined;
-  const threadId = channel && channel === lastChannel ? lastThreadId : undefined;
-  const mode = params.mode ?? (explicitTo ? "explicit" : "implicit");
-
-  return {
-    channel,
-    to,
-    accountId,
-    threadId: explicitThreadId ?? threadId,
-    mode,
-    lastChannel,
-    lastTo,
-    lastAccountId,
-    lastThreadId,
-  };
-}
+export type { OutboundTargetResolution } from "./targets-resolve-shared.js";
+export { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
+import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 
 // Channel docking: prefer plugin.outbound.resolveTarget + allowFrom to normalize destinations.
 export function resolveOutboundTarget(params: {
@@ -124,67 +60,41 @@ export function resolveOutboundTarget(params: {
   accountId?: string | null;
   mode?: ChannelOutboundTargetMode;
 }): OutboundTargetResolution {
-  if (params.channel === INTERNAL_MESSAGE_CHANNEL) {
-    return {
-      ok: false,
-      error: new Error(
-        `Delivering to WebChat is not supported via \`${formatCliCommand("openclaw agent")}\`; use WhatsApp/Telegram or run with --deliver=false.`,
-      ),
-    };
-  }
-
-  const plugin = getChannelPlugin(params.channel);
-  if (!plugin) {
-    return {
+  return (
+    resolveOutboundTargetWithPlugin({
+      plugin: resolveOutboundChannelPlugin({
+        channel: params.channel,
+        cfg: params.cfg,
+      }),
+      target: params,
+      onMissingPlugin: () =>
+        params.channel === INTERNAL_MESSAGE_CHANNEL
+          ? undefined
+          : {
+              ok: false,
+              error: new Error(`Unsupported channel: ${params.channel}`),
+            },
+    }) ?? {
       ok: false,
       error: new Error(`Unsupported channel: ${params.channel}`),
-    };
-  }
-
-  const allowFrom =
-    params.allowFrom ??
-    (params.cfg && plugin.config.resolveAllowFrom
-      ? plugin.config.resolveAllowFrom({
-          cfg: params.cfg,
-          accountId: params.accountId ?? undefined,
-        })
-      : undefined);
-
-  const resolveTarget = plugin.outbound?.resolveTarget;
-  if (resolveTarget) {
-    return resolveTarget({
-      cfg: params.cfg,
-      to: params.to,
-      allowFrom,
-      accountId: params.accountId ?? undefined,
-      mode: params.mode ?? "explicit",
-    });
-  }
-
-  const trimmed = params.to?.trim();
-  if (trimmed) {
-    return { ok: true, to: trimmed };
-  }
-  const hint = plugin.messaging?.targetResolver?.hint;
-  return {
-    ok: false,
-    error: missingTargetError(plugin.meta.label ?? params.channel, hint),
-  };
+    }
+  );
 }
 
 export function resolveHeartbeatDeliveryTarget(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
+  turnSource?: DeliveryContext;
 }): OutboundTarget {
   const { cfg, entry } = params;
   const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
   const rawTarget = heartbeat?.target;
-  let target: HeartbeatTarget = "last";
+  let target: HeartbeatTarget = "none";
   if (rawTarget === "none" || rawTarget === "last") {
     target = rawTarget;
   } else if (typeof rawTarget === "string") {
-    const normalized = normalizeChannelId(rawTarget);
+    const normalized = normalizeDeliverableOutboundChannel(rawTarget);
     if (normalized) {
       target = normalized;
     }
@@ -192,20 +102,35 @@ export function resolveHeartbeatDeliveryTarget(params: {
 
   if (target === "none") {
     const base = resolveSessionDeliveryTarget({ entry });
-    return {
-      channel: "none",
+    return buildNoHeartbeatDeliveryTarget({
       reason: "target-none",
-      accountId: undefined,
       lastChannel: base.lastChannel,
       lastAccountId: base.lastAccountId,
-    };
+    });
   }
+
+  const resolvedTurnSource =
+    target === "last"
+      ? mergeDeliveryContext(params.turnSource, deliveryContextFromSession(entry))
+      : undefined;
 
   const resolvedTarget = resolveSessionDeliveryTarget({
     entry,
     requestedChannel: target === "last" ? "last" : target,
     explicitTo: heartbeat?.to,
     mode: "heartbeat",
+    turnSourceChannel:
+      resolvedTurnSource?.channel && isDeliverableMessageChannel(resolvedTurnSource.channel)
+        ? resolvedTurnSource.channel
+        : undefined,
+    turnSourceTo: resolvedTurnSource?.to,
+    turnSourceAccountId: resolvedTurnSource?.accountId,
+    // Only pass threadId from an explicit turn source (e.g., restart sentinel's
+    // delivery context). Do NOT fall back to session-stored threadId here —
+    // heartbeat mode intentionally drops inherited thread IDs to avoid replying
+    // in stale threads (e.g., Slack thread_ts). The sentinel's delivery context
+    // carries the correct topic/thread ID when present.
+    turnSourceThreadId: params.turnSource?.threadId,
   });
 
   const heartbeatAccountId = heartbeat?.accountId?.trim();
@@ -213,7 +138,10 @@ export function resolveHeartbeatDeliveryTarget(params: {
   let effectiveAccountId = heartbeatAccountId || resolvedTarget.accountId;
 
   if (heartbeatAccountId && resolvedTarget.channel) {
-    const plugin = getChannelPlugin(resolvedTarget.channel);
+    const plugin = resolveOutboundChannelPlugin({
+      channel: resolvedTarget.channel,
+      cfg,
+    });
     const listAccountIds = plugin?.config.listAccountIds;
     const accountIds = listAccountIds ? listAccountIds(cfg) : [];
     if (accountIds.length > 0) {
@@ -222,26 +150,24 @@ export function resolveHeartbeatDeliveryTarget(params: {
         accountIds.map((accountId) => normalizeAccountId(accountId)),
       );
       if (!normalizedAccountIds.has(normalizedAccountId)) {
-        return {
-          channel: "none",
+        return buildNoHeartbeatDeliveryTarget({
           reason: "unknown-account",
           accountId: normalizedAccountId,
           lastChannel: resolvedTarget.lastChannel,
           lastAccountId: resolvedTarget.lastAccountId,
-        };
+        });
       }
       effectiveAccountId = normalizedAccountId;
     }
   }
 
   if (!resolvedTarget.channel || !resolvedTarget.to) {
-    return {
-      channel: "none",
+    return buildNoHeartbeatDeliveryTarget({
       reason: "no-target",
       accountId: effectiveAccountId,
       lastChannel: resolvedTarget.lastChannel,
       lastAccountId: resolvedTarget.lastAccountId,
-    };
+    });
   }
 
   const resolved = resolveOutboundTarget({
@@ -252,17 +178,35 @@ export function resolveHeartbeatDeliveryTarget(params: {
     mode: "heartbeat",
   });
   if (!resolved.ok) {
-    return {
-      channel: "none",
+    return buildNoHeartbeatDeliveryTarget({
       reason: "no-target",
       accountId: effectiveAccountId,
       lastChannel: resolvedTarget.lastChannel,
       lastAccountId: resolvedTarget.lastAccountId,
-    };
+    });
+  }
+
+  const sessionChatTypeHint =
+    target === "last" && !heartbeat?.to ? normalizeChatType(entry?.chatType) : undefined;
+  const deliveryChatType = resolveHeartbeatDeliveryChatType({
+    channel: resolvedTarget.channel,
+    to: resolved.to,
+    sessionChatType: sessionChatTypeHint,
+  });
+  if (deliveryChatType === "direct" && heartbeat?.directPolicy === "block") {
+    return buildNoHeartbeatDeliveryTarget({
+      reason: "dm-blocked",
+      accountId: effectiveAccountId,
+      lastChannel: resolvedTarget.lastChannel,
+      lastAccountId: resolvedTarget.lastAccountId,
+    });
   }
 
   let reason: string | undefined;
-  const plugin = getChannelPlugin(resolvedTarget.channel);
+  const plugin = resolveOutboundChannelPlugin({
+    channel: resolvedTarget.channel,
+    cfg,
+  });
   if (plugin?.config.resolveAllowFrom) {
     const explicit = resolveOutboundTarget({
       channel: resolvedTarget.channel,
@@ -276,14 +220,104 @@ export function resolveHeartbeatDeliveryTarget(params: {
     }
   }
 
+  const inheritedHeartbeatThreadId = shouldReuseHeartbeatTelegramTopicThread({
+    target,
+    heartbeat,
+    turnSource: params.turnSource,
+    entry,
+    resolvedTarget,
+  })
+    ? resolvedTarget.lastThreadId
+    : undefined;
+
   return {
     channel: resolvedTarget.channel,
     to: resolved.to,
     reason,
     accountId: effectiveAccountId,
+    // Heartbeats normally avoid inheriting session reply-thread IDs, but
+    // Telegram forum-topic sessions encode the topic as part of the
+    // destination identity. Preserve that topic routing when the heartbeat is
+    // still targeting the same group session.
+    threadId: resolvedTarget.threadId ?? inheritedHeartbeatThreadId,
     lastChannel: resolvedTarget.lastChannel,
     lastAccountId: resolvedTarget.lastAccountId,
   };
+}
+
+function buildNoHeartbeatDeliveryTarget(params: {
+  reason: string;
+  accountId?: string;
+  lastChannel?: DeliverableMessageChannel;
+  lastAccountId?: string;
+}): OutboundTarget {
+  return {
+    channel: "none",
+    reason: params.reason,
+    accountId: params.accountId,
+    lastChannel: params.lastChannel,
+    lastAccountId: params.lastAccountId,
+  };
+}
+
+function inferChatTypeFromTarget(params: {
+  channel: DeliverableMessageChannel;
+  to: string;
+}): ChatType | undefined {
+  const to = params.to.trim();
+  if (!to) {
+    return undefined;
+  }
+
+  if (/^user:/i.test(to)) {
+    return "direct";
+  }
+  if (/^(channel:|thread:)/i.test(to)) {
+    return "channel";
+  }
+  if (/^group:/i.test(to)) {
+    return "group";
+  }
+  return (
+    resolveOutboundChannelPlugin({
+      channel: params.channel,
+    })?.messaging?.inferTargetChatType?.({ to }) ?? undefined
+  );
+}
+
+function resolveHeartbeatDeliveryChatType(params: {
+  channel: DeliverableMessageChannel;
+  to: string;
+  sessionChatType?: ChatType;
+}): ChatType | undefined {
+  if (params.sessionChatType) {
+    return params.sessionChatType;
+  }
+  return inferChatTypeFromTarget({
+    channel: params.channel,
+    to: params.to,
+  });
+}
+
+function shouldReuseHeartbeatTelegramTopicThread(params: {
+  target: HeartbeatTarget;
+  heartbeat?: AgentDefaultsConfig["heartbeat"];
+  turnSource?: DeliveryContext;
+  entry?: SessionEntry;
+  resolvedTarget: SessionDeliveryTarget;
+}): boolean {
+  return (
+    params.resolvedTarget.threadId == null &&
+    params.target === "last" &&
+    !params.heartbeat?.to &&
+    params.turnSource?.threadId == null &&
+    params.resolvedTarget.channel === "telegram" &&
+    params.resolvedTarget.lastChannel === "telegram" &&
+    Boolean(params.resolvedTarget.to) &&
+    Boolean(params.resolvedTarget.lastTo) &&
+    params.resolvedTarget.to === params.resolvedTarget.lastTo &&
+    normalizeChatType(params.entry?.chatType) === "group"
+  );
 }
 
 function resolveHeartbeatSenderId(params: {
@@ -300,9 +334,7 @@ function resolveHeartbeatSenderId(params: {
     provider && lastTo ? `${provider}:${lastTo}` : undefined,
   ].filter((val): val is string => Boolean(val?.trim()));
 
-  const allowList = allowFrom
-    .map((entry) => String(entry))
-    .filter((entry) => entry && entry !== "*");
+  const allowList = mapAllowFromEntries(allowFrom).filter((entry) => entry && entry !== "*");
   if (allowFrom.includes("*")) {
     return candidates[0] ?? "heartbeat";
   }
@@ -331,12 +363,16 @@ export function resolveHeartbeatSenderContext(params: {
   const accountId =
     params.delivery.accountId ??
     (provider === params.delivery.lastChannel ? params.delivery.lastAccountId : undefined);
-  const allowFrom = provider
-    ? (getChannelPlugin(provider)?.config.resolveAllowFrom?.({
+  const allowFromRaw = provider
+    ? (resolveOutboundChannelPlugin({
+        channel: provider,
+        cfg: params.cfg,
+      })?.config.resolveAllowFrom?.({
         cfg: params.cfg,
         accountId,
       }) ?? [])
     : [];
+  const allowFrom = mapAllowFromEntries(allowFromRaw);
 
   const sender = resolveHeartbeatSenderId({
     allowFrom,

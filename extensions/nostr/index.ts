@@ -1,49 +1,71 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
-import type { NostrProfile } from "./src/config-schema.js";
-import { nostrPlugin } from "./src/channel.js";
-import { createNostrProfileHttpHandler } from "./src/nostr-profile-http.js";
-import { setNostrRuntime, getNostrRuntime } from "./src/runtime.js";
-import { resolveNostrAccount } from "./src/types.js";
+import {
+  defineBundledChannelEntry,
+  loadBundledEntryExportSync,
+} from "openclaw/plugin-sdk/channel-entry-contract";
+import type { PluginRuntime, ResolvedNostrAccount } from "./api.js";
 
-const plugin = {
+function createNostrProfileHttpHandler() {
+  return loadBundledEntryExportSync<
+    (params: Record<string, unknown>) => (ctx: unknown) => Promise<void> | void
+  >(import.meta.url, {
+    specifier: "./api.js",
+    exportName: "createNostrProfileHttpHandler",
+  });
+}
+
+function getNostrRuntime() {
+  return loadBundledEntryExportSync<() => PluginRuntime>(import.meta.url, {
+    specifier: "./api.js",
+    exportName: "getNostrRuntime",
+  })();
+}
+
+function resolveNostrAccount(params: { cfg: unknown; accountId: string }) {
+  return loadBundledEntryExportSync<
+    (params: { cfg: unknown; accountId: string }) => ResolvedNostrAccount
+  >(import.meta.url, {
+    specifier: "./api.js",
+    exportName: "resolveNostrAccount",
+  })(params);
+}
+
+export default defineBundledChannelEntry({
   id: "nostr",
   name: "Nostr",
   description: "Nostr DM channel plugin via NIP-04",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setNostrRuntime(api.runtime);
-    api.registerChannel({ plugin: nostrPlugin });
-
-    // Register HTTP handler for profile management
-    const httpHandler = createNostrProfileHttpHandler({
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "nostrPlugin",
+  },
+  runtime: {
+    specifier: "./api.js",
+    exportName: "setNostrRuntime",
+  },
+  registerFull(api) {
+    const httpHandler = createNostrProfileHttpHandler()({
       getConfigProfile: (accountId: string) => {
         const runtime = getNostrRuntime();
         const cfg = runtime.config.loadConfig();
         const account = resolveNostrAccount({ cfg, accountId });
         return account.profile;
       },
-      updateConfigProfile: async (accountId: string, profile: NostrProfile) => {
+      updateConfigProfile: async (accountId: string, profile: unknown) => {
         const runtime = getNostrRuntime();
         const cfg = runtime.config.loadConfig();
 
-        // Build the config patch for channels.nostr.profile
         const channels = (cfg.channels ?? {}) as Record<string, unknown>;
         const nostrConfig = (channels.nostr ?? {}) as Record<string, unknown>;
 
-        const updatedNostrConfig = {
-          ...nostrConfig,
-          profile,
-        };
-
-        const updatedChannels = {
-          ...channels,
-          nostr: updatedNostrConfig,
-        };
-
         await runtime.config.writeConfigFile({
           ...cfg,
-          channels: updatedChannels,
+          channels: {
+            ...channels,
+            nostr: {
+              ...nostrConfig,
+              profile,
+            },
+          },
         });
       },
       getAccountInfo: (accountId: string) => {
@@ -61,8 +83,12 @@ const plugin = {
       log: api.logger,
     });
 
-    api.registerHttpHandler(httpHandler);
+    api.registerHttpRoute({
+      path: "/api/channels/nostr",
+      auth: "gateway",
+      match: "prefix",
+      gatewayRuntimeScopeSurface: "trusted-operator",
+      handler: httpHandler,
+    });
   },
-};
-
-export default plugin;
+});

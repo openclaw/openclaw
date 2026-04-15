@@ -1,42 +1,134 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../../config/config.js";
-import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isCronSessionKey } from "../../../routing/session-key.js";
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../../shared/string-coerce.js";
+import {
+  BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
+import type { ToolResultFormat } from "../../pi-embedded-subscribe.shared-types.js";
 import {
-  extractAssistantText,
   extractAssistantThinking,
+  extractAssistantVisibleText,
   formatReasoningMessage,
 } from "../../pi-embedded-utils.js";
+import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
+import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
 type ToolMetaEntry = { toolName: string; meta?: string };
+type ToolErrorWarningPolicy = {
+  showWarning: boolean;
+  includeDetails: boolean;
+};
+
+const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
+  "required",
+  "missing",
+  "invalid",
+  "must be",
+  "must have",
+  "needs",
+  "requires",
+] as const;
+
+function isRecoverableToolError(error: string | undefined): boolean {
+  const errorLower = normalizeOptionalLowercaseString(error) ?? "";
+  return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
+}
+
+function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
+  return level === "on" || level === "full";
+}
+
+function shouldIncludeToolErrorDetails(params: {
+  lastToolError: ToolErrorSummary;
+  isCronTrigger?: boolean;
+  sessionKey: string;
+  verboseLevel?: VerboseLevel;
+}): boolean {
+  if (isVerboseToolDetailEnabled(params.verboseLevel)) {
+    return true;
+  }
+  return (
+    isExecLikeToolName(params.lastToolError.toolName) &&
+    params.lastToolError.timedOut === true &&
+    (params.isCronTrigger === true || isCronSessionKey(params.sessionKey))
+  );
+}
+
+function resolveToolErrorWarningPolicy(params: {
+  lastToolError: ToolErrorSummary;
+  hasUserFacingReply: boolean;
+  suppressToolErrors: boolean;
+  suppressToolErrorWarnings?: boolean;
+  isCronTrigger?: boolean;
+  sessionKey: string;
+  verboseLevel?: VerboseLevel;
+}): ToolErrorWarningPolicy {
+  const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
+  const includeDetails = shouldIncludeToolErrorDetails(params);
+  if (params.suppressToolErrorWarnings) {
+    return { showWarning: false, includeDetails };
+  }
+  if (isExecLikeToolName(params.lastToolError.toolName) && !includeDetails) {
+    return { showWarning: false, includeDetails };
+  }
+  // sessions_send timeouts and errors are transient inter-session communication
+  // issues — the message may still have been delivered. Suppress warnings to
+  // prevent raw error text from leaking into the chat surface (#23989).
+  if (normalizedToolName === "sessions_send") {
+    return { showWarning: false, includeDetails };
+  }
+  const isMutatingToolError =
+    params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
+  if (isMutatingToolError) {
+    return { showWarning: true, includeDetails };
+  }
+  if (params.suppressToolErrors) {
+    return { showWarning: false, includeDetails };
+  }
+  return {
+    showWarning: !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error),
+    includeDetails,
+  };
+}
 
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
-  lastToolError?: { toolName: string; meta?: string; error?: string };
+  lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;
+  isCronTrigger?: boolean;
   sessionKey: string;
+  provider?: string;
+  model?: string;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
+  suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
+  didSendViaMessagingTool?: boolean;
+  didSendDeterministicApprovalPrompt?: boolean;
 }): Array<{
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
   replyToId?: string;
   isError?: boolean;
+  isReasoning?: boolean;
   audioAsVoice?: boolean;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
@@ -45,6 +137,7 @@ export function buildEmbeddedRunPayloads(params: {
     text: string;
     media?: string[];
     isError?: boolean;
+    isReasoning?: boolean;
     audioAsVoice?: boolean;
     replyToId?: string;
     replyToTag?: boolean;
@@ -52,15 +145,21 @@ export function buildEmbeddedRunPayloads(params: {
   }> = [];
 
   const useMarkdown = params.toolResultFormat === "markdown";
+  const suppressAssistantArtifacts = params.didSendDeterministicApprovalPrompt === true;
   const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
-  const errorText = params.lastAssistant
-    ? formatAssistantErrorText(params.lastAssistant, {
-        cfg: params.config,
-        sessionKey: params.sessionKey,
-      })
-    : undefined;
+  const errorText =
+    params.lastAssistant && lastAssistantErrored
+      ? suppressAssistantArtifacts
+        ? undefined
+        : formatAssistantErrorText(params.lastAssistant, {
+            cfg: params.config,
+            sessionKey: params.sessionKey,
+            provider: params.provider,
+            model: params.model,
+          })
+      : undefined;
   const rawErrorMessage = lastAssistantErrored
-    ? params.lastAssistant?.errorMessage?.trim() || undefined
+    ? normalizeOptionalString(params.lastAssistant?.errorMessage)
     : undefined;
   const rawErrorFingerprint = rawErrorMessage
     ? getApiErrorPayloadFingerprint(rawErrorMessage)
@@ -75,6 +174,7 @@ export function buildEmbeddedRunPayloads(params: {
     ? normalizeTextForComparison(rawErrorMessage)
     : null;
   const normalizedErrorText = errorText ? normalizeTextForComparison(errorText) : null;
+  const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
   const genericErrorText = "The AI service returned an error. Please try again.";
   if (errorText) {
     replyItems.push({ text: errorText, isError: true });
@@ -108,15 +208,18 @@ export function buildEmbeddedRunPayloads(params: {
     }
   }
 
-  const reasoningText =
-    params.lastAssistant && params.reasoningLevel === "on"
+  const reasoningText = suppressAssistantArtifacts
+    ? ""
+    : params.lastAssistant && params.reasoningLevel === "on"
       ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
       : "";
   if (reasoningText) {
-    replyItems.push({ text: reasoningText });
+    replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
-  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
+  const fallbackAnswerText = params.lastAssistant
+    ? extractAssistantVisibleText(params.lastAssistant)
+    : "";
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantErrored) {
       return false;
@@ -131,6 +234,13 @@ export function buildEmbeddedRunPayloads(params: {
         return true;
       }
       if (trimmed === genericErrorText) {
+        return true;
+      }
+      if (
+        normalized &&
+        normalizedGenericBillingErrorText &&
+        normalized === normalizedGenericBillingErrorText
+      ) {
         return true;
       }
     }
@@ -160,14 +270,16 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
-  const answerTexts = (
-    params.assistantTexts.length
-      ? params.assistantTexts
-      : fallbackAnswerText
-        ? [fallbackAnswerText]
-        : []
-  ).filter((text) => !shouldSuppressRawErrorText(text));
+  const answerTexts = suppressAssistantArtifacts
+    ? []
+    : (params.assistantTexts.length
+        ? params.assistantTexts
+        : fallbackAnswerText
+          ? [fallbackAnswerText]
+          : []
+      ).filter((text) => !shouldSuppressRawErrorText(text));
 
+  let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {
     const {
       text: cleanedText,
@@ -188,53 +300,56 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag,
       replyToCurrent,
     });
+    hasUserFacingAssistantReply = true;
   }
 
   if (params.lastToolError) {
-    const lastAssistantHasToolCalls =
-      Array.isArray(params.lastAssistant?.content) &&
-      params.lastAssistant?.content.some((block) =>
-        block && typeof block === "object"
-          ? (block as { type?: unknown }).type === "toolCall"
-          : false,
-      );
-    const lastAssistantWasToolUse = params.lastAssistant?.stopReason === "toolUse";
-    const hasUserFacingReply =
-      replyItems.length > 0 && !lastAssistantHasToolCalls && !lastAssistantWasToolUse;
-    // Check if this is a recoverable/internal tool error that shouldn't be shown to users
-    // when there's already a user-facing reply (the model should have retried).
-    const errorLower = (params.lastToolError.error ?? "").toLowerCase();
-    const isRecoverableError =
-      errorLower.includes("required") ||
-      errorLower.includes("missing") ||
-      errorLower.includes("invalid") ||
-      errorLower.includes("must be") ||
-      errorLower.includes("must have") ||
-      errorLower.includes("needs") ||
-      errorLower.includes("requires");
+    const warningPolicy = resolveToolErrorWarningPolicy({
+      lastToolError: params.lastToolError,
+      hasUserFacingReply: hasUserFacingAssistantReply,
+      suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
+      suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+      isCronTrigger: params.isCronTrigger,
+      sessionKey: params.sessionKey,
+      verboseLevel: params.verboseLevel,
+    });
 
-    // Show tool errors only when:
-    // 1. There's no user-facing reply AND the error is not recoverable
-    // Recoverable errors (validation, missing params) are already in the model's context
-    // and shouldn't be surfaced to users since the model should retry.
-    if (!hasUserFacingReply && !isRecoverableError) {
+    // Always surface mutating tool failures so we do not silently confirm actions that did not happen.
+    // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
+    if (warningPolicy.showWarning) {
       const toolSummary = formatToolAggregate(
         params.lastToolError.toolName,
         params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
         { markdown: useMarkdown },
       );
-      const errorSuffix = params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
-      replyItems.push({
-        text: `⚠️ ${toolSummary} failed${errorSuffix}`,
-        isError: true,
-      });
+      const errorSuffix =
+        warningPolicy.includeDetails && params.lastToolError.error
+          ? `: ${params.lastToolError.error}`
+          : "";
+      const warningText = `⚠️ ${toolSummary} failed${errorSuffix}`;
+      const normalizedWarning = normalizeTextForComparison(warningText);
+      const duplicateWarning = normalizedWarning
+        ? replyItems.some((item) => {
+            if (!item.text) {
+              return false;
+            }
+            const normalizedExisting = normalizeTextForComparison(item.text);
+            return normalizedExisting.length > 0 && normalizedExisting === normalizedWarning;
+          })
+        : false;
+      if (!duplicateWarning) {
+        replyItems.push({
+          text: warningText,
+          isError: true,
+        });
+      }
     }
   }
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
     .map((item) => ({
-      text: item.text?.trim() ? item.text.trim() : undefined,
+      text: normalizeOptionalString(item.text),
       mediaUrls: item.media?.length ? item.media : undefined,
       mediaUrl: item.media?.[0],
       isError: item.isError,
@@ -244,10 +359,10 @@ export function buildEmbeddedRunPayloads(params: {
       audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
     }))
     .filter((p) => {
-      if (!p.text && !p.mediaUrl && (!p.mediaUrls || p.mediaUrls.length === 0)) {
+      if (!hasOutboundReplyContent(p)) {
         return false;
       }
-      if (p.text && isSilentReplyText(p.text, SILENT_REPLY_TOKEN)) {
+      if (p.text && isSilentReplyPayloadText(p.text, SILENT_REPLY_TOKEN)) {
         return false;
       }
       return true;

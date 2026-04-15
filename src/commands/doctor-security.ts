@@ -1,16 +1,184 @@
-import type { ChannelId } from "../channels/plugins/types.js";
-import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
-import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
+import type { AgentConfig } from "../config/types.agents.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
-import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
+import { loadExecApprovals, type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
+import { resolveDmAllowState } from "../security/dm-policy-shared.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
+import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
+
+function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): string[] {
+  const warnings: string[] = [];
+
+  const maybeWarn = (params: {
+    label: string;
+    heartbeat: AgentConfig["heartbeat"] | undefined;
+    pathHint: string;
+  }) => {
+    const heartbeat = params.heartbeat;
+    if (!heartbeat || heartbeat.target === undefined || heartbeat.target === "none") {
+      return;
+    }
+    if (heartbeat.directPolicy !== undefined) {
+      return;
+    }
+    warnings.push(
+      `- ${params.label}: heartbeat delivery is configured while ${params.pathHint} is unset.`,
+      '  Heartbeat now allows direct/DM targets by default. Set it explicitly to "allow" or "block" to pin upgrade behavior.',
+    );
+  };
+
+  maybeWarn({
+    label: "Heartbeat defaults",
+    heartbeat: cfg.agents?.defaults?.heartbeat,
+    pathHint: "agents.defaults.heartbeat.directPolicy",
+  });
+
+  for (const agent of cfg.agents?.list ?? []) {
+    maybeWarn({
+      label: `Heartbeat agent "${agent.id}"`,
+      heartbeat: agent.heartbeat,
+      pathHint: `heartbeat.directPolicy for agent "${agent.id}"`,
+    });
+  }
+
+  return warnings;
+}
+
+function execSecurityRank(value: ExecSecurity): number {
+  switch (value) {
+    case "deny":
+      return 0;
+    case "allowlist":
+      return 1;
+    case "full":
+      return 2;
+  }
+  throw new Error("Unsupported exec security value");
+}
+
+function execAskRank(value: ExecAsk): number {
+  switch (value) {
+    case "off":
+      return 0;
+    case "on-miss":
+      return 1;
+    case "always":
+      return 2;
+  }
+  throw new Error("Unsupported exec ask value");
+}
+
+function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
+  const warnings: string[] = [];
+  const approvals = loadExecApprovals();
+  const defaultRequestedSecuritySource = "OpenClaw default (full)";
+  const defaultRequestedAskSource = "OpenClaw default (off)";
+
+  const maybeWarn = (params: {
+    scopeLabel: string;
+    scopeExecConfig: { security?: ExecSecurity; ask?: ExecAsk } | undefined;
+    globalExecConfig?: { security?: ExecSecurity; ask?: ExecAsk } | undefined;
+    agentId?: string;
+  }) => {
+    const scopeExecConfig = params.scopeExecConfig;
+    const globalExecConfig = params.globalExecConfig;
+    if (
+      !scopeExecConfig?.security &&
+      !scopeExecConfig?.ask &&
+      !globalExecConfig?.security &&
+      !globalExecConfig?.ask
+    ) {
+      return;
+    }
+    const snapshot = resolveExecPolicyScopeSnapshot({
+      approvals,
+      scopeExecConfig,
+      globalExecConfig,
+      configPath:
+        params.scopeLabel === "tools.exec"
+          ? "tools.exec"
+          : `agents.list.${params.agentId}.tools.exec`,
+      scopeLabel: params.scopeLabel,
+      agentId: params.agentId,
+    });
+    const securityConfigured = snapshot.security.requestedSource !== defaultRequestedSecuritySource;
+    const askConfigured = snapshot.ask.requestedSource !== defaultRequestedAskSource;
+    const securityConflict =
+      securityConfigured &&
+      execSecurityRank(snapshot.security.requested) > execSecurityRank(snapshot.security.effective);
+    const askConflict =
+      askConfigured && execAskRank(snapshot.ask.requested) < execAskRank(snapshot.ask.effective);
+    if (!securityConflict && !askConflict) {
+      return;
+    }
+
+    const configParts: string[] = [];
+    const hostParts: string[] = [];
+    if (securityConflict) {
+      configParts.push(`${snapshot.security.requestedSource}="${snapshot.security.requested}"`);
+      hostParts.push(`${snapshot.security.hostSource}="${snapshot.security.host}"`);
+    }
+    if (askConflict) {
+      configParts.push(`${snapshot.ask.requestedSource}="${snapshot.ask.requested}"`);
+      hostParts.push(`${snapshot.ask.hostSource}="${snapshot.ask.host}"`);
+    }
+
+    warnings.push(
+      [
+        `- ${params.scopeLabel} is broader than the host exec policy.`,
+        `  Config: ${configParts.join(", ")}`,
+        `  Host: ${hostParts.join(", ")}`,
+        `  Effective host exec stays security="${snapshot.security.effective}" ask="${snapshot.ask.effective}" because the stricter side wins.`,
+        "  Headless runs like isolated cron cannot answer approval prompts; align both files or enable Web UI, terminal UI, or chat exec approvals.",
+        `  Inspect with: ${formatCliCommand("openclaw approvals get --gateway")}`,
+      ].join("\n"),
+    );
+  };
+
+  maybeWarn({
+    scopeLabel: "tools.exec",
+    scopeExecConfig: cfg.tools?.exec,
+  });
+
+  for (const agent of cfg.agents?.list ?? []) {
+    maybeWarn({
+      scopeLabel: `agents.list.${agent.id}.tools.exec`,
+      scopeExecConfig: agent.tools?.exec,
+      globalExecConfig: cfg.tools?.exec,
+      agentId: agent.id,
+    });
+  }
+
+  return warnings;
+}
+
+function collectDurableExecApprovalWarnings(cfg: OpenClawConfig): string[] {
+  void cfg;
+  return [];
+}
 
 export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const warnings: string[] = [];
   const auditHint = `- Run: ${formatCliCommand("openclaw security audit --deep")}`;
+
+  if (cfg.approvals?.exec?.enabled === false) {
+    warnings.push(
+      "- Note: approvals.exec.enabled=false disables approval forwarding only.",
+      "  Host exec gating still comes from ~/.openclaw/exec-approvals.json.",
+      `  Check local policy with: ${formatCliCommand("openclaw approvals get --gateway")}`,
+    );
+  }
+
+  warnings.push(...collectImplicitHeartbeatDirectPolicyWarnings(cfg));
+  warnings.push(...collectExecPolicyConflictWarnings(cfg));
+  warnings.push(...collectDurableExecApprovalWarnings(cfg));
 
   // ===========================================
   // GATEWAY NETWORK EXPOSURE CHECK
@@ -18,6 +186,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   // Check for dangerous gateway binding configurations
   // that expose the gateway to network without proper auth
 
+  const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const gatewayBind = (cfg.gateway?.bind ?? "loopback") as string;
   const customBindHost = cfg.gateway?.customBindHost?.trim();
   const bindModes: GatewayBindMode[] = ["auto", "lan", "loopback", "custom", "tailnet"];
@@ -32,16 +201,25 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const resolvedAuth = resolveGatewayAuth({
     authConfig: cfg.gateway?.auth,
     env: process.env,
-    tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
+    tailscaleMode,
   });
-  const authToken = resolvedAuth.token?.trim() ?? "";
-  const authPassword = resolvedAuth.password?.trim() ?? "";
-  const hasToken = authToken.length > 0;
-  const hasPassword = authPassword.length > 0;
+  const authToken = normalizeOptionalString(resolvedAuth.token) ?? "";
+  const authPassword = normalizeOptionalString(resolvedAuth.password) ?? "";
+  const hasToken =
+    authToken.length > 0 ||
+    hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults);
+  const hasPassword =
+    authPassword.length > 0 ||
+    hasConfiguredSecretInput(cfg.gateway?.auth?.password, cfg.secrets?.defaults);
   const hasSharedSecret =
     (resolvedAuth.mode === "token" && hasToken) ||
     (resolvedAuth.mode === "password" && hasPassword);
   const bindDescriptor = `"${gatewayBind}" (${resolvedBindHost})`;
+  const saferRemoteAccessLines = [
+    "  Safer remote access: keep bind loopback and use Tailscale Serve/Funnel or an SSH tunnel.",
+    "  Example tunnel: ssh -N -L 18789:127.0.0.1:18789 user@gateway-host",
+    "  Docs: https://docs.openclaw.ai/gateway/remote",
+  ];
 
   if (isExposed) {
     if (!hasSharedSecret) {
@@ -61,6 +239,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
         `- CRITICAL: Gateway bound to ${bindDescriptor} without authentication.`,
         `  Anyone on your network (or internet if port-forwarded) can fully control your agent.`,
         `  Fix: ${formatCliCommand("openclaw config set gateway.bind loopback")}`,
+        ...saferRemoteAccessLines,
         ...authFixLines,
       );
     } else {
@@ -68,6 +247,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
       warnings.push(
         `- WARNING: Gateway bound to ${bindDescriptor} (network-accessible).`,
         `  Ensure your auth credentials are strong and not exposed.`,
+        ...saferRemoteAccessLines,
       );
     }
   }
@@ -75,6 +255,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const warnDmPolicy = async (params: {
     label: string;
     provider: ChannelId;
+    accountId: string;
     dmPolicy: string;
     allowFrom?: Array<string | number> | null;
     policyPath?: string;
@@ -84,21 +265,13 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   }) => {
     const dmPolicy = params.dmPolicy;
     const policyPath = params.policyPath ?? `${params.allowFromPath}policy`;
-    const configAllowFrom = (params.allowFrom ?? []).map((v) => String(v).trim());
-    const hasWildcard = configAllowFrom.includes("*");
-    const storeAllowFrom = await readChannelAllowFromStore(params.provider).catch(() => []);
-    const normalizedCfg = configAllowFrom
-      .filter((v) => v !== "*")
-      .map((v) => (params.normalizeEntry ? params.normalizeEntry(v) : v))
-      .map((v) => v.trim())
-      .filter(Boolean);
-    const normalizedStore = storeAllowFrom
-      .map((v) => (params.normalizeEntry ? params.normalizeEntry(v) : v))
-      .map((v) => v.trim())
-      .filter(Boolean);
-    const allowCount = Array.from(new Set([...normalizedCfg, ...normalizedStore])).length;
+    const { hasWildcard, allowCount, isMultiUserDm } = await resolveDmAllowState({
+      provider: params.provider,
+      accountId: params.accountId,
+      allowFrom: params.allowFrom,
+      normalizeEntry: params.normalizeEntry,
+    });
     const dmScope = cfg.session?.dmScope ?? "main";
-    const isMultiUserDm = hasWildcard || allowCount > 1;
 
     if (dmPolicy === "open") {
       const allowFromPath = `${params.allowFromPath}allowFrom`;
@@ -124,7 +297,9 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
 
     if (dmScope === "main" && isMultiUserDm) {
       warnings.push(
-        `- ${params.label} DMs: multiple senders share the main session; set session.dmScope="per-channel-peer" (or "per-account-channel-peer" for multi-account channels) to isolate sessions.`,
+        `- ${params.label} DMs: multiple senders share the main session; run: ` +
+          formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
+          ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
       );
     }
   };
@@ -133,20 +308,17 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     if (!plugin.security) {
       continue;
     }
-    const accountIds = plugin.config.listAccountIds(cfg);
-    const defaultAccountId = resolveChannelDefaultAccountId({
-      plugin,
-      cfg,
-      accountIds,
-    });
-    const account = plugin.config.resolveAccount(cfg, defaultAccountId);
-    const enabled = plugin.config.isEnabled ? plugin.config.isEnabled(account, cfg) : true;
+    const { defaultAccountId, account, enabled, configured, diagnostics } =
+      await resolveDefaultChannelAccountContext(plugin, cfg, {
+        mode: "read_only",
+        commandName: "doctor",
+      });
+    for (const diagnostic of diagnostics) {
+      warnings.push(`- [secrets] ${diagnostic}`);
+    }
     if (!enabled) {
       continue;
     }
-    const configured = plugin.config.isConfigured
-      ? await plugin.config.isConfigured(account, cfg)
-      : true;
     if (!configured) {
       continue;
     }
@@ -159,6 +331,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
       await warnDmPolicy({
         label: plugin.meta.label ?? plugin.id,
         provider: plugin.id,
+        accountId: defaultAccountId,
         dmPolicy: dmPolicy.policy,
         allowFrom: dmPolicy.allowFrom,
         policyPath: dmPolicy.policyPath,

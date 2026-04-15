@@ -3,14 +3,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
-// Module under test imports these at module scope.
-vi.mock("../agents/skills-status.js", () => ({
+const mocks = vi.hoisted(() => ({
   buildWorkspaceSkillStatus: vi.fn(),
-}));
-vi.mock("../agents/skills-install.js", () => ({
   installSkill: vi.fn(),
-}));
-vi.mock("./onboard-helpers.js", () => ({
   detectBinary: vi.fn(),
   resolveNodeManagerOptions: vi.fn(() => [
     { value: "npm", label: "npm" },
@@ -19,10 +14,83 @@ vi.mock("./onboard-helpers.js", () => ({
   ]),
 }));
 
-import { installSkill } from "../agents/skills-install.js";
-import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
-import { detectBinary } from "./onboard-helpers.js";
+// Module under test imports these at module scope.
+vi.mock("../agents/skills-status.js", () => ({
+  buildWorkspaceSkillStatus: mocks.buildWorkspaceSkillStatus,
+}));
+vi.mock("../agents/skills-install.js", () => ({
+  installSkill: mocks.installSkill,
+}));
+vi.mock("./onboard-helpers.js", () => ({
+  detectBinary: mocks.detectBinary,
+  resolveNodeManagerOptions: mocks.resolveNodeManagerOptions,
+}));
+
 import { setupSkills } from "./onboard-skills.js";
+
+function createBundledSkill(params: {
+  name: string;
+  description: string;
+  bins: string[];
+  os?: string[];
+  installLabel: string;
+}): {
+  name: string;
+  description: string;
+  source: string;
+  bundled: boolean;
+  filePath: string;
+  baseDir: string;
+  skillKey: string;
+  always: boolean;
+  disabled: boolean;
+  blockedByAllowlist: boolean;
+  eligible: boolean;
+  requirements: {
+    bins: string[];
+    anyBins: string[];
+    env: string[];
+    config: string[];
+    os: string[];
+  };
+  missing: { bins: string[]; anyBins: string[]; env: string[]; config: string[]; os: string[] };
+  configChecks: [];
+  install: Array<{ id: string; kind: string; label: string; bins: string[] }>;
+} {
+  return {
+    name: params.name,
+    description: params.description,
+    source: "openclaw-bundled",
+    bundled: true,
+    filePath: `/tmp/skills/${params.name}`,
+    baseDir: `/tmp/skills/${params.name}`,
+    skillKey: params.name,
+    always: false,
+    disabled: false,
+    blockedByAllowlist: false,
+    eligible: false,
+    requirements: { bins: params.bins, anyBins: [], env: [], config: [], os: params.os ?? [] },
+    missing: { bins: params.bins, anyBins: [], env: [], config: [], os: params.os ?? [] },
+    configChecks: [],
+    install: [{ id: "brew", kind: "brew", label: params.installLabel, bins: params.bins }],
+  };
+}
+
+function mockMissingBrewStatus(skills: Array<ReturnType<typeof createBundledSkill>>): void {
+  mocks.detectBinary.mockResolvedValue(false);
+  mocks.installSkill.mockResolvedValue({
+    ok: true,
+    message: "Installed",
+    stdout: "",
+    stderr: "",
+    code: 0,
+  });
+  mocks.buildWorkspaceSkillStatus.mockReturnValue({
+    workspaceDir: "/tmp/ws",
+    managedSkillsDir: "/tmp/managed",
+    skills,
+  } as never);
+}
 
 function createPrompter(params: {
   configure?: boolean;
@@ -40,8 +108,10 @@ function createPrompter(params: {
     note: vi.fn(async (message: string, title?: string) => {
       notes.push({ title, message });
     }),
-    select: vi.fn(async () => "npm"),
-    multiselect: vi.fn(async () => params.multiselect ?? ["__skip__"]),
+    select: vi.fn(async () => "npm") as unknown as WizardPrompter["select"],
+    multiselect: vi.fn(
+      async () => params.multiselect ?? ["__skip__"],
+    ) as unknown as WizardPrompter["multiselect"],
     text: vi.fn(async () => ""),
     confirm: vi.fn(async ({ message }) => {
       if (message === "Show Homebrew install command?") {
@@ -69,56 +139,21 @@ describe("setupSkills", () => {
       return;
     }
 
-    vi.mocked(detectBinary).mockResolvedValue(false);
-    vi.mocked(installSkill).mockResolvedValue({
-      ok: true,
-      message: "Installed",
-      stdout: "",
-      stderr: "",
-      code: 0,
-    });
-    vi.mocked(buildWorkspaceSkillStatus).mockReturnValue({
-      workspaceDir: "/tmp/ws",
-      managedSkillsDir: "/tmp/managed",
-      skills: [
-        {
-          name: "apple-reminders",
-          description: "macOS-only",
-          source: "openclaw-bundled",
-          bundled: true,
-          filePath: "/tmp/skills/apple-reminders",
-          baseDir: "/tmp/skills/apple-reminders",
-          skillKey: "apple-reminders",
-          always: false,
-          disabled: false,
-          blockedByAllowlist: false,
-          eligible: false,
-          requirements: { bins: ["remindctl"], anyBins: [], env: [], config: [], os: ["darwin"] },
-          missing: { bins: ["remindctl"], anyBins: [], env: [], config: [], os: ["darwin"] },
-          configChecks: [],
-          install: [
-            { id: "brew", kind: "brew", label: "Install remindctl (brew)", bins: ["remindctl"] },
-          ],
-        },
-        {
-          name: "video-frames",
-          description: "ffmpeg",
-          source: "openclaw-bundled",
-          bundled: true,
-          filePath: "/tmp/skills/video-frames",
-          baseDir: "/tmp/skills/video-frames",
-          skillKey: "video-frames",
-          always: false,
-          disabled: false,
-          blockedByAllowlist: false,
-          eligible: false,
-          requirements: { bins: ["ffmpeg"], anyBins: [], env: [], config: [], os: [] },
-          missing: { bins: ["ffmpeg"], anyBins: [], env: [], config: [], os: [] },
-          configChecks: [],
-          install: [{ id: "brew", kind: "brew", label: "Install ffmpeg (brew)", bins: ["ffmpeg"] }],
-        },
-      ],
-    });
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "apple-reminders",
+        description: "macOS-only",
+        bins: ["remindctl"],
+        os: ["darwin"],
+        installLabel: "Install remindctl (brew)",
+      }),
+      createBundledSkill({
+        name: "video-frames",
+        description: "ffmpeg",
+        bins: ["ffmpeg"],
+        installLabel: "Install ffmpeg (brew)",
+      }),
+    ]);
 
     const { prompter, notes } = createPrompter({ multiselect: ["__skip__"] });
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
@@ -136,37 +171,14 @@ describe("setupSkills", () => {
       return;
     }
 
-    vi.mocked(detectBinary).mockResolvedValue(false);
-    vi.mocked(installSkill).mockResolvedValue({
-      ok: true,
-      message: "Installed",
-      stdout: "",
-      stderr: "",
-      code: 0,
-    });
-    vi.mocked(buildWorkspaceSkillStatus).mockReturnValue({
-      workspaceDir: "/tmp/ws",
-      managedSkillsDir: "/tmp/managed",
-      skills: [
-        {
-          name: "video-frames",
-          description: "ffmpeg",
-          source: "openclaw-bundled",
-          bundled: true,
-          filePath: "/tmp/skills/video-frames",
-          baseDir: "/tmp/skills/video-frames",
-          skillKey: "video-frames",
-          always: false,
-          disabled: false,
-          blockedByAllowlist: false,
-          eligible: false,
-          requirements: { bins: ["ffmpeg"], anyBins: [], env: [], config: [], os: [] },
-          missing: { bins: ["ffmpeg"], anyBins: [], env: [], config: [], os: [] },
-          configChecks: [],
-          install: [{ id: "brew", kind: "brew", label: "Install ffmpeg (brew)", bins: ["ffmpeg"] }],
-        },
-      ],
-    });
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "video-frames",
+        description: "ffmpeg",
+        bins: ["ffmpeg"],
+        installLabel: "Install ffmpeg (brew)",
+      }),
+    ]);
 
     const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);

@@ -1,9 +1,15 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  type AuthCredentialReasonCode,
   type AuthProfileCredential,
   type AuthProfileStore,
   resolveAuthProfileDisplayLabel,
 } from "./auth-profiles.js";
+import {
+  evaluateStoredCredentialEligibility,
+  resolveTokenExpiryState,
+} from "./auth-profiles/credential-state.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 export type AuthProfileSource = "store";
 
@@ -14,6 +20,7 @@ export type AuthProfileHealth = {
   provider: string;
   type: "oauth" | "token" | "api_key";
   status: AuthProfileHealthStatus;
+  reasonCode?: AuthCredentialReasonCode;
   expiresAt?: number;
   remainingMs?: number;
   source: AuthProfileSource;
@@ -43,14 +50,23 @@ export function resolveAuthProfileSource(_profileId: string): AuthProfileSource 
   return "store";
 }
 
-export function formatRemainingShort(remainingMs?: number): string {
+export function formatRemainingShort(
+  remainingMs?: number,
+  opts?: {
+    underMinuteLabel?: string;
+  },
+): string {
   if (remainingMs === undefined || Number.isNaN(remainingMs)) {
     return "unknown";
   }
   if (remainingMs <= 0) {
     return "0m";
   }
-  const minutes = Math.max(1, Math.round(remainingMs / 60_000));
+  const roundedMinutes = Math.round(remainingMs / 60_000);
+  if (roundedMinutes < 1) {
+    return opts?.underMinuteLabel ?? "1m";
+  }
+  const minutes = roundedMinutes;
   if (minutes < 60) {
     return `${minutes}m`;
   }
@@ -91,11 +107,12 @@ function buildProfileHealth(params: {
   const { profileId, credential, store, cfg, now, warnAfterMs } = params;
   const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
   const source = resolveAuthProfileSource(profileId);
+  const provider = normalizeProviderId(credential.provider);
 
   if (credential.type === "api_key") {
     return {
       profileId,
-      provider: credential.provider,
+      provider,
       type: "api_key",
       status: "static",
       source,
@@ -104,14 +121,29 @@ function buildProfileHealth(params: {
   }
 
   if (credential.type === "token") {
-    const expiresAt =
-      typeof credential.expires === "number" && Number.isFinite(credential.expires)
-        ? credential.expires
-        : undefined;
-    if (!expiresAt || expiresAt <= 0) {
+    const eligibility = evaluateStoredCredentialEligibility({
+      credential,
+      now,
+    });
+    if (!eligibility.eligible) {
+      const status: AuthProfileHealthStatus =
+        eligibility.reasonCode === "expired" ? "expired" : "missing";
       return {
         profileId,
-        provider: credential.provider,
+        provider,
+        type: "token",
+        status,
+        reasonCode: eligibility.reasonCode,
+        source,
+        label,
+      };
+    }
+    const expiryState = resolveTokenExpiryState(credential.expires, now);
+    const expiresAt = expiryState === "valid" ? credential.expires : undefined;
+    if (!expiresAt) {
+      return {
+        profileId,
+        provider,
         type: "token",
         status: "static",
         source,
@@ -121,9 +153,10 @@ function buildProfileHealth(params: {
     const { status, remainingMs } = resolveOAuthStatus(expiresAt, now, warnAfterMs);
     return {
       profileId,
-      provider: credential.provider,
+      provider,
       type: "token",
       status,
+      reasonCode: status === "expired" ? "expired" : undefined,
       expiresAt,
       remainingMs,
       source,
@@ -143,7 +176,7 @@ function buildProfileHealth(params: {
     hasRefreshToken && (rawStatus === "expired" || rawStatus === "expiring") ? "ok" : rawStatus;
   return {
     profileId,
-    provider: credential.provider,
+    provider,
     type: "oauth",
     status,
     expiresAt: credential.expires,
@@ -162,11 +195,13 @@ export function buildAuthHealthSummary(params: {
   const now = Date.now();
   const warnAfterMs = params.warnAfterMs ?? DEFAULT_OAUTH_WARN_MS;
   const providerFilter = params.providers
-    ? new Set(params.providers.map((p) => p.trim()).filter(Boolean))
+    ? new Set(params.providers.map((p) => normalizeProviderId(p)).filter(Boolean))
     : null;
 
   const profiles = Object.entries(params.store.profiles)
-    .filter(([_, cred]) => (providerFilter ? providerFilter.has(cred.provider) : true))
+    .filter(([_, cred]) =>
+      providerFilter ? providerFilter.has(normalizeProviderId(cred.provider)) : true,
+    )
     .map(([profileId, credential]) =>
       buildProfileHealth({
         profileId,

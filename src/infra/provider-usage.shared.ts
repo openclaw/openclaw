@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { normalizeProviderId } from "../agents/provider-id.js";
+import { resolveRequiredHomeDir } from "./home-dir.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
 
 export const DEFAULT_TIMEOUT_MS = 5000;
 
@@ -7,7 +11,6 @@ export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
   anthropic: "Claude",
   "github-copilot": "Copilot",
   "google-gemini-cli": "Gemini",
-  "google-antigravity": "Antigravity",
   minimax: "MiniMax",
   "openai-codex": "Codex",
   xiaomi: "Xiaomi",
@@ -18,7 +21,6 @@ export const usageProviders: UsageProviderId[] = [
   "anthropic",
   "github-copilot",
   "google-gemini-cli",
-  "google-antigravity",
   "minimax",
   "openai-codex",
   "xiaomi",
@@ -30,6 +32,13 @@ export function resolveUsageProviderId(provider?: string | null): UsageProviderI
     return undefined;
   }
   const normalized = normalizeProviderId(provider);
+  if (
+    normalized === "minimax-portal" ||
+    normalized === "minimax-cn" ||
+    normalized === "minimax-portal-cn"
+  ) {
+    return "minimax";
+  }
   return usageProviders.includes(normalized as UsageProviderId)
     ? (normalized as UsageProviderId)
     : undefined;
@@ -61,3 +70,33 @@ export const withTimeout = async <T>(work: Promise<T>, ms: number, fallback: T):
     }
   }
 };
+
+export function resolveLegacyPiAgentAccessToken(
+  env: NodeJS.ProcessEnv,
+  providerIds: string[],
+): string | undefined {
+  try {
+    const authPath = path.join(
+      resolveRequiredHomeDir(env, os.homedir),
+      ".pi",
+      "agent",
+      "auth.json",
+    );
+    if (!fs.existsSync(authPath)) {
+      return undefined;
+    }
+    const parsed = JSON.parse(fs.readFileSync(authPath, "utf8")) as Record<
+      string,
+      { access?: string }
+    >;
+    for (const providerId of providerIds) {
+      const token = parsed[providerId]?.access;
+      if (typeof token === "string" && token.trim()) {
+        return token;
+      }
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}

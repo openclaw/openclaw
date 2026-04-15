@@ -1,21 +1,30 @@
 export {
   buildBootstrapContextFiles,
   DEFAULT_BOOTSTRAP_MAX_CHARS,
+  DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE,
+  DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
   ensureSessionHeader,
   resolveBootstrapMaxChars,
+  resolveBootstrapPromptTruncationWarningMode,
+  resolveBootstrapTotalMaxChars,
   stripThoughtSignatures,
 } from "./pi-embedded-helpers/bootstrap.js";
 export {
   BILLING_ERROR_USER_MESSAGE,
+  classifyProviderRuntimeFailureKind,
+  formatBillingErrorMessage,
   classifyFailoverReason,
+  classifyFailoverReasonFromHttpStatus,
   formatRawAssistantErrorForUi,
   formatAssistantErrorText,
   getApiErrorPayloadFingerprint,
   isAuthAssistantError,
   isAuthErrorMessage,
+  isAuthPermanentErrorMessage,
+  isModelNotFoundErrorMessage,
   isBillingAssistantError,
+  extractObservedOverflowTokenCount,
   parseApiErrorInfo,
-  sanitizeUserFacingText,
   isBillingErrorMessage,
   isCloudflareOrHtmlErrorPage,
   isCloudCodeAssistFormatError,
@@ -35,9 +44,14 @@ export {
   parseImageDimensionError,
   parseImageSizeError,
 } from "./pi-embedded-helpers/errors.js";
+export type { ProviderRuntimeFailureKind } from "./pi-embedded-helpers/errors.js";
+export { sanitizeUserFacingText } from "./pi-embedded-helpers/sanitize-user-facing-text.js";
 export { isGoogleModelApi, sanitizeGoogleTurnOrdering } from "./pi-embedded-helpers/google.js";
 
-export { downgradeOpenAIReasoningBlocks } from "./pi-embedded-helpers/openai.js";
+export {
+  downgradeOpenAIFunctionCallReasoningPairs,
+  downgradeOpenAIReasoningBlocks,
+} from "./pi-embedded-helpers/openai.js";
 export {
   isEmptyAssistantMessageContent,
   sanitizeSessionMessagesImages,

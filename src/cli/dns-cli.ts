@@ -1,13 +1,13 @@
-import type { Command } from "commander";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import type { Command } from "commander";
 import { loadConfig } from "../config/config.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import { getWideAreaZonePath, resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
-import { renderTable } from "../terminal/table.js";
+import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 
 type RunOpts = { allowFailure?: boolean; inherit?: boolean };
@@ -133,7 +133,7 @@ export function registerDnsCli(program: Command) {
       }
       const zonePath = getWideAreaZonePath(wideAreaDomain);
 
-      const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+      const tableWidth = getTerminalTableWidth();
       defaultRuntime.log(theme.heading("DNS setup"));
       defaultRuntime.log(
         renderTable({
@@ -153,17 +153,15 @@ export function registerDnsCli(program: Command) {
         }).trimEnd(),
       );
       defaultRuntime.log("");
-      defaultRuntime.log(theme.heading("Recommended ~/.openclaw/openclaw.json:"));
       defaultRuntime.log(
-        JSON.stringify(
-          {
-            gateway: { bind: "auto" },
-            discovery: { wideArea: { enabled: true, domain: wideAreaDomain } },
-          },
-          null,
-          2,
+        theme.heading(
+          "Recommended config ($OPENCLAW_CONFIG_PATH, default ~/.openclaw/openclaw.json):",
         ),
       );
+      defaultRuntime.writeJson({
+        gateway: { bind: "auto" },
+        discovery: { wideArea: { enabled: true, domain: wideAreaDomain } },
+      });
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Tailscale admin (DNS → Nameservers):"));
       defaultRuntime.log(
@@ -254,7 +252,7 @@ export function registerDnsCli(program: Command) {
         defaultRuntime.log("");
         defaultRuntime.log(
           theme.muted(
-            "Note: enable discovery.wideArea.enabled in ~/.openclaw/openclaw.json on the gateway and restart the gateway so it writes the DNS-SD zone.",
+            "Note: enable discovery.wideArea.enabled in the active OpenClaw config ($OPENCLAW_CONFIG_PATH, default ~/.openclaw/openclaw.json) on the gateway and restart the gateway so it writes the DNS-SD zone.",
           ),
         );
       }

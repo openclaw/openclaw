@@ -1,5 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
+import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -35,28 +36,6 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
     .filter((b) => b.blockChars > 0);
 }
 
-function buildInjectedWorkspaceFiles(params: {
-  bootstrapFiles: WorkspaceBootstrapFile[];
-  injectedFiles: EmbeddedContextFile[];
-  bootstrapMaxChars: number;
-}): SessionSystemPromptReport["injectedWorkspaceFiles"] {
-  const injectedByName = new Map(params.injectedFiles.map((f) => [f.path, f.content]));
-  return params.bootstrapFiles.map((file) => {
-    const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
-    const injected = injectedByName.get(file.name);
-    const injectedChars = injected ? injected.length : 0;
-    const truncated = !file.missing && rawChars > params.bootstrapMaxChars;
-    return {
-      name: file.name,
-      path: file.path,
-      missing: file.missing,
-      rawChars,
-      injectedChars,
-      truncated,
-    };
-  });
-}
-
 function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools"]["entries"] {
   return tools.map((tool) => {
     const name = tool.name;
@@ -87,17 +66,6 @@ function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools
   });
 }
 
-function extractToolListText(systemPrompt: string): string {
-  const markerA = "Tool names are case-sensitive. Call tools exactly as listed.\n";
-  const markerB =
-    "\nTOOLS.md does not control tool availability; it is user guidance for how to use external tools.";
-  const extracted = extractBetween(systemPrompt, markerA, markerB);
-  if (!extracted.found) {
-    return "";
-  }
-  return extracted.text.replace(markerA, "").trim();
-}
-
 export function buildSystemPromptReport(params: {
   source: SessionSystemPromptReport["source"];
   generatedAt: number;
@@ -107,6 +75,8 @@ export function buildSystemPromptReport(params: {
   model?: string;
   workspaceDir?: string;
   bootstrapMaxChars: number;
+  bootstrapTotalMaxChars?: number;
+  bootstrapTruncation?: SessionSystemPromptReport["bootstrapTruncation"];
   sandbox?: SessionSystemPromptReport["sandbox"];
   systemPrompt: string;
   bootstrapFiles: WorkspaceBootstrapFile[];
@@ -121,8 +91,6 @@ export function buildSystemPromptReport(params: {
     "\n## Silent Replies\n",
   );
   const projectContextChars = projectContext.text.length;
-  const toolListText = extractToolListText(systemPrompt);
-  const toolListChars = toolListText.length;
   const toolsEntries = buildToolsEntries(params.tools);
   const toolsSchemaChars = toolsEntries.reduce((sum, t) => sum + (t.schemaChars ?? 0), 0);
   const skillsEntries = parseSkillBlocks(params.skillsPrompt);
@@ -136,23 +104,24 @@ export function buildSystemPromptReport(params: {
     model: params.model,
     workspaceDir: params.workspaceDir,
     bootstrapMaxChars: params.bootstrapMaxChars,
+    bootstrapTotalMaxChars: params.bootstrapTotalMaxChars,
+    ...(params.bootstrapTruncation ? { bootstrapTruncation: params.bootstrapTruncation } : {}),
     sandbox: params.sandbox,
     systemPrompt: {
       chars: systemPrompt.length,
       projectContextChars,
       nonProjectContextChars: Math.max(0, systemPrompt.length - projectContextChars),
     },
-    injectedWorkspaceFiles: buildInjectedWorkspaceFiles({
+    injectedWorkspaceFiles: buildBootstrapInjectionStats({
       bootstrapFiles: params.bootstrapFiles,
       injectedFiles: params.injectedFiles,
-      bootstrapMaxChars: params.bootstrapMaxChars,
     }),
     skills: {
       promptChars: params.skillsPrompt.length,
       entries: skillsEntries,
     },
     tools: {
-      listChars: toolListChars,
+      listChars: 0,
       schemaChars: toolsSchemaChars,
       entries: toolsEntries,
     },

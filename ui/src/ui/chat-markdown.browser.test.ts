@@ -1,31 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { OpenClawApp } from "./app.ts";
+import { describe, expect, it } from "vitest";
+import { mountApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
-// oxlint-disable-next-line typescript/unbound-method
-const originalConnect = OpenClawApp.prototype.connect;
-
-function mountApp(pathname: string) {
-  window.history.replaceState({}, "", pathname);
-  const app = document.createElement("openclaw-app") as OpenClawApp;
-  document.body.append(app);
-  return app;
-}
-
-beforeEach(() => {
-  OpenClawApp.prototype.connect = () => {
-    // no-op: avoid real gateway WS connections in browser tests
-  };
-  window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
-  localStorage.clear();
-  document.body.innerHTML = "";
-});
-
-afterEach(() => {
-  OpenClawApp.prototype.connect = originalConnect;
-  window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
-  localStorage.clear();
-  document.body.innerHTML = "";
-});
+registerAppMountHooks();
 
 describe("chat markdown rendering", () => {
   it("renders markdown inside tool output sidebar", async () => {
@@ -46,16 +22,19 @@ describe("chat markdown rendering", () => {
 
     await app.updateComplete;
 
-    const toolCards = Array.from(app.querySelectorAll<HTMLElement>(".chat-tool-card"));
-    const toolCard = toolCards.find((card) =>
-      card.querySelector(".chat-tool-card__preview, .chat-tool-card__inline"),
-    );
-    expect(toolCard).not.toBeUndefined();
-    toolCard?.click();
+    const toolSummary = app.querySelector<HTMLElement>(".chat-tool-msg-summary");
+    expect(toolSummary).not.toBeNull();
+    toolSummary?.click();
 
     await app.updateComplete;
 
-    const strong = app.querySelector(".sidebar-markdown strong");
-    expect(strong?.textContent).toBe("world");
+    const openSidebarButton = app.querySelector<HTMLElement>(".chat-tool-card__action-btn");
+    expect(openSidebarButton).not.toBeNull();
+    openSidebarButton?.click();
+
+    await app.updateComplete;
+
+    const strongNodes = Array.from(app.querySelectorAll(".sidebar-markdown strong"));
+    expect(strongNodes.some((node) => node.textContent === "world")).toBe(true);
   });
 });

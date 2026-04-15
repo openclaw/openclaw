@@ -1,7 +1,8 @@
 import { colorize, isRich as isRichTerminal, theme } from "../../terminal/theme.js";
+export { maskApiKey } from "../../utils/mask-api-key.js";
 
 export const isRich = (opts?: { json?: boolean; plain?: boolean }) =>
-  Boolean(isRichTerminal() && !opts?.json && !opts?.plain);
+  isRichTerminal() && !opts?.json && !opts?.plain;
 
 export const pad = (value: string, size: number) => value.padEnd(size);
 
@@ -54,15 +55,4 @@ export const truncate = (value: string, max: number) => {
     return value.slice(0, max);
   }
   return `${value.slice(0, max - 3)}...`;
-};
-
-export const maskApiKey = (value: string): string => {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "missing";
-  }
-  if (trimmed.length <= 16) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, 8)}...${trimmed.slice(-8)}`;
 };

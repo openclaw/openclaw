@@ -1,5 +1,17 @@
+import { splitArgsPreservingQuotes } from "./arg-split.js";
+import type { GatewayServiceRenderArgs } from "./service-types.js";
+
+const SYSTEMD_LINE_BREAKS = /[\r\n]/;
+
+function assertNoSystemdLineBreaks(value: string, label: string): void {
+  if (SYSTEMD_LINE_BREAKS.test(value)) {
+    throw new Error(`${label} cannot contain CR or LF characters.`);
+  }
+}
+
 function systemdEscapeArg(value: string): string {
-  if (!/[\\s"\\\\]/.test(value)) {
+  assertNoSystemdLineBreaks(value, "Systemd unit values");
+  if (!/[\s"\\]/.test(value)) {
     return value;
   }
   return `"${value.replace(/\\\\/g, "\\\\\\\\").replace(/"/g, '\\\\"')}"`;
@@ -15,9 +27,25 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
   if (entries.length === 0) {
     return [];
   }
-  return entries.map(
-    ([key, value]) => `Environment=${systemdEscapeArg(`${key}=${value?.trim() ?? ""}`)}`,
-  );
+  return entries.map(([key, value]) => {
+    const rawValue = value ?? "";
+    assertNoSystemdLineBreaks(key, "Systemd environment variable names");
+    assertNoSystemdLineBreaks(rawValue, "Systemd environment variable values");
+    return `Environment=${systemdEscapeArg(`${key}=${rawValue.trim()}`)}`;
+  });
+}
+
+function renderEnvironmentFileLines(environmentFiles: string[] | undefined): string[] {
+  if (!environmentFiles) {
+    return [];
+  }
+  return environmentFiles
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      assertNoSystemdLineBreaks(entry, "Systemd EnvironmentFile values");
+      return `EnvironmentFile=-${systemdEscapeArg(entry)}`;
+    });
 }
 
 export function buildSystemdUnit({
@@ -25,33 +53,38 @@ export function buildSystemdUnit({
   programArguments,
   workingDirectory,
   environment,
-}: {
-  description?: string;
-  programArguments: string[];
-  workingDirectory?: string;
-  environment?: Record<string, string | undefined>;
-}): string {
+  environmentFiles,
+}: GatewayServiceRenderArgs): string {
   const execStart = programArguments.map(systemdEscapeArg).join(" ");
-  const descriptionLine = `Description=${description?.trim() || "OpenClaw Gateway"}`;
+  const descriptionValue = description?.trim() || "OpenClaw Gateway";
+  assertNoSystemdLineBreaks(descriptionValue, "Systemd Description");
+  const descriptionLine = `Description=${descriptionValue}`;
   const workingDirLine = workingDirectory
     ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
     : null;
   const envLines = renderEnvLines(environment);
+  const environmentFileLines = renderEnvironmentFileLines(environmentFiles);
   return [
     "[Unit]",
     descriptionLine,
     "After=network-online.target",
     "Wants=network-online.target",
+    "StartLimitBurst=5",
+    "StartLimitIntervalSec=60",
     "",
     "[Service]",
     `ExecStart=${execStart}`,
     "Restart=always",
     "RestartSec=5",
-    // KillMode=process ensures systemd only waits for the main process to exit.
-    // Without this, podman's conmon (container monitor) processes block shutdown
-    // since they run as children of the gateway and stay in the same cgroup.
-    "KillMode=process",
+    "RestartPreventExitStatus=78",
+    "TimeoutStopSec=30",
+    "TimeoutStartSec=30",
+    "SuccessExitStatus=0 143",
+    // Keep service children in the same lifecycle so restarts do not leave
+    // orphan ACP/runtime workers behind.
+    "KillMode=control-group",
     workingDirLine,
+    ...environmentFileLines,
     ...envLines,
     "",
     "[Install]",
@@ -63,38 +96,7 @@ export function buildSystemdUnit({
 }
 
 export function parseSystemdExecStart(value: string): string[] {
-  const args: string[] = [];
-  let current = "";
-  let inQuotes = false;
-  let escapeNext = false;
-
-  for (const char of value) {
-    if (escapeNext) {
-      current += char;
-      escapeNext = false;
-      continue;
-    }
-    if (char === "\\\\") {
-      escapeNext = true;
-      continue;
-    }
-    if (char === '"') {
-      inQuotes = !inQuotes;
-      continue;
-    }
-    if (!inQuotes && /\s/.test(char)) {
-      if (current) {
-        args.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += char;
-  }
-  if (current) {
-    args.push(current);
-  }
-  return args;
+  return splitArgsPreservingQuotes(value, { escapeMode: "backslash" });
 }
 
 export function parseSystemdEnvAssignment(raw: string): { key: string; value: string } | null {
