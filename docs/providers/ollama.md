@@ -8,7 +8,7 @@ title: "Ollama"
 
 # Ollama
 
-Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. OpenClaw integrates with Ollama's native API (`/api/chat`), supports streaming and tool calling, and can auto-discover local Ollama models when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
+OpenClaw integrates with Ollama's native API (`/api/chat`) for both hosted cloud models and local/self-hosted Ollama servers. Cloud setup uses an `OLLAMA_API_KEY` against `https://ollama.com`. Local setup uses a reachable Ollama host and can auto-discover local models when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
 
 <Warning>
 **Remote Ollama users**: Do not use the `/v1` OpenAI-compatible URL (`http://host:11434/v1`) with OpenClaw. This breaks tool calling and models may output raw tool JSON as plain text. Use the native Ollama API URL instead: `baseUrl: "http://host:11434"` (no `/v1`).
@@ -20,7 +20,7 @@ Choose your preferred setup method and mode.
 
 <Tabs>
   <Tab title="Onboarding (recommended)">
-    **Best for:** fastest path to a working Ollama setup with automatic model discovery.
+    **Best for:** fastest path to a working Ollama cloud or local setup.
 
     <Steps>
       <Step title="Run onboarding">
@@ -31,13 +31,11 @@ Choose your preferred setup method and mode.
         Select **Ollama** from the provider list.
       </Step>
       <Step title="Choose your mode">
-        - **Cloud + Local** — cloud-hosted models and local models together
+        - **Cloud** — hosted Ollama models via `https://ollama.com`
         - **Local** — local models only
-
-        If you choose **Cloud + Local** and are not signed in to ollama.com, onboarding opens a browser sign-in flow.
       </Step>
       <Step title="Select a model">
-        Onboarding discovers available models and suggests defaults. It auto-pulls the selected model if it is not available locally.
+        Cloud mode prompts for `OLLAMA_API_KEY` and suggests hosted cloud defaults. Local mode asks for an Ollama base URL, discovers available models, and auto-pulls the selected local model if it is not available yet.
       </Step>
       <Step title="Verify the model is available">
         ```bash
@@ -67,13 +65,14 @@ Choose your preferred setup method and mode.
   </Tab>
 
   <Tab title="Manual setup">
-    **Best for:** full control over installation, model pulls, and config.
+    **Best for:** full control over cloud or local setup.
 
     <Steps>
-      <Step title="Install Ollama">
-        Download from [ollama.com/download](https://ollama.com/download).
+      <Step title="Choose cloud or local">
+        - **Cloud**: use `https://ollama.com` with an `OLLAMA_API_KEY`
+        - **Local**: install Ollama from [ollama.com/download](https://ollama.com/download)
       </Step>
-      <Step title="Pull a local model">
+      <Step title="Pull a local model (local only)">
         ```bash
         ollama pull gemma4
         # or
@@ -82,22 +81,18 @@ Choose your preferred setup method and mode.
         ollama pull llama3.3
         ```
       </Step>
-      <Step title="Sign in for cloud models (optional)">
-        If you want cloud models too:
-
-        ```bash
-        ollama signin
-        ```
-      </Step>
       <Step title="Enable Ollama for OpenClaw">
-        Set any value for the API key (Ollama does not require a real key):
+        For cloud, use your real `OLLAMA_API_KEY`. For local-only setups, any placeholder value works:
 
         ```bash
-        # Set environment variable
+        # Cloud
+        export OLLAMA_API_KEY="your-ollama-api-key"
+
+        # Local-only
         export OLLAMA_API_KEY="ollama-local"
 
         # Or configure in your config file
-        openclaw config set models.providers.ollama.apiKey "ollama-local"
+        openclaw config set models.providers.ollama.apiKey "OLLAMA_API_KEY"
         ```
       </Step>
       <Step title="Inspect and set your model">
@@ -126,19 +121,17 @@ Choose your preferred setup method and mode.
 ## Cloud models
 
 <Tabs>
-  <Tab title="Cloud + Local">
-    Cloud models let you run cloud-hosted models alongside your local models. Examples include `kimi-k2.5:cloud`, `minimax-m2.7:cloud`, and `glm-5.1:cloud` -- these do **not** require a local `ollama pull`.
+  <Tab title="Cloud">
+    Cloud models run against Ollama's hosted API at `https://ollama.com`. Examples include `kimi-k2.5:cloud`, `minimax-m2.7:cloud`, and `glm-5.1:cloud`.
 
-    Select **Cloud + Local** mode during setup. The wizard checks whether you are signed in and opens a browser sign-in flow when needed. If authentication cannot be verified, the wizard falls back to local model defaults.
-
-    You can also sign in directly at [ollama.com/signin](https://ollama.com/signin).
+    Use **Cloud** mode during setup. OpenClaw prompts for `OLLAMA_API_KEY`, sets `baseUrl: "https://ollama.com"`, and seeds the hosted cloud model list. This path does **not** require a local Ollama server or `ollama signin`.
 
     OpenClaw currently suggests these cloud defaults: `kimi-k2.5:cloud`, `minimax-m2.7:cloud`, `glm-5.1:cloud`.
 
   </Tab>
 
   <Tab title="Local only">
-    In local-only mode, OpenClaw discovers models from the local Ollama instance. No cloud sign-in is needed.
+    In local-only mode, OpenClaw discovers models from the configured Ollama instance. This path is for local or self-hosted Ollama servers.
 
     OpenClaw currently suggests `gemma4` as the local default.
 
@@ -182,7 +175,7 @@ If you set `models.providers.ollama` explicitly, auto-discovery is skipped and y
 
 <Tabs>
   <Tab title="Basic (implicit discovery)">
-    The simplest way to enable Ollama is via environment variable:
+    The simplest local-only enablement path is via environment variable:
 
     ```bash
     export OLLAMA_API_KEY="ollama-local"
@@ -195,25 +188,25 @@ If you set `models.providers.ollama` explicitly, auto-discovery is skipped and y
   </Tab>
 
   <Tab title="Explicit (manual models)">
-    Use explicit config when Ollama runs on another host/port, you want to force specific context windows or model lists, or you want fully manual model definitions.
+    Use explicit config when you want hosted cloud setup, Ollama runs on another host/port, you want to force specific context windows or model lists, or you want fully manual model definitions.
 
     ```json5
     {
       models: {
         providers: {
           ollama: {
-            baseUrl: "http://ollama-host:11434",
-            apiKey: "ollama-local",
+            baseUrl: "https://ollama.com",
+            apiKey: "OLLAMA_API_KEY",
             api: "ollama",
             models: [
               {
-                id: "gpt-oss:20b",
-                name: "GPT-OSS 20B",
+                id: "kimi-k2.5:cloud",
+                name: "kimi-k2.5:cloud",
                 reasoning: false,
-                input: ["text"],
+                input: ["text", "image"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 8192,
-                maxTokens: 8192 * 10
+                contextWindow: 128000,
+                maxTokens: 8192
               }
             ]
           }
