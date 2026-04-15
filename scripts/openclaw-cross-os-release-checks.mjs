@@ -1132,9 +1132,14 @@ async function runPowerShellScript(script, options) {
 
 async function runInstallerSmoke(params) {
   if (process.platform === "win32") {
-    const script = `& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing '${powerShellSingleQuote(
-      params.installerUrl,
-    )}').Content)) -Tag '${powerShellSingleQuote(params.installVersion)}' -NoOnboard`;
+    const script = `
+$response = Invoke-WebRequest -UseBasicParsing '${powerShellSingleQuote(params.installerUrl)}'
+$content = $response.Content
+if ($content -is [byte[]]) {
+  $content = [System.Text.Encoding]::UTF8.GetString($content)
+}
+& ([scriptblock]::Create([string]$content)) -Tag '${powerShellSingleQuote(params.installVersion)}' -NoOnboard
+`;
     await runPowerShellScript(script, {
       cwd: params.lane.homeDir,
       env: params.env,
@@ -2318,7 +2323,7 @@ async function startStaticFileServer(params) {
       return;
     }
     response.statusCode = 200;
-    response.setHeader("content-type", "application/octet-stream");
+    response.setHeader("content-type", resolveStaticFileContentType(params.filePath));
     response.setHeader("content-length", String(fileBytes.length));
     response.end(fileBytes);
   });
@@ -2341,6 +2346,13 @@ async function startStaticFileServer(params) {
         });
       }),
   };
+}
+
+export function resolveStaticFileContentType(filePath) {
+  if (filePath.endsWith(".sh") || filePath.endsWith(".ps1")) {
+    return "text/plain; charset=utf-8";
+  }
+  return "application/octet-stream";
 }
 
 function writeSummary(baseDir, summaryPayload) {
