@@ -19,6 +19,29 @@ import type {
   MessageTranscribedHookContext,
 } from "./internal-hooks.js";
 
+const MAX_HOOK_MEDIA_ITEMS = 16;
+const MAX_HOOK_MEDIA_VALUE_LENGTH = 2048;
+
+function normalizeHookMediaValues(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.length === 0) {
+      continue;
+    }
+    if (entry.length > MAX_HOOK_MEDIA_VALUE_LENGTH) {
+      continue;
+    }
+    normalized.push(entry);
+    if (normalized.length >= MAX_HOOK_MEDIA_ITEMS) {
+      break;
+    }
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 export type CanonicalInboundMessageHookContext = {
   from: string;
   to?: string;
@@ -85,16 +108,9 @@ export function deriveInboundMessageHookContext(
   );
   const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
   const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
-  const mediaPaths = Array.isArray(ctx.MediaPaths)
-    ? ctx.MediaPaths.filter(
-        (value): value is string => typeof value === "string" && value.length > 0,
-      )
-    : undefined;
-  const mediaTypes = Array.isArray(ctx.MediaTypes)
-    ? ctx.MediaTypes.filter(
-        (value): value is string => typeof value === "string" && value.length > 0,
-      )
-    : undefined;
+  const mediaPaths = normalizeHookMediaValues(ctx.MediaPaths);
+  // Keep media type cardinality aligned with the exported media paths.
+  const mediaTypes = normalizeHookMediaValues(ctx.MediaTypes)?.slice(0, mediaPaths?.length);
   return {
     from: ctx.From ?? "",
     to: ctx.To,
@@ -292,10 +308,6 @@ export function toPluginMessageReceivedEvent(
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
-      mediaPath: canonical.mediaPath,
-      mediaType: canonical.mediaType,
-      mediaPaths: canonical.mediaPaths,
-      mediaTypes: canonical.mediaTypes,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       topicName: canonical.topicName,
@@ -338,10 +350,6 @@ export function toInternalMessageReceivedContext(
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
-      mediaPath: canonical.mediaPath,
-      mediaType: canonical.mediaType,
-      mediaPaths: canonical.mediaPaths,
-      mediaTypes: canonical.mediaTypes,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       topicName: canonical.topicName,

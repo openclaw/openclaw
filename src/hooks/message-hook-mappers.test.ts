@@ -131,6 +131,62 @@ describe("message hook mappers", () => {
     );
   });
 
+  it("bounds inbound media arrays before exposing hook payloads", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        MediaPath: undefined,
+        MediaType: undefined,
+        MediaPaths: [
+          "/tmp/1.jpg",
+          "/tmp/2.jpg",
+          "/tmp/3.jpg",
+          "/tmp/4.jpg",
+          "/tmp/5.jpg",
+          "/tmp/6.jpg",
+          "/tmp/7.jpg",
+          "/tmp/8.jpg",
+          "/tmp/9.jpg",
+          "/tmp/10.jpg",
+          "/tmp/11.jpg",
+          "/tmp/12.jpg",
+          "/tmp/13.jpg",
+          "/tmp/14.jpg",
+          "/tmp/15.jpg",
+          "/tmp/16.jpg",
+          "/tmp/17.jpg",
+          "",
+          "x".repeat(2049),
+        ],
+        MediaTypes: [
+          "image/jpeg",
+          "image/jpeg",
+          "image/jpeg",
+          "image/jpeg",
+          "image/jpeg",
+          "image/jpeg",
+          "image/jpeg",
+          "image/jpeg",
+          "image/jpeg",
+          "image/jpeg",
+          "image/jpeg",
+          "image/jpeg",
+          "image/jpeg",
+          "image/jpeg",
+          "image/jpeg",
+          "image/jpeg",
+          "image/jpeg",
+          "x".repeat(2049),
+        ],
+      }),
+    );
+
+    expect(canonical.mediaPaths).toHaveLength(16);
+    expect(canonical.mediaPaths?.[0]).toBe("/tmp/1.jpg");
+    expect(canonical.mediaPaths?.at(-1)).toBe("/tmp/16.jpg");
+    expect(canonical.mediaTypes).toHaveLength(16);
+    expect(canonical.mediaType).toBe("image/jpeg");
+  });
+
   it("maps canonical inbound context to plugin/internal received payloads", () => {
     const canonical = deriveInboundMessageHookContext(
       makeInboundCtx({
@@ -155,10 +211,6 @@ describe("message hook mappers", () => {
         messageId: "msg-1",
         senderName: "User One",
         threadId: 42,
-        mediaPath: "/tmp/tree.jpg",
-        mediaType: "image/jpeg",
-        mediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
-        mediaTypes: ["image/jpeg", "image/jpeg"],
         topicName: "Deployments",
       }),
     });
@@ -177,10 +229,6 @@ describe("message hook mappers", () => {
       metadata: expect.objectContaining({
         senderUsername: "userone",
         senderE164: "+15551234567",
-        mediaPath: "/tmp/tree.jpg",
-        mediaType: "image/jpeg",
-        mediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
-        mediaTypes: ["image/jpeg", "image/jpeg"],
         topicName: "Deployments",
       }),
     });
