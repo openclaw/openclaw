@@ -398,6 +398,8 @@ describe("sanitizeUserFacingText", () => {
   it("preserves literal JSON tool-call examples at sentence end", () => {
     const text = 'Use <tool_call>{"name":"exec"}</tool_call>';
     expect(sanitizeUserFacingText(text)).toBe(text);
+    const example = 'Example: <tool_call>{"name":"exec"}</tool_call>';
+    expect(sanitizeUserFacingText(example)).toBe(example);
   });
 
   it("strips broad prose that wraps JSON tool-call payloads", () => {
@@ -409,10 +411,20 @@ describe("sanitizeUserFacingText", () => {
   it("preserves tool-call tags inside indented code blocks", () => {
     const text = [
       "Code:",
+      "",
       '    <tool_call>{"name":"find","arguments":{"query":"x"}}</tool_call>',
       "After",
     ].join("\n");
     expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("strips tool-call tags from ordinary indented prose", () => {
+    const text = ["Before", '    <tool_call>{"name":"find"}</tool_call>', "After"].join("\n");
+    expect(sanitizeUserFacingText(text)).toBe(["Before", "    ", "After"].join("\n"));
+    const afterColon = ["Before:", '    <tool_call>{"name":"find"}</tool_call>', "After"].join(
+      "\n",
+    );
+    expect(sanitizeUserFacingText(afterColon)).toBe(["Before:", "    ", "After"].join("\n"));
   });
 
   it("does not collapse unrelated formatting when no tool tags are stripped", () => {

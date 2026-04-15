@@ -211,7 +211,7 @@ const LITERAL_TOOL_TAG_AFTER_RE =
 const LITERAL_TOOL_PAYLOAD_AFTER_RE =
   /^[^.!?\n]*\b(?:docs?|documentation|example|literal(?:ly)?|syntax)\b/i;
 const LITERAL_TOOL_PAYLOAD_SENTENCE_END_BEFORE_RE =
-  /(?:^|[\n.!?]\s*)(?:use|type|write|include|document)\b[^.!?\n]*$/i;
+  /(?:^|[\n.!?]\s*)(?:use|type|write|include|document|example)\b[^.!?\n]*$/i;
 const LITERAL_TOOL_PAYLOAD_SENTENCE_END_AFTER_RE = /^[\s)"'`.,:;!?]*(?:$|\n)/;
 
 function looksLikeLiteralToolTagContext(text: string, start: number, end: number): boolean {
@@ -232,7 +232,28 @@ function looksLikeLiteralToolPayloadContext(text: string, start: number, end: nu
 
 function isOnIndentedMarkdownCodeLine(text: string, index: number): boolean {
   const lineStart = text.lastIndexOf("\n", Math.max(0, index - 1)) + 1;
-  return text.startsWith("    ", lineStart) || text.startsWith("\t", lineStart);
+  if (!text.startsWith("    ", lineStart) && !text.startsWith("\t", lineStart)) {
+    return false;
+  }
+
+  let blockStart = lineStart;
+  while (blockStart > 0) {
+    const previousLineEnd = blockStart - 1;
+    const previousLineStart = text.lastIndexOf("\n", Math.max(0, previousLineEnd - 1)) + 1;
+    const previousLine = text.slice(previousLineStart, previousLineEnd);
+    if (!previousLine.startsWith("    ") && !previousLine.startsWith("\t")) {
+      break;
+    }
+    blockStart = previousLineStart;
+  }
+
+  if (blockStart === 0) {
+    return true;
+  }
+
+  const previousLineEnd = blockStart - 1;
+  const previousLineStart = text.lastIndexOf("\n", Math.max(0, previousLineEnd - 1)) + 1;
+  return text.slice(previousLineStart, previousLineEnd).trim().length === 0;
 }
 
 function findLiteralToolBlockEnd(

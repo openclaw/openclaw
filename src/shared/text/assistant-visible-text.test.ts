@@ -247,6 +247,10 @@ describe("stripAssistantInternalScaffolding", () => {
         'Type <tool_call>{"name":"exec"}</tool_call>.',
         'Type <tool_call>{"name":"exec"}</tool_call>.',
       );
+      expectVisibleText(
+        'Example: <tool_call>{"name":"exec"}</tool_call>',
+        'Example: <tool_call>{"name":"exec"}</tool_call>',
+      );
     });
 
     it("strips broad prose that wraps JSON tool-call payloads", () => {
@@ -418,10 +422,22 @@ describe("stripAssistantInternalScaffolding", () => {
     it("preserves tool-call tags inside indented code blocks", () => {
       const input = [
         "Code:",
+        "",
         '    <tool_call>{"name":"find","arguments":{"query":"x"}}</tool_call>',
         "After",
       ].join("\n");
       expectVisibleText(input, input);
+    });
+
+    it("strips tool-call tags from ordinary indented prose", () => {
+      expectVisibleText(
+        ["Before", '    <tool_call>{"name":"find"}</tool_call>', "After"].join("\n"),
+        ["Before", "    ", "After"].join("\n"),
+      );
+      expectVisibleText(
+        ["Before:", '    <tool_call>{"name":"find"}</tool_call>', "After"].join("\n"),
+        ["Before:", "    ", "After"].join("\n"),
+      );
     });
 
     it("preserves inline code references to tool_call tags", () => {
