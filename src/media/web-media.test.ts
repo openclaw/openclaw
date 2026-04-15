@@ -198,6 +198,19 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/csv");
   });
 
+  it("allows host-read Markdown files", async () => {
+    const mdFile = path.join(fixtureRoot, "notes.md");
+    await fs.writeFile(mdFile, "# Title\n\nSome **bold** text.\n", "utf8");
+    const result = await loadWebMedia(mdFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("text/markdown");
+  });
+
   it("rejects binary data disguised as a CSV file", async () => {
     const fakeCsv = path.join(fixtureRoot, "evil.csv");
     // Write a PNG header — binary, not text
