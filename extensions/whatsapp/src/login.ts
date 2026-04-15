@@ -3,15 +3,63 @@ import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { logInfo } from "openclaw/plugin-sdk/text-runtime";
+import type { createWaSocket, waitForWaConnection } from "./session.js";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { waitForWhatsAppLoginResult } from "./connection-controller.js";
 
+type LoginSocketFactory = typeof createWaSocket;
+type LoginWaiter = typeof waitForWaConnection;
+
+type LoginWebResolvedArgs = {
+  runtime: RuntimeEnv;
+  accountId: string | undefined;
+  waitForConnection: LoginWaiter | undefined;
+  createSocket: LoginSocketFactory | undefined;
+};
+
+function isRuntimeEnvLike(value: unknown): value is RuntimeEnv {
+  return !!value && typeof value === "object" && "log" in value;
+}
+
+function resolveLoginWebArgs(
+  arg2?: RuntimeEnv | LoginWaiter,
+  arg3?: RuntimeEnv | string,
+  arg4?: string | LoginSocketFactory,
+  arg5?: LoginSocketFactory,
+): LoginWebResolvedArgs {
+  if (typeof arg2 === "function") {
+    return {
+      runtime: isRuntimeEnvLike(arg3) ? arg3 : defaultRuntime,
+      accountId: typeof arg4 === "string" ? arg4 : undefined,
+      waitForConnection: arg2,
+      createSocket: arg5,
+    };
+  }
+
+  return {
+    runtime: arg2 ?? defaultRuntime,
+    accountId: typeof arg3 === "string" ? arg3 : typeof arg4 === "string" ? arg4 : undefined,
+    waitForConnection: undefined,
+    createSocket:
+      typeof arg4 === "function"
+        ? arg4
+        : arg5,
+  };
+}
+
 export async function loginWeb(
   verbose: boolean,
-  runtime: RuntimeEnv = defaultRuntime,
-  accountId?: string,
-  createSocket?: (printQr: boolean, verbose: boolean, opts: { authDir: string }) => Promise<unknown>,
+  arg2?: RuntimeEnv | LoginWaiter,
+  arg3?: RuntimeEnv | string,
+  arg4?: string | LoginSocketFactory,
+  arg5?: LoginSocketFactory,
 ) {
+  const { runtime, accountId, waitForConnection, createSocket } = resolveLoginWebArgs(
+    arg2,
+    arg3,
+    arg4,
+    arg5,
+  );
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId });
   logInfo("Waiting for WhatsApp connection...", runtime);
@@ -20,9 +68,10 @@ export async function loginWeb(
     isLegacyAuthDir: account.isLegacyAuthDir,
     verbose,
     runtime,
-    createSocket: createSocket ?? (async () => {
+    waitForConnection,
+    createSocket: createSocket ?? (async (printQr, socketVerbose, opts) => {
       const { createWaSocket } = await import("./session.js");
-      return createWaSocket(true, verbose, { authDir: account.authDir });
+      return createWaSocket(printQr, socketVerbose, opts);
     }),
   });
   try {
