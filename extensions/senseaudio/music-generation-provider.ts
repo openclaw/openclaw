@@ -147,6 +147,7 @@ export function buildSenseaudioMusicGenerationProvider(): MusicGenerationProvide
 
       const model = normalizeOptionalString(req.model) || DEFAULT_SENSEAUDIO_MUSIC_MODEL;
       const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const deadline = Date.now() + timeoutMs;
 
       // Step 1: Generate structured lyrics from prompt when no lyrics are provided.
       // This applies to both vocal and instrumental tracks: for instrumental,
@@ -161,7 +162,7 @@ export function buildSenseaudioMusicGenerationProvider(): MusicGenerationProvide
           url: `${baseUrl}/v1/music/lyrics/create`,
           headers: jsonHeaders,
           body: { prompt: req.prompt, provider: model },
-          timeoutMs: API_CALL_TIMEOUT_MS,
+          timeoutMs: Math.min(API_CALL_TIMEOUT_MS, deadline - Date.now()),
           fetchFn,
           pinDns: false,
           allowPrivateNetwork,
@@ -202,7 +203,7 @@ export function buildSenseaudioMusicGenerationProvider(): MusicGenerationProvide
         url: `${baseUrl}/v1/music/song/create`,
         headers: jsonHeaders,
         body: songBody,
-        timeoutMs: API_CALL_TIMEOUT_MS,
+        timeoutMs: Math.min(API_CALL_TIMEOUT_MS, deadline - Date.now()),
         fetchFn,
         pinDns: false,
         allowPrivateNetwork,
@@ -224,7 +225,6 @@ export function buildSenseaudioMusicGenerationProvider(): MusicGenerationProvide
       }
 
       // Step 3: Poll until the task reaches SUCCESS or FAILED.
-      const deadline = Date.now() + timeoutMs;
       let pendingData: SenseaudioSongPendingResponse | null = null;
       while (Date.now() < deadline) {
         const remaining = deadline - Date.now();
