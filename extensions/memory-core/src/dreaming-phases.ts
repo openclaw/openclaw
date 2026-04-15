@@ -961,7 +961,7 @@ async function ingestSessionTranscriptSignals(params: {
       results: batch.results,
       signalType: "daily",
       dedupeByQueryPerDay: true,
-      dayBucket: batch.day,
+      dayBucket: formatMemoryDreamingDay(params.nowMs, params.timezone),
       nowMs: params.nowMs,
       timezone: params.timezone,
     });
@@ -1120,7 +1120,7 @@ async function ingestDailyMemorySignals(params: {
       results: batch.results,
       signalType: "daily",
       dedupeByQueryPerDay: true,
-      dayBucket: batch.day,
+      dayBucket: formatMemoryDreamingDay(params.nowMs, params.timezone),
       nowMs: params.nowMs,
       timezone: params.timezone,
     });
@@ -1222,7 +1222,7 @@ export async function seedHistoricalDailyMemorySignals(params: {
       results,
       signalType: "daily",
       dedupeByQueryPerDay: true,
-      dayBucket: entry.day,
+      dayBucket: formatMemoryDreamingDay(params.nowMs, params.timezone),
       nowMs: params.nowMs,
       timezone: params.timezone,
     });
