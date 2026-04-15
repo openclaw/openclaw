@@ -335,14 +335,17 @@ export const OpenClawSchema = z
         lastTouchedAt: z
           .union([
             z.string(),
-            z.number().transform((n, ctx) => {
-              const d = new Date(n);
-              if (Number.isNaN(d.getTime())) {
-                ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid timestamp" });
-                return z.NEVER;
-              }
-              return d.toISOString();
-            }),
+            z
+              .number()
+              .transform((n, ctx) => {
+                const d = new Date(n);
+                if (Number.isNaN(d.getTime())) {
+                  ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid timestamp" });
+                  return z.NEVER;
+                }
+                return d.toISOString();
+              })
+              .pipe(z.string()),
           ])
           .optional(),
       })
