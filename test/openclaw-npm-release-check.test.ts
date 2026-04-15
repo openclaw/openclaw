@@ -406,6 +406,15 @@ describe("collectPackedTestCargoErrors", () => {
       ]),
     ).toEqual([]);
   });
+
+  it("allows legitimate package roots named test under node_modules", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/extensions/fixture-plugin/node_modules/direct/node_modules/test/index.js",
+        "dist/extensions/fixture-plugin/node_modules/direct/node_modules/@scope/tests/index.js",
+      ]),
+    ).toEqual([]);
+  });
 });
 
 describe("collectReleaseTagErrors", () => {

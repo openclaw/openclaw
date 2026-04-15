@@ -415,6 +415,67 @@ describe("stageBundledPluginRuntimeDeps", () => {
     ).toBe(false);
   });
 
+  it("preserves nested runtime dependencies named test or tests", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    const nestedTestDir = path.join(directDir, "node_modules", "test");
+    const scopedTestsDir = path.join(directDir, "node_modules", "@scope", "tests");
+    fs.mkdirSync(nestedTestDir, { recursive: true });
+    fs.mkdirSync(scopedTestsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0", "dependencies": { "test": "^1.0.0", "@scope/tests": "^1.0.0" } }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'direct';\n", "utf8");
+    fs.writeFileSync(
+      path.join(nestedTestDir, "package.json"),
+      '{ "name": "test", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(nestedTestDir, "index.js"), "module.exports = 'test';\n", "utf8");
+    fs.writeFileSync(
+      path.join(scopedTestsDir, "package.json"),
+      '{ "name": "@scope/tests", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(scopedTestsDir, "index.js"),
+      "module.exports = 'scoped-tests';\n",
+      "utf8",
+    );
+
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+
+    expect(
+      fs.readFileSync(
+        path.join(pluginDir, "node_modules", "direct", "node_modules", "test", "index.js"),
+        "utf8",
+      ),
+    ).toBe("module.exports = 'test';\n");
+    expect(
+      fs.readFileSync(
+        path.join(
+          pluginDir,
+          "node_modules",
+          "direct",
+          "node_modules",
+          "@scope",
+          "tests",
+          "index.js",
+        ),
+        "utf8",
+      ),
+    ).toBe("module.exports = 'scoped-tests';\n");
+  });
+
   it("stages hoisted transitive runtime deps from the root node_modules", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {

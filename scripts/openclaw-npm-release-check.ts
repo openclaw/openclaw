@@ -118,7 +118,6 @@ const skipPackValidationEnv = "OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK";
 function normalizePackedPath(packedPath: string): string {
   return packedPath.replace(/\\/g, "/");
 }
-
 function isNodeModulesPackageRoot(segments: string[], index: number): boolean {
   const parent = segments[index - 1];
   if (parent === "node_modules") {
@@ -521,11 +520,8 @@ function collectPackedTarballErrors(): string[] {
   return [
     ...collectControlUiPackErrors(packedPaths),
     ...collectForbiddenPackedPathErrors(packedPaths),
-<<<<<<< HEAD
     ...collectForbiddenPackedContentErrors(packedPaths),
-=======
     ...collectPackedTestCargoErrors(packedPaths),
->>>>>>> caafdea0bb (Build: prune packaged runtime test cargo)
   ];
 }
 
@@ -591,11 +587,8 @@ export function collectPackedTestCargoErrors(paths: Iterable<string>): string[] 
   return errors.toSorted((left, right) => left.localeCompare(right));
 }
 
-<<<<<<< HEAD
 async function main(): Promise<number> {
-=======
-function main(): number {
->>>>>>> caafdea0bb (Build: prune packaged runtime test cargo)
+async function main(): Promise<number> {
   const pkg = loadPackageJson();
   const now = new Date();
   const skipPackValidation = shouldSkipPackedTarballValidation();

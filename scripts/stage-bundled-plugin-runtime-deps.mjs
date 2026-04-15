@@ -504,6 +504,18 @@ function pruneDependencyFilesBySuffixes(depRoot, suffixes) {
   });
 }
 
+function relativePathSegments(rootDir, fullPath) {
+  return path.relative(rootDir, fullPath).split(path.sep).filter(Boolean);
+}
+
+function isNodeModulesPackageRoot(segments, index) {
+  const parent = segments[index - 1];
+  if (parent === "node_modules") {
+    return true;
+  }
+  return parent?.startsWith("@") === true && segments[index - 2] === "node_modules";
+}
+
 function pruneDependencyDirectoriesByBasename(depRoot, basenames) {
   if (!basenames || basenames.length === 0 || !fs.existsSync(depRoot)) {
     return;
@@ -517,7 +529,8 @@ function pruneDependencyDirectoriesByBasename(depRoot, basenames) {
         continue;
       }
       const fullPath = path.join(currentDir, entry.name);
-      if (basenameSet.has(entry.name)) {
+      const segments = relativePathSegments(depRoot, fullPath);
+      if (basenameSet.has(entry.name) && !isNodeModulesPackageRoot(segments, segments.length - 1)) {
         removePathIfExists(fullPath);
         continue;
       }
@@ -531,7 +544,7 @@ function pruneDependencyFilesByPatterns(depRoot, patterns) {
     return;
   }
   walkFiles(depRoot, (fullPath) => {
-    const relativePath = path.relative(depRoot, fullPath).replace(/\\/g, "/");
+    const relativePath = relativePathSegments(depRoot, fullPath).join("/");
     if (patterns.some((pattern) => pattern.test(relativePath))) {
       removePathIfExists(fullPath);
     }
