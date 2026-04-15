@@ -12,7 +12,7 @@ title: "Image Generation"
 The `image_generate` tool lets the agent create and edit images using your configured providers. Generated images are delivered automatically as media attachments in the agent's reply.
 
 <Note>
-The tool only appears when at least one image generation provider is available. If you don't see `image_generate` in your agent's tools, configure `agents.defaults.imageGenerationModel` or set up a provider API key.
+The tool only appears when at least one image generation provider is available. If you don't see `image_generate` in your agent's tools, configure `agents.defaults.imageModel` or set up a provider API key.
 </Note>
 
 ## Quick start
@@ -24,7 +24,7 @@ The tool only appears when at least one image generation provider is available. 
 {
   agents: {
     defaults: {
-      imageGenerationModel: {
+      imageModel: {
         primary: "openai/gpt-image-1",
       },
     },
@@ -80,7 +80,7 @@ Tool results report the applied settings. When OpenClaw remaps geometry during p
 {
   agents: {
     defaults: {
-      imageGenerationModel: {
+      imageModel: {
         primary: "openai/gpt-image-1",
         fallbacks: ["google/gemini-3.1-flash-image-preview", "fal/fal-ai/flux/dev"],
       },
@@ -94,8 +94,8 @@ Tool results report the applied settings. When OpenClaw remaps geometry during p
 When generating an image, OpenClaw tries providers in this order:
 
 1. **`model` parameter** from the tool call (if the agent specifies one)
-2. **`imageGenerationModel.primary`** from config
-3. **`imageGenerationModel.fallbacks`** in order
+2. **`imageModel.primary`** from config
+3. **`imageModel.fallbacks`** in order
 4. **Auto-detection** — uses auth-backed provider defaults only:
    - current default provider first
    - remaining registered image-generation providers in provider-id order
@@ -147,5 +147,5 @@ MiniMax image generation is available through both bundled MiniMax auth paths:
 - [MiniMax](/providers/minimax) — MiniMax image provider setup
 - [OpenAI](/providers/openai) — OpenAI Images provider setup
 - [Vydra](/providers/vydra) — Vydra image, video, and speech setup
-- [Configuration Reference](/gateway/configuration-reference#agent-defaults) — `imageGenerationModel` config
+- [Configuration Reference](/gateway/configuration-reference#agent-defaults) — `imageModel` config
 - [Models](/concepts/models) — model configuration and failover
