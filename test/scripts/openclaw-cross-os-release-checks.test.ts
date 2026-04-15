@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildDiscordSmokeGuildsConfig,
   looksLikeReleaseVersionRef,
   normalizeWindowsInstalledCliPath,
   parseArgs,
   readRunnerOverrideEnv,
-  resolveGlobalInstallBinDir,
-  resolveGlobalOpenClawCliPath,
   resolveRepairGlobalInstallArgs,
   resolveRequestedSuites,
   resolveRunnerMatrix,
@@ -132,20 +131,17 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ]);
   });
 
-  it("derives the active global bin dir and CLI path from the npm prefix", () => {
-    expect(resolveGlobalInstallBinDir("/opt/homebrew", "darwin")).toBe("/opt/homebrew/bin");
-    expect(resolveGlobalInstallBinDir("/usr/local", "linux")).toBe("/usr/local/bin");
-    expect(
-      resolveGlobalInstallBinDir(String.raw`C:\Users\runner\AppData\Roaming\npm`, "win32"),
-    ).toBe(String.raw`C:\Users\runner\AppData\Roaming\npm`);
-
-    expect(resolveGlobalOpenClawCliPath("/opt/homebrew", "darwin")).toBe(
-      "/opt/homebrew/bin/openclaw",
-    );
-    expect(resolveGlobalOpenClawCliPath("/usr/local", "linux")).toBe("/usr/local/bin/openclaw");
-    expect(
-      resolveGlobalOpenClawCliPath(String.raw`C:\Users\runner\AppData\Roaming\npm`, "win32"),
-    ).toBe(String.raw`C:\Users\runner\AppData\Roaming\npm\openclaw.cmd`);
+  it("writes Discord smoke config using the strict guild channel schema", () => {
+    expect(buildDiscordSmokeGuildsConfig("guild-123", "channel-456")).toEqual({
+      "guild-123": {
+        channels: {
+          "channel-456": {
+            enabled: true,
+            requireMention: false,
+          },
+        },
+      },
+    });
   });
 
   it("only treats main as a real dev-update lane", () => {

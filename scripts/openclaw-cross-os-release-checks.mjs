@@ -18,7 +18,7 @@ import { mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, posix, resolve, win32 } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -1173,17 +1173,6 @@ export function resolveRepairGlobalInstallArgs(platform = process.platform, gitR
   return ["link"];
 }
 
-export function resolveGlobalInstallBinDir(prefixDir, platform = process.platform) {
-  const pathImpl = platform === "win32" ? win32 : posix;
-  return platform === "win32" ? prefixDir : pathImpl.join(prefixDir, "bin");
-}
-
-export function resolveGlobalOpenClawCliPath(prefixDir, platform = process.platform) {
-  const binDir = resolveGlobalInstallBinDir(prefixDir, platform);
-  const pathImpl = platform === "win32" ? win32 : posix;
-  return pathImpl.join(binDir, platform === "win32" ? "openclaw.cmd" : "openclaw");
-}
-
 async function runPosixShellScript(script, options) {
   return runCommand("/bin/bash", ["-lc", script], options);
 }
@@ -1322,6 +1311,7 @@ async function readInstalledUpdateStatus(params) {
 async function ensureDevUpdateGitInstall(params) {
   if (!shouldRunMainChannelDevUpdate(params.requestedRef)) {
     await repairLegacyDevUpdateInstall({
+      activeCliPath: params.cliPath,
       lane: params.lane,
       env: params.env,
       logsDir: params.logsDir,
@@ -1403,29 +1393,26 @@ async function repairLegacyDevUpdateInstall(params) {
     timeoutMs: updateTimeoutMs(),
   });
   if (process.platform !== "win32") {
-    await repointPosixGlobalOpenClawCli({
-      env: params.env,
+    repointPosixActiveOpenClawCli({
+      activeCliPath: params.activeCliPath,
       gitRoot,
       logsDir: params.logsDir,
     });
   }
 }
 
-async function repointPosixGlobalOpenClawCli(params) {
-  const prefixResult = await runCommand(npmCommand(), ["config", "get", "prefix"], {
-    cwd: params.gitRoot,
-    env: params.env,
-    logPath: join(params.logsDir, "dev-update-repair-global-prefix.log"),
-    timeoutMs: 2 * 60 * 1000,
-  });
-  const prefixDir = prefixResult.stdout.trim();
-  if (!prefixDir) {
-    throw new Error("npm config get prefix did not return a global prefix.");
+function repointPosixActiveOpenClawCli(params) {
+  if (!params.activeCliPath?.trim()) {
+    throw new Error("Missing active CLI path for POSIX dev-update repair.");
   }
-  const cliPath = resolveGlobalOpenClawCliPath(prefixDir, process.platform);
-  mkdirSync(dirname(cliPath), { recursive: true });
-  rmSync(cliPath, { force: true, recursive: true });
-  symlinkSync(join(params.gitRoot, "openclaw.mjs"), cliPath);
+  mkdirSync(dirname(params.activeCliPath), { recursive: true });
+  rmSync(params.activeCliPath, { force: true, recursive: true });
+  symlinkSync(join(params.gitRoot, "openclaw.mjs"), params.activeCliPath);
+  writeFileSync(
+    join(params.logsDir, "dev-update-repair-cli-link.log"),
+    `${params.activeCliPath} -> ${join(params.gitRoot, "openclaw.mjs")}\n`,
+    "utf8",
+  );
 }
 
 async function runOnboardWithInstalledCli(params) {
@@ -1463,6 +1450,7 @@ async function runOnboardWithInstalledCli(params) {
 }
 
 async function startManualGatewayFromInstalledCli(params) {
+  mkdirSync(dirname(params.logPath), { recursive: true });
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
   const child = spawn(
     params.cliPath,
@@ -1672,17 +1660,23 @@ if ($null -ne $corepack) {
   }
 }
 
-async function configureDiscordSmoke(params) {
-  const guildsJson = JSON.stringify({
-    [params.guildId]: {
+export function buildDiscordSmokeGuildsConfig(guildId, channelId) {
+  return {
+    [guildId]: {
       channels: {
-        [params.channelId]: {
-          allow: true,
+        [channelId]: {
+          enabled: true,
           requireMention: false,
         },
       },
     },
-  });
+  };
+}
+
+async function configureDiscordSmoke(params) {
+  const guildsJson = JSON.stringify(
+    buildDiscordSmokeGuildsConfig(params.guildId, params.channelId),
+  );
   await runInstalledCli({
     cliPath: params.cliPath,
     args: [
