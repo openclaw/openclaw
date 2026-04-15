@@ -119,6 +119,26 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ).not.toThrow();
   });
 
+  it("accepts a git dev-channel payload for a requested non-main branch", () => {
+    expect(() =>
+      verifyDevUpdateStatus(
+        JSON.stringify({
+          update: {
+            installKind: "git",
+            git: {
+              branch: "codex/cross-os-release-checks-full-native-e2e",
+              sha: "08753a1d793c040b101c8a26c43445dbbab14995",
+            },
+          },
+          channel: {
+            value: "dev",
+          },
+        }),
+        { ref: "codex/cross-os-release-checks-full-native-e2e" },
+      ),
+    ).not.toThrow();
+  });
+
   it("rejects update status payloads that are not on dev/main git", () => {
     expect(() =>
       verifyDevUpdateStatus(

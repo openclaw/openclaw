@@ -207,8 +207,18 @@ function Install-OpenClawNpm {
     Write-Host "Installing OpenClaw ($installSpec)..." -Level info
     
     try {
-        # Use -ExecutionPolicy Bypass to handle restricted execution policy
-        npm install -g $installSpec --no-fund --no-audit 2>&1
+        # PowerShell surfaces native stderr as error records, so treat npm's
+        # actual exit code as the install result instead of warning noise.
+        $installOutput = & npm install -g $installSpec --no-fund --no-audit 2>&1
+        $exitCode = $LASTEXITCODE
+        $installText = ($installOutput | Out-String).TrimEnd()
+        if ($installText) {
+            Microsoft.PowerShell.Utility\Write-Output $installText
+        }
+        if ($exitCode -ne 0) {
+            Write-Host "npm install failed with exit code $exitCode" -Level error
+            return $false
+        }
         Write-Host "OpenClaw installed" -Level success
         return $true
     } catch {

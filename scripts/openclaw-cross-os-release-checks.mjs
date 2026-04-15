@@ -330,6 +330,7 @@ async function main(argv) {
         logsDir,
         providerConfig: selectedProvider,
         providerSecretValue,
+        ref: inputRef || "main",
         runDiscordRoundtrip,
       });
     }
@@ -730,6 +731,7 @@ async function runInstallerFreshSuite(params) {
   const cleanup = [];
   const installVersion = resolveBaselineVersion(params.baselineSpec);
   const usesManagedGateway = shouldUseManagedGatewayService();
+  const manualGateway = { current: null };
   try {
     const env = buildInstallerEnv(lane, params.providerConfig, params.providerSecretValue);
     const installerServer = await startStaticFileServer({
@@ -773,7 +775,8 @@ async function runInstallerFreshSuite(params) {
         env,
         logPath: join(params.logsDir, "installer-fresh-gateway.log"),
       });
-      cleanup.push(() => stopGateway(gateway));
+      manualGateway.current = gateway;
+      cleanup.push(() => stopGateway(manualGateway.current));
       logLanePhase(lane, "gateway-status");
       await waitForInstalledGateway({
         lane,
@@ -864,6 +867,7 @@ async function runInstallerFreshSuite(params) {
         lane,
         cliPath: freshShell.cliPath,
         env,
+        gatewayHolder: manualGateway,
         logPath: join(params.logsDir, "installer-fresh-discord.log"),
       });
     }
@@ -887,6 +891,8 @@ async function runDevUpdateSuite(params) {
   const cleanup = [];
   const installVersion = resolveBaselineVersion(params.baselineSpec);
   const usesManagedGateway = shouldUseManagedGatewayService();
+  const requestedRef = resolveExpectedDevUpdateRef(params.ref);
+  const manualGateway = { current: null };
   try {
     const env = buildInstallerEnv(lane, params.providerConfig, params.providerSecretValue);
     const installerServer = await startStaticFileServer({
@@ -913,14 +919,16 @@ async function runDevUpdateSuite(params) {
     });
 
     logLanePhase(lane, "update-dev");
-    await runInstalledCli({
-      cliPath: baselineShell.cliPath,
-      args: ["update", "--channel", "dev", "--yes", "--json"],
-      env,
-      cwd: lane.homeDir,
-      logPath: join(params.logsDir, "dev-update.log"),
-      timeoutMs: updateTimeoutMs(),
-    });
+    if (shouldRunMainChannelDevUpdate(requestedRef)) {
+      await runInstalledCli({
+        cliPath: baselineShell.cliPath,
+        args: ["update", "--channel", "dev", "--yes", "--json"],
+        env,
+        cwd: lane.homeDir,
+        logPath: join(params.logsDir, "dev-update.log"),
+        timeoutMs: updateTimeoutMs(),
+      });
+    }
 
     logLanePhase(lane, "fresh-shell-updated");
     const updatedShell = await verifyFreshShellCommand({
@@ -936,6 +944,7 @@ async function runDevUpdateSuite(params) {
       env,
       cliPath: updatedShell.cliPath,
       logsDir: params.logsDir,
+      requestedRef,
     });
 
     if (process.platform === "win32") {
@@ -965,7 +974,8 @@ async function runDevUpdateSuite(params) {
         env,
         logPath: join(params.logsDir, "dev-update-gateway.log"),
       });
-      cleanup.push(() => stopGateway(gateway));
+      manualGateway.current = gateway;
+      cleanup.push(() => stopGateway(manualGateway.current));
       logLanePhase(lane, "gateway-status");
       await waitForInstalledGateway({
         lane,
@@ -1014,6 +1024,7 @@ async function runDevUpdateSuite(params) {
         lane,
         cliPath: verifiedShell.cliPath,
         env,
+        gatewayHolder: manualGateway,
         logPath: join(params.logsDir, "dev-update-discord.log"),
       });
     }
@@ -1114,6 +1125,19 @@ function resolveBaselineVersion(baselineSpec) {
     return trimmed.slice("openclaw@".length);
   }
   return trimmed;
+}
+
+function looksLikeCommitSha(ref) {
+  return /^[0-9a-f]{7,40}$/iu.test(ref.trim());
+}
+
+function resolveExpectedDevUpdateRef(ref) {
+  const trimmed = ref?.trim() || "main";
+  return trimmed || "main";
+}
+
+function shouldRunMainChannelDevUpdate(ref) {
+  return resolveExpectedDevUpdateRef(ref) === "main";
 }
 
 function powerShellSingleQuote(value) {
@@ -1262,6 +1286,29 @@ async function readInstalledUpdateStatus(params) {
 }
 
 async function ensureDevUpdateGitInstall(params) {
+  if (!shouldRunMainChannelDevUpdate(params.requestedRef)) {
+    await repairLegacyDevUpdateInstall({
+      lane: params.lane,
+      env: params.env,
+      logsDir: params.logsDir,
+      requestedRef: params.requestedRef,
+    });
+    const repairedShell = await verifyFreshShellCommand({
+      lane: params.lane,
+      env: params.env,
+      expectedNeedle: "OpenClaw",
+      logPath: join(params.logsDir, "dev-update-repair-shell.log"),
+    });
+    const repairedStatus = await readInstalledUpdateStatus({
+      cliPath: repairedShell.cliPath,
+      cwd: params.lane.homeDir,
+      env: params.env,
+      logPath: join(params.logsDir, "dev-update-status-after-repair.log"),
+    });
+    verifyDevUpdateStatus(repairedStatus.stdout, { ref: params.requestedRef });
+    return repairedShell;
+  }
+
   try {
     const updateStatus = await readInstalledUpdateStatus({
       cliPath: params.cliPath,
@@ -1269,13 +1316,14 @@ async function ensureDevUpdateGitInstall(params) {
       env: params.env,
       logPath: join(params.logsDir, "dev-update-status.log"),
     });
-    verifyDevUpdateStatus(updateStatus.stdout);
+    verifyDevUpdateStatus(updateStatus.stdout, { ref: params.requestedRef });
     return { cliPath: params.cliPath };
   } catch (initialError) {
     await repairLegacyDevUpdateInstall({
       lane: params.lane,
       env: params.env,
       logsDir: params.logsDir,
+      requestedRef: params.requestedRef,
     });
     const repairedShell = await verifyFreshShellCommand({
       lane: params.lane,
@@ -1290,7 +1338,7 @@ async function ensureDevUpdateGitInstall(params) {
         env: params.env,
         logPath: join(params.logsDir, "dev-update-status-after-repair.log"),
       });
-      verifyDevUpdateStatus(repairedStatus.stdout);
+      verifyDevUpdateStatus(repairedStatus.stdout, { ref: params.requestedRef });
       return repairedShell;
     } catch (repairError) {
       throw new Error(
@@ -1303,26 +1351,29 @@ async function ensureDevUpdateGitInstall(params) {
 
 async function repairLegacyDevUpdateInstall(params) {
   const gitRoot = join(params.lane.homeDir, "openclaw");
+  const requestedRef = resolveExpectedDevUpdateRef(params.requestedRef);
   rmSync(gitRoot, { recursive: true, force: true });
 
-  await runCommand(
-    gitCommand(),
-    [
-      "clone",
-      "--depth",
-      "1",
-      "--branch",
-      "main",
-      "https://github.com/openclaw/openclaw.git",
-      gitRoot,
-    ],
-    {
-      cwd: params.lane.homeDir,
+  const cloneArgs = ["clone"];
+  if (!looksLikeCommitSha(requestedRef)) {
+    cloneArgs.push("--depth", "1", "--branch", requestedRef);
+  }
+  cloneArgs.push("https://github.com/openclaw/openclaw.git", gitRoot);
+
+  await runCommand(gitCommand(), cloneArgs, {
+    cwd: params.lane.homeDir,
+    env: params.env,
+    logPath: join(params.logsDir, "dev-update-repair-git-clone.log"),
+    timeoutMs: updateTimeoutMs(),
+  });
+  if (looksLikeCommitSha(requestedRef)) {
+    await runCommand(gitCommand(), ["-C", gitRoot, "checkout", "--detach", requestedRef], {
+      cwd: gitRoot,
       env: params.env,
-      logPath: join(params.logsDir, "dev-update-repair-git-clone.log"),
+      logPath: join(params.logsDir, "dev-update-repair-git-checkout.log"),
       timeoutMs: updateTimeoutMs(),
-    },
-  );
+    });
+  }
   await runCommand(pnpmCommand(), ["install"], {
     cwd: gitRoot,
     env: params.env,
@@ -1423,9 +1474,6 @@ async function startManualGatewayFromInstalledCli(params) {
 }
 
 async function resolveInstalledGatewayStatusArgs(params) {
-  if (process.platform === "win32") {
-    return ["gateway", "status", "--deep", "--require-rpc", "--timeout", "5000"];
-  }
   const help = await runInstalledCli({
     cliPath: params.cliPath,
     args: ["gateway", "status", "--help"],
@@ -1522,16 +1570,18 @@ async function runInstalledAgentTurn(params) {
   return result;
 }
 
-export function verifyDevUpdateStatus(stdout) {
+export function verifyDevUpdateStatus(stdout, options = {}) {
   let payload = null;
   try {
     payload = JSON.parse(stdout);
   } catch {
     payload = null;
   }
+  const expectedRef = resolveExpectedDevUpdateRef(options.ref);
   const update = payload?.update ?? payload;
   const installKind = update?.installKind ?? null;
   const branch = update?.git?.branch ?? null;
+  const sha = update?.git?.sha ?? null;
   const channelValue = payload?.channel?.value ?? payload?.channel?.channel ?? null;
   if (installKind !== "git") {
     throw new Error(
@@ -1543,9 +1593,17 @@ export function verifyDevUpdateStatus(stdout) {
       `Dev update status did not report channel=dev. Found ${channelValue ?? "<missing>"}.`,
     );
   }
-  if (branch !== "main") {
+  if (looksLikeCommitSha(expectedRef)) {
+    if (!sha || !sha.startsWith(expectedRef)) {
+      throw new Error(
+        `Dev update status did not report sha=${expectedRef}. Found ${sha ?? "<missing>"}.`,
+      );
+    }
+    return;
+  }
+  if (branch !== expectedRef) {
     throw new Error(
-      `Dev update status did not report branch=main. Found ${branch ?? "<missing>"}.`,
+      `Dev update status did not report branch=${expectedRef}. Found ${branch ?? "<missing>"}.`,
     );
   }
 }
@@ -1639,6 +1697,29 @@ async function configureDiscordSmoke(params) {
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });
+  if (!shouldUseManagedGatewayService()) {
+    const gatewayEnv = { ...params.env, DISCORD_BOT_TOKEN: params.token };
+    if (params.gatewayHolder?.current) {
+      await stopGateway(params.gatewayHolder.current);
+      params.gatewayHolder.current = null;
+    }
+    const gateway = await startManualGatewayFromInstalledCli({
+      lane: params.lane,
+      cliPath: params.cliPath,
+      env: gatewayEnv,
+      logPath: join(params.cwd, `.openclaw/logs/${params.lane.name}-discord-gateway.log`),
+    });
+    if (params.gatewayHolder) {
+      params.gatewayHolder.current = gateway;
+    }
+    await waitForInstalledGateway({
+      lane: params.lane,
+      cliPath: params.cliPath,
+      env: gatewayEnv,
+      logPath: params.logPath,
+    });
+    return;
+  }
   await runInstalledCli({
     cliPath: params.cliPath,
     args: ["gateway", "restart"],
@@ -1772,6 +1853,7 @@ async function maybeRunDiscordRoundtrip(params) {
       cliPath: params.cliPath,
       cwd: params.lane.homeDir,
       env: params.env,
+      gatewayHolder: params.gatewayHolder,
       logPath: params.logPath,
       token,
       guildId,
