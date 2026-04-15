@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDiscordSmokeGuildsConfig,
+  buildRealUpdateEnv,
   looksLikeReleaseVersionRef,
   normalizeWindowsInstalledCliPath,
   parseArgs,
@@ -144,12 +145,24 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
-  it("only treats main as a real dev-update lane", () => {
+  it("treats main and main SHAs as real dev-update lanes", () => {
     expect(shouldRunMainChannelDevUpdate("main")).toBe(true);
+    expect(shouldRunMainChannelDevUpdate("08753a1d793c040b101c8a26c43445dbbab14995")).toBe(true);
     expect(shouldRunMainChannelDevUpdate(" codex/cross-os-release-checks-full-native-e2e ")).toBe(
       false,
     );
     expect(shouldRunMainChannelDevUpdate("v2026.4.14")).toBe(false);
+  });
+
+  it("drops the bundled plugin postinstall disable flag for real updater calls", () => {
+    expect(
+      buildRealUpdateEnv({
+        FOO: "bar",
+        OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1",
+      }),
+    ).toEqual({
+      FOO: "bar",
+    });
   });
 
   it("accepts a git main dev-channel update status payload", () => {

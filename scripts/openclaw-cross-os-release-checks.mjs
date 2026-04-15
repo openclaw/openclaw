@@ -635,6 +635,7 @@ async function runUpgradeLane(params) {
     const baseline = readInstalledMetadata(lane.prefixDir);
 
     logLanePhase(lane, "update");
+    const updateEnv = buildRealUpdateEnv(env);
     const updateArgs = [
       "update",
       "--tag",
@@ -646,7 +647,7 @@ async function runUpgradeLane(params) {
     ];
     await runOpenClaw({
       lane,
-      env,
+      env: updateEnv,
       args: updateArgs,
       logPath: join(params.logsDir, "upgrade-update.log"),
       timeoutMs: updateTimeoutMs(),
@@ -1144,7 +1145,14 @@ function resolveExpectedDevUpdateRef(ref) {
 }
 
 export function shouldRunMainChannelDevUpdate(ref) {
-  return resolveExpectedDevUpdateRef(ref) === "main";
+  const expectedRef = resolveExpectedDevUpdateRef(ref);
+  return expectedRef === "main" || looksLikeCommitSha(expectedRef);
+}
+
+export function buildRealUpdateEnv(env) {
+  const updateEnv = { ...env };
+  delete updateEnv.OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL;
+  return updateEnv;
 }
 
 function powerShellSingleQuote(value) {
