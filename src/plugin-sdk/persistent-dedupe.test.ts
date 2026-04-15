@@ -129,6 +129,24 @@ describe("createClaimableDedupe", () => {
     await expect(dedupe.claim("line:evt-1")).resolves.toEqual({ kind: "duplicate" });
   });
 
+  it("serializes concurrent first-claim races onto one in-flight owner", async () => {
+    const dedupe = createClaimableDedupe({
+      ttlMs: 10_000,
+      memoryMaxSize: 100,
+    });
+
+    const claims = await Promise.all([dedupe.claim("line:race-1"), dedupe.claim("line:race-1")]);
+    expect(claims.filter((claim) => claim.kind === "claimed")).toHaveLength(1);
+    expect(claims.filter((claim) => claim.kind === "inflight")).toHaveLength(1);
+
+    const waitingClaim = claims.find((claim) => claim.kind === "inflight");
+    await expect(dedupe.commit("line:race-1")).resolves.toBe(true);
+    if (waitingClaim?.kind === "inflight") {
+      await expect(waitingClaim.pending).resolves.toBe(true);
+    }
+    await expect(dedupe.claim("line:race-1")).resolves.toEqual({ kind: "duplicate" });
+  });
+
   it("rejects waiting duplicates when the active claim releases with an error", async () => {
     const dedupe = createClaimableDedupe({
       ttlMs: 10_000,

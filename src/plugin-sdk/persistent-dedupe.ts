@@ -347,9 +347,6 @@ export function createClaimableDedupe(options: ClaimableDedupeOptions): Claimabl
     if (existing) {
       return { kind: "inflight", pending: existing.promise };
     }
-    if (await hasRecent(trimmed, dedupeOptions)) {
-      return { kind: "duplicate" };
-    }
 
     let resolve!: (result: boolean) => void;
     let reject!: (error: unknown) => void;
@@ -359,7 +356,18 @@ export function createClaimableDedupe(options: ClaimableDedupeOptions): Claimabl
     });
     void promise.catch(() => {});
     inflight.set(scopedKey, { promise, resolve, reject });
-    return { kind: "claimed" };
+    try {
+      if (await hasRecent(trimmed, dedupeOptions)) {
+        resolve(false);
+        inflight.delete(scopedKey);
+        return { kind: "duplicate" };
+      }
+      return { kind: "claimed" };
+    } catch (error) {
+      reject(error);
+      inflight.delete(scopedKey);
+      throw error;
+    }
   }
 
   async function commit(

@@ -87,6 +87,13 @@ const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
 const LINE_WEBHOOK_REPLAY_MAX_ENTRIES = 4096;
 export type LineWebhookReplayCache = ClaimableDedupe;
 
+export class LineRetryableWebhookError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "LineRetryableWebhookError";
+  }
+}
+
 export function createLineWebhookReplayCache(): LineWebhookReplayCache {
   return createClaimableDedupe({
     ttlMs: LINE_WEBHOOK_REPLAY_WINDOW_MS,
@@ -617,7 +624,11 @@ export async function handleLineWebhookEvents(
       }
     } catch (err) {
       if (replayCandidate) {
-        replayCandidate.cache.release(replayCandidate.key, { error: err });
+        if (err instanceof LineRetryableWebhookError) {
+          replayCandidate.cache.release(replayCandidate.key, { error: err });
+        } else {
+          await replayCandidate.cache.commit(replayCandidate.key);
+        }
       }
       context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
       firstError ??= err;
