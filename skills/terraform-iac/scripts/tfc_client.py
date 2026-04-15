@@ -108,6 +108,12 @@ def get_org():
     return org
 
 
+def terraform_label(value):
+    safe = "".join(ch if ch.isalnum() else "_" for ch in str(value).lower())
+    safe = safe.strip("_")
+    return safe or "x"
+
+
 def api_headers():
     return {
         "Authorization": f"Bearer {get_token()}",
@@ -1217,6 +1223,10 @@ output "sg_name" {{ value = aws_security_group.this.name }}
 
 def prompt_landing_zone(org, workspace, outdir):
     """Interactively gather AWS Control Tower Landing Zone config."""
+
+    def ou_ref_by_name(target_name):
+        safe = terraform_label(target_name)
+        return f'aws_organizations_organizational_unit.{safe}.id' if target_name in ous else 'aws_organizations_organization.this.roots[0].id'
 
     print("""
 🏢 AWS Control Tower Landing Zone Wizard
@@ -3874,11 +3884,11 @@ def cmd_apply(args):
 
 
 def cmd_destroy(args):
+    work_dir = validate_dir(args.dir)
     if getattr(args, "confirm", None) != "DESTROY":
         print("ERROR: Destroy requires explicit confirmation.")
         print("Pass --confirm DESTROY to proceed.")
         sys.exit(1)
-    work_dir = validate_dir(args.dir)
     print(f"\n⚠️  DESTROYING all resources in {work_dir}")
     print("Running terraform destroy...")
     rc = run_tf(["destroy", "-auto-approve"], cwd=work_dir)
