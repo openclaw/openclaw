@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
@@ -301,6 +303,19 @@ describe("minimax provider hooks", () => {
       baseUrl: "https://api.minimax.io/anthropic",
       api: "anthropic-messages",
       authHeader: true,
+    });
+  });
+});
+
+describe("minimax manifest", () => {
+  it("declares its CN provider auth aliases in the manifest", () => {
+    const pluginJson = JSON.parse(
+      readFileSync(resolve(import.meta.dirname, "openclaw.plugin.json"), "utf-8"),
+    ) as Record<string, unknown>;
+
+    expect(pluginJson.providerAuthAliases).toEqual({
+      "minimax-cn": "minimax",
+      "minimax-portal-cn": "minimax-portal",
     });
   });
 });
