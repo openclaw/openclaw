@@ -113,7 +113,7 @@ describe("applyInlineDirectiveOverrides trace directives", () => {
       throw new Error("expected directive-only trace reply");
     }
     expect(result.reply).toEqual({
-      text: "Current trace level: on.\nOptions: on, off.",
+      text: "Current trace level: on.\nOptions: on, off, raw.",
     });
   });
 });
