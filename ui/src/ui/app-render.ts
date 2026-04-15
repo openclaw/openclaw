@@ -129,6 +129,11 @@ import {
 } from "./views/agents-utils.ts";
 import { renderChat } from "./views/chat.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
+import {
+  renderQuickSettings,
+  type QuickSettingsChannel,
+  type QuickSettingsApiKey,
+} from "./views/config-quick.ts";
 import { renderConfig, type ConfigProps } from "./views/config.ts";
 import { renderDreaming } from "./views/dreaming.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
@@ -396,6 +401,121 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
     return candidate;
   }
   return identity?.avatarUrl;
+}
+
+// ── Quick Settings data extraction helpers ──
+
+const KNOWN_CHANNEL_IDS = [
+  { id: "telegram", label: "Telegram" },
+  { id: "discord", label: "Discord" },
+  { id: "slack", label: "Slack" },
+  { id: "whatsapp", label: "WhatsApp" },
+  { id: "signal", label: "Signal" },
+  { id: "imessage", label: "iMessage" },
+] as const;
+
+const KNOWN_PROVIDER_KEYS = [
+  { provider: "anthropic", label: "Anthropic", envKey: "ANTHROPIC_API_KEY" },
+  { provider: "openai", label: "OpenAI", envKey: "OPENAI_API_KEY" },
+  { provider: "google", label: "Google", envKey: "GOOGLE_API_KEY" },
+  { provider: "openrouter", label: "OpenRouter", envKey: "OPENROUTER_API_KEY" },
+] as const;
+
+function extractQuickSettingsChannels(state: AppViewState): QuickSettingsChannel[] {
+  const config = state.configForm ?? state.configSnapshot?.config;
+  if (!config || typeof config !== "object") {
+    return [];
+  }
+  const channels: QuickSettingsChannel[] = [];
+  for (const { id, label } of KNOWN_CHANNEL_IDS) {
+    const channelConfig = config[id];
+    const hasConfig =
+      channelConfig != null &&
+      typeof channelConfig === "object" &&
+      Object.keys(channelConfig).length > 0;
+    channels.push({
+      id,
+      label,
+      connected: hasConfig,
+      detail: hasConfig ? "Configured" : undefined,
+    });
+  }
+  // Only show channels that are configured or are well-known
+  return channels.filter((c) => c.connected || KNOWN_CHANNEL_IDS.some((k) => k.id === c.id));
+}
+
+function extractQuickSettingsApiKeys(state: AppViewState): QuickSettingsApiKey[] {
+  const config = state.configForm ?? state.configSnapshot?.config;
+  const env = config && typeof config === "object" ? config.env : null;
+  const envObj = env && typeof env === "object" ? (env as Record<string, unknown>) : {};
+  return KNOWN_PROVIDER_KEYS.map(({ provider, label, envKey }) => {
+    const value = envObj[envKey];
+    const isSet = value != null && typeof value === "string" && value.trim().length > 0;
+    const masked = isSet ? `••••${value.slice(-4)}` : undefined;
+    return { provider, label, masked, isSet };
+  });
+}
+
+function extractMcpServerCount(state: AppViewState): number {
+  const config = state.configForm ?? state.configSnapshot?.config;
+  if (!config || typeof config !== "object") {
+    return 0;
+  }
+  const mcp = config.mcp;
+  if (!mcp || typeof mcp !== "object") {
+    return 0;
+  }
+  return Object.keys(mcp).length;
+}
+
+function extractQuickSettingsSecurity(state: AppViewState): {
+  gatewayAuth: string;
+  execPolicy: string;
+  deviceAuth: boolean;
+} {
+  const config = state.configForm ?? state.configSnapshot?.config;
+  if (!config || typeof config !== "object") {
+    return { gatewayAuth: "unknown", execPolicy: "unknown", deviceAuth: false };
+  }
+  const cfg = config;
+  // Gateway auth
+  const auth = cfg.auth;
+  let gatewayAuth = "unknown";
+  if (auth && typeof auth === "object") {
+    const authObj = auth as Record<string, unknown>;
+    if (authObj.password || authObj.gatewayPassword) {
+      gatewayAuth = "password";
+    } else if (authObj.jwt) {
+      gatewayAuth = "jwt";
+    } else {
+      gatewayAuth = "none";
+    }
+  }
+  // Exec policy
+  const agents = cfg.agents;
+  let execPolicy = "allowlist";
+  if (agents && typeof agents === "object") {
+    const defaults = (agents as Record<string, unknown>).defaults;
+    if (defaults && typeof defaults === "object") {
+      const exec = (defaults as Record<string, unknown>).exec;
+      if (exec && typeof exec === "object") {
+        const security = (exec as Record<string, unknown>).security;
+        if (typeof security === "string") {
+          execPolicy = security;
+        }
+      }
+    }
+  }
+  // Device auth
+  const gateway = cfg.gateway;
+  let deviceAuth = true;
+  if (gateway && typeof gateway === "object") {
+    const gw = gateway as Record<string, unknown>;
+    if (gw.dangerouslyDisableDeviceAuth === true) {
+      deviceAuth = false;
+    }
+  }
+  return { gatewayAuth, execPolicy, deviceAuth };
 }
 
 export function renderApp(state: AppViewState) {
@@ -671,7 +791,98 @@ export function renderApp(state: AppViewState) {
   );
   const renderConfigTabForActiveTab = () => {
     switch (state.tab) {
-      case "config":
+      case "config": {
+        // Quick Settings mode — opinionated card layout
+        if (state.configSettingsMode === "quick") {
+          const configObj = state.configForm ?? state.configSnapshot?.config ?? {};
+          const agentsDefaults = ((configObj.agents as Record<string, unknown> | undefined)
+            ?.defaults ?? {}) as Record<string, unknown>;
+          const currentModel =
+            typeof agentsDefaults.model === "string" ? agentsDefaults.model : "default";
+          const thinkingLevel =
+            typeof agentsDefaults.thinkingLevel === "string" ? agentsDefaults.thinkingLevel : "off";
+          const fastMode = agentsDefaults.fastMode === true;
+          return renderQuickSettings({
+            currentModel,
+            thinkingLevel,
+            fastMode,
+            onModelChange: () => {
+              state.configSettingsMode = "advanced";
+              state.tab = "aiAgents" as import("./navigation.ts").Tab;
+              state.aiAgentsActiveSection = "models";
+              requestHostUpdate?.();
+            },
+            onThinkingChange: (level) => {
+              if (state.client) {
+                void state.client.request("sessions.patch", {
+                  key: state.sessionKey,
+                  thinkingLevel: level,
+                });
+              }
+              requestHostUpdate?.();
+            },
+            onFastModeToggle: () => {
+              if (state.client) {
+                void state.client.request("sessions.patch", {
+                  key: state.sessionKey,
+                  fastMode: !fastMode,
+                });
+              }
+              requestHostUpdate?.();
+            },
+            channels: extractQuickSettingsChannels(state),
+            onChannelConfigure: () => {
+              state.tab = "communications" as import("./navigation.ts").Tab;
+              state.communicationsActiveSection = "channels";
+              requestHostUpdate?.();
+            },
+            apiKeys: extractQuickSettingsApiKeys(state),
+            onApiKeyChange: () => {
+              state.configSettingsMode = "advanced";
+              state.configActiveSection = "env";
+              requestHostUpdate?.();
+            },
+            automation: {
+              cronJobCount: state.cronJobs?.length ?? 0,
+              skillCount: state.skillsReport?.skills?.length ?? 0,
+              mcpServerCount: extractMcpServerCount(state),
+            },
+            onManageCron: () => {
+              state.tab = "cron" as import("./navigation.ts").Tab;
+              requestHostUpdate?.();
+            },
+            onBrowseSkills: () => {
+              state.tab = "skills" as import("./navigation.ts").Tab;
+              requestHostUpdate?.();
+            },
+            onConfigureMcp: () => {
+              state.tab = "infrastructure" as import("./navigation.ts").Tab;
+              state.infrastructureActiveSection = "mcp";
+              requestHostUpdate?.();
+            },
+            security: extractQuickSettingsSecurity(state),
+            onSecurityConfigure: () => {
+              state.configSettingsMode = "advanced";
+              state.configActiveSection = "auth";
+              requestHostUpdate?.();
+            },
+            theme: state.theme,
+            themeMode: state.themeMode,
+            borderRadius: state.settings.borderRadius,
+            setTheme: (theme, context) => state.setTheme(theme, context),
+            setThemeMode: (mode, context) => state.setThemeMode(mode, context),
+            setBorderRadius: (value) => state.setBorderRadius(value),
+            onAdvancedSettings: () => {
+              state.configSettingsMode = "advanced";
+              requestHostUpdate?.();
+            },
+            connected: state.connected,
+            gatewayUrl: state.settings.gatewayUrl,
+            assistantName: state.assistantName,
+            version: state.hello?.server?.version ?? "",
+          });
+        }
+        // Advanced mode — existing full config form
         return renderConfigTab({
           formMode: state.configFormMode,
           searchQuery: state.configSearchQuery,
@@ -694,6 +905,7 @@ export function renderApp(state: AppViewState) {
             "wizard",
           ],
         });
+      }
       case "communications":
         return renderConfigTab({
           formMode: state.communicationsFormMode,

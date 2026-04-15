@@ -1,0 +1,314 @@
+/* ── Quick Settings ── */
+
+.qs-container {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+
+.qs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.qs-header__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--fg);
+}
+
+.qs-header__title svg {
+  width: 20px;
+  height: 20px;
+  opacity: 0.6;
+}
+
+/* ── Grid ── */
+
+.qs-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Card ── */
+
+.qs-card {
+  background: var(--bg-layer);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.qs-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
+.qs-card__header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.qs-card__icon {
+  display: flex;
+  align-items: center;
+  color: var(--accent);
+}
+
+.qs-card__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.qs-card__title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--fg);
+}
+
+.qs-card__body {
+  padding: 4px 0;
+}
+
+/* ── Row ── */
+
+.qs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  min-height: 40px;
+  gap: 12px;
+}
+
+.qs-row + .qs-row {
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.qs-row__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8125rem;
+  color: var(--fg);
+  white-space: nowrap;
+}
+
+.qs-row__value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8125rem;
+  color: var(--fg-muted, var(--fg));
+}
+
+.qs-row__value--action {
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  transition: background 0.15s;
+  color: var(--fg);
+  font: inherit;
+}
+
+.qs-row__value--action:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.05));
+}
+
+.qs-row__value--action code {
+  font-size: 0.75rem;
+}
+
+.qs-row__chevron svg {
+  width: 14px;
+  height: 14px;
+  opacity: 0.4;
+}
+
+/* ── Segmented control ── */
+
+.qs-segmented {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-inset, rgba(0, 0, 0, 0.15));
+  border-radius: var(--radius);
+  padding: 2px;
+}
+
+.qs-segmented__btn {
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 4px 12px;
+  border: none;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--fg-muted, var(--fg));
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.qs-segmented__btn--compact {
+  padding: 4px 8px;
+}
+
+.qs-segmented__btn:hover {
+  color: var(--fg);
+}
+
+.qs-segmented__btn--active {
+  background: var(--bg-layer);
+  color: var(--fg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* ── Toggle switch ── */
+
+.qs-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.qs-toggle input {
+  display: none;
+}
+
+.qs-toggle__track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  background: var(--bg-inset, rgba(0, 0, 0, 0.2));
+  border-radius: 10px;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.qs-toggle__track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: var(--fg-muted, #888);
+  border-radius: 50%;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.qs-toggle input:checked + .qs-toggle__track {
+  background: var(--accent);
+}
+
+.qs-toggle input:checked + .qs-toggle__track::after {
+  transform: translateX(16px);
+  background: #fff;
+}
+
+.qs-toggle__hint {
+  font-size: 0.75rem;
+}
+
+/* ── Badge ── */
+
+.qs-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-inset, rgba(0, 0, 0, 0.15));
+  color: var(--fg-muted, var(--fg));
+  text-transform: capitalize;
+}
+
+.qs-badge--ok {
+  background: rgba(34, 197, 94, 0.15);
+  color: rgb(34, 197, 94);
+}
+
+.qs-badge--warn {
+  background: rgba(234, 179, 8, 0.15);
+  color: rgb(234, 179, 8);
+}
+
+/* ── Status dot ── */
+
+.qs-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-muted, #666);
+  flex-shrink: 0;
+}
+
+.qs-status-dot--ok {
+  background: rgb(34, 197, 94);
+}
+
+/* ── Masked value ── */
+
+.qs-masked {
+  font-size: 0.75rem;
+  letter-spacing: 1px;
+  color: var(--fg-muted, var(--fg));
+}
+
+/* ── Link button ── */
+
+.qs-link-btn {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius);
+  transition: opacity 0.15s;
+  white-space: nowrap;
+}
+
+.qs-link-btn:hover {
+  opacity: 0.8;
+  text-decoration: underline;
+}
+
+/* ── Empty state ── */
+
+.qs-empty {
+  padding: 12px 16px;
+  font-size: 0.8125rem;
+}
+
+/* ── Footer ── */
+
+.qs-footer {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.qs-footer__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+}
