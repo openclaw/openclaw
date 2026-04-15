@@ -44,12 +44,19 @@ function resolveUserHomeDir(): string | undefined {
   }
 }
 
-function compactSkillPaths(skills: Skill[]): Skill[] {
-  const homes = [resolveHomeDir(), resolveUserHomeDir()]
-    .filter((home): home is string => !!home)
-    .map((home) => path.resolve(home))
+function resolveCompactHomePrefixes(): string[] {
+  const homes = [resolveHomeDir(), resolveUserHomeDir()].filter((home): home is string => !!home);
+  const resolvedHomes = homes.map((home) => path.resolve(home));
+  const realHomes = resolvedHomes
+    .map((home) => tryRealpath(home))
+    .filter((home): home is string => !!home);
+  return [...resolvedHomes, ...realHomes]
     .filter((home, index, all) => all.indexOf(home) === index)
     .sort((a, b) => b.length - a.length);
+}
+
+function compactSkillPaths(skills: Skill[]): Skill[] {
+  const homes = resolveCompactHomePrefixes();
   if (homes.length === 0) return skills;
   return skills.map((s) => ({
     ...s,
@@ -65,6 +72,10 @@ function compactHomePath(filePath: string, homes: readonly string[]): string {
     }
   }
   return filePath;
+}
+
+function compactPathForConsoleMessage(filePath: string): string {
+  return compactHomePath(filePath, resolveCompactHomePrefixes());
 }
 
 function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
@@ -162,17 +173,76 @@ function tryRealpath(filePath: string): string | null {
   }
 }
 
+function isSymlinkPath(filePath: string): boolean {
+  try {
+    return fs.lstatSync(filePath).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function buildEscapedSkillPathReason(params: { source: string; candidatePath: string }): {
+  reason: string;
+  consoleHint: string;
+} {
+  const candidateIsSymlink = isSymlinkPath(params.candidatePath);
+  if (params.source === "openclaw-bundled" && candidateIsSymlink) {
+    return {
+      reason: "bundled-symlink-escape",
+      consoleHint:
+        "reason=bundled-symlink-escape hint=likely-stray-local-symlink-or-checkout-mutation",
+    };
+  }
+  if (candidateIsSymlink) {
+    return {
+      reason: "symlink-escape",
+      consoleHint: "reason=symlink-escape",
+    };
+  }
+  if (params.source === "openclaw-bundled") {
+    return {
+      reason: "bundled-root-escape",
+      consoleHint:
+        "reason=bundled-root-escape hint=likely-stray-local-symlink-or-checkout-mutation",
+    };
+  }
+  return {
+    reason: "path-escape",
+    consoleHint: "reason=path-escape",
+  };
+}
+
 function warnEscapedSkillPath(params: {
   source: string;
   rootDir: string;
+  rootRealPath: string;
   candidatePath: string;
   candidateRealPath: string;
 }) {
-  skillsLogger.warn("Skipping skill path that resolves outside its configured root.", {
+  const compactRootDir = compactPathForConsoleMessage(params.rootDir);
+  const compactRootRealPath = compactPathForConsoleMessage(params.rootRealPath);
+  const compactCandidatePath = compactPathForConsoleMessage(params.candidatePath);
+  const compactCandidateRealPath = compactPathForConsoleMessage(params.candidateRealPath);
+  const rootResolved =
+    path.resolve(params.rootDir) === params.rootRealPath
+      ? ""
+      : ` rootResolved=${compactRootRealPath}`;
+  const escapeReason = buildEscapedSkillPathReason({
+    source: params.source,
+    candidatePath: params.candidatePath,
+  });
+  skillsLogger.warn("Skipping escaped skill path outside its configured root.", {
     source: params.source,
     rootDir: params.rootDir,
+    rootRealPath: params.rootRealPath,
     path: params.candidatePath,
     realPath: params.candidateRealPath,
+    reason: escapeReason.reason,
+    consoleMessage:
+      `Skipping escaped skill path outside its configured root: ` +
+      `source=${params.source} root=${compactRootDir}${rootResolved} ` +
+      `${escapeReason.consoleHint} requested=${compactCandidatePath} ` +
+      `resolved=${compactCandidateRealPath}`,
   });
 }
 
@@ -192,6 +262,7 @@ function resolveContainedSkillPath(params: {
   warnEscapedSkillPath({
     source: params.source,
     rootDir: params.rootDir,
+    rootRealPath: params.rootRealPath,
     candidatePath: path.resolve(params.candidatePath),
     candidateRealPath,
   });

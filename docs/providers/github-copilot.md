@@ -90,6 +90,23 @@ openclaw models auth login --provider github-copilot --method device --set-defau
     selects the correct transport based on the model ref.
   </Accordion>
 
+  <Accordion title="Environment variable resolution order">
+    OpenClaw resolves Copilot auth from environment variables in the following
+    priority order:
+
+    | Priority | Variable              | Notes                            |
+    | -------- | --------------------- | -------------------------------- |
+    | 1        | `COPILOT_GITHUB_TOKEN` | Highest priority, Copilot-specific |
+    | 2        | `GH_TOKEN`            | GitHub CLI token (fallback)      |
+    | 3        | `GITHUB_TOKEN`        | Standard GitHub token (lowest)   |
+
+    When multiple variables are set, OpenClaw uses the highest-priority one.
+    The device-login flow (`openclaw models auth login-github-copilot`) stores
+    its token in the auth profile store and takes precedence over all environment
+    variables.
+
+  </Accordion>
+
   <Accordion title="Token storage">
     The login stores a GitHub token in the auth profile store and exchanges it
     for a Copilot API token when OpenClaw runs. You do not need to manage the
@@ -101,6 +118,46 @@ openclaw models auth login --provider github-copilot --method device --set-defau
 Requires an interactive TTY. Run the login command directly in a terminal, not
 inside a headless script or CI job.
 </Warning>
+
+## Memory search embeddings
+
+GitHub Copilot can also serve as an embedding provider for
+[memory search](/concepts/memory-search). If you have a Copilot subscription and
+have logged in, OpenClaw can use it for embeddings without a separate API key.
+
+### Auto-detection
+
+When `memorySearch.provider` is `"auto"` (the default), GitHub Copilot is tried
+at priority 15 -- after local embeddings but before OpenAI and other paid
+providers. If a GitHub token is available, OpenClaw discovers available
+embedding models from the Copilot API and picks the best one automatically.
+
+### Explicit config
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "github-copilot",
+        // Optional: override the auto-discovered model
+        model: "text-embedding-3-small",
+      },
+    },
+  },
+}
+```
+
+### How it works
+
+1. OpenClaw resolves your GitHub token (from env vars or auth profile).
+2. Exchanges it for a short-lived Copilot API token.
+3. Queries the Copilot `/models` endpoint to discover available embedding models.
+4. Picks the best model (prefers `text-embedding-3-small`).
+5. Sends embedding requests to the Copilot `/embeddings` endpoint.
+
+Model availability depends on your GitHub plan. If no embedding models are
+available, OpenClaw skips Copilot and tries the next provider.
 
 ## Related
 

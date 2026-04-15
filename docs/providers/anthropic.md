@@ -227,6 +227,21 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
   </Accordion>
 
+  <Accordion title="Media understanding (image and PDF)">
+    The bundled Anthropic plugin registers image and PDF understanding. OpenClaw
+    auto-resolves media capabilities from the configured Anthropic auth — no
+    additional config is needed.
+
+    | Property       | Value                |
+    | -------------- | -------------------- |
+    | Default model  | `claude-opus-4-6`    |
+    | Supported input | Images, PDF documents |
+
+    When an image or PDF is attached to a conversation, OpenClaw automatically
+    routes it through the Anthropic media understanding provider.
+
+  </Accordion>
+
   <Accordion title="1M context window (beta)">
     Anthropic's 1M context window is beta-gated. Enable it per model:
 

@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../plugins/memory-state.js";
@@ -140,15 +140,19 @@ class MockContextEngine implements ContextEngine {
 }
 
 class LegacySessionKeyStrictEngine implements ContextEngine {
-  readonly info: ContextEngineInfo = {
-    id: "legacy-sessionkey-strict",
-    name: "Legacy SessionKey Strict Engine",
-  };
+  readonly info: ContextEngineInfo;
   readonly ingestCalls: Array<Record<string, unknown>> = [];
   readonly assembleCalls: Array<Record<string, unknown>> = [];
   readonly compactCalls: Array<Record<string, unknown>> = [];
   readonly maintainCalls: Array<Record<string, unknown>> = [];
   readonly ingestedMessages: AgentMessage[] = [];
+
+  constructor(engineId = "legacy-sessionkey-strict") {
+    this.info = {
+      id: engineId,
+      name: "Legacy SessionKey Strict Engine",
+    };
+  }
 
   private rejectSessionKey(params: { sessionKey?: string }): void {
     if (Object.prototype.hasOwnProperty.call(params, "sessionKey")) {
@@ -223,12 +227,17 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
 }
 
 class SessionKeyRuntimeErrorEngine implements ContextEngine {
-  readonly info: ContextEngineInfo = {
-    id: "sessionkey-runtime-error",
-    name: "SessionKey Runtime Error Engine",
-  };
+  readonly info: ContextEngineInfo;
   assembleCalls = 0;
-  constructor(private readonly errorMessage = "sessionKey lookup failed") {}
+  constructor(
+    engineId = "sessionkey-runtime-error",
+    private readonly errorMessage = "sessionKey lookup failed",
+  ) {
+    this.info = {
+      id: engineId,
+      name: "SessionKey Runtime Error Engine",
+    };
+  }
 
   async ingest(_params: {
     sessionId: string;
@@ -266,11 +275,15 @@ class SessionKeyRuntimeErrorEngine implements ContextEngine {
 }
 
 class LegacyAssembleStrictEngine implements ContextEngine {
-  readonly info: ContextEngineInfo = {
-    id: "legacy-assemble-strict",
-    name: "Legacy Assemble Strict Engine",
-  };
+  readonly info: ContextEngineInfo;
   readonly assembleCalls: Array<Record<string, unknown>> = [];
+
+  constructor(engineId = "legacy-assemble-strict") {
+    this.info = {
+      id: engineId,
+      name: "Legacy Assemble Strict Engine",
+    };
+  }
 
   async ingest(_params: {
     sessionId: string;
@@ -541,7 +554,7 @@ describe("Registry tests", () => {
 describe("Legacy sessionKey compatibility", () => {
   it("memoizes legacy mode after the first strict compatibility retry", async () => {
     const engineId = `legacy-sessionkey-${Date.now().toString(36)}`;
-    const strictEngine = new LegacySessionKeyStrictEngine();
+    const strictEngine = new LegacySessionKeyStrictEngine(engineId);
     registerContextEngine(engineId, () => strictEngine);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
@@ -567,7 +580,7 @@ describe("Legacy sessionKey compatibility", () => {
 
   it("retries strict ingest once and ingests each message only once", async () => {
     const engineId = `legacy-sessionkey-ingest-${Date.now().toString(36)}`;
-    const strictEngine = new LegacySessionKeyStrictEngine();
+    const strictEngine = new LegacySessionKeyStrictEngine(engineId);
     registerContextEngine(engineId, () => strictEngine);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
@@ -594,7 +607,7 @@ describe("Legacy sessionKey compatibility", () => {
 
   it("retries strict maintain once and memoizes legacy mode there too", async () => {
     const engineId = `legacy-sessionkey-maintain-${Date.now().toString(36)}`;
-    const strictEngine = new LegacySessionKeyStrictEngine();
+    const strictEngine = new LegacySessionKeyStrictEngine(engineId);
     registerContextEngine(engineId, () => strictEngine);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
@@ -612,7 +625,7 @@ describe("Legacy sessionKey compatibility", () => {
 
   it("does not retry non-compat runtime errors", async () => {
     const engineId = `sessionkey-runtime-${Date.now().toString(36)}`;
-    const runtimeErrorEngine = new SessionKeyRuntimeErrorEngine();
+    const runtimeErrorEngine = new SessionKeyRuntimeErrorEngine(engineId);
     registerContextEngine(engineId, () => runtimeErrorEngine);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
@@ -630,6 +643,7 @@ describe("Legacy sessionKey compatibility", () => {
   it("does not treat 'Unknown sessionKey' runtime failures as schema-compat errors", async () => {
     const engineId = `sessionkey-unknown-runtime-${Date.now().toString(36)}`;
     const runtimeErrorEngine = new SessionKeyRuntimeErrorEngine(
+      engineId,
       'Unknown sessionKey "agent:main:missing"',
     );
     registerContextEngine(engineId, () => runtimeErrorEngine);
@@ -691,23 +705,168 @@ describe("Default engine selection", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Invalid engine fallback", () => {
-  it("includes the requested id and available ids in unknown-engine errors", async () => {
-    // Ensure at least legacy is registered so we see it in the available list
+  beforeEach(() => {
     registerLegacyContextEngine();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("falls back to default engine when requested engine is not registered", async () => {
+    const engine = await resolveContextEngine(configWithSlot("does-not-exist"));
+    expect(engine.info.id).toBe("legacy");
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("does-not-exist"));
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("falling back to default engine"),
+    );
+  });
+
+  it("throws when the default engine itself is not registered", async () => {
+    // Access the process-global registry via the well-known symbol and clear it
+    // so even the default engine is missing. The symbol key must match the
+    // private CONTEXT_ENGINE_REGISTRY_STATE constant in registry.ts — guard
+    // against a silent key mismatch so a rename surfaces loudly.
+    const registryState = (globalThis as Record<symbol, unknown>)[
+      Symbol.for("openclaw.contextEngineRegistryState")
+    ] as { engines: Map<string, unknown> } | undefined;
+    expect(registryState).toBeDefined();
+    const snapshot = new Map(registryState!.engines);
+    registryState!.engines.clear();
 
     try {
-      await resolveContextEngine(configWithSlot("does-not-exist"));
-      // Should not reach here
-      expect.unreachable("Expected resolveContextEngine to throw");
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      expect(message).toContain("does-not-exist");
-      expect(message).toContain("not registered");
-      // Should mention available engines
-      expect(message).toMatch(/Available engines:/);
-      // At least "legacy" should be listed as available
-      expect(message).toContain("legacy");
+      await expect(resolveContextEngine()).rejects.toThrow("not registered");
+    } finally {
+      for (const [key, value] of snapshot) {
+        registryState!.engines.set(key, value);
+      }
     }
+  });
+
+  it("propagates error when default engine factory throws", async () => {
+    // Override the default "legacy" engine with a throwing factory via the
+    // core-owner path so the registration is accepted.
+    registerContextEngineForOwner(
+      "legacy",
+      () => {
+        throw new Error("default engine init failed");
+      },
+      "core",
+      { allowSameOwnerRefresh: true },
+    );
+
+    await expect(resolveContextEngine()).rejects.toThrow("default engine init failed");
+  });
+
+  it("propagates error when default engine fails contract validation", async () => {
+    registerContextEngineForOwner(
+      "legacy",
+      () => ({ broken: true }) as unknown as ContextEngine,
+      "core",
+      { allowSameOwnerRefresh: true },
+    );
+
+    await expect(resolveContextEngine()).rejects.toThrow(
+      'Context engine "legacy" factory returned an invalid ContextEngine',
+    );
+  });
+
+  it("falls back to default engine when factory throws", async () => {
+    const engineId = `factory-throw-${Date.now().toString(36)}`;
+    registerContextEngine(engineId, () => {
+      throw new Error("plugin version mismatch");
+    });
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    expect(engine.info.id).toBe("legacy");
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("plugin version mismatch"));
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("falling back to default engine"),
+    );
+  });
+
+  it("falls back to default engine when resolved engine omits info metadata", async () => {
+    const engineId = `invalid-info-${Date.now().toString(36)}`;
+    registerContextEngine(
+      engineId,
+      () =>
+        ({
+          async ingest() {
+            return { ingested: false };
+          },
+          async assemble({ messages }: { messages: AgentMessage[] }) {
+            return { messages, estimatedTokens: 0 };
+          },
+          async compact() {
+            return { ok: true, compacted: false };
+          },
+        }) as unknown as ContextEngine,
+    );
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    expect(engine.info.id).toBe("legacy");
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("missing info"));
+  });
+
+  it("falls back to default engine when info.id mismatches the registered id", async () => {
+    const engineId = `mismatched-info-id-${Date.now().toString(36)}`;
+    registerContextEngine(
+      engineId,
+      () =>
+        ({
+          info: { id: "legacy", name: "Broken Engine" },
+          async ingest() {
+            return { ingested: false };
+          },
+          async assemble({ messages }: { messages: AgentMessage[] }) {
+            return { messages, estimatedTokens: 0 };
+          },
+          async compact() {
+            return { ok: true, compacted: false };
+          },
+        }) as unknown as ContextEngine,
+    );
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    expect(engine.info.id).toBe("legacy");
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining(`info.id must match registered id "${engineId}"`),
+    );
+  });
+
+  it("falls back to default engine when resolved engine omits lifecycle methods", async () => {
+    const engineId = `invalid-methods-${Date.now().toString(36)}`;
+    registerContextEngine(
+      engineId,
+      () =>
+        ({
+          info: { id: engineId, name: "Broken Engine" },
+          async ingest() {
+            return { ingested: false };
+          },
+        }) as unknown as ContextEngine,
+    );
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    expect(engine.info.id).toBe("legacy");
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("missing assemble(), missing compact()"),
+    );
+  });
+
+  it("falls back to default engine when contract validation itself throws", async () => {
+    const engineId = `validation-throw-${Date.now().toString(36)}`;
+    // BigInt cannot be JSON.stringify'd — triggers a throw inside
+    // describeResolvedContextEngineContractError when the factory returns
+    // a non-object value that passes the typeof !== "object" branch.
+    registerContextEngine(engineId, () => 42n as unknown as ContextEngine);
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    expect(engine.info.id).toBe("legacy");
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("contract validation threw"),
+    );
   });
 });
 
@@ -809,7 +968,7 @@ describe("assemble() prompt forwarding", () => {
 
   it("retries strict legacy assemble without sessionKey and prompt", async () => {
     const engineId = `prompt-legacy-${Date.now().toString(36)}`;
-    const strictEngine = new LegacyAssembleStrictEngine();
+    const strictEngine = new LegacyAssembleStrictEngine(engineId);
     registerContextEngine(engineId, () => strictEngine);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));

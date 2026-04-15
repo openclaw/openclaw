@@ -237,6 +237,77 @@ OpenClaw adds a small OpenAI-specific prompt overlay for `openai/*` and `openai-
 Values are case-insensitive at runtime, so `"Off"` and `"off"` both disable the overlay.
 </Tip>
 
+## Voice and speech
+
+<AccordionGroup>
+  <Accordion title="Speech synthesis (TTS)">
+    The bundled `openai` plugin registers speech synthesis for the `messages.tts` surface.
+
+    | Setting | Config path | Default |
+    |---------|------------|---------|
+    | Model | `messages.tts.providers.openai.model` | `gpt-4o-mini-tts` |
+    | Voice | `messages.tts.providers.openai.voice` | `coral` |
+    | Speed | `messages.tts.providers.openai.speed` | (unset) |
+    | Instructions | `messages.tts.providers.openai.instructions` | (unset, `gpt-4o-mini-tts` only) |
+    | Format | `messages.tts.providers.openai.responseFormat` | `opus` for voice notes, `mp3` for files |
+    | API key | `messages.tts.providers.openai.apiKey` | Falls back to `OPENAI_API_KEY` |
+    | Base URL | `messages.tts.providers.openai.baseUrl` | `https://api.openai.com/v1` |
+
+    Available models: `gpt-4o-mini-tts`, `tts-1`, `tts-1-hd`. Available voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `fable`, `juniper`, `marin`, `onyx`, `nova`, `sage`, `shimmer`, `verse`.
+
+    ```json5
+    {
+      messages: {
+        tts: {
+          providers: {
+            openai: { model: "gpt-4o-mini-tts", voice: "coral" },
+          },
+        },
+      },
+    }
+    ```
+
+    <Note>
+    Set `OPENAI_TTS_BASE_URL` to override the TTS base URL without affecting the chat API endpoint.
+    </Note>
+
+  </Accordion>
+
+  <Accordion title="Realtime transcription">
+    The bundled `openai` plugin registers realtime transcription for the Voice Call plugin.
+
+    | Setting | Config path | Default |
+    |---------|------------|---------|
+    | Model | `plugins.entries.voice-call.config.streaming.providers.openai.model` | `gpt-4o-transcribe` |
+    | Silence duration | `...openai.silenceDurationMs` | `800` |
+    | VAD threshold | `...openai.vadThreshold` | `0.5` |
+    | API key | `...openai.apiKey` | Falls back to `OPENAI_API_KEY` |
+
+    <Note>
+    Uses a WebSocket connection to `wss://api.openai.com/v1/realtime` with G.711 u-law audio.
+    </Note>
+
+  </Accordion>
+
+  <Accordion title="Realtime voice">
+    The bundled `openai` plugin registers realtime voice for the Voice Call plugin.
+
+    | Setting | Config path | Default |
+    |---------|------------|---------|
+    | Model | `plugins.entries.voice-call.config.realtime.providers.openai.model` | `gpt-realtime` |
+    | Voice | `...openai.voice` | `alloy` |
+    | Temperature | `...openai.temperature` | `0.8` |
+    | VAD threshold | `...openai.vadThreshold` | `0.5` |
+    | Silence duration | `...openai.silenceDurationMs` | `500` |
+    | API key | `...openai.apiKey` | Falls back to `OPENAI_API_KEY` |
+
+    <Note>
+    Supports Azure OpenAI via `azureEndpoint` and `azureDeployment` config keys. Supports bidirectional tool calling. Uses G.711 u-law audio format.
+    </Note>
+
+  </Accordion>
+</AccordionGroup>
+
 ## Advanced configuration
 
 <AccordionGroup>

@@ -86,6 +86,22 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 - For stable correction releases like `YYYY.M.D-N`, it also verifies the
   upgrade path from `YYYY.M.D` to `YYYY.M.D-N` so a correction publish cannot
   silently leave existing global installs on the old base stable payload.
+- Treat install smoke as a pack-budget gate too. `pnpm test:install:smoke`
+  now fails the candidate update tarball when npm reports an oversized
+  `unpackedSize`, so release-time e2e cannot miss pack bloat that would risk
+  low-memory install/startup failures.
+- Keep direct npm global coverage enabled in install smoke. It exercises plain
+  `npm install -g <candidate>` fresh installs and npm-driven update installs,
+  because many users install with npm even when docs prefer pnpm.
+- Use `pnpm test:live:media video` for bounded video-provider smoke when video
+  generation is in release scope. The default video smoke skips `fal`, runs one
+  text-to-video attempt per provider with a one-second lobster prompt, and caps
+  each provider operation with `OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS`
+  (`180000` by default).
+- Run `pnpm test:live:media video --video-providers fal` only when FAL-specific
+  proof is required. Its queue latency can dominate release time.
+- Set `OPENCLAW_LIVE_VIDEO_GENERATION_FULL_MODES=1` only when intentionally
+  validating the slower image-to-video and video-to-video transform lanes.
 
 ## Check all relevant release builds
 
@@ -97,6 +113,13 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   - `pnpm release:check`
   - `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke`
 - Check all release-related build surfaces touched by the release, not only the npm package.
+- For beta-style full e2e batteries, hard-cap top-level long lanes instead of letting them run indefinitely. Use host `timeout --foreground`/`gtimeout --foreground` caps such as:
+  - `45m` for `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke`
+  - `90m` for `pnpm test:docker:all`
+  - Parallels caps from the `openclaw-parallels-smoke` skill
+    If a lane hits its cap, stop and inspect/fix the affected lane before continuing; do not continue to wait on the same process.
+- Actual npm install/update phases are capped at 5 minutes. If `npm install -g`, installer package install, or `openclaw update` takes longer than 300s in release e2e, stop treating the run as healthy progress and debug the installer/updater or harness.
+- Serialize host build/package mutations ahead of VM lanes. Finish `pnpm build`, `pnpm ui:build`, `pnpm release:check`, install smoke, and any Docker/package-prep lanes before starting Parallels `npm pack` lanes; otherwise `dist` can disappear during VM pack prep and produce false failures.
 - Include mac release readiness in preflight by running the public validation
   workflow in `openclaw/openclaw` and the real mac preflight in
   `openclaw/releases-private` for every release.
@@ -120,6 +143,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   `.github/workflows/openclaw-npm-release.yml`, but it still needs a valid
   `NPM_TOKEN` because `npm dist-tag` management is separate from trusted
   publishing.
+- Direct stable publishes can also run the same workflow with
+  `sync_stable_dist_tags=true` to point both `latest` and `beta` at the
+  already-published stable version. This also needs the `npm-release`
+  environment approval and `NPM_TOKEN`.
 - The publish run must be started manually with `workflow_dispatch`.
 - The npm workflow and the private mac publish workflow accept
   `preflight_only=true` to run validation/build/package steps without uploading
@@ -178,7 +205,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   plan does not yet support required reviewers there, do not assume the
   environment alone is the approval boundary; rely on private repo access and
   CODEOWNERS until those settings can be enabled.
-- Do not use `NPM_TOKEN` or the plugin OTP flow for OpenClaw releases.
+- Do not use `NPM_TOKEN` or the plugin OTP flow for the OpenClaw package
+  publish path; package publishing uses trusted publishing.
+- Use `NPM_TOKEN` only for explicit npm dist-tag management modes, because npm
+  does not support trusted publishing for `npm dist-tag add`.
 - `@openclaw/*` plugin publishes use a separate maintainer-only flow.
 - Only publish plugins that already exist on npm; bundled disk-tree-only plugins stay unpublished.
 
@@ -248,19 +278,25 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     passes with the same stable tag, `promote_beta_to_latest=true`,
     `preflight_only=false`, empty `preflight_run_id`, and `npm_dist_tag=beta`,
     then verify `latest` now points at that version.
-17. Start
+17. If the stable release was published directly to `latest` and `beta` should
+    follow it, start `.github/workflows/openclaw-npm-release.yml` again with
+    the same stable tag, `sync_stable_dist_tags=true`,
+    `promote_beta_to_latest=false`, `preflight_only=false`, empty
+    `preflight_run_id`, and `npm_dist_tag=latest`, then verify both `latest`
+    and `beta` point at that version.
+18. Start
     `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`
     for the real publish with the successful private mac `preflight_run_id` and
     wait for success.
-18. Verify the successful real private mac run uploaded the `.zip`, `.dmg`,
+19. Verify the successful real private mac run uploaded the `.zip`, `.dmg`,
     and `.dSYM.zip` artifacts to the existing GitHub release in
     `openclaw/openclaw`.
-19. For stable releases, download `macos-appcast-<tag>` from the successful
+20. For stable releases, download `macos-appcast-<tag>` from the successful
     private mac run, update `appcast.xml` on `main`, and verify the feed.
-20. For beta releases, publish the mac assets but expect no shared production
+21. For beta releases, publish the mac assets but expect no shared production
     `appcast.xml` artifact and do not update the shared production feed unless a
     separate beta feed exists.
-21. After publish, verify npm and the attached release artifacts.
+22. After publish, verify npm and the attached release artifacts.
 
 ## GHSA advisory work
 

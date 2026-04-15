@@ -561,6 +561,66 @@ describe("loadChatHistory", () => {
     // text takes precedence — "real reply" is NOT silent, so message is kept.
     expect(state.chatMessages).toHaveLength(1);
   });
+
+  it("filters the synthetic transcript-repair tool result from history", async () => {
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "unknown",
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "shell",
+        content: [{ type: "text", text: "real tool output" }],
+      },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([messages[0], messages[2]]);
+  });
+
+  it("keeps a user message even if it matches the synthetic repair text", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+          },
+        ],
+      },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual(messages);
+  });
 });
 
 describe("sendChatMessage", () => {
@@ -621,6 +681,49 @@ describe("abortChatRun", () => {
 });
 
 describe("loadChatHistory", () => {
+  it("retries retryable startup unavailability before showing history", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "chat.history unavailable during gateway startup",
+            details: { method: "chat.history" },
+            retryable: true,
+            retryAfterMs: 250,
+          }),
+        )
+        .mockResolvedValueOnce({
+          messages: [{ role: "assistant", content: [{ type: "text", text: "awake" }] }],
+          thinkingLevel: "low",
+        });
+      const state = createState({
+        connected: true,
+        client: { request } as unknown as ChatState["client"],
+      });
+
+      const load = loadChatHistory(state);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+      expect(state.chatLoading).toBe(true);
+      expect(state.lastError).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(250);
+      await load;
+
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(state.chatMessages).toEqual([
+        { role: "assistant", content: [{ type: "text", text: "awake" }] },
+      ]);
+      expect(state.chatThinkingLevel).toBe("low");
+      expect(state.chatLoading).toBe(false);
+      expect(state.lastError).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("filters assistant NO_REPLY messages and keeps user NO_REPLY messages", async () => {
     const request = vi.fn().mockResolvedValue({
       messages: [

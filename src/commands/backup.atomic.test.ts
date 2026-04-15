@@ -3,13 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
-import { backupCreateCommand } from "./backup.js";
 import {
   backupVerifyCommandMock,
   createBackupTestRuntime,
   mockStateOnlyBackupPlan,
   tarCreateMock,
 } from "./backup.test-support.js";
+
+const { backupCreateCommand } = await import("./backup.js");
 
 describe("backupCreateCommand atomic archive write", () => {
   let tempHome: TempHomeEnv;

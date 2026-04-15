@@ -49,6 +49,16 @@ const provider: VoiceCallProvider = {
   getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
 };
 
+type TwilioProviderTestDouble = VoiceCallProvider &
+  Pick<
+    TwilioProvider,
+    | "isValidStreamToken"
+    | "registerCallStream"
+    | "unregisterCallStream"
+    | "hasRegisteredStream"
+    | "clearTtsQueue"
+  >;
+
 const createConfig = (overrides: Partial<VoiceCallConfig> = {}): VoiceCallConfig => {
   const base = VoiceCallConfigSchema.parse({});
   base.serve.port = 0;
@@ -115,20 +125,8 @@ function expectWebhookUrl(url: string, expectedPath: string) {
   expect(parsed.port).not.toBe("0");
 }
 
-type TwilioTestProvider = VoiceCallProvider &
-  Partial<
-    Pick<
-      TwilioProvider,
-      | "clearTtsQueue"
-      | "hasRegisteredStream"
-      | "isValidStreamToken"
-      | "registerCallStream"
-      | "unregisterCallStream"
-    >
-  >;
-
 function createTwilioVerificationProvider(
-  overrides: Partial<TwilioTestProvider> = {},
+  overrides: Partial<TwilioProviderTestDouble> = {},
 ): VoiceCallProvider {
   return {
     ...provider,
@@ -139,8 +137,8 @@ function createTwilioVerificationProvider(
 }
 
 function createTwilioStreamingProvider(
-  overrides: Partial<TwilioTestProvider> = {},
-): TwilioTestProvider {
+  overrides: Partial<TwilioProviderTestDouble> = {},
+): TwilioProviderTestDouble {
   return {
     ...createTwilioVerificationProvider({
       parseWebhookEvent: () => ({ events: [] }),
@@ -199,6 +197,155 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
     } finally {
       await server.stop();
     }
+  });
+});
+
+describe("VoiceCallWebhookServer media stream client IP resolution", () => {
+  type MediaStreamRequestDouble = {
+    headers: Record<string, string>;
+    socket: { remoteAddress?: string };
+  };
+
+  const resolveMediaStreamClientIp = (
+    configOverrides: Partial<VoiceCallConfig>,
+    requestOverrides: Partial<MediaStreamRequestDouble> = {},
+  ): string | undefined => {
+    const { manager } = createManager([]);
+    const server = new VoiceCallWebhookServer(
+      createConfig(configOverrides),
+      manager,
+      createTwilioStreamingProvider(),
+    );
+    const request = {
+      headers: {},
+      socket: { remoteAddress: "127.0.0.1" },
+      ...requestOverrides,
+    };
+
+    return (
+      server as unknown as {
+        resolveMediaStreamClientIp: (request: MediaStreamRequestDouble) => string | undefined;
+      }
+    ).resolveMediaStreamClientIp(request as never);
+  };
+
+  it("uses forwarded IPs only when forwarding trust is explicitly enabled", () => {
+    const ip = resolveMediaStreamClientIp(
+      {
+        webhookSecurity: {
+          allowedHosts: [],
+          trustForwardingHeaders: true,
+          trustedProxyIPs: ["127.0.0.1"],
+        },
+      },
+      {
+        headers: {
+          "x-forwarded-for": "198.51.100.10, 203.0.113.10",
+        },
+      },
+    );
+
+    expect(ip).toBe("203.0.113.10");
+  });
+
+  it("does not trust forwarded IPs when only allowedHosts is configured", () => {
+    const ip = resolveMediaStreamClientIp(
+      {
+        webhookSecurity: {
+          allowedHosts: ["voice.example.com"],
+          trustForwardingHeaders: false,
+          trustedProxyIPs: ["127.0.0.1"],
+        },
+      },
+      {
+        headers: {
+          "x-forwarded-for": "198.51.100.10",
+          "x-real-ip": "198.51.100.11",
+        },
+      },
+    );
+
+    expect(ip).toBe("127.0.0.1");
+  });
+
+  it("ignores spoofed forwarded IPs from untrusted remotes", () => {
+    const ip = resolveMediaStreamClientIp(
+      {
+        webhookSecurity: {
+          allowedHosts: [],
+          trustForwardingHeaders: true,
+          trustedProxyIPs: ["203.0.113.10"],
+        },
+      },
+      {
+        headers: {
+          "x-forwarded-for": "198.51.100.10",
+        },
+        socket: { remoteAddress: "127.0.0.1" },
+      },
+    );
+
+    expect(ip).toBe("127.0.0.1");
+  });
+
+  it("walks the forwarded chain from the right to support trusted multi-proxy deployments", () => {
+    const ip = resolveMediaStreamClientIp(
+      {
+        webhookSecurity: {
+          allowedHosts: [],
+          trustForwardingHeaders: true,
+          trustedProxyIPs: ["127.0.0.1", "203.0.113.10"],
+        },
+      },
+      {
+        headers: {
+          "x-forwarded-for": "198.51.100.10, 203.0.113.10",
+        },
+      },
+    );
+
+    expect(ip).toBe("198.51.100.10");
+  });
+
+  it("ignores forwarded IPs when no trusted proxy is configured", () => {
+    const ip = resolveMediaStreamClientIp(
+      {
+        webhookSecurity: {
+          allowedHosts: [],
+          trustForwardingHeaders: true,
+          trustedProxyIPs: [],
+        },
+      },
+      {
+        headers: {
+          "x-forwarded-for": "198.51.100.10",
+          "x-real-ip": "198.51.100.11",
+        },
+        socket: { remoteAddress: "127.0.0.1" },
+      },
+    );
+
+    expect(ip).toBe("127.0.0.1");
+  });
+
+  it("matches trusted proxies when the remote uses an IPv4-mapped form", () => {
+    const ip = resolveMediaStreamClientIp(
+      {
+        webhookSecurity: {
+          allowedHosts: [],
+          trustForwardingHeaders: true,
+          trustedProxyIPs: ["127.0.0.1", "203.0.113.10"],
+        },
+      },
+      {
+        headers: {
+          "x-forwarded-for": "198.51.100.10, 203.0.113.10",
+        },
+        socket: { remoteAddress: "::ffff:127.0.0.1" },
+      },
+    );
+
+    expect(ip).toBe("198.51.100.10");
   });
 });
 
@@ -773,11 +920,7 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
         },
       },
     });
-    const server = new VoiceCallWebhookServer(
-      config,
-      manager,
-      twilioProvider as unknown as VoiceCallProvider,
-    );
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
     await server.start();
 
     const mediaHandler = server.getMediaStreamHandler() as unknown as {
@@ -805,9 +948,11 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
 });
 
 describe("VoiceCallWebhookServer barge-in suppression during initial message", () => {
-  const createTwilioProvider = (clearTtsQueue: ReturnType<typeof vi.fn>) =>
+  const createTwilioProvider = (
+    clearTtsQueue: ReturnType<typeof vi.fn<TwilioProviderTestDouble["clearTtsQueue"]>>,
+  ) =>
     createTwilioStreamingProvider({
-      clearTtsQueue: clearTtsQueue as TwilioTestProvider["clearTtsQueue"],
+      clearTtsQueue,
     });
 
   const getMediaCallbacks = (server: VoiceCallWebhookServer) =>
@@ -829,7 +974,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       initialMessage: "Hi, this is OpenClaw.",
     };
 
-    const clearTtsQueue = vi.fn();
+    const clearTtsQueue = vi.fn<TwilioProviderTestDouble["clearTtsQueue"]>();
     const processEvent = vi.fn((event: NormalizedEvent) => {
       if (event.type === "call.speech") {
         // Mirrors manager behavior: call.speech transitions to listening.
@@ -858,11 +1003,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
         },
       },
     });
-    const server = new VoiceCallWebhookServer(
-      config,
-      manager,
-      createTwilioProvider(clearTtsQueue) as unknown as VoiceCallProvider,
-    );
+    const server = new VoiceCallWebhookServer(config, manager, createTwilioProvider(clearTtsQueue));
     await server.start();
     const handleInboundResponse = vi.fn(async () => {});
     (
@@ -913,7 +1054,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       initialMessage: "Hello from inbound greeting.",
     };
 
-    const clearTtsQueue = vi.fn();
+    const clearTtsQueue = vi.fn<TwilioProviderTestDouble["clearTtsQueue"]>();
     const manager = {
       getActiveCalls: () => [call],
       getCallByProviderCallId: (providerCallId: string) =>
@@ -936,11 +1077,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
         },
       },
     });
-    const server = new VoiceCallWebhookServer(
-      config,
-      manager,
-      createTwilioProvider(clearTtsQueue) as unknown as VoiceCallProvider,
-    );
+    const server = new VoiceCallWebhookServer(config, manager, createTwilioProvider(clearTtsQueue));
     await server.start();
 
     try {

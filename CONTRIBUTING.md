@@ -77,6 +77,12 @@ Welcome to the lobster tank! 🦞
 - **Tengji (George) Zhang** - Chinese model APIs, cloud, pi
   - GitHub: [@odysseus0](https://github.com/odysseus0) · X: [@odysseus0z](https://x.com/odysseus0z)
 
+- **Sliverp** - Chinese Channel: QQ, WeChat, Wecom, Dingtalk, Feishu
+  - GitHub: [@sliverp](https://github.com/sliverp) · X: [@sliver01234](https://x.com/sliver01234)
+
+- **Mason Huang** - Stability, Security, Speed
+  - GitHub: [@hxy91819](https://github.com/hxy91819) · X: [@chenjingtalk](https://x.com/chenjingtalk)
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!

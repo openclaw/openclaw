@@ -31,6 +31,7 @@ UPDATE_EXPECTED_NEEDLE=""
 API_KEY_VALUE=""
 PROGRESS_INTERVAL_S=15
 PROGRESS_STALE_S=60
+TIMEOUT_UPDATE_S=300
 
 MACOS_FRESH_STATUS="skip"
 WINDOWS_FRESH_STATUS="skip"
@@ -615,6 +616,32 @@ wait_job() {
   return 1
 }
 
+start_timeout_guard() {
+  local label="$1"
+  local timeout_s="$2"
+  local pid="$3"
+  local log_path="${4:-}"
+  (
+    sleep "$timeout_s"
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      warn "$label exceeded ${timeout_s}s; stopping"
+      if [[ -n "$log_path" ]]; then
+        dump_log_tail "$label" "$log_path"
+      fi
+      kill "$pid" >/dev/null 2>&1 || true
+      sleep 2
+      kill -9 "$pid" >/dev/null 2>&1 || true
+    fi
+  ) &
+  printf '%s\n' "$!"
+}
+
+stop_timeout_guard() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] || return 0
+  kill "$pid" >/dev/null 2>&1 || true
+}
+
 extract_log_progress() {
   local log_path="$1"
   "$PYTHON_BIN" - "$log_path" <<'PY'
@@ -794,7 +821,7 @@ run_windows_script_via_log() {
   log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-update-log-state.XXXXXX")"
   : >"$log_state_path"
   start_seconds="$SECONDS"
-  poll_deadline=$((SECONDS + 900))
+  poll_deadline=$((SECONDS + TIMEOUT_UPDATE_S + 60))
   startup_checked=0
 
   guest_powershell "$(cat <<EOF
@@ -1163,11 +1190,18 @@ run_windows_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" "$window
 windows_update_pid=$!
 run_linux_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" >"$RUN_DIR/linux-update.log" 2>&1 &
 linux_update_pid=$!
+macos_update_guard_pid="$(start_timeout_guard "macOS update" "$TIMEOUT_UPDATE_S" "$macos_update_pid" "$RUN_DIR/macos-update.log")"
+windows_update_guard_pid="$(start_timeout_guard "Windows update" "$TIMEOUT_UPDATE_S" "$windows_update_pid" "$RUN_DIR/windows-update.log")"
+linux_update_guard_pid="$(start_timeout_guard "Linux update" "$TIMEOUT_UPDATE_S" "$linux_update_pid" "$RUN_DIR/linux-update.log")"
 
 monitor_jobs_progress "update" \
   "macOS" "$macos_update_pid" "$RUN_DIR/macos-update.log" \
   "Windows" "$windows_update_pid" "$RUN_DIR/windows-update.log" \
   "Linux" "$linux_update_pid" "$RUN_DIR/linux-update.log"
+
+stop_timeout_guard "$macos_update_guard_pid"
+stop_timeout_guard "$windows_update_guard_pid"
+stop_timeout_guard "$linux_update_guard_pid"
 
 wait_job "macOS update" "$macos_update_pid" "$RUN_DIR/macos-update.log" && MACOS_UPDATE_STATUS="pass" || MACOS_UPDATE_STATUS="fail"
 wait_job "Windows update" "$windows_update_pid" "$RUN_DIR/windows-update.log" && WINDOWS_UPDATE_STATUS="pass" || WINDOWS_UPDATE_STATUS="fail"
