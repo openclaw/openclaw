@@ -22,7 +22,11 @@ function getPluginRuntimeStoreRegistry(): PluginRuntimeStoreRegistry {
 }
 
 function pluginRuntimeStoreKeyForPluginId(pluginId: string): string {
-  return `plugin-runtime:${pluginId.trim()}`;
+  const normalizedPluginId = pluginId.trim();
+  if (!normalizedPluginId) {
+    throw new Error("createPluginRuntimeStore: pluginId must not be empty");
+  }
+  return `plugin-runtime:${normalizedPluginId}`;
 }
 
 function resolvePluginRuntimeStoreOptions(
@@ -78,7 +82,7 @@ export function createPluginRuntimeStore<T>(options: string | PluginRuntimeStore
       return (slot.runtime as T | null) ?? null;
     },
     getRuntime() {
-      if (!slot.runtime) {
+      if (slot.runtime === null) {
         throw new Error(resolved.errorMessage);
       }
       return slot.runtime as T;

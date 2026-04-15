@@ -684,9 +684,9 @@ function mergeSetupRuntimeChannelPlugin(
 }
 
 function resolveBundledRuntimeChannelRegistration(moduleExport: unknown): {
-  plugin?: ChannelPlugin;
+  loadChannelPlugin?: () => ChannelPlugin;
+  loadChannelSecrets?: () => ChannelPlugin["secrets"] | undefined;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
-  loadError?: unknown;
 } {
   const resolved = unwrapDefaultModuleExport(moduleExport);
   if (!resolved || typeof resolved !== "object") {
@@ -704,33 +704,48 @@ function resolveBundledRuntimeChannelRegistration(moduleExport: unknown): {
   ) {
     return {};
   }
+  return {
+    loadChannelPlugin: entryRecord.loadChannelPlugin as () => ChannelPlugin,
+    ...(typeof entryRecord.loadChannelSecrets === "function"
+      ? {
+          loadChannelSecrets: entryRecord.loadChannelSecrets as () =>
+            | ChannelPlugin["secrets"]
+            | undefined,
+        }
+      : {}),
+    ...(typeof entryRecord.setChannelRuntime === "function"
+      ? {
+          setChannelRuntime: entryRecord.setChannelRuntime as (runtime: PluginRuntime) => void,
+        }
+      : {}),
+  };
+}
+
+function loadBundledRuntimeChannelPlugin(params: {
+  registration: ReturnType<typeof resolveBundledRuntimeChannelRegistration>;
+}): {
+  plugin?: ChannelPlugin;
+  loadError?: unknown;
+} {
+  if (typeof params.registration.loadChannelPlugin !== "function") {
+    return {};
+  }
   try {
-    const loadedPlugin = entryRecord.loadChannelPlugin();
-    const loadedSecrets =
-      typeof entryRecord.loadChannelSecrets === "function"
-        ? (entryRecord.loadChannelSecrets() as ChannelPlugin["secrets"] | undefined)
-        : undefined;
-    if (loadedPlugin && typeof loadedPlugin === "object") {
-      const mergedSecrets = mergeChannelPluginSection(
-        (loadedPlugin as ChannelPlugin).secrets,
-        loadedSecrets,
-      );
-      return {
-        plugin: {
-          ...(loadedPlugin as ChannelPlugin),
-          ...(mergedSecrets !== undefined ? { secrets: mergedSecrets } : {}),
-        },
-        ...(typeof entryRecord.setChannelRuntime === "function"
-          ? {
-              setChannelRuntime: entryRecord.setChannelRuntime as (runtime: PluginRuntime) => void,
-            }
-          : {}),
-      };
+    const loadedPlugin = params.registration.loadChannelPlugin();
+    const loadedSecrets = params.registration.loadChannelSecrets?.();
+    if (!loadedPlugin || typeof loadedPlugin !== "object") {
+      return {};
     }
+    const mergedSecrets = mergeChannelPluginSection(loadedPlugin.secrets, loadedSecrets);
+    return {
+      plugin: {
+        ...loadedPlugin,
+        ...(mergedSecrets !== undefined ? { secrets: mergedSecrets } : {}),
+      },
+    };
   } catch (err) {
     return { loadError: err };
   }
-  return {};
 }
 
 function resolveSetupChannelRegistration(moduleExport: unknown): {
@@ -1783,8 +1798,19 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           continue;
         }
         if (setupRegistration.plugin) {
+          const api = createApi(record, {
+            config: cfg,
+            pluginConfig: {},
+            hookPolicy: entry?.hooks,
+            registrationMode,
+          });
           let mergedSetupRegistration = setupRegistration;
-          if (setupRegistration.usesBundledSetupContract && candidate.source !== safeSource) {
+          let runtimeSetterApplied = false;
+          if (
+            registrationMode === "setup-runtime" &&
+            setupRegistration.usesBundledSetupContract &&
+            candidate.source !== safeSource
+          ) {
             const runtimeOpened = openBoundaryFileSync({
               absolutePath: candidate.source,
               rootPath: pluginRoot,
@@ -1824,7 +1850,30 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               continue;
             }
             const runtimeRegistration = resolveBundledRuntimeChannelRegistration(runtimeMod);
-            if (runtimeRegistration.loadError) {
+            if (runtimeRegistration.setChannelRuntime) {
+              try {
+                runtimeRegistration.setChannelRuntime(api.runtime);
+                runtimeSetterApplied = true;
+              } catch (err) {
+                recordPluginError({
+                  logger,
+                  registry,
+                  record,
+                  seenIds,
+                  pluginId,
+                  origin: candidate.origin,
+                  phase: "load",
+                  error: err,
+                  logPrefix: `[plugins] ${record.id} failed to apply setup-runtime channel runtime from ${record.source}: `,
+                  diagnosticMessagePrefix: "failed to apply setup-runtime channel runtime: ",
+                });
+                continue;
+              }
+            }
+            const runtimePluginRegistration = loadBundledRuntimeChannelPlugin({
+              registration: runtimeRegistration,
+            });
+            if (runtimePluginRegistration.loadError) {
               recordPluginError({
                 logger,
                 registry,
@@ -1833,17 +1882,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                 pluginId,
                 origin: candidate.origin,
                 phase: "load",
-                error: runtimeRegistration.loadError,
+                error: runtimePluginRegistration.loadError,
                 logPrefix: `[plugins] ${record.id} failed to load setup-runtime channel entry from ${record.source}: `,
                 diagnosticMessagePrefix: "failed to load setup-runtime channel entry: ",
               });
               continue;
             }
-            if (runtimeRegistration.plugin) {
+            if (runtimePluginRegistration.plugin) {
               mergedSetupRegistration = {
                 ...setupRegistration,
                 plugin: mergeSetupRuntimeChannelPlugin(
-                  runtimeRegistration.plugin,
+                  runtimePluginRegistration.plugin,
                   setupRegistration.plugin,
                 ),
                 setChannelRuntime:
@@ -1861,13 +1910,25 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             );
             continue;
           }
-          const api = createApi(record, {
-            config: cfg,
-            pluginConfig: {},
-            hookPolicy: entry?.hooks,
-            registrationMode,
-          });
-          mergedSetupRegistration.setChannelRuntime?.(api.runtime);
+          if (!runtimeSetterApplied) {
+            try {
+              mergedSetupRegistration.setChannelRuntime?.(api.runtime);
+            } catch (err) {
+              recordPluginError({
+                logger,
+                registry,
+                record,
+                seenIds,
+                pluginId,
+                origin: candidate.origin,
+                phase: "load",
+                error: err,
+                logPrefix: `[plugins] ${record.id} failed to apply setup channel runtime from ${record.source}: `,
+                diagnosticMessagePrefix: "failed to apply setup channel runtime: ",
+              });
+              continue;
+            }
+          }
           api.registerChannel(mergedSetupPlugin);
           registry.plugins.push(record);
           seenIds.set(pluginId, candidate.origin);

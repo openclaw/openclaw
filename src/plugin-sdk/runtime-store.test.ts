@@ -70,6 +70,27 @@ describe("createPluginRuntimeStore", () => {
     expect(secondStore.getRuntime()).toEqual({ value: "custom" });
   });
 
+  test("rejects empty plugin ids", () => {
+    expect(() =>
+      createPluginRuntimeStore({
+        pluginId: "   ",
+        errorMessage: "runtime not initialized",
+      }),
+    ).toThrow("pluginId must not be empty");
+  });
+
+  test("treats falsy runtime values as initialized", () => {
+    const store = createPluginRuntimeStore<number>({
+      key: "custom-falsy-runtime-key",
+      errorMessage: "runtime not initialized",
+    });
+
+    store.clearRuntime();
+    store.setRuntime(0);
+
+    expect(store.getRuntime()).toBe(0);
+  });
+
   test("shares runtime slots across duplicate module instances when plugin id matches", async () => {
     const firstModule = await importFreshModule<typeof import("./runtime-store.js")>(
       import.meta.url,
