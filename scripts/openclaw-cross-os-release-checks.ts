@@ -1148,7 +1148,10 @@ function resolveExpectedDevUpdateRef(ref) {
   return trimmed || "main";
 }
 
-export function resolveDevUpdateVerificationRef(ref, _sourceSha) {
+export function resolveDevUpdateVerificationRef(ref, sourceSha) {
+  if (looksLikeCommitSha(sourceSha ?? "")) {
+    return sourceSha.trim();
+  }
   return resolveExpectedDevUpdateRef(ref);
 }
 

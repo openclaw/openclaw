@@ -428,8 +428,13 @@ function Main {
     
     # Try to add npm global bin to PATH
     try {
-        $npmPrefix = npm config get prefix 2>$null
-        if ($npmPrefix) {
+        $prefixResult = Invoke-NativeCommandCapture -FilePath "npm.cmd" -Arguments @(
+            "config",
+            "get",
+            "prefix"
+        )
+        $npmPrefix = $prefixResult.Stdout
+        if ($prefixResult.ExitCode -eq 0 -and $npmPrefix) {
             Add-ToPath -Path "$npmPrefix"
         }
     } catch { }
