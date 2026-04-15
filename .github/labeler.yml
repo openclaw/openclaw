@@ -369,3 +369,16 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/fal/**"
+
+"ops":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/ops/**"
+          - "INCIDENT_RESPONSE.md"
+
+"ci/cd":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/**"
+          - ".github/actions/**"
+          - ".github/dependabot.yml"

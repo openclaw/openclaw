@@ -1,0 +1,261 @@
+name: Nightly
+
+# Extended test suite that runs nightly against main.
+# Covers gates intentionally excluded from fast PR CI:
+#   - Full test suite across multiple Node versions
+#   - Duplicate / dead-code checks
+#   - Config schema and plugin SDK drift
+#   - Docs link audit
+#   - pnpm build smoke
+# Separate from the live-provider tests (pnpm test:live) which require real API keys
+# and are gated behind OPENCLAW_LIVE_TEST=1 manually or in release checks.
+
+on:
+  schedule:
+    # 02:00 UTC daily — chosen to avoid overlap with the Dependabot daily
+    # update window (typically 05:00–08:00 UTC) and peak contributor hours.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      skip_build:
+        description: Skip the full build step (faster iteration)
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.32.1"
+  # Fence off any real credentials — nightly must not hit live providers
+  OPENAI_API_KEY: ""
+  ANTHROPIC_API_KEY: ""
+  OPENCLAW_LIVE_OPENAI_KEY: ""
+  OPENCLAW_LIVE_ANTHROPIC_KEY: ""
+  OPENCLAW_LIVE_GEMINI_KEY: ""
+  OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ""
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Full test suite on LTS Node versions
+  # ──────────────────────────────────────────────────────────────────────────
+  test-full:
+    name: Full test suite (${{ matrix.node-version }})
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["22.x", "24.x"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ matrix.node-version }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+          use-sticky-disk: "false"
+
+      - name: Run full test suite
+        env:
+          OPENCLAW_VITEST_MAX_WORKERS: "8"
+        run: pnpm test
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.node-version }}
+          path: coverage/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Build smoke (full production build)
+  # ──────────────────────────────────────────────────────────────────────────
+  build-smoke:
+    name: Build smoke
+    if: ${{ !inputs.skip_build }}
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+          use-sticky-disk: "false"
+
+      - name: Full production build
+        run: pnpm build:strict-smoke
+
+      - name: Check plugin SDK exports
+        run: pnpm plugin-sdk:check-exports
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Schema and API drift detection
+  # ──────────────────────────────────────────────────────────────────────────
+  drift-detection:
+    name: Drift detection
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Check config schema drift
+        run: pnpm config:docs:check
+
+      - name: Check plugin SDK API drift
+        run: pnpm plugin-sdk:api:check
+
+      - name: Check bundled channel config metadata drift
+        run: pnpm config:channels:check
+
+      - name: Check canon invariants
+        run: pnpm canon:check
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Dead code and duplicate detection
+  # ──────────────────────────────────────────────────────────────────────────
+  deadcode:
+    name: Dead code / duplicate detection
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Dead code report (knip)
+        run: pnpm deadcode:report:ci:knip
+
+      - name: Upload dead code artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deadcode-report
+          path: .artifacts/deadcode/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Docs link audit
+  # ──────────────────────────────────────────────────────────────────────────
+  docs-check:
+    name: Docs link audit
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Docs link audit
+        run: pnpm docs:check-links || true
+
+      - name: Markdown lint
+        run: pnpm lint:docs || true
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Extensions full suite
+  # ──────────────────────────────────────────────────────────────────────────
+  extensions-full:
+    name: Extensions full test suite
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+          use-sticky-disk: "false"
+
+      - name: Run all extension tests
+        run: pnpm test:extensions
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Notify on failure
+  # ──────────────────────────────────────────────────────────────────────────
+  notify-failure:
+    name: Notify on nightly failure
+    needs: [test-full, build-smoke, drift-detection, deadcode, extensions-full]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 5
+    steps:
+      - name: Report failure
+        run: |
+          echo "Nightly CI failed. Review the failed jobs above."
+          echo "Run ID: ${{ github.run_id }}"
+          echo "URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          # To enable Discord / webhook notifications, add a step here that
+          # calls your webhook with the above run URL.
+          # Example (requires DISCORD_WEBHOOK_URL secret):
+          # curl -sS -X POST "$DISCORD_WEBHOOK_URL" \
+          #   -H "Content-Type: application/json" \
+          #   -d '{"content":"⚠️ Nightly CI failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}'

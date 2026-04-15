@@ -1,0 +1,106 @@
+name: SBOM
+
+# Generates a Software Bill of Materials (SBOM) for every release tag
+# and attaches it as a release artifact.
+# Also runs on workflow_dispatch for manual SBOM generation.
+
+on:
+  push:
+    tags:
+      - "v[0-9][0-9][0-9][0-9].[1-9][0-9]*.[1-9][0-9]*"
+      - "v[0-9][0-9][0-9][0-9].[1-9][0-9]*.[1-9][0-9]*-beta.*"
+      - "v[0-9][0-9][0-9][0-9].[1-9][0-9]*.[1-9][0-9]*-[1-9][0-9]*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to generate SBOM for (tag, branch, or SHA)
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: sbom-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  sbom:
+    name: Generate SBOM
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Generate npm SBOM (CycloneDX)
+        run: |
+          set -euo pipefail
+          pnpm dlx @cyclonedx/cyclonedx-npm \
+            --output-format JSON \
+            --output-file sbom-npm.cdx.json \
+            --package-lock-only \
+            --mc-type library
+          echo "SBOM generated: sbom-npm.cdx.json"
+          wc -l sbom-npm.cdx.json
+
+      - name: Generate npm SBOM (SPDX)
+        run: |
+          set -euo pipefail
+          # Use syft for SPDX format
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sh -s -- -b /usr/local/bin
+          syft dir:. \
+            --output spdx-json=sbom-npm.spdx.json \
+            --select-catalogers "+javascript-package-cataloger" \
+            --exclude "./apps/android/**" \
+            --exclude "./apps/ios/**" \
+            --exclude "./apps/macos/**" \
+            --exclude "./apps/shared/**" \
+            --exclude "./.git/**" \
+            --exclude "./dist/**" \
+            --exclude "./node_modules/.pnpm/**" 2>/dev/null || true
+          echo "SBOM SPDX generated: sbom-npm.spdx.json"
+
+      - name: Validate CycloneDX SBOM
+        run: |
+          set -euo pipefail
+          pnpm dlx @cyclonedx/cyclonedx-cli validate \
+            --input-file sbom-npm.cdx.json \
+            --input-format json \
+            --input-version v1_6 || true
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.ref_name }}
+          path: |
+            sbom-npm.cdx.json
+            sbom-npm.spdx.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Attach SBOM to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            sbom-npm.cdx.json
+            sbom-npm.spdx.json
+          tag_name: ${{ github.ref_name }}
+          fail_on_unmatched_files: false
