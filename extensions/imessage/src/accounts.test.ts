@@ -53,6 +53,26 @@ describe("shouldStartIMessageAccount", () => {
     expect(shouldStartIMessageAccount({ cfg, account: workAccount })).toBe(true);
   });
 
+  it("treats default as shadowed by a bare named account using the same watcher backend", () => {
+    const cfg = {
+      channels: {
+        imessage: {
+          accounts: {
+            default: {},
+            work: {},
+          },
+        },
+      },
+    } as never;
+
+    const defaultAccount = resolveIMessageAccount({ cfg, accountId: "default" });
+    const workAccount = resolveIMessageAccount({ cfg, accountId: "work" });
+
+    expect(workAccount.configured).toBe(false);
+    expect(shouldStartIMessageAccount({ cfg, account: defaultAccount })).toBe(false);
+    expect(shouldStartIMessageAccount({ cfg, account: workAccount })).toBe(true);
+  });
+
   it("keeps default enabled when the named account uses a different watcher backend", () => {
     const cfg = {
       channels: {
