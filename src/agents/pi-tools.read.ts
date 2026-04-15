@@ -475,9 +475,9 @@ async function readTextFileWithStreaming(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const lines: string[] = [];
-    let currentLine = 0;
-    const startLine = Math.max(0, offset - 1);
-    const endLine = limit !== undefined ? startLine + limit : Infinity;
+    // offset is 1-indexed from user perspective
+    const startLine = offset;  // First line to include (1-indexed)
+    const endLine = limit !== undefined ? startLine + limit - 1 : Infinity;  // Last line to include
     let lineCount = 0;
     
     const readStream = createReadStream(filePath, { encoding: 'utf-8' });
@@ -507,12 +507,14 @@ async function readTextFileWithStreaming(
         return;
       }
       
+      // Stop reading once we've passed the last line we need
       if (lineCount > endLine) {
         rl.close();
         readStream.destroy();
         return;
       }
       
+      // Include lines from startLine through endLine
       if (lineCount >= startLine) {
         lines.push(line);
       }
@@ -564,11 +566,12 @@ async function readTextFileFromSandbox(
   
   const text = Buffer.isBuffer(buffer) ? buffer.toString("utf-8") : String(buffer);
   
-  if (offset > 0 || limit !== undefined) {
+  if (offset > 1 || limit !== undefined) {
     const lines = text.split('\n');
-    const start = Math.max(0, Math.min(offset - 1, lines.length));
-    const end = limit !== undefined ? Math.min(start + limit, lines.length) : lines.length;
-    return lines.slice(start, end).join('\n');
+    // offset is 1-indexed, convert to 0-indexed for array slicing
+    const startIndex = Math.max(0, offset - 1);
+    const endIndex = limit !== undefined ? Math.min(startIndex + limit, lines.length) : lines.length;
+    return lines.slice(startIndex, endIndex).join('\n');
   }
   
   return text;

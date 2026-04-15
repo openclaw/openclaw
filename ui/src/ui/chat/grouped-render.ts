@@ -1007,12 +1007,16 @@ function isLocalAttachmentPreviewAllowed(
   source: string,
   localMediaPreviewRoots: readonly string[],
 ): boolean {
-  const normalizedSource = normalizeLocalAttachmentPath(source);
+  // Decode the source if it's percent-encoded
+  const decodedSource = source.startsWith('%2F') ? decodeURIComponent(source) : source;
+  const sourceToCheck = decodedSource !== source ? decodedSource : source;
+  
+  const normalizedSource = normalizeLocalAttachmentPath(sourceToCheck);
   const comparableSources = normalizedSource
     ? [canonicalizeLocalPathForComparison(normalizedSource)]
-    : source.trim().startsWith("~")
+    : sourceToCheck.trim().startsWith("~")
       ? resolveHomeCandidatesFromRoots(localMediaPreviewRoots).map((home) =>
-          canonicalizeLocalPathForComparison(source.trim().replace(/^~(?=$|[\\/])/, home)),
+          canonicalizeLocalPathForComparison(sourceToCheck.trim().replace(/^~(?=$|[\\/])/, home)),
         )
       : [];
   if (comparableSources.length === 0) {
@@ -1034,26 +1038,41 @@ function buildAssistantAttachmentUrl(
   source: string,
   basePath?: string,
   authToken?: string | null,
+  localMediaPreviewRoots?: readonly string[],
 ): string {
+  // First, check if this is a local file source (including encoded paths)
+  const isLocalSource = isLocalAssistantAttachmentSource(source) || 
+    source.startsWith('%2F') || // Encoded absolute path
+    /^%2F/i.test(source);
+  
+  // For local files that should go through assistant-media
+  if (isLocalSource && (!localMediaPreviewRoots || isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots))) {
+    const normalizedBasePath =
+      basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
+    const params = new URLSearchParams({ source });
+    const normalizedToken = authToken?.trim();
+    if (normalizedToken) {
+      params.set("token", normalizedToken);
+    }
+    return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
+  }
+  
+  // Decode only for non-local sources that are safe
   const decoded = source.startsWith('%2F') ? decodeURIComponent(source) : source;
-  if (decoded.startsWith('/') && !decoded.startsWith('//')) {
+  
+  // For paths that are absolute but explicitly allowed (e.g., media server paths)
+  if (decoded.startsWith('/') && !decoded.startsWith('//') && 
+      (decoded.startsWith('/__openclaw__/') || decoded.startsWith('/media/'))) {
     return `http://localhost:18791${decoded}`;
   }
   
-  // For other sources that aren't local files, return as-is
-  if (!isLocalAssistantAttachmentSource(source)) {
+  // For other sources (HTTP URLs, data URLs, etc.), return as-is
+  if (!isLocalSource) {
     return source;
   }
   
-  // Only use assistant-media for file://, ~, and Windows paths
-  const normalizedBasePath =
-    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
-  const params = new URLSearchParams({ source });
-  const normalizedToken = authToken?.trim();
-  if (normalizedToken) {
-    params.set("token", normalizedToken);
-  }
-  return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
+  // Fallback: return source as-is for local files that aren't allowed
+  return source;
 }
 
 function buildAssistantAttachmentMetaUrl(
@@ -1072,12 +1091,19 @@ function resolveAssistantAttachmentAvailability(
   authToken: string | null | undefined,
   onRequestUpdate: (() => void) | undefined,
 ): AssistantAttachmentAvailability {
-  if (!isLocalAssistantAttachmentSource(source)) {
+  // Check if this is a local file (including encoded absolute paths)
+  const isLocalFile = isLocalAssistantAttachmentSource(source) || 
+    source.startsWith('%2F') || 
+    /^%2F/i.test(source);
+  
+  if (!isLocalFile) {
     return { status: "available" };
   }
+  
   if (!isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)) {
     return { status: "unavailable", reason: "Outside allowed folders", checkedAt: Date.now() };
   }
+  
   const normalizedAuthToken = authToken?.trim() ?? "";
   const cacheKey = `${basePath ?? ""}::${normalizedAuthToken}::${source}`;
   const cached = assistantAttachmentAvailabilityCache.get(cacheKey);
