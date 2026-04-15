@@ -23,6 +23,8 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "apply_patch",
   // Session orchestration — spawning agents remotely is RCE
   "sessions_spawn",
+  // model_spawn in spawn mode calls spawnSubagentDirect — same RCE surface as sessions_spawn
+  "model_spawn",
   // Cross-session injection — message injection across sessions
   "sessions_send",
   // Persistent automation control plane — can create/update/remove scheduled runs
