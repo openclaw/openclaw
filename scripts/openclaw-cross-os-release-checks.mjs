@@ -1221,10 +1221,14 @@ function parseMarkerLine(output, marker) {
 }
 
 export function normalizeWindowsInstalledCliPath(cliPath) {
-  if (typeof cliPath !== "string") {
-    return cliPath;
+  return normalizeWindowsCommandShimPath(cliPath);
+}
+
+export function normalizeWindowsCommandShimPath(commandPath) {
+  if (typeof commandPath !== "string") {
+    return commandPath;
   }
-  return cliPath.replace(/\.ps1$/iu, ".cmd");
+  return commandPath.replace(/\.ps1$/iu, ".cmd");
 }
 
 export function resolveInstalledPrefixDirFromCliPath(cliPath, platform = process.platform) {
@@ -1332,8 +1336,15 @@ foreach ($candidate in @($userPath, $machinePath, $env:Path)) {
 }
 $env:Path = [string]::Join(';', $segments)
 $cmd = Get-Command openclaw -ErrorAction Stop
-$version = (& $cmd.Source --version 2>&1 | Out-String).Trim()
-Write-Output "__OPENCLAW_PATH__=$($cmd.Source)"
+$commandPath = $cmd.Source
+if ($commandPath -match '(?i)\\.ps1$') {
+  $cmdPath = [System.IO.Path]::ChangeExtension($commandPath, '.cmd')
+  if (Test-Path -LiteralPath $cmdPath) {
+    $commandPath = $cmdPath
+  }
+}
+$version = (& $commandPath --version 2>&1 | Out-String).Trim()
+Write-Output "__OPENCLAW_PATH__=$commandPath"
 Write-Output $version
 if ('${powerShellSingleQuote(params.expectedNeedle)}'.Length -gt 0 -and $version -notmatch [regex]::Escape('${powerShellSingleQuote(
       params.expectedNeedle,
@@ -1763,12 +1774,26 @@ foreach ($candidate in @($userPath, $machinePath, $env:Path)) {
 }
 $env:Path = [string]::Join(';', $segments)
 $pnpmCommand = Get-Command pnpm -ErrorAction Stop
-Write-Output "__PNPM_PATH__=$($pnpmCommand.Source)"
-& $pnpmCommand.Source --version
+$pnpmPath = $pnpmCommand.Source
+if ($pnpmPath -match '(?i)\\.ps1$') {
+  $pnpmCmdPath = [System.IO.Path]::ChangeExtension($pnpmPath, '.cmd')
+  if (Test-Path -LiteralPath $pnpmCmdPath) {
+    $pnpmPath = $pnpmCmdPath
+  }
+}
+Write-Output "__PNPM_PATH__=$pnpmPath"
+& $pnpmPath --version
 $corepack = Get-Command corepack -ErrorAction SilentlyContinue
 if ($null -ne $corepack) {
-  Write-Output "__COREPACK_PATH__=$($corepack.Source)"
-  & $corepack.Source --version
+  $corepackPath = $corepack.Source
+  if ($corepackPath -match '(?i)\\.ps1$') {
+    $corepackCmdPath = [System.IO.Path]::ChangeExtension($corepackPath, '.cmd')
+    if (Test-Path -LiteralPath $corepackCmdPath) {
+      $corepackPath = $corepackCmdPath
+    }
+  }
+  Write-Output "__COREPACK_PATH__=$corepackPath"
+  & $corepackPath --version
 }
 `;
   const result = await runPowerShellScript(script, {

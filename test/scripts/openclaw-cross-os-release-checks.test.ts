@@ -5,6 +5,7 @@ import {
   isImmutableReleaseRef,
   looksLikeReleaseVersionRef,
   normalizeRequestedRef,
+  normalizeWindowsCommandShimPath,
   normalizeWindowsInstalledCliPath,
   parseArgs,
   readRunnerOverrideEnv,
@@ -149,6 +150,18 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         String.raw`C:\Users\runner\AppData\Roaming\npm\openclaw.cmd`,
       ),
     ).toBe(String.raw`C:\Users\runner\AppData\Roaming\npm\openclaw.cmd`);
+  });
+
+  it("normalizes generic Windows PowerShell shims to cmd shims", () => {
+    expect(normalizeWindowsCommandShimPath(String.raw`C:\Program Files\nodejs\pnpm.ps1`)).toBe(
+      String.raw`C:\Program Files\nodejs\pnpm.cmd`,
+    );
+    expect(normalizeWindowsCommandShimPath(String.raw`C:\Program Files\nodejs\corepack.ps1`)).toBe(
+      String.raw`C:\Program Files\nodejs\corepack.cmd`,
+    );
+    expect(normalizeWindowsCommandShimPath(String.raw`C:\Program Files\nodejs\node.exe`)).toBe(
+      String.raw`C:\Program Files\nodejs\node.exe`,
+    );
   });
 
   it("derives the installed prefix from resolved CLI paths", () => {
