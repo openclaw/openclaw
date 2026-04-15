@@ -261,13 +261,10 @@ export function collectMissingPackPaths(paths: Iterable<string>): string[] {
 }
 
 export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
-  const isAllowedBundledPluginNodeModulesPath = (path: string) =>
-    /^dist\/extensions\/[^/]+\/node_modules\//.test(path);
   return [...paths]
     .filter(
       (path) =>
-        forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
-        (/node_modules\//.test(path) && !isAllowedBundledPluginNodeModulesPath(path)),
+        forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) || /node_modules\//.test(path),
     )
     .toSorted((left, right) => left.localeCompare(right));
 }

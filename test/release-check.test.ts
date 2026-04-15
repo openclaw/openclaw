@@ -265,7 +265,7 @@ describe("bundled plugin root runtime mirrors", () => {
 });
 
 describe("collectForbiddenPackPaths", () => {
-  it("allows bundled plugin runtime deps under dist/extensions but still blocks other node_modules", () => {
+  it("blocks all packaged node_modules payloads", () => {
     expect(
       collectForbiddenPackPaths([
         "dist/index.js",
@@ -273,7 +273,11 @@ describe("collectForbiddenPackPaths", () => {
         bundledPluginFile("tlon", "node_modules/.bin/tlon"),
         "node_modules/.bin/openclaw",
       ]),
-    ).toEqual([bundledPluginFile("tlon", "node_modules/.bin/tlon"), "node_modules/.bin/openclaw"]);
+    ).toEqual([
+      bundledDistPluginFile("discord", "node_modules/@buape/carbon/index.js"),
+      bundledPluginFile("tlon", "node_modules/.bin/tlon"),
+      "node_modules/.bin/openclaw",
+    ]);
   });
 
   it("blocks generated docs artifacts from npm pack output", () => {
