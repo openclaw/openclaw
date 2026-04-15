@@ -1,23 +1,11 @@
 {
-  "fallbackKeys": [
-    "overview.cards.modelAuth",
-    "overview.cards.modelAuthAttentionExpiredDesc",
-    "overview.cards.modelAuthAttentionExpiredTitle",
-    "overview.cards.modelAuthAttentionExpiringEntry",
-    "overview.cards.modelAuthAttentionExpiringTitle",
-    "overview.cards.modelAuthExpired",
-    "overview.cards.modelAuthExpiresIn",
-    "overview.cards.modelAuthExpiring",
-    "overview.cards.modelAuthOk",
-    "overview.cards.modelAuthProviders",
-    "overview.cards.modelAuthUsageLeft"
-  ],
-  "generatedAt": "2026-04-15T03:34:04.731Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-04-15T05:43:59.297Z",
   "locale": "es",
   "model": "gpt-5.4",
   "provider": "openai",
   "sourceHash": "34089e99b81e81139add4dca8eb47a80da365bd90534ac5e5e042474f3816ad6",
   "totalKeys": 706,
-  "translatedKeys": 695,
+  "translatedKeys": 706,
   "workflow": 1
 }
