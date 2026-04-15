@@ -5,6 +5,7 @@ import { createWriteStream } from 'fs';
 import path from 'path';
 import os from 'os';
 import https from 'https';
+import { ClientRequest } from 'http'; // FIX: Import ClientRequest type
 import crypto from 'crypto';
 import type { AgentToolResult, AgentToolUpdateCallback } from '@mariozechner/pi-agent-core';
 
@@ -34,7 +35,10 @@ async function downloadTextContent(url: string, signal?: AbortSignal): Promise<s
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted();
     
+    let req: ClientRequest | null = null; // FIX: Use imported ClientRequest type
+    
     const abortHandler = () => {
+      req?.destroy();
       reject(new DOMException('The operation was aborted', 'AbortError'));
     };
     
@@ -50,7 +54,7 @@ async function downloadTextContent(url: string, signal?: AbortSignal): Promise<s
         return reject(new Error(`Too many redirects: ${url}`));
       }
 
-      https.get(currentUrl, (response) => {
+      req = https.get(currentUrl, (response) => {
         if ((response.statusCode === 301 || response.statusCode === 302) && response.headers.location) {
           response.resume();
           return doGet(response.headers.location, redirectsLeft - 1);
@@ -72,6 +76,8 @@ async function downloadTextContent(url: string, signal?: AbortSignal): Promise<s
           signal?.removeEventListener('abort', abortHandler);
           reject(err);
         });
+        
+        signal?.addEventListener('abort', () => response.destroy(), { once: true });
       }).on('error', (err) => {
         signal?.removeEventListener('abort', abortHandler);
         reject(err);
@@ -158,7 +164,10 @@ async function downloadFileWithVerification(
   
   try {
     await new Promise((resolve, reject) => {
+      let req: ClientRequest | null = null; // FIX: Use imported ClientRequest type
+      
       const abortHandler = () => {
+        req?.destroy();
         reject(new DOMException('The operation was aborted', 'AbortError'));
       };
       
@@ -174,7 +183,7 @@ async function downloadFileWithVerification(
           return reject(new Error(`Too many redirects: ${url}`));
         }
 
-        https.get(currentUrl, (response) => {
+        req = https.get(currentUrl, (response) => {
           if ((response.statusCode === 301 || response.statusCode === 302) && response.headers.location) {
             response.resume();
             return doGet(response.headers.location, redirectsLeft - 1);
@@ -198,6 +207,11 @@ async function downloadFileWithVerification(
             reject(err);
           });
 
+          signal?.addEventListener('abort', () => {
+            file.destroy();
+            response.destroy();
+          }, { once: true });
+
           file.on('close', async () => {
             signal?.removeEventListener('abort', abortHandler);
             
@@ -209,7 +223,6 @@ async function downloadFileWithVerification(
                 return;
               }
               
-              // Move temp file to final destination
               try {
                 await fs.rename(tempDest, dest);
               } catch (renameError) {
@@ -222,13 +235,11 @@ async function downloadFileWithVerification(
                 try {
                   await fs.chmod(dest, 0o755);
                 } catch (chmodError) {
-                  // Log but don't fail - file still usable
                   console.warn(`Warning: Could not set executable permissions on ${dest}:`, chmodError);
                 }
               }
               resolve(undefined);
             } catch (error) {
-              // Clean up on any unexpected error
               await fs.unlink(tempDest).catch(() => {});
               reject(error);
             }
@@ -241,7 +252,6 @@ async function downloadFileWithVerification(
       doGet(url, 10);
     });
   } catch (error) {
-    // Clean up temp file on error
     await fs.unlink(tempDest).catch(() => {});
     throw error;
   }
@@ -256,43 +266,35 @@ async function getYtDlpPath(): Promise<string> {
 async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
   const ytDlpPath = await getYtDlpPath();
   
-  // Check for cancellation before starting
   signal?.throwIfAborted();
   
   try {
-    // First, try to use existing binary
     await execFileAsync(ytDlpPath, ['--version'], { signal });
     
-    // Verify integrity of existing binary
     let integrityCheckPassed = false;
     try {
       const expectedHash = await getExpectedChecksum(signal);
       const isValid = await verifyFileChecksum(ytDlpPath, expectedHash);
       if (!isValid) {
         console.warn('Existing yt-dlp binary failed integrity check, will re-download');
-        // Don't throw here - we'll handle this by re-downloading
         integrityCheckPassed = false;
       } else {
         integrityCheckPassed = true;
       }
     } catch (checksumError) {
-      // Network or parsing error - can't verify, assume existing binary is fine
-      // but log warning
       console.warn('Could not verify existing yt-dlp binary (network/parsing issue):', checksumError);
-      integrityCheckPassed = true; // Assume binary is fine when verification is impossible
+      // FIX #2: Fail closed - don't trust unverified binary
+      integrityCheckPassed = false;
     }
     
-    // If integrity check failed (binary was corrupted), proceed to download fresh copy
     if (!integrityCheckPassed) {
-      throw new Error('Integrity check failed - need fresh download');
+      throw new Error('Integrity check failed or unverifiable - need fresh download');
     }
     
     return ytDlpPath;
   } catch (error) {
-    // Check if we were cancelled
     signal?.throwIfAborted();
     
-    // Binary missing, corrupted, or failed verification - download fresh copy
     const url = YTDLP_URLS[process.platform];
     if (!url) {
       throw new Error(`Unsupported platform: ${process.platform}`);
@@ -300,14 +302,11 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
     
     console.log('Downloading fresh yt-dlp binary...');
     
-    // Fetch expected checksum from official source
     const expectedHash = await getExpectedChecksum(signal);
     console.log(`Expected SHA256: ${expectedHash}`);
     
-    // Download and verify with cancellation support
     await downloadFileWithVerification(url, ytDlpPath, expectedHash, signal);
     
-    // Final verification
     const isValid = await verifyFileChecksum(ytDlpPath, expectedHash);
     if (!isValid) {
       throw new Error('Downloaded yt-dlp binary failed final integrity check');
@@ -330,16 +329,13 @@ async function findWorkspaceFolder(): Promise<string> {
   let currentPath = path.resolve(process.cwd());
   const root = path.parse(currentPath).root;
   
-  // First, check if we're already in a workspace subdirectory
   while (currentPath !== root) {
     const parent = path.dirname(currentPath);
     
-    // Check if parent is a workspace directory
     if (path.basename(parent) === 'workspace') {
-      return currentPath; // Return the actual working directory under workspace
+      return currentPath;
     }
     
-    // Check for workspace directory in current path
     const workspaceDir = path.join(currentPath, 'workspace');
     try {
       if ((await fs.stat(workspaceDir)).isDirectory()) {
@@ -350,7 +346,6 @@ async function findWorkspaceFolder(): Promise<string> {
     currentPath = parent;
   }
   
-  // Fallback to a workspace-relative path
   const fallback = path.join(os.homedir(), '.openclaw', 'workspace');
   await fs.mkdir(fallback, { recursive: true });
   return fallback;
@@ -387,18 +382,15 @@ export const downloadVideoTool = {
       } else if (typedParams.quality === "worst") {
           formatSelector = "worstvideo+worstaudio/worst";
       } else if (typedParams.quality && typeof typedParams.quality === "string" && typedParams.quality.includes("[")) {
-          // If it's a custom format string, assume the user knows what they're doing
           formatSelector = typedParams.quality;
       }
 
-      // Get title first (without creating file)
       const { stdout: rawTitle } = await execFileAsync(
         ytDlpPath, 
         ['--get-title', '--no-playlist', typedParams.url as string],
         { signal }
       );
       
-      // Create sanitized filename with fallback for non-ASCII titles
       let sanitized = rawTitle.trim()
         .replace(/[^a-zA-Z0-9\s]/g, '')
         .replace(/\s+/g, '_')
@@ -425,7 +417,6 @@ export const downloadVideoTool = {
           });
       }
 
-      // Download and capture the actual filename
       const { stdout: ytDlpOutput } = await execFileAsync(ytDlpPath, [
         '-f', formatSelector,
         '--no-playlist',
@@ -443,38 +434,29 @@ export const downloadVideoTool = {
         signal
       });
 
-      // Wait a moment for file system to sync
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Get the actual filename from output or scan directory
       const lines = ytDlpOutput?.split('\n').filter(Boolean);
       let downloadedFile = lines?.[lines.length - 1]?.trim();
       
       if (!downloadedFile || !downloadedFile.includes(sanitized)) {
-        // Fallback: scan directory for the most recent matching file
         const files = await fs.readdir(workspaceRoot);
         
-        // Create ASCII-normalized version of the original sanitized title
         const asciiNormalizedTitle = sanitized.normalize('NFKD')
-          .replace(/[\u0300-\u036f]/g, '') // Remove diacritics
-          .replace(/[^\x00-\x7F]/g, '');    // Remove remaining non-ASCII
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^\x00-\x7F]/g, '');
         
         const matchingFiles = files.filter(f => {
-          // Skip temp files
           if (f.endsWith('.part') || f.endsWith('.ytdl')) return false;
-          
-          // Try the original sanitized match
           if (f.includes(sanitized)) return true;
           
-          // Check if filename (normalized) contains the normalized title
           const normalizedFilename = f.normalize('NFKD')
             .replace(/[\u0300-\u036f]/g, '')
             .replace(/[^\x00-\x7F]/g, '');
           
-          // Check if normalized filename matches or contains timestamp-like patterns
           return asciiNormalizedTitle.length > 0 && 
                  (normalizedFilename.includes(asciiNormalizedTitle) || 
-                  /video_.*\d{13}/.test(f));   // Fallback for our generated names
+                  /video_.*\d{13}/.test(f));
         });
         
         if (matchingFiles.length > 0) {
@@ -489,7 +471,6 @@ export const downloadVideoTool = {
           downloadedFile = fileStats[0]?.name;
         }
       } else {
-        // Extract just the filename from the full path if needed
         downloadedFile = path.basename(downloadedFile);
       }
 
@@ -499,16 +480,17 @@ export const downloadVideoTool = {
 
       const finalPath = path.join(workspaceRoot, downloadedFile);
       
-      // Verify file exists and has size > 0
       try {
         const stats = await fs.stat(finalPath);
         if (stats.size === 0) {
           throw new Error("Downloaded file is empty");
         }
         
-        // Clean path for URL
-        const cleanPath = finalPath.startsWith('/') ? finalPath.substring(1) : finalPath;
-        const fileUrl = `http://localhost:${MEDIA_SERVER_PORT}/${cleanPath}`;
+        // FIX #3: Properly encode path for URL
+        const relativePath = path.relative(workspaceRoot, finalPath);
+        const posixPath = relativePath.split(path.sep).join('/');
+        const encodedPath = posixPath.split('/').map(encodeURIComponent).join('/');
+        const fileUrl = `http://localhost:${MEDIA_SERVER_PORT}/${encodedPath}`;
 
         return {
           content: [{
