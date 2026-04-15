@@ -124,15 +124,47 @@ function readInstalledDistInventory(params = {}) {
   return new Set(parsed.map(normalizeRelativePath));
 }
 
-function listInstalledDistFiles(params = {}) {
+function resolveInstalledDistRoot(params = {}) {
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const pathExists = params.existsSync ?? existsSync;
-  const readDir = params.readdirSync ?? readdirSync;
+  const pathLstat = params.lstatSync ?? lstatSync;
+  const resolveRealPath = params.realpathSync ?? realpathSync;
   const distDir = join(packageRoot, "dist");
   if (!pathExists(distDir)) {
+    return null;
+  }
+  const distStats = pathLstat(distDir);
+  if (!distStats.isDirectory() || distStats.isSymbolicLink()) {
+    throw new Error("unsafe dist root: dist must be a real directory");
+  }
+  const packageRootReal = resolveRealPath(packageRoot);
+  const distDirReal = resolveRealPath(distDir);
+  const relativeDistPath = relative(packageRootReal, distDirReal);
+  if (relativeDistPath !== "dist") {
+    throw new Error("unsafe dist root: dist escaped package root");
+  }
+  return { distDir, distDirReal, packageRootReal };
+}
+
+function assertSafeInstalledDistPath(relativePath, params) {
+  const resolveRealPath = params.realpathSync ?? realpathSync;
+  const candidatePath = join(params.packageRoot, relativePath);
+  const candidateRealPath = resolveRealPath(candidatePath);
+  const relativeCandidatePath = relative(params.distDirReal, candidateRealPath);
+  if (relativeCandidatePath.startsWith("..") || isAbsolute(relativeCandidatePath)) {
+    throw new Error(`unsafe dist path: ${relativePath}`);
+  }
+  return candidatePath;
+}
+
+function listInstalledDistFiles(params = {}) {
+  const readDir = params.readdirSync ?? readdirSync;
+  const distRoot = resolveInstalledDistRoot(params);
+  if (distRoot === null) {
     return [];
   }
-  const pending = [distDir];
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const pending = [distRoot.distDir];
   const files = [];
   while (pending.length > 0) {
     const currentDir = pending.pop();
@@ -141,11 +173,16 @@ function listInstalledDistFiles(params = {}) {
     }
     for (const entry of readDir(currentDir, { withFileTypes: true })) {
       const entryPath = join(currentDir, entry.name);
+      if (entry.isSymbolicLink()) {
+        throw new Error(
+          `unsafe dist entry: ${normalizeRelativePath(relative(packageRoot, entryPath))}`,
+        );
+      }
       if (entry.isDirectory()) {
         pending.push(entryPath);
         continue;
       }
-      if (!entry.isFile() && !entry.isSymbolicLink()) {
+      if (!entry.isFile()) {
         continue;
       }
       const relativePath = normalizeRelativePath(relative(packageRoot, entryPath));
@@ -159,37 +196,59 @@ function listInstalledDistFiles(params = {}) {
 }
 
 function pruneEmptyDistDirectories(params = {}) {
-  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const pathExists = params.existsSync ?? existsSync;
   const readDir = params.readdirSync ?? readdirSync;
   const removePath = params.rmSync ?? rmSync;
-  const distDir = join(packageRoot, "dist");
-  if (!pathExists(distDir)) {
+  const distRoot = resolveInstalledDistRoot(params);
+  if (distRoot === null) {
     return;
   }
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const pathLstat = params.lstatSync ?? lstatSync;
 
   function prune(currentDir) {
     for (const entry of readDir(currentDir, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) {
+        throw new Error(
+          `unsafe dist entry: ${normalizeRelativePath(relative(packageRoot, join(currentDir, entry.name)))}`,
+        );
+      }
       if (!entry.isDirectory()) {
         continue;
       }
       prune(join(currentDir, entry.name));
     }
-    if (currentDir === distDir) {
+    if (currentDir === distRoot.distDir) {
       return;
     }
+    const currentStats = pathLstat(currentDir);
+    if (!currentStats.isDirectory() || currentStats.isSymbolicLink()) {
+      throw new Error(
+        `unsafe dist directory: ${normalizeRelativePath(relative(packageRoot, currentDir))}`,
+      );
+    }
     if (readDir(currentDir).length === 0) {
-      removePath(currentDir, { recursive: true, force: true });
+      removePath(
+        assertSafeInstalledDistPath(normalizeRelativePath(relative(packageRoot, currentDir)), {
+          packageRoot,
+          distDirReal: distRoot.distDirReal,
+          realpathSync: params.realpathSync,
+        }),
+        { recursive: true, force: true },
+      );
     }
   }
 
-  prune(distDir);
+  prune(distRoot.distDir);
 }
 
 export function pruneInstalledPackageDist(params = {}) {
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const removePath = params.rmSync ?? rmSync;
   const log = params.log ?? console;
+  const distRoot = resolveInstalledDistRoot(params);
+  if (distRoot === null) {
+    return [];
+  }
   const expectedFiles = params.expectedFiles ?? readInstalledDistInventory(params);
   const installedFiles = listInstalledDistFiles(params);
   const removed = [];
@@ -198,7 +257,14 @@ export function pruneInstalledPackageDist(params = {}) {
     if (expectedFiles.has(relativePath)) {
       continue;
     }
-    removePath(join(packageRoot, relativePath), { recursive: true, force: true });
+    removePath(
+      assertSafeInstalledDistPath(relativePath, {
+        packageRoot,
+        distDirReal: distRoot.distDirReal,
+        realpathSync: params.realpathSync,
+      }),
+      { recursive: true, force: true },
+    );
     removed.push(relativePath);
   }
 
