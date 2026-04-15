@@ -44,12 +44,6 @@ type DefineBundledChannelSetupEntryOptions = {
   importMetaUrl: string;
   plugin: BundledEntryModuleRef;
   secrets?: BundledEntryModuleRef;
-  features?: BundledChannelSetupEntryFeatures;
-};
-
-export type BundledChannelSetupEntryFeatures = {
-  legacyStateMigrations?: boolean;
-  legacySessionSurfaces?: boolean;
 };
 
 export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
@@ -68,7 +62,6 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
   kind: "bundled-channel-setup-entry";
   loadSetupPlugin: () => TPlugin;
   loadSetupSecrets?: () => ChannelPlugin["secrets"] | undefined;
-  features?: BundledChannelSetupEntryFeatures;
 };
 
 const nodeRequire = createRequire(import.meta.url);
@@ -380,7 +373,6 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
   importMetaUrl,
   plugin,
   secrets,
-  features,
 }: DefineBundledChannelSetupEntryOptions): BundledChannelSetupEntryContract<TPlugin> {
   return {
     kind: "bundled-channel-setup-entry",
@@ -394,6 +386,5 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
             ),
         }
       : {}),
-    ...(features ? { features } : {}),
   };
 }

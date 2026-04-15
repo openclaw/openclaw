@@ -5,7 +5,7 @@ import {
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
 import {
-  loadFreshAgentsBindCommandModuleForTest,
+  loadFreshAgentsCommandModuleForTest,
   readConfigFileSnapshotMock,
   resetAgentsBindTestHarness,
   runtime,
@@ -25,11 +25,11 @@ const matrixBindingPlugin = createBindingResolverTestPlugin({
   },
 });
 
-let agentsBindCommand: typeof import("./agents.commands.bind.js").agentsBindCommand;
+let agentsBindCommand: typeof import("./agents.js").agentsBindCommand;
 
 describe("agents bind matrix integration", () => {
   beforeEach(async () => {
-    ({ agentsBindCommand } = await loadFreshAgentsBindCommandModuleForTest());
+    ({ agentsBindCommand } = await loadFreshAgentsCommandModuleForTest());
     resetAgentsBindTestHarness();
 
     setActivePluginRegistry(

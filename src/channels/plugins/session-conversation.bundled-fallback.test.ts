@@ -4,7 +4,6 @@ import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 
 const fallbackState = vi.hoisted(() => ({
   activeDirName: null as string | null,
-  loadCalls: 0,
   resolveSessionConversation: null as
     | ((params: { kind: "group" | "channel"; rawId: string }) => {
         id: string;
@@ -21,12 +20,10 @@ vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
   );
   return {
     ...actual,
-    tryLoadActivatedBundledPluginPublicSurfaceModuleSync: ({ dirName }: { dirName: string }) => (
-      (fallbackState.loadCalls += 1),
+    tryLoadActivatedBundledPluginPublicSurfaceModuleSync: ({ dirName }: { dirName: string }) =>
       dirName === fallbackState.activeDirName && fallbackState.resolveSessionConversation
         ? { resolveSessionConversation: fallbackState.resolveSessionConversation }
-        : null
-    ),
+        : null,
   };
 });
 
@@ -35,7 +32,6 @@ import { resolveSessionConversationRef, resolveSessionThreadInfo } from "./sessi
 describe("session conversation bundled fallback", () => {
   beforeEach(() => {
     fallbackState.activeDirName = null;
-    fallbackState.loadCalls = 0;
     fallbackState.resolveSessionConversation = null;
     resetPluginRuntimeStateForTest();
   });
@@ -151,43 +147,5 @@ describe("session conversation bundled fallback", () => {
       baseConversationId: "room",
       parentConversationCandidates: ["room:topic:root", "room"],
     });
-  });
-
-  it("reuses the bundled fallback loader result across repeated calls", () => {
-    fallbackState.activeDirName = "mock-threaded";
-    fallbackState.resolveSessionConversation = ({ rawId }) => {
-      const [conversationId, threadId] = rawId.split(":topic:");
-      return {
-        id: conversationId,
-        threadId,
-        baseConversationId: conversationId,
-        parentConversationCandidates: [conversationId],
-      };
-    };
-    setRuntimeConfigSnapshot({
-      plugins: {
-        entries: {
-          "mock-threaded": {
-            enabled: true,
-          },
-        },
-      },
-    });
-
-    expect(resolveSessionConversationRef("agent:main:mock-threaded:group:room:topic:42")).toEqual(
-      expect.objectContaining({
-        channel: "mock-threaded",
-        id: "room",
-        threadId: "42",
-      }),
-    );
-    expect(resolveSessionConversationRef("agent:main:mock-threaded:group:room:topic:43")).toEqual(
-      expect.objectContaining({
-        channel: "mock-threaded",
-        id: "room",
-        threadId: "43",
-      }),
-    );
-    expect(fallbackState.loadCalls).toBe(1);
   });
 });

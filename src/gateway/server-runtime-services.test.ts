@@ -40,7 +40,6 @@ const { activateGatewayScheduledServices, startGatewayRuntimeServices } =
 
 describe("server-runtime-services", () => {
   beforeEach(() => {
-    vi.useRealTimers();
     hoisted.heartbeatRunner.stop.mockClear();
     hoisted.heartbeatRunner.updateConfig.mockClear();
     hoisted.startHeartbeatRunner.mockClear();
@@ -85,13 +84,14 @@ describe("server-runtime-services", () => {
     expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
     expect(cron.start).toHaveBeenCalledTimes(1);
     expect(services.heartbeatRunner).toBe(hoisted.heartbeatRunner);
-    await vi.dynamicImportSettled();
-    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliver: hoisted.deliverOutboundPayloads,
-        cfg: {},
-      }),
-    );
+    await vi.waitFor(() => {
+      expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deliver: hoisted.deliverOutboundPayloads,
+          cfg: {},
+        }),
+      );
+    });
   });
 
   it("keeps scheduled services disabled for minimal test gateways", () => {

@@ -346,7 +346,7 @@ describe("exec approval forwarder", () => {
     });
     expect(deliver).toHaveBeenCalledTimes(2);
 
-    await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - baseRequest.createdAtMs);
+    await vi.runAllTimersAsync();
     expect(deliver).toHaveBeenCalledTimes(2);
   });
 
@@ -358,7 +358,7 @@ describe("exec approval forwarder", () => {
     await Promise.resolve();
     expect(deliver).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - baseRequest.createdAtMs);
+    await vi.runAllTimersAsync();
     expect(deliver).toHaveBeenCalledTimes(2);
   });
 

@@ -2,7 +2,6 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
@@ -13,10 +12,6 @@ import {
   resolveInstalledBinaryPath,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
-
-const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
-  (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
-);
 
 describe("buildPublishedInstallScenarios", () => {
   it("uses a single fresh scenario for plain stable releases", () => {
@@ -75,21 +70,13 @@ describe("collectInstalledPackageErrors", () => {
     );
     expect(errors).toEqual(
       expect.arrayContaining(
-        PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS.map(
+        BUNDLED_RUNTIME_SIDECAR_PATHS.map(
           (relativePath) =>
             `installed package is missing required bundled runtime sidecar: ${relativePath}`,
         ),
       ),
     );
-    expect(errors).not.toEqual(
-      expect.arrayContaining([
-        "installed package is missing required bundled runtime sidecar: dist/extensions/qa-channel/runtime-api.js",
-        "installed package is missing required bundled runtime sidecar: dist/extensions/qa-lab/runtime-api.js",
-      ]),
-    );
-    expect(errors.length).toBeGreaterThanOrEqual(
-      1 + PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS.length,
-    );
+    expect(errors.length).toBeGreaterThanOrEqual(1 + BUNDLED_RUNTIME_SIDECAR_PATHS.length);
   });
 });
 

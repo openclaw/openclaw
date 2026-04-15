@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { listBundledChannelSetupPluginsByFeature } from "../channels/plugins/bundled.js";
+import { iterateBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
+import { listBundledChannelPlugins } from "../channels/plugins/bundled.js";
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import {
   resolveLegacyStateDirs,
@@ -72,7 +73,6 @@ type MigrationLogger = {
 
 let autoMigrateChecked = false;
 let autoMigrateStateDirChecked = false;
-let cachedLegacySessionSurfaces: LegacySessionSurface[] | null = null;
 
 type LegacySessionSurface = {
   isLegacyGroupSessionKey?: (key: string) => boolean;
@@ -83,16 +83,14 @@ type LegacySessionSurface = {
 };
 
 function getLegacySessionSurfaces(): LegacySessionSurface[] {
-  // Legacy migrations run on cold doctor/startup paths. Prefer the narrower
-  // setup plugin surface here so session-key cleanup does not materialize full
-  // bundled channel runtimes.
-  cachedLegacySessionSurfaces ??= listBundledChannelSetupPluginsByFeature(
-    "legacySessionSurfaces",
-  ).flatMap((plugin) => {
+  const surfaces: LegacySessionSurface[] = [];
+  for (const plugin of iterateBootstrapChannelPlugins()) {
     const surface = plugin.messaging;
-    return surface && typeof surface === "object" ? [surface] : [];
-  });
-  return cachedLegacySessionSurfaces;
+    if (surface && typeof surface === "object") {
+      surfaces.push(surface);
+    }
+  }
+  return surfaces;
 }
 
 function isSurfaceGroupKey(key: string): boolean {
@@ -421,7 +419,6 @@ function removeDirIfEmpty(dir: string) {
 
 export function resetAutoMigrateLegacyStateForTest() {
   autoMigrateChecked = false;
-  cachedLegacySessionSurfaces = null;
 }
 
 export function resetAutoMigrateLegacyAgentDirForTest() {
@@ -670,9 +667,7 @@ async function collectChannelLegacyStateMigrationPlans(params: {
   oauthDir: string;
 }): Promise<ChannelLegacyStateMigrationPlan[]> {
   const plans: ChannelLegacyStateMigrationPlan[] = [];
-  // Legacy state detection belongs on the lightweight setup surface so doctor
-  // does not cold-load unrelated runtime channel code.
-  for (const plugin of listBundledChannelSetupPluginsByFeature("legacyStateMigrations")) {
+  for (const plugin of listBundledChannelPlugins()) {
     const detected = await plugin.lifecycle?.detectLegacyStateMigrations?.({
       cfg: params.cfg,
       env: params.env,

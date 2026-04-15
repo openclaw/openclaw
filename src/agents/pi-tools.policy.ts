@@ -1,4 +1,4 @@
-import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionConversation } from "../channels/plugins/session-conversation.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
@@ -388,7 +388,7 @@ export function resolveGroupToolPolicy(params: {
   }
   let plugin;
   try {
-    plugin = getLoadedChannelPlugin(channel);
+    plugin = getChannelPlugin(channel);
   } catch {
     plugin = undefined;
   }

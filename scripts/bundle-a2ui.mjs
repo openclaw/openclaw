@@ -2,7 +2,6 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -13,11 +12,14 @@ const hashFile = path.join(rootDir, "src", "canvas-host", "a2ui", ".bundle.hash"
 const outputFile = path.join(rootDir, "src", "canvas-host", "a2ui", "a2ui.bundle.js");
 const a2uiRendererDir = path.join(rootDir, "vendor", "a2ui", "renderers", "lit");
 const a2uiAppDir = path.join(rootDir, "apps", "shared", "OpenClawKit", "Tools", "CanvasA2UI");
-const uiPackageFile = path.join(rootDir, "ui", "package.json");
-const bundleDependencyIds = ["lit", "@lit/context", "@lit-labs/signals", "signal-utils"];
-const repoInputPaths = [uiPackageFile, a2uiRendererDir, a2uiAppDir];
+const inputPaths = [
+  path.join(rootDir, "package.json"),
+  path.join(rootDir, "pnpm-lock.yaml"),
+  a2uiRendererDir,
+  a2uiAppDir,
+];
 const ignoredBundleHashInputPrefixes = ["vendor/a2ui/renderers/lit/dist"];
-const relativeRepoInputPaths = repoInputPaths.map((inputPath) =>
+const relativeInputPaths = inputPaths.map((inputPath) =>
   normalizePath(path.relative(rootDir, inputPath)),
 );
 
@@ -65,38 +67,6 @@ export function getLocalRolldownCliCandidates(repoRoot = rootDir) {
   ];
 }
 
-export function getBundleHashRepoInputPaths(repoRoot = rootDir) {
-  return [
-    path.join(repoRoot, "ui", "package.json"),
-    path.join(repoRoot, "vendor", "a2ui", "renderers", "lit"),
-    path.join(repoRoot, "apps", "shared", "OpenClawKit", "Tools", "CanvasA2UI"),
-  ];
-}
-
-export function getResolvedBundleDependencyPackageJsonPaths(repoRoot = rootDir) {
-  const uiNodeModules = path.join(repoRoot, "ui", "node_modules");
-  const repoNodeModules = path.join(repoRoot, "node_modules");
-  const paths = [];
-  for (const dependencyId of bundleDependencyIds) {
-    const candidates = [
-      path.join(uiNodeModules, dependencyId, "package.json"),
-      path.join(repoNodeModules, dependencyId, "package.json"),
-    ];
-    const match = candidates.find((candidate) => existsSync(candidate));
-    if (match) {
-      paths.push(match);
-    }
-  }
-  return [...new Set(paths)];
-}
-
-export function getBundleHashInputPaths(repoRoot = rootDir) {
-  return [
-    ...getBundleHashRepoInputPaths(repoRoot),
-    ...getResolvedBundleDependencyPackageJsonPaths(repoRoot),
-  ];
-}
-
 export function compareNormalizedPaths(left, right) {
   const normalizedLeft = normalizePath(left);
   const normalizedRight = normalizePath(right);
@@ -125,7 +95,7 @@ async function walkFiles(entryPath, files) {
 }
 
 function listTrackedInputFiles() {
-  const result = spawnSync("git", ["ls-files", "--", ...relativeRepoInputPaths], {
+  const result = spawnSync("git", ["ls-files", "--", ...relativeInputPaths], {
     cwd: rootDir,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -133,24 +103,22 @@ function listTrackedInputFiles() {
   if (result.status !== 0) {
     return null;
   }
-  const trackedFiles = result.stdout
+  return result.stdout
     .split("\n")
     .filter(Boolean)
     .map((filePath) => path.join(rootDir, filePath))
     .filter((filePath) => isBundleHashInputPath(filePath));
-  return [...trackedFiles, ...getResolvedBundleDependencyPackageJsonPaths(rootDir)];
 }
 
 async function computeHash() {
   let files = listTrackedInputFiles();
   if (!files) {
     files = [];
-    for (const inputPath of getBundleHashRepoInputPaths(rootDir)) {
+    for (const inputPath of inputPaths) {
       await walkFiles(inputPath, files);
     }
-    files.push(...getResolvedBundleDependencyPackageJsonPaths(rootDir));
   }
-  files = [...new Set(files)].toSorted(compareNormalizedPaths);
+  files.sort(compareNormalizedPaths);
 
   const hash = createHash("sha256");
   for (const filePath of files) {
