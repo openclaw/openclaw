@@ -7,25 +7,36 @@ const GATEWAY_TOKEN_FILENAME = "gateway.token";
 const SIG_EXTENSION = ".sig";
 
 /**
- * Resolves the gateway token path at ~/.openclaw/gateway.token.
- */
-function resolveGatewayTokenPath(): string {
-  return path.join(os.homedir(), ".openclaw", GATEWAY_TOKEN_FILENAME);
-}
-
-/**
- * Reads the gateway token from ~/.openclaw/gateway.token.
- * No process-lifetime cache — reads fresh from disk each call so token
- * rotation takes effect immediately without a gateway restart.
+ * Resolves the gateway token for HMAC operations.
+ *
+ * Checks three sources in order (matching gateway auth token resolution):
+ * 1. `~/.openclaw/gateway.token` file (most common)
+ * 2. `OPENCLAW_GATEWAY_TOKEN` environment variable
+ *
+ * No process-lifetime cache — reads fresh each call so token rotation
+ * takes effect immediately without a gateway restart.
+ *
+ * Note: `gateway.auth.token` from config is NOT checked here because
+ * reading it would create a circular dependency (config read needs HMAC
+ * verification, but HMAC needs the config to resolve SecretRefs).
  */
 export function readGatewayToken(): string | null {
+  // Source 1: token file on disk
   try {
-    const tokenPath = resolveGatewayTokenPath();
+    const tokenPath = path.join(os.homedir(), ".openclaw", GATEWAY_TOKEN_FILENAME);
     const raw = fs.readFileSync(tokenPath, "utf-8").trim();
-    return raw.length > 0 ? raw : null;
+    if (raw.length > 0) {
+      return raw;
+    }
   } catch {
-    return null;
+    // fall through to env
   }
+  // Source 2: environment variable
+  const envToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
+  if (envToken && envToken.length > 0) {
+    return envToken;
+  }
+  return null;
 }
 
 /**
@@ -43,7 +54,7 @@ export function resolveConfigSigPath(configPath: string): string {
 }
 
 /**
- * Writes the HMAC signature sidecar file after a config write.
+ * Writes the HMAC signature sidecar file after a config write (async).
  * Best-effort; failures are silently ignored.
  */
 export async function writeConfigHmacSig(configPath: string, configContent: string): Promise<void> {
@@ -55,6 +66,25 @@ export async function writeConfigHmacSig(configPath: string, configContent: stri
     const hmac = computeConfigHmac(configContent, token);
     const sigPath = resolveConfigSigPath(configPath);
     await fs.promises.writeFile(sigPath, hmac, { encoding: "utf-8", mode: 0o600 });
+  } catch {
+    // best-effort
+  }
+}
+
+/**
+ * Writes the HMAC signature sidecar file after a config write (sync).
+ * Used by internal createConfigIO write paths that don't use the
+ * exported async writeConfigFile wrapper.
+ */
+export function writeConfigHmacSigSync(configPath: string, configContent: string): void {
+  const token = readGatewayToken();
+  if (!token) {
+    return;
+  }
+  try {
+    const hmac = computeConfigHmac(configContent, token);
+    const sigPath = resolveConfigSigPath(configPath);
+    fs.writeFileSync(sigPath, hmac, { encoding: "utf-8", mode: 0o600 });
   } catch {
     // best-effort
   }
@@ -87,6 +117,7 @@ export function verifyConfigHmac(
   try {
     storedHmac = fs.readFileSync(sigPath, "utf-8").trim();
   } catch {
+    // Sig file missing. If config is established (>100 bytes), treat as suspicious.
     const suspicious = (() => {
       try {
         return fs.statSync(configPath).size > 100;
@@ -96,11 +127,20 @@ export function verifyConfigHmac(
     })();
     return { status: "no-sig", suspicious };
   }
+  // Empty sig file = suspicious. An attacker could truncate the sig to bypass.
   if (storedHmac.length === 0) {
-    return { status: "no-sig", suspicious: false };
+    const suspicious = (() => {
+      try {
+        return fs.statSync(configPath).size > 100;
+      } catch {
+        return false;
+      }
+    })();
+    return { status: "no-sig", suspicious };
   }
   try {
     const expectedHmac = computeConfigHmac(configContent, token);
+    // Constant-time comparison to prevent timing side-channel attacks.
     const stored = Buffer.from(storedHmac, "hex");
     const expected = Buffer.from(expectedHmac, "hex");
     if (stored.length === expected.length && crypto.timingSafeEqual(stored, expected)) {
