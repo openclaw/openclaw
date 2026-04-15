@@ -15,7 +15,11 @@ import sense_runtime_bridge as bridge
 # ---------------------------------------------------------------------------
 
 _HEALTH_CHECK_TIMEOUT = float(os.environ.get("HEALTH_CHECK_TIMEOUT", "5"))
-_OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+_OLLAMA_BASE_URL = (
+    os.environ.get("OLLAMA_BASE_URL")
+    or os.environ.get("OLLAMA_HOST")
+    or "http://localhost:11434"
+)
 
 
 def _probe_http(url: str, timeout: float) -> tuple[bool, str]:
