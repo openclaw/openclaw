@@ -650,6 +650,8 @@ type EditReplacement = {
   newText: string;
 };
 
+type ToolSchemaRecord = Record<string, unknown>;
+
 function readEditReplacements(params: unknown): { path?: string; edits: EditReplacement[] } {
   const record = getToolParamsRecord(params);
   const pathParam = typeof record?.path === "string" ? record.path : undefined;
@@ -672,9 +674,99 @@ function readEditReplacements(params: unknown): { path?: string; edits: EditRepl
   return { path: pathParam, edits };
 }
 
-function wrapLegacySingleEditExecution(base: AnyAgentTool): AnyAgentTool {
+function readToolParameterSchema(tool: AnyAgentTool): ToolSchemaRecord | undefined {
+  return tool.parameters && typeof tool.parameters === "object"
+    ? (tool.parameters as ToolSchemaRecord)
+    : undefined;
+}
+
+function readToolSchemaProperties(schema: ToolSchemaRecord | undefined): ToolSchemaRecord | undefined {
+  const properties = schema?.properties;
+  return properties && typeof properties === "object" ? (properties as ToolSchemaRecord) : undefined;
+}
+
+function toolAcceptsCanonicalEditParams(tool: AnyAgentTool): boolean {
+  const schema = readToolParameterSchema(tool);
+  const properties = readToolSchemaProperties(schema);
+  const required = Array.isArray(schema?.required) ? schema.required : [];
+  return Boolean(
+    (properties && Object.prototype.hasOwnProperty.call(properties, "edits")) ||
+      required.includes("edits"),
+  );
+}
+
+function toolAcceptsLegacySingleEditParams(tool: AnyAgentTool): boolean {
+  const schema = readToolParameterSchema(tool);
+  const properties = readToolSchemaProperties(schema);
+  const required = new Set(Array.isArray(schema?.required) ? schema.required : []);
+  return Boolean(
+    (properties &&
+      Object.prototype.hasOwnProperty.call(properties, "oldText") &&
+      Object.prototype.hasOwnProperty.call(properties, "newText")) ||
+      (required.has("oldText") && required.has("newText")),
+  );
+}
+
+function buildCanonicalEditParameters(tool: AnyAgentTool) {
+  const schema = readToolParameterSchema(tool);
+  if (!schema) {
+    return undefined;
+  }
+  const sourceProperties = readToolSchemaProperties(schema);
+  const properties = sourceProperties ? { ...sourceProperties } : {};
+  const oldTextSchema = properties.oldText;
+  const newTextSchema = properties.newText;
+  delete properties.oldText;
+  delete properties.newText;
+  properties.edits = {
+    type: "array",
+    minItems: 1,
+    description: "Exact text replacements to apply in order.",
+    items: {
+      type: "object",
+      required: ["oldText", "newText"],
+      properties: {
+        oldText:
+          oldTextSchema && typeof oldTextSchema === "object"
+            ? oldTextSchema
+            : {
+                type: "string",
+                description: "Exact text to find and replace (must match exactly)",
+              },
+        newText:
+          newTextSchema && typeof newTextSchema === "object"
+            ? newTextSchema
+            : {
+                type: "string",
+                description: "New text to replace the old text with",
+              },
+      },
+    },
+  } satisfies ToolSchemaRecord;
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  required.delete("oldText");
+  required.delete("newText");
+  required.add("path");
+  required.add("edits");
+  return {
+    ...schema,
+    properties,
+    required: [...required],
+  } satisfies ToolSchemaRecord;
+}
+
+function wrapCanonicalEditExecution(base: AnyAgentTool): AnyAgentTool {
+  if (toolAcceptsCanonicalEditParams(base)) {
+    return base;
+  }
+  if (!toolAcceptsLegacySingleEditParams(base)) {
+    return base;
+  }
+
+  const parameters = buildCanonicalEditParameters(base);
   return {
     ...base,
+    ...(parameters ? { parameters } : {}),
     execute: async (toolCallId, params, signal, onUpdate) => {
       const { path: pathParam, edits } = readEditReplacements(params);
       if (!pathParam || edits.length === 0) {
@@ -721,7 +813,7 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
 }
 
 export function createSandboxedEditTool(params: SandboxToolParams) {
-  const base = wrapLegacySingleEditExecution(
+  const base = wrapCanonicalEditExecution(
     createEditTool(params.root, {
       operations: createSandboxEditOperations(params),
     }) as unknown as AnyAgentTool,
@@ -748,7 +840,7 @@ export function createHostWorkspaceEditTool(
   root: string,
   options?: { workspaceOnly?: boolean; allowedRoots?: readonly string[] },
 ) {
-  const base = wrapLegacySingleEditExecution(
+  const base = wrapCanonicalEditExecution(
     createEditTool(root, {
       operations: createHostEditOperations(root, options),
     }) as unknown as AnyAgentTool,

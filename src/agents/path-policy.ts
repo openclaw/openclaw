@@ -227,7 +227,7 @@ export function resolvePathWithinRoots(
     if (bestMatch) {
       return bestMatch;
     }
-    throwPathEscapesBoundary({
+    return throwPathEscapesBoundary({
       options: escapeOptions,
       rootResolved: normalizedRoots[0],
       candidate,
@@ -260,7 +260,7 @@ export function resolvePathWithinRoots(
   if (bestMatch) {
     return bestMatch;
   }
-  throwPathEscapesBoundary({
+  return throwPathEscapesBoundary({
     options: escapeOptions,
     rootResolved: normalizedRoots[0],
     candidate,
