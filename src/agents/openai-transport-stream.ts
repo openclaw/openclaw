@@ -1106,7 +1106,12 @@ async function processOpenAICompletionsStream(
       });
       continue;
     }
-    const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
+    const reasoningFields = [
+      "reasoning_content",
+      "reasoning",
+      "reasoning_text",
+      "reasoning_details",
+    ] as const;
     const reasoningField = reasoningFields.find((field) => {
       const value = (choice.delta as Record<string, unknown>)[field];
       return typeof value === "string" && value.length > 0;
