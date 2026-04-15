@@ -103,4 +103,12 @@ describe("parseReplyDirectives - sticker directive", () => {
     const result = parseReplyDirectives(input);
     expect(result.sticker).toEqual({ raw: expectedRaw });
   });
+
+  it("does not extract STICKER directives from fenced code blocks", () => {
+    const result = parseReplyDirectives(
+      "Here is code:\n```txt\nSTICKER:446:1988\n```\nActual sticker below\nSTICKER:1070:17844",
+    );
+    expect(result.sticker).toEqual({ raw: "1070:17844" });
+    expect(result.text).toBe("Here is code:\n```txt\nSTICKER:446:1988\n```\nActual sticker below");
+  });
 });

@@ -302,6 +302,71 @@ describe("linePlugin outbound.sendPayload", () => {
     });
   });
 
+  it("does not short-circuit invalid sticker when media payload exists", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await linePlugin.outbound!.sendPayload!({
+      to: "line:user:4",
+      text: "",
+      payload: {
+        sticker: { raw: "not-valid" },
+        mediaUrl: "https://example.com/video.mp4",
+      },
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:4", "", {
+      verbose: false,
+      mediaUrl: "https://example.com/video.mp4",
+      accountId: "default",
+      cfg,
+    });
+    expect(mocks.pushMessagesLine).not.toHaveBeenCalledWith(
+      "line:user:4",
+      [{ type: "text", text: "[Sticker send error: invalid sticker format]" }],
+      { verbose: false, accountId: "default", cfg },
+    );
+  });
+
+  it("does not short-circuit invalid sticker when lineData rich content exists", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await linePlugin.outbound!.sendPayload!({
+      to: "line:user:4",
+      text: "",
+      payload: {
+        sticker: { raw: "not-valid" },
+        channelData: {
+          line: {
+            flexMessage: {
+              altText: "Card",
+              contents: { type: "bubble" },
+            },
+          },
+        },
+      },
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushFlexMessage).toHaveBeenCalledWith(
+      "line:user:4",
+      "Card",
+      { type: "bubble" },
+      { verbose: false, accountId: "default", cfg },
+    );
+    expect(mocks.pushMessagesLine).not.toHaveBeenCalledWith(
+      "line:user:4",
+      [{ type: "text", text: "[Sticker send error: invalid sticker format]" }],
+      { verbose: false, accountId: "default", cfg },
+    );
+  });
+
   it("uses LINE-specific media options for rich media payloads", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);

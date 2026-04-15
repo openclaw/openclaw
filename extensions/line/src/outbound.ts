@@ -99,6 +99,11 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const quickReply = hasQuickReplies
       ? (lineRuntime?.createQuickReplyItems ?? outboundRuntime.createQuickReplyItems)(quickReplies)
       : undefined;
+    const mediaUrls = resolveOutboundMediaUrls(payload);
+    const hasTextContent = Boolean(payload.text?.trim());
+    const hasLineRichContent = Boolean(
+      lineData.flexMessage ?? lineData.templateMessage ?? lineData.location,
+    );
 
     // LINE SDK expects Message[] but we build dynamically.
     const sendMessageBatch = async (messages: Array<Record<string, unknown>>) => {
@@ -123,14 +128,14 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         await sendMessageBatch([createStickerMessage(parsed.packageId, parsed.stickerId)]);
         return createEmptyChannelResult("line", lastResult ?? { messageId: "sticker", chatId: to });
       }
-      // Malformed sticker token with no text: surface as error rather than silent empty send.
-      if (!payload.text) {
+      // Malformed sticker token with no other sendable content: surface as error.
+      if (!hasTextContent && mediaUrls.length === 0 && !hasLineRichContent) {
         await sendMessageBatch([
           { type: "text", text: "[Sticker send error: invalid sticker format]" },
         ]);
         return createEmptyChannelResult("line", { messageId: "sticker-error", chatId: to });
       }
-      // Malformed sticker token but text is present: fall through to deliver text below.
+      // Malformed sticker token but other sendable content is present: fall through.
     }
 
     const processed = payload.text
@@ -145,7 +150,6 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const chunks = processed.text
       ? runtime.channel.text.chunkMarkdownText(processed.text, chunkLimit)
       : [];
-    const mediaUrls = resolveOutboundMediaUrls(payload);
     const useLineSpecificMedia = hasLineSpecificMediaOptions(lineData);
     const shouldSendQuickRepliesInline = chunks.length === 0 && hasQuickReplies;
     const sendMediaMessages = async () => {

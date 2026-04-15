@@ -258,6 +258,59 @@ describe("deliverLineAutoReply", () => {
       expect(pushMessagesLine).not.toHaveBeenCalled();
     });
 
+    it("falls through to media delivery when invalid sticker has media payload", async () => {
+      const { deps, replyMessageLine, pushMessagesLine } = createDeps({
+        processLineMessage: () => ({ text: "", flexMessages: [] }),
+        chunkMarkdownText: () => [],
+      });
+
+      await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: {
+          sticker: { raw: "not-valid" },
+          mediaUrl: "https://example.com/sticker-fallback.png",
+        },
+        lineData: {},
+        deps,
+      });
+
+      expect(replyMessageLine).toHaveBeenCalledWith(
+        "token",
+        [createImageMessage("https://example.com/sticker-fallback.png")],
+        { accountId: "acc" },
+      );
+      expect(pushMessagesLine).not.toHaveBeenCalledWith(
+        "line:user:1",
+        [{ type: "text", text: "[Sticker send error: invalid sticker format]" }],
+        { accountId: "acc" },
+      );
+    });
+
+    it("falls through to lineData rich delivery when invalid sticker has rich content", async () => {
+      const { deps, replyMessageLine, pushMessagesLine } = createDeps({
+        processLineMessage: () => ({ text: "", flexMessages: [] }),
+        chunkMarkdownText: () => [],
+      });
+
+      await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { sticker: { raw: "not-valid" } },
+        lineData: { flexMessage: { altText: "Card", contents: { type: "bubble" } } },
+        deps,
+      });
+
+      expect(replyMessageLine).toHaveBeenCalledWith(
+        "token",
+        [createFlexMessage("Card", { type: "bubble" })],
+        { accountId: "acc" },
+      );
+      expect(pushMessagesLine).not.toHaveBeenCalledWith(
+        "line:user:1",
+        [{ type: "text", text: "[Sticker send error: invalid sticker format]" }],
+        { accountId: "acc" },
+      );
+    });
+
     it("sends sticker only when payload has valid sticker (text is dropped)", async () => {
       const { deps, replyMessageLine, pushMessagesLine } = createDeps();
 

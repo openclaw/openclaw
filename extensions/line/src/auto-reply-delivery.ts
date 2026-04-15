@@ -109,6 +109,11 @@ export async function deliverLineAutoReply(params: {
       await pushLineMessages(remaining);
     }
   };
+  const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
+  const hasTextContent = Boolean(payload.text?.trim());
+  const hasLineRichContent = Boolean(
+    lineData.flexMessage ?? lineData.templateMessage ?? lineData.location,
+  );
 
   // Sticker-only sending policy: if a valid sticker is present, send only the sticker (drop text).
   // payload.sticker comes from the common STICKER: directive parser.
@@ -134,11 +139,11 @@ export async function deliverLineAutoReply(params: {
       return { replyTokenUsed };
     }
     // Invalid sticker-only payload should not disappear silently.
-    if (!payload.text?.trim()) {
+    if (!hasTextContent && mediaUrls.length === 0 && !hasLineRichContent) {
       await sendLineMessages([{ type: "text", text: stickerInvalidFormatText }], true);
       return { replyTokenUsed };
     }
-    // If text exists, fall through and deliver text normally.
+    // If another sendable payload part exists, fall through and deliver it normally.
   }
 
   // lineData.sticker: direct channelData path (packageId/stickerId already parsed).
@@ -203,7 +208,6 @@ export async function deliverLineAutoReply(params: {
 
   const chunks = processed.text ? deps.chunkMarkdownText(processed.text, textLimit) : [];
 
-  const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
   const mediaMessages = mediaUrls
     .map((url) => url?.trim())
     .filter((url): url is string => Boolean(url))
