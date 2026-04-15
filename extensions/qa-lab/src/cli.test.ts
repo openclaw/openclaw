@@ -6,7 +6,6 @@ const TEST_QA_RUNNER = {
   pluginId: "qa-runner-test",
   commandName: "runner-test",
   description: "Run the test live QA lane",
-  npmSpec: "@openclaw/qa-runner-test",
 } as const;
 
 function createAvailableQaRunnerContribution() {
@@ -21,16 +20,6 @@ function createAvailableQaRunnerContribution() {
       }),
     },
   } satisfies QaRunnerCliContribution;
-}
-
-function createMissingQaRunnerContribution(): QaRunnerCliContribution {
-  return {
-    pluginId: TEST_QA_RUNNER.pluginId,
-    commandName: TEST_QA_RUNNER.commandName,
-    description: TEST_QA_RUNNER.description,
-    status: "missing",
-    npmSpec: TEST_QA_RUNNER.npmSpec,
-  };
 }
 
 function createBlockedQaRunnerContribution(): QaRunnerCliContribution {
@@ -125,16 +114,6 @@ describe("qa cli registration", () => {
     expect(optionNames).toEqual(
       expect.arrayContaining(["--credential-source", "--credential-role"]),
     );
-  });
-
-  it("shows an install hint when a discovered runner plugin is unavailable", async () => {
-    listQaRunnerCliContributions.mockReset().mockReturnValue([createMissingQaRunnerContribution()]);
-    const missingProgram = new Command();
-    registerQaLabCli(missingProgram);
-
-    await expect(
-      missingProgram.parseAsync(["node", "openclaw", "qa", TEST_QA_RUNNER.commandName]),
-    ).rejects.toThrow(`openclaw plugins install ${TEST_QA_RUNNER.npmSpec}`);
   });
 
   it("shows an enable hint when a discovered runner plugin is installed but blocked", async () => {
