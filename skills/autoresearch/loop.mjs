@@ -1,7 +1,7 @@
 // loop.mjs — main experiment runner
 import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { homedir } from 'node:os';
 import { execSync } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -32,9 +32,14 @@ function checkPreconditions(opts = {}) {
   if (!opts.force) {
     const now = new Date();
     const hh = now.getHours() + now.getMinutes() / 60;
-    if (hh < 10.5 || hh >= 12.0) throw new Error('Outside morning window (10:30–12:00)');
+    if (hh >= 12.0) throw new Error('Past morning window (after 12:00)');
+    if (hh < 10.5) {
+      const waitMs = Math.round((10.5 - hh) * 3600 * 1000);
+      console.log(`Before window — sleeping ${Math.round(waitMs / 60000)}m until 10:30`);
+      return { ranFlag, waitMs };
+    }
   }
-  return ranFlag;
+  return { ranFlag, waitMs: 0 };
 }
 
 async function proposeAndValidate({ skill, currentDesc, misroutes, model, apiKey }) {
@@ -101,7 +106,8 @@ async function runPhase({ name, experiments, models, pool, apiKey, baselineEval,
 }
 
 export async function main({ force = false, dryRun = false } = {}) {
-  const ranFlag = checkPreconditions({ force });
+  const { ranFlag, waitMs } = checkPreconditions({ force });
+  if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
   const apiKey = process.env.ANTHROPIC_API_KEY || readAnthropicKeyFromEnvFile();
   const git = createGitOps(REPO_DIR);
   if (await git.hasUncommittedChanges()) throw new Error('Repo has uncommitted changes');
@@ -166,7 +172,7 @@ function readAnthropicKeyFromEnvFile() {
   return line.split('=')[1].trim();
 }
 
-if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
   main({ force: args.includes('--force'), dryRun: args.includes('--dry-run') })
     .catch(e => { console.error(e); process.exit(1); });
