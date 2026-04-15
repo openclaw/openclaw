@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "../../scripts/lib/npm-update-compat-sidecars.mjs";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { pathExists } from "../utils.js";
 import {
@@ -110,10 +111,34 @@ async function collectInstalledPackageDistErrors(packageRoot: string): Promise<s
   }
   return await collectInstalledPathErrors({
     packageRoot,
-    expectedFiles: [...NPM_UPDATE_COMPAT_SIDECAR_PATHS],
+    expectedFiles: await collectLegacyInstalledPackageDistPaths(packageRoot),
     actualFiles: null,
     missingMessage: (relativePath) => `missing bundled runtime sidecar ${relativePath}`,
   });
+}
+
+async function collectLegacyInstalledPackageDistPaths(packageRoot: string): Promise<string[]> {
+  const expectedFiles = new Set(NPM_UPDATE_COMPAT_SIDECAR_PATHS);
+  await Promise.all(
+    BUNDLED_RUNTIME_SIDECAR_PATHS.map(async (relativePath) => {
+      const pluginRoot = resolveBundledPluginRoot(relativePath);
+      if (pluginRoot === null) {
+        return;
+      }
+      if (
+        (await pathExists(path.join(packageRoot, pluginRoot, "package.json"))) ||
+        (await pathExists(path.join(packageRoot, pluginRoot, "openclaw.plugin.json")))
+      ) {
+        expectedFiles.add(relativePath);
+      }
+    }),
+  );
+  return [...expectedFiles].toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolveBundledPluginRoot(relativePath: string): string | null {
+  const match = /^dist\/extensions\/[^/]+/u.exec(relativePath);
+  return match ? match[0] : null;
 }
 
 async function collectInstalledPathErrors(params: {

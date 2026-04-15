@@ -421,4 +421,27 @@ describe("update global helpers", () => {
       );
     });
   });
+
+  it("verifies legacy sidecars for installed bundled plugins without inventory", async () => {
+    await withTempDir({ prefix: "openclaw-update-global-legacy-plugin-" }, async (packageRoot) => {
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+        "utf-8",
+      );
+      const matrixPackageJson = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "matrix",
+        "package.json",
+      );
+      await fs.mkdir(path.dirname(matrixPackageJson), { recursive: true });
+      await fs.writeFile(matrixPackageJson, JSON.stringify({ name: "@openclaw/matrix" }), "utf-8");
+
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
+        `missing bundled runtime sidecar ${MATRIX_HELPER_API}`,
+      );
+    });
+  });
 });
