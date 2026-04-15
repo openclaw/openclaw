@@ -202,6 +202,38 @@ describe("createChildAdapter", () => {
     expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
   });
 
+  it("settles wait on Windows after timeout even when streams are not drained", async () => {
+    // Regression test: if stdout/stderr do not emit end/close within the settle
+    // window, the wait should still settle after the timeout using the exit state.
+    vi.useFakeTimers();
+    setPlatform("win32");
+
+    const { adapter, emitExit, child } = await (async () => {
+      const stub = createStubChild(8642);
+      spawnWithFallbackMock.mockResolvedValue({
+        child: stub.child,
+        usedFallback: false,
+      });
+      const adapter = await createChildAdapter({
+        argv: ["openclaw", "status"],
+        stdinMode: "pipe-closed",
+      });
+      return { ...stub, adapter };
+    })();
+
+    const settled = vi.fn();
+    void adapter.wait().then((result) => {
+      settled(result);
+    });
+
+    // Emit exit but do NOT emit end on stdout/stderr (streams remain undrained)
+    emitExit(0, null);
+    await vi.advanceTimersByTimeAsync(300);
+
+    // Should still settle with the exit code, even though streams are not drained
+    expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
+  });
+
   it("disables detached mode in service-managed runtime", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
 

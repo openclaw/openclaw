@@ -214,7 +214,14 @@ export async function createChildAdapter(params: {
     }
     clearWindowsCloseFallbackTimer();
     windowsCloseFallbackTimer = setTimeout(() => {
-      maybeSettleAfterWindowsExit();
+      if (waitResult || waitError !== undefined) {
+        return;
+      }
+      // Force settle after timeout, using observed exit state if available.
+      // This handles the case where stdout/stderr streams do not emit end/close
+      // within the settle window (e.g., some Windows processes with buffered output).
+      const exitState = childExitState ?? { code: null, signal: null };
+      settleWait(resolveObservedExitState(exitState));
     }, WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS);
     windowsCloseFallbackTimer.unref?.();
   };
