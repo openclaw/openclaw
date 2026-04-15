@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readLoggingConfig } from "./config.js";
+import { readLoggingConfig, registerLoggingConfigLoader } from "./config.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 
@@ -17,6 +17,7 @@ describe("readLoggingConfig", () => {
   afterEach(() => {
     process.argv = originalArgv;
     loadConfigMock.mockReset();
+    registerLoggingConfigLoader();
   });
 
   it("skips mutating config loads for config schema", async () => {
@@ -26,6 +27,17 @@ describe("readLoggingConfig", () => {
     });
 
     expect(readLoggingConfig()).toBeUndefined();
+    expect(loadConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers a registered runtime loader over the fallback config require", () => {
+    const loggingConfig = { level: "info" as const, file: "/tmp/custom.log" };
+    loadConfigMock.mockImplementation(() => {
+      throw new Error("fallback loadConfig should not be called");
+    });
+    registerLoggingConfigLoader(() => loggingConfig);
+
+    expect(readLoggingConfig()).toEqual(loggingConfig);
     expect(loadConfigMock).not.toHaveBeenCalled();
   });
 });

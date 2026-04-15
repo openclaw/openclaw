@@ -14,6 +14,7 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
+import { registerLoggingConfigLoader } from "../logging/config.js";
 import {
   collectRelevantDoctorPluginIds,
   listPluginDoctorLegacyConfigRules,
@@ -1799,6 +1800,8 @@ export function loadConfig(): OpenClawConfig {
   // reparsing openclaw.json on hot code paths.
   return loadPinnedRuntimeConfig(() => createConfigIO().loadConfig());
 }
+
+registerLoggingConfigLoader(() => loadConfig().logging);
 
 export function getRuntimeConfig(): OpenClawConfig {
   return loadConfig();
