@@ -70,26 +70,33 @@ describe("resolvePnpmRunner", () => {
     });
   });
 
-  it("falls back to bare pnpm when npm_execpath points to a native pnpm binary", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "pnpm-runner-"));
-    const npmExecPath = path.join(tempDir, "pnpm");
-    writeFileSync(npmExecPath, Buffer.from([0x7f, 0x45, 0x4c, 0x46]));
+  it("treats uppercase pnpm script suffixes as node-launchable", () => {
+    expect(
+      resolvePnpmRunner({
+        npmExecPath: "C:\\Users\\test\\AppData\\Local\\pnpm\\pnpm.CJS",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        pnpmArgs: ["exec", "vitest", "run"],
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      args: ["C:\\Users\\test\\AppData\\Local\\pnpm\\pnpm.CJS", "exec", "vitest", "run"],
+      shell: false,
+    });
+  });
 
-    try {
-      expect(
-        resolvePnpmRunner({
-          npmExecPath,
-          pnpmArgs: ["exec", "vitest", "run"],
-          platform: "linux",
-        }),
-      ).toEqual({
-        command: "pnpm",
-        args: ["exec", "vitest", "run"],
-        shell: false,
-      });
-    } finally {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
+  it("executes native npm_execpath binaries directly on non-Windows", () => {
+    expect(
+      resolvePnpmRunner({
+        npmExecPath: "/home/test/.local/share/pnpm/pnpm",
+        pnpmArgs: ["exec", "vitest", "run"],
+        platform: "linux",
+      }),
+    ).toEqual({
+      command: "/home/test/.local/share/pnpm/pnpm",
+      args: ["exec", "vitest", "run"],
+      shell: false,
+    });
   });
 
   it("falls back to bare pnpm on non-Windows when npm_execpath is missing", () => {
@@ -119,6 +126,57 @@ describe("resolvePnpmRunner", () => {
       args: ["/d", "/s", "/c", 'pnpm.cmd exec vitest run -t "path with spaces"'],
       shell: false,
       windowsVerbatimArguments: true,
+    });
+  });
+
+  it("uses npm_execpath .cmd on Windows when available", () => {
+    expect(
+      resolvePnpmRunner({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        npmExecPath: "C:\\Users\\test\\AppData\\Local\\pnpm\\pnpm.cmd",
+        pnpmArgs: ["exec", "vitest", "run", "-t", "path with spaces"],
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        'call C:\\Users\\test\\AppData\\Local\\pnpm\\pnpm.cmd exec vitest run -t "path with spaces"',
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("supports special characters in npm_execpath .cmd Windows paths", () => {
+    expect(
+      resolvePnpmRunner({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        npmExecPath: "C:\\Users\\R&D\\100%real\\pnpm.cmd",
+        pnpmArgs: ["exec", "vitest", "run"],
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "call C:\\Users\\R^&D\\100%%real\\pnpm.cmd exec vitest run"],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("uses npm_execpath .exe on Windows when available", () => {
+    expect(
+      resolvePnpmRunner({
+        npmExecPath: "C:\\Users\\test\\AppData\\Local\\pnpm\\pnpm.exe",
+        pnpmArgs: ["exec", "vitest", "run"],
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Users\\test\\AppData\\Local\\pnpm\\pnpm.exe",
+      args: ["exec", "vitest", "run"],
+      shell: false,
     });
   });
 
