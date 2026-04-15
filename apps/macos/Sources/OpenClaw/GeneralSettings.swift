@@ -8,6 +8,8 @@ import SwiftUI
 struct GeneralSettings: View {
     @Bindable var state: AppState
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
+    @AppStorage("openclaw.geminiAPIKey") private var geminiAPIKey: String = ""
+    @AppStorage("openclaw.imageGenSaveFolder") private var imageGenSaveFolder: String = ""
     private let healthStore = HealthStore.shared
     private let gatewayManager = GatewayProcessManager.shared
     @State private var gatewayDiscovery = GatewayDiscoveryModel(
@@ -52,6 +54,50 @@ struct GeneralSettings: View {
                         subtitle: "Enable idle blinks and wiggles on the status icon.",
                         binding: self.$state.iconAnimationsEnabled)
 
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Gemini API Key")
+                            .font(.system(size: 12, weight: .medium))
+                        Text("Add Gemini API Key to enable image generation.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                        SecureField("Enter your Gemini API key", text: self.$geminiAPIKey)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 11, design: .monospaced))
+                    }
+                    .padding(.vertical, 4)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Image Save Folder")
+                            .font(.system(size: 12, weight: .medium))
+                        Text("Automatically save all generated images to this folder.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            TextField(
+                                "Not configured",
+                                text: self.$imageGenSaveFolder)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 11, design: .monospaced))
+                            Button("Browse…") {
+                                let panel = NSOpenPanel()
+                                panel.canChooseFiles = false
+                                panel.canChooseDirectories = true
+                                panel.allowsMultipleSelection = false
+                                panel.prompt = "Select Folder"
+                                if panel.runModal() == .OK, let url = panel.url {
+                                    self.imageGenSaveFolder = url.path
+                                }
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                    .padding(.vertical, 4)
+
+                    SettingsToggleRow(
+                        title: "Show system messages",
+                        subtitle: "Show internal system messages in the chat window.",
+                        binding: self.$state.showSystemMessages)
+
                     SettingsToggleRow(
                         title: "Allow Canvas",
                         subtitle: "Allow the agent to show and control the Canvas panel.",
@@ -66,6 +112,13 @@ struct GeneralSettings: View {
                         title: "Enable Peekaboo Bridge",
                         subtitle: "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
                         binding: self.$state.peekabooBridgeEnabled)
+
+                    if voiceWakeSupported {
+                        SettingsToggleRow(
+                            title: "Talk Mode",
+                            subtitle: "Enable hands-free voice conversation with your assistant.",
+                            binding: self.talkBinding)
+                    }
 
                     SettingsToggleRow(
                         title: "Enable debug tools",
@@ -99,6 +152,14 @@ struct GeneralSettings: View {
         Binding(
             get: { !self.state.isPaused },
             set: { self.state.isPaused = !$0 })
+    }
+
+    private var talkBinding: Binding<Bool> {
+        Binding(
+            get: { self.state.talkEnabled },
+            set: { newValue in
+                Task { await self.state.setTalkEnabled(newValue) }
+            })
     }
 
     private var connectionSection: some View {

@@ -20,8 +20,8 @@ enum OpenClawChatTheme {
         // NSColor semantic colors don't reliably resolve for arbitrary NSAppearance in SwiftPM.
         // Use explicit light/dark values so the bubble updates when the system appearance flips.
         appearance.isDarkAqua
-            ? NSColor(calibratedWhite: 0.18, alpha: 0.88)
-            : NSColor(calibratedWhite: 0.94, alpha: 0.92)
+            ? NSColor(calibratedRed: 0.235, green: 0.231, blue: 0.220, alpha: 0.88)
+            : NSColor(calibratedRed: 0.235, green: 0.231, blue: 0.220, alpha: 0.88)
     }
 
     static func resolvedOnboardingAssistantBubbleColor(for appearance: NSAppearance) -> NSColor {
@@ -101,7 +101,7 @@ enum OpenClawChatTheme {
     }
 
     static var userBubble: Color {
-        Color(red: 127 / 255.0, green: 184 / 255.0, blue: 212 / 255.0)
+        Color(red: 50 / 255.0, green: 53 / 255.0, blue: 57 / 255.0)
     }
 
     static var assistantBubble: Color {

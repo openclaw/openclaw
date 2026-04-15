@@ -144,8 +144,12 @@ struct ChatMessageBubble: View {
     let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
     let showsAssistantTrace: Bool
+    @AppStorage("openclaw.showSystemMessages") private var showSystemMessages: Bool = true
 
     var body: some View {
+        if self.isUser && self.isSystemUserMessage && !self.showSystemMessages {
+            EmptyView()
+        } else {
         ChatMessageBody(
             message: self.message,
             isUser: self.isUser,
@@ -153,12 +157,34 @@ struct ChatMessageBubble: View {
             markdownVariant: self.markdownVariant,
             userAccent: self.userAccent,
             showsAssistantTrace: self.showsAssistantTrace)
-            .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: self.isUser ? .trailing : .leading)
-            .frame(maxWidth: .infinity, alignment: self.isUser ? .trailing : .leading)
+            .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: self.bubbleAlignment)
+            .frame(maxWidth: .infinity, alignment: self.bubbleAlignment)
             .padding(.horizontal, 2)
+        }
     }
 
     private var isUser: Bool { self.message.role.lowercased() == "user" }
+
+    private var isSystemUserMessage: Bool {
+        guard self.isUser else { return false }
+        let text = self.message.content.compactMap { ($0.type ?? "text").lowercased() == "text" ? $0.text : nil }
+            .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return false }
+        return lines.allSatisfy { line in
+            line.hasPrefix("System:") ||
+            line.hasPrefix("An async command") ||
+            line.hasPrefix("Current time:") ||
+            line.hasPrefix("Handle the result internally")
+        }
+    }
+
+    private var bubbleAlignment: Alignment {
+        if self.isUser && self.isSystemUserMessage { return .leading }
+        return self.isUser ? .trailing : .leading
+    }
 }
 
 @MainActor
@@ -183,12 +209,16 @@ private struct ChatMessageBody: View {
                         isUser: self.isUser,
                         toolName: self.message.toolName)
                 }
+            } else if self.isUser, self.isSystemMessage(text) {
+                CollapsibleSystemMessage(text: text)
+            } else if self.isUser, self.isSystemMessage(text) {
+                CollapsibleSystemMessage(text: text)
             } else if self.isUser {
                 ChatMarkdownRenderer(
                     text: text,
                     context: .user,
                     variant: self.markdownVariant,
-                    font: .system(size: 14),
+                    font: .custom("Courier New", size: 12),
                     textColor: textColor)
             } else {
                 ChatAssistantTextBody(
@@ -235,6 +265,25 @@ private struct ChatMessageBody: View {
         .padding(.trailing, self.tailPaddingTrailing)
     }
 
+    private func isSystemMessage(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = trimmed.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return false }
+        return lines.allSatisfy { line in
+            line.hasPrefix("System:") ||
+            line.hasPrefix("An async command") ||
+            line.hasPrefix("Current time:") ||
+            line.hasPrefix("Handle the result internally")
+        }
+    }
+
+    private var isSystemContent: Bool {
+        guard self.isUser else { return false }
+        return self.isSystemMessage(self.primaryText)
+    }
+
     private var primaryText: String {
         let parts = self.message.content.compactMap { content -> String? in
             let kind = (content.type ?? "text").lowercased()
@@ -247,7 +296,7 @@ private struct ChatMessageBody: View {
     private var inlineAttachments: [OpenClawChatMessageContent] {
         self.message.content.filter { content in
             switch content.type ?? "text" {
-            case "file", "attachment":
+            case "file", "attachment", "image":
                 true
             default:
                 false
@@ -287,6 +336,9 @@ private struct ChatMessageBody: View {
     }
 
     private var bubbleFillColor: Color {
+        if self.isUser, self.isSystemContent {
+            return Color(red: 38 / 255.0, green: 39 / 255.0, blue: 42 / 255.0)
+        }
         if self.isUser {
             return self.userAccent ?? OpenClawChatTheme.userBubble
         }
@@ -354,19 +406,126 @@ private struct AttachmentRow: View {
     let att: OpenClawChatMessageContent
     let isUser: Bool
 
+    @State private var isHovered = false
+
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "paperclip")
-            Text(self.att.fileName ?? "Attachment")
-                .font(.footnote)
-                .lineLimit(1)
-                .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
-            Spacer()
+        if let image = self.decodedImage {
+            #if os(macOS)
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(maxHeight: 400)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+                .overlay(alignment: .bottomTrailing) {
+                    if self.isHovered {
+                        HStack(spacing: 6) {
+                            Button {
+                                let pb = NSPasteboard.general
+                                pb.clearContents()
+                                pb.writeObjects([image])
+                            } label: {
+                                Image(systemName: "doc.on.doc")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Copy Image")
+
+                            Button {
+                                self.saveImage(image)
+                            } label: {
+                                Image(systemName: "square.and.arrow.down")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Save Image…")
+                        }
+                        .foregroundStyle(.white)
+                        .padding(6)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .padding(8)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    }
+                }
+                .onHover { hovering in
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        self.isHovered = hovering
+                    }
+                }
+                .contextMenu {
+                    Button("Copy Image") {
+                        let pb = NSPasteboard.general
+                        pb.clearContents()
+                        pb.writeObjects([image])
+                    }
+                    Button("Save Image…") {
+                        self.saveImage(image)
+                    }
+                }
+            #else
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(maxHeight: 400)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            #endif
+        } else {
+            HStack(spacing: 8) {
+                Image(systemName: "paperclip")
+                Text(self.att.fileName ?? "Attachment")
+                    .font(.system(size: 11, design: .monospaced))
+                    .lineLimit(1)
+                    .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
+                Spacer()
+            }
+            .padding(10)
+            .background(self.isUser ? Color.white.opacity(0.2) : Color.black.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
-        .padding(10)
-        .background(self.isUser ? Color.white.opacity(0.2) : Color.black.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
+
+    private var decodedImage: OpenClawPlatformImage? {
+        guard let base64 = self.att.content?.value as? String,
+              let data = Data(base64Encoded: base64)
+        else { return nil }
+        #if os(macOS)
+        return NSImage(data: data)
+        #else
+        return UIImage(data: data)
+        #endif
+    }
+
+    #if os(macOS)
+    private func saveImage(_ image: NSImage) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.jpeg, .png]
+        panel.nameFieldStringValue = self.att.fileName ?? "generated_image.jpg"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+
+            // If saving as PNG and the raw data has OpenClaw metadata, write raw bytes
+            // to preserve the tEXt chunk (NSBitmapImageRep strips it during round-trip).
+            if url.pathExtension.lowercased() == "png",
+               let base64 = self.att.content?.value as? String,
+               let rawData = Data(base64Encoded: base64),
+               OpenClawImageMetadata.extractMetadata(from: rawData) != nil
+            {
+                try? rawData.write(to: url)
+                return
+            }
+
+            // Fallback: re-encode via NSBitmapImageRep (JPEG or PNG without metadata)
+            if let tiff = image.tiffRepresentation,
+               let rep = NSBitmapImageRep(data: tiff),
+               let data = rep.representation(using: url.pathExtension == "png" ? .png : .jpeg, properties: [:])
+            {
+                try? data.write(to: url)
+            }
+        }
+    }
+    #endif
 }
 
 private struct ToolCallCard: View {
@@ -377,13 +536,13 @@ private struct ToolCallCard: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text(self.toolName)
-                    .font(.footnote.weight(.semibold))
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 Spacer(minLength: 0)
             }
 
             if let summary = self.summary, !summary.isEmpty {
                 Text(summary)
-                    .font(.footnote.monospaced())
+                    .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
@@ -422,12 +581,12 @@ private struct ToolResultCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     Text(self.title)
-                        .font(.footnote.weight(.semibold))
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     Spacer(minLength: 0)
                 }
 
                 Text(self.displayText)
-                    .font(.footnote.monospaced())
+                    .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
                     .lineLimit(self.expanded ? nil : Self.previewLineLimit)
 
@@ -436,7 +595,7 @@ private struct ToolResultCard: View {
                         self.expanded.toggle()
                     }
                     .buttonStyle(.plain)
-                    .font(.caption)
+                    .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.secondary)
                 }
             }
@@ -475,11 +634,17 @@ struct ChatTypingIndicatorBubble: View {
     let style: OpenClawChatView.Style
 
     var body: some View {
-        HStack(spacing: 10) {
-            TypingDots()
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(Color(red: 1.0, green: 0.75, blue: 0.2))
+            Text("⏳ thinking…")
+                .font(.custom("Courier New Bold", size: 10))
+                .foregroundStyle(Color(red: 1.0, green: 0.75, blue: 0.2))
+            ElapsedTimerView()
             Spacer(minLength: 0)
         }
-        .padding(.vertical, self.style == .standard ? 12 : 10)
+        .padding(.vertical, self.style == .standard ? 8 : 6)
         .padding(.horizontal, self.style == .standard ? 12 : 14)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -495,6 +660,91 @@ struct ChatTypingIndicatorBubble: View {
 extension ChatTypingIndicatorBubble: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.style == rhs.style
+    }
+}
+
+// MARK: - Image Generation Progress Bubble
+
+@MainActor
+struct ChatImageGenProgressBubble: View {
+    let phase: String
+    let style: OpenClawChatView.Style
+
+    @State private var shimmerOffset: CGFloat = -1
+
+    private static let accentColor = Color(red: 0.6, green: 0.4, blue: 1.0) // purple tint for image gen
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(Self.accentColor)
+            Text("🎨 \(self.phase)")
+                .font(.custom("Courier New Bold", size: 10))
+                .foregroundStyle(Self.accentColor)
+            ElapsedTimerView()
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, self.style == .standard ? 8 : 6)
+        .padding(.horizontal, self.style == .standard ? 12 : 14)
+        .background(
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(OpenClawChatTheme.assistantBubble)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Self.accentColor.opacity(0),
+                                Self.accentColor.opacity(0.08),
+                                Self.accentColor.opacity(0),
+                            ],
+                            startPoint: UnitPoint(x: self.shimmerOffset, y: 0.5),
+                            endPoint: UnitPoint(x: self.shimmerOffset + 0.4, y: 0.5)))
+            })
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Self.accentColor.opacity(0.15), lineWidth: 1))
+        .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+        .focusable(false)
+        .onAppear {
+            withAnimation(.linear(duration: 1.8).repeatForever(autoreverses: false)) {
+                self.shimmerOffset = 1.4
+            }
+        }
+    }
+}
+
+extension ChatImageGenProgressBubble: @MainActor Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.phase == rhs.phase && lhs.style == rhs.style
+    }
+}
+
+@MainActor
+private struct ElapsedTimerView: View {
+    @State private var elapsed: TimeInterval = 0
+    @State private var startDate = Date()
+    private let timer = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Text(self.formattedTime)
+            .font(.custom("Courier New", size: 10))
+            .foregroundStyle(Color.secondary.opacity(0.6))
+            .onReceive(self.timer) { _ in
+                self.elapsed = Date().timeIntervalSince(self.startDate)
+            }
+    }
+
+    private var formattedTime: String {
+        let secs = Int(self.elapsed)
+        let tenths = Int((self.elapsed - Double(secs)) * 10)
+        if secs < 60 {
+            return String(format: "%d.%ds", secs, tenths)
+        }
+        let mins = secs / 60
+        let remainSecs = secs % 60
+        return String(format: "%d:%02d", mins, remainSecs)
     }
 }
 
@@ -535,34 +785,31 @@ struct ChatPendingToolsBubble: View {
     let toolCalls: [OpenClawChatPendingToolCall]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Running tools…", systemImage: "hammer")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
+        VStack(alignment: .leading, spacing: 6) {
             ForEach(self.toolCalls) { call in
                 let display = ToolDisplayRegistry.resolve(name: call.name, args: call.args)
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("\(display.emoji) \(display.label)")
-                            .font(.footnote.monospaced())
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                        ProgressView().controlSize(.mini)
-                    }
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(Color(red: 1.0, green: 0.75, blue: 0.2))
+                    Text("\(display.emoji) \(display.label)")
+                        .font(.custom("Courier New Bold", size: 10))
+                        .foregroundStyle(Color(red: 1.0, green: 0.75, blue: 0.2))
                     if let detail = display.detailLine, !detail.isEmpty {
                         Text(detail)
-                            .font(.caption.monospaced())
+                            .font(.custom("Courier New", size: 9))
                             .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    if let startedAt = call.startedAt {
+                        ToolElapsedView(startedAt: startedAt)
                     }
                 }
-                .padding(10)
-                .background(Color.white.opacity(0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         }
-        .padding(12)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
         .assistantBubbleContainerStyle()
     }
 }
@@ -572,6 +819,26 @@ extension ChatPendingToolsBubble: @MainActor Equatable {
         lhs.toolCalls == rhs.toolCalls
     }
 }
+
+@MainActor
+private struct ToolElapsedView: View {
+    let startedAt: Double
+    @State private var elapsed: TimeInterval = 0
+    private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+    var body: some View {
+        Text(self.formattedTime)
+            .font(.custom("Courier New", size: 9))
+            .foregroundStyle(Color.secondary.opacity(0.5))
+            .onAppear { self.elapsed = max(0, Date().timeIntervalSince1970 - self.startedAt / 1000) }
+            .onReceive(self.timer) { _ in self.elapsed = max(0, Date().timeIntervalSince1970 - self.startedAt / 1000) }
+    }
+    private var formattedTime: String {
+        let secs = Int(self.elapsed)
+        if secs < 60 { return "\(secs)s" }
+        return String(format: "%d:%02d", secs / 60, secs % 60)
+    }
+}
+
 
 @MainActor
 private struct TypingDots: View {
@@ -613,6 +880,53 @@ private struct TypingDots: View {
     }
 }
 
+@MainActor
+private struct CollapsibleSystemMessage: View {
+    let text: String
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button(action: { withAnimation(.easeInOut(duration: 0.2)) { self.isExpanded.toggle() } }) {
+                HStack(spacing: 6) {
+                    Image(systemName: self.isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(Color.secondary.opacity(0.6))
+                        .frame(width: 10)
+                    Image(systemName: "terminal")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.secondary.opacity(0.5))
+                    Text(self.previewText)
+                        .font(.custom("Courier New", size: 10))
+                        .foregroundStyle(Color.secondary.opacity(0.6))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if self.isExpanded {
+                Text(self.text)
+                    .font(.custom("Courier New", size: 10))
+                    .foregroundStyle(Color.secondary.opacity(0.7))
+                    .textSelection(.enabled)
+                    .padding(.leading, 16)
+            }
+        }
+    }
+
+    private var previewText: String {
+        let firstLine = self.text.components(separatedBy: .newlines).first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? "System message"
+        let cleaned = firstLine
+            .replacingOccurrences(of: "System: ", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.count > 60 {
+            return String(cleaned.prefix(60)) + "…"
+        }
+        return cleaned
+    }
+}
+
 private struct ChatAssistantTextBody: View {
     let text: String
     let markdownVariant: ChatMarkdownVariant
@@ -622,7 +936,7 @@ private struct ChatAssistantTextBody: View {
         let segments = AssistantTextParser.segments(from: self.text, includeThinking: self.includesThinking)
         VStack(alignment: .leading, spacing: 10) {
             ForEach(segments) { segment in
-                let font = segment.kind == .thinking ? Font.system(size: 14).italic() : Font.system(size: 14)
+                let font = segment.kind == .thinking ? Font.custom("Courier New Italic", size: 12) : Font.custom("Courier New", size: 12)
                 ChatMarkdownRenderer(
                     text: segment.text,
                     context: .assistant,

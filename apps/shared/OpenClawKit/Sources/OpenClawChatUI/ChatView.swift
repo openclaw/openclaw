@@ -17,6 +17,8 @@ public struct OpenClawChatView: View {
     @State private var hasPerformedInitialScroll = false
     @State private var isPinnedToBottom = true
     @State private var lastUserMessageID: UUID?
+    @State private var composerHeight: CGFloat = 150
+    @State private var composerDragStart: CGFloat?
     private let showsSessionSwitcher: Bool
     private let style: Style
     private let markdownVariant: ChatMarkdownVariant
@@ -68,18 +70,66 @@ public struct OpenClawChatView: View {
                     .ignoresSafeArea()
             }
 
-            VStack(spacing: Layout.stackSpacing) {
-                self.messageList
-                    .padding(.horizontal, Layout.outerPaddingHorizontal)
-                OpenClawChatComposer(
-                    viewModel: self.viewModel,
-                    style: self.style,
-                    showsSessionSwitcher: self.showsSessionSwitcher)
-                    .padding(.horizontal, Layout.composerPaddingHorizontal)
+            GeometryReader { geo in
+                let handleH: CGFloat = 15
+                let padV = Layout.outerPaddingVertical * 2
+                let listH = max(100, geo.size.height - padV - handleH - self.composerHeight)
+
+                VStack(spacing: 0) {
+                    self.messageList
+                        .padding(.horizontal, Layout.outerPaddingHorizontal)
+                        .frame(height: listH)
+                        .clipped()
+
+                    // ── Resize handle ──
+                    VStack(spacing: 0) {
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.15))
+                            .frame(height: 1)
+                        HStack(spacing: 3) {
+                            ForEach(0..<3, id: \.self) { _ in
+                                RoundedRectangle(cornerRadius: 1)
+                                    .fill(Color.primary.opacity(0.3))
+                                    .frame(width: 20, height: 3)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 14)
+                    }
+                    .frame(height: handleH)
+                    .contentShape(Rectangle())
+                    #if os(macOS)
+                    .onHover { inside in
+                        if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+                    }
+                    #endif
+                    .highPriorityGesture(
+                        DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                            .onChanged { value in
+                                if self.composerDragStart == nil {
+                                    self.composerDragStart = self.composerHeight
+                                }
+                                let minH: CGFloat = 80
+                                let maxH: CGFloat = geo.size.height - padV - handleH - 100
+                                let proposed = (self.composerDragStart ?? 150) - value.translation.height
+                                self.composerHeight = min(maxH, max(minH, proposed))
+                            }
+                            .onEnded { _ in
+                                self.composerDragStart = nil
+                            }
+                    )
+
+                    // ── Composer ──
+                    OpenClawChatComposer(
+                        viewModel: self.viewModel,
+                        style: self.style,
+                        showsSessionSwitcher: self.showsSessionSwitcher)
+                        .padding(.horizontal, Layout.composerPaddingHorizontal)
+                        .frame(height: self.composerHeight)
+                }
+                .padding(.vertical, Layout.outerPaddingVertical)
             }
-            .padding(.vertical, Layout.outerPaddingVertical)
-            .frame(maxWidth: .infinity)
-            .frame(maxHeight: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { self.viewModel.load() }
@@ -200,7 +250,13 @@ public struct OpenClawChatView: View {
                     alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
         }
 
-        if self.viewModel.pendingRunCount > 0 {
+        if let phase = self.viewModel.imageGenPhase {
+            HStack {
+                ChatImageGenProgressBubble(phase: phase, style: self.style)
+                    .equatable()
+                Spacer(minLength: 0)
+            }
+        } else if self.viewModel.pendingRunCount > 0 {
             HStack {
                 ChatTypingIndicatorBubble(style: self.style)
                     .equatable()

@@ -1,6 +1,25 @@
 import SwiftUI
 import Textual
 
+// Custom StructuredText style based on gitHub but with apricot inline code background
+private struct ApricotStyle: StructuredText.Style {
+    let inlineStyle: InlineStyle = InlineStyle()
+        .code(.monospaced, .foregroundColor(Color(red: 1.0, green: 0.75, blue: 0.2)))
+        .strong(.fontWeight(.semibold))
+        .link(.foregroundColor(Color(red: 0.6, green: 0.4, blue: 1.0)))
+    let headingStyle: StructuredText.GitHubHeadingStyle = .gitHub
+    let paragraphStyle: StructuredText.GitHubParagraphStyle = .gitHub
+    let blockQuoteStyle: StructuredText.GitHubBlockQuoteStyle = .gitHub
+    let codeBlockStyle: StructuredText.GitHubCodeBlockStyle = .gitHub
+    let listItemStyle: StructuredText.DefaultListItemStyle = .default
+    let unorderedListMarker: StructuredText.HierarchicalSymbolListMarker = .hierarchical(.disc, .circle, .square)
+    let orderedListMarker: StructuredText.DecimalListMarker = .decimal
+    let tableStyle: StructuredText.GitHubTableStyle = .gitHub
+    let tableCellStyle: StructuredText.GitHubTableCellStyle = .gitHub
+    let thematicBreakStyle: StructuredText.GitHubThematicBreakStyle = .gitHub
+}
+
+
 public enum ChatMarkdownVariant: String, CaseIterable, Sendable {
     case standard
     case compact
@@ -47,17 +66,15 @@ private struct ChatMarkdownStyle: ViewModifier {
             if self.variant == .compact {
                 content.textual.structuredTextStyle(.default)
             } else {
-                content.textual.structuredTextStyle(.gitHub)
+                content.textual.structuredTextStyle(ApricotStyle())
             }
         }
         .font(self.font)
-        .foregroundStyle(self.textColor)
-        .textual.inlineStyle(self.inlineStyle)
         .textual.textSelection(.enabled)
     }
 
     private var inlineStyle: InlineStyle {
-        let linkColor: Color = self.context == .user ? self.textColor : .accentColor
+        let linkColor: Color = self.context == .user ? self.textColor : Color(red: 0.6, green: 0.4, blue: 1.0)
         let codeScale: CGFloat = self.variant == .compact ? 0.85 : 0.9
         return InlineStyle()
             .code(.monospaced, .fontScale(codeScale))

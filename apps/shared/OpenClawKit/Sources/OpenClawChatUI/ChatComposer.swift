@@ -32,7 +32,14 @@ struct OpenClawChatComposer: View {
                     if self.viewModel.showsModelPicker {
                         self.modelPicker
                     }
-                    self.thinkingPicker
+                    if self.viewModel.showsImageResolutionPicker {
+                        self.imageResolutionPicker
+                        self.imageAspectRatioPicker
+                        self.imageVariationsPicker
+                    }
+                    if !self.viewModel.showsImageResolutionPicker {
+                        self.thinkingPicker
+                    }
                     Spacer()
                     self.refreshButton
                     self.attachmentPicker
@@ -85,6 +92,27 @@ struct OpenClawChatComposer: View {
         .onAppear {
             self.shouldFocusTextView = true
         }
+        .alert("Large File",
+               isPresented: Binding(
+                   get: { self.viewModel.pendingLargeFile != nil },
+                   set: { if !$0 { self.viewModel.pendingLargeFile = nil } }))
+        {
+            Button("Upload via File API") {
+                if let file = self.viewModel.pendingLargeFile {
+                    // TODO: Implement Google File API upload
+                    self.viewModel.errorText = "Google File API upload not yet implemented — file too large (\(file.sizeMB) MB)"
+                    self.viewModel.pendingLargeFile = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                self.viewModel.pendingLargeFile = nil
+            }
+        } message: {
+            if let file = self.viewModel.pendingLargeFile {
+                Text("\(file.fileName) is \(file.sizeMB) MB — exceeds the 20 MB inline limit.\nUpload via Google File API?")
+            }
+        }
+        .modifier(MetadataRestoreAlert(viewModel: self.viewModel))
         #endif
     }
 
@@ -106,7 +134,7 @@ struct OpenClawChatComposer: View {
         .labelsHidden()
         .pickerStyle(.menu)
         .controlSize(.small)
-        .frame(maxWidth: 140, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var modelPicker: some View {
@@ -117,15 +145,78 @@ struct OpenClawChatComposer: View {
                 set: { next in self.viewModel.selectModel(next) }))
         {
             Text(self.viewModel.defaultModelLabel).tag(OpenClawChatViewModel.defaultModelSelectionID)
-            ForEach(self.viewModel.modelChoices) { model in
-                Text(model.displayLabel).tag(model.selectionID)
+            ForEach(self.viewModel.filteredModelChoices) { model in
+                Text(self.viewModel.friendlyName(for: model)).tag(model.selectionID)
             }
         }
         .labelsHidden()
         .pickerStyle(.menu)
         .controlSize(.small)
-        .frame(maxWidth: 240, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .help("Model")
+    }
+
+    private var imageResolutionPicker: some View {
+        Picker(
+            "Resolution",
+            selection: Binding(
+                get: { self.viewModel.imageResolution },
+                set: { next in self.viewModel.imageResolution = next }))
+        {
+            Text("0.5K").tag("0.5K")
+            Text("1K").tag("1K")
+            Text("2K").tag("2K")
+            Text("4K").tag("4K")
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help("Output resolution")
+    }
+
+    private var imageAspectRatioPicker: some View {
+        Picker(
+            "Aspect Ratio",
+            selection: Binding(
+                get: { self.viewModel.imageAspectRatio },
+                set: { next in self.viewModel.imageAspectRatio = next }))
+        {
+            Text("1:1").tag("1:1")
+            Text("3:2").tag("3:2")
+            Text("2:3").tag("2:3")
+            Text("3:4").tag("3:4")
+            Text("4:3").tag("4:3")
+            Text("4:5").tag("4:5")
+            Text("5:4").tag("5:4")
+            Text("9:16").tag("9:16")
+            Text("16:9").tag("16:9")
+            Text("21:9").tag("21:9")
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help("Aspect ratio")
+    }
+
+    private var imageVariationsPicker: some View {
+        Picker(
+            "Variations",
+            selection: Binding(
+                get: { self.viewModel.imageVariations },
+                set: { next in self.viewModel.imageVariations = next }))
+        {
+            Text("1 Image").tag(1)
+            Text("2 Images").tag(2)
+            Text("3 Images").tag(3)
+            Text("4 Images").tag(4)
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help("Number of image variations to generate")
     }
 
     private var sessionPicker: some View {
@@ -144,7 +235,7 @@ struct OpenClawChatComposer: View {
         .labelsHidden()
         .pickerStyle(.menu)
         .controlSize(.small)
-        .frame(maxWidth: 160, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .help("Session")
     }
 
@@ -280,6 +371,9 @@ struct OpenClawChatComposer: View {
                 },
                 onPasteImageAttachment: { data, fileName, mimeType in
                     self.viewModel.addImageAttachment(data: data, fileName: fileName, mimeType: mimeType)
+                },
+                onDropFileURLs: { urls in
+                    self.viewModel.addAttachments(urls: urls)
                 })
             .frame(minHeight: self.textMinHeight, idealHeight: self.textMinHeight, maxHeight: self.textMaxHeight)
             .padding(.horizontal, 4)
@@ -373,7 +467,11 @@ struct OpenClawChatComposer: View {
     }
 
     private var textMaxHeight: CGFloat {
+        #if os(macOS)
+        self.style == .onboarding ? 52 : .infinity
+        #else
         self.style == .onboarding ? 52 : 64
+        #endif
     }
 
     private var isComposerCompacted: Bool {
@@ -440,6 +538,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
     @Binding var shouldFocus: Bool
     var onSend: () -> Void
     var onPasteImageAttachment: (_ data: Data, _ fileName: String, _ mimeType: String) -> Void
+    var onDropFileURLs: (([URL]) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -452,7 +551,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
         textView.isAutomaticTextReplacementEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.font = .systemFont(ofSize: 14, weight: .regular)
+        textView.font = .systemFont(ofSize: 13, weight: .regular)
         textView.textContainer?.lineBreakMode = .byWordWrapping
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainerInset = NSSize(width: 2, height: 4)
@@ -472,6 +571,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
             self.onSend()
         }
         textView.onPasteImageAttachment = self.onPasteImageAttachment
+        textView.onDropFileURLs = self.onDropFileURLs
 
         let scroll = NSScrollView()
         scroll.drawsBackground = false
@@ -487,6 +587,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? ChatComposerNSTextView else { return }
         textView.onPasteImageAttachment = self.onPasteImageAttachment
+        textView.onDropFileURLs = self.onDropFileURLs
 
         if self.shouldFocus, let window = scrollView.window {
             window.makeFirstResponder(textView)
@@ -495,10 +596,12 @@ private struct ChatComposerTextView: NSViewRepresentable {
 
         let isEditing = scrollView.window?.firstResponder == textView
 
-        // Always allow clearing the text (e.g. after send), even while editing.
+        // Always allow clearing the text (e.g. after send) or filling empty field
+        // (e.g. metadata restore), even while editing.
         // Only skip other updates while editing to avoid cursor jumps.
         let shouldClear = self.text.isEmpty && !textView.string.isEmpty
-        if isEditing, !shouldClear { return }
+        let shouldFill = !self.text.isEmpty && textView.string.isEmpty
+        if isEditing, !shouldClear, !shouldFill { return }
 
         if textView.string != self.text {
             context.coordinator.isProgrammaticUpdate = true
@@ -525,6 +628,19 @@ private struct ChatComposerTextView: NSViewRepresentable {
 private final class ChatComposerNSTextView: NSTextView {
     var onSend: (() -> Void)?
     var onPasteImageAttachment: ((_ data: Data, _ fileName: String, _ mimeType: String) -> Void)?
+    /// Callback to route dropped file URLs to the attachment handler instead of inserting as text.
+    var onDropFileURLs: (([URL]) -> Void)?
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        let pboard = sender.draggingPasteboard
+        if let urls = pboard.readObjects(forClasses: [NSURL.self], options: [
+            .urlReadingFileURLsOnly: true
+        ]) as? [URL], !urls.isEmpty, let handler = self.onDropFileURLs {
+            handler(urls)
+            return true
+        }
+        return super.performDragOperation(sender)
+    }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         var types = super.readablePasteboardTypes
@@ -532,6 +648,20 @@ private final class ChatComposerNSTextView: NSTextView {
             types.append(type)
         }
         return types
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Ensure Option+key combos (e.g. @ on German keyboard = Option+L) are handled
+        // by the text view, not intercepted by toolbar/menu bar.
+        // Only intercept if it produces a character and doesn't involve Command.
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.option) && !flags.contains(.command),
+           let chars = event.characters, !chars.isEmpty
+        {
+            self.interpretKeyEvents([event])
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -755,6 +885,57 @@ enum ChatComposerPasteSupport {
 
     private static func defaultFileName(index: Int, ext: String) -> String {
         "pasted-image-\(index + 1).\(ext)"
+    }
+}
+#endif
+
+// MARK: - Metadata Restore Alert (extracted to help Swift type-checker)
+
+#if os(macOS)
+private struct MetadataRestoreAlert: ViewModifier {
+    @Bindable var viewModel: OpenClawChatViewModel
+
+    func body(content: Content) -> some View {
+        content
+            .alert(
+                "Generation Settings Detected",
+                isPresented: Binding(
+                    get: { self.viewModel.pendingMetadataRestore != nil },
+                    set: { if !$0 { self.viewModel.dismissMetadataRestore() } }
+                )
+            ) {
+                Button("Restore Settings") {
+                    self.viewModel.applyRestoredGenParams()
+                }
+                Button("Use as Input Only") {
+                    self.viewModel.useDroppedImageAsInput()
+                }
+                Button("Cancel", role: .cancel) {
+                    self.viewModel.dismissMetadataRestore()
+                }
+            } message: {
+                Text(self.metadataAlertMessage)
+            }
+    }
+
+    private var metadataAlertMessage: String {
+        guard let pending = self.viewModel.pendingMetadataRestore else {
+            return ""
+        }
+        let p = pending.params
+        let promptExcerpt = p.prompt.count > 60
+            ? String(p.prompt.prefix(57)) + "…"
+            : p.prompt
+        return """
+        This image was generated with OpenClaw.
+
+        Model: \(p.model)
+        Resolution: \(p.resolution) · \(p.aspectRatio)
+        Variations: \(p.variations)
+        Prompt: "\(promptExcerpt)"
+
+        Restore all settings, or use as input for a new generation?
+        """
     }
 }
 #endif

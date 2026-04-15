@@ -154,8 +154,13 @@ struct OpenClawApp: App {
         handler.onRightClick = { [self] in
             HoverHUDController.shared.dismiss(reason: "statusItemRightClick")
             WebChatManager.shared.closePanel()
-            self.isMenuPresented = true
-            self.updateStatusHighlight()
+            WebChatManager.shared.closeWindow()
+            // Deactivate the app briefly so MenuBarExtra menu can appear
+            // (SwiftUI menu won't show while an NSWindow is key)
+            DispatchQueue.main.async {
+                self.isMenuPresented = true
+                self.updateStatusHighlight()
+            }
         }
         handler.onHoverChanged = { [self] inside in
             HoverHUDController.shared.statusItemHoverChanged(
@@ -178,9 +183,7 @@ struct OpenClawApp: App {
         self.isMenuPresented = false
         Task { @MainActor in
             let sessionKey = await WebChatManager.shared.preferredSessionKey()
-            WebChatManager.shared.togglePanel(
-                sessionKey: sessionKey,
-                anchorProvider: { [self] in self.statusButtonScreenFrame() })
+            WebChatManager.shared.toggleWindow(sessionKey: sessionKey)
         }
     }
 

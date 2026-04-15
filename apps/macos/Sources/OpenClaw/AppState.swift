@@ -187,6 +187,10 @@ final class AppState {
         didSet { self.syncGatewayConfigIfNeeded() }
     }
 
+    var showSystemMessages: Bool {
+        didSet { self.ifNotPreview { UserDefaults.standard.set(self.showSystemMessages, forKey: "openclaw.showSystemMessages") } }
+    }
+
     var canvasEnabled: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.canvasEnabled, forKey: canvasEnabledKey) } }
     }
@@ -330,6 +334,7 @@ final class AppState {
         self.remoteIdentity = UserDefaults.standard.string(forKey: remoteIdentityKey) ?? ""
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey) ?? ""
+        self.showSystemMessages = UserDefaults.standard.object(forKey: "openclaw.showSystemMessages") as? Bool ?? true
         self.canvasEnabled = UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
         let execDefaults = ExecApprovalsStore.resolveDefaults()
         self.execApprovalMode = ExecApprovalQuickMode.from(security: execDefaults.security, ask: execDefaults.ask)
@@ -351,7 +356,12 @@ final class AppState {
 
         if !self.isPreview {
             Task { await VoiceWakeRuntime.shared.refresh(state: self) }
-            Task { await TalkModeController.shared.setEnabled(self.talkEnabled) }
+            // Defer TalkModeController init to next run loop iteration to prevent
+            // re-entrant access to AppStateStore.shared during init (#36983).
+            let savedTalkEnabled = self.talkEnabled
+            DispatchQueue.main.async {
+                Task { await TalkModeController.shared.setEnabled(savedTalkEnabled) }
+            }
         }
 
         self.isInitializing = false
