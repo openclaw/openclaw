@@ -608,6 +608,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("message: Send messages and channel actions");
     expect(prompt).toContain("### message tool");
     expect(prompt).toContain(`respond with ONLY: ${SILENT_REPLY_TOKEN}`);
+    expect(prompt).toContain(
+      "if the current channel or chosen `channel` has a paired/default recipient, you may omit `to`",
+    );
   });
 
   it("reapplies provider prompt contributions", () => {

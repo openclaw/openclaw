@@ -7,6 +7,7 @@ import {
   slackConfig,
   slackTestPlugin,
   telegramTestPlugin,
+  whatsappTestPlugin,
 } from "./message-action-runner.test-helpers.js";
 
 describe("runMessageAction send validation", () => {
@@ -22,6 +23,20 @@ describe("runMessageAction send validation", () => {
           pluginId: "telegram",
           source: "test",
           plugin: telegramTestPlugin,
+        },
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: {
+            ...whatsappTestPlugin,
+            config: {
+              ...whatsappTestPlugin.config,
+              resolveDefaultTo: ({ cfg }) =>
+                typeof cfg.channels?.whatsapp?.defaultTo === "string"
+                  ? cfg.channels.whatsapp.defaultTo
+                  : undefined,
+            },
+          },
         },
       ]),
     );
@@ -82,6 +97,29 @@ describe("runMessageAction send validation", () => {
     });
 
     expect(result.kind).toBe("send");
+  });
+
+  it("allows target-less WhatsApp sends when defaultTo is configured", async () => {
+    const result = await runDrySend({
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15551234567"],
+            defaultTo: "+15551234567",
+          },
+        },
+      } as OpenClawConfig,
+      actionParams: {
+        channel: "whatsapp",
+        message: "hello",
+      },
+    });
+
+    expect(result.kind).toBe("send");
+    if (result.kind !== "send") {
+      throw new Error("expected send result");
+    }
+    expect(result.to).toBe("+15551234567");
   });
 
   it.each([

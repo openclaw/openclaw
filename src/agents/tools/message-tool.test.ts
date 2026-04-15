@@ -208,6 +208,7 @@ function createChannelPlugin(params: {
   capabilities?: readonly ChannelMessageCapability[];
   toolSchema?: MessageToolSchema | ((params: MessageToolDiscoveryContext) => MessageToolSchema);
   describeMessageTool?: DescribeMessageTool;
+  config?: ChannelPlugin["config"];
   messaging?: ChannelPlugin["messaging"];
 }): ChannelPlugin {
   return {
@@ -221,10 +222,12 @@ function createChannelPlugin(params: {
       aliases: params.aliases,
     },
     capabilities: { chatTypes: ["direct", "group"], media: true },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({}),
-    },
+    config:
+      params.config ??
+      {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({}),
+      },
     ...(params.messaging ? { messaging: params.messaging } : {}),
     actions: {
       describeMessageTool:
@@ -987,6 +990,89 @@ describe("message tool description", () => {
 
     expect(tool.description).toContain("Current channel (bluebubbles) supports:");
     expect(tool.description).not.toContain("Other configured channels");
+  });
+
+  it("mentions default-target sends for the current channel when configured", () => {
+    const whatsappPlugin = createChannelPlugin({
+      id: "whatsapp",
+      label: "WhatsApp",
+      docsPath: "/channels/whatsapp",
+      blurb: "WhatsApp test plugin.",
+      actions: ["send", "react"],
+      config: {
+        resolveDefaultTo: ({ cfg }: { cfg: OpenClawConfig }) =>
+          typeof cfg.channels?.whatsapp?.defaultTo === "string"
+            ? cfg.channels.whatsapp.defaultTo
+            : undefined,
+      },
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: whatsappPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {
+        channels: {
+          whatsapp: {
+            defaultTo: "+15551234567",
+          },
+        },
+      } as OpenClawConfig,
+      currentChannelProvider: "whatsapp",
+    });
+
+    expect(tool.description).toContain(
+      "Current channel has a default delivery target, so send/poll can omit target/to",
+    );
+  });
+
+  it("mentions configured channels with default targets outside the current chat channel", () => {
+    const whatsappPlugin = createChannelPlugin({
+      id: "whatsapp",
+      label: "WhatsApp",
+      docsPath: "/channels/whatsapp",
+      blurb: "WhatsApp test plugin.",
+      actions: ["send", "react"],
+      config: {
+        resolveDefaultTo: ({ cfg }: { cfg: OpenClawConfig }) =>
+          typeof cfg.channels?.whatsapp?.defaultTo === "string"
+            ? cfg.channels.whatsapp.defaultTo
+            : undefined,
+      },
+    });
+    const webchatPlugin = createChannelPlugin({
+      id: "webchat",
+      label: "WebChat",
+      docsPath: "/channels/webchat",
+      blurb: "WebChat test plugin.",
+      actions: ["send"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "webchat", source: "test", plugin: webchatPlugin },
+        { pluginId: "whatsapp", source: "test", plugin: whatsappPlugin },
+      ]),
+    );
+
+    const tool = createMessageTool({
+      config: {
+        channels: {
+          whatsapp: {
+            defaultTo: "+15551234567",
+          },
+        },
+      } as OpenClawConfig,
+      currentChannelProvider: "webchat",
+    });
+
+    expect(tool.description).toContain(
+      "Configured channels with a default delivery target: whatsapp.",
+    );
+    expect(tool.description).toContain(
+      "When you choose one of them with channel, send/poll can omit target/to",
+    );
   });
 
   it("includes the thread read hint when the current channel supports read", () => {

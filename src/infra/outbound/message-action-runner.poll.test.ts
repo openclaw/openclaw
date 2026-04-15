@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 
@@ -54,6 +57,10 @@ const telegramPollTestPlugin: ChannelPlugin = {
     listAccountIds: () => ["default"],
     resolveAccount: () => ({ botToken: "telegram-test" }),
     isConfigured: () => true,
+    resolveDefaultTo: ({ cfg }) =>
+      typeof cfg.channels?.telegram?.defaultTo === "string"
+        ? cfg.channels.telegram.defaultTo
+        : undefined,
   },
   outbound: {
     deliveryMode: "gateway",
@@ -128,7 +135,9 @@ describe("runMessageAction poll handling", () => {
     mocks.resolveOutboundChannelPlugin.mockReset();
     mocks.resolveOutboundChannelPlugin.mockImplementation(
       ({ channel }: { channel: string }) =>
-        getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
+        getActivePluginRegistry()?.channels.find(
+          (entry) => entry?.plugin?.id === channel,
+        )?.plugin,
     );
     mocks.executePollAction.mockReset();
     mocks.executePollAction.mockImplementation(async (input) => ({
@@ -206,5 +215,25 @@ describe("runMessageAction poll handling", () => {
     });
 
     expect(call?.maxSelections).toBe(1);
+  });
+
+  it("allows target-less polls when telegram defaultTo is configured", async () => {
+    const call = await runPollAction({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "telegram-test",
+            defaultTo: "123456789",
+          },
+        },
+      } as OpenClawConfig,
+      actionParams: {
+        channel: "telegram",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+    });
+
+    expect(call?.to).toBe("123456789");
   });
 });

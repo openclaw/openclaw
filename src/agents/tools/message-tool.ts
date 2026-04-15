@@ -581,6 +581,16 @@ function buildMessageToolDescription(options?: {
       if (otherChannels.length > 0) {
         desc += ` Other configured channels: ${otherChannels.join(", ")}.`;
       }
+      desc += buildDefaultTargetHint({
+        config: resolvedOptions.config,
+        currentChannel,
+        currentAccountId: resolvedOptions.currentAccountId,
+      });
+      desc += buildConfiguredChannelDefaultTargetHint({
+        config: resolvedOptions.config,
+        currentChannel,
+        currentAccountId: resolvedOptions.currentAccountId,
+      });
 
       return appendMessageToolReadHint(
         desc,
@@ -594,13 +604,70 @@ function buildMessageToolDescription(options?: {
     const actions = listAllMessageToolActions(messageToolDiscoveryParams);
     if (actions.length > 0) {
       return appendMessageToolReadHint(
-        `${baseDescription} Supports actions: ${actions.join(", ")}.`,
+        `${baseDescription} Supports actions: ${actions.join(", ")}.${buildDefaultTargetHint({
+          config: resolvedOptions.config,
+          currentChannel,
+          currentAccountId: resolvedOptions.currentAccountId,
+        })}${buildConfiguredChannelDefaultTargetHint({
+          config: resolvedOptions.config,
+          currentChannel,
+          currentAccountId: resolvedOptions.currentAccountId,
+        })}`,
         actions,
       );
     }
   }
 
   return `${baseDescription} Supports actions: send, delete, react, poll, pin, threads, and more.`;
+}
+
+function buildDefaultTargetHint(options?: {
+  config?: OpenClawConfig;
+  currentChannel?: string;
+  currentAccountId?: string;
+}): string {
+  const cfg = options?.config;
+  const currentChannel = normalizeMessageChannel(options?.currentChannel);
+  if (!cfg || !currentChannel) {
+    return "";
+  }
+  const plugin = listChannelPlugins().find((entry) => entry.id === currentChannel);
+  const defaultTo = plugin?.config.resolveDefaultTo?.({
+    cfg,
+    accountId: options?.currentAccountId,
+  });
+  if (!normalizeOptionalString(defaultTo == null ? undefined : String(defaultTo))) {
+    return "";
+  }
+  return " Current channel has a default delivery target, so send/poll can omit target/to when you mean the paired/default chat.";
+}
+
+function buildConfiguredChannelDefaultTargetHint(options?: {
+  config?: OpenClawConfig;
+  currentChannel?: string;
+  currentAccountId?: string;
+}): string {
+  const cfg = options?.config;
+  if (!cfg) {
+    return "";
+  }
+  const currentChannel = normalizeMessageChannel(options?.currentChannel);
+  const channelIds = listChannelPlugins().flatMap((plugin) => {
+    if (plugin.id === currentChannel) {
+      return [];
+    }
+    const defaultTo = plugin.config.resolveDefaultTo?.({
+      cfg,
+      accountId: undefined,
+    });
+    return normalizeOptionalString(defaultTo == null ? undefined : String(defaultTo))
+      ? [plugin.id]
+      : [];
+  });
+  if (channelIds.length === 0) {
+    return "";
+  }
+  return ` Configured channels with a default delivery target: ${channelIds.join(", ")}. When you choose one of them with channel, send/poll can omit target/to when you mean the paired/default chat.`;
 }
 
 function appendMessageToolReadHint(

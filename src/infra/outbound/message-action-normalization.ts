@@ -8,22 +8,29 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { applyTargetToParams } from "./channel-target.js";
-import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
+import {
+  actionHasTarget,
+  actionRequiresTarget,
+} from "./message-action-spec.js";
 
 export function normalizeMessageActionInput(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   toolContext?: ChannelThreadingToolContext;
+  allowDeferredTargetResolution?: boolean;
 }): Record<string, unknown> {
   const normalizedArgs = { ...params.args };
-  const { action, toolContext } = params;
+  const { action, toolContext, allowDeferredTargetResolution } = params;
   const explicitChannel = normalizeOptionalString(normalizedArgs.channel) ?? "";
   const inferredChannel =
-    explicitChannel || normalizeMessageChannel(toolContext?.currentChannelProvider) || "";
+    explicitChannel ||
+    normalizeMessageChannel(toolContext?.currentChannelProvider) ||
+    "";
 
   const explicitTarget = normalizeOptionalString(normalizedArgs.target) ?? "";
   const hasLegacyTargetFields =
-    typeof normalizedArgs.to === "string" || typeof normalizedArgs.channelId === "string";
+    typeof normalizedArgs.to === "string" ||
+    typeof normalizedArgs.channelId === "string";
   const hasLegacyTarget =
     (normalizeOptionalString(normalizedArgs.to) ?? "").length > 0 ||
     (normalizeOptionalString(normalizedArgs.channelId) ?? "").length > 0;
@@ -39,7 +46,9 @@ export function normalizeMessageActionInput(params: {
     actionRequiresTarget(action) &&
     !actionHasTarget(action, normalizedArgs, { channel: inferredChannel })
   ) {
-    const inferredTarget = normalizeOptionalString(toolContext?.currentChannelId);
+    const inferredTarget = normalizeOptionalString(
+      toolContext?.currentChannelId,
+    );
     if (inferredTarget) {
       normalizedArgs.target = inferredTarget;
     }
@@ -47,7 +56,8 @@ export function normalizeMessageActionInput(params: {
 
   if (!explicitTarget && actionRequiresTarget(action) && hasLegacyTarget) {
     const legacyTo = normalizeOptionalString(normalizedArgs.to) ?? "";
-    const legacyChannelId = normalizeOptionalString(normalizedArgs.channelId) ?? "";
+    const legacyChannelId =
+      normalizeOptionalString(normalizedArgs.channelId) ?? "";
     const legacyTarget = legacyTo || legacyChannelId;
     if (legacyTarget) {
       normalizedArgs.target = legacyTarget;
@@ -65,7 +75,8 @@ export function normalizeMessageActionInput(params: {
   applyTargetToParams({ action, args: normalizedArgs });
   if (
     actionRequiresTarget(action) &&
-    !actionHasTarget(action, normalizedArgs, { channel: inferredChannel })
+    !actionHasTarget(action, normalizedArgs, { channel: inferredChannel }) &&
+    !(allowDeferredTargetResolution && (action === "send" || action === "poll"))
   ) {
     throw new Error(`Action ${action} requires a target.`);
   }
