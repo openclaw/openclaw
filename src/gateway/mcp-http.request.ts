@@ -1,13 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolveMainSessionKey } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-utils.js";
+import {
+  listMcpLoopbackTokens,
+  resolveMcpLoopbackTokenScope,
+  type McpLoopbackScope,
+} from "./mcp-http.loopback-runtime.js";
 import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
@@ -19,11 +17,6 @@ export type McpRequestContext = {
   accountId: string | undefined;
   senderIsOwner: boolean | undefined;
 };
-
-function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | undefined): string {
-  const trimmed = normalizeOptionalString(rawSessionKey);
-  return !trimmed || trimmed === "main" ? resolveMainSessionKey(cfg) : trimmed;
-}
 
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   const origin = getHeader(req, "origin");
@@ -48,59 +41,78 @@ function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   }).ok;
 }
 
+export type McpLoopbackValidationResult =
+  | { ok: true; scope: McpLoopbackScope }
+  | { ok: false };
+
 export function validateMcpLoopbackRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
-  token: string;
-}): boolean {
+}): McpLoopbackValidationResult {
   let url: URL;
   try {
     url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
   } catch {
     params.res.writeHead(400, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "bad_request" }));
-    return false;
+    return { ok: false };
   }
 
   if (params.req.method === "GET" && url.pathname.startsWith("/.well-known/")) {
     params.res.writeHead(404);
     params.res.end();
-    return false;
+    return { ok: false };
   }
 
   if (url.pathname !== "/mcp") {
     params.res.writeHead(404, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "not_found" }));
-    return false;
+    return { ok: false };
   }
 
   if (params.req.method !== "POST") {
     params.res.writeHead(405, { Allow: "POST" });
     params.res.end();
-    return false;
+    return { ok: false };
   }
 
   if (rejectsBrowserLoopbackRequest(params.req)) {
     params.res.writeHead(403, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "forbidden" }));
-    return false;
+    return { ok: false };
   }
 
-  const authHeader = getHeader(params.req, "authorization") ?? "";
-  if (!safeEqualSecret(authHeader, `Bearer ${params.token}`)) {
+  const scope = resolveBearerScope(getHeader(params.req, "authorization") ?? "");
+  if (!scope) {
     params.res.writeHead(401, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "unauthorized" }));
-    return false;
+    return { ok: false };
   }
 
   const contentType = getHeader(params.req, "content-type") ?? "";
   if (!contentType.startsWith("application/json")) {
     params.res.writeHead(415, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "unsupported_media_type" }));
-    return false;
+    return { ok: false };
   }
 
-  return true;
+  return { ok: true, scope };
+}
+
+function resolveBearerScope(authHeader: string): McpLoopbackScope | undefined {
+  // Constant-time comparison against every registered token: do not
+  // short-circuit on first miss. N is bounded by live backends (small).
+  let matchedToken: string | undefined;
+  for (const candidate of listMcpLoopbackTokens()) {
+    const isMatch = safeEqualSecret(authHeader, `Bearer ${candidate}`);
+    if (isMatch && matchedToken === undefined) {
+      matchedToken = candidate;
+    }
+  }
+  if (!matchedToken) {
+    return undefined;
+  }
+  return resolveMcpLoopbackTokenScope(matchedToken);
 }
 
 export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
@@ -121,19 +133,11 @@ export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-export function resolveMcpRequestContext(
-  req: IncomingMessage,
-  cfg: OpenClawConfig,
-): McpRequestContext {
-  const senderIsOwnerRaw = normalizeOptionalLowercaseString(
-    getHeader(req, "x-openclaw-sender-is-owner"),
-  );
+export function resolveMcpRequestContext(scope: McpLoopbackScope): McpRequestContext {
   return {
-    sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
-    messageProvider:
-      normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
-    accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
-    senderIsOwner:
-      senderIsOwnerRaw === "true" ? true : senderIsOwnerRaw === "false" ? false : undefined,
+    sessionKey: scope.sessionKey,
+    messageProvider: scope.messageProvider,
+    accountId: scope.accountId,
+    senderIsOwner: scope.senderIsOwner,
   };
 }

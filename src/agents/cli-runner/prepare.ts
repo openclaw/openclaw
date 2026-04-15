@@ -1,8 +1,13 @@
+import { resolveMainSessionKey } from "../../config/sessions.js";
 import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
+  registerMcpLoopbackToken,
+  unregisterMcpLoopbackToken,
 } from "../../gateway/mcp-http.loopback-runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   buildBootstrapInjectionStats,
@@ -39,6 +44,8 @@ const prepareDeps = {
   getActiveMcpLoopbackRuntime,
   ensureMcpLoopbackServer,
   createMcpLoopbackServerConfig,
+  registerMcpLoopbackToken,
+  unregisterMcpLoopbackToken,
   resolveOpenClawDocsPath: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawDocsPath>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawDocsPath(params),
@@ -46,6 +53,17 @@ const prepareDeps = {
 
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
   Object.assign(prepareDeps, overrides);
+}
+
+function resolveLoopbackSessionKey(
+  cfg: RunCliAgentParams["config"],
+  rawSessionKey: string | undefined,
+): string {
+  const trimmed = normalizeOptionalString(rawSessionKey);
+  if (!trimmed || trimmed === "main") {
+    return resolveMainSessionKey(cfg);
+  }
+  return trimmed;
 }
 
 export async function prepareCliRunContext(
@@ -127,6 +145,14 @@ export async function prepareCliRunContext(
     }
     mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
   }
+  const mcpLoopbackToken = mcpLoopbackRuntime
+    ? prepareDeps.registerMcpLoopbackToken({
+        sessionKey: resolveLoopbackSessionKey(params.config, params.sessionKey),
+        accountId: normalizeOptionalString(params.agentAccountId),
+        messageProvider: normalizeMessageChannel(params.messageProvider) ?? undefined,
+        senderIsOwner: params.senderIsOwner === true,
+      })
+    : undefined;
   const preparedBackend = await prepareCliBundleMcpConfig({
     enabled: backendResolved.bundleMcp,
     mode: backendResolved.bundleMcpMode,
@@ -136,17 +162,19 @@ export async function prepareCliRunContext(
     additionalConfig: mcpLoopbackRuntime
       ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
       : undefined,
-    env: mcpLoopbackRuntime
-      ? {
-          OPENCLAW_MCP_TOKEN: mcpLoopbackRuntime.token,
-          OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
-          OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
-          OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
-          OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageProvider ?? "",
-          OPENCLAW_MCP_SENDER_IS_OWNER: params.senderIsOwner === true ? "true" : "false",
-        }
-      : undefined,
+    env:
+      mcpLoopbackRuntime && mcpLoopbackToken
+        ? {
+            OPENCLAW_MCP_TOKEN: mcpLoopbackToken,
+            OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
+          }
+        : undefined,
     warn: (message) => cliBackendLog.warn(message),
+  }).catch((error) => {
+    if (mcpLoopbackToken) {
+      prepareDeps.unregisterMcpLoopbackToken(mcpLoopbackToken);
+    }
+    throw error;
   });
   const reusableCliSession = params.cliSessionBinding
     ? resolveCliSessionReuse({
@@ -252,5 +280,6 @@ export async function prepareCliRunContext(
     heartbeatPrompt,
     authEpoch,
     extraSystemPromptHash,
+    mcpLoopbackToken,
   };
 }

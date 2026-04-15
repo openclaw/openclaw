@@ -1,3 +1,4 @@
+import { unregisterMcpLoopbackToken } from "../gateway/mcp-http.loopback-runtime.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
@@ -121,6 +122,9 @@ export async function runPreparedCliAgent(
     }
   } finally {
     await context.preparedBackend.cleanup?.();
+    if (context.mcpLoopbackToken) {
+      unregisterMcpLoopbackToken(context.mcpLoopbackToken);
+    }
   }
 }
 

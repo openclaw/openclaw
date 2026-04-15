@@ -67,4 +67,5 @@ export type PreparedCliRunContext = {
   heartbeatPrompt?: string;
   authEpoch?: string;
   extraSystemPromptHash?: string;
+  mcpLoopbackToken?: string;
 };

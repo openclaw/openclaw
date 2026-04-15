@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { createServer as createHttpServer } from "node:http";
 import { loadConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -21,6 +20,9 @@ import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 export {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
+  registerMcpLoopbackToken,
+  resolveMcpLoopbackTokenScope,
+  unregisterMcpLoopbackToken,
 } from "./mcp-http.loopback-runtime.js";
 
 type McpLoopbackServer = {
@@ -35,11 +37,11 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   port: number;
   close: () => Promise<void>;
 }> {
-  const token = crypto.randomBytes(32).toString("hex");
   const toolCache = new McpLoopbackToolCache();
 
   const httpServer = createHttpServer((req, res) => {
-    if (!validateMcpLoopbackRequest({ req, res, token })) {
+    const validation = validateMcpLoopbackRequest({ req, res });
+    if (!validation.ok) {
       return;
     }
 
@@ -48,7 +50,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         const body = await readMcpHttpBody(req);
         const parsed: JsonRpcRequest | JsonRpcRequest[] = JSON.parse(body);
         const cfg = loadConfig();
-        const requestContext = resolveMcpRequestContext(req, cfg);
+        const requestContext = resolveMcpRequestContext(validation.scope);
         const scopedTools = toolCache.resolve({
           cfg,
           sessionKey: requestContext.sessionKey,
@@ -103,7 +105,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   if (!address || typeof address === "string") {
     throw new Error("mcp loopback did not bind to a TCP port");
   }
-  setActiveMcpLoopbackRuntime({ port: address.port, token });
+  setActiveMcpLoopbackRuntime({ port: address.port });
   logDebug(`mcp loopback listening on 127.0.0.1:${address.port}`);
 
   const server: McpLoopbackServer = {
@@ -112,7 +114,8 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
       new Promise<void>((resolve, reject) => {
         httpServer.close((error) => {
           if (!error) {
-            clearActiveMcpLoopbackRuntime(token);
+            clearActiveMcpLoopbackRuntime();
+            toolCache.dispose();
             if (activeMcpLoopbackServer === server) {
               activeMcpLoopbackServer = undefined;
             }

@@ -3,6 +3,7 @@ import {
   clearActiveMcpLoopbackRuntime,
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
+  registerMcpLoopbackScopeInvalidator,
   setActiveMcpLoopbackRuntime,
 } from "./mcp-http.loopback-runtime.js";
 import {
@@ -22,8 +23,39 @@ type CachedScopedTools = {
   time: number;
 };
 
+function buildCacheKey(params: {
+  sessionKey: string;
+  messageProvider: string | undefined;
+  accountId: string | undefined;
+  senderIsOwner: boolean | undefined;
+}): string {
+  return [
+    params.sessionKey,
+    params.messageProvider ?? "",
+    params.accountId ?? "",
+    params.senderIsOwner === true ? "owner" : params.senderIsOwner === false ? "non-owner" : "",
+  ].join("\u0000");
+}
+
+// The cache keys on the authoritative scope tuple carried by a registered
+// loopback token (see registerMcpLoopbackToken). Scope is never read from
+// attacker-controllable request headers, so two separately-registered
+// tokens with different scopes get independent cache entries.
 export class McpLoopbackToolCache {
   #entries = new Map<string, CachedScopedTools>();
+  #unregisterInvalidator: (() => void) | undefined;
+
+  constructor() {
+    this.#unregisterInvalidator = registerMcpLoopbackScopeInvalidator((scope) => {
+      this.invalidateForScope(scope);
+    });
+  }
+
+  dispose(): void {
+    this.#unregisterInvalidator?.();
+    this.#unregisterInvalidator = undefined;
+    this.#entries.clear();
+  }
 
   resolve(params: {
     cfg: OpenClawConfig;
@@ -32,12 +64,7 @@ export class McpLoopbackToolCache {
     accountId: string | undefined;
     senderIsOwner: boolean | undefined;
   }): CachedScopedTools {
-    const cacheKey = [
-      params.sessionKey,
-      params.messageProvider ?? "",
-      params.accountId ?? "",
-      params.senderIsOwner === true ? "owner" : params.senderIsOwner === false ? "non-owner" : "",
-    ].join("\u0000");
+    const cacheKey = buildCacheKey(params);
     const now = Date.now();
     const cached = this.#entries.get(cacheKey);
     if (cached && cached.configRef === params.cfg && now - cached.time < TOOL_CACHE_TTL_MS) {
@@ -66,6 +93,22 @@ export class McpLoopbackToolCache {
       }
     }
     return nextEntry;
+  }
+
+  invalidateForScope(scope: {
+    sessionKey: string;
+    messageProvider?: string | undefined;
+    accountId?: string | undefined;
+    senderIsOwner?: boolean | undefined;
+  }): void {
+    this.#entries.delete(
+      buildCacheKey({
+        sessionKey: scope.sessionKey,
+        messageProvider: scope.messageProvider,
+        accountId: scope.accountId,
+        senderIsOwner: scope.senderIsOwner,
+      }),
+    );
   }
 }
 

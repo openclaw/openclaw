@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Security/MCP loopback: bind loopback MCP scope to the per-backend bearer token so scope headers can no longer be spoofed by code running inside a spawned agent backend. (#64993)
+
 ## 2026.4.15-beta.1
 
 ### Changes

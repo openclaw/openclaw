@@ -199,6 +199,10 @@ describe("prepareCliBundleMcpConfig", () => {
   });
 
   it("preserves extra env values alongside generated MCP config", async () => {
+    // Scope env vars (OPENCLAW_MCP_SESSION_KEY / _ACCOUNT_ID /
+    // _MESSAGE_CHANNEL / _SENDER_IS_OWNER) are no longer injected by
+    // prepareCliRunContext — scope is bound to OPENCLAW_MCP_TOKEN
+    // server-side. This test covers the generic env pass-through path.
     const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-env-");
 
     const prepared = await prepareCliBundleMcpConfig({
@@ -212,15 +216,13 @@ describe("prepareCliBundleMcpConfig", () => {
       config: {},
       env: {
         OPENCLAW_MCP_TOKEN: "loopback-token-123",
-        OPENCLAW_MCP_SESSION_KEY: "agent:main:telegram:group:chat123",
-        OPENCLAW_MCP_SENDER_IS_OWNER: "false",
+        OPENCLAW_MCP_AGENT_ID: "main",
       },
     });
 
     expect(prepared.env).toEqual({
       OPENCLAW_MCP_TOKEN: "loopback-token-123",
-      OPENCLAW_MCP_SESSION_KEY: "agent:main:telegram:group:chat123",
-      OPENCLAW_MCP_SENDER_IS_OWNER: "false",
+      OPENCLAW_MCP_AGENT_ID: "main",
     });
 
     await prepared.cleanup?.();

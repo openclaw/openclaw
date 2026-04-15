@@ -112,9 +112,26 @@ function getJiti(modulePath: string) {
 function loadPublicSurfaceModule(modulePath: string): unknown {
   const tryNative = resolvePluginLoaderJitiTryNative(modulePath, { preferBuiltDist: true });
   if (canUseSourceArtifactRequire({ modulePath, tryNative })) {
-    return sourceArtifactRequire(modulePath);
+    try {
+      return sourceArtifactRequire(modulePath);
+    } catch (error) {
+      if (!isUnresolvedRelativeJsImportError(error, modulePath)) {
+        throw error;
+      }
+    }
   }
   return getJiti(modulePath)(modulePath);
+}
+
+function isUnresolvedRelativeJsImportError(error: unknown, modulePath: string): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code !== "MODULE_NOT_FOUND" && code !== "ERR_MODULE_NOT_FOUND") {
+    return false;
+  }
+  return error.message.includes(".js") && error.message.includes(modulePath);
 }
 
 function getSharedBundledPublicSurfaceJiti(modulePath: string, tryNative: boolean) {
