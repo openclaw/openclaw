@@ -24,7 +24,6 @@ import {
   runDriverTopLevelMentionScenario,
   runNoReplyExpectedScenario,
   runTopologyScopedTopLevelScenario,
-  runTopLevelMentionScenario,
   waitForMembershipEvent,
   type MatrixQaActorId,
   type MatrixQaScenarioContext,
