@@ -1,0 +1,28 @@
+{
+  "id": "qiniu",
+  "enabledByDefault": true,
+  "providers": ["qiniu"],
+  "providerAuthEnvVars": {
+    "qiniu": ["QINIU_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "qiniu",
+      "method": "api-key",
+      "choiceId": "qiniu-api-key",
+      "choiceLabel": "Qiniu API key",
+      "groupId": "qiniu",
+      "groupLabel": "Qiniu",
+      "groupHint": "API key",
+      "optionKey": "qiniuApiKey",
+      "cliFlag": "--qiniu-api-key",
+      "cliOption": "--qiniu-api-key <key>",
+      "cliDescription": "Qiniu API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
