@@ -5,6 +5,7 @@ import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import {
   isCronSessionKey,
+  isSystemSessionKey,
   parseSessionKey,
   renderChatSessionSelect as renderChatSessionSelectBase,
   renderChatThinkingSelect,
@@ -21,7 +22,13 @@ import { normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
 
-export { isCronSessionKey, parseSessionKey, resolveSessionDisplayName, resolveSessionOptionGroups };
+export {
+  isCronSessionKey,
+  isSystemSessionKey,
+  parseSessionKey,
+  resolveSessionDisplayName,
+  resolveSessionOptionGroups,
+};
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;

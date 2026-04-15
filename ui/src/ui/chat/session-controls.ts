@@ -434,6 +434,24 @@ export function isCronSessionKey(key: string): boolean {
   return rest.startsWith("cron:");
 }
 
+// Matches background/system sessions that pollute the list for most users
+// (e.g. nightly dreaming runs written as `agent:<id>:dreaming-narrative-...`).
+export function isSystemSessionKey(key: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(key);
+  if (!normalized) {
+    return false;
+  }
+  if (!normalized.startsWith("agent:")) {
+    return false;
+  }
+  const parts = normalized.split(":").filter(Boolean);
+  if (parts.length < 3) {
+    return false;
+  }
+  const rest = parts.slice(2).join(":");
+  return rest.startsWith("dreaming-narrative-");
+}
+
 type SessionOptionEntry = {
   key: string;
   label: string;

@@ -34,6 +34,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     limit: "120",
     includeGlobal: false,
     includeUnknown: false,
+    hideSystemSessions: false,
     basePath: "",
     searchQuery: "",
     sortColumn: "updated",

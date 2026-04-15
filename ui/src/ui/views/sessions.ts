@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { isSystemSessionKey } from "../app-render.helpers.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
@@ -19,6 +20,7 @@ export type SessionsProps = {
   limit: string;
   includeGlobal: boolean;
   includeUnknown: boolean;
+  hideSystemSessions: boolean;
   basePath: string;
   searchQuery: string;
   sortColumn: "key" | "kind" | "updated" | "tokens";
@@ -36,6 +38,7 @@ export type SessionsProps = {
     limit: string;
     includeGlobal: boolean;
     includeUnknown: boolean;
+    hideSystemSessions: boolean;
   }) => void;
   onSearchChange: (query: string) => void;
   onSortChange: (column: "key" | "kind" | "updated" | "tokens", dir: "asc" | "desc") => void;
@@ -144,12 +147,17 @@ function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string |
   return value;
 }
 
-function filterRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow[] {
+function filterRows(
+  rows: GatewaySessionRow[],
+  query: string,
+  hideSystem: boolean,
+): GatewaySessionRow[] {
+  const base = hideSystem ? rows.filter((row) => !isSystemSessionKey(row.key)) : rows;
   const q = normalizeLowercaseStringOrEmpty(query);
   if (!q) {
-    return rows;
+    return base;
   }
-  return rows.filter((row) => {
+  return base.filter((row) => {
     const key = normalizeLowercaseStringOrEmpty(row.key);
     const label = normalizeLowercaseStringOrEmpty(row.label);
     const kind = normalizeLowercaseStringOrEmpty(row.kind);
@@ -227,7 +235,10 @@ function formatCheckpointDelta(checkpoint: SessionCompactionCheckpoint): string 
 
 export function renderSessions(props: SessionsProps) {
   const rawRows = props.result?.sessions ?? [];
-  const filtered = filterRows(rawRows, props.searchQuery);
+  const hiddenSystemCount = props.hideSystemSessions
+    ? rawRows.reduce((acc, row) => acc + (isSystemSessionKey(row.key) ? 1 : 0), 0)
+    : 0;
+  const filtered = filterRows(rawRows, props.searchQuery, props.hideSystemSessions);
   const sorted = sortRows(filtered, props.sortColumn, props.sortDir);
   const totalRows = sorted.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
@@ -283,6 +294,7 @@ export function renderSessions(props: SessionsProps) {
                 limit: props.limit,
                 includeGlobal: props.includeGlobal,
                 includeUnknown: props.includeUnknown,
+                hideSystemSessions: props.hideSystemSessions,
               })}
           />
         </label>
@@ -297,6 +309,7 @@ export function renderSessions(props: SessionsProps) {
                 limit: (e.target as HTMLInputElement).value,
                 includeGlobal: props.includeGlobal,
                 includeUnknown: props.includeUnknown,
+                hideSystemSessions: props.hideSystemSessions,
               })}
           />
         </label>
@@ -310,6 +323,7 @@ export function renderSessions(props: SessionsProps) {
                 limit: props.limit,
                 includeGlobal: (e.target as HTMLInputElement).checked,
                 includeUnknown: props.includeUnknown,
+                hideSystemSessions: props.hideSystemSessions,
               })}
           />
           <span>Global</span>
@@ -324,9 +338,28 @@ export function renderSessions(props: SessionsProps) {
                 limit: props.limit,
                 includeGlobal: props.includeGlobal,
                 includeUnknown: (e.target as HTMLInputElement).checked,
+                hideSystemSessions: props.hideSystemSessions,
               })}
           />
           <span>Unknown</span>
+        </label>
+        <label
+          class="field-inline checkbox"
+          title="Hide background/system sessions (e.g. dreaming-narrative runs)"
+        >
+          <input
+            type="checkbox"
+            .checked=${props.hideSystemSessions}
+            @change=${(e: Event) =>
+              props.onFiltersChange({
+                activeMinutes: props.activeMinutes,
+                limit: props.limit,
+                includeGlobal: props.includeGlobal,
+                includeUnknown: props.includeUnknown,
+                hideSystemSessions: (e.target as HTMLInputElement).checked,
+              })}
+          />
+          <span>Hide system${hiddenSystemCount > 0 ? html` (${hiddenSystemCount})` : nothing}</span>
         </label>
       </div>
 

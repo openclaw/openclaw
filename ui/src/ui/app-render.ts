@@ -1551,6 +1551,7 @@ export function renderApp(state: AppViewState) {
                 limit: state.sessionsFilterLimit,
                 includeGlobal: state.sessionsIncludeGlobal,
                 includeUnknown: state.sessionsIncludeUnknown,
+                hideSystemSessions: state.sessionsHideSystem ?? true,
                 basePath: state.basePath,
                 searchQuery: state.sessionsSearchQuery,
                 sortColumn: state.sessionsSortColumn,
@@ -1568,6 +1569,8 @@ export function renderApp(state: AppViewState) {
                   state.sessionsFilterLimit = next.limit;
                   state.sessionsIncludeGlobal = next.includeGlobal;
                   state.sessionsIncludeUnknown = next.includeUnknown;
+                  state.sessionsHideSystem = next.hideSystemSessions;
+                  state.sessionsPage = 0;
                 },
                 onSearchChange: (q) => {
                   state.sessionsSearchQuery = q;

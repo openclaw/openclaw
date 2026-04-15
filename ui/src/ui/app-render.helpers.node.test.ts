@@ -32,6 +32,7 @@ vi.mock("./controllers/sessions.ts", () => ({
 
 import {
   isCronSessionKey,
+  isSystemSessionKey,
   parseSessionKey,
   resolveAssistantAttachmentAuthToken,
   resolveSessionOptionGroups,
@@ -368,6 +369,25 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+describe("isSystemSessionKey", () => {
+  it("returns true for dreaming-narrative agent keys", () => {
+    expect(
+      isSystemSessionKey("agent:aqiqi:dreaming-narrative-rem-e99f5dec5305-1776193792495"),
+    ).toBe(true);
+    expect(
+      isSystemSessionKey("agent:aqiqi:dreaming-narrative-light-58a895993323-1776193732815"),
+    ).toBe(true);
+  });
+
+  it("returns false for non-system keys", () => {
+    expect(isSystemSessionKey("")).toBe(false);
+    expect(isSystemSessionKey("agent:main:main")).toBe(false);
+    expect(isSystemSessionKey("agent:main:cron:abc")).toBe(false);
+    expect(isSystemSessionKey("discord:group:eng")).toBe(false);
+    expect(isSystemSessionKey("dreaming-narrative-rem-abc")).toBe(false);
   });
 });
 
