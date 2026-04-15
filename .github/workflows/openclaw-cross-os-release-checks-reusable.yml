@@ -1,6 +1,51 @@
 name: OpenClaw Cross-OS Release Checks (Reusable)
 
 on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Public OpenClaw ref to validate (tag, branch, or full commit SHA)
+        required: true
+        default: main
+        type: string
+      provider:
+        description: Provider lane to use for onboarding and the end-to-end turn
+        required: true
+        default: openai
+        type: choice
+        options:
+          - openai
+          - anthropic
+          - minimax
+      mode:
+        description: Which release-check lanes to run
+        required: true
+        default: both
+        type: choice
+        options:
+          - fresh
+          - upgrade
+          - both
+      previous_version:
+        description: Optional baseline version for installer/dev-update and packaged upgrade
+        required: false
+        default: ""
+        type: string
+      ubuntu_runner:
+        description: Optional Linux runner label override
+        required: false
+        default: ""
+        type: string
+      windows_runner:
+        description: Optional Windows runner label override
+        required: false
+        default: ""
+        type: string
+      macos_runner:
+        description: Optional macOS runner label override
+        required: false
+        default: ""
+        type: string
   workflow_call:
     inputs:
       ref:
@@ -90,12 +135,6 @@ jobs:
               ;;
           esac
 
-      - name: Checkout caller release workflow repo
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          persist-credentials: false
-
       - name: Checkout public source ref
         uses: actions/checkout@v6
         with:
@@ -123,13 +162,12 @@ jobs:
         env:
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare
         run: |
-          node --disable-warning=ExperimentalWarning scripts/openclaw-cross-os-release-checks.ts \
+          node source/scripts/openclaw-cross-os-release-checks.mjs \
             --prepare-only \
             --source-dir source \
             --output-dir "${OUTPUT_DIR}"
 
       - name: Resolve baseline package spec
-        if: ${{ inputs.mode != 'fresh' }}
         id: baseline
         env:
           INPUT_PREVIOUS_VERSION: ${{ inputs.previous_version }}
@@ -198,6 +236,7 @@ jobs:
       - name: Resolve runner matrix
         id: matrix
         env:
+          INPUT_REF: ${{ inputs.ref }}
           INPUT_MODE: ${{ inputs.mode }}
           INPUT_UBUNTU_RUNNER: ${{ inputs.ubuntu_runner }}
           INPUT_WINDOWS_RUNNER: ${{ inputs.windows_runner }}
@@ -206,41 +245,17 @@ jobs:
           VAR_WINDOWS_RUNNER: ${{ vars.OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER }}
           VAR_MACOS_RUNNER: ${{ vars.OPENCLAW_RELEASE_CHECKS_MACOS_RUNNER }}
         run: |
-          node <<'NODE' >>"$GITHUB_OUTPUT"
-          const pick = (...values) => values.find((value) => typeof value === "string" && value.trim().length > 0)?.trim();
-          const lanes = (process.env.INPUT_MODE ?? "both") === "both" ? ["fresh", "upgrade"] : [process.env.INPUT_MODE ?? "both"];
-          const runners = [
-            {
-              os_id: "ubuntu",
-              display_name: "Linux",
-              runner: pick(process.env.INPUT_UBUNTU_RUNNER, process.env.VAR_UBUNTU_RUNNER, "ubuntu-latest"),
-              artifact_name: "linux",
-            },
-            {
-              os_id: "windows",
-              display_name: "Windows",
-              runner: pick(
-                process.env.INPUT_WINDOWS_RUNNER,
-                process.env.VAR_WINDOWS_RUNNER,
-                "blacksmith-32vcpu-windows-2025",
-              ),
-              artifact_name: "windows",
-            },
-            {
-              os_id: "macos",
-              display_name: "macOS",
-              runner: pick(process.env.INPUT_MACOS_RUNNER, process.env.VAR_MACOS_RUNNER, "macos-latest-xlarge"),
-              artifact_name: "macos",
-            },
-          ];
-          const matrix = {
-            include: runners.flatMap((runner) => lanes.map((lane) => ({ ...runner, lane }))),
-          };
-          process.stdout.write(`value=${JSON.stringify(matrix)}\n`);
-          NODE
+          MATRIX_JSON="$(node source/scripts/openclaw-cross-os-release-checks.mjs \
+            --resolve-matrix \
+            --ref "${INPUT_REF}" \
+            --mode "${INPUT_MODE}" \
+            --ubuntu-runner "${INPUT_UBUNTU_RUNNER}" \
+            --windows-runner "${INPUT_WINDOWS_RUNNER}" \
+            --macos-runner "${INPUT_MACOS_RUNNER}")"
+          echo "value=${MATRIX_JSON}" >> "$GITHUB_OUTPUT"
 
   cross_os_release_checks:
-    name: "${{ matrix.display_name }} / ${{ matrix.lane }}"
+    name: "${{ matrix.display_name }} / ${{ matrix.suite_label }}"
     needs: prepare
     strategy:
       fail-fast: false
@@ -248,11 +263,15 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     steps:
-      - name: Checkout caller release workflow repo
+      - name: Checkout public source ref
         uses: actions/checkout@v6
         with:
-          fetch-depth: 1
+          repository: ${{ env.OPENCLAW_REPOSITORY }}
+          ref: ${{ inputs.ref }}
+          path: source
+          fetch-depth: 0
           persist-credentials: false
+          submodules: recursive
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -264,6 +283,8 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: source/pnpm-lock.yaml
 
       - name: Download candidate artifact
         uses: actions/download-artifact@v8
@@ -272,7 +293,7 @@ jobs:
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate
 
       - name: Download baseline artifact
-        if: ${{ matrix.lane == 'upgrade' }}
+        if: ${{ matrix.suite == 'packaged-upgrade' }}
         uses: actions/download-artifact@v8
         with:
           name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}
@@ -287,7 +308,7 @@ jobs:
           OPENCLAW_RELEASE_CHECK_OS: ${{ matrix.os_id }}
           OPENCLAW_RELEASE_CHECK_RUNNER: ${{ matrix.runner }}
         run: |
-          node --disable-warning=ExperimentalWarning scripts/openclaw-cross-os-release-checks.ts \
+          node source/scripts/openclaw-cross-os-release-checks.mjs \
             --candidate-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/candidate/${{ needs.prepare.outputs.candidate_file_name }}" \
             --candidate-version "${{ needs.prepare.outputs.candidate_version }}" \
             --source-sha "${{ needs.prepare.outputs.source_sha }}" \
@@ -295,13 +316,15 @@ jobs:
             --baseline-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/baseline/${{ needs.prepare.outputs.baseline_file_name }}" \
             --provider "${{ inputs.provider }}" \
             --mode "${{ matrix.lane }}" \
-            --output-dir "$RUNNER_TEMP/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.lane }}"
+            --suite "${{ matrix.suite }}" \
+            --ref "${{ inputs.ref }}" \
+            --output-dir "$RUNNER_TEMP/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}"
 
       - name: Summarize release checks
         if: always()
         shell: bash
         env:
-          SUMMARY_PATH: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.lane }}/summary.md
+          SUMMARY_PATH: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}/summary.md
         run: |
           if [[ -f "${SUMMARY_PATH}" ]]; then
             cat "${SUMMARY_PATH}" >> "$GITHUB_STEP_SUMMARY"
@@ -313,6 +336,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: openclaw-cross-os-release-checks-${{ matrix.artifact_name }}-${{ matrix.lane }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.lane }}
+          name: openclaw-cross-os-release-checks-${{ matrix.artifact_name }}-${{ matrix.suite }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}
           if-no-files-found: error
