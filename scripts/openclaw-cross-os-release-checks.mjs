@@ -22,10 +22,7 @@ import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
-const SCRIPT_DIR = dirname(SCRIPT_PATH);
-const REPO_ROOT = resolve(SCRIPT_DIR, "..");
-const POSIX_INSTALLER_PATH = join(REPO_ROOT, "scripts", "install.sh");
-const WINDOWS_INSTALLER_PATH = join(REPO_ROOT, "scripts", "install.ps1");
+const PUBLISHED_INSTALLER_BASE_URL = "https://openclaw.ai";
 
 const SUPPORTED_MODES = new Set(["fresh", "upgrade", "both"]);
 const SUPPORTED_SUITES = new Set([
@@ -757,11 +754,6 @@ async function runInstallerFreshSuite(params) {
   const manualGateway = { current: null };
   try {
     const env = buildInstallerEnv(lane, params.providerConfig, params.providerSecretValue);
-    const installerServer = await startStaticFileServer({
-      filePath: process.platform === "win32" ? WINDOWS_INSTALLER_PATH : POSIX_INSTALLER_PATH,
-      logPath: join(params.logsDir, "installer-http-server.log"),
-    });
-    cleanup.push(() => installerServer.close());
     // Drive the public installer against the exact candidate artifact built from the requested ref.
     const candidateServer = await startStaticFileServer({
       filePath: params.build.candidateTgz,
@@ -769,12 +761,13 @@ async function runInstallerFreshSuite(params) {
     });
     cleanup.push(() => candidateServer.close());
     const installTarget = candidateServer.url;
+    const installerUrl = resolvePublishedInstallerUrl();
 
     logLanePhase(lane, "installer-run");
     await runInstallerSmoke({
       lane,
       env,
-      installerUrl: installerServer.url,
+      installerUrl,
       installTarget,
       logPath: join(params.logsDir, "installer-fresh-install.log"),
     });
@@ -939,17 +932,13 @@ async function runDevUpdateSuite(params) {
   const manualGateway = { current: null };
   try {
     const env = buildInstallerEnv(lane, params.providerConfig, params.providerSecretValue);
-    const installerServer = await startStaticFileServer({
-      filePath: process.platform === "win32" ? WINDOWS_INSTALLER_PATH : POSIX_INSTALLER_PATH,
-      logPath: join(params.logsDir, "dev-update-installer-http-server.log"),
-    });
-    cleanup.push(() => installerServer.close());
+    const installerUrl = resolvePublishedInstallerUrl();
 
     logLanePhase(lane, "installer-baseline");
     await runInstallerSmoke({
       lane,
       env,
-      installerUrl: installerServer.url,
+      installerUrl,
       installTarget,
       logPath: join(params.logsDir, "dev-update-install.log"),
     });
@@ -2722,6 +2711,13 @@ export function resolveStaticFileContentType(filePath) {
     return "text/plain; charset=utf-8";
   }
   return "application/octet-stream";
+}
+
+export function resolvePublishedInstallerUrl(platform = process.platform) {
+  if (platform === "win32") {
+    return `${PUBLISHED_INSTALLER_BASE_URL}/install.ps1`;
+  }
+  return `${PUBLISHED_INSTALLER_BASE_URL}/install.sh`;
 }
 
 function writeSummary(baseDir, summaryPayload) {

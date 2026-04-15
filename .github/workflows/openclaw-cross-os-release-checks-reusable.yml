@@ -158,6 +158,7 @@ jobs:
           INPUT_WORKFLOW_REF: ${{ inputs.workflow_ref }}
           CALLER_REPOSITORY: ${{ github.repository }}
           CURRENT_SHA: ${{ github.sha }}
+          WORKFLOW_CONTEXT_REF: ${{ github.workflow_ref }}
           WORKFLOW_REPOSITORY: ${{ env.OPENCLAW_REPOSITORY }}
         run: |
           set -euo pipefail
@@ -165,8 +166,11 @@ jobs:
             TARGET_REF="${INPUT_WORKFLOW_REF}"
           elif [[ "${CALLER_REPOSITORY}" == "${WORKFLOW_REPOSITORY}" ]]; then
             TARGET_REF="${CURRENT_SHA}"
+          elif [[ "${WORKFLOW_CONTEXT_REF}" == "${WORKFLOW_REPOSITORY}/"* ]] && [[ "${WORKFLOW_CONTEXT_REF}" == *"@"* ]]; then
+            TARGET_REF="${WORKFLOW_CONTEXT_REF##*@}"
           else
-            TARGET_REF="main"
+            echo "Failed to infer workflow ref from github.workflow_ref=${WORKFLOW_CONTEXT_REF}" >&2
+            exit 1
           fi
 
           if [[ "${TARGET_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -175,14 +179,10 @@ jobs:
           fi
 
           REMOTE_URL="https://github.com/${WORKFLOW_REPOSITORY}.git"
-          if [[ -n "${INPUT_WORKFLOW_REF}" ]]; then
-            if [[ "${TARGET_REF}" == refs/* ]]; then
-              mapfile -t MATCHES < <(git ls-remote "${REMOTE_URL}" "${TARGET_REF}" | awk '{print $1}' | awk '!seen[$0]++')
-            else
-              mapfile -t MATCHES < <(git ls-remote "${REMOTE_URL}" "refs/heads/${TARGET_REF}" "refs/tags/${TARGET_REF}" "${TARGET_REF}" | awk '{print $1}' | awk '!seen[$0]++')
-            fi
+          if [[ "${TARGET_REF}" == refs/* ]]; then
+            mapfile -t MATCHES < <(git ls-remote "${REMOTE_URL}" "${TARGET_REF}" | awk '{print $1}' | awk '!seen[$0]++')
           else
-            mapfile -t MATCHES < <(git ls-remote "${REMOTE_URL}" "refs/heads/${TARGET_REF}" | awk '{print $1}' | awk '!seen[$0]++')
+            mapfile -t MATCHES < <(git ls-remote "${REMOTE_URL}" "refs/heads/${TARGET_REF}" "refs/tags/${TARGET_REF}" "${TARGET_REF}" | awk '{print $1}' | awk '!seen[$0]++')
           fi
 
           case "${#MATCHES[@]}" in

@@ -12,6 +12,7 @@ import {
   resolveExplicitBaselineVersion,
   resolveDevUpdateVerificationRef,
   resolveInstalledPrefixDirFromCliPath,
+  resolvePublishedInstallerUrl,
   resolveRepairGlobalInstallArgs,
   resolveRequestedSuites,
   resolveRunnerMatrix,
@@ -126,6 +127,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolveStaticFileContentType("scripts/install.sh")).toBe("text/plain; charset=utf-8");
     expect(resolveStaticFileContentType("scripts/install.ps1")).toBe("text/plain; charset=utf-8");
     expect(resolveStaticFileContentType("openclaw-2026.4.14.tgz")).toBe("application/octet-stream");
+  });
+
+  it("uses the published installer URLs for native installer lanes", () => {
+    expect(resolvePublishedInstallerUrl("darwin")).toBe("https://openclaw.ai/install.sh");
+    expect(resolvePublishedInstallerUrl("linux")).toBe("https://openclaw.ai/install.sh");
+    expect(resolvePublishedInstallerUrl("win32")).toBe("https://openclaw.ai/install.ps1");
   });
 
   it("uses managed gateway services only on native Windows runners", () => {
