@@ -422,7 +422,7 @@ Values are case-insensitive at runtime, so `"Off"` and `"off"` both disable the 
 
     - Forces `store: true` (unless model compat sets `supportsStore: false`)
     - Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
-    - Default `compact_threshold`: 70% of `contextWindow` (or `80000` when unavailable)
+    - Default `compact_threshold`: 90% of `contextWindow` (or `80000` when unavailable)
 
     <Tabs>
       <Tab title="Enable explicitly">

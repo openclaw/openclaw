@@ -6,6 +6,19 @@ import {
 } from "./openai-responses-payload-policy.js";
 
 describe("openai responses payload policy", () => {
+  it("uses 90% of the context window as the default compaction threshold", () => {
+    expect(
+      resolveOpenAIResponsesPayloadPolicy({
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 200000,
+      }),
+    ).toMatchObject({
+      compactThreshold: 180000,
+    });
+  });
+
   it("forces store for native OpenAI responses payloads but keeps disable mode for transport defaults", () => {
     const model = {
       id: "gpt-5.4",
@@ -25,6 +38,7 @@ describe("openai responses payload policy", () => {
     ).toMatchObject({
       explicitStore: true,
       allowsServiceTier: true,
+      compactThreshold: 180000,
     });
     expect(resolveOpenAIResponsesPayloadPolicy(model, { storeMode: "disable" })).toMatchObject({
       explicitStore: false,
