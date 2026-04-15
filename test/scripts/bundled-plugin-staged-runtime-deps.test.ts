@@ -78,4 +78,20 @@ describe("collectBuiltBundledPluginStagedRuntimeDependencyErrors", () => {
     expect(packageJson.dependencies?.["@whiskeysockets/baileys"]).toBe("7.0.0-rc.9");
     expect(packageJson.openclaw?.bundle?.stageRuntimeDependencies).toBe(true);
   });
+
+  it("keeps Baileys ownership in the WhatsApp bundled plugin instead of the root package", () => {
+    const rootPackageJson = JSON.parse(
+      fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"),
+    ) as {
+      dependencies?: Record<string, string>;
+    };
+    const whatsappPackageJson = JSON.parse(
+      fs.readFileSync(path.join(process.cwd(), "extensions/whatsapp/package.json"), "utf8"),
+    ) as {
+      dependencies?: Record<string, string>;
+    };
+
+    expect(rootPackageJson.dependencies?.["@whiskeysockets/baileys"]).toBeUndefined();
+    expect(whatsappPackageJson.dependencies?.["@whiskeysockets/baileys"]).toBe("7.0.0-rc.9");
+  });
 });
