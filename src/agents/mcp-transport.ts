@@ -100,9 +100,13 @@ export function resolveMcpTransport(
     };
   }
   if (resolved.transportType === "streamable-http") {
+    const headers: Record<string, string> = {
+      ...resolved.headers,
+      Accept: "application/json, text/event-stream",
+    };
     return {
       transport: new StreamableHTTPClientTransport(new URL(resolved.url), {
-        requestInit: resolved.headers ? { headers: resolved.headers } : undefined,
+        requestInit: { headers },
       }),
       description: resolved.description,
       transportType: "streamable-http",
