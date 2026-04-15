@@ -109,7 +109,7 @@ describe("loginWeb coverage", () => {
     waitForCredsSaveQueueWithTimeoutMock.mockReturnValueOnce(credsFlushGate);
 
     const runtime = { log: vi.fn(), error: vi.fn() } as never;
-    const pendingLogin = loginWeb(false, waitForWaConnectionMock as never, runtime, undefined, createWaSocketMock);
+    const pendingLogin = loginWeb(false, runtime, undefined, createWaSocketMock);
     await flushTasks();
 
     expect(createWaSocketMock).toHaveBeenCalledTimes(1);
@@ -132,7 +132,7 @@ describe("loginWeb coverage", () => {
       output: { statusCode: 401 },
     });
 
-    await expect(loginWeb(false, waitForWaConnectionMock as never, undefined, undefined, createWaSocketMock)).rejects.toThrow(
+    await expect(loginWeb(false, undefined, undefined, createWaSocketMock)).rejects.toThrow(
       /cache cleared/i,
     );
     expect(rmMock).toHaveBeenCalledWith(testState.authDir, {
@@ -143,7 +143,7 @@ describe("loginWeb coverage", () => {
 
   it("formats and rethrows generic errors", async () => {
     waitForWaConnectionMock.mockRejectedValueOnce(new Error("boom"));
-    await expect(loginWeb(false, waitForWaConnectionMock as never, undefined, undefined, createWaSocketMock)).rejects.toThrow(
+    await expect(loginWeb(false, undefined, undefined, createWaSocketMock)).rejects.toThrow(
       "formatted:Error: boom",
     );
     expect(formatErrorMock).toHaveBeenCalled();

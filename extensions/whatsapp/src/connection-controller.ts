@@ -129,22 +129,25 @@ export type WhatsAppLoginWaitResult =
       outcome: "connected";
       restarted: boolean;
       sock: WaSocket;
+      closeSocket: () => void;
     }
   | {
       outcome: "logged-out";
       message: string;
       statusCode: number;
       error: unknown;
+      closeSocket: () => void;
     }
   | {
       outcome: "failed";
       message: string;
       statusCode?: number;
       error: unknown;
+      closeSocket: () => void;
     };
 
 export async function waitForWhatsAppLoginResult(params: {
-  sock: WaSocket;
+  sock?: WaSocket;
   authDir: string;
   isLegacyAuthDir: boolean;
   verbose: boolean;
@@ -158,7 +161,15 @@ export async function waitForWhatsAppLoginResult(params: {
   );
   const wait = params.waitForConnection ?? _waitDefault;
   const createSocket = params.createSocket ?? _createDefault;
-  let currentSock = params.sock;
+
+  // Track sockets so closeSocket can clean up all of them.
+  const sockets: WaSocket[] = [];
+  const addSocket = (sock: WaSocket) => sockets.push(sock);
+  const closeAll = () => sockets.forEach((s) => closeWaSocketSoon(s));
+
+  let currentSock = params.sock ?? (await createSocket(true, params.verbose, { authDir: params.authDir }));
+  addSocket(currentSock);
+
   let restarted = false;
 
   while (true) {
@@ -168,6 +179,7 @@ export async function waitForWhatsAppLoginResult(params: {
         outcome: "connected",
         restarted,
         sock: currentSock,
+        closeSocket: closeAll,
       };
     } catch (err) {
       const statusCode = getStatusCode(err);
@@ -180,6 +192,7 @@ export async function waitForWhatsAppLoginResult(params: {
           currentSock = await createSocket(false, params.verbose, {
             authDir: params.authDir,
           });
+          addSocket(currentSock);
           params.onSocketReplaced?.(currentSock);
           continue;
         } catch (createErr) {
@@ -188,6 +201,7 @@ export async function waitForWhatsAppLoginResult(params: {
             message: formatError(createErr),
             statusCode: getStatusCode(createErr),
             error: createErr,
+            closeSocket: closeAll,
           };
         }
       }
@@ -203,6 +217,7 @@ export async function waitForWhatsAppLoginResult(params: {
           message: WHATSAPP_LOGGED_OUT_RELINK_MESSAGE,
           statusCode: LOGGED_OUT_STATUS,
           error: err,
+          closeSocket: closeAll,
         };
       }
 
@@ -211,6 +226,7 @@ export async function waitForWhatsAppLoginResult(params: {
         message: formatError(err),
         statusCode,
         error: err,
+        closeSocket: closeAll,
       };
     }
   }
