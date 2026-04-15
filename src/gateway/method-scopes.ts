@@ -145,6 +145,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.pending.enqueue",
   ],
   [ADMIN_SCOPE]: [
+    "config.patch",
+    "config.set",
+    "config.apply",
     "channels.logout",
     "agents.create",
     "agents.update",

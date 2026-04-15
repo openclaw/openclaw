@@ -1280,6 +1280,19 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...auditNonDeep.collectSyncedFolderFindings({ stateDir, configPath }));
 
   findings.push(...collectGatewayConfigFindings(cfg, context.sourceConfig, env));
+  if (context.configSnapshot?.integrityWarning) {
+    findings.push({
+      checkId: "config.hmac_integrity_mismatch",
+      severity: "warn",
+      title: "Config HMAC integrity mismatch detected",
+      detail:
+        "The config file appears to have been modified outside the gateway process. " +
+        "This may indicate unauthorized tampering or manual editing.",
+      remediation:
+        "If you edited the config manually, this warning is expected. " +
+        "Otherwise, investigate the source of the modification.",
+    });
+  }
   findings.push(...(await collectPluginSecurityAuditFindings(context)));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
