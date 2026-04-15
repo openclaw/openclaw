@@ -406,6 +406,48 @@ describe("bedrock mantle discovery", () => {
     expect(provider).toBeNull();
   });
 
+  it("returns null when discovery is explicitly disabled via pluginConfig", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],
+      }),
+    });
+
+    const provider = await resolveImplicitMantleProvider({
+      env: {
+        AWS_BEARER_TOKEN_BEDROCK: "my-token", // pragma: allowlist secret
+        AWS_REGION: "us-east-1",
+      } as NodeJS.ProcessEnv,
+      pluginConfig: { discovery: { enabled: false } },
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(provider).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("returns null when discovery is explicitly disabled via config", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],
+      }),
+    });
+
+    const provider = await resolveImplicitMantleProvider({
+      env: {
+        AWS_BEARER_TOKEN_BEDROCK: "my-token", // pragma: allowlist secret
+        AWS_REGION: "us-east-1",
+      } as NodeJS.ProcessEnv,
+      config: { bedrockMantleDiscovery: { enabled: false } },
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(provider).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it("defaults to us-east-1 when no region is set", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,

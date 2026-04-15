@@ -255,12 +255,26 @@ export async function discoverMantleModels(params: {
  * - Models discovered from `/v1/models`
  */
 export async function resolveImplicitMantleProvider(params: {
+  config?: {
+    models?: { providers?: Record<string, unknown> };
+    bedrockMantleDiscovery?: { enabled?: boolean };
+  };
+  pluginConfig?: { discovery?: { enabled?: boolean } };
   env?: NodeJS.ProcessEnv;
   fetchFn?: typeof fetch;
 }): Promise<ModelProviderConfig | null> {
   const env = params.env ?? process.env;
   const region = env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
   const explicitBearerToken = resolveMantleBearerToken(env);
+
+  const discoveryConfig = {
+    ...params.config?.bedrockMantleDiscovery,
+    ...params.pluginConfig?.discovery,
+  };
+  const enabled = discoveryConfig?.enabled;
+  if (enabled === false) {
+    return null;
+  }
 
   if (!isSupportedRegion(region)) {
     log.debug?.("Mantle not available in region", { region });
