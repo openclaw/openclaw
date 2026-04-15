@@ -2,6 +2,7 @@ import { Button, type ButtonInteraction, type ComponentData } from "@buape/carbo
 import { ButtonStyle } from "discord-api-types/v10";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
@@ -53,7 +54,10 @@ export function parseExecApprovalData(
 
 export type ExecApprovalButtonContext = {
   getApprovers: () => string[];
-  resolveApproval: (approvalId: string, decision: ExecApprovalDecision) => Promise<boolean>;
+  resolveApproval: (
+    approvalId: string,
+    decision: ExecApprovalDecision,
+  ) => Promise<{ ok: true } | { ok: false; reason: "error" | "not-found" }>;
 };
 
 export class ExecApprovalButton extends Button {
@@ -100,8 +104,12 @@ export class ExecApprovalButton extends Button {
       await interaction.acknowledge();
     } catch {}
 
-    const ok = await this.ctx.resolveApproval(parsed.approvalId, parsed.action);
-    if (!ok) {
+    const resolution = await this.ctx.resolveApproval(parsed.approvalId, parsed.action);
+    if (!resolution.ok) {
+      // Stale buttons can race with auto-resolution; keep those clicks silent.
+      if (resolution.reason === "not-found") {
+        return;
+      }
       try {
         await interaction.followUp({
           content: `Failed to submit approval decision for **${decisionLabel}**. The request may have expired or already been resolved.`,
@@ -138,9 +146,11 @@ export function createDiscordExecApprovalButtonContext(params: {
           gatewayUrl: params.gatewayUrl,
           clientDisplayName: `Discord approval (${params.accountId})`,
         });
-        return true;
-      } catch {
-        return false;
+        return { ok: true };
+      } catch (error) {
+        return isApprovalNotFoundError(error)
+          ? { ok: false, reason: "not-found" }
+          : { ok: false, reason: "error" };
       }
     },
   };
