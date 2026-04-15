@@ -9,7 +9,6 @@ import {
   buildPluginDiagnosticsReport,
   clearPluginManifestRegistryCache,
   enablePluginInConfig,
-  installHooksFromPath,
   installHooksFromNpmSpec,
   installHooksFromPath,
   installPluginFromClawHub,
@@ -692,25 +691,26 @@ describe("plugins cli install", () => {
     const enabledCfg = createEnabledPluginConfig("demo");
 
     loadConfig.mockReturnValue(cfg);
-    installPluginFromPath.mockImplementation(
-      async (params: {
-        logger?: { warn?: (message: string) => void };
-        path: string;
-        dryRun?: boolean;
-        dangerouslyForceUnsafeInstall?: boolean;
-      }) => {
-        params.logger?.warn?.(
-          'WARNING: Plugin "demo" forced despite dangerous code patterns via --dangerously-force-unsafe-install: index.js:1',
-        );
-        return {
-          ok: true,
-          pluginId: "demo",
-          targetDir: localPluginDir,
-          version: "1.0.0",
-          extensions: [],
-        };
-      },
-    );
+    installPluginFromPath.mockImplementation(async (...args: unknown[]) => {
+      const [params] = args as [
+        {
+          logger?: { warn?: (message: string) => void };
+          path: string;
+          dryRun?: boolean;
+          dangerouslyForceUnsafeInstall?: boolean;
+        },
+      ];
+      params.logger?.warn?.(
+        'WARNING: Plugin "demo" forced despite dangerous code patterns via --dangerously-force-unsafe-install: index.js:1',
+      );
+      return {
+        ok: true,
+        pluginId: "demo",
+        targetDir: localPluginDir,
+        version: "1.0.0",
+        extensions: [],
+      };
+    });
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
     recordPluginInstall.mockReturnValue(enabledCfg);
     applyExclusiveSlotSelection.mockReturnValue({
