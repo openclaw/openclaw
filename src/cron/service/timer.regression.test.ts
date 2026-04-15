@@ -1276,6 +1276,54 @@ describe("cron service timer regressions", () => {
     }
   });
 
+  it("clears schedule error count when completion maintenance recompute recovers (#66019)", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-04-13T16:15:00.000Z");
+    const recoveredNextRunAtMs = scheduledAt + 24 * 60 * 60 * 1_000;
+    const cronJob = createIsolatedRegressionJob({
+      id: "cron-66019-completion-recovered",
+      name: "cron-66019-completion-recovered",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "0 7 * * *", tz: "Asia/Shanghai" },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi.fn(async () => {
+      now = scheduledAt + 25;
+      return { status: "ok" as const, summary: "done" };
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+    let computeCalls = 0;
+    const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockImplementation(() => {
+      computeCalls += 1;
+      return computeCalls === 1 ? undefined : recoveredNextRunAtMs;
+    });
+
+    try {
+      await onTimer(state);
+
+      const job = state.store?.jobs.find((entry) => entry.id === "cron-66019-completion-recovered");
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+      expect(computeCalls).toBeGreaterThanOrEqual(2);
+      expect(job?.state.scheduleErrorCount).toBeUndefined();
+      expect(job?.state.nextRunAtMs).toBe(recoveredNextRunAtMs);
+      expect(job?.enabled).toBe(true);
+    } finally {
+      nextRunSpy.mockRestore();
+    }
+  });
+
   it("does not triple-count startup catch-up schedule errors (#66019)", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-04-13T16:10:00.000Z");
@@ -1312,6 +1360,55 @@ describe("cron service timer regressions", () => {
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
       expect(job?.state.scheduleErrorCount).toBe(1);
       expect(job?.state.nextRunAtMs).toBeUndefined();
+      expect(job?.enabled).toBe(true);
+    } finally {
+      nextRunSpy.mockRestore();
+      stop(state);
+    }
+  });
+
+  it("clears startup catch-up schedule error count when recompute recovers (#66019)", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-04-13T16:15:00.000Z");
+    const recoveredNextRunAtMs = scheduledAt + 24 * 60 * 60 * 1_000;
+    const cronJob = createIsolatedRegressionJob({
+      id: "cron-66019-startup-recovered",
+      name: "cron-66019-startup-recovered",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "0 7 * * *", tz: "Asia/Shanghai" },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi.fn(async () => {
+      now = scheduledAt + 25;
+      return { status: "ok" as const, summary: "done" };
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+    let computeCalls = 0;
+    const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockImplementation(() => {
+      computeCalls += 1;
+      return computeCalls === 1 ? undefined : recoveredNextRunAtMs;
+    });
+
+    try {
+      await start(state);
+
+      const job = state.store?.jobs.find((entry) => entry.id === "cron-66019-startup-recovered");
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+      expect(computeCalls).toBeGreaterThanOrEqual(2);
+      expect(job?.state.scheduleErrorCount).toBeUndefined();
+      expect(job?.state.nextRunAtMs).toBe(recoveredNextRunAtMs);
       expect(job?.enabled).toBe(true);
     } finally {
       nextRunSpy.mockRestore();

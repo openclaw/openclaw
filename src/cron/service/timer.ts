@@ -865,7 +865,6 @@ export async function onTimer(state: CronServiceState) {
         // daily cron schedules to jump 48 h instead of 24 h (#17852).
         recomputeNextRunsForMaintenance(state, {
           suppressScheduleComputeErrorJobIds: scheduleComputeFailedJobIds,
-          preserveScheduleErrorCountJobIds: scheduleComputeFailedJobIds,
         });
         await persist(state);
       });
@@ -1178,7 +1177,6 @@ async function applyStartupCatchupOutcomes(
     // instead of being silently advanced.
     recomputeNextRunsForMaintenance(state, {
       suppressScheduleComputeErrorJobIds: scheduleComputeFailedJobIds,
-      preserveScheduleErrorCountJobIds: scheduleComputeFailedJobIds,
       recordedScheduleComputeErrorJobIds: scheduleComputeFailedJobIds,
     });
     await persist(state);

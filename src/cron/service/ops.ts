@@ -176,7 +176,6 @@ export async function start(state: CronServiceState) {
     await ensureLoaded(state, { skipRecompute: true });
     const changed = recomputeNextRuns(state, {
       suppressScheduleComputeErrorJobIds: startupScheduleComputeFailedJobIds,
-      preserveScheduleErrorCountJobIds: startupScheduleComputeFailedJobIds,
     });
     if (changed) {
       await persist(state);
