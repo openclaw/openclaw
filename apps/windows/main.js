@@ -26,9 +26,12 @@ const statusIndicator = document.getElementById('status-indicator');
 const startBtn = document.getElementById('start-btn');
 const stopBtn = document.getElementById('stop-btn');
 
+let gatewayPort = 18789;
+invoke('get_port').then(p => { gatewayPort = p; }).catch(() => {});
+
 async function checkHealth() {
   try {
-    const res = await fetch('http://localhost:18789/health');
+    const res = await fetch(`http://localhost:${gatewayPort}/health`);
     if (res.ok) {
       statusIndicator.textContent = 'ONLINE';
       statusIndicator.className = 'indicator online';

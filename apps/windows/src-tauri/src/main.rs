@@ -51,6 +51,30 @@ fn get_openclaw_command() -> (String, Vec<String>) {
     ("openclaw".to_string(), vec![])
 }
 
+fn get_gateway_port() -> u16 {
+    let (program, args_base) = get_openclaw_command();
+    let mut args = args_base;
+    args.push("config".to_string());
+    args.push("get".to_string());
+    args.push("gateway.port".to_string());
+    
+    if let Ok(output) = Command::new(&program).args(&args).output() {
+        if output.status.success() {
+            if let Ok(port_str) = String::from_utf8(output.stdout) {
+                if let Ok(port) = port_str.trim().parse::<u16>() {
+                    return port;
+                }
+            }
+        }
+    }
+    18789
+}
+
+#[tauri::command]
+fn get_port() -> u16 {
+    get_gateway_port()
+}
+
 #[tauri::command]
 async fn start_gateway(app: AppHandle, state: State<'_, GatewayState>) -> Result<String, String> {
     {
@@ -139,7 +163,8 @@ fn watchdog_thread(app: AppHandle, state: GatewayState) {
         }
         
         // HTTP Readiness Probe
-        let _ = ureq::get("http://localhost:18789/health").timeout(Duration::from_secs(2)).call();
+        let port = get_gateway_port();
+        let _ = ureq::get(&format!("http://localhost:{}/health", port)).timeout(Duration::from_secs(2)).call();
         
         let mut process_lock = match state.process.lock() {
             Ok(guard) => guard,
@@ -157,6 +182,9 @@ fn watchdog_thread(app: AppHandle, state: GatewayState) {
                     if count > max_restarts {
                         show_notification(&app, "OpenClaw Gateway", 
                             "Critical error. Gateway crashed multiple times. Manual restart required.");
+                        if let Ok(mut final_lock) = state.process.lock() {
+                            let _ = final_lock.take();
+                        }
                         break;
                     }
                     
@@ -266,7 +294,7 @@ fn main() {
             let _ = spawn_gateway(app.handle(), state.inner().clone());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![start_gateway, stop_gateway])
+        .invoke_handler(tauri::generate_handler![start_gateway, stop_gateway, get_port])
         .system_tray(SystemTray::new().with_menu(tray_menu))
         .on_system_tray_event(|app, event| match event {
             SystemTrayEvent::LeftClick { .. } => {
