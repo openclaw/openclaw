@@ -5,7 +5,7 @@ import {
   _setComfyFetchGuardForTesting,
   buildComfyImageGenerationProvider,
 } from "./image-generation-provider.js";
-import { getComfyConfig } from "./workflow-runtime.js";
+import { getComfyCapabilityConfig, getComfyConfig } from "./workflow-runtime.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -101,6 +101,45 @@ describe("comfy image-generation provider", () => {
     ).toEqual({
       baseUrl: "http://comfy.internal:8188",
       mode: "local",
+    });
+  });
+
+  it("merges nested runtime capability overrides without dropping plugin workflows", () => {
+    const cfg = {
+      ...buildComfyPluginConfig({
+        image: {
+          workflow: {
+            "6": { inputs: { text: "" } },
+          },
+          promptNodeId: "6",
+          outputNodeIds: ["9"],
+        },
+      }),
+      ...buildComfyConfig({
+        image: {
+          baseUrl: "http://comfy.internal:8188",
+          pollIntervalMs: 500,
+        },
+      }),
+    };
+
+    expect(getComfyConfig(cfg).image).toEqual({
+      workflow: {
+        "6": { inputs: { text: "" } },
+      },
+      promptNodeId: "6",
+      outputNodeIds: ["9"],
+      baseUrl: "http://comfy.internal:8188",
+      pollIntervalMs: 500,
+    });
+    expect(getComfyCapabilityConfig(getComfyConfig(cfg), "image")).toEqual({
+      workflow: {
+        "6": { inputs: { text: "" } },
+      },
+      promptNodeId: "6",
+      outputNodeIds: ["9"],
+      baseUrl: "http://comfy.internal:8188",
+      pollIntervalMs: 500,
     });
   });
 

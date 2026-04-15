@@ -87,6 +87,7 @@ export type ComfyWorkflowResult = {
 };
 
 let comfyFetchGuard = fetchWithSsrFGuard;
+const COMFY_CAPABILITIES = ["image", "music", "video"] as const satisfies readonly ComfyCapability[];
 
 export function _setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
   comfyFetchGuard = impl ?? fetchWithSsrFGuard;
@@ -135,7 +136,18 @@ export function getComfyConfig(cfg?: OpenClawConfig): ComfyProviderConfig {
   const pluginConfig = cfg?.plugins?.entries?.comfy?.config;
   const providerConfig = cfg?.models?.providers?.comfy;
   if (isRecord(pluginConfig) && isRecord(providerConfig)) {
-    return { ...pluginConfig, ...providerConfig };
+    const merged = { ...pluginConfig, ...providerConfig };
+    for (const capability of COMFY_CAPABILITIES) {
+      const pluginCapabilityConfig = pluginConfig[capability];
+      const providerCapabilityConfig = providerConfig[capability];
+      if (isRecord(pluginCapabilityConfig) && isRecord(providerCapabilityConfig)) {
+        merged[capability] = {
+          ...pluginCapabilityConfig,
+          ...providerCapabilityConfig,
+        };
+      }
+    }
+    return merged;
   }
   if (isRecord(providerConfig)) {
     return providerConfig;
