@@ -388,6 +388,8 @@ describe("sanitizeUserFacingText", () => {
   it("preserves literal closing-tool-tag syntax in instructional prose", () => {
     const text = "Use </tool_call> to close the tag.";
     expect(sanitizeUserFacingText(text)).toBe(text);
+    expect(sanitizeUserFacingText("Use </tool_call>.")).toBe("Use </tool_call>.");
+    expect(sanitizeUserFacingText("Example: </tool_result>")).toBe("Example: </tool_result>");
   });
 
   it("preserves literal JSON tool-call examples in instructional prose", () => {

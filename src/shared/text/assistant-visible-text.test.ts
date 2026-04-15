@@ -229,6 +229,8 @@ describe("stripAssistantInternalScaffolding", () => {
 
     it("preserves literal closing-tag syntax in instructional prose", () => {
       expectVisibleText("Use </tool_call> to close the tag.", "Use </tool_call> to close the tag.");
+      expectVisibleText("Use </tool_call>.", "Use </tool_call>.");
+      expectVisibleText("Example: </tool_result>", "Example: </tool_result>");
     });
 
     it("preserves literal JSON tool-call examples in instructional prose", () => {

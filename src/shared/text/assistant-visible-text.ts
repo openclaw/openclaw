@@ -212,12 +212,15 @@ const LITERAL_TOOL_PAYLOAD_AFTER_RE =
   /^[^.!?\n]*\b(?:docs?|documentation|example|literal(?:ly)?|syntax)\b/i;
 const LITERAL_TOOL_PAYLOAD_SENTENCE_END_BEFORE_RE =
   /(?:^|[\n.!?]\s*)(?:use|type|write|include|document|example)\b[^.!?\n]*$/i;
-const LITERAL_TOOL_PAYLOAD_SENTENCE_END_AFTER_RE = /^[\s)"'`.,:;!?]*(?:$|\n)/;
+const LITERAL_TOOL_SENTENCE_END_AFTER_RE = /^[\s)"'`.,:;!?]*(?:$|\n)/;
 
 function looksLikeLiteralToolTagContext(text: string, start: number, end: number): boolean {
   const before = text.slice(Math.max(0, start - 80), start);
   const after = text.slice(end, Math.min(text.length, end + 80));
-  return LITERAL_TOOL_TAG_BEFORE_RE.test(before) && LITERAL_TOOL_TAG_AFTER_RE.test(after);
+  return (
+    LITERAL_TOOL_TAG_BEFORE_RE.test(before) &&
+    (LITERAL_TOOL_TAG_AFTER_RE.test(after) || LITERAL_TOOL_SENTENCE_END_AFTER_RE.test(after))
+  );
 }
 
 function looksLikeLiteralToolPayloadContext(text: string, start: number, end: number): boolean {
@@ -226,7 +229,7 @@ function looksLikeLiteralToolPayloadContext(text: string, start: number, end: nu
   return (
     (LITERAL_TOOL_TAG_BEFORE_RE.test(before) && LITERAL_TOOL_PAYLOAD_AFTER_RE.test(after)) ||
     (LITERAL_TOOL_PAYLOAD_SENTENCE_END_BEFORE_RE.test(before) &&
-      LITERAL_TOOL_PAYLOAD_SENTENCE_END_AFTER_RE.test(after))
+      LITERAL_TOOL_SENTENCE_END_AFTER_RE.test(after))
   );
 }
 
