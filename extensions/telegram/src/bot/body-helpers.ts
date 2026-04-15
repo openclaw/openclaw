@@ -92,14 +92,25 @@ export function buildSenderLabel(msg: Message, senderId?: number | string) {
 
 export type TelegramTextEntity = NonNullable<Message["entities"]>[number];
 
+export function isBinaryContent(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function getTelegramTextParts(
   msg: Pick<Message, "text" | "caption" | "entities" | "caption_entities">,
 ): {
   text: string;
   entities: TelegramTextEntity[];
 } {
-  const text = msg.text ?? msg.caption ?? "";
-  const entities = msg.entities ?? msg.caption_entities ?? [];
+  const raw = msg.text ?? msg.caption ?? "";
+  const text = isBinaryContent(raw) ? "" : raw;
+  const entities = text ? (msg.entities ?? msg.caption_entities ?? []) : [];
   return { text, entities };
 }
 

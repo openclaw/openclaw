@@ -25,6 +25,10 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dyn
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { flattenCompletionMessagesToStringContent } from "./openai-completions-string-content.js";
 import {
+  mapOpenAIReasoningEffortForModel,
+  resolveOpenAIReasoningEffortMap,
+} from "./openai-reasoning-compat.js";
+import {
   normalizeOpenAIReasoningEffort,
   type OpenAIApiReasoningEffort,
   type OpenAIReasoningEffort,
@@ -750,6 +754,20 @@ function resolveOpenAIReasoningEffort(
   ) as Exclude<OpenAIApiReasoningEffort, "none">;
 }
 
+function coerceOpenAIApiReasoningEffort(effort: string): OpenAIApiReasoningEffort {
+  const normalized = normalizeOpenAIReasoningEffort(effort);
+  switch (normalized) {
+    case "none":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+      return normalized;
+    default:
+      return "high";
+  }
+}
+
 export function buildOpenAIResponsesParams(
   model: Model<Api>,
   context: Context,
@@ -795,8 +813,17 @@ export function buildOpenAIResponsesParams(
   }
   if (model.reasoning) {
     if (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary) {
+      const requestedReasoningEffort = resolveOpenAIReasoningEffort(options);
+      const reasoningEffort = coerceOpenAIApiReasoningEffort(
+        mapOpenAIReasoningEffortForModel({
+          model,
+          effort: requestedReasoningEffort,
+        }) ?? requestedReasoningEffort,
+      );
+      const normalizedReasoningEffort: Exclude<OpenAIApiReasoningEffort, "none"> =
+        reasoningEffort === "none" ? "high" : reasoningEffort;
       params.reasoning = {
-        effort: resolveOpenAIReasoningEffort(options),
+        effort: normalizedReasoningEffort,
         summary: options?.reasoningSummary || "auto",
       };
       params.include = ["reasoning.encrypted_content"];
@@ -1209,9 +1236,7 @@ function getCompat(model: OpenAIModeModel): {
     supportsDeveloperRole:
       (compat.supportsDeveloperRole as boolean | undefined) ?? detected.supportsDeveloperRole,
     supportsReasoningEffort,
-    reasoningEffortMap:
-      (compat.reasoningEffortMap as Record<string, string> | undefined) ??
-      detected.reasoningEffortMap,
+    reasoningEffortMap: resolveOpenAIReasoningEffortMap(model, detected.reasoningEffortMap),
     supportsUsageInStreaming:
       (compat.supportsUsageInStreaming as boolean | undefined) ?? detected.supportsUsageInStreaming,
     maxTokensField: (compat.maxTokensField as string | undefined) ?? detected.maxTokensField,

@@ -4,6 +4,7 @@ import {
   isGoogleGenerativeAiApi,
   normalizeGoogleApiBaseUrl,
   normalizeGoogleGenerativeAiBaseUrl,
+  normalizeGoogleProviderConfig,
   parseGeminiAuth,
   resolveGoogleGenerativeAiHttpRequestConfig,
   resolveGoogleGenerativeAiApiOrigin,
@@ -103,6 +104,36 @@ describe("google generative ai helpers", () => {
     ).toEqual({
       api: "openai-completions",
       baseUrl: "https://generativelanguage.googleapis.com",
+    });
+  });
+
+  it("normalizes google-vertex model ids without rewriting the OpenAI-compatible baseUrl", () => {
+    expect(
+      normalizeGoogleProviderConfig("google-vertex", {
+        api: "openai-completions",
+        baseUrl:
+          "https://aiplatform.googleapis.com/v1/projects/test/locations/us-central1/endpoints/openapi",
+        models: [
+          {
+            id: "gemini-3.1-flash-lite",
+            name: "Gemini Flash Lite",
+            input: ["text"],
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 1,
+            maxTokens: 1,
+          },
+        ],
+      }),
+    ).toMatchObject({
+      api: "openai-completions",
+      baseUrl:
+        "https://aiplatform.googleapis.com/v1/projects/test/locations/us-central1/endpoints/openapi",
+      models: [
+        expect.objectContaining({
+          id: "gemini-3.1-flash-lite-preview",
+        }),
+      ],
     });
   });
 

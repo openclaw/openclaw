@@ -615,6 +615,33 @@ describe("openai transport stream", () => {
     expect(params.reasoning).toEqual({ effort: "low", summary: "auto" });
   });
 
+  it("maps low reasoning to medium for Codex mini responses models", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.1-codex-mini",
+        name: "gpt-5.1-codex-mini",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "low",
+      } as never,
+    ) as { reasoning?: unknown };
+
+    expect(params.reasoning).toEqual({ effort: "medium", summary: "auto" });
+  });
+
   it.each([
     {
       label: "openai",
