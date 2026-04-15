@@ -1,11 +1,11 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import { afterEach, describe, expect, it } from "vitest";
-import { extractToolPayload } from "../../../src/infra/outbound/tool-payload.js";
 import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
-} from "../../../src/plugins/runtime.js";
-import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
+} from "openclaw/plugin-sdk/testing";
+import { afterEach, describe, expect, it } from "vitest";
+import { extractToolPayload } from "../../../src/infra/outbound/tool-payload.js";
+import { createTestRegistry } from "../../../test/helpers/plugins/plugin-registry.js";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/api.js";
 import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
