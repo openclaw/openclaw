@@ -66,19 +66,28 @@ function resolveChannelPluginModuleEntry(
 ): BundledChannelEntryRuntimeContract | null {
   const resolved = unwrapDefaultModuleExport(moduleExport);
   if (!resolved || typeof resolved !== "object") {
+    log.warn(
+      `[channels] bundled channel entry missing or not an object; skipping`,
+    );
     return null;
   }
   const record = resolved as Partial<BundledChannelEntryRuntimeContract>;
   if (record.kind !== "bundled-channel-entry") {
+    log.warn(
+      `[channels] bundled channel entry missing bundled-channel-entry kind marker; skipping (found: ${String(record.kind)})`,
+    );
     return null;
   }
-  if (
-    typeof record.id !== "string" ||
-    typeof record.name !== "string" ||
-    typeof record.description !== "string" ||
-    typeof record.register !== "function" ||
-    typeof record.loadChannelPlugin !== "function"
-  ) {
+  const missingFields: string[] = [];
+  if (typeof record.id !== "string") missingFields.push("id");
+  if (typeof record.name !== "string") missingFields.push("name");
+  if (typeof record.description !== "string") missingFields.push("description");
+  if (typeof record.register !== "function") missingFields.push("register");
+  if (typeof record.loadChannelPlugin !== "function") missingFields.push("loadChannelPlugin");
+  if (missingFields.length > 0) {
+    log.warn(
+      `[channels] bundled channel entry missing required fields: ${missingFields.join(", ")}; skipping`,
+    );
     return null;
   }
   return record as BundledChannelEntryRuntimeContract;

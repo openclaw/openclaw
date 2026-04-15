@@ -2198,8 +2198,19 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
 
       if (typeof register !== "function") {
-        logger.error(`[plugins] ${record.id} missing register/activate export`);
-        pushPluginLoadError("plugin export missing register/activate");
+        // Check if this is a bundled channel entry that uses the new contract
+        const resolvedModule = resolved?.definition ?? {};
+        const isBundledChannelEntry =
+          resolvedModule.kind === "bundled-channel-entry";
+        if (isBundledChannelEntry) {
+          logger.error(
+            `[plugins] ${record.id} is a bundled channel entry that requires setup-runtime; ensure plugin is loaded via bundled channel discovery, not legacy plugin loader`,
+          );
+          pushPluginLoadError("bundled channel entry requires setup-runtime loader");
+        } else {
+          logger.error(`[plugins] ${record.id} missing register/activate export`);
+          pushPluginLoadError("plugin export missing register/activate");
+        }
         continue;
       }
 
@@ -2611,8 +2622,19 @@ export async function loadOpenClawPluginCliRegistry(
     }
 
     if (typeof register !== "function") {
-      logger.error(`[plugins] ${record.id} missing register/activate export`);
-      pushPluginLoadError("plugin export missing register/activate");
+      // Check if this is a bundled channel entry that uses the new contract
+      const resolvedModule = resolved?.definition ?? {};
+      const isBundledChannelEntry =
+        resolvedModule.kind === "bundled-channel-entry";
+      if (isBundledChannelEntry) {
+        logger.error(
+          `[plugins] ${record.id} is a bundled channel entry that requires setup-runtime; ensure plugin is loaded via bundled channel discovery, not legacy plugin loader`,
+        );
+        pushPluginLoadError("bundled channel entry requires setup-runtime loader");
+      } else {
+        logger.error(`[plugins] ${record.id} missing register/activate export`);
+        pushPluginLoadError("plugin export missing register/activate");
+      }
       continue;
     }
 
