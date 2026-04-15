@@ -1118,7 +1118,7 @@ async function processOpenAICompletionsStream(
     if (!choice.delta) {
       continue;
     }
-    if (choice.delta.content) {
+    if (typeof choice.delta.content === "string") {
       flushPendingThinkingDelta();
       if (!currentBlock || currentBlock.type !== "text") {
         finishCurrentBlock();
