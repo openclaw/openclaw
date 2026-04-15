@@ -1319,6 +1319,61 @@ describe("cron service timer regressions", () => {
     }
   });
 
+  it("suppresses startup follow-up recomputes for maintenance schedule errors (#66019)", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-04-13T16:20:00.000Z");
+    const dueJob = createIsolatedRegressionJob({
+      id: "cron-66019-startup-due",
+      name: "cron-66019-startup-due",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "0 7 * * *", tz: "Asia/Shanghai" },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    const missingNextRunJob = createIsolatedRegressionJob({
+      id: "cron-66019-startup-maintenance",
+      name: "cron-66019-startup-maintenance",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+      payload: { kind: "agentTurn", message: "pong" },
+      state: {},
+    });
+    await writeCronJobs(store.storePath, [dueJob, missingNextRunJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi.fn(async () => {
+      now = scheduledAt + 25;
+      return { status: "ok" as const, summary: "done" };
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+    const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
+
+    try {
+      await start(state);
+
+      const due = state.store?.jobs.find((entry) => entry.id === "cron-66019-startup-due");
+      const maintenance = state.store?.jobs.find(
+        (entry) => entry.id === "cron-66019-startup-maintenance",
+      );
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+      expect(due?.state.scheduleErrorCount).toBe(1);
+      expect(maintenance?.state.scheduleErrorCount).toBe(1);
+      expect(maintenance?.state.nextRunAtMs).toBeUndefined();
+      expect(maintenance?.enabled).toBe(true);
+    } finally {
+      nextRunSpy.mockRestore();
+      stop(state);
+    }
+  });
+
   it("force run preserves 'every' anchor while recording manual lastRunAtMs", () => {
     const nowMs = Date.now();
     const everyMs = 24 * 60 * 60 * 1_000;
