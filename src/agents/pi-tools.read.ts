@@ -454,6 +454,8 @@ export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
 ): AnyAgentTool {
+  const useBridge = !!options?.bridge;
+  
   return {
     ...base,
     execute: async (toolCallId, params, signal, _onUpdate): Promise<AgentToolResult> => {
@@ -478,12 +480,44 @@ export function createOpenClawReadTool(
       });
 
       try {
-        const stats = await fs.stat(inputPath);
-        const isDirectory = stats.isDirectory();
+        let stats;
+        let isDirectory = false;
+        let fileSize = 0;
+        
+        if (useBridge) {
+          const bridgeStats = await options.bridge!.stat({ 
+            filePath: inputPath, 
+            cwd: rootDirResolved,
+            signal 
+          });
+          if (!bridgeStats) {
+            throw new Error(`ENOENT: ${inputPath} not found in sandbox`);
+          }
+          // SandboxFsStat uses 'type' property instead of isDirectory()
+          isDirectory = bridgeStats.type === "directory";
+          fileSize = bridgeStats.size;
+          stats = { size: fileSize, isDirectory: () => isDirectory };
+        } else {
+          stats = await fs.stat(inputPath);
+          isDirectory = stats.isDirectory();
+          fileSize = stats.size;
+        }
 
         if (isDirectory) {
           if (signal?.aborted) { throw new Error("Read operation aborted"); }
 
+          // For sandboxed mode, we cannot list directory contents through the bridge
+          // because SandboxFsBridge doesn't have a readdir method. Return a message
+          // indicating that directory listing is not supported in sandboxed mode.
+          if (useBridge) {
+            return {
+              toolCallId,
+              content: [{ type: "text", text: `Cannot list directory ${inputPath} in sandboxed mode. Please specify a specific file path.` }],
+              details: { path: inputPath },
+            } as AgentToolResult;
+          }
+
+          // Host mode - can list directories
           const files = await fs.readdir(inputPath);
           
           let truncated = false;
@@ -511,7 +545,19 @@ export function createOpenClawReadTool(
         if (IMAGE_EXTENSIONS.has(ext)) {
           if (signal?.aborted) { throw new Error("Read operation aborted"); }
 
-          let fileBuffer = await fs.readFile(inputPath);
+          // Use bridge for file reading if available
+          let fileBuffer: Buffer;
+          if (useBridge) {
+            const buffer = await options.bridge!.readFile({ 
+              filePath: inputPath, 
+              cwd: rootDirResolved,
+              signal 
+            });
+            fileBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+          } else {
+            fileBuffer = await fs.readFile(inputPath);
+          }
+          
           let mimeType = getImageMimeType(ext);
 
           if (options?.imageSanitization) {
@@ -573,7 +619,7 @@ export function createOpenClawReadTool(
               } as const,
               { type: "text", text: `🎵 [${fileName}](${mediaUrl})` }
             ],
-            details: { path: inputPath, size: stats.size },
+            details: { path: inputPath, size: fileSize },
           } as AgentToolResult;
         }
 
@@ -595,13 +641,24 @@ export function createOpenClawReadTool(
               } as const,
               { type: "text", text: `🎬 [${fileName}](${mediaUrl})` }
             ],
-            details: { path: inputPath, size: stats.size },
+            details: { path: inputPath, size: fileSize },
           } as AgentToolResult;
         }
 
         if (signal?.aborted) { throw new Error("Read operation aborted"); }
         
-        let text = await fs.readFile(inputPath, "utf-8");
+        // Use bridge for text file reading if available
+        let text: string;
+        if (useBridge) {
+          const buffer = await options.bridge!.readFile({ 
+            filePath: inputPath, 
+            cwd: rootDirResolved,
+            signal 
+          });
+          text = Buffer.isBuffer(buffer) ? buffer.toString("utf-8") : String(buffer);
+        } else {
+          text = await fs.readFile(inputPath, "utf-8");
+        }
 
         if (offset > 0 || limit !== undefined) {
           const lines = text.split('\n');
@@ -618,7 +675,7 @@ export function createOpenClawReadTool(
         return {
           toolCallId,
           content: [{ type: "text", text }],
-          details: { path: inputPath, size: stats.size, offset, limit },
+          details: { path: inputPath, size: fileSize, offset, limit },
         } as AgentToolResult;
 
       } catch (error) {
