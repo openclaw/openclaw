@@ -145,9 +145,9 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
-  it("treats main and main SHAs as real dev-update lanes", () => {
+  it("only treats main as a real dev-update lane", () => {
     expect(shouldRunMainChannelDevUpdate("main")).toBe(true);
-    expect(shouldRunMainChannelDevUpdate("08753a1d793c040b101c8a26c43445dbbab14995")).toBe(true);
+    expect(shouldRunMainChannelDevUpdate("08753a1d793c040b101c8a26c43445dbbab14995")).toBe(false);
     expect(shouldRunMainChannelDevUpdate(" codex/cross-os-release-checks-full-native-e2e ")).toBe(
       false,
     );

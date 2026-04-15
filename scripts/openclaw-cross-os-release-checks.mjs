@@ -1145,8 +1145,7 @@ function resolveExpectedDevUpdateRef(ref) {
 }
 
 export function shouldRunMainChannelDevUpdate(ref) {
-  const expectedRef = resolveExpectedDevUpdateRef(ref);
-  return expectedRef === "main" || looksLikeCommitSha(expectedRef);
+  return resolveExpectedDevUpdateRef(ref) === "main";
 }
 
 export function buildRealUpdateEnv(env) {
@@ -2157,9 +2156,6 @@ function gatewayReadyDeadlineMs() {
 }
 
 async function resolveGatewayStatusArgs(lane, env, logPath) {
-  if (process.platform === "win32") {
-    return ["gateway", "status", "--deep", "--require-rpc", "--timeout", "5000"];
-  }
   const help = await runOpenClaw({
     lane,
     env,

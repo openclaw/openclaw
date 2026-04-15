@@ -162,12 +162,42 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -n "${INPUT_WORKFLOW_REF}" ]]; then
-            echo "value=${INPUT_WORKFLOW_REF}" >> "$GITHUB_OUTPUT"
+            TARGET_REF="${INPUT_WORKFLOW_REF}"
           elif [[ "${CALLER_REPOSITORY}" == "${WORKFLOW_REPOSITORY}" ]]; then
-            echo "value=${CURRENT_SHA}" >> "$GITHUB_OUTPUT"
+            TARGET_REF="${CURRENT_SHA}"
           else
-            echo "value=main" >> "$GITHUB_OUTPUT"
+            TARGET_REF="main"
           fi
+
+          if [[ "${TARGET_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "value=${TARGET_REF}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          REMOTE_URL="https://github.com/${WORKFLOW_REPOSITORY}.git"
+          if [[ -n "${INPUT_WORKFLOW_REF}" ]]; then
+            if [[ "${TARGET_REF}" == refs/* ]]; then
+              mapfile -t MATCHES < <(git ls-remote "${REMOTE_URL}" "${TARGET_REF}" | awk '{print $1}' | awk '!seen[$0]++')
+            else
+              mapfile -t MATCHES < <(git ls-remote "${REMOTE_URL}" "refs/heads/${TARGET_REF}" "refs/tags/${TARGET_REF}" "${TARGET_REF}" | awk '{print $1}' | awk '!seen[$0]++')
+            fi
+          else
+            mapfile -t MATCHES < <(git ls-remote "${REMOTE_URL}" "refs/heads/${TARGET_REF}" | awk '{print $1}' | awk '!seen[$0]++')
+          fi
+
+          case "${#MATCHES[@]}" in
+            1)
+              echo "value=${MATCHES[0]}" >> "$GITHUB_OUTPUT"
+              ;;
+            0)
+              echo "Failed to resolve workflow ref: ${TARGET_REF}" >&2
+              exit 1
+              ;;
+            *)
+              echo "Workflow ref resolved ambiguously: ${TARGET_REF}" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Checkout workflow repo
         uses: actions/checkout@v6
