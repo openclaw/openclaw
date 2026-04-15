@@ -467,7 +467,7 @@ export async function deliverDiscordReply(params: {
         ? rawComponentSpec
         : {
             ...rawComponentSpec,
-            text: payload.text?.trim() ? payload.text : undefined,
+            text: payload.text?.trim() ? convertMarkdownTables(payload.text, tableMode) : undefined,
           }
       : undefined;
     if (!reply.hasMedia) {

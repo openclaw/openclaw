@@ -300,6 +300,46 @@ describe("deliverDiscordReply", () => {
     expect(sendMessageDiscordMock).not.toHaveBeenCalled();
   });
 
+  it("applies markdown-table conversion when component text falls back from payload text", async () => {
+    const cfgWithCodeTables = {
+      channels: { discord: { token: "test-token", markdownTableMode: "code" } },
+    } as OpenClawConfig;
+
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "| H | I |\n| - | - |\n| 1 | 2 |",
+          channelData: {
+            discord: {
+              components: {
+                blocks: [
+                  {
+                    type: "actions",
+                    buttons: [{ label: "Approve", callbackData: "approve", style: "success" }],
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+      target: "channel:654",
+      token: "token",
+      runtime,
+      cfg: cfgWithCodeTables,
+      textLimit: 2000,
+      replyToId: "reply-1",
+    });
+
+    expect(sendDiscordComponentMessageMock).toHaveBeenCalledTimes(1);
+    const spec = sendDiscordComponentMessageMock.mock.calls[0]?.[1] as {
+      text?: string;
+    };
+    expect(spec.text?.startsWith("```")).toBe(true);
+    expect(spec.text).toContain("| H | I |");
+    expect(spec.text).toContain("| --- | --- |");
+  });
+
   it("builds Discord components from interactive replies and attaches them to the first media send", async () => {
     const mediaLocalRoots = ["/tmp/workspace-agent"] as const;
     await deliverDiscordReply({
