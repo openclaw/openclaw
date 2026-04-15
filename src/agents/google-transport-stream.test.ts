@@ -295,6 +295,187 @@ describe("google transport stream", () => {
     });
   });
 
+  it("captures thoughtSignature on tool-call parts from Gemini SSE responses", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          responseId: "resp_sig",
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: { name: "exec", args: { cmd: "ls" } },
+                    thoughtSignature: "sig_tool_1",
+                  },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+          usageMetadata: {
+            promptTokenCount: 1,
+            candidatesTokenCount: 1,
+            totalTokenCount: 2,
+          },
+        },
+      ]),
+    );
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel({ id: "gemini-3-flash-preview" }),
+        {
+          messages: [{ role: "user", content: "hi", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        { apiKey: "k" } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "exec",
+        thoughtSignature: "sig_tool_1",
+      }),
+    ]);
+  });
+
+  it("re-emits thoughtSignature byte-exact on same-provider tool-call replays", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-3-flash-preview" }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "google",
+            api: "google-generative-ai",
+            model: "gemini-3-flash-preview",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "exec",
+                arguments: { cmd: "ls" },
+                thoughtSignature: "sig_tool_1",
+              },
+            ],
+          },
+        ],
+      } as never,
+    );
+
+    expect(params.contents[0]).toMatchObject({
+      role: "model",
+      parts: [
+        {
+          functionCall: { name: "exec", args: { cmd: "ls" } },
+          thoughtSignature: "sig_tool_1",
+        },
+      ],
+    });
+  });
+
+  it("omits thoughtSignature on tool-call replays when absent", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-3-flash-preview" }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "google",
+            api: "google-generative-ai",
+            model: "gemini-3-flash-preview",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "exec",
+                arguments: { cmd: "ls" },
+              },
+            ],
+          },
+        ],
+      } as never,
+    );
+
+    const part = (params.contents[0] as { parts: Array<Record<string, unknown>> }).parts[0];
+    expect(part).not.toHaveProperty("thoughtSignature");
+  });
+
+  it("drops thoughtSignature on tool-call replays when switching providers", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-3-flash-preview" }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "openai",
+            api: "openai-responses",
+            model: "gpt-5.4",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "exec",
+                arguments: { cmd: "ls" },
+                thoughtSignature: "sig_from_other_provider",
+              },
+            ],
+          },
+        ],
+      } as never,
+    );
+
+    const part = (params.contents[0] as { parts: Array<Record<string, unknown>> }).parts[0];
+    expect(part).not.toHaveProperty("thoughtSignature");
+  });
+
+  it("preserves thoughtSignature only on the parts that carried one in a parallel tool-call turn", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-3-flash-preview" }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "google",
+            api: "google-generative-ai",
+            model: "gemini-3-flash-preview",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "exec",
+                arguments: { cmd: "ls" },
+                thoughtSignature: "sig_first_only",
+              },
+              {
+                type: "toolCall",
+                id: "call_2",
+                name: "exec",
+                arguments: { cmd: "pwd" },
+              },
+            ],
+          },
+        ],
+      } as never,
+    );
+
+    const parts = (params.contents[0] as { parts: Array<Record<string, unknown>> }).parts;
+    expect(parts[0]).toMatchObject({ thoughtSignature: "sig_first_only" });
+    expect(parts[1]).not.toHaveProperty("thoughtSignature");
+  });
+
   it("includes cachedContent in direct Gemini payloads when requested", () => {
     const params = buildGoogleGenerativeAiParams(
       buildGeminiModel(),

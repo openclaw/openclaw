@@ -63,7 +63,13 @@ type GoogleGenerateContentRequest = {
 type GoogleTransportContentBlock =
   | { type: "text"; text: string; textSignature?: string }
   | { type: "thinking"; thinking: string; thinkingSignature?: string }
-  | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> };
+  | {
+      type: "toolCall";
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+      thoughtSignature?: string;
+    };
 
 type MutableAssistantOutput = {
   role: "assistant";
@@ -705,6 +711,9 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
                   id: toolCallId,
                   name: part.functionCall.name || "",
                   arguments: part.functionCall.args ?? {},
+                  ...(typeof part.thoughtSignature === "string" && part.thoughtSignature.length > 0
+                    ? { thoughtSignature: part.thoughtSignature }
+                    : {}),
                 };
                 output.content.push(toolCall);
                 const blockIndex = output.content.length - 1;
