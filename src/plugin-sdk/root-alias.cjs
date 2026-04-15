@@ -175,6 +175,7 @@ function getJiti(tryNative) {
     // Prefer Node's native sync ESM loader for built dist/plugin-sdk/*.js files
     // so local plugins do not create a second transpiled OpenClaw core graph.
     tryNative: effectiveTryNative,
+    fsCache: process.env.OPENCLAW_JITI_CACHE_DIR?.trim() || true,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
   });
   jitiLoaders.set(effectiveTryNative, jitiLoader);

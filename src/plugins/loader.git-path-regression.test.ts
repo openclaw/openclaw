@@ -62,6 +62,7 @@ export const copiedRuntimeMarker = {
       const withoutAlias = createJiti(${JSON.stringify(jitiBaseFile)}, {
         interopDefault: true,
         tryNative: false,
+        fsCache: false,
         extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
       });
       let withoutAliasThrew = false;
@@ -73,6 +74,7 @@ export const copiedRuntimeMarker = {
       const withAlias = createJiti(${JSON.stringify(jitiBaseFile)}, {
         interopDefault: true,
         tryNative: false,
+        fsCache: false,
         extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
         alias: {
           "openclaw/plugin-sdk/infra-runtime": ${JSON.stringify(copiedChannelRuntimeShim)},
