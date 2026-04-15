@@ -92,12 +92,42 @@ describe("google video generation provider", () => {
     expect(GoogleGenAIMock).toHaveBeenCalledWith(
       expect.objectContaining({
         apiKey: "google-key",
-        httpOptions: expect.not.objectContaining({
-          baseUrl: expect.anything(),
-          apiVersion: expect.anything(),
-        }),
+        apiVersion: "v1alpha",
       }),
     );
+  });
+
+  it("omits apiVersion for GA models", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              videoBytes: Buffer.from("mp4-bytes").toString("base64"),
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+
+    const provider = buildGoogleVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "google",
+      model: "veo-3.0-fast-generate-001",
+      prompt: "A tiny robot",
+      cfg: {},
+    });
+
+    const ctorArgs = GoogleGenAIMock.mock.calls[0]?.[0];
+    expect(ctorArgs).toHaveProperty("apiKey", "google-key");
+    expect(ctorArgs).not.toHaveProperty("apiVersion");
   });
 
   it("rejects mixed image and video inputs", async () => {
