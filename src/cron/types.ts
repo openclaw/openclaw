@@ -108,7 +108,13 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow">> & {
+} & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow" | "model" | "fallbacks" | "thinking">> & {
+    /** Pass null to clear the model override and inherit the global default. */
+    model?: string | null;
+    /** Pass null to clear per-job fallbacks and inherit the global fallback chain. */
+    fallbacks?: string[] | null;
+    /** Pass null to clear the thinking override. */
+    thinking?: string | null;
     toolsAllow?: string[] | null;
   };
 export type CronJobState = {

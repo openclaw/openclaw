@@ -1,14 +1,28 @@
 import { Type, type TSchema } from "@sinclair/typebox";
 import { NonEmptyString } from "./primitives.js";
 
-function cronAgentTurnPayloadSchema(params: { message: TSchema; toolsAllow: TSchema }) {
+function cronAgentTurnPayloadSchema(params: {
+  message: TSchema;
+  toolsAllow: TSchema;
+  modelNullable?: boolean;
+  fallbacksNullable?: boolean;
+  thinkingNullable?: boolean;
+}) {
   return Type.Object(
     {
       kind: Type.Literal("agentTurn"),
       message: params.message,
-      model: Type.Optional(Type.String()),
-      fallbacks: Type.Optional(Type.Array(Type.String())),
-      thinking: Type.Optional(Type.String()),
+      model: Type.Optional(
+        params.modelNullable ? Type.Union([Type.String(), Type.Null()]) : Type.String(),
+      ),
+      fallbacks: Type.Optional(
+        params.fallbacksNullable
+          ? Type.Union([Type.Array(Type.String()), Type.Null()])
+          : Type.Array(Type.String()),
+      ),
+      thinking: Type.Optional(
+        params.thinkingNullable ? Type.Union([Type.String(), Type.Null()]) : Type.String(),
+      ),
       timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
       lightContext: Type.Optional(Type.Boolean()),
@@ -152,6 +166,9 @@ export const CronPayloadPatchSchema = Type.Union([
   cronAgentTurnPayloadSchema({
     message: Type.Optional(NonEmptyString),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
+    modelNullable: true,
+    fallbacksNullable: true,
+    thinkingNullable: true,
   }),
 ]);
 
