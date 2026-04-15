@@ -6,13 +6,17 @@ import {
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
-import { getCliSessionBinding } from "../../agents/cli-session.js";
+import { getCliSessionBinding, setCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveSessionStoreEntry,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -136,6 +140,30 @@ export function createFollowupRunner(params: {
     }
   };
 
+  const refreshActiveSessionEntryFromStore = (fallbackEntry?: SessionEntry) => {
+    if (!storePath || !sessionKey) {
+      return fallbackEntry;
+    }
+    try {
+      const latestStore = loadSessionStore(storePath, { skipCache: true });
+      const resolved = resolveSessionStoreEntry({
+        store: latestStore,
+        sessionKey,
+      });
+      const latestEntry = resolved.existing;
+      if (!latestEntry) {
+        return fallbackEntry;
+      }
+      if (sessionStore) {
+        sessionStore[resolved.normalizedKey] = latestEntry;
+        sessionStore[sessionKey] = latestEntry;
+      }
+      return latestEntry;
+    } catch {
+      return fallbackEntry;
+    }
+  };
+
   return async (queued: FollowupRun) => {
     queued.run.config = await resolveQueuedReplyExecutionConfig(queued.run.config, {
       originatingChannel: queued.originatingChannel,
@@ -175,8 +203,9 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
-      let activeSessionEntry =
-        (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
+      let activeSessionEntry = refreshActiveSessionEntryFromStore(
+        (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry,
+      );
       activeSessionEntry = await runPreflightCompactionIfNeeded({
         cfg: runtimeConfig,
         followupRun: effectiveQueued,
@@ -365,6 +394,22 @@ export function createFollowupRunner(params: {
           usageIsContextSnapshot: isCliProvider(providerUsed, runtimeConfig),
           logLabel: "followup",
         });
+      }
+
+      const cliSessionBinding = runResult.meta?.agentMeta?.cliSessionBinding;
+      if (providerUsed && cliSessionBinding) {
+        const updatedEntry =
+          activeSessionEntry ??
+          (sessionKey ? sessionStore?.[sessionKey] : undefined) ??
+          sessionEntry;
+        if (updatedEntry) {
+          setCliSessionBinding(updatedEntry, providerUsed, cliSessionBinding);
+          updatedEntry.updatedAt = Date.now();
+          activeSessionEntry = updatedEntry;
+          if (sessionKey && sessionStore) {
+            sessionStore[sessionKey] = updatedEntry;
+          }
+        }
       }
 
       const payloadArray = runResult.payloads ?? [];
