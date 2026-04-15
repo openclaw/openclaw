@@ -190,10 +190,10 @@ jobs:
 
           if [[ -n "${INPUT_WORKFLOW_REF}" ]]; then
             TARGET_REF="${INPUT_WORKFLOW_REF}"
-          elif [[ "${CALLER_REPOSITORY}" == "${WORKFLOW_REPOSITORY}" ]]; then
-            TARGET_REF="${CURRENT_SHA}"
           elif [[ "${WORKFLOW_CONTEXT_REF}" == "${WORKFLOW_REPOSITORY}/"* ]] && [[ "${WORKFLOW_CONTEXT_REF}" == *"@"* ]]; then
             TARGET_REF="${WORKFLOW_CONTEXT_REF##*@}"
+          elif [[ "${CALLER_REPOSITORY}" == "${WORKFLOW_REPOSITORY}" ]]; then
+            TARGET_REF="${CURRENT_SHA}"
           else
             echo "Failed to infer workflow ref from github.workflow_ref=${WORKFLOW_CONTEXT_REF}" >&2
             exit 1
