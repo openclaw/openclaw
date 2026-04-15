@@ -228,6 +228,7 @@ prepare_update_tarball() {
     UPDATE_EXPECT_VERSION="$(
       node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version'
     )"
+    node --import tsx scripts/write-package-dist-inventory.ts
     quiet_npm pack --ignore-scripts --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
   fi
   UPDATE_TGZ_FILE="$(
