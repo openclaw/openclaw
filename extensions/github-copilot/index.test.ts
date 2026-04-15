@@ -57,7 +57,6 @@ describe("github-copilot plugin", () => {
     expect(adapter.id).toBe("github-copilot");
   });
 
-
   it("skips catalog discovery when plugin discovery is disabled", async () => {
     const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
 

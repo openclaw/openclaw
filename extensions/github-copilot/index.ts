@@ -2,8 +2,8 @@ import { definePluginEntry, type ProviderAuthContext } from "openclaw/plugin-sdk
 import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
-import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
+import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
 import { buildGithubCopilotReplayPolicy } from "./replay-policy.js";
 import { wrapCopilotProviderStream } from "./stream.js";
 
@@ -107,8 +107,9 @@ export default definePluginEntry({
           }
           const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } =
             await loadGithubCopilotRuntime();
-          const { githubToken, hasProfile } = resolveFirstGithubToken({
+          const { githubToken, hasProfile } = await resolveFirstGithubToken({
             agentDir: ctx.agentDir,
+            config: ctx.config,
             env: ctx.env,
           });
           if (!hasProfile && !githubToken) {

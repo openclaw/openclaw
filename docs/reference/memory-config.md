@@ -39,7 +39,7 @@ plugin-owned config, transcript persistence, and safe rollout pattern.
 
 | Key        | Type      | Default          | Description                                                                                                   |
 | ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------- |
-| `provider` | `string`  | auto-detected    | Embedding adapter ID: `github-copilot`, `openai`, `gemini`, `voyage`, `mistral`, `bedrock`, `ollama`, `local` |
+| `provider` | `string`  | auto-detected    | Embedding adapter ID: `bedrock`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, `voyage` |
 | `model`    | `string`  | provider default | Embedding model name                                                                                          |
 | `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                    |
 | `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                               |
@@ -65,13 +65,13 @@ credential chain instead (instance roles, SSO, access keys).
 
 | Provider       | Env var                                            | Config key                        |
 | -------------- | -------------------------------------------------- | --------------------------------- |
-| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | Auth profile via device login     |
-| OpenAI         | `OPENAI_API_KEY`                                   | `models.providers.openai.apiKey`  |
-| Gemini         | `GEMINI_API_KEY`                                   | `models.providers.google.apiKey`  |
-| Voyage         | `VOYAGE_API_KEY`                                   | `models.providers.voyage.apiKey`  |
-| Mistral        | `MISTRAL_API_KEY`                                  | `models.providers.mistral.apiKey` |
 | Bedrock        | AWS credential chain                               | No API key needed                 |
+| Gemini         | `GEMINI_API_KEY`                                   | `models.providers.google.apiKey`  |
+| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | Auth profile via device login     |
+| Mistral        | `MISTRAL_API_KEY`                                  | `models.providers.mistral.apiKey` |
 | Ollama         | `OLLAMA_API_KEY` (placeholder)                     | --                                |
+| OpenAI         | `OPENAI_API_KEY`                                   | `models.providers.openai.apiKey`  |
+| Voyage         | `VOYAGE_API_KEY`                                   | `models.providers.voyage.apiKey`  |
 
 Codex OAuth covers chat/completions only and does not satisfy embedding
 requests.

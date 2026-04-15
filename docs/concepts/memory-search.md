@@ -38,14 +38,14 @@ node-llama-cpp).
 
 | Provider       | ID               | Needs API key | Notes                                                |
 | -------------- | ---------------- | ------------- | ---------------------------------------------------- |
-| GitHub Copilot | `github-copilot` | No            | Auto-detected, uses Copilot subscription             |
-| OpenAI         | `openai`         | Yes           | Auto-detected, fast                                  |
-| Gemini         | `gemini`         | Yes           | Supports image/audio indexing                        |
-| Voyage         | `voyage`         | Yes           | Auto-detected                                        |
-| Mistral        | `mistral`        | Yes           | Auto-detected                                        |
 | Bedrock        | `bedrock`        | No            | Auto-detected when the AWS credential chain resolves |
-| Ollama         | `ollama`         | No            | Local, must set explicitly                           |
+| Gemini         | `gemini`         | Yes           | Supports image/audio indexing                        |
+| GitHub Copilot | `github-copilot` | No            | Auto-detected, uses Copilot subscription             |
 | Local          | `local`          | No            | GGUF model, ~0.6 GB download                         |
+| Mistral        | `mistral`        | Yes           | Auto-detected                                        |
+| Ollama         | `ollama`         | No            | Local, must set explicitly                           |
+| OpenAI         | `openai`         | Yes           | Auto-detected, fast                                  |
+| Voyage         | `voyage`         | Yes           | Auto-detected                                        |
 
 ## How search works
 
