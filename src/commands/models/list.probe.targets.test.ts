@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 let mockStore: AuthProfileStore;
 let mockAllowedProfiles: string[];
 const loadModelCatalogMock = vi.fn<() => Promise<ModelCatalogEntry[]>>(async () => []);
+const ensureAuthProfileStoreMock = vi.fn((_agentDir?: string): AuthProfileStore => mockStore);
 
 const resolveAuthProfileOrderMock = vi.fn(() => mockAllowedProfiles);
 const resolveAuthProfileEligibilityMock = vi.fn(() => ({
@@ -28,7 +29,7 @@ vi.mock("../../agents/auth-profiles.js", async () => {
   );
   return {
     ...actual,
-    ensureAuthProfileStore: () => mockStore,
+    ensureAuthProfileStore: ensureAuthProfileStoreMock,
     listProfilesForProvider: (_store: AuthProfileStore, provider: string) =>
       Object.entries(mockStore.profiles)
         .filter(
@@ -165,6 +166,25 @@ describe("buildProbeTargets reason codes", () => {
       eligible: false,
       reasonCode: "invalid_expires",
     });
+    ensureAuthProfileStoreMock.mockClear();
+  });
+
+  it("forwards agentDir to ensureAuthProfileStore so per-agent auth stores are probed (#67235)", async () => {
+    await buildProbeTargets({
+      cfg: {
+        auth: { order: { anthropic: ["anthropic:default"] } },
+      } as OpenClawConfig,
+      providers: ["anthropic"],
+      modelCandidates: ["anthropic/claude-sonnet-4-6"],
+      options: { timeoutMs: 5_000, concurrency: 1, maxTokens: 16 },
+      agentDir: "/tmp/.openclaw/agents/traum-bot",
+    });
+    expect(ensureAuthProfileStoreMock).toHaveBeenCalledWith("/tmp/.openclaw/agents/traum-bot");
+  });
+
+  it("falls back to the default auth store when agentDir is omitted", async () => {
+    await buildAnthropicProbePlan(["anthropic:default"]);
+    expect(ensureAuthProfileStoreMock).toHaveBeenCalledWith(undefined);
   });
 
   it("reports invalid_expires with a legacy-compatible first error line", async () => {

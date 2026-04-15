@@ -234,6 +234,7 @@ export async function modelsStatusCommand(
           cfg,
           providers,
           modelCandidates,
+          agentDir,
           options: {
             provider: opts.probeProvider,
             profileIds: probeProfileIds,

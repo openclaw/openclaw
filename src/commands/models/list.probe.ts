@@ -252,9 +252,12 @@ export async function buildProbeTargets(params: {
   providers: string[];
   modelCandidates: string[];
   options: AuthProbeOptions;
+  /** Target agent's store directory. Required when probing `--agent <id>` so
+   *  the per-agent auth order / profiles are read instead of the main store. */
+  agentDir?: string;
 }): Promise<{ targets: AuthProbeTarget[]; results: AuthProbeResult[] }> {
-  const { cfg, providers, modelCandidates, options } = params;
-  const store = ensureAuthProfileStore();
+  const { cfg, providers, modelCandidates, options, agentDir } = params;
+  const store = ensureAuthProfileStore(agentDir);
   const providerFilter = options.provider?.trim();
   const providerFilterKey = providerFilter ? normalizeProviderId(providerFilter) : null;
   const profileFilter = new Set((options.profileIds ?? []).map((id) => id.trim()).filter(Boolean));
@@ -551,6 +554,9 @@ export async function runAuthProbes(params: {
   providers: string[];
   modelCandidates: string[];
   options: AuthProbeOptions;
+  /** Target agent's store directory, forwarded to buildProbeTargets so
+   *  `--agent <id>` probes read the correct per-agent auth store. */
+  agentDir?: string;
   onProgress?: (update: { completed: number; total: number; label?: string }) => void;
 }): Promise<AuthProbeSummary> {
   const startedAt = Date.now();
@@ -559,6 +565,7 @@ export async function runAuthProbes(params: {
     providers: params.providers,
     modelCandidates: params.modelCandidates,
     options: params.options,
+    agentDir: params.agentDir,
   });
 
   const totalTargets = plan.targets.length;
