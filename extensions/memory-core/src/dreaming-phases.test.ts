@@ -796,9 +796,11 @@ describe("memory-core dreaming phases", () => {
         { trigger: "heartbeat", workspaceDir },
       );
 
-      expect(readFileSpy.mock.calls.some(([target]) => String(target) === transcriptPath)).toBe(
-        false,
-      );
+      expect(
+        readFileSpy.mock.calls.some(
+          ([target]) => typeof target === "string" && target === transcriptPath,
+        ),
+      ).toBe(false);
       readFileSpy.mockRestore();
     } finally {
       vi.restoreAllMocks();
