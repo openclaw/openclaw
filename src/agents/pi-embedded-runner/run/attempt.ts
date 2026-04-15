@@ -294,11 +294,21 @@ const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 export function resolveUnknownToolGuardThreshold(loopDetection?: {
   enabled?: boolean;
   unknownToolThreshold?: number;
-}): number | undefined {
-  if (loopDetection?.enabled !== true) {
-    return undefined;
+}): number {
+  // The unknown-tool guard is a safety net against the model hallucinating a
+  // tool name or calling a tool that has since been removed from the allowlist
+  // (for example after a `skills.allowBundled` config change). After `threshold`
+  // consecutive unknown-tool attempts the stream wrapper rewrites the assistant
+  // message content to tell the model to stop, which breaks otherwise-infinite
+  // Tool-not-found loops against the provider. Unlike the genericRepeat /
+  // pingPong / pollNoProgress detectors this guard has no false-positive
+  // surface because the tool is objectively not registered in this run, so it
+  // stays on regardless of `tools.loopDetection.enabled`.
+  const raw = loopDetection?.unknownToolThreshold;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
   }
-  return loopDetection.unknownToolThreshold ?? UNKNOWN_TOOL_THRESHOLD;
+  return UNKNOWN_TOOL_THRESHOLD;
 }
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
