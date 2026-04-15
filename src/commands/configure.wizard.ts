@@ -1,5 +1,6 @@
 import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshot, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
@@ -11,7 +12,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
-import { resolveUserPath } from "../utils.js";
+import { isPlainObject, resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { resolveSetupSecretInputString } from "../wizard/setup.secret-input.js";
@@ -49,6 +50,26 @@ import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
+
+function mergeWizardConfigOntoLatest(current: unknown, base: unknown, next: unknown): unknown {
+  if (isDeepStrictEqual(next, base)) {
+    return current;
+  }
+  if (isPlainObject(current) && isPlainObject(base) && isPlainObject(next)) {
+    const merged: Record<string, unknown> = { ...current };
+    const keys = new Set([...Object.keys(current), ...Object.keys(base), ...Object.keys(next)]);
+    for (const key of keys) {
+      const mergedValue = mergeWizardConfigOntoLatest(current[key], base[key], next[key]);
+      if (mergedValue === undefined) {
+        delete merged[key];
+      } else {
+        merged[key] = mergedValue;
+      }
+    }
+    return merged;
+  }
+  return structuredClone(next);
+}
 
 async function resolveGatewaySecretInputForWizard(params: {
   cfg: OpenClawConfig;
@@ -427,6 +448,7 @@ export async function runConfigureWizard(
     }
 
     let nextConfig = { ...baseConfig };
+    let mergeBaseConfig = structuredClone(baseConfig);
     let didSetGatewayMode = false;
     if (nextConfig.gateway?.mode !== "local") {
       nextConfig = {
@@ -462,6 +484,7 @@ export async function runConfigureWizard(
           // After successful write, re-read the snapshot to get the new hash
           const freshSnapshot = await readConfigFileSnapshot();
           currentBaseHash = freshSnapshot.hash ?? undefined;
+          mergeBaseConfig = structuredClone(nextConfig);
 
           logConfigUpdated(runtime);
           return;
@@ -475,7 +498,11 @@ export async function runConfigureWizard(
             const diskConfig = freshSnapshot.valid
               ? (freshSnapshot.sourceConfig ?? freshSnapshot.config)
               : {};
-            nextConfig = { ...diskConfig, ...nextConfig };
+            nextConfig = mergeWizardConfigOntoLatest(
+              diskConfig,
+              mergeBaseConfig,
+              nextConfig,
+            ) as OpenClawConfig;
             continue;
           }
           throw err;
