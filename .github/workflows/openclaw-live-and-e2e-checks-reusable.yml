@@ -38,7 +38,37 @@ on:
         required: false
       ANTHROPIC_API_TOKEN:
         required: false
+      BYTEPLUS_API_KEY:
+        required: false
+      CEREBRAS_API_KEY:
+        required: false
+      DASHSCOPE_API_KEY:
+        required: false
+      GROQ_API_KEY:
+        required: false
+      KIMI_API_KEY:
+        required: false
+      MODELSTUDIO_API_KEY:
+        required: false
+      MOONSHOT_API_KEY:
+        required: false
+      MISTRAL_API_KEY:
+        required: false
       MINIMAX_API_KEY:
+        required: false
+      OPENCODE_API_KEY:
+        required: false
+      OPENCODE_ZEN_API_KEY:
+        required: false
+      OPENCLAW_LIVE_BROWSER_CDP_URL:
+        required: false
+      OPENCLAW_LIVE_SETUP_TOKEN:
+        required: false
+      OPENCLAW_LIVE_SETUP_TOKEN_MODEL:
+        required: false
+      OPENCLAW_LIVE_SETUP_TOKEN_PROFILE:
+        required: false
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE:
         required: false
       GEMINI_API_KEY:
         required: false
@@ -46,11 +76,23 @@ on:
         required: false
       OPENROUTER_API_KEY:
         required: false
+      QWEN_API_KEY:
+        required: false
       FAL_KEY:
         required: false
       RUNWAY_API_KEY:
         required: false
       DEEPGRAM_API_KEY:
+        required: false
+      TOGETHER_API_KEY:
+        required: false
+      VYDRA_API_KEY:
+        required: false
+      XAI_API_KEY:
+        required: false
+      ZAI_API_KEY:
+        required: false
+      Z_AI_API_KEY:
         required: false
       BYTEPLUS_ACCESS_KEY_ID:
         required: false
@@ -145,6 +187,75 @@ jobs:
       - name: Run repo E2E suite
         run: pnpm test:e2e
 
+  validate_special_e2e:
+    if: inputs.include_repo_e2e || inputs.include_live_suites
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite_id: openshell-e2e
+            label: OpenShell repo E2E
+            command: pnpm test:e2e:openshell
+            timeout_minutes: 120
+            requires_repo_e2e: true
+            requires_live_suites: false
+          - suite_id: openai-ws-stream-live-e2e
+            label: OpenAI WebSocket live E2E
+            command: pnpm test:e2e -- src/agents/openai-ws-stream.e2e.test.ts
+            timeout_minutes: 90
+            requires_repo_e2e: false
+            requires_live_suites: true
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENCLAW_E2E_WORKERS: "1"
+      OPENCLAW_VITEST_MAX_WORKERS: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+          use-sticky-disk: "false"
+
+      - name: Configure suite-specific env
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.suite_id }}" in
+            openai-ws-stream-live-e2e)
+              echo "OPENAI_LIVE_TEST=1" >> "$GITHUB_ENV"
+              echo "OPENCLAW_LIVE_TEST=1" >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      - name: Validate suite credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.suite_id }}" in
+            openai-ws-stream-live-e2e)
+              [[ -n "${OPENAI_API_KEY:-}" ]] || {
+                echo "OPENAI_API_KEY is required for the OpenAI WebSocket live E2E suite." >&2
+                exit 1
+              }
+              ;;
+          esac
+
+      - name: Run ${{ matrix.label }}
+        if: |
+          (inputs.include_repo_e2e && matrix.requires_repo_e2e) ||
+          (inputs.include_live_suites && matrix.requires_live_suites)
+        run: ${{ matrix.command }}
+
   validate_docker_e2e:
     if: inputs.include_release_path_suites || inputs.include_openwebui
     runs-on: blacksmith-32vcpu-ubuntu-2404
@@ -207,13 +318,34 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
+      OPENCLAW_LIVE_SETUP_TOKEN: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN }}
+      OPENCLAW_LIVE_SETUP_TOKEN_MODEL: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_MODEL }}
+      OPENCLAW_LIVE_SETUP_TOKEN_PROFILE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE }}
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_VALUE }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
       DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+      TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+      VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
       BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
       BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -325,13 +457,34 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
+      OPENCLAW_LIVE_SETUP_TOKEN: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN }}
+      OPENCLAW_LIVE_SETUP_TOKEN_MODEL: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_MODEL }}
+      OPENCLAW_LIVE_SETUP_TOKEN_PROFILE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE }}
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_VALUE }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
       DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+      TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+      VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
       BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
       BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -342,6 +495,8 @@ jobs:
       OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
       OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      OPENCLAW_LIVE_VIDEO_GENERATION_SKIP_PROVIDERS: ""
+      OPENCLAW_LIVE_VYDRA_VIDEO: "1"
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
