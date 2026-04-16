@@ -48,20 +48,6 @@ const checkIcon = html`<svg
   <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
   <path d="M22 4 12 14.01l-3-3" />
 </svg>`;
-const listIcon = html`<svg
-  width="14"
-  height="14"
-  viewBox="0 0 24 24"
-  fill="none"
-  stroke="currentColor"
-  stroke-width="2"
-  stroke-linecap="round"
-  stroke-linejoin="round"
-  aria-hidden="true"
->
-  <path d="M9 11l3 3L22 4" />
-  <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-</svg>`;
 const unlockIcon = html`<svg
   width="14"
   height="14"
@@ -96,20 +82,17 @@ export const MODE_DEFINITIONS: ModeDefinition[] = [
     execAsk: "off",
     icon: checkIcon,
   },
-  {
-    id: "plan",
-    label: "Plan mode",
-    shortLabel: "Plan",
-    shortcut: "3",
-    execSecurity: "deny",
-    execAsk: "off",
-    icon: listIcon,
-  },
+  // Note: "Plan mode" UI toggle is intentionally NOT included here.
+  // Plan mode is owned by the runtime PlanModeSessionState introduced in #67538
+  // (mutation gate + approval state machine). The UI toggle for it requires a
+  // protocol contract change (sessions.patch planMode field) and lands as a
+  // separate PR after #67538 merges. Setting execSecurity:"deny" here would
+  // be wrong because plan mode explicitly ALLOWS read-only exec for research.
   {
     id: "bypass",
     label: "Bypass permissions",
     shortLabel: "Bypass",
-    shortcut: "4",
+    shortcut: "3",
     execSecurity: "full",
     execAsk: "off",
     icon: unlockIcon,
@@ -147,7 +130,7 @@ export function renderModeSwitcher(params: {
         type="button"
         class="agent-chat__mode-chip"
         @click=${onToggleMenu}
-        title="Switch mode (Ctrl+1-4)"
+        title="Switch mode (Ctrl+1-3)"
         aria-haspopup="true"
         aria-expanded="${menuOpen ? "true" : "false"}"
       >
@@ -194,7 +177,7 @@ export function renderModeSwitcher(params: {
 }
 
 /**
- * Handles keyboard shortcuts for mode switching (Ctrl+1 through Ctrl+4).
+ * Handles keyboard shortcuts for mode switching (Ctrl+1 through Ctrl+3).
  * Returns the selected mode if a shortcut matched, or null.
  */
 export function handleModeShortcut(e: KeyboardEvent): ModeDefinition | null {
