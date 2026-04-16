@@ -12,9 +12,13 @@
 
 import type { PlanMode } from "./types.js";
 
-/** Tools always blocked during plan mode (exact match, lowercase). */
+/**
+ * Tools blocked during plan mode unless handled by a special case below
+ * (e.g. exec has a read-only prefix allowlist).
+ */
 const MUTATION_TOOL_BLOCKLIST = new Set([
   "apply_patch",
+  "bash",
   "edit",
   "exec",
   "gateway",
@@ -83,9 +87,19 @@ export function checkMutationGate(
     return { blocked: false };
   }
 
-  // Special case: exec with a read-only command prefix is allowed.
-  if (normalized === "exec" && execCommand) {
+  // Special case: exec/bash with a read-only command prefix is allowed,
+  // but reject commands containing shell compound operators first.
+  if ((normalized === "exec" || normalized === "bash") && execCommand) {
     const cmd = execCommand.trim().toLowerCase();
+    // Block shell compound operators that could chain arbitrary commands.
+    if (/[;|&`]|\$\(|>>?/.test(cmd)) {
+      return {
+        blocked: true,
+        reason:
+          `Tool "${toolName}" command contains shell operators and is blocked in plan mode. ` +
+          "Only simple read-only commands are allowed.",
+      };
+    }
     const isReadOnly = READ_ONLY_EXEC_PREFIXES.some(
       (prefix) => cmd === prefix || cmd.startsWith(prefix + " "),
     );
@@ -117,6 +131,12 @@ export function checkMutationGate(
     }
   }
 
-  // Not in blocklist, not suffix-matched: allow by default.
-  return { blocked: false };
+  // Default deny: unknown tools are blocked in plan mode to prevent
+  // newly added or plugin tools from bypassing the mutation gate.
+  return {
+    blocked: true,
+    reason:
+      `Tool "${toolName}" is not in the plan-mode allowlist and is blocked by default. ` +
+      "Call exit_plan_mode to proceed.",
+  };
 }
