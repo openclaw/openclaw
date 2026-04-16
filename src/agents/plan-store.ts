@@ -147,8 +147,8 @@ export class PlanStore {
 
   /**
    * Acquires a file-level lock for a namespace.
-   * Returns a release function. The lock auto-expires after 10s
-   * to prevent deadlocks from crashed processes.
+   * Returns a release function. Stale locks (older than 10s) are
+   * cleaned up opportunistically by the next lock() caller.
    */
   async lock(namespace: string): Promise<() => Promise<void>> {
     const lockFile = this.lockPath(namespace);
@@ -165,7 +165,7 @@ export class PlanStore {
       let handle: fs.FileHandle | undefined;
       try {
         handle = await fs.open(lockFile, "wx");
-        await handle.write(lockToken);
+        await handle.writeFile(lockToken);
         await handle.close();
         handle = undefined; // closed successfully
 
