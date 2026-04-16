@@ -60,6 +60,7 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import {
+  canTelegramOwnerBypassGroupDisabled,
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
@@ -182,6 +183,10 @@ async function resolveTelegramCommandAuth(params: {
   } = groupAllowContext;
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const senderUsername = msg.from?.username ?? "";
+  const dmAllow = normalizeAllowFromWithStore({
+    allowFrom,
+    storeAllowFrom,
+  });
 
   const sendAuthMessage = async (text: string) => {
     await withTelegramApiErrorLogging({
@@ -205,14 +210,29 @@ async function resolveTelegramCommandAuth(params: {
     enforceAllowOverride: requireAuth,
     requireSenderForAllowOverride: true,
   });
+  const groupDisabledByToggle =
+    telegramCfg.groupEnabled === false ||
+    (telegramCfg.groupEnabled == null && cfg.channels?.defaults?.groupEnabled === false);
+  const ownerBypassesDisabledGroup =
+    (groupDisabledByToggle || (!baseAccess.allowed && baseAccess.reason === "group-disabled")) &&
+    canTelegramOwnerBypassGroupDisabled({
+      reason: "group-disabled",
+      effectiveOwnerAllow: dmAllow,
+      senderId,
+      senderUsername,
+    });
   if (!baseAccess.allowed) {
-    if (baseAccess.reason === "group-disabled") {
-      return await sendAuthMessage("This group is disabled.");
+    if (ownerBypassesDisabledGroup) {
+      // fall through — owner bypasses group-disabled
+    } else {
+      if (baseAccess.reason === "group-disabled") {
+        return await sendAuthMessage("This group is disabled.");
+      }
+      if (baseAccess.reason === "topic-disabled") {
+        return await sendAuthMessage("This topic is disabled.");
+      }
+      return await rejectNotAuthorized();
     }
-    if (baseAccess.reason === "topic-disabled") {
-      return await sendAuthMessage("This topic is disabled.");
-    }
-    return await rejectNotAuthorized();
   }
 
   const policyAccess = evaluateTelegramGroupPolicyAccess({
@@ -235,7 +255,11 @@ async function resolveTelegramCommandAuth(params: {
   });
   if (!policyAccess.allowed) {
     if (policyAccess.reason === "group-policy-disabled") {
-      return await sendAuthMessage("Telegram group commands are disabled.");
+      if (ownerBypassesDisabledGroup) {
+        // fall through — owner bypasses group-disabled
+      } else {
+        return await sendAuthMessage("Telegram group commands are disabled.");
+      }
     }
     if (
       policyAccess.reason === "group-policy-allowlist-no-sender" ||
@@ -248,10 +272,6 @@ async function resolveTelegramCommandAuth(params: {
     }
   }
 
-  const dmAllow = normalizeAllowFromWithStore({
-    allowFrom: allowFrom,
-    storeAllowFrom,
-  });
   const senderAllowed = isSenderAllowed({
     allow: dmAllow,
     senderId,

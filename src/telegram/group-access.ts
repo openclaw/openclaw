@@ -58,6 +58,19 @@ export const evaluateTelegramGroupBaseAccess = (params: {
   return { allowed: true };
 };
 
+export const canTelegramOwnerBypassGroupDisabled = (params: {
+  reason: TelegramGroupBaseBlockReason;
+  effectiveOwnerAllow: NormalizedAllowFrom;
+  senderId?: string;
+  senderUsername?: string;
+}) =>
+  params.reason === "group-disabled" &&
+  isSenderAllowed({
+    allow: params.effectiveOwnerAllow,
+    senderId: params.senderId ?? "",
+    senderUsername: params.senderUsername ?? "",
+  });
+
 export type TelegramGroupPolicyBlockReason =
   | "group-policy-disabled"
   | "group-policy-allowlist-no-sender"

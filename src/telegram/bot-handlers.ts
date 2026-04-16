@@ -42,6 +42,7 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import {
+  canTelegramOwnerBypassGroupDisabled,
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
@@ -370,6 +371,7 @@ export const registerTelegramHandlers = ({
     resolvedThreadId?: number;
     senderId: string;
     senderUsername: string;
+    effectiveDmAllow: NormalizedAllowFrom;
     effectiveGroupAllow: NormalizedAllowFrom;
     hasGroupAllowOverride: boolean;
     groupConfig?: TelegramGroupConfig;
@@ -382,6 +384,7 @@ export const registerTelegramHandlers = ({
       resolvedThreadId,
       senderId,
       senderUsername,
+      effectiveDmAllow,
       effectiveGroupAllow,
       hasGroupAllowOverride,
       groupConfig,
@@ -398,11 +401,20 @@ export const registerTelegramHandlers = ({
       enforceAllowOverride: true,
       requireSenderForAllowOverride: true,
     });
+    const groupDisabledByToggle =
+      telegramCfg.groupEnabled === false ||
+      (telegramCfg.groupEnabled == null && cfg.channels?.defaults?.groupEnabled === false);
+    const ownerBypassesDisabledGroup =
+      (groupDisabledByToggle || (!baseAccess.allowed && baseAccess.reason === "group-disabled")) &&
+      canTelegramOwnerBypassGroupDisabled({
+        reason: "group-disabled",
+        effectiveOwnerAllow: effectiveDmAllow,
+        senderId,
+        senderUsername,
+      });
     if (!baseAccess.allowed) {
       if (baseAccess.reason === "group-disabled") {
-        // When groupEnabled:false, owner (allowFrom) can still message the bot in groups
-        const ownerIds = (telegramCfg.allowFrom ?? []).map((id) => String(id));
-        if (ownerIds.length > 0 && senderId && ownerIds.includes(senderId)) {
+        if (ownerBypassesDisabledGroup) {
           // fall through — owner bypasses group-disabled
         } else {
           logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
@@ -443,6 +455,9 @@ export const registerTelegramHandlers = ({
     });
     if (!policyAccess.allowed) {
       if (policyAccess.reason === "group-policy-disabled") {
+        if (ownerBypassesDisabledGroup) {
+          return false;
+        }
         logVerbose("Blocked telegram group message (groupPolicy: disabled)");
         return true;
       }
@@ -835,6 +850,7 @@ export const registerTelegramHandlers = ({
           resolvedThreadId,
           senderId,
           senderUsername,
+          effectiveDmAllow,
           effectiveGroupAllow,
           hasGroupAllowOverride,
           groupConfig,
@@ -1108,6 +1124,10 @@ export const registerTelegramHandlers = ({
         effectiveGroupAllow,
         hasGroupAllowOverride,
       } = groupAllowContext;
+      const effectiveDmAllow = normalizeAllowFromWithStore({
+        allowFrom: telegramCfg.allowFrom,
+        storeAllowFrom,
+      });
 
       if (event.requireConfiguredGroup && (!groupConfig || groupConfig.enabled === false)) {
         logVerbose(`Blocked telegram channel ${event.chatId} (channel disabled)`);
@@ -1122,6 +1142,7 @@ export const registerTelegramHandlers = ({
           resolvedThreadId,
           senderId: event.senderId,
           senderUsername: event.senderUsername,
+          effectiveDmAllow,
           effectiveGroupAllow,
           hasGroupAllowOverride,
           groupConfig,

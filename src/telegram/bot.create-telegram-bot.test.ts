@@ -1138,6 +1138,38 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     expect(replySpy.mock.calls[0][0].WasMentioned).toBe(true);
   });
+  it("lets the owner bypass groupEnabled false in group chats", async () => {
+    resetHarnessSpies();
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          allowFrom: ["9"],
+          groupEnabled: false,
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    await dispatchMessage({
+      message: {
+        chat: { id: 7, type: "group", title: "Test Group" },
+        text: "hello from owner",
+        date: 1736380800,
+        message_id: 4,
+        from: { id: 9, first_name: "Ada" },
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(replySpy.mock.calls[0][0].SenderId).toBe("9");
+  });
+
   it("keeps group envelope headers stable (sender identity is separate)", async () => {
     resetHarnessSpies();
 

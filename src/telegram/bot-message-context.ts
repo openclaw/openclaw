@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { Bot } from "grammy";
 import { resolveAckReaction } from "../agents/identity.js";
 import {
@@ -33,19 +34,25 @@ import { buildPairingReply, buildAllowlistReply } from "../pairing/pairing-messa
 import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
-import path from "node:path";
 
 /** Resolve the widget chat URL from config and agent dir env var. */
 function resolveWidgetUrl(): string | undefined {
   const baseUrl = loadConfig().meta?.widgetBaseUrl;
-  if (!baseUrl) return undefined;
+  if (!baseUrl) {
+    return undefined;
+  }
   const agentDir = process.env.OPENCLAW_AGENT_DIR;
-  if (!agentDir) return undefined;
+  if (!agentDir) {
+    return undefined;
+  }
   // agentDir is like /root/.openclaw/agents/{agentName}/... — extract agent name
   const parts = agentDir.split(path.sep);
   const agentsIdx = parts.lastIndexOf("agents");
-  const agentName = agentsIdx >= 0 && agentsIdx + 1 < parts.length ? parts[agentsIdx + 1] : undefined;
-  if (!agentName) return undefined;
+  const agentName =
+    agentsIdx >= 0 && agentsIdx + 1 < parts.length ? parts[agentsIdx + 1] : undefined;
+  if (!agentName) {
+    return undefined;
+  }
   return `${baseUrl.replace(/\/$/, "")}/chat/${agentName}`;
 }
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -72,7 +79,10 @@ import {
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
-import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
+import {
+  canTelegramOwnerBypassGroupDisabled,
+  evaluateTelegramGroupBaseAccess,
+} from "./group-access.js";
 
 export type TelegramMediaRef = {
   path: string;
@@ -223,18 +233,32 @@ export const buildTelegramMessageContext = async ({
     requireSenderForAllowOverride: false,
   });
   if (!baseAccess.allowed) {
-    if (baseAccess.reason === "group-disabled") {
-      logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
-      return null;
-    }
-    if (baseAccess.reason === "topic-disabled") {
+    if (
+      baseAccess.reason === "group-disabled" &&
+      canTelegramOwnerBypassGroupDisabled({
+        reason: baseAccess.reason,
+        effectiveOwnerAllow: effectiveDmAllow,
+        senderId,
+        senderUsername,
+      })
+    ) {
+      // fall through — owner bypasses group-disabled
+    } else {
+      if (baseAccess.reason === "group-disabled") {
+        logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
+        return null;
+      }
+      if (baseAccess.reason === "topic-disabled") {
+        logVerbose(
+          `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
+        );
+        return null;
+      }
       logVerbose(
-        `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
+        `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`,
       );
       return null;
     }
-    logVerbose(`Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`);
-    return null;
   }
 
   // Compute requireMention early for preflight transcription gating
@@ -365,11 +389,11 @@ export const buildTelegramMessageContext = async ({
             }
           }
           logVerbose(
-            `Blocked unauthorized telegram sender ${candidate} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+            `Blocked unauthorized telegram sender ${candidate} (dmPolicy=${dmPolicy as string}, ${allowMatchMeta})`,
           );
         } else {
           logVerbose(
-            `Blocked unauthorized telegram sender ${candidate} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+            `Blocked unauthorized telegram sender ${candidate} (dmPolicy=${dmPolicy as string}, ${allowMatchMeta})`,
           );
         }
         return null;
