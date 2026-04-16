@@ -1283,6 +1283,29 @@ jobs:
           name: canvas-a2ui-bundle
           path: src/canvas-host/a2ui/
 
+      - name: Patch mlx-audio-swift manifest
+        run: |
+          set -euo pipefail
+          swift package resolve --package-path apps/macos >/dev/null
+          python <<'PY'
+          from pathlib import Path
+
+          path = Path("apps/macos/.build/checkouts/mlx-audio-swift/Package.swift")
+          text = path.read_text()
+          if "Models/Qwen3/README.md" in text:
+              print("mlx-audio-swift README excludes already present")
+              raise SystemExit(0)
+
+          needle = '            path: "Sources/MLXAudioTTS"\n'
+          replacement = """            path: \"Sources/MLXAudioTTS\",\n            exclude: [\n                \"Models/Llama/README.md\",\n                \"Models/Marvis/README.md\",\n                \"Models/PocketTTS/README.md\",\n                \"Models/Qwen3/README.md\",\n                \"Models/Soprano/README.md\",\n            ]\n"""
+
+          if needle not in text:
+              raise SystemExit("Could not find MLXAudioTTS target path in mlx-audio-swift Package.swift")
+
+          path.write_text(text.replace(needle, replacement, 1))
+          print(f"Patched {path}")
+          PY
+
       - name: TS tests (macOS)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
@@ -1328,6 +1351,29 @@ jobs:
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-swiftpm-
+
+      - name: Patch mlx-audio-swift manifest
+        run: |
+          set -euo pipefail
+          swift package resolve --package-path apps/macos >/dev/null
+          python <<'PY'
+          from pathlib import Path
+
+          path = Path("apps/macos/.build/checkouts/mlx-audio-swift/Package.swift")
+          text = path.read_text()
+          if "Models/Qwen3/README.md" in text:
+              print("mlx-audio-swift README excludes already present")
+              raise SystemExit(0)
+
+          needle = '            path: "Sources/MLXAudioTTS"\n'
+          replacement = """            path: \"Sources/MLXAudioTTS\",\n            exclude: [\n                \"Models/Llama/README.md\",\n                \"Models/Marvis/README.md\",\n                \"Models/PocketTTS/README.md\",\n                \"Models/Qwen3/README.md\",\n                \"Models/Soprano/README.md\",\n            ]\n"""
+
+          if needle not in text:
+              raise SystemExit("Could not find MLXAudioTTS target path in mlx-audio-swift Package.swift")
+
+          path.write_text(text.replace(needle, replacement, 1))
+          print(f"Patched {path}")
+          PY
 
       - name: Show toolchain
         run: |
