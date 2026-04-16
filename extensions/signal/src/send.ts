@@ -61,7 +61,8 @@ type SignalTarget =
   | { type: "group"; groupId: string }
   | { type: "username"; username: string };
 
-export { resolveSignalQuoteParams } from "./send-quote.js";
+import { resolveSignalQuoteParams } from "./send-quote.js";
+export { resolveSignalQuoteParams };
 
 let signalConfigRuntimePromise:
   | Promise<typeof import("openclaw/plugin-sdk/config-runtime")>
