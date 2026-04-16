@@ -1,9 +1,16 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import { Type } from "typebox";
+import {
+  fileTempPath,
+  parseFileReadPayload,
+  writeFilePayloadToFile,
+} from "../../cli/nodes-file.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { readConnectPairingRequiredMessage } from "../../gateway/protocol/connect-error-details.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { NODE_FILE_READ_COMMAND, NODE_FILE_WRITE_COMMAND } from "../../infra/node-commands.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -36,6 +43,8 @@ const NODES_TOOL_ACTIONS = [
   "device_permissions",
   "device_health",
   "invoke",
+  "file_pull",
+  "file_push",
 ] as const;
 
 const NOTIFY_PRIORITIES = ["passive", "active", "timeSensitive"] as const;
@@ -116,7 +125,16 @@ const NodesToolSchema = Type.Object({
   invokeCommand: Type.Optional(Type.String()),
   invokeParamsJson: Type.Optional(Type.String()),
   invokeTimeoutMs: Type.Optional(Type.Number()),
+  // file_pull / file_push
+  remotePath: Type.Optional(Type.String()),
+  localPath: Type.Optional(Type.String()),
+  data: Type.Optional(Type.String()),
+  encoding: optionalStringEnum(["base64", "utf8"] as const),
+  mkdirs: Type.Optional(Type.Boolean()),
+  overwrite: Type.Optional(Type.Boolean()),
 });
+
+const FILE_TRANSFER_MAX_BYTES = 64 * 1024 * 1024; // 64 MB hard cap
 
 export function createNodesTool(options?: {
   agentSessionKey?: string;
@@ -280,6 +298,91 @@ export function createNodesTool(options?: {
               allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
               mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
+          }
+          case "file_pull": {
+            const remotePath = readStringParam(params, "remotePath", { required: true });
+            const outPath =
+              typeof params.outPath === "string" && params.outPath.trim()
+                ? params.outPath.trim()
+                : undefined;
+            const encoding =
+              typeof params.encoding === "string" && params.encoding.trim()
+                ? params.encoding.trim()
+                : "base64";
+            const node = readStringParam(params, "node", { required: true });
+            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const invokeResult = await callGatewayTool("node.invoke", gatewayOpts, {
+              nodeId,
+              command: NODE_FILE_READ_COMMAND,
+              params: { path: remotePath, encoding },
+              idempotencyKey: crypto.randomUUID(),
+            });
+            const payload = parseFileReadPayload(invokeResult?.payload ?? invokeResult);
+            if (payload.size > FILE_TRANSFER_MAX_BYTES) {
+              throw new Error(
+                `file.read: file size ${payload.size} exceeds max ${FILE_TRANSFER_MAX_BYTES} bytes`,
+              );
+            }
+            const localPath = outPath ?? fileTempPath({ remotePath });
+            await writeFilePayloadToFile(localPath, payload);
+            return {
+              content: [{ type: "text" as const, text: `FILE:${localPath}` }],
+              details: {
+                remotePath,
+                localPath,
+                size: payload.size,
+                encoding: payload.encoding,
+              },
+            };
+          }
+          case "file_push": {
+            const remotePath = readStringParam(params, "remotePath", { required: true });
+            const localPath =
+              typeof params.localPath === "string" && params.localPath.trim()
+                ? params.localPath.trim()
+                : undefined;
+            const inlineData = typeof params.data === "string" ? params.data : undefined;
+            if (!localPath && inlineData === undefined) {
+              throw new Error("file_push requires localPath or data");
+            }
+            const mkdirs = typeof params.mkdirs === "boolean" ? params.mkdirs : undefined;
+            const overwrite = typeof params.overwrite === "boolean" ? params.overwrite : undefined;
+            const node = readStringParam(params, "node", { required: true });
+            const nodeId = await resolveNodeId(gatewayOpts, node);
+
+            let pushData: string;
+            let pushEncoding: string;
+            let size: number;
+
+            if (localPath) {
+              const buf = await fs.readFile(localPath);
+              size = buf.length;
+              if (size > FILE_TRANSFER_MAX_BYTES) {
+                throw new Error(
+                  `file_push: local file size ${size} exceeds max ${FILE_TRANSFER_MAX_BYTES} bytes`,
+                );
+              }
+              pushData = buf.toString("base64");
+              pushEncoding = "base64";
+            } else {
+              pushData = inlineData!;
+              pushEncoding = "utf8";
+              size = Buffer.byteLength(pushData, "utf8");
+            }
+
+            await callGatewayTool("node.invoke", gatewayOpts, {
+              nodeId,
+              command: NODE_FILE_WRITE_COMMAND,
+              params: {
+                path: remotePath,
+                data: pushData,
+                encoding: pushEncoding,
+                mkdirs,
+                overwrite,
+              },
+              idempotencyKey: crypto.randomUUID(),
+            });
+            return jsonResult({ ok: true, remotePath, size });
           }
           default:
             throw new Error(`Unknown action: ${action}`);

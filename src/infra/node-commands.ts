@@ -7,6 +7,9 @@ export const NODE_SYSTEM_RUN_COMMANDS = [
 export const NODE_SYSTEM_NOTIFY_COMMAND = "system.notify";
 export const NODE_BROWSER_PROXY_COMMAND = "browser.proxy";
 
+export const NODE_FILE_READ_COMMAND = "file.read";
+export const NODE_FILE_WRITE_COMMAND = "file.write";
+
 export const NODE_EXEC_APPROVALS_COMMANDS = [
   "system.execApprovals.get",
   "system.execApprovals.set",

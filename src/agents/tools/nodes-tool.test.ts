@@ -25,6 +25,19 @@ const nodesCameraMocks = vi.hoisted(() => ({
   writeCameraPayloadToFile: vi.fn(async () => undefined),
 }));
 
+const nodesFileMocks = vi.hoisted(() => ({
+  parseFileReadPayload: vi.fn((v: unknown) => v),
+  fileTempPath: vi.fn(() => "/tmp/openclaw-file-transfer-test.bin"),
+  writeFilePayloadToFile: vi.fn(async () => ({
+    path: "/tmp/openclaw-file-transfer-test.bin",
+    size: 5,
+  })),
+}));
+
+const fsMocks = vi.hoisted(() => ({
+  readFile: vi.fn(async () => Buffer.from("hello")),
+}));
+
 const screenMocks = vi.hoisted(() => ({
   parseScreenRecordPayload: vi.fn(() => ({
     base64: "ZmFrZQ==",
@@ -54,6 +67,17 @@ vi.mock("../../cli/nodes-camera.js", () => ({
   parseCameraSnapPayload: nodesCameraMocks.parseCameraSnapPayload,
   writeCameraClipPayloadToFile: nodesCameraMocks.writeCameraClipPayloadToFile,
   writeCameraPayloadToFile: nodesCameraMocks.writeCameraPayloadToFile,
+}));
+
+vi.mock("../../cli/nodes-file.js", () => ({
+  parseFileReadPayload: nodesFileMocks.parseFileReadPayload,
+  fileTempPath: nodesFileMocks.fileTempPath,
+  writeFilePayloadToFile: nodesFileMocks.writeFilePayloadToFile,
+}));
+
+vi.mock("node:fs/promises", () => ({
+  default: { readFile: fsMocks.readFile },
+  readFile: fsMocks.readFile,
 }));
 
 vi.mock("../../cli/nodes-screen.js", () => ({
@@ -122,6 +146,10 @@ describe("createNodesTool screen_record duration guardrails", () => {
     nodesCameraMocks.cameraTempPath.mockClear();
     nodesCameraMocks.parseCameraSnapPayload.mockClear();
     nodesCameraMocks.writeCameraPayloadToFile.mockClear();
+    nodesFileMocks.parseFileReadPayload.mockClear();
+    nodesFileMocks.fileTempPath.mockClear();
+    nodesFileMocks.writeFilePayloadToFile.mockClear();
+    fsMocks.readFile.mockClear();
   });
 
   it("marks nodes as owner-only", () => {
@@ -325,6 +353,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
     gatewayMocks.callGatewayTool.mockRejectedValueOnce(
       new Error("scope upgrade pending approval (requestId: req-123)"),
     );
+
     const tool = createNodesTool();
 
     await expect(
@@ -335,6 +364,113 @@ describe("createNodesTool screen_record duration guardrails", () => {
       }),
     ).rejects.toThrow(
       "pairing required before node invoke. Approve pairing request req-123 and retry.",
+    );
+  });
+
+  it("file_pull returns FILE: prefixed path on success", async () => {
+    const fakePayload = {
+      path: "/remote/doc.txt",
+      encoding: "base64",
+      data: "aGVsbG8=",
+      size: 5,
+    };
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: fakePayload });
+    nodesFileMocks.parseFileReadPayload.mockReturnValue(fakePayload);
+    nodesFileMocks.fileTempPath.mockReturnValue("/tmp/openclaw-file-transfer-test.txt");
+    nodesFileMocks.writeFilePayloadToFile.mockResolvedValue({
+      path: "/tmp/openclaw-file-transfer-test.txt",
+      size: 5,
+    });
+
+    const tool = createNodesTool();
+    const result = await tool.execute("call-1", {
+      action: "file_pull",
+      node: "macbook",
+      remotePath: "/remote/doc.txt",
+    });
+
+    expect(result?.content).toEqual([
+      { type: "text", text: "FILE:/tmp/openclaw-file-transfer-test.txt" },
+    ]);
+    expect(result?.details).toMatchObject({
+      remotePath: "/remote/doc.txt",
+      localPath: "/tmp/openclaw-file-transfer-test.txt",
+      size: 5,
+    });
+  });
+
+  it("file_pull rejects oversized files", async () => {
+    const oversizedPayload = {
+      path: "/remote/huge.bin",
+      encoding: "base64",
+      data: "x",
+      size: 128 * 1024 * 1024,
+    };
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: oversizedPayload });
+    nodesFileMocks.parseFileReadPayload.mockReturnValue(oversizedPayload);
+
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-1", {
+        action: "file_pull",
+        node: "macbook",
+        remotePath: "/remote/huge.bin",
+      }),
+    ).rejects.toThrow(/exceeds max/i);
+  });
+
+  it("file_push with localPath invokes node.invoke with file.write", async () => {
+    fsMocks.readFile.mockResolvedValue(Buffer.from("hello"));
+    gatewayMocks.callGatewayTool.mockResolvedValue({ ok: true });
+
+    const tool = createNodesTool();
+    const result = await tool.execute("call-1", {
+      action: "file_push",
+      node: "macbook",
+      remotePath: "/remote/doc.txt",
+      localPath: "/local/doc.txt",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      expect.objectContaining({
+        command: "file.write",
+        params: expect.objectContaining({
+          path: "/remote/doc.txt",
+          encoding: "base64",
+        }),
+      }),
+    );
+    const parsed = JSON.parse((result?.content as Array<{ text: string }>)?.[0]?.text ?? "{}");
+    expect(parsed.ok).toBe(true);
+    expect(parsed.remotePath).toBe("/remote/doc.txt");
+  });
+
+  it("file_push with inline data skips file read", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ ok: true });
+
+    const tool = createNodesTool();
+    await tool.execute("call-1", {
+      action: "file_push",
+      node: "macbook",
+      remotePath: "/remote/config.json",
+      data: '{"key":"value"}',
+    });
+
+    expect(fsMocks.readFile).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      expect.objectContaining({
+        command: "file.write",
+        params: expect.objectContaining({
+          path: "/remote/config.json",
+          data: '{"key":"value"}',
+          encoding: "utf8",
+        }),
+      }),
     );
   });
 });

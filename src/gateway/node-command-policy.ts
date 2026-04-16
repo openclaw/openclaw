@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
+  NODE_FILE_READ_COMMAND,
+  NODE_FILE_WRITE_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
@@ -51,10 +53,14 @@ const SMS_DANGEROUS_COMMANDS = ["sms.send", "sms.search"];
 // iOS nodes don't implement system.run/which, but they do support notifications.
 const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
 
+const FILE_READ_COMMANDS = [NODE_FILE_READ_COMMAND];
+const FILE_WRITE_COMMANDS = [NODE_FILE_WRITE_COMMAND];
+
 const SYSTEM_COMMANDS = [
   ...NODE_SYSTEM_RUN_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
+  ...FILE_READ_COMMANDS,
 ];
 const UNKNOWN_PLATFORM_COMMANDS = [
   ...CANVAS_COMMANDS,
@@ -72,6 +78,7 @@ export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
   ...CALENDAR_DANGEROUS_COMMANDS,
   ...REMINDERS_DANGEROUS_COMMANDS,
   ...SMS_DANGEROUS_COMMANDS,
+  ...FILE_WRITE_COMMANDS,
 ];
 
 const PLATFORM_DEFAULTS: Record<string, string[]> = {
