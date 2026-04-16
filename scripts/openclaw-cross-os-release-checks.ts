@@ -928,7 +928,10 @@ async function runDevUpdateSuite(params) {
     await runInstalledCli({
       cliPath: baselineShell.cliPath,
       args: ["update", "--channel", "dev", "--yes", "--json"],
-      env,
+      env: {
+        ...buildRealUpdateEnv(env),
+        OPENCLAW_UPDATE_DEV_TARGET_REF: verificationRef,
+      },
       cwd: lane.homeDir,
       logPath: join(params.logsDir, "dev-update.log"),
       timeoutMs: updateTimeoutMs(),
@@ -1142,7 +1145,9 @@ function resolveExpectedDevUpdateRef(ref) {
 }
 
 export function resolveDevUpdateVerificationRef(ref, sourceSha) {
-  void sourceSha;
+  if (resolveExpectedDevUpdateRef(ref) === "main" && looksLikeCommitSha(sourceSha ?? "")) {
+    return sourceSha.trim();
+  }
   return resolveExpectedDevUpdateRef(ref);
 }
 

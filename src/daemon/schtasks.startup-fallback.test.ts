@@ -204,7 +204,7 @@ describe("Windows startup fallback", () => {
   it("launches the task script directly when schtasks /Run is accepted but never starts the task", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       sleepMock.mockImplementationOnce(async () => {
-        timeState.now += 2_000;
+        timeState.now += 15_000;
       });
       schtasksResponses.push(
         { code: 0, stdout: "", stderr: "" },
@@ -225,6 +225,38 @@ describe("Windows startup fallback", () => {
       });
 
       expectStartupFallbackSpawn(env);
+    });
+  });
+
+  it("does not relaunch the task script when schtasks shows startup progress after /Run", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "not found" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
+        {
+          code: 0,
+          stdout: [
+            "Status: Ready",
+            "Last Run Time: 4/15/2026 11:42:31 PM",
+            "Last Run Result: 267011",
+            "",
+          ].join("\r\n"),
+          stderr: "",
+        },
+      );
+
+      await installScheduledTask({
+        env,
+        stdout: new PassThrough(),
+        programArguments: ["node", "gateway.js", "--port", "18789"],
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      expect(spawn).not.toHaveBeenCalled();
     });
   });
 
@@ -322,7 +354,7 @@ describe("Windows startup fallback", () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       await writeGatewayScript(env);
       sleepMock.mockImplementationOnce(async () => {
-        timeState.now += 2_000;
+        timeState.now += 15_000;
       });
       inspectPortUsage.mockResolvedValue({
         port: 18789,

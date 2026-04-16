@@ -216,6 +216,8 @@ const RUNNING_RESULT_CODES = new Set(["0x41301"]);
 const NOT_YET_RUN_RESULT_CODES = new Set(["0x41303"]);
 const UNKNOWN_STATUS_DETAIL =
   "Task status is locale-dependent and no numeric Last Run Result was available.";
+const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
+const SCHEDULED_TASK_FALLBACK_TIMEOUT_MS = 15_000;
 
 export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   status: GatewayServiceRuntime["status"];
@@ -640,26 +642,49 @@ async function updateExistingScheduledTask(params: {
 async function shouldFallbackScheduledTaskLaunch(params: {
   env: GatewayServiceEnv;
 }): Promise<boolean> {
-  const readLaunchState = async (): Promise<"running" | "not-yet-run" | "other"> => {
+  const readLaunchObservation = async (): Promise<{
+    state: "running" | "not-yet-run" | "other";
+    signature: string;
+  }> => {
     const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
     if (runtime?.status === "running") {
-      return "running";
+      return {
+        state: "running",
+        signature: [runtime.state, runtime.lastRunTime, runtime.lastRunResult, runtime.detail]
+          .filter(Boolean)
+          .join("|"),
+      };
     }
     const normalizedResult = normalizeTaskResultCode(runtime?.lastRunResult);
     if (normalizedResult && NOT_YET_RUN_RESULT_CODES.has(normalizedResult)) {
-      return "not-yet-run";
+      return {
+        state: "not-yet-run",
+        signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
+          .filter(Boolean)
+          .join("|"),
+      };
     }
-    return "other";
+    return {
+      state: "other",
+      signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
+        .filter(Boolean)
+        .join("|"),
+    };
   };
 
-  if ((await readLaunchState()) !== "not-yet-run") {
+  const initial = await readLaunchObservation();
+  if (initial.state !== "not-yet-run") {
     return false;
   }
 
-  const deadline = Date.now() + 2_000;
+  const deadline = Date.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    await sleep(250);
-    if ((await readLaunchState()) !== "not-yet-run") {
+    await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
+    const current = await readLaunchObservation();
+    if (current.state !== "not-yet-run") {
+      return false;
+    }
+    if (current.signature !== initial.signature) {
       return false;
     }
   }
