@@ -2173,4 +2173,86 @@ describe("spawnAcpDirect", () => {
       }),
     );
   });
+
+  // Phase 2.5 Discord Surface Overhaul — F1 + F2 atomic fix coverage.
+  it("defaults thread-bound spawns to silent notifyPolicy and forwards threadId to relay deliveryContext", async () => {
+    // Spawn from a channel context with thread:true. Previously isThreadBoundSpawn
+    // only checked requesterState.origin.threadId, so creating a *new* thread via
+    // preparedBinding/binding kept notifyPolicy undefined (done_only default) and
+    // the relay lost the newly-created threadId from parentDeliveryCtx.
+    hoisted.sessionBindingBindMock.mockImplementationOnce(
+      async (input: {
+        targetSessionKey: string;
+        conversation: { accountId: string; conversationId: string; parentConversationId?: string };
+        metadata?: Record<string, unknown>;
+      }) =>
+        createSessionBinding({
+          targetSessionKey: input.targetSessionKey,
+          conversation: {
+            channel: "discord",
+            accountId: input.conversation.accountId,
+            conversationId: "new-child-thread-id",
+            parentConversationId: input.conversation.parentConversationId ?? "parent-channel",
+          },
+          metadata: {
+            boundBy: "system",
+            agentId: "codex",
+            webhookId: "wh-1",
+          },
+        }),
+    );
+    hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
+      const store: Record<
+        string,
+        { sessionId: string; updatedAt: number; deliveryContext?: unknown }
+      > = {
+        "agent:main:discord:channel:parent-channel": {
+          sessionId: "parent-sess-1",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "discord",
+            to: "channel:parent-channel",
+            accountId: "default",
+          },
+        },
+      };
+      return new Proxy(store, {
+        get(target, prop) {
+          if (typeof prop === "string" && prop.startsWith("agent:codex:acp:")) {
+            return { sessionId: "sess-123", updatedAt: Date.now() };
+          }
+          return target[prop as keyof typeof target];
+        },
+      });
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        thread: true,
+        streamTo: "parent",
+      },
+      {
+        agentSessionKey: "agent:main:discord:channel:parent-channel",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+      },
+    );
+    const accepted = expectAcceptedSpawn(result);
+
+    // F1: notifyPolicy must be "silent" because preparedBinding/binding are set
+    // even though the requesterState.origin.threadId is absent.
+    const task = findTaskByRunId(accepted.runId);
+    expect(task?.notifyPolicy).toBe("silent");
+
+    // F2: the relay's deliveryContext must carry the child-thread id so the
+    // final_reply direct-post branch targets the new thread.
+    const relayCall = hoisted.startAcpSpawnParentStreamRelayMock.mock.calls.at(-1)?.[0] as
+      | { deliveryContext?: { channel?: string; threadId?: string | number } }
+      | undefined;
+    expect(relayCall?.deliveryContext?.threadId).toBe("new-child-thread-id");
+    expect(relayCall?.deliveryContext?.channel).toBe("discord");
+  });
 });

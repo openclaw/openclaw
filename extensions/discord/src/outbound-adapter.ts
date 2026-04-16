@@ -4,7 +4,9 @@ import {
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import {
+  resolveAgentOutboundIdentity,
   resolveOutboundSendDep,
   type OutboundIdentity,
 } from "openclaw/plugin-sdk/outbound-runtime";
@@ -60,6 +62,8 @@ function loadDiscordThreadBindings(): Promise<DiscordThreadBindingsModule> {
   return discordThreadBindingsPromise;
 }
 
+const outboundLog = createSubsystemLogger("discord/outbound-adapter");
+
 function hasApprovalChannelData(payload: { channelData?: unknown }): boolean {
   const channelData = payload.channelData;
   if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
@@ -101,14 +105,37 @@ function resolveDiscordOutboundTarget(params: {
   return `channel:${threadId}`;
 }
 
+// F5b (Phase 10 Discord Surface Overhaul): unified persona resolution across
+// outbound-adapter / reply-delivery / thread-bindings-persona. When cfg has
+// `agents.<id>.identity` (emoji + name), use that as the username source so
+// the webhook identity matches the intro banner (`⚙ claude` / `⚙ codex`)
+// instead of regressing to the raw binding label.
 function resolveDiscordWebhookIdentity(params: {
   identity?: OutboundIdentity;
   binding: ThreadBindingRecord;
+  cfg?: OpenClawConfig;
 }): { username?: string; avatarUrl?: string } {
-  const usernameRaw = normalizeOptionalString(params.identity?.name);
-  const fallbackUsername = normalizeOptionalString(params.binding.label) ?? params.binding.agentId;
-  const username = (usernameRaw || fallbackUsername || "").slice(0, 80) || undefined;
-  const avatarUrl = normalizeOptionalString(params.identity?.avatarUrl);
+  const cfgIdentity =
+    params.cfg && params.binding.agentId
+      ? (() => {
+          try {
+            return resolveAgentOutboundIdentity(params.cfg, params.binding.agentId);
+          } catch {
+            return undefined;
+          }
+        })()
+      : undefined;
+  const cfgName = normalizeOptionalString(cfgIdentity?.name);
+  const cfgEmoji = normalizeOptionalString(cfgIdentity?.emoji);
+  const explicitName = normalizeOptionalString(params.identity?.name);
+  const fallbackName = normalizeOptionalString(params.binding.label) ?? params.binding.agentId;
+  const composedCfgUsername =
+    cfgName && cfgEmoji ? `${cfgEmoji} ${cfgName}` : (cfgName ?? undefined);
+  const username =
+    ((composedCfgUsername ?? explicitName ?? fallbackName) || "").slice(0, 80) || undefined;
+  const avatarUrl =
+    normalizeOptionalString(params.identity?.avatarUrl) ??
+    normalizeOptionalString(cfgIdentity?.avatarUrl);
   return { username, avatarUrl };
 }
 
@@ -139,6 +166,7 @@ async function maybeSendDiscordWebhookText(params: {
   const persona = resolveDiscordWebhookIdentity({
     identity: params.identity,
     binding,
+    cfg: params.cfg,
   });
   const { sendWebhookMessageDiscord } = await loadDiscordSendRuntime();
   const result = await sendWebhookMessageDiscord(params.text, {
@@ -242,6 +270,9 @@ export const discordOutbound: ChannelOutboundAdapter = {
     channel: "discord",
     sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
       if (!silent) {
+        // F6: preserve availability (fall back to bot) but surface the failure
+        // at warn level so operators can see username-policy rejections or
+        // other webhook errors. `fallbackUsed` flag is recorded for auditing.
         const webhookResult = await maybeSendDiscordWebhookText({
           cfg,
           text,
@@ -249,7 +280,15 @@ export const discordOutbound: ChannelOutboundAdapter = {
           accountId,
           identity,
           replyToId,
-        }).catch(() => null);
+        }).catch((err: unknown) => {
+          outboundLog.warn("webhook send failed, falling back to bot", {
+            threadId,
+            accountId,
+            fallbackUsed: true,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return null;
+        });
         if (webhookResult) {
           return webhookResult;
         }

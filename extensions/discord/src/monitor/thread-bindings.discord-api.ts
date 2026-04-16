@@ -145,10 +145,23 @@ export async function maybeSendBindingMessage(params: {
         webhookToken: record.webhookToken,
         accountId: record.accountId,
         threadId: record.threadId,
-        username: resolveThreadBindingPersonaFromRecord(record),
+        username: resolveThreadBindingPersonaFromRecord(record, params.cfg),
       });
       return;
     } catch (err) {
+      // F6 (Phase 10 Discord Surface Overhaul): elevate silent webhook-send
+      // failures to structured warn-level logging. The previous `logVerbose`
+      // line was only visible with verbose logging enabled; username-policy
+      // rejections (HTTP 400 from Discord's username constraints) were
+      // therefore invisible in production and the fallback bot identity was
+      // the only visible signal that something went wrong. `fallbackUsed`
+      // flag lets downstream log analysis quantify the degradation.
+      log.warn("discord thread binding webhook send failed, falling back to bot", {
+        threadId: record.threadId,
+        accountId: record.accountId,
+        fallbackUsed: true,
+        error: summarizeDiscordError(err),
+      });
       logVerbose(`discord thread binding webhook send failed: ${summarizeDiscordError(err)}`);
     }
   }

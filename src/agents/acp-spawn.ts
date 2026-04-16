@@ -65,9 +65,11 @@ import type { TaskNotifyPolicy } from "../tasks/task-registry.types.js";
 import {
   deliveryContextFromSession,
   formatConversationTarget,
+  mergeDeliveryContext,
   normalizeDeliveryContext,
   resolveConversationDeliveryTarget,
 } from "../utils/delivery-context.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import {
   type AcpSpawnParentRelayHandle,
   resolveAcpSpawnStreamLogPath,
@@ -1131,7 +1133,13 @@ export async function spawnAcpDirect(
       : undefined;
   // Resolve parent session delivery context so system events route to the
   // correct thread/topic instead of falling back to the main DM.
-  const parentDeliveryCtx =
+  //
+  // F2 (Phase 2.5 Discord Surface Overhaul): merge the freshly-bound child
+  // thread id into the parent's stored delivery context. The parent session
+  // record predates the child thread and does NOT know about it on its own,
+  // so without this merge the relay would ship `final_reply` back to the
+  // parent channel instead of the newly-created Discord thread.
+  const baseParentDeliveryCtx =
     effectiveStreamToParent && parentSessionKey
       ? deliveryContextFromSession(
           loadSessionStore(
@@ -1141,6 +1149,29 @@ export async function spawnAcpDirect(
           )[parentSessionKey],
         )
       : undefined;
+  const boundThreadIdForRelay = normalizeOptionalString(binding?.conversation?.conversationId);
+  const boundChannelForRelay = normalizeOptionalString(binding?.conversation?.channel);
+  const boundAccountForRelay = normalizeOptionalString(binding?.conversation?.accountId);
+  const fallbackThreadIdForRelay = (() => {
+    const raw = requesterState.origin?.threadId;
+    if (typeof raw === "number" && Number.isFinite(raw)) {
+      return String(Math.trunc(raw));
+    }
+    return typeof raw === "string" ? normalizeOptionalString(raw) : undefined;
+  })();
+  const threadOverride: DeliveryContext | undefined =
+    boundThreadIdForRelay || fallbackThreadIdForRelay
+      ? {
+          channel: boundChannelForRelay ?? requesterState.origin?.channel,
+          to:
+            boundChannelForRelay && boundThreadIdForRelay
+              ? `channel:${boundThreadIdForRelay}`
+              : requesterState.origin?.to,
+          accountId: boundAccountForRelay ?? requesterState.origin?.accountId,
+          threadId: boundThreadIdForRelay ?? fallbackThreadIdForRelay,
+        }
+      : undefined;
+  const parentDeliveryCtx = mergeDeliveryContext(threadOverride, baseParentDeliveryCtx);
 
   let parentRelay: AcpSpawnParentRelayHandle | undefined;
   if (effectiveStreamToParent && parentSessionKey) {
@@ -1212,8 +1243,15 @@ export async function spawnAcpDirect(
     // terminal banner ("Background task done: ...") would duplicate that into
     // the thread. Silent notify suppresses the generic banner so the thread
     // stays clean. Blocked outcomes escape this via the blocked-class invariant
-    // in surface-policy.ts. Threads are identified by requesterState.origin.threadId.
-    const isThreadBoundSpawn = Boolean(requesterState.origin?.threadId);
+    // in surface-policy.ts.
+    //
+    // F1 (Phase 2.5): widen the predicate. The previous version only checked
+    // requesterState.origin.threadId, which detected "caller was already in a
+    // thread" but NOT "this spawn is creating a new thread" (preparedBinding)
+    // or "this spawn was just bound to a thread" (binding). Both of those
+    // paths create Discord threads that must also default to silent.
+    const isThreadBoundSpawn =
+      Boolean(requesterState.origin?.threadId) || Boolean(preparedBinding) || Boolean(binding);
     const threadBoundNotifyPolicy: TaskNotifyPolicy | undefined = isThreadBoundSpawn
       ? "silent"
       : undefined;

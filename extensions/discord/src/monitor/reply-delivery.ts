@@ -3,6 +3,7 @@ import { resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
+import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
@@ -261,6 +262,12 @@ function createPayloadReplyToResolver(params: {
   };
 }
 
+// F5b (Phase 10 Discord Surface Overhaul): unified persona resolution. This
+// used to emit `🤖 <label>` (different emoji from the intro banner's `⚙`),
+// producing a visible identity regression mid-conversation. The resolver now
+// prefers `cfg.agents.<id>.identity` via `resolveAgentOutboundIdentity` so
+// the username matches the intro banner (`⚙ claude` / `⚙ codex`). When no
+// identity is configured we fall back to the SYSTEM_MARK + label default.
 function resolveBindingPersona(
   cfg: OpenClawConfig,
   binding: DiscordThreadBindingLookupRecord | undefined,
@@ -271,17 +278,35 @@ function resolveBindingPersona(
   if (!binding) {
     return {};
   }
-  const baseLabel = binding.label?.trim() || binding.agentId;
-  const username = (`🤖 ${baseLabel}`.trim() || "🤖 agent").slice(0, 80);
+  const identity = (() => {
+    try {
+      return resolveAgentOutboundIdentity(cfg, binding.agentId);
+    } catch {
+      return undefined;
+    }
+  })();
+  const identityName = identity?.name?.trim();
+  let username: string;
+  if (identityName) {
+    const emoji = identity?.emoji?.trim() || "⚙️";
+    username = `${emoji} ${identityName}`.slice(0, 80);
+  } else {
+    const baseLabel = binding.label?.trim() || binding.agentId || "agent";
+    username = `⚙️ ${baseLabel}`.slice(0, 80);
+  }
 
   let avatarUrl: string | undefined;
-  try {
-    const avatar = resolveAgentAvatar(cfg, binding.agentId);
-    if (avatar.kind === "remote") {
-      avatarUrl = avatar.url;
+  if (identity?.avatarUrl) {
+    avatarUrl = identity.avatarUrl;
+  } else {
+    try {
+      const avatar = resolveAgentAvatar(cfg, binding.agentId);
+      if (avatar.kind === "remote") {
+        avatarUrl = avatar.url;
+      }
+    } catch {
+      avatarUrl = undefined;
     }
-  } catch {
-    avatarUrl = undefined;
   }
   return { username, avatarUrl };
 }
@@ -324,8 +349,18 @@ async function sendDiscordChunkWithFallback(params: {
         avatarUrl: params.avatarUrl,
       });
       return;
-    } catch {
-      // Fall through to the standard bot sender path.
+    } catch (err) {
+      // F6 (Phase 10 Discord Surface Overhaul): the fallback preserves
+      // availability but log the underlying error at warn level so
+      // username-policy rejections (HTTP 400 from Discord's reserved
+      // username list) are visible in production. `fallbackUsed` lets
+      // downstream audit tooling quantify identity-fidelity degradation.
+      log.warn("discord webhook reply failed, falling back to bot", {
+        threadId: binding.threadId,
+        accountId: binding.accountId,
+        fallbackUsed: true,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
   // When channelId and request are pre-resolved, send directly via sendDiscordText

@@ -5,13 +5,18 @@ import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config
 import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import type { MessageClass } from "../infra/outbound/message-class.js";
+import { sendMessage } from "../infra/outbound/message.js";
+import { planDelivery, type ResolvedSurfaceTarget } from "../infra/outbound/surface-policy.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { normalizeAssistantPhase } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistant-visible-text.js";
 import { recordTaskRunProgressByRunId } from "../tasks/task-executor.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+
+const relayLog = createSubsystemLogger("agents/acp-spawn-parent-stream");
 
 // Phase 3 Discord Surface Overhaul: sanitizer profile selection for outbound
 // emissions. `final_reply` uses the canonical delivery profile; `progress`
@@ -248,6 +253,69 @@ export function startAcpSpawnParentStreamRelay(params: {
   // internal_narration via the surface-policy predicate, but we let it flow
   // through so the legacy session-queue behavior is preserved on main surfaces.
   const threadBound = Boolean(params.deliveryContext?.threadId);
+
+  // F3 (Phase 3.5 Discord Surface Overhaul): when the relay has a thread-bound
+  // delivery context AND the emission class is `final_reply`, POST the text
+  // directly into the thread instead of queuing it as a system event on the
+  // parent prompt. Without this branch, the "final answer" ends up spliced
+  // into the parent's NEXT turn as a `System:` line (see
+  // `drainFormattedSystemEvents`) — the user never sees it in the thread.
+  // Fires a void promise; errors are logged at warn and do NOT block the
+  // subscriber (sync) caller.
+  const directPostFinalReply = (
+    text: string,
+    contextKey: string,
+    messageClass: MessageClass,
+  ): boolean => {
+    if (!threadBound || messageClass !== "final_reply") {
+      return false;
+    }
+    const ctx = params.deliveryContext;
+    if (!ctx?.channel || !ctx?.to) {
+      return false;
+    }
+    // Plan delivery via the central policy so suppression/reroute semantics
+    // stay consistent with other outbound surfaces (currently `deliver`).
+    const surface: ResolvedSurfaceTarget = {
+      channel: ctx.channel,
+      to: ctx.to,
+      ...(ctx.accountId ? { accountId: ctx.accountId } : {}),
+      ...(ctx.threadId != null ? { threadId: ctx.threadId } : {}),
+    };
+    const decision = planDelivery({
+      messageClass,
+      surface: ctx,
+    });
+    if (decision.outcome !== "deliver") {
+      // Respect operator_only/silent/internal suppression even on the
+      // direct-POST fast path. Fall back to enqueue so legacy policy wins.
+      return false;
+    }
+    const threadIdForPost = ctx.threadId;
+    void sendMessage({
+      channel: surface.channel,
+      to: surface.to,
+      content: text,
+      accountId: surface.accountId,
+      ...(typeof threadIdForPost === "number"
+        ? { threadId: threadIdForPost }
+        : typeof threadIdForPost === "string" && threadIdForPost
+          ? { threadId: threadIdForPost }
+          : {}),
+      bestEffort: true,
+    }).catch((err: unknown) => {
+      relayLog.warn("acp-spawn parent-stream direct final_reply post failed", {
+        runId,
+        parentSessionKey,
+        contextKey,
+        channel: surface.channel,
+        threadId: threadIdForPost,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+    return true;
+  };
+
   const emit = (text: string, contextKey: string, messageClass: MessageClass) => {
     const cleaned = text.trim();
     if (!cleaned) {
@@ -270,6 +338,10 @@ export function startAcpSpawnParentStreamRelay(params: {
     // will be suppressed by the surface-policy predicate downstream.
     const sanitized = sanitizeEmissionText(cleaned, messageClass);
     const payload = sanitized.trim() || cleaned; // never deliver empty text
+    if (directPostFinalReply(payload, contextKey, messageClass)) {
+      wake();
+      return;
+    }
     enqueueSystemEvent(payload, {
       sessionKey: parentSessionKey,
       contextKey,
@@ -322,7 +394,14 @@ export function startAcpSpawnParentStreamRelay(params: {
   // final_reply snippet. Reset after each flush so a subsequent commentary
   // pass doesn't accidentally carry over a stale `final_answer` class.
   let pendingAssistantPhase: "commentary" | "final_answer" | undefined;
-  const flushPending = () => {
+  // F4 (Phase 2.5 Discord Surface Overhaul): when lifecycle `phase="end"`
+  // fires with buffered assistant text AND no explicit assistant phase was
+  // observed (Claude ACP deltas omit `phase`), promote the terminal flush to
+  // `final_reply`. This matches observed upstream behavior: the last
+  // agentMessage chunk carries the user-visible answer. Without the promotion
+  // every delta — including the terminal one — would ship as `progress`,
+  // leaving the final answer invisible on thread surfaces.
+  const flushPending = (options?: { terminal?: boolean }) => {
     clearFlushTimer();
     if (!pendingText) {
       return;
@@ -334,11 +413,15 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (!snippet) {
       return;
     }
-    emit(
-      `${relayLabel}: ${snippet}`,
-      `${contextPrefix}:progress`,
-      classifyRelayStreamEmission({ stream: "assistant", assistantPhase: phase }),
-    );
+    const effectivePhase: "commentary" | "final_answer" | undefined =
+      options?.terminal && phase !== "commentary" ? "final_answer" : phase;
+    const messageClass = classifyRelayStreamEmission({
+      stream: "assistant",
+      assistantPhase: effectivePhase,
+    });
+    const contextKey =
+      messageClass === "final_reply" ? `${contextPrefix}:final_reply` : `${contextPrefix}:progress`;
+    emit(`${relayLabel}: ${snippet}`, contextKey, messageClass);
   };
 
   const scheduleFlush = () => {
@@ -472,7 +555,10 @@ export function startAcpSpawnParentStreamRelay(params: {
     const phase = normalizeOptionalString((event.data as { phase?: unknown } | undefined)?.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
     if (phase === "end") {
-      flushPending();
+      // F4: flush remaining buffered text as `final_reply` when the child
+      // terminates cleanly. Lifecycle-end is the authoritative terminal
+      // boundary for Claude ACP deltas that omit the assistant `phase`.
+      flushPending({ terminal: true });
       const startedAt = toFiniteNumber(
         (event.data as { startedAt?: unknown } | undefined)?.startedAt,
       );

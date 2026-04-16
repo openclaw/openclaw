@@ -6,9 +6,16 @@ const requestHeartbeatNowMock = vi.fn();
 const readAcpSessionEntryMock = vi.fn();
 const resolveSessionFilePathMock = vi.fn();
 const resolveSessionFilePathOptionsMock = vi.fn();
+const sendMessageMock = vi.fn();
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+}));
+
+// Phase 3.5 Discord Surface Overhaul: mock the outbound message seam so F3's
+// direct-to-thread final_reply POST is observable without hitting the gateway.
+vi.mock("../infra/outbound/message.js", () => ({
+  sendMessage: (...args: unknown[]) => sendMessageMock(...args),
 }));
 
 vi.mock("../infra/heartbeat-wake.js", async () => {
@@ -64,6 +71,8 @@ describe("startAcpSpawnParentStreamRelay", () => {
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
+    sendMessageMock.mockReset();
+    sendMessageMock.mockResolvedValue({});
     readAcpSessionEntryMock.mockReset();
     resolveSessionFilePathMock.mockReset();
     resolveSessionFilePathOptionsMock.mockReset();
@@ -461,5 +470,134 @@ describe("startAcpSpawnParentStreamRelay", () => {
         storePath: "/tmp/openclaw/agents/codex/sessions/sessions.json",
       }),
     );
+  });
+
+  // Phase 2.5/3.5 Discord Surface Overhaul — F3 + F4 atomic fix coverage.
+  it("F3: direct-posts final_reply to the bound thread instead of enqueuing a system event", () => {
+    const deliveryContext = {
+      channel: "discord",
+      to: "channel:parent-channel",
+      accountId: "default",
+      threadId: "child-thread-999",
+    };
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-f3",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:f3",
+      agentId: "codex",
+      deliveryContext,
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    emitAgentEvent({
+      runId: "run-f3",
+      stream: "assistant",
+      data: { delta: "Final verdict: ship it.", phase: "final_answer" },
+    });
+    vi.advanceTimersByTime(15);
+
+    // F3: final_reply + thread-bound deliveryContext triggers sendMessage with
+    // the thread id as the routing target, NOT enqueueSystemEvent for prompt
+    // insertion on the parent.
+    expect(sendMessageMock).toHaveBeenCalled();
+    const postArgs = sendMessageMock.mock.calls.at(-1)?.[0] as
+      | {
+          channel?: string;
+          to?: string;
+          threadId?: string | number;
+          content?: string;
+        }
+      | undefined;
+    expect(postArgs?.channel).toBe("discord");
+    expect(postArgs?.threadId).toBe("child-thread-999");
+    expect(postArgs?.content).toContain("Final verdict: ship it.");
+
+    // Crucially, the final_reply must NOT have been enqueued as a system event
+    // (which would splice it as prompt text on the parent's next turn).
+    const finalReplyEnqueues = enqueueSystemEventMock.mock.calls.filter(
+      (call) => (call[1] as { messageClass?: string } | undefined)?.messageClass === "final_reply",
+    );
+    expect(finalReplyEnqueues.length).toBe(0);
+
+    relay.dispose();
+  });
+
+  it("F3: falls back to enqueue when deliveryContext has no threadId (non-thread-bound)", () => {
+    const deliveryContext = {
+      channel: "discord",
+      to: "channel:parent-channel",
+      accountId: "default",
+    };
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-f3-fallback",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:f3f",
+      agentId: "codex",
+      deliveryContext,
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    emitAgentEvent({
+      runId: "run-f3-fallback",
+      stream: "assistant",
+      data: { delta: "Final: ok.", phase: "final_answer" },
+    });
+    vi.advanceTimersByTime(15);
+
+    // Not thread-bound → legacy enqueue path remains.
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    const finalReplyEnqueues = enqueueSystemEventMock.mock.calls.filter(
+      (call) => (call[1] as { messageClass?: string } | undefined)?.messageClass === "final_reply",
+    );
+    expect(finalReplyEnqueues.length).toBeGreaterThan(0);
+    relay.dispose();
+  });
+
+  it("F4: promotes the terminal assistant flush to final_reply when lifecycle phase=end fires", () => {
+    // Claude ACP deltas omit `phase`. Prior to F4 every delta (including the
+    // terminal one) classified as `progress`, leaving the final answer
+    // invisible on thread surfaces. On lifecycle-end the pending buffer MUST
+    // flush as final_reply.
+    const deliveryContext = {
+      channel: "discord",
+      to: "channel:parent-channel",
+      accountId: "default",
+      threadId: "thread-f4",
+    };
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-f4",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:f4",
+      agentId: "codex",
+      deliveryContext,
+      streamFlushMs: 5_000, // intentionally longer than the test window
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    emitAgentEvent({
+      runId: "run-f4",
+      stream: "assistant",
+      data: { delta: "Claude's terminal answer without phase." },
+    });
+    // Lifecycle end fires before the flush timer — F4 must flush as
+    // final_reply, which triggers F3's direct POST for thread-bound surfaces.
+    emitAgentEvent({
+      runId: "run-f4",
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
+    });
+
+    expect(sendMessageMock).toHaveBeenCalled();
+    const postArgs = sendMessageMock.mock.calls.at(-1)?.[0] as
+      | { threadId?: string | number; content?: string }
+      | undefined;
+    expect(postArgs?.threadId).toBe("thread-f4");
+    expect(postArgs?.content).toContain("Claude's terminal answer");
+    relay.dispose();
   });
 });

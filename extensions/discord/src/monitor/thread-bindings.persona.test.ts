@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
 import {
   resolveThreadBindingPersona,
@@ -30,5 +31,29 @@ describe("thread binding persona", () => {
       label: "codex-thread",
     } satisfies ThreadBindingRecord;
     expect(resolveThreadBindingPersonaFromRecord(record)).toBe("⚙️ codex-thread");
+  });
+
+  it("prefers cfg.agents.<id>.identity over binding label", () => {
+    // F5b (Phase 10 Discord Surface Overhaul): when cfg provides identity for
+    // the backend agent id, the persona should follow it — this keeps the
+    // webhook username consistent across intro banner, reply-delivery, and
+    // outbound-adapter instead of regressing to the raw binding label.
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "codex",
+            identity: { name: "codex", emoji: "⚙" },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    expect(
+      resolveThreadBindingPersona({
+        label: "discord-smoke-codex-phase123-20260416",
+        agentId: "codex",
+        cfg,
+      }),
+    ).toBe("⚙ codex");
   });
 });
