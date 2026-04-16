@@ -220,6 +220,18 @@ export function createConfiguredOllamaCompatStreamWrapper(
 // Ollama compat wrapper now owns more than num_ctx injection.
 export const createConfiguredOllamaCompatNumCtxWrapper = createConfiguredOllamaCompatStreamWrapper;
 
+/**
+ * Strip the `ollama/` provider prefix from a model id so the wire value
+ * matches what Ollama's own API expects. Mirrors the equivalent strip in
+ * `embedding-provider.ts#normalizeEmbeddingModel`, which already had this
+ * fix — the chat request path was missing it, hitting Ollama with
+ * `ollama/<model>` and getting a 404 `model '...' not found`. See #67435.
+ */
+export function stripOllamaProviderPrefix(modelId: string): string {
+  const trimmed = modelId.trim();
+  return trimmed.toLowerCase().startsWith("ollama/") ? trimmed.slice("ollama/".length) : trimmed;
+}
+
 export function buildOllamaChatRequest(params: {
   modelId: string;
   messages: OllamaChatMessage[];
@@ -228,7 +240,7 @@ export function buildOllamaChatRequest(params: {
   stream?: boolean;
 }): OllamaChatRequest {
   return {
-    model: params.modelId,
+    model: stripOllamaProviderPrefix(params.modelId),
     messages: params.messages,
     stream: params.stream ?? true,
     ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),

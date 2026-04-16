@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildAssistantMessage, createOllamaStreamFn } from "./stream.js";
+import {
+  buildAssistantMessage,
+  buildOllamaChatRequest,
+  createOllamaStreamFn,
+  stripOllamaProviderPrefix,
+} from "./stream.js";
 
 function makeOllamaResponse(params: {
   content?: string;
@@ -224,5 +229,48 @@ describe("createOllamaStreamFn thinking events", () => {
     // Text content index should be 0 (no thinking block)
     const textStart = events.find((e) => e.type === "text_start") as { contentIndex?: number };
     expect(textStart?.contentIndex).toBe(0);
+  });
+});
+
+describe("stripOllamaProviderPrefix (#67435)", () => {
+  it("strips the `ollama/` prefix when present", () => {
+    expect(stripOllamaProviderPrefix("ollama/qwen3:14b-q8_0")).toBe("qwen3:14b-q8_0");
+  });
+
+  it("strips case-insensitively", () => {
+    expect(stripOllamaProviderPrefix("Ollama/qwen3")).toBe("qwen3");
+    expect(stripOllamaProviderPrefix("OLLAMA/qwen3")).toBe("qwen3");
+  });
+
+  it("leaves bare model ids unchanged", () => {
+    expect(stripOllamaProviderPrefix("qwen3:14b-q8_0")).toBe("qwen3:14b-q8_0");
+  });
+
+  it("does not strip prefixes that merely start with ollama", () => {
+    // Defensive: e.g. a model literally named "ollamaX/..." should NOT get
+    // stripped because the separator is part of the prefix match.
+    expect(stripOllamaProviderPrefix("ollamaX/weird")).toBe("ollamaX/weird");
+  });
+
+  it("trims whitespace before prefix check", () => {
+    expect(stripOllamaProviderPrefix("  ollama/qwen3  ")).toBe("qwen3");
+  });
+});
+
+describe("buildOllamaChatRequest model-id normalization (#67435)", () => {
+  it("sends the bare model id to Ollama when a prefixed id is passed in", () => {
+    const body = buildOllamaChatRequest({
+      modelId: "ollama/qwen3:14b-q8_0",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(body.model).toBe("qwen3:14b-q8_0");
+  });
+
+  it("passes through bare model ids unchanged", () => {
+    const body = buildOllamaChatRequest({
+      modelId: "qwen3:14b-q8_0",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(body.model).toBe("qwen3:14b-q8_0");
   });
 });
