@@ -182,11 +182,12 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   }
 
   const leadingStatus = extractLeadingHttpStatus(trimmed);
-  if (leadingStatus && isCloudflareOrHtmlErrorPage(trimmed)) {
+  const isHtmlChallenge = isCloudflareOrHtmlErrorPage(trimmed);
+  if (leadingStatus && isHtmlChallenge) {
     return `The AI service is temporarily unavailable (HTTP ${leadingStatus.code}). Please try again in a moment.`;
   }
 
-  if (isCloudflareOrHtmlErrorPage(trimmed)) {
+  if (isHtmlChallenge) {
     return (
       "The provider returned an HTML error page instead of an API response. " +
       "This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. " +
