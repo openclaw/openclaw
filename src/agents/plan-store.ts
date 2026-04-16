@@ -94,6 +94,9 @@ export class PlanStore {
    * Callers should acquire a lock first for concurrent safety.
    */
   async write(namespace: string, plan: StoredPlan): Promise<void> {
+    if (plan.namespace !== namespace) {
+      throw new Error(`Plan namespace mismatch: expected "${namespace}", got "${plan.namespace}"`);
+    }
     const planFile = this.planPath(namespace);
     const dir = path.dirname(planFile);
     await fs.mkdir(dir, { recursive: true });
@@ -183,18 +186,19 @@ export class PlanStore {
     sessionKey?: string,
   ): StoredPlanStep[] {
     const now = Date.now();
+    const attribution = sessionKey ? { updatedBy: sessionKey, updatedAt: now } : { updatedAt: now };
     const incomingMap = new Map(incoming.map((s) => [s.step, s]));
     const existingStepTexts = new Set(existing.map((s) => s.step));
     const merged = existing.map((s) => {
       const update = incomingMap.get(s.step);
       if (update) {
-        return { ...update, updatedBy: sessionKey, updatedAt: now };
+        return { ...update, ...attribution };
       }
       return s;
     });
     for (const s of incoming) {
       if (!existingStepTexts.has(s.step)) {
-        merged.push({ ...s, updatedBy: sessionKey, updatedAt: now });
+        merged.push({ ...s, ...attribution });
       }
     }
     return merged;
