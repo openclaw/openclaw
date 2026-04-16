@@ -95,6 +95,104 @@ function readMediaFetchErrorCode(error: unknown): MediaFetchErrorCode | undefine
     : undefined;
 }
 
+/**
+ * Fetch attachment metadata for a message from the BlueBubbles server by GUID.
+ *
+ * When the initial webhook arrives with an empty `attachments` array (common
+ * when Private API is disabled), this function can be called after a short
+ * delay to re-fetch the message and extract any attachments that BlueBubbles
+ * has since indexed.
+ */
+export async function fetchBlueBubblesMessageAttachments(
+  messageGuid: string,
+  opts: {
+    baseUrl: string;
+    password: string;
+    allowPrivateNetwork?: boolean;
+    timeoutMs?: number;
+  },
+): Promise<BlueBubblesAttachment[]> {
+  const trimmedGuid = messageGuid.trim();
+  if (!trimmedGuid) {
+    return [];
+  }
+  const url = buildBlueBubblesApiUrl({
+    baseUrl: opts.baseUrl,
+    path: `/api/v1/message/${encodeURIComponent(trimmedGuid)}`,
+    password: opts.password,
+  });
+  const ssrfPolicy: SsrFPolicy = opts.allowPrivateNetwork
+    ? { allowPrivateNetwork: true }
+    : {};
+  try {
+    const res = await blueBubblesFetchWithTimeout(
+      url,
+      { method: "GET", headers: { "Content-Type": "application/json" } },
+      opts.timeoutMs ?? 10_000,
+      ssrfPolicy,
+    );
+    if (!res.ok) {
+      return [];
+    }
+    const json = (await res.json().catch(() => null)) as {
+      data?: Record<string, unknown>;
+    } | null;
+    const data = json?.data;
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      return [];
+    }
+    const rawAttachments = data["attachments"];
+    if (!Array.isArray(rawAttachments) || rawAttachments.length === 0) {
+      return [];
+    }
+    const attachments: BlueBubblesAttachment[] = [];
+    for (const entry of rawAttachments) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        continue;
+      }
+      const rec = entry as Record<string, unknown>;
+      const guid =
+        typeof rec["guid"] === "string" ? rec["guid"].trim() || undefined : undefined;
+      if (!guid) {
+        continue;
+      }
+      attachments.push({
+        guid,
+        uti: typeof rec["uti"] === "string" ? rec["uti"] : undefined,
+        mimeType:
+          typeof rec["mimeType"] === "string"
+            ? rec["mimeType"]
+            : typeof rec["mime_type"] === "string"
+              ? rec["mime_type"]
+              : undefined,
+        transferName:
+          typeof rec["transferName"] === "string"
+            ? rec["transferName"]
+            : typeof rec["transfer_name"] === "string"
+              ? rec["transfer_name"]
+              : undefined,
+        totalBytes:
+          typeof rec["totalBytes"] === "number"
+            ? rec["totalBytes"]
+            : typeof rec["total_bytes"] === "number"
+              ? rec["total_bytes"]
+              : undefined,
+        height: typeof rec["height"] === "number" ? rec["height"] : undefined,
+        width: typeof rec["width"] === "number" ? rec["width"] : undefined,
+        originalROWID:
+          typeof rec["originalROWID"] === "number"
+            ? rec["originalROWID"]
+            : typeof rec["rowid"] === "number"
+              ? rec["rowid"]
+              : undefined,
+      });
+    }
+    return attachments;
+  } catch {
+    return [];
+  }
+}
+
 export async function downloadBlueBubblesAttachment(
   attachment: BlueBubblesAttachment,
   opts: BlueBubblesAttachmentOpts & { maxBytes?: number } = {},

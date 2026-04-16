@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
-import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
+import {
+  downloadBlueBubblesAttachment,
+  fetchBlueBubblesMessageAttachments,
+  sendBlueBubblesAttachment,
+} from "./attachments.js";
 import { fetchBlueBubblesServerInfo, getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import type { PluginRuntime } from "./runtime-api.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
@@ -767,5 +771,129 @@ describe("sendBlueBubblesAttachment", () => {
         opts: { serverUrl: "http://localhost:1234", password: "test" },
       }),
     ).rejects.toThrow("chatGuid not found");
+  });
+});
+
+describe("fetchBlueBubblesMessageAttachments", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it("returns attachments when the API responds with attachment data", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          data: {
+            guid: "msg-123",
+            attachments: [
+              {
+                guid: "att-1",
+                mimeType: "image/jpeg",
+                transferName: "photo.jpg",
+                totalBytes: 12345,
+              },
+              {
+                guid: "att-2",
+                mime_type: "image/png",
+                transfer_name: "screenshot.png",
+              },
+            ],
+          },
+        }),
+    });
+
+    const result = await fetchBlueBubblesMessageAttachments("msg-123", {
+      baseUrl: "http://localhost:1234",
+      password: "test",
+    });
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({
+      guid: "att-1",
+      uti: undefined,
+      mimeType: "image/jpeg",
+      transferName: "photo.jpg",
+      totalBytes: 12345,
+      height: undefined,
+      width: undefined,
+      originalROWID: undefined,
+    });
+    expect(result[1]?.guid).toBe("att-2");
+    expect(result[1]?.mimeType).toBe("image/png");
+    expect(result[1]?.transferName).toBe("screenshot.png");
+  });
+
+  it("returns empty array when API response has no attachments", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          data: { guid: "msg-456", attachments: [] },
+        }),
+    });
+
+    const result = await fetchBlueBubblesMessageAttachments("msg-456", {
+      baseUrl: "http://localhost:1234",
+      password: "test",
+    });
+
+    expect(result).toHaveLength(0);
+  });
+
+  it("returns empty array when API returns non-OK status", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+
+    const result = await fetchBlueBubblesMessageAttachments("msg-missing", {
+      baseUrl: "http://localhost:1234",
+      password: "test",
+    });
+
+    expect(result).toHaveLength(0);
+  });
+
+  it("returns empty array on network error", async () => {
+    mockFetch.mockRejectedValueOnce(new Error("network timeout"));
+
+    const result = await fetchBlueBubblesMessageAttachments("msg-timeout", {
+      baseUrl: "http://localhost:1234",
+      password: "test",
+    });
+
+    expect(result).toHaveLength(0);
+  });
+
+  it("returns empty array for empty GUID", async () => {
+    const result = await fetchBlueBubblesMessageAttachments("  ", {
+      baseUrl: "http://localhost:1234",
+      password: "test",
+    });
+
+    expect(result).toHaveLength(0);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("skips attachment entries without a guid", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          data: {
+            guid: "msg-789",
+            attachments: [
+              { mimeType: "image/jpeg", transferName: "no-guid.jpg" },
+              { guid: "att-valid", mimeType: "image/png" },
+            ],
+          },
+        }),
+    });
+
+    const result = await fetchBlueBubblesMessageAttachments("msg-789", {
+      baseUrl: "http://localhost:1234",
+      password: "test",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.guid).toBe("att-valid");
   });
 });
