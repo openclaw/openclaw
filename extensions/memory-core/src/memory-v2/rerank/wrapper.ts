@@ -73,12 +73,20 @@ export function buildRerankWrapper(
         now: ts,
       });
       if (shadowOnRecall) {
-        const hits: TouchableHit[] = results.map((r) => ({
-          source: r.source,
-          path: r.path,
-          startLine: r.startLine,
-          endLine: r.endLine,
-        }));
+        // Supplement/wiki results reach this wrapper via an `as never` cast
+        // in tools.ts and may lack the NOT NULL fields the sidecar insert
+        // requires. Filter to true memory-v2 sources before writing shadows.
+        const hits: TouchableHit[] = [];
+        for (const r of results) {
+          if (r.source === "memory" || r.source === "sessions") {
+            hits.push({
+              source: r.source,
+              path: r.path,
+              startLine: r.startLine,
+              endLine: r.endLine,
+            });
+          }
+        }
         touch(db, hits, ts);
       }
       return reranked;

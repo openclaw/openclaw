@@ -161,4 +161,36 @@ describe("buildRerankWrapper — enabled", () => {
     expect(receivedHits.map((h) => h.path)).toEqual(["memory/a.md", "b.md"]);
     expect(receivedNow).toBe(5000);
   });
+
+  it("excludes non-memory sources from the shadow-touch hit list", async () => {
+    let receivedHits: ReadonlyArray<{ source: string; path: string }> = [];
+    const touch = (
+      _db: DatabaseSync,
+      hits: ReadonlyArray<{ source: string; path: string }>,
+      _now: number,
+    ) => {
+      receivedHits = hits;
+      return { inspected: 0, inserted: 0, refreshed: 0 };
+    };
+    const fn = buildRerankWrapper(
+      { enabled: true, shadowOnRecall: true },
+      { openDb: () => db, touch: touch as never, now: () => 1000 },
+    );
+    const mixed = [
+      result({ path: "memory/a.md" }),
+      {
+        source: "wiki",
+        path: "wiki/x.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.3,
+      } as unknown as RerankableResult,
+      result({ source: "sessions", path: "sessions/s.md" }),
+    ];
+    await fn(mixed, { workspaceDir: "/ws" });
+    expect(receivedHits.map((h) => `${h.source}:${h.path}`)).toEqual([
+      "memory:memory/a.md",
+      "sessions:sessions/s.md",
+    ]);
+  });
 });
