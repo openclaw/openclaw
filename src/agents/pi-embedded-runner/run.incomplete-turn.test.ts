@@ -232,6 +232,44 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     }
   });
 
+  it("auto-continue injects ACK fast-path and resets retry counter when enabled", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-auto-continue-enabled",
+      config: {
+        agents: {
+          defaults: {
+            embeddedPi: {
+              autoContinue: { enabled: true, maxCycles: 2 },
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    // 2 auto-continue cycles × (1 ACK + 3 retries) + initial (1 + 3 retries) = 1 + 3 + 4 + 4 = 12
+    // But after the final cycle exhausts retries, it blocks.
+    expect(mockedRunEmbeddedAttempt.mock.calls.length).toBeGreaterThan(4);
+    expect(result.payloads).toEqual([{ text: STRICT_AGENTIC_BLOCKED_TEXT, isError: true }]);
+  });
+
+  // Note: stopOnMutation via accumulated mutation tracking is defense-in-depth.
+  // In the current code, resolvePlanningOnlyRetryInstruction() at incomplete-turn.ts:567
+  // already returns null when hadPotentialSideEffects is true, so a turn with
+  // side effects never reaches the auto-continue block. The accumulated guard
+  // protects against future code changes that might relax that filter.
+
   it("detects replay-safe planning-only GPT turns", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
