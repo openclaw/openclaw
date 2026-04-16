@@ -168,6 +168,23 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
+  it("falls back to legacy runner override env names when workflow vars are blank", () => {
+    expect(
+      readRunnerOverrideEnv({
+        VAR_UBUNTU_RUNNER: "",
+        VAR_WINDOWS_RUNNER: " ",
+        VAR_MACOS_RUNNER: "",
+        OPENCLAW_RELEASE_CHECKS_UBUNTU_RUNNER: "legacy-linux",
+        OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER: "legacy-windows",
+        OPENCLAW_RELEASE_CHECKS_MACOS_RUNNER: "legacy-macos",
+      }),
+    ).toEqual({
+      varUbuntuRunner: "legacy-linux",
+      varWindowsRunner: "legacy-windows",
+      varMacosRunner: "legacy-macos",
+    });
+  });
+
   it("serves installer scripts as UTF-8 text and package payloads as binary", () => {
     expect(resolveStaticFileContentType("scripts/install.sh")).toBe("text/plain; charset=utf-8");
     expect(resolveStaticFileContentType("scripts/install.ps1")).toBe("text/plain; charset=utf-8");

@@ -20,8 +20,16 @@ const sleepMock = vi.hoisted(() =>
 );
 const childUnref = vi.hoisted(() => vi.fn());
 const spawn = vi.hoisted(() => vi.fn(() => ({ unref: childUnref })));
+type SpawnSyncResult = {
+  pid: number;
+  output: (string | null)[];
+  stdout: string;
+  stderr: string;
+  status: number;
+  signal: null;
+};
 const spawnSync = vi.hoisted(() =>
-  vi.fn(() => ({
+  vi.fn<(command: string, args?: readonly string[]) => SpawnSyncResult>(() => ({
     pid: 0,
     output: [null, "", ""],
     stdout: "",
@@ -247,6 +255,66 @@ describe("Windows startup fallback", () => {
           ].join("\r\n"),
           stderr: "",
         },
+      );
+
+      await installScheduledTask({
+        env,
+        stdout: new PassThrough(),
+        programArguments: ["node", "gateway.js", "--port", "18789"],
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      expect(spawn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not relaunch the task script when the scheduled task process is already starting", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const taskScriptPath = resolveTaskScriptPath(env);
+      sleepMock.mockImplementationOnce(async () => {
+        timeState.now += 15_000;
+      });
+      spawnSync.mockImplementation((command, args) => {
+        if (
+          command === "powershell" &&
+          Array.isArray(args) &&
+          args.includes(
+            "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+          )
+        ) {
+          return {
+            pid: 0,
+            output: [null, "", ""],
+            stdout: JSON.stringify([
+              {
+                ProcessId: 4242,
+                CommandLine: `cmd.exe /d /s /c "${taskScriptPath}"`,
+              },
+            ]),
+            stderr: "",
+            status: 0,
+            signal: null,
+          };
+        }
+        return {
+          pid: 0,
+          output: [null, "", ""],
+          stdout: "",
+          stderr: "",
+          status: 0,
+          signal: null,
+        };
+      });
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "not found" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
       );
 
       await installScheduledTask({

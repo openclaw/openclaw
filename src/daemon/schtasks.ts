@@ -641,6 +641,7 @@ async function updateExistingScheduledTask(params: {
 
 async function shouldFallbackScheduledTaskLaunch(params: {
   env: GatewayServiceEnv;
+  scriptPath: string;
 }): Promise<boolean> {
   const readLaunchObservation = async (): Promise<{
     state: "running" | "not-yet-run" | "other";
@@ -672,6 +673,84 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     };
   };
 
+  const hasLaunchEvidence = async (): Promise<boolean> => {
+    const port = await resolveScheduledTaskPort(params.env);
+    if (port) {
+      const listenerPids = await resolveScheduledTaskGatewayListenerPids(port);
+      if (listenerPids.length > 0) {
+        return true;
+      }
+    }
+
+    if (process.platform !== "win32") {
+      return false;
+    }
+
+    const scriptPathNeedle = normalizeLowercaseStringOrEmpty(
+      params.scriptPath.replaceAll("/", "\\"),
+    );
+    if (!scriptPathNeedle) {
+      return false;
+    }
+
+    const processSnapshot = spawnSync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+      ],
+      {
+        encoding: "utf8",
+        timeout: 1_500,
+        windowsHide: true,
+      },
+    );
+    if (processSnapshot.error || processSnapshot.status !== 0) {
+      return false;
+    }
+
+    type WindowsProcessSnapshotEntry = {
+      ProcessId?: number;
+      CommandLine?: string | null;
+    };
+
+    let parsedSnapshot: unknown;
+    try {
+      parsedSnapshot = JSON.parse(processSnapshot.stdout.trim() || "[]");
+    } catch {
+      return false;
+    }
+
+    const entries = (Array.isArray(parsedSnapshot) ? parsedSnapshot : [parsedSnapshot]).filter(
+      (entry): entry is WindowsProcessSnapshotEntry => typeof entry === "object" && entry !== null,
+    );
+    const matchingTaskScriptProcess = entries.some((entry) =>
+      normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "")
+        .replaceAll("/", "\\")
+        .includes(scriptPathNeedle),
+    );
+    if (matchingTaskScriptProcess) {
+      return true;
+    }
+
+    if (!port) {
+      return false;
+    }
+
+    return entries.some((entry) => {
+      const commandLine = normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "");
+      if (!commandLine) {
+        return false;
+      }
+      const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
+      if (!isGatewayArgv(argv, { allowGatewayBinary: true })) {
+        return false;
+      }
+      return parsePortFromProgramArguments(argv) === port;
+    });
+  };
+
   const initial = await readLaunchObservation();
   if (initial.state !== "not-yet-run") {
     return false;
@@ -688,7 +767,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
       return false;
     }
   }
-  return true;
+  return !(await hasLaunchEvidence());
 }
 
 async function runScheduledTaskOrThrow(params: {
@@ -700,7 +779,9 @@ async function runScheduledTaskOrThrow(params: {
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
   }
-  if (!(await shouldFallbackScheduledTaskLaunch({ env: params.env }))) {
+  if (
+    !(await shouldFallbackScheduledTaskLaunch({ env: params.env, scriptPath: params.scriptPath }))
+  ) {
     return;
   }
   launchFallbackTaskScript(params.scriptPath);

@@ -178,10 +178,28 @@ export function resolveRunnerMatrix(params) {
 }
 
 export function readRunnerOverrideEnv(env = process.env) {
+  const preferNonEmptyEnv = (primary: string | undefined, legacy: string | undefined) => {
+    const primaryValue = primary?.trim();
+    if (primaryValue) {
+      return primaryValue;
+    }
+    const legacyValue = legacy?.trim();
+    return legacyValue || "";
+  };
+
   return {
-    varUbuntuRunner: env.VAR_UBUNTU_RUNNER ?? env.OPENCLAW_RELEASE_CHECKS_UBUNTU_RUNNER ?? "",
-    varWindowsRunner: env.VAR_WINDOWS_RUNNER ?? env.OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER ?? "",
-    varMacosRunner: env.VAR_MACOS_RUNNER ?? env.OPENCLAW_RELEASE_CHECKS_MACOS_RUNNER ?? "",
+    varUbuntuRunner: preferNonEmptyEnv(
+      env.VAR_UBUNTU_RUNNER,
+      env.OPENCLAW_RELEASE_CHECKS_UBUNTU_RUNNER,
+    ),
+    varWindowsRunner: preferNonEmptyEnv(
+      env.VAR_WINDOWS_RUNNER,
+      env.OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER,
+    ),
+    varMacosRunner: preferNonEmptyEnv(
+      env.VAR_MACOS_RUNNER,
+      env.OPENCLAW_RELEASE_CHECKS_MACOS_RUNNER,
+    ),
   };
 }
 
