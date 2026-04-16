@@ -1393,10 +1393,10 @@
     "@lancedb/lancedb": "^0.27.2",
     "@larksuiteoapi/node-sdk": "^1.60.0",
     "@lydell/node-pty": "1.2.0-beta.12",
-    "@mariozechner/pi-agent-core": "0.66.1",
-    "@mariozechner/pi-ai": "0.66.1",
-    "@mariozechner/pi-coding-agent": "0.66.1",
-    "@mariozechner/pi-tui": "0.66.1",
+    "@mariozechner/pi-agent-core": "0.67.5",
+    "@mariozechner/pi-ai": "0.67.5",
+    "@mariozechner/pi-coding-agent": "0.67.5",
+    "@mariozechner/pi-tui": "0.67.5",
     "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
@@ -1499,7 +1499,7 @@
   "packageManager": "pnpm@10.32.1",
   "pnpm": {
     "overrides": {
-      "@anthropic-ai/sdk": "0.81.0",
+      "@anthropic-ai/sdk": "0.90.0",
       "hono": "4.12.14",
       "@hono/node-server": "1.19.14",
       "axios": "1.15.0",
