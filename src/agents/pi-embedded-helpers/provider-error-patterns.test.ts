@@ -249,10 +249,14 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
       "cloudflare_challenge",
     );
 
-    const msg: AssistantMessage = {
-      stopReason: "error",
+    const msg = {
+      stopReason: "error" as const,
       errorMessage: cfChallenge403,
       provider: "openai-codex",
+      role: "assistant" as const,
+      content: [],
+      api: "openai" as const,
+      model: "gpt-4",
     };
 
     const result = formatAssistantErrorText(msg);
