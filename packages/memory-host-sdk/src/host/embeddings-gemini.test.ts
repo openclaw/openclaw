@@ -246,6 +246,8 @@ describe("gemini embedding provider", () => {
       outputDimensionality: 768,
       taskType: "SEMANTIC_SIMILARITY",
     });
+    await expect(v2QueryProvider.embedQuery("   ")).resolves.toEqual([]);
+    await expect(v2QueryProvider.embedBatch([])).resolves.toEqual([]);
     expectNormalizedThreeFourVector(await v2QueryProvider.embedQuery("test query"));
 
     const v2BatchFetch = createGeminiBatchFetchMock(2, [3, 4]);
@@ -285,19 +287,5 @@ describe("gemini model normalization", () => {
       "gemini-embedding-2-preview",
     );
     expect(normalizeGeminiModel("")).toBe(DEFAULT_GEMINI_EMBEDDING_MODEL);
-  });
-
-  it("returns empty arrays without fetching for blank query and empty batch", async () => {
-    mockResolvedProviderKey();
-
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "gemini",
-      model: "gemini-embedding-2-preview",
-      fallback: "none",
-    });
-
-    await expect(provider.embedQuery("   ")).resolves.toEqual([]);
-    await expect(provider.embedBatch([])).resolves.toEqual([]);
   });
 });

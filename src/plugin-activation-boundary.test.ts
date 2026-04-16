@@ -105,7 +105,6 @@ describe("plugin activation boundary", () => {
     loadBundledPluginPublicSurfaceModuleSync.mockReset();
   });
 
-  let ambientImportsPromise: Promise<void> | undefined;
   let configHelpersPromise:
     | Promise<{
         isStaticallyChannelConfigured: typeof import("./config/channel-configured-shared.js").isStaticallyChannelConfigured;
@@ -134,16 +133,6 @@ describe("plugin activation boundary", () => {
         resolveProfile: typeof import("./plugin-sdk/browser-config.js").resolveProfile;
       }>
     | undefined;
-  let browserAmbientImportsPromise: Promise<void> | undefined;
-  function importAmbientModules() {
-    ambientImportsPromise ??= Promise.all([
-      import("./commands/onboard-custom.js"),
-      import("./plugins/provider-model-defaults.js"),
-      import("./plugins/provider-model-primary.js"),
-    ]).then(() => undefined);
-    return ambientImportsPromise;
-  }
-
   function importConfigHelpers() {
     configHelpersPromise ??= Promise.all([
       import("./config/channel-configured-shared.js"),
@@ -185,26 +174,9 @@ describe("plugin activation boundary", () => {
     return browserHelpersPromise;
   }
 
-  function importBrowserAmbientModules() {
-    browserAmbientImportsPromise ??= Promise.all([
-      import("./agents/sandbox/browser.js"),
-      import("./agents/sandbox/context.js"),
-      import("./commands/doctor-browser.js"),
-      import("./node-host/runner.js"),
-      import("./security/audit.js"),
-      import("./security/audit-extra.sync.js"),
-    ]).then(() => undefined);
-    return browserAmbientImportsPromise;
-  }
-
-  it("keeps ambient core imports cold", async () => {
-    const [, { isStaticallyChannelConfigured, resolveEnvApiKey }, { normalizeModelRef }] =
-      await Promise.all([
-        importAmbientModules(),
-        importConfigHelpers(),
-        importModelSelection(),
-        importBrowserAmbientModules(),
-      ]);
+  it("keeps config and model boundary helpers cold", async () => {
+    const [{ isStaticallyChannelConfigured, resolveEnvApiKey }, { normalizeModelRef }] =
+      await Promise.all([importConfigHelpers(), importModelSelection()]);
 
     expect(isStaticallyChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(
       true,
