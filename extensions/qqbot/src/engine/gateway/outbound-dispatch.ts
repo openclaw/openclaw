@@ -32,7 +32,7 @@ import { audioFileToSilkBase64 } from "../utils/audio.js";
 import type { InboundContext } from "./inbound-context.js";
 import type {
   GatewayAccount,
-  GatewayLogger,
+  EngineLogger,
   GatewayPluginRuntime,
   OutboundResult,
 } from "./types.js";
@@ -50,7 +50,7 @@ export interface OutboundDispatchDeps {
   runtime: GatewayPluginRuntime;
   cfg: unknown;
   account: GatewayAccount;
-  log?: GatewayLogger;
+  log?: EngineLogger;
 }
 
 // ============ dispatchOutbound ============
@@ -150,12 +150,12 @@ export async function dispatchOutbound(
   // ---- Deliver deps ----
   const deliverDeps: DeliverDeps = {
     mediaSender: {
-      sendPhoto: (target, imageUrl) => sendPhoto(target as never, imageUrl),
+      sendPhoto: (target, imageUrl) => sendPhoto(target, imageUrl),
       sendVoice: (target, voicePath, uploadFormats, transcodeEnabled) =>
-        sendVoice(target as never, voicePath, uploadFormats, transcodeEnabled),
-      sendVideoMsg: (target, videoPath) => sendVideoMsg(target as never, videoPath),
-      sendDocument: (target, filePath) => sendDocument(target as never, filePath),
-      sendMedia: (opts) => sendMedia(opts as never),
+        sendVoice(target, voicePath, uploadFormats, transcodeEnabled),
+      sendVideoMsg: (target, videoPath) => sendVideoMsg(target, videoPath),
+      sendDocument: (target, filePath) => sendDocument(target, filePath),
+      sendMedia: (opts) => sendMedia(opts),
     },
     chunkText: (text, limit) => runtime.channel.text.chunkMarkdownText(text, limit),
   };

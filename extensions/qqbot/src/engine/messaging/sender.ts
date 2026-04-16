@@ -29,9 +29,9 @@ import { TokenManager } from "../api/token.js";
 import {
   MediaFileType,
   type ChatScope,
+  type EngineLogger,
   type MessageResponse,
   type OutboundMeta,
-  type ApiLogger,
 } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
@@ -81,7 +81,7 @@ export function setOpenClawVersion(version: string): void {
 
 // ============ Lazy singleton instances ============
 
-const _logger: ApiLogger = {
+const _logger: EngineLogger = {
   info: (msg: string) => debugLog(msg),
   error: (msg: string) => debugError(msg),
   debug: (msg: string) => debugLog(msg),
@@ -287,9 +287,6 @@ export interface AccountCreds {
   clientSecret: string;
 }
 
-/** Logger interface for diagnostics. */
-export type SenderLogger = ApiLogger;
-
 // ============ Token retry ============
 
 /**
@@ -298,7 +295,7 @@ export type SenderLogger = ApiLogger;
 export async function withTokenRetry<T>(
   creds: AccountCreds,
   sendFn: (token: string) => Promise<T>,
-  log?: SenderLogger,
+  log?: EngineLogger,
   accountId?: string,
 ): Promise<T> {
   try {
@@ -313,6 +310,20 @@ export async function withTokenRetry<T>(
       return await sendFn(newToken);
     }
     throw err;
+  }
+}
+
+// ============ Media hook helper ============
+
+/**
+ * Notify the MessageApi onMessageSent hook after a media send.
+ * Centralises the hook invocation that was previously duplicated 4× with
+ * `as unknown as` casts.
+ */
+function notifyMediaHook(appId: string, result: MessageResponse, meta: OutboundMeta): void {
+  const refIdx = result.ext_info?.ref_idx;
+  if (refIdx) {
+    getOrCreateMessageApi(appId).notifyMessageSent(refIdx, meta);
   }
 }
 
@@ -359,7 +370,7 @@ export async function sendTextWithRetry(
   content: string,
   creds: AccountCreds,
   opts?: { msgId?: string; messageReference?: string },
-  log?: SenderLogger,
+  log?: EngineLogger,
 ): Promise<MessageResponse> {
   return withTokenRetry(
     creds,
@@ -473,9 +484,7 @@ export async function sendImage(
     content: opts?.content,
   });
 
-  if (result.ext_info?.ref_idx) {
-    getOrCreateMessageApi(creds.appId).notifyMessageSent(result.ext_info.ref_idx, meta);
-  }
+  notifyMediaHook(creds.appId, result, meta);
 
   return result;
 }
@@ -512,13 +521,11 @@ export async function sendVoiceMessage(
     msgId: opts.msgId,
   });
 
-  if (result.ext_info?.ref_idx) {
-    getOrCreateMessageApi(creds.appId).notifyMessageSent(result.ext_info.ref_idx, {
-      mediaType: "voice",
-      ...(opts.ttsText ? { ttsText: opts.ttsText } : {}),
-      ...(opts.filePath ? { mediaLocalPath: opts.filePath } : {}),
-    });
-  }
+  notifyMediaHook(creds.appId, result, {
+    mediaType: "voice",
+    ...(opts.ttsText ? { ttsText: opts.ttsText } : {}),
+    ...(opts.filePath ? { mediaLocalPath: opts.filePath } : {}),
+  });
 
   return result;
 }
@@ -556,14 +563,12 @@ export async function sendVideoMessage(
     content: opts.content,
   });
 
-  if (result.ext_info?.ref_idx) {
-    getOrCreateMessageApi(creds.appId).notifyMessageSent(result.ext_info.ref_idx, {
-      text: opts.content,
-      mediaType: "video",
-      ...(opts.videoUrl ? { mediaUrl: opts.videoUrl } : {}),
-      ...(opts.localPath ? { mediaLocalPath: opts.localPath } : {}),
-    });
-  }
+  notifyMediaHook(creds.appId, result, {
+    text: opts.content,
+    mediaType: "video",
+    ...(opts.videoUrl ? { mediaUrl: opts.videoUrl } : {}),
+    ...(opts.localPath ? { mediaLocalPath: opts.localPath } : {}),
+  });
 
   return result;
 }
@@ -601,13 +606,11 @@ export async function sendFileMessage(
     msgId: opts.msgId,
   });
 
-  if (result.ext_info?.ref_idx) {
-    getOrCreateMessageApi(creds.appId).notifyMessageSent(result.ext_info.ref_idx, {
-      mediaType: "file",
-      mediaUrl: opts.fileUrl,
-      mediaLocalPath: opts.localFilePath ?? opts.fileName,
-    });
-  }
+  notifyMediaHook(creds.appId, result, {
+    mediaType: "file",
+    mediaUrl: opts.fileUrl,
+    mediaLocalPath: opts.localFilePath ?? opts.fileName,
+  });
 
   return result;
 }

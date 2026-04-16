@@ -15,7 +15,7 @@ import type {
   C2CMessageEvent,
   GuildMessageEvent,
   GroupMessageEvent,
-  GatewayLogger,
+  EngineLogger,
 } from "./types.js";
 
 // ============ Dispatch result ============
@@ -39,7 +39,7 @@ export function dispatchEvent(
   eventType: string,
   data: unknown,
   accountId: string,
-  _log?: GatewayLogger,
+  _log?: EngineLogger,
 ): DispatchResult {
   if (eventType === GatewayEvent.READY) {
     const d = data as { session_id: string };

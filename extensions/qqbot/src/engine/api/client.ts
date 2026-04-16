@@ -9,7 +9,7 @@
  * - `redactBodyKeys` replaces the hardcoded `file_data` redaction.
  */
 
-import { ApiError, type ApiClientConfig, type ApiLogger } from "../types.js";
+import { ApiError, type ApiClientConfig, type EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
 const DEFAULT_BASE_URL = "https://api.sgroup.qq.com";
@@ -36,7 +36,7 @@ export class ApiClient {
   private readonly baseUrl: string;
   private readonly defaultTimeoutMs: number;
   private readonly fileUploadTimeoutMs: number;
-  private readonly logger?: ApiLogger;
+  private readonly logger?: EngineLogger;
   private readonly resolveUserAgent: () => string;
 
   constructor(config: ApiClientConfig = {}) {

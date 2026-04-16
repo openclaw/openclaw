@@ -42,7 +42,7 @@ import { dispatchOutbound } from "./outbound-dispatch.js";
 import type {
   CoreGatewayContext,
   GatewayAccount,
-  GatewayLogger,
+  EngineLogger,
   RefAttachmentSummary,
 } from "./types.js";
 import { TypingKeepAlive, TYPING_INPUT_SECOND } from "./typing-keepalive.js";
@@ -171,7 +171,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
 async function startTypingForEvent(
   event: QueuedMessage,
   account: GatewayAccount,
-  log?: GatewayLogger,
+  log?: EngineLogger,
 ): Promise<{ refIdx?: string; keepAlive: TypingKeepAlive | null }> {
   const isC2C = event.type === "c2c" || event.type === "dm";
   if (!isC2C) {

@@ -6,7 +6,7 @@
  */
 
 import type { QueuedMessage } from "../gateway/message-queue.js";
-import type { GatewayAccount, GatewayLogger } from "../gateway/types.js";
+import type { GatewayAccount, EngineLogger } from "../gateway/types.js";
 import { sendDocument } from "../messaging/outbound.js";
 import {
   sendText as senderSendText,
@@ -20,7 +20,7 @@ import type { SlashCommandContext, QueueSnapshot } from "./slash-commands.js";
 
 export interface SlashCommandHandlerContext {
   account: GatewayAccount;
-  log?: GatewayLogger;
+  log?: EngineLogger;
   getMessagePeerId: (msg: QueuedMessage) => string;
   getQueueSnapshot: (peerId: string) => QueueSnapshot;
 }

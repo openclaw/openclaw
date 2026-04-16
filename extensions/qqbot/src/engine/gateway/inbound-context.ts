@@ -11,7 +11,7 @@
 import type { QueuedMessage } from "./message-queue.js";
 import type {
   GatewayAccount,
-  GatewayLogger,
+  EngineLogger,
   GatewayPluginRuntime,
   ProcessedAttachments,
 } from "./types.js";
@@ -92,7 +92,7 @@ export interface InboundContext {
 export interface InboundPipelineDeps {
   account: GatewayAccount;
   cfg: unknown;
-  log?: GatewayLogger;
+  log?: EngineLogger;
   runtime: GatewayPluginRuntime;
   /** Start typing indicator and return the refIdx from InputNotify. */
   startTyping: (event: QueuedMessage) => Promise<{

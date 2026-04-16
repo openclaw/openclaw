@@ -7,14 +7,9 @@
  */
 
 import type { InteractionEvent } from "../types.js";
-
 // ============ Logger ============
-
-export interface GatewayLogger {
-  info: (msg: string) => void;
-  error: (msg: string) => void;
-  debug?: (msg: string) => void;
-}
+import type { EngineLogger } from "../types.js";
+export type { EngineLogger };
 
 // ============ Account ============
 
@@ -166,7 +161,7 @@ export interface CoreGatewayContext {
   onError?: (error: Error) => void;
   /** Called when an INTERACTION_CREATE event is received (e.g. approval button clicks). */
   onInteraction?: (event: InteractionEvent) => void;
-  log?: GatewayLogger;
+  log?: EngineLogger;
   /** PluginRuntime injected by the framework — same object in both versions. */
   runtime: GatewayPluginRuntime;
 }

@@ -11,7 +11,7 @@ import type {
   ChatScope,
   MessageResponse,
   OutboundMeta,
-  ApiLogger,
+  EngineLogger,
   InlineKeyboard,
 } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
@@ -30,7 +30,7 @@ export interface MessageApiConfig {
   /** Whether the QQ Bot has markdown permission. */
   markdownSupport: boolean;
   /** Logger for diagnostics. */
-  logger?: ApiLogger;
+  logger?: EngineLogger;
 }
 
 type OnMessageSentCallback = (refIdx: string, meta: OutboundMeta) => void;
@@ -48,7 +48,7 @@ export class MessageApi {
   private readonly client: ApiClient;
   private readonly tokenManager: TokenManager;
   private readonly markdownSupport: boolean;
-  private readonly logger?: ApiLogger;
+  private readonly logger?: EngineLogger;
   private messageSentHook: OnMessageSentCallback | null = null;
 
   constructor(client: ApiClient, tokenManager: TokenManager, config: MessageApiConfig) {
@@ -63,7 +63,10 @@ export class MessageApi {
     this.messageSentHook = callback;
   }
 
-  /** Trigger the message-sent hook from external callers (e.g. media send flows). */
+  /**
+   * Notify the registered hook about a sent message.
+   * Use this for media sends that bypass `sendAndNotify`.
+   */
   notifyMessageSent(refIdx: string, meta: OutboundMeta): void {
     if (this.messageSentHook) {
       try {

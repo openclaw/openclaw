@@ -12,7 +12,7 @@ import {
   type ChatScope,
   type UploadMediaResponse,
   type MessageResponse,
-  type ApiLogger,
+  type EngineLogger,
 } from "../types.js";
 import { ApiClient } from "./client.js";
 import { withRetry, UPLOAD_RETRY_POLICY } from "./retry.js";
@@ -38,7 +38,7 @@ export interface UploadCacheAdapter {
 export type SanitizeFileNameFn = (name: string) => string;
 
 export interface MediaApiConfig {
-  logger?: ApiLogger;
+  logger?: EngineLogger;
   /** Upload cache adapter (optional, omit to disable caching). */
   uploadCache?: UploadCacheAdapter;
   /** File name sanitizer. */
@@ -53,7 +53,7 @@ export interface MediaApiConfig {
 export class MediaApi {
   private readonly client: ApiClient;
   private readonly tokenManager: TokenManager;
-  private readonly logger?: ApiLogger;
+  private readonly logger?: EngineLogger;
   private readonly cache?: UploadCacheAdapter;
   private readonly sanitize: SanitizeFileNameFn;
 

@@ -7,6 +7,7 @@
  * Zero external dependencies — uses only the constants from `./constants.ts`.
  */
 
+import type { EngineLogger } from "../types.js";
 import {
   RECONNECT_DELAYS,
   RATE_LIMIT_DELAY,
@@ -15,13 +16,6 @@ import {
   QUICK_DISCONNECT_THRESHOLD,
   GatewayCloseCode,
 } from "./constants.js";
-
-/** Logger interface for reconnect diagnostics. */
-export interface ReconnectLogger {
-  info: (msg: string) => void;
-  error: (msg: string) => void;
-  debug?: (msg: string) => void;
-}
 
 /** Actions the caller should take after processing a close event. */
 export interface CloseAction {
@@ -62,7 +56,7 @@ export class ReconnectState {
 
   constructor(
     private readonly accountId: string,
-    private readonly log?: ReconnectLogger,
+    private readonly log?: EngineLogger,
   ) {}
 
   /** Call when a WebSocket connection is successfully established. */

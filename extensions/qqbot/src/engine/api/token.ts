@@ -6,7 +6,7 @@
  * globals, fully supporting multi-account concurrent operation.
  */
 
-import type { ApiLogger } from "../types.js";
+import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
@@ -37,10 +37,10 @@ export class TokenManager {
   private readonly cache = new Map<string, CachedToken>();
   private readonly fetchPromises = new Map<string, Promise<string>>();
   private readonly refreshControllers = new Map<string, AbortController>();
-  private readonly logger?: ApiLogger;
+  private readonly logger?: EngineLogger;
   private readonly resolveUserAgent: () => string;
 
-  constructor(config?: { logger?: ApiLogger; userAgent?: string | (() => string) }) {
+  constructor(config?: { logger?: EngineLogger; userAgent?: string | (() => string) }) {
     this.logger = config?.logger;
     const ua = config?.userAgent ?? "QQBotPlugin/unknown";
     this.resolveUserAgent = typeof ua === "function" ? ua : () => ua;

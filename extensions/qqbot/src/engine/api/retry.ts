@@ -10,7 +10,7 @@
  * parameterized by `RetryPolicy` and optional `PersistentRetryPolicy`.
  */
 
-import type { ApiLogger } from "../types.js";
+import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
 /** Standard retry policy with exponential or fixed backoff. */
@@ -58,7 +58,7 @@ export async function withRetry<T>(
   fn: () => Promise<T>,
   policy: RetryPolicy,
   persistentPolicy?: PersistentRetryPolicy,
-  logger?: ApiLogger,
+  logger?: EngineLogger,
 ): Promise<T> {
   let lastError: Error | null = null;
 
@@ -108,7 +108,7 @@ export async function withRetry<T>(
 async function persistentRetryLoop<T>(
   fn: () => Promise<T>,
   policy: PersistentRetryPolicy,
-  logger?: ApiLogger,
+  logger?: EngineLogger,
 ): Promise<T> {
   const deadline = Date.now() + policy.timeoutMs;
   let attempt = 0;

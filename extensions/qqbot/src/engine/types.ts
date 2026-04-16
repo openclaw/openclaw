@@ -34,8 +34,16 @@ export class ApiError extends Error {
 
 // ============ Logger ============
 
-/** Minimal logger interface injected into core modules via constructor. */
-export interface ApiLogger {
+/**
+ * Unified logger interface used across all engine/ modules.
+ *
+ * Replaces the previously fragmented ApiLogger, GatewayLogger, ReconnectLogger,
+ * MessageRefLogger, PathLogger, and SenderLogger interfaces.
+ *
+ * `info` and `error` are required; `warn` and `debug` are optional because
+ * some callers (e.g. the framework-injected `ctx.log`) may not provide them.
+ */
+export interface EngineLogger {
   info: (msg: string) => void;
   error: (msg: string) => void;
   warn?: (msg: string) => void;
@@ -102,7 +110,7 @@ export interface ApiClientConfig {
   /** File upload request timeout in milliseconds. */
   fileUploadTimeoutMs?: number;
   /** Logger instance. */
-  logger?: ApiLogger;
+  logger?: EngineLogger;
   /** User-Agent header value, or a getter function for dynamic resolution. */
   userAgent?: string | (() => string);
 }

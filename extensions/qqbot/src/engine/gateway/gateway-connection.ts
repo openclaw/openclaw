@@ -21,13 +21,13 @@ import {
 import { flushRefIndex } from "../ref/store.js";
 import { flushKnownUsers } from "../session/known-users.js";
 import { clearSession, loadSession, saveSession } from "../session/session-store.js";
+import type { InteractionEvent } from "../types.js";
 import { decodeGatewayMessageData } from "./codec.js";
 import { FULL_INTENTS, RATE_LIMIT_DELAY, GatewayOp } from "./constants.js";
 import { dispatchEvent } from "./event-dispatcher.js";
 import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
 import { ReconnectState } from "./reconnect.js";
-import type { InteractionEvent } from "../types.js";
-import type { GatewayAccount, GatewayLogger, GatewayPluginRuntime, WSPayload } from "./types.js";
+import type { GatewayAccount, EngineLogger, GatewayPluginRuntime, WSPayload } from "./types.js";
 
 // ============ Connection context ============
 
@@ -35,7 +35,7 @@ export interface GatewayConnectionContext {
   account: GatewayAccount;
   abortSignal: AbortSignal;
   cfg: unknown;
-  log?: GatewayLogger;
+  log?: EngineLogger;
   runtime: GatewayPluginRuntime;
   onReady?: (data: unknown) => void;
   onError?: (error: Error) => void;

@@ -9,6 +9,7 @@
  * injected `AttachmentProcessor` so this module stays framework-agnostic.
  */
 
+import type { EngineLogger } from "../types.js";
 import { parseFaceTags, buildAttachmentSummaries } from "../utils/text-parsing.js";
 import { formatRefEntryForAgent } from "./format-ref-entry.js";
 import type { RefAttachmentSummary } from "./types.js";
@@ -30,7 +31,7 @@ export interface AttachmentProcessor {
           asr_refer_text?: string;
         }>
       | undefined,
-    ctx: { appId: string; peerId?: string; cfg: unknown; log?: MessageRefLogger },
+    ctx: { appId: string; peerId?: string; cfg: unknown; log?: EngineLogger },
   ): Promise<{
     attachmentInfo: string;
     voiceTranscripts: string[];
@@ -39,12 +40,6 @@ export interface AttachmentProcessor {
   }>;
 
   formatVoiceText(voiceTranscripts: string[]): string;
-}
-
-export interface MessageRefLogger {
-  info: (msg: string) => void;
-  error: (msg: string) => void;
-  debug?: (msg: string) => void;
 }
 
 // ============ Public API ============
@@ -79,7 +74,7 @@ export async function formatMessageReferenceForAgent(
     appId: string;
     peerId?: string;
     cfg: unknown;
-    log?: MessageRefLogger;
+    log?: EngineLogger;
   },
   processor: AttachmentProcessor,
 ): Promise<string> {

@@ -8,11 +8,7 @@
  * Zero external dependencies.
  */
 
-/** Logger interface matching the subset used by outbound-deliver. */
-interface PathLogger {
-  debug?: (msg: string) => void;
-  error: (msg: string) => void;
-}
+import type { EngineLogger } from "../types.js";
 
 /**
  * Normalize a file path by expanding `~` to the home directory and trimming.
@@ -41,7 +37,7 @@ function normalizePath(p: string): string {
  * @param prefix - Log prefix (e.g. `[qqbot:accountId]`).
  * @returns The decoded, normalized media path.
  */
-export function decodeMediaPath(raw: string, log?: PathLogger, prefix = ""): string {
+export function decodeMediaPath(raw: string, log?: EngineLogger, prefix = ""): string {
   let mediaPath = raw;
   if (mediaPath.startsWith("MEDIA:")) {
     mediaPath = mediaPath.slice("MEDIA:".length);
