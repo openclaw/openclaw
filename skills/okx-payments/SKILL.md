@@ -19,25 +19,19 @@ Ask the user:
 
 ### Step 2a — Buyer path
 
-Run the following setup in order:
-
 **Install onchainos CLI**
 
-> Security note: Review the install script before running pipe-to-shell commands. You can inspect the raw script at the URL above, or download and audit it first.
+> **Tip:** Detect the user's operating system first, then run the appropriate install command below. Do not run all commands — only the one matching the detected OS.
 
 ```bash
-# macOS / Linux (stable)
+# macOS / Linux
 curl -sSL https://raw.githubusercontent.com/okx/onchainos-skills/main/install.sh | sh
 
-# macOS / Linux (beta)
-curl -sSL https://raw.githubusercontent.com/okx/onchainos-skills/main/install.sh | sh -s -- --beta
-
-# Windows PowerShell (stable)
+# Windows PowerShell
 irm https://raw.githubusercontent.com/okx/onchainos-skills/main/install.ps1 | iex
-
-# Windows PowerShell (beta)
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/okx/onchainos-skills/main/install.ps1))) --beta
 ```
+
+> Security note: Review the install script before running pipe-to-shell commands. You can inspect the raw script at the URL above, or download and audit it first.
 
 **Install onchainos skills** (pick one)
 
