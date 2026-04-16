@@ -19,7 +19,6 @@ import type {
   SkillEntry,
   SkillInstallSpec,
   SkillInvocationPolicy,
-  SkillPlanTemplateStep,
 } from "./types.js";
 
 export function parseFrontmatter(content: string): ParsedSkillFrontmatter {
@@ -185,18 +184,6 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   return spec;
 }
 
-function parsePlanTemplate(raw: unknown): SkillPlanTemplateStep[] {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return raw
-    .filter((item: any) => item && typeof item === "object" && item.step)
-    .map((item: any) => ({
-      step: String(item.step || ""),
-      ...(item.activeForm ? { activeForm: String(item.activeForm) } : {}),
-    }));
-}
-
 export function resolveOpenClawMetadata(
   frontmatter: ParsedSkillFrontmatter,
 ): OpenClawSkillMetadata | undefined {
@@ -207,7 +194,6 @@ export function resolveOpenClawMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
-  const planTemplate = parsePlanTemplate(metadataObj["plan-template"]);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: readStringValue(metadataObj.emoji),
@@ -217,7 +203,6 @@ export function resolveOpenClawMetadata(
     os: osRaw.length > 0 ? osRaw : undefined,
     requires: requires,
     install: install.length > 0 ? install : undefined,
-    planTemplate: planTemplate.length > 0 ? planTemplate : undefined,
   };
 }
 
