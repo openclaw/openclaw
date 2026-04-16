@@ -16,23 +16,9 @@ export interface GatewayLogger {
 
 // ============ Account ============
 
-/** Resolved account configuration — subset used by the gateway. */
-export interface GatewayAccount {
-  accountId: string;
-  appId: string;
-  clientSecret: string;
-  markdownSupport: boolean;
-  systemPrompt?: string;
-  config: Record<string, unknown> & {
-    allowFrom?: unknown[];
-    streaming?: { mode?: string };
-    audioFormatPolicy?: {
-      uploadDirectFormats?: string[];
-      transcodeEnabled?: boolean;
-    };
-    voiceDirectUploadFormats?: string[];
-  };
-}
+/** Re-export GatewayAccount from engine/types.ts (single source of truth). */
+import type { GatewayAccount as _GatewayAccount } from "../types.js";
+export type GatewayAccount = _GatewayAccount;
 
 // ============ PluginRuntime subset ============
 
@@ -87,18 +73,8 @@ export interface GatewayPluginRuntime {
 
 // ============ Shared result types ============
 
-/** Processed attachment result from inbound-attachments. */
-export interface ProcessedAttachments {
-  attachmentInfo: string;
-  imageUrls: string[];
-  imageMediaTypes: string[];
-  voiceAttachmentPaths: string[];
-  voiceAttachmentUrls: string[];
-  voiceAsrReferTexts: string[];
-  voiceTranscripts: string[];
-  voiceTranscriptSources: string[];
-  attachmentLocalPaths: Array<string | null>;
-}
+/** Re-export ProcessedAttachments from inbound-attachments (single source of truth). */
+export type { ProcessedAttachments } from "./inbound-attachments.js";
 
 /** Outbound result from media sends. */
 export interface OutboundResult {
@@ -110,6 +86,72 @@ export interface OutboundResult {
 
 /** Re-export RefAttachmentSummary for convenience. */
 export type { RefAttachmentSummary } from "../ref/types.js";
+
+// ============ WebSocket Event Types ============
+
+/** Raw WebSocket payload structure. */
+export interface WSPayload {
+  op: number;
+  d: unknown;
+  s?: number;
+  t?: string;
+}
+
+/** Attachment shape shared by all message event types. */
+export interface RawMessageAttachment {
+  content_type: string;
+  url: string;
+  filename?: string;
+  voice_wav_url?: string;
+  asr_refer_text?: string;
+}
+
+/** Referenced message element (used for quote messages). */
+export interface RawMsgElement {
+  msg_idx?: string;
+  content?: string;
+  attachments?: Array<
+    RawMessageAttachment & {
+      height?: number;
+      width?: number;
+      size?: number;
+    }
+  >;
+}
+
+export interface C2CMessageEvent {
+  id: string;
+  content: string;
+  timestamp: string;
+  author: { user_openid: string };
+  attachments?: RawMessageAttachment[];
+  message_scene?: { ext?: string[] };
+  message_type?: number;
+  msg_elements?: RawMsgElement[];
+}
+
+export interface GuildMessageEvent {
+  id: string;
+  content: string;
+  timestamp: string;
+  author: { id: string; username?: string };
+  channel_id: string;
+  guild_id: string;
+  attachments?: RawMessageAttachment[];
+  message_scene?: { ext?: string[] };
+}
+
+export interface GroupMessageEvent {
+  id: string;
+  content: string;
+  timestamp: string;
+  author: { member_openid: string };
+  group_openid: string;
+  attachments?: RawMessageAttachment[];
+  message_scene?: { ext?: string[] };
+  message_type?: number;
+  msg_elements?: RawMsgElement[];
+}
 
 // ============ Gateway Context ============
 

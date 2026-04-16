@@ -37,6 +37,23 @@ export interface QueuedMessage {
   refMsgIdx?: string;
   /** refIdx assigned to this message for future quoting. */
   msgIdx?: string;
+  /** QQ message type (103 = quote). */
+  msgType?: number;
+  /** Referenced message elements (for quote messages). */
+  msgElements?: Array<{
+    msg_idx?: string;
+    content?: string;
+    attachments?: Array<{
+      content_type: string;
+      url: string;
+      filename?: string;
+      height?: number;
+      width?: number;
+      size?: number;
+      voice_wav_url?: string;
+      asr_refer_text?: string;
+    }>;
+  }>;
 }
 
 export interface MessageQueueContext {

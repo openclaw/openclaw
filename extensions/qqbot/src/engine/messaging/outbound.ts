@@ -46,7 +46,7 @@ function shouldTranscodeVoice(p: string): boolean {
 function waitForFile(p: string, ms?: number): Promise<number> {
   return getAudio().waitForFile(p, ms);
 }
-import type { GatewayAccount } from "../gateway/types.js";
+import type { GatewayAccount } from "../types.js";
 import {
   checkFileSize,
   downloadFile,

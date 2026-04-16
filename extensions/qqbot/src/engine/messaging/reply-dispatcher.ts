@@ -8,7 +8,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { GatewayAccount } from "../gateway/types.js";
+import type { GatewayAccount } from "../types.js";
 import { MAX_UPLOAD_SIZE, formatFileSize } from "../utils/file-utils.js";
 import {
   parseQQBotPayload,

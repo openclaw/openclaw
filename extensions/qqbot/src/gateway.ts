@@ -10,11 +10,11 @@
 import { createRequire } from "node:module";
 import { resolveRuntimeServiceVersion } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { registerVersionResolver } from "./engine/commands/slash-commands-impl.js";
 import {
   startGateway as coreStartGateway,
   type CoreGatewayContext,
 } from "./engine/gateway/gateway.js";
-import { registerVersionResolver } from "./engine/gateway/slash-commands-impl.js";
 import type { GatewayAccount } from "./engine/gateway/types.js";
 import { initSender } from "./engine/messaging/sender.js";
 import { registerTextChunker } from "./engine/utils/text-chunk.js";

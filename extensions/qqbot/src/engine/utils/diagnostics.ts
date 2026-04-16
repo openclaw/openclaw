@@ -7,7 +7,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { debugLog } from "../utils/log.js";
+import { debugLog } from "./log.js";
 import {
   getHomeDir,
   getTempDir,
@@ -16,7 +16,7 @@ import {
   isWindows,
   detectFfmpeg,
   checkSilkWasmAvailable,
-} from "../utils/platform.js";
+} from "./platform.js";
 
 export interface DiagnosticReport {
   platform: string;

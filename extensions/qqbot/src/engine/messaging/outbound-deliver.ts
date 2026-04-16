@@ -6,7 +6,7 @@
  * `DeliverDeps.mediaSender`.
  */
 
-import type { GatewayAccount } from "../gateway/types.js";
+import type { GatewayAccount } from "../types.js";
 import { getImageSize, formatQQBotMarkdownImage, hasQQBotImageSize } from "../utils/image-size.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
 import { isLocalPath as isLocalFilePath } from "../utils/platform.js";

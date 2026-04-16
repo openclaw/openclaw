@@ -12,7 +12,7 @@ import {
   asOptionalObjectRecord as asRecord,
   readStringField as readString,
   sanitizeFileName,
-} from "../utils/string-normalize.js";
+} from "./string-normalize.js";
 
 export interface STTConfig {
   baseUrl: string;

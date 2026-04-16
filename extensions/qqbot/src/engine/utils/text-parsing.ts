@@ -20,23 +20,54 @@ export function filterInternalMarkers(text: string | undefined | null): string {
 
 // ============ Ref indices ============
 
-/** Parse message_scene.ext to extract refMsgIdx and msgIdx. */
-export function parseRefIndices(ext?: string[]): { refMsgIdx?: string; msgIdx?: string } {
-  if (!ext || ext.length === 0) {
-    return {};
-  }
+/** QQ 引用（回复）消息类型常量。 */
+export const MSG_TYPE_QUOTE = 103;
 
+/**
+ * Parse message_scene.ext to extract refMsgIdx and msgIdx.
+ *
+ * Supports both ext prefix formats:
+ * - `ref_msg_idx=` / `msg_idx=` (platform native format)
+ * - `refMsgIdx:` / `msgIdx:` (legacy internal format)
+ *
+ * When `messageType` equals `MSG_TYPE_QUOTE` (103) and `msgElements` is
+ * provided, `msgElements[0].msg_idx` takes precedence over the ext-parsed
+ * `refMsgIdx` value — the element-level index is more authoritative for
+ * quote messages.
+ */
+export function parseRefIndices(
+  ext?: string[],
+  messageType?: number,
+  msgElements?: Array<{ msg_idx?: string }>,
+): { refMsgIdx?: string; msgIdx?: string } {
   let refMsgIdx: string | undefined;
   let msgIdx: string | undefined;
 
-  for (const item of ext) {
-    if (typeof item !== "string") {
-      continue;
+  if (ext && ext.length > 0) {
+    for (const item of ext) {
+      if (typeof item !== "string") {
+        continue;
+      }
+      // Platform native format: ref_msg_idx= / msg_idx=
+      if (item.startsWith("ref_msg_idx=")) {
+        refMsgIdx = item.slice("ref_msg_idx=".length).trim();
+      } else if (item.startsWith("msg_idx=")) {
+        msgIdx = item.slice("msg_idx=".length).trim();
+      }
+      // Legacy internal format: refMsgIdx: / msgIdx:
+      else if (item.startsWith("refMsgIdx:")) {
+        refMsgIdx = item.slice("refMsgIdx:".length).trim();
+      } else if (item.startsWith("msgIdx:")) {
+        msgIdx = item.slice("msgIdx:".length).trim();
+      }
     }
-    if (item.startsWith("refMsgIdx:")) {
-      refMsgIdx = item.slice("refMsgIdx:".length).trim();
-    } else if (item.startsWith("msgIdx:")) {
-      msgIdx = item.slice("msgIdx:".length).trim();
+  }
+
+  // For quote messages, msg_elements[0].msg_idx is more authoritative.
+  if (messageType === MSG_TYPE_QUOTE) {
+    const refElement = msgElements?.[0];
+    if (refElement?.msg_idx) {
+      refMsgIdx = refElement.msg_idx;
     }
   }
 

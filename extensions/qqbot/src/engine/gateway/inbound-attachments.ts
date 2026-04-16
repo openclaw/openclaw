@@ -1,7 +1,7 @@
 import { downloadFile } from "../utils/file-utils.js";
 import { getQQBotMediaDir } from "../utils/platform.js";
 import { normalizeOptionalString } from "../utils/string-normalize.js";
-import { transcribeAudio, resolveSTTConfig } from "./stt.js";
+import { transcribeAudio, resolveSTTConfig } from "../utils/stt.js";
 // Re-export formatVoiceText from core/.
 export { formatVoiceText } from "../utils/voice-text.js";
 

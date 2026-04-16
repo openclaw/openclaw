@@ -192,3 +192,28 @@ export interface InlineKeyboard {
     rows: Array<{ buttons: KeyboardButton[] }>;
   };
 }
+
+// ============ Gateway Account ============
+
+/**
+ * Resolved account configuration — shared across gateway/ and messaging/ layers.
+ *
+ * Lifted here from gateway/types.ts to eliminate the circular type dependency
+ * where messaging/ had to import from gateway/.
+ */
+export interface GatewayAccount {
+  accountId: string;
+  appId: string;
+  clientSecret: string;
+  markdownSupport: boolean;
+  systemPrompt?: string;
+  config: Record<string, unknown> & {
+    allowFrom?: unknown[];
+    streaming?: { mode?: string };
+    audioFormatPolicy?: {
+      uploadDirectFormats?: string[];
+      transcodeEnabled?: boolean;
+    };
+    voiceDirectUploadFormats?: string[];
+  };
+}
