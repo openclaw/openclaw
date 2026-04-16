@@ -13,6 +13,9 @@ on:
           - play
           - both
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build ${{ matrix.flavor }}Debug
@@ -59,10 +62,34 @@ jobs:
         working-directory: apps/android
         run: ./gradlew --no-daemon :app:assemble${{ steps.flavor.outputs.capitalized }}Debug
 
-      - name: Upload APK
+      - name: Rename APK for release
+        run: |
+          src_dir="apps/android/app/build/outputs/apk/${{ matrix.flavor }}/debug"
+          mkdir -p release-assets
+          cp "$src_dir"/*.apk "release-assets/openclaw-${{ matrix.flavor }}-debug.apk"
+
+      - name: Upload APK as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: openclaw-${{ matrix.flavor }}-debug-apk
-          path: apps/android/app/build/outputs/apk/${{ matrix.flavor }}/debug/*.apk
+          path: release-assets/openclaw-${{ matrix.flavor }}-debug.apk
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
+
+      - name: Publish to GitHub Release (android-debug-latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-debug-latest
+          name: Android Debug APK (latest)
+          body: |
+            Automatisch aktualisiertes Debug-APK vom Branch `${{ github.ref_name }}`
+            Commit: `${{ github.sha }}`
+            Gebaut am: ${{ github.event.repository.updated_at }}
+
+            **Direktdownload:**
+            - thirdParty: https://github.com/${{ github.repository }}/releases/download/android-debug-latest/openclaw-thirdParty-debug.apk
+            - play: https://github.com/${{ github.repository }}/releases/download/android-debug-latest/openclaw-play-debug.apk
+          prerelease: true
+          make_latest: "false"
+          files: release-assets/openclaw-${{ matrix.flavor }}-debug.apk
+          fail_on_unmatched_files: true
