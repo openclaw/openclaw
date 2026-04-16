@@ -7,20 +7,18 @@
 
 ## Last Session
 
-- **Date**: 2026-04-13 (handover refresh)
+- **Date**: 2026-04-16 (CI/CD + Telegram group access)
 - **What changed**:
-  - Confirmed `DevAgents` (`root@204.168.223.245`) as the primary development host for routine gateway/dashboard work, builds, git operations, and deploy orchestration
-  - Confirmed canonical repo-root startup read order on DevAgents: `STATUS.md` → `MULTI_AGENT_PROTOCOL.md` → `AGENTS.md` → `CODEX_TASK_BRIEF.md`
-  - Verified dashboard CI/CD is live: merging `openclaw-dashboard` `main` auto-deploys to Cloud Run and auto-tags releases
-  - Verified the dashboard repo on DevAgents is up to date with `main`
-  - Reconfirmed the gateway blocker: Venice model discovery times out at startup and falls back to the static catalog
+  - Fixed Telegram group access: `accessMode: "subscribed"` now defaults group policy to `"allowlist"`; owner bypasses `groupEnabled: false` in groups (deployed as `v2026.04.16-group-access` on 2ndclaw)
+  - CI/CD (`docker-release.yml`): main-branch pushes now also tag `latest` / `latest-amd64` / `latest-arm64` on GHCR (alongside existing `main` tags)
+  - `deploy.sh` (`scripts/ops/` + `/opt/openclaw-ops/scripts/`): warns before overwriting an agent's `docker.env` when the running image differs from the incoming one
 - **Sync state**: re-check `STATUS.md` before creating a branch; one branch = one owner
 
 ---
 
 ## Currently In Progress
 
-- Codex implementing Widget Chat V1 in openclaw-dashboard (branch: codex/feat-widget-chat-v1)
+- Dashboard PR #53: `fix/control-deploy-infra` — awaiting merge (control/logs/deploy fixes)
 
 ---
 
@@ -42,11 +40,15 @@
 
 ## Active Branches / PRs
 
-| Repo               | Branch                    | PR  | Status      | Owner   | Files / Areas Touched              | Validation | Next Concrete Step                       | Notes                                                           |
-| ------------------ | ------------------------- | --- | ----------- | ------- | ---------------------------------- | ---------- | ---------------------------------------- | --------------------------------------------------------------- |
-| openclaw-dashboard | codex/feat-widget-chat-v1 | —   | claimed     | Codex   | Widget Chat V1                     | build pass | PR review                                | Widget Chat V1 implemented; build passing in openclaw-dashboard |
-| unknown            | chore/staging-deploy-gcp  | #1  | open, stale | unknown | GCP deploy workflow                | unknown    | Verify ownership before reuse or cleanup | Treat as active until verified                                  |
-| openclaw-dashboard | feat/ci-cd-pipeline       | #51 | merged      | Claude  | GitHub Actions, Cloud Run pipeline | merged     | None                                     | CI/CD auto-deploy live                                          |
+| Repo               | Branch                          | PR  | Status          | Owner   | Files / Areas Touched                    | Validation         | Next Concrete Step                       | Notes                                                                    |
+| ------------------ | ------------------------------- | --- | --------------- | ------- | ---------------------------------------- | ------------------ | ---------------------------------------- | ------------------------------------------------------------------------ |
+| openclaw-dashboard | codex/feat-widget-chat-v1       | #52 | merged+deployed | Codex   | Widget Chat V1 (widget tab, chat API/UI) | npm run build + CI | Monitor production behavior              | Merged to main; Cloud Run deploy run 24422489602 succeeded               |
+| openclaw-dashboard | codex/fix-port-allocation-drift | #55 | merged+deployed | Codex   | agent creation, port allocation          | npm run build + CI | Monitor new-agent deploy behavior        | skips ports already claimed in live server state before allocation       |
+| openclaw-dashboard | codex/fix-deploy-port-repair    | #56 | merged+deployed | Codex   | deploy route, port reservation repair    | npm run build + CI | Monitor first-deploy conflict recovery   | auto-repairs stale reserved ports for never-deployed agents              |
+| openclaw-dashboard | feat/ci-cd-pipeline             | #51 | merged          | Claude  | GitHub Actions, Cloud Run pipeline       | merged             | None                                     | CI/CD auto-deploy live                                                   |
+| openclaw           | fix/deploy-and-control-infra    | #7  | merged          | Claude  | docker-compose.yml                       | n/a                | None                                     | Adds OPENCLAW_SKIP_BROWSER_CONTROL_SERVER env passthrough; merged Apr 15 |
+| openclaw-dashboard | fix/control-deploy-infra        | #53 | review          | Claude  | control, logs, deploy routes             | build pass         | Merge to main (auto-deploys)             | Fixes restart/logs/deploy for agents with missing containers             |
+| unknown            | chore/staging-deploy-gcp        | #1  | open, stale     | unknown | GCP deploy workflow                      | unknown            | Verify ownership before reuse or cleanup | Treat as active until verified                                           |
 
 ---
 
@@ -61,6 +63,7 @@
 
 - Dashboard: normal path is merge to `main`; no routine manual deploys
 - Gateway/runtime: run from DevAgents with `/opt/openclaw-ops/scripts/build-and-push.sh <tag>` then `/opt/openclaw-ops/scripts/deploy.sh <tag>`
+- `deploy.sh` warns when overwriting a running agent's image with a different tag — review the warning before confirming
 
 ---
 
