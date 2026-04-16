@@ -10,11 +10,13 @@ let pageState: {
   armIdUpload: number;
   armIdDialog: number;
   armIdDownload: number;
+  downloadWaiterDepth: number;
 } = {
   console: [],
   armIdUpload: 0,
   armIdDialog: 0,
   armIdDownload: 0,
+  downloadWaiterDepth: 0,
 };
 
 const sessionMocks = vi.hoisted(() => ({
@@ -82,6 +84,7 @@ describe("pw-tools-core", () => {
       armIdUpload: 0,
       armIdDialog: 0,
       armIdDownload: 0,
+      downloadWaiterDepth: 0,
     };
 
     for (const fn of Object.values(sessionMocks)) {
@@ -137,20 +140,26 @@ describe("pw-tools-core", () => {
   }
 
   function createDownloadEventHarness() {
-    let downloadHandler: ((download: unknown) => void) | undefined;
+    const downloadHandlers = new Set<(download: unknown) => void>();
     const on = vi.fn((event: string, handler: (download: unknown) => void) => {
       if (event === "download") {
-        downloadHandler = handler;
+        downloadHandlers.add(handler);
       }
     });
-    const off = vi.fn();
+    const off = vi.fn((event: string, handler: (download: unknown) => void) => {
+      if (event === "download") {
+        downloadHandlers.delete(handler);
+      }
+    });
     currentPage = { on, off };
     return {
       trigger: (download: unknown) => {
-        downloadHandler?.(download);
+        for (const handler of downloadHandlers) {
+          handler(download);
+        }
       },
-      expectArmed: () => {
-        expect(downloadHandler).toBeDefined();
+      expectArmed: (count = 1) => {
+        expect(downloadHandlers.size).toBe(count);
       },
     };
   }

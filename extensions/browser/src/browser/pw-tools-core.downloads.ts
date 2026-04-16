@@ -33,14 +33,14 @@ function createPageDownloadWaiter(page: Page, timeoutMs: number) {
   let handler: ((download: unknown) => void) | undefined;
 
   const state = ensurePageState(page);
-  state.downloadWaiterActive = true;
+  state.downloadWaiterDepth += 1;
 
   const cleanup = () => {
     if (timer) {
       clearTimeout(timer);
     }
     timer = undefined;
-    state.downloadWaiterActive = false;
+    state.downloadWaiterDepth = Math.max(0, state.downloadWaiterDepth - 1);
     if (handler) {
       page.off("download", handler as never);
       handler = undefined;

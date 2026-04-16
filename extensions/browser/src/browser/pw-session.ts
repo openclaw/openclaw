@@ -94,7 +94,7 @@ type PageState = {
   armIdUpload: number;
   armIdDialog: number;
   armIdDownload: number;
-  downloadWaiterActive: boolean;
+  downloadWaiterDepth: number;
   /**
    * Role-based refs from the last role snapshot (e.g. e1/e2).
    * Mode "role" refs are generated from ariaSnapshot and resolved via getByRole.
@@ -329,7 +329,7 @@ export function ensurePageState(page: Page): PageState {
     armIdUpload: 0,
     armIdDialog: 0,
     armIdDownload: 0,
-    downloadWaiterActive: false,
+    downloadWaiterDepth: 0,
   };
   pageStates.set(page, state);
 
@@ -399,7 +399,7 @@ export function ensurePageState(page: Page): PageState {
       rec.ok = false;
     });
     page.on("download", (download) => {
-      if (state.downloadWaiterActive) {
+      if (state.downloadWaiterDepth > 0) {
         return;
       }
       const suggested = sanitizeUntrustedFileName(
