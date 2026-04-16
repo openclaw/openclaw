@@ -74,6 +74,6 @@ export function releasePluginInteractiveCallbackDedupe(dedupeKey: string | undef
 
 export function clearPluginInteractiveHandlersState(): void {
   getPluginInteractiveHandlersState().clear();
-  getPluginInteractiveCallbackDedupeState().clear();
+  getPluginInteractiveCallbackDedupeState()?.clear();
   getState().inflightCallbackDedupe.clear();
 }
