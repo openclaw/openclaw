@@ -19,8 +19,8 @@ export function sanitizeProfileIdForDisplay(id: string): string {
     id
       // Strip 7-bit ESC-prefixed ANSI/VT control sequences (CSI, OSC, DCS, APC, PM, SOS,
       // private-use, and bare ESC + any char) to prevent terminal injection via profile IDs.
-      // eslint-disable-next-line no-control-regex
       .replace(
+        // eslint-disable-next-line no-control-regex -- intentional: regex must match control chars to strip them
         /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[\s\S]?)/g,
         "",
       )

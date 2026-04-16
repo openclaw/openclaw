@@ -81,6 +81,7 @@ describe("production lint suppressions", () => {
       "extensions/browser/src/browser/pw-tools-core.interactions.ts|@typescript-eslint/no-implied-eval|2",
       "scripts/e2e/mcp-channels-harness.ts|unicorn/prefer-add-event-listener|1",
       "src/agents/agent-scope.ts|no-control-regex|1",
+      "src/agents/auth-profiles/sanitize.ts|no-control-regex|2",
       "src/agents/pi-embedded-runner/run/images.ts|no-control-regex|1",
       "src/agents/skills-clawhub.ts|no-control-regex|1",
       "src/agents/subagent-attachments.ts|no-control-regex|1",
