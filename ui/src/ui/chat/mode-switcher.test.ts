@@ -34,11 +34,19 @@ describe("resolveCurrentMode", () => {
 });
 
 describe("handleModeShortcut", () => {
-  function makeKeyEvent(key: string, ctrl = false, meta = false): KeyboardEvent {
+  function makeKeyEvent(
+    key: string,
+    ctrl = false,
+    meta = false,
+    shift = false,
+    alt = false,
+  ): KeyboardEvent {
     return {
       key,
       ctrlKey: ctrl,
       metaKey: meta,
+      shiftKey: shift,
+      altKey: alt,
       preventDefault: () => {},
     } as unknown as KeyboardEvent;
   }
@@ -65,6 +73,14 @@ describe("handleModeShortcut", () => {
 
   it("returns null for plain digit without modifier", () => {
     expect(handleModeShortcut(makeKeyEvent("1", false, false))).toBeNull();
+  });
+
+  it("returns null for Ctrl+Shift+1 (extra modifier blocks)", () => {
+    expect(handleModeShortcut(makeKeyEvent("1", true, false, true, false))).toBeNull();
+  });
+
+  it("returns null for Ctrl+Alt+1 (extra modifier blocks)", () => {
+    expect(handleModeShortcut(makeKeyEvent("1", true, false, false, true))).toBeNull();
   });
 
   it("calls preventDefault when a mode matches", () => {
