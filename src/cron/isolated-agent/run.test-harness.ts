@@ -53,7 +53,12 @@ function resolveAllowedModelRefForTest(params: {
     return { error: `invalid model: ${trimmed}` };
   }
   const ref = { provider: provider.toLowerCase(), model };
-  return { ref, key: `${ref.provider}/${ref.model}` };
+  const key = `${ref.provider}/${ref.model}`;
+  const status = getModelRefStatusMock({ ref });
+  if (status && typeof status === "object" && "allowed" in status && !status.allowed) {
+    return { error: `model not allowed: ${key}` };
+  }
+  return { ref, key };
 }
 
 export const buildWorkspaceSkillSnapshotMock = createMock();

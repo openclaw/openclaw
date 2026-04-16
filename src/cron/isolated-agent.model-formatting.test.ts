@@ -71,13 +71,13 @@ function parseModelRef(raw: string): { provider: string; model: string } | { err
   const trimmed = raw.trim();
   const slash = trimmed.indexOf("/");
   if (slash <= 0 || slash === trimmed.length - 1) {
-    return { error: `invalid model: ${trimmed}` };
+    return { error: "invalid model" };
   }
 
   const providerRaw = trimmed.slice(0, slash).trim().toLowerCase();
   const modelRaw = trimmed.slice(slash + 1).trim();
   if (!providerRaw || !modelRaw) {
-    return { error: `invalid model: ${trimmed}` };
+    return { error: "invalid model" };
   }
 
   const provider = providerRaw === "bedrock" ? "amazon-bedrock" : providerRaw;
