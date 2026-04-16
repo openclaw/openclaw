@@ -278,11 +278,16 @@ describe("extractToolResultMediaPaths", () => {
   });
 
   it("blocks trusted-media aliases that are not exact registered built-ins", () => {
+    expect(filterToolResultMediaUrls("bash", ["/etc/passwd"], undefined, new Set(["exec"]))).toEqual(
+      [],
+    );
     expect(
-      filterToolResultMediaUrls("bash", ["/etc/passwd"], undefined, new Set(["exec"])),
-    ).toEqual([]);
-    expect(
-      filterToolResultMediaUrls("Web_Search", ["/etc/passwd"], undefined, new Set(["web_search"])),
+      filterToolResultMediaUrls(
+        "Web_Search",
+        ["/etc/passwd"],
+        undefined,
+        new Set(["web_search"]),
+      ),
     ).toEqual([]);
   });
 

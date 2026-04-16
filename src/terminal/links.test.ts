@@ -18,7 +18,9 @@ describe("formatDocsLink", () => {
   });
 
   it("does not crash when path is undefined (regression: #67076, #67074)", () => {
-    expect(() => formatDocsLink(undefined as unknown as string, "label")).not.toThrow();
+    expect(() =>
+      formatDocsLink(undefined as unknown as string, "label"),
+    ).not.toThrow();
     const out = formatDocsLink(undefined as unknown as string, "label");
     expect(out).toContain("https://docs.openclaw.ai");
   });
