@@ -4,6 +4,7 @@ import { defineConfig, type UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
   listBundledPluginRuntimeDependencies,
+  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
 
@@ -93,6 +94,7 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
 
 const bundledPluginBuildEntries = collectBundledPluginBuildEntries();
 const bundledPluginRuntimeDependencies = listBundledPluginRuntimeDependencies();
+const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
 
 function buildBundledHookEntries(): Record<string, string> {
   const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
@@ -236,7 +238,9 @@ const stagedBundledPluginBuildEntries = bundledPluginBuildEntries.filter(({ pack
   shouldStageBundledPluginRuntimeDependencies(packageJson),
 );
 const rootBundledPluginBuildEntries = bundledPluginBuildEntries.filter(
-  ({ packageJson }) => !shouldStageBundledPluginRuntimeDependencies(packageJson),
+  ({ id, packageJson }) =>
+    !shouldStageBundledPluginRuntimeDependencies(packageJson) &&
+    (shouldBuildPrivateQaEntries || !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id)),
 );
 
 function buildUnifiedDistEntries(): Record<string, string> {
@@ -250,6 +254,12 @@ function buildUnifiedDistEntries(): Record<string, string> {
         source,
       ]),
     ),
+    ...(shouldBuildPrivateQaEntries
+      ? {
+          "plugin-sdk/qa-lab": "src/plugin-sdk/qa-lab.ts",
+          "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
+        }
+      : {}),
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     ...bundledHookEntries,
   };

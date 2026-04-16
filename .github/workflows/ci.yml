@@ -227,7 +227,7 @@ jobs:
                             check_name: "checks-node-compat-node22",
                             runtime: "node",
                             task: "compat-node22",
-                            node_version: "22.x",
+                            node_version: "22.18.0",
                             cache_key_suffix: "node22",
                           },
                         ]
