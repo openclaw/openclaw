@@ -35,7 +35,7 @@ describe("resolveFirstBoundAccountId", () => {
     ).toBe("bot-alpha-room-a");
   });
 
-  it("prefers wildcard peer binding over channel-only when caller supplies any peerId", () => {
+  it("prefers wildcard peer binding over channel-only when caller peerKind matches", () => {
     const cfg = cfgWithBindings([
       {
         type: "route",
@@ -58,6 +58,7 @@ describe("resolveFirstBoundAccountId", () => {
         channelId: "matrix",
         agentId: "bot-alpha",
         peerId: "!anyRoom:example.org",
+        peerKind: "channel",
       }),
     ).toBe("bot-alpha-wildcard");
   });
@@ -187,6 +188,58 @@ describe("resolveFirstBoundAccountId", () => {
         peerKind: "direct",
       }),
     ).toBe("bot-alpha-dm");
+  });
+
+  it("skips wildcard peer bindings when the caller's peerKind is unknown", () => {
+    const cfg = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "matrix",
+          peer: { kind: "direct", id: "*" },
+          accountId: "bot-alpha-dm",
+        },
+      },
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: { channel: "matrix", accountId: "bot-alpha-default" },
+      },
+    ]);
+    // Without a peerKind on the caller, we cannot verify kind compatibility
+    // for the wildcard binding — it must be skipped in favor of the channel-only
+    // fallback rather than risk routing to the wrong identity.
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "matrix",
+        agentId: "bot-alpha",
+        peerId: "!room:example.org",
+      }),
+    ).toBe("bot-alpha-default");
+  });
+
+  it("matches exact peer id even when the caller's peerKind is unknown", () => {
+    const cfg = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "matrix",
+          peer: { kind: "channel", id: "!room:example.org" },
+          accountId: "bot-alpha-room",
+        },
+      },
+    ]);
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "matrix",
+        agentId: "bot-alpha",
+        peerId: "!room:example.org",
+      }),
+    ).toBe("bot-alpha-room");
   });
 
   it("skips peer-specific bindings whose kind does not match the caller's peerKind", () => {

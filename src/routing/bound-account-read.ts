@@ -74,23 +74,29 @@ export function resolveFirstBoundAccountId(params: {
     ) {
       continue;
     }
-    // When the caller knows the peer kind and the binding declares a peer kind,
-    // they must match — a direct/* binding must not win for a channel caller,
-    // and vice versa. If either side omits the kind, we do not filter on it
-    // (preserves backward-compat for peerless cron callers).
-    if (resolved.peerKind && normalizedPeerKind && resolved.peerKind !== normalizedPeerKind) {
-      continue;
-    }
     if (resolved.peerId === "*") {
+      // Wildcard peer bindings are only safe when both sides declare a peer
+      // kind AND the kinds agree. If either side lacks a kind, skip — a
+      // direct/* binding must never win for a channel caller (or vice versa),
+      // and we'd rather fall through to channel-only or the caller account
+      // than actively route to the wrong identity.
+      if (!resolved.peerKind || !normalizedPeerKind || resolved.peerKind !== normalizedPeerKind) {
+        continue;
+      }
       if (normalizedPeerId) {
         wildcardPeerMatch ??= resolved.accountId;
       } else {
-        // Caller supplied no peer — a wildcard binding has no peer to match against,
-        // so treat it as a last-resort peer-ish fallback rather than letting it
-        // override channel-only bindings.
         peerlessPeerSpecificFallback ??= resolved.accountId;
       }
     } else if (resolved.peerId) {
+      // Exact peer id match: peer ids are channel-unique so id alone is
+      // sufficient, but when both sides declare a kind they must still agree
+      // (avoids a direct-kind binding matching a channel caller that happens
+      // to share an id, which can occur on channels where ids are reused
+      // across kinds).
+      if (resolved.peerKind && normalizedPeerKind && resolved.peerKind !== normalizedPeerKind) {
+        continue;
+      }
       if (normalizedPeerId && resolved.peerId === normalizedPeerId) {
         return resolved.accountId;
       }

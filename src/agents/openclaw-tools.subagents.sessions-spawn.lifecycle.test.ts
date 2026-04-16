@@ -697,6 +697,51 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(spawnAccountId).toBe("bot-alpha");
   });
 
+  it("sessions_spawn peels channel prefix then kind prefix for <channel>:<kind>:<id> targets", async () => {
+    let spawnAccountId: string | undefined;
+    const rawGroupId = "U123example";
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      messages: { queue: { debounceMs: 0 } },
+      agents: { defaults: { subagents: { allowAgents: ["bot-alpha"] } } },
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "line",
+            peer: { kind: "group", id: rawGroupId },
+            accountId: "bot-alpha-line",
+          },
+        },
+      ],
+    });
+    setupSessionsSpawnGatewayMock({
+      onAgentSubagentSpawn: (params) => {
+        const rec = params as { accountId?: string } | undefined;
+        spawnAccountId = rec?.accountId;
+      },
+    });
+
+    // LINE emits its originatingTo as `line:group:<id>`. Without peeling the
+    // channel prefix first and looping, a naive strip would leave `group:<id>`
+    // (or `line:<id>`) and the exact peer-id binding would not match.
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "line",
+      agentAccountId: "bot-beta",
+      agentTo: `line:group:${rawGroupId}`,
+    });
+
+    const result = await tool.execute("call-line-nested-prefix", {
+      task: "do thing",
+      agentId: "bot-alpha",
+      cleanup: "keep",
+    });
+    expect(result.details).toMatchObject({ status: "accepted", runId: expect.any(String) });
+    expect(spawnAccountId).toBe("bot-alpha-line");
+  });
+
   it("sessions_spawn preserves the caller's account for same-agent subagent spawns", async () => {
     let spawnAccountId: string | undefined;
     const room = "!someRoom:example.org";
