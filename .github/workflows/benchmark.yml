@@ -1,0 +1,38 @@
+name: Performance Benchmark
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install hyperfine
+        run: |
+          curl -sL https://github.com/sharkdp/hyperfine/releases/download/v1.18.0/hyperfine_1.18.0_amd64.deb -o /tmp/hf.deb
+          sudo dpkg -i /tmp/hf.deb
+
+      - name: Run benchmarks
+        run: |
+          hyperfine --warmup 2 --export-json bench-results.json \
+            'node -e "require(\"./dist/cli.js\")" --help' \
+            || true
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: bench-results.json
