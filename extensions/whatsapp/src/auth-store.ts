@@ -39,10 +39,17 @@ export function maybeRestoreCredsFromBackup(authDir: string): void {
     const credsPath = resolveWebCredsPath(authDir);
     const backupPath = resolveWebCredsBackupPath(authDir);
     const raw = readCredsJsonRaw(credsPath);
+    let credsCorrupt = false;
+
     if (raw) {
-      // Validate that creds.json is parseable.
-      JSON.parse(raw);
-      return;
+      try {
+        // Validate that creds.json is parseable.
+        JSON.parse(raw);
+        return;
+      } catch {
+        // File exists but is corrupt JSON — fall through to restore.
+        credsCorrupt = true;
+      }
     }
 
     const backupRaw = readCredsJsonRaw(backupPath);
@@ -58,7 +65,15 @@ export function maybeRestoreCredsFromBackup(authDir: string): void {
     } catch {
       // best-effort on platforms that support it
     }
-    logger.warn({ credsPath }, "restored corrupted WhatsApp creds.json from backup");
+
+    if (credsCorrupt) {
+      // Only warn at warn level when creds.json actually contained invalid JSON.
+      logger.warn({ credsPath }, "restored corrupted WhatsApp creds.json from backup");
+    } else {
+      // creds.json was missing or empty (e.g. during reconnect flush) —
+      // this is normal, don't alarm the user. (#60625)
+      logger.debug({ credsPath }, "WhatsApp creds.json was missing, restored from backup");
+    }
   } catch {
     // ignore
   }
