@@ -1,3 +1,4 @@
+import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import {
   hasPotentialConfiguredChannels,
@@ -99,35 +100,8 @@ function extractProviderFromModelRef(value: string): string | null {
   return normalizeProviderId(trimmed.slice(0, slash));
 }
 
-function collectEmbeddedHarnessRuntimes(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  const runtimes = new Set<string>();
-  const pushRuntime = (value: unknown) => {
-    if (typeof value !== "string") {
-      return;
-    }
-    const normalized = normalizeOptionalLowercaseString(value);
-    if (!normalized || normalized === "auto" || normalized === "pi") {
-      return;
-    }
-    runtimes.add(normalized);
-  };
-
-  pushRuntime(cfg.agents?.defaults?.embeddedHarness?.runtime);
-  if (Array.isArray(cfg.agents?.list)) {
-    for (const agent of cfg.agents.list) {
-      if (!isRecord(agent)) {
-        continue;
-      }
-      pushRuntime((agent.embeddedHarness as Record<string, unknown> | undefined)?.runtime);
-    }
-  }
-  pushRuntime(env.OPENCLAW_AGENT_RUNTIME);
-
-  return [...runtimes].toSorted((left, right) => left.localeCompare(right));
-}
-
 function hasConfiguredEmbeddedHarnessRuntime(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  return collectEmbeddedHarnessRuntimes(cfg, env).length > 0;
+  return collectConfiguredAgentHarnessRuntimes(cfg, env).length > 0;
 }
 
 function resolveAgentHarnessOwnerPluginIds(
@@ -490,7 +464,7 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     }
   }
 
-  for (const runtime of collectEmbeddedHarnessRuntimes(params.config, params.env)) {
+  for (const runtime of collectConfiguredAgentHarnessRuntimes(params.config, params.env)) {
     const pluginIds = resolveAgentHarnessOwnerPluginIds(params.registry, runtime);
     for (const pluginId of pluginIds) {
       changes.push({
