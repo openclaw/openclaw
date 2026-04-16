@@ -9,6 +9,8 @@ const OPEN_POLICY: SpeechModelOverridePolicy = {
   allowModelId: true,
   allowText: true,
   allowVoiceSettings: true,
+  allowNormalization: true,
+  allowSeed: true,
 };
 
 describe("parseTtsDirectives", () => {
