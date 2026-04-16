@@ -34,6 +34,7 @@ import type {
   MemoryRemBackfillOptions,
   MemoryRemHarnessOptions,
   MemorySearchCommandOptions,
+  MemorySidecarListCommandOptions,
 } from "./cli.types.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
 import { previewRemDreaming, seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
@@ -45,6 +46,15 @@ import {
 } from "./dreaming-repair.js";
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import {
+  formatListLines as formatSidecarListLines,
+  formatStatsLines as formatSidecarStatsLines,
+  readSidecarList,
+  readSidecarStats,
+  type SidecarListRow,
+  type SidecarStatsSummary,
+} from "./memory-v2/cli/sidecar-cli.js";
+import { SIDECAR_DB_RELATIVE_PATH, openSidecarDatabase } from "./memory-v2/sidecar-store.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import {
   applyShortTermPromotions,
@@ -1932,4 +1942,159 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
       }
     },
   });
+}
+
+type SidecarStatsEntry = {
+  agentId: string;
+  dbPath: string;
+  initialized: boolean;
+  stats: SidecarStatsSummary | null;
+};
+
+type SidecarListEntry = {
+  agentId: string;
+  dbPath: string;
+  initialized: boolean;
+  rows: SidecarListRow[];
+};
+
+async function collectSidecarStatsEntries(
+  cfg: OpenClawConfig,
+  agentIds: readonly string[],
+): Promise<SidecarStatsEntry[]> {
+  const entries: SidecarStatsEntry[] = [];
+  for (const agentId of agentIds) {
+    await withMemoryManagerForAgent({
+      cfg,
+      agentId,
+      purpose: "status",
+      run: async (manager) => {
+        const workspaceDir = manager.status().workspaceDir;
+        if (!workspaceDir) {
+          return;
+        }
+        const dbPath = path.join(workspaceDir, SIDECAR_DB_RELATIVE_PATH);
+        if (!fsSync.existsSync(dbPath)) {
+          entries.push({ agentId, dbPath, initialized: false, stats: null });
+          return;
+        }
+        const db = openSidecarDatabase(dbPath);
+        try {
+          entries.push({ agentId, dbPath, initialized: true, stats: readSidecarStats(db) });
+        } finally {
+          db.close();
+        }
+      },
+    });
+  }
+  return entries;
+}
+
+async function collectSidecarListEntries(
+  cfg: OpenClawConfig,
+  agentIds: readonly string[],
+  opts: { status?: string; limit?: number },
+): Promise<SidecarListEntry[]> {
+  const entries: SidecarListEntry[] = [];
+  for (const agentId of agentIds) {
+    await withMemoryManagerForAgent({
+      cfg,
+      agentId,
+      purpose: "status",
+      run: async (manager) => {
+        const workspaceDir = manager.status().workspaceDir;
+        if (!workspaceDir) {
+          return;
+        }
+        const dbPath = path.join(workspaceDir, SIDECAR_DB_RELATIVE_PATH);
+        if (!fsSync.existsSync(dbPath)) {
+          entries.push({ agentId, dbPath, initialized: false, rows: [] });
+          return;
+        }
+        const db = openSidecarDatabase(dbPath);
+        try {
+          entries.push({
+            agentId,
+            dbPath,
+            initialized: true,
+            rows: readSidecarList(db, opts),
+          });
+        } finally {
+          db.close();
+        }
+      },
+    });
+  }
+  return entries;
+}
+
+export async function runMemorySidecarStats(opts: MemoryCommandOptions): Promise<void> {
+  setVerbose(Boolean(opts.verbose));
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory sidecar stats");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentIds = resolveAgentIds(cfg, opts.agent);
+  const entries = await collectSidecarStatsEntries(cfg, agentIds);
+
+  if (opts.json) {
+    defaultRuntime.writeJson(entries);
+    return;
+  }
+
+  const rich = isRich();
+  const heading = (text: string) => colorize(rich, theme.heading, text);
+  const muted = (text: string) => colorize(rich, theme.muted, text);
+  for (const entry of entries) {
+    defaultRuntime.log(heading(`Memory v2 sidecar — ${entry.agentId}`));
+    defaultRuntime.log(muted(`path: ${shortenHomePath(entry.dbPath)}`));
+    if (!entry.initialized || !entry.stats) {
+      defaultRuntime.log(
+        muted("sidecar not initialized (enable memoryV2.ingest to start populating)."),
+      );
+      defaultRuntime.log("");
+      continue;
+    }
+    for (const line of formatSidecarStatsLines(entry.stats)) {
+      defaultRuntime.log(`  ${line}`);
+    }
+    defaultRuntime.log("");
+  }
+}
+
+export async function runMemorySidecarList(opts: MemorySidecarListCommandOptions): Promise<void> {
+  setVerbose(Boolean(opts.verbose));
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory sidecar list");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentIds = resolveAgentIds(cfg, opts.agent);
+  const listOpts: { status?: string; limit?: number } = {};
+  if (typeof opts.status === "string" && opts.status.length > 0) {
+    listOpts.status = opts.status;
+  }
+  if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
+    listOpts.limit = opts.limit;
+  }
+  const entries = await collectSidecarListEntries(cfg, agentIds, listOpts);
+
+  if (opts.json) {
+    defaultRuntime.writeJson(entries);
+    return;
+  }
+
+  const rich = isRich();
+  const heading = (text: string) => colorize(rich, theme.heading, text);
+  const muted = (text: string) => colorize(rich, theme.muted, text);
+  for (const entry of entries) {
+    defaultRuntime.log(heading(`Memory v2 sidecar — ${entry.agentId}`));
+    defaultRuntime.log(muted(`path: ${shortenHomePath(entry.dbPath)}`));
+    if (!entry.initialized) {
+      defaultRuntime.log(
+        muted("sidecar not initialized (enable memoryV2.ingest to start populating)."),
+      );
+      defaultRuntime.log("");
+      continue;
+    }
+    for (const line of formatSidecarListLines(entry.rows)) {
+      defaultRuntime.log(line);
+    }
+    defaultRuntime.log("");
+  }
 }

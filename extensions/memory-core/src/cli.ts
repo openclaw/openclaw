@@ -11,6 +11,7 @@ import type {
   MemoryRemBackfillOptions,
   MemoryRemHarnessOptions,
   MemorySearchCommandOptions,
+  MemorySidecarListCommandOptions,
 } from "./cli.types.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
@@ -63,6 +64,16 @@ async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
 async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemoryRemBackfill(opts);
+}
+
+async function runMemorySidecarStats(opts: MemoryCommandOptions) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemorySidecarStats(opts);
+}
+
+async function runMemorySidecarList(opts: MemorySidecarListCommandOptions) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemorySidecarList(opts);
 }
 
 export function registerMemoryCli(program: Command) {
@@ -218,5 +229,31 @@ export function registerMemoryCli(program: Command) {
     .option("--json", "Print JSON")
     .action(async (opts: MemoryRemBackfillOptions) => {
       await runMemoryRemBackfill(opts);
+    });
+
+  const sidecar = memory
+    .command("sidecar")
+    .description("Inspect the Memory v2 sidecar database (read-only)");
+
+  sidecar
+    .command("stats")
+    .description("Show row counts, status/source breakdown, and time bounds")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--json", "Print JSON")
+    .option("--verbose", "Verbose logging", false)
+    .action(async (opts: MemoryCommandOptions) => {
+      await runMemorySidecarStats(opts);
+    });
+
+  sidecar
+    .command("list")
+    .description("List sidecar rows newest-first (read-only)")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--status <s>", "Filter by status (active | superseded | archived | deleted)")
+    .option("--limit <n>", "Max rows (default 20, max 1000)", (value: string) => Number(value))
+    .option("--json", "Print JSON")
+    .option("--verbose", "Verbose logging", false)
+    .action(async (opts: MemorySidecarListCommandOptions) => {
+      await runMemorySidecarList(opts);
     });
 }
