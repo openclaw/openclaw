@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default ClawModeler desktop capability.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:default"]
 }

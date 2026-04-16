@@ -198,6 +198,7 @@ fn collect_files(root: &Path, files: &mut Vec<String>) {
 
 pub fn run() {
     if let Err(error) = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             clawmodeler_doctor,
             clawmodeler_tools,

@@ -257,6 +257,37 @@ small {
   color: #155344;
 }
 
+.label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pick-btn {
+  min-height: 28px;
+  padding: 4px 12px;
+  border: 1px solid #1c6b5a;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1c6b5a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pick-btn:hover:not(:disabled) {
+  background: #f0f7f3;
+  color: #155344;
+}
+
+.pick-btn:disabled {
+  border-color: #b8c2bd;
+  background: #f6f8f7;
+  color: #8a958f;
+  cursor: not-allowed;
+  opacity: 1;
+}
+
 .run-state {
   display: inline-flex;
   align-items: center;

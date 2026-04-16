@@ -1,5 +1,6 @@
 import "./styles.css";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   buildFullWorkflowArgs,
   friendlyError,
@@ -266,6 +267,70 @@ async function refreshArtifacts(showBusy = true) {
   }
 }
 
+async function pickWorkspaceFolder() {
+  try {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "Pick workspace folder",
+    });
+    if (typeof selected === "string" && selected) {
+      state.workspace = selected;
+      saveForm();
+      render();
+    }
+  } catch (error) {
+    state.status = friendlyError(error instanceof Error ? error.message : String(error));
+    render();
+  }
+}
+
+async function pickInputFiles() {
+  try {
+    const selected = await open({
+      directory: false,
+      multiple: true,
+      title: "Pick input files",
+      filters: [
+        { name: "Planning data", extensions: ["geojson", "json", "csv", "parquet", "tsv"] },
+        { name: "All files", extensions: ["*"] },
+      ],
+    });
+    if (Array.isArray(selected) && selected.length > 0) {
+      const existing = state.inputPaths.trim();
+      const appended = selected.join("\n");
+      state.inputPaths = existing ? `${existing}\n${appended}` : appended;
+      saveForm();
+      render();
+    }
+  } catch (error) {
+    state.status = friendlyError(error instanceof Error ? error.message : String(error));
+    render();
+  }
+}
+
+async function pickQuestionFile() {
+  try {
+    const selected = await open({
+      directory: false,
+      multiple: false,
+      title: "Pick question.json",
+      filters: [
+        { name: "JSON", extensions: ["json"] },
+        { name: "All files", extensions: ["*"] },
+      ],
+    });
+    if (typeof selected === "string" && selected) {
+      state.questionPath = selected;
+      saveForm();
+      render();
+    }
+  } catch (error) {
+    state.status = friendlyError(error instanceof Error ? error.message : String(error));
+    render();
+  }
+}
+
 function bindControls() {
   appRoot.querySelector<HTMLInputElement>("#workspace")?.addEventListener("input", (event) => {
     state.workspace = (event.target as HTMLInputElement).value;
@@ -317,6 +382,21 @@ function bindControls() {
     ?.addEventListener("click", () => {
       markOnboarded();
       render();
+    });
+  appRoot
+    .querySelector<HTMLButtonElement>("[data-action='pick-workspace']")
+    ?.addEventListener("click", () => {
+      void pickWorkspaceFolder();
+    });
+  appRoot
+    .querySelector<HTMLButtonElement>("[data-action='pick-inputs']")
+    ?.addEventListener("click", () => {
+      void pickInputFiles();
+    });
+  appRoot
+    .querySelector<HTMLButtonElement>("[data-action='pick-question']")
+    ?.addEventListener("click", () => {
+      void pickQuestionFile();
     });
   appRoot
     .querySelector<HTMLButtonElement>("[data-action='full']")
@@ -508,7 +588,10 @@ function render() {
             </div>
 
             <label>
-              Workspace path
+              <span class="label-row">
+                <span>Workspace path</span>
+                <button type="button" data-action="pick-workspace" class="pick-btn" ${!isTauriRuntime() || state.busy ? "disabled" : ""} title="${isTauriRuntime() ? "Browse for a folder" : "Available in the desktop app"}">Pick folder…</button>
+              </span>
               <input id="workspace" value="${escapeHtml(state.workspace)}" spellcheck="false" />
               <small class="help">Folder on your computer where ClawModeler stores this project's files. Pick an empty folder — it will be created if it doesn't exist.</small>
             </label>
@@ -518,14 +601,20 @@ function render() {
               <small class="help">Short name for this analysis run (e.g., "demo", "2026-baseline"). Used to name the output folder.</small>
             </label>
             <label>
-              Input paths
+              <span class="label-row">
+                <span>Input paths</span>
+                <button type="button" data-action="pick-inputs" class="pick-btn" ${!isTauriRuntime() || state.busy ? "disabled" : ""} title="${isTauriRuntime() ? "Browse for data files to add" : "Available in the desktop app"}">Add files…</button>
+              </span>
               <textarea id="input-paths" rows="5" spellcheck="false" placeholder="/path/zones.geojson&#10;/path/socio.csv&#10;/path/projects.csv">${escapeHtml(
                 state.inputPaths,
               )}</textarea>
               <small class="help">One path per line. Typical inputs: zones (GeoJSON), socio-economic data (CSV), projects (CSV). Leave blank to use the built-in demo.</small>
             </label>
             <label>
-              Question JSON
+              <span class="label-row">
+                <span>Question JSON</span>
+                <button type="button" data-action="pick-question" class="pick-btn" ${!isTauriRuntime() || state.busy ? "disabled" : ""} title="${isTauriRuntime() ? "Browse for a question.json file" : "Available in the desktop app"}">Pick file…</button>
+              </span>
               <input id="question-path" value="${escapeHtml(
                 state.questionPath,
               )}" placeholder="/path/question.json" spellcheck="false" />
