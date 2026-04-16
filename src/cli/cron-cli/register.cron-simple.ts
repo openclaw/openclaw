@@ -52,6 +52,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .alias("delete")
       .description("Remove a cron job")
       .argument("<id>", "Job id")
+      .option("--json", "Output JSON", false)
       .action(async (id, opts) => {
         try {
           const res = await callGatewayFromCli("cron.remove", opts, { id });
