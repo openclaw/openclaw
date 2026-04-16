@@ -192,7 +192,7 @@ describe("Google speech provider", () => {
 
     expect(
       provider.parseDirectiveToken?.({
-        key: "voice",
+        key: "google_voice",
         value: "Aoede",
         policy: {
           enabled: true,
@@ -209,6 +209,28 @@ describe("Google speech provider", () => {
       handled: true,
       overrides: {
         voiceName: "Aoede",
+      },
+    });
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "google_model",
+        value: "gemini-3.1-flash-tts-preview",
+        policy: {
+          enabled: true,
+          allowText: true,
+          allowProvider: true,
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+          allowNormalization: true,
+          allowSeed: true,
+        },
+      }),
+    ).toEqual({
+      handled: true,
+      overrides: {
+        model: "gemini-3.1-flash-tts-preview",
       },
     });
   });

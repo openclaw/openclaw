@@ -335,8 +335,8 @@ Here you go.
 Available directive keys (when enabled):
 
 - `provider` (registered speech provider id, for example `openai`, `elevenlabs`, `google`, `minimax`, or `microsoft`; requires `allowProvider: true`)
-- `voice` (OpenAI or Google voice) or `voiceId` (ElevenLabs / MiniMax)
-- `model` (OpenAI TTS model, Google TTS model, ElevenLabs model id, or MiniMax model)
+- `voice` (OpenAI voice), `voiceName` / `voice_name` / `google_voice` (Google voice), or `voiceId` (ElevenLabs / MiniMax)
+- `model` (OpenAI TTS model, ElevenLabs model id, or MiniMax model) or `google_model` (Google TTS model)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
 - `vol` / `volume` (MiniMax volume, 0-10)
 - `pitch` (MiniMax pitch, -12 to 12)

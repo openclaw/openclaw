@@ -181,7 +181,6 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
   warnings?: string[];
 } {
   switch (ctx.key) {
-    case "voice":
     case "voicename":
     case "voice_name":
     case "google_voice":
@@ -190,7 +189,6 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
         return { handled: true };
       }
       return { handled: true, overrides: { voiceName: ctx.value } };
-    case "model":
     case "google_model":
     case "googlemodel":
       if (!ctx.policy.allowModelId) {
