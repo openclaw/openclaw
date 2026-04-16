@@ -30,7 +30,14 @@
   width: 22px;
   height: 22px;
   opacity: 0.5;
-  color: var(--accent);
+  color: currentColor;
+  stroke: currentColor;
+  fill: none;
+}
+
+.qs-header__title svg * {
+  stroke: currentColor;
+  fill: none;
 }
 
 /* ── Grid ── */
@@ -83,16 +90,24 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg-elevated) 78%, var(--border) 22%);
-  color: var(--text-strong);
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  background: transparent;
+  color: inherit;
 }
 
 .qs-card__icon svg {
   width: 14px;
   height: 14px;
+  color: inherit;
+  stroke: currentColor;
+  fill: none;
+}
+
+.qs-card__icon svg * {
+  stroke: currentColor;
+  fill: none;
 }
 
 .qs-card__title {
