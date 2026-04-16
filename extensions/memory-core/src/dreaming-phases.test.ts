@@ -249,8 +249,8 @@ describe("memory-core dreaming phases", () => {
     });
 
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
-    expect(subagent.deleteSession.mock.calls[0]?.[0]).toEqual({ sessionKey: expectedSessionKey });
-    expect(subagent.deleteSession.mock.calls[1]?.[0]).toEqual({ sessionKey: expectedSessionKey });
+    expect(subagent.deleteSession).toHaveBeenNthCalledWith(1, { sessionKey: expectedSessionKey });
+    expect(subagent.deleteSession).toHaveBeenNthCalledWith(2, { sessionKey: expectedSessionKey });
   });
 
   it("does not re-ingest managed light dreaming blocks from daily notes", async () => {

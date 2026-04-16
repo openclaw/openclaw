@@ -684,7 +684,7 @@ async function appendSessionCorpusLines(params: {
 
 async function collectSessionIngestionBatches(params: {
   workspaceDir: string;
-  cfg?: OpenClawConfig;
+  cfg?: DreamingHostConfig;
   lookbackDays: number;
   nowMs: number;
   timezone?: string;
@@ -972,7 +972,7 @@ async function collectSessionIngestionBatches(params: {
 
 async function ingestSessionTranscriptSignals(params: {
   workspaceDir: string;
-  cfg?: OpenClawConfig;
+  cfg?: DreamingHostConfig;
   lookbackDays: number;
   nowMs: number;
   timezone?: string;
@@ -1652,11 +1652,11 @@ export async function runDreamingSweepPhases(params: {
   nowMs?: number;
 }): Promise<void> {
   // Normalize nowMs once so all phase timestamps and narrative session keys are consistent.
-  const sweepNowMs = Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
+  const sweepNowMs: number = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
 
   const light = resolveMemoryLightDreamingConfig({
     pluginConfig: params.pluginConfig,
-    cfg: params.cfg,
+    cfg: params.cfg as Parameters<typeof resolveMemoryLightDreamingConfig>[0]["cfg"],
   });
   if (light.enabled && light.limit > 0) {
     await runLightDreaming({
@@ -1683,7 +1683,7 @@ export async function runDreamingSweepPhases(params: {
 
   const rem = resolveMemoryRemDreamingConfig({
     pluginConfig: params.pluginConfig,
-    cfg: params.cfg,
+    cfg: params.cfg as Parameters<typeof resolveMemoryRemDreamingConfig>[0]["cfg"],
   });
   if (rem.enabled && rem.limit > 0) {
     await runRemDreaming({
