@@ -29,16 +29,13 @@ const hookMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../../../src/plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => hookMocks.runner,
-}));
-
 vi.mock("openclaw/plugin-sdk/hook-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/hook-runtime")>(
     "openclaw/plugin-sdk/hook-runtime",
   );
   return {
     ...actual,
+    getGlobalHookRunner: () => hookMocks.runner,
     fireAndForgetHook: vi.fn((promise: Promise<unknown>) => {
       void promise;
     }),

@@ -3,6 +3,7 @@ import {
   buildCanonicalSentMessageHookContext,
   createInternalHookEvent,
   fireAndForgetHook,
+  getGlobalHookRunner,
   toInternalMessageSentContext,
   toPluginMessageContext,
   toPluginMessageSentEvent,
@@ -16,7 +17,6 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { getGlobalHookRunner } from "../../../../src/plugins/hook-runner-global.js";
 import { loadWebMedia } from "../media.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
