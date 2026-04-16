@@ -23,24 +23,28 @@ describe("private-qa-cli", () => {
     process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-private-qa-source-"));
     tempDirs.push(repoRoot);
-    const importModule = vi.fn(async () => ({
-      isQaLabCliAvailable: expect.any(Function),
-      registerQaLabCli: expect.any(Function),
-    }));
+    const expectedPaths = new Set([
+      path.join(repoRoot, ".git"),
+      path.join(repoRoot, "src"),
+      path.join(repoRoot, "dist", "plugin-sdk", "qa-lab.js"),
+    ]);
+    let importedSpecifier: string | undefined;
+    const importModule = vi.fn(async (specifier: string) => {
+      importedSpecifier = specifier;
+      return {
+        isQaLabCliAvailable: expect.any(Function),
+        registerQaLabCli: expect.any(Function),
+      };
+    });
 
     const module = await loadPrivateQaCliModule({
       importModule,
       resolvePackageRootSync: () => repoRoot,
-      existsSync: (filePath) =>
-        [
-          path.join(repoRoot, ".git"),
-          path.join(repoRoot, "src"),
-          path.join(repoRoot, "dist", "plugin-sdk", "qa-lab.js"),
-        ].includes(filePath),
+      existsSync: (filePath) => typeof filePath === "string" && expectedPaths.has(filePath),
     });
 
     expect(importModule).toHaveBeenCalledTimes(1);
-    expect(importModule.mock.calls[0]?.[0]).toContain("/dist/plugin-sdk/qa-lab.js");
+    expect(importedSpecifier).toContain("/dist/plugin-sdk/qa-lab.js");
     expect(module).toMatchObject({
       isQaLabCliAvailable: expect.any(Function),
       registerQaLabCli: expect.any(Function),
