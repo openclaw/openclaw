@@ -222,6 +222,11 @@ export async function dispatchWhatsAppBufferedReply(params: {
   deliverReply: (params: {
     replyResult: ReplyPayload;
     msg: WebInboundMsg;
+    sessionKeyForInternalHooks?: string;
+    accountId?: string;
+    conversationId?: string;
+    isGroup?: boolean;
+    groupId?: string;
     mediaLocalRoots: readonly string[];
     maxMediaBytes: number;
     textLimit: number;
@@ -282,6 +287,11 @@ export async function dispatchWhatsAppBufferedReply(params: {
         await params.deliverReply({
           replyResult: payload,
           msg: params.msg,
+          sessionKeyForInternalHooks: params.route.sessionKey,
+          accountId: params.route.accountId ?? params.msg.accountId,
+          conversationId: params.conversationId,
+          isGroup: params.msg.chatType === "group",
+          groupId: params.msg.chatType === "group" ? params.conversationId : undefined,
           mediaLocalRoots,
           maxMediaBytes: params.maxMediaBytes,
           textLimit,
