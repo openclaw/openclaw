@@ -923,6 +923,9 @@ describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => 
     expect(classifyFailoverReasonFromHttpStatus(402, undefined)).toBe("billing");
     expect(classifyFailoverReasonFromHttpStatus(402, "")).toBe("billing");
     expect(classifyFailoverReasonFromHttpStatus(402, "Payment required")).toBe("billing");
+    expect(classifyFailoverReasonFromHttpStatus(402, "402 custom proxy billing failure")).toBe(
+      "billing",
+    );
   });
 
   it("matches raw 402 wrappers and status-split payloads for the same message", () => {

@@ -583,7 +583,7 @@ export function classifyFailoverReasonFromHttpStatus(
     ? classifyFailoverClassificationFromMessage(message, opts?.provider)
     : null;
   return failoverReasonFromClassification(
-    classifyFailoverClassificationFromHttpStatus(status, message, messageClassification),
+    classifyFailoverClassificationFromHttpStatus(status, message, messageClassification, status),
   );
 }
 
@@ -591,6 +591,7 @@ function classifyFailoverClassificationFromHttpStatus(
   status: number | undefined,
   message: string | undefined,
   messageClassification: FailoverClassification | null,
+  explicitStatus: number | undefined,
 ): FailoverClassification | null {
   const messageReason = failoverReasonFromClassification(messageClassification);
   if (typeof status !== "number" || !Number.isFinite(status)) {
@@ -604,7 +605,12 @@ function classifyFailoverClassificationFromHttpStatus(
     const leadingStatus = extractLeadingHttpStatus(message.trim());
     if (leadingStatus?.code === 402) {
       const reasonFrom402Text = classifyFailoverReasonFrom402Text(message);
-      return reasonFrom402Text ? toReasonClassification(reasonFrom402Text) : messageClassification;
+      if (reasonFrom402Text) {
+        return toReasonClassification(reasonFrom402Text);
+      }
+      return typeof explicitStatus === "number"
+        ? toReasonClassification("billing")
+        : messageClassification;
     }
     return toReasonClassification(classify402Message(message));
   }
@@ -835,6 +841,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     inferredStatus,
     signal.message,
     messageClassification,
+    signal.status,
   );
   if (statusClassification) {
     return statusClassification;
@@ -1246,20 +1253,8 @@ export function classifyFailoverReason(
   raw: string,
   opts?: { provider?: string },
 ): FailoverReason | null {
-  const trimmed = raw.trim();
-  const leadingStatus = extractLeadingHttpStatus(trimmed);
-  const reasonFrom402Text =
-    leadingStatus?.code === 402 ? classifyFailoverReasonFrom402Text(trimmed) : null;
-  if (
-    leadingStatus?.code === 402 &&
-    !reasonFrom402Text &&
-    !isHtmlErrorResponse(trimmed, leadingStatus.code)
-  ) {
-    return null;
-  }
   return failoverReasonFromClassification(
     classifyFailoverSignal({
-      status: leadingStatus?.code,
       message: raw,
       provider: opts?.provider,
     }),
