@@ -206,7 +206,7 @@ export async function persistCliTurnTranscript(params: {
     threadId: params.threadId,
     sessionCwd: params.sessionCwd,
     assistant: {
-      api: provider,
+      api: "cli",
       provider,
       model,
       usage: params.result.meta.agentMeta?.usage,
