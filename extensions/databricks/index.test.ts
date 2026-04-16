@@ -446,6 +446,39 @@ describe("Databricks plugin", () => {
       // Non-text blocks (like image) should be filtered out
       expect(toolMsg?.content).not.toContain("base64data");
     });
+
+    it("serializes block-array user content to text instead of null", async () => {
+      const api = { registerProvider: vi.fn() } as any;
+      await plugin.register(api);
+      const wrapStreamFn = api.registerProvider.mock.calls[0][0].wrapStreamFn;
+
+      const model = { id: "test", baseUrl: "https://test.com", api: "openai-completions" } as any;
+      const context = {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Hello " },
+              { type: "text", text: "World" },
+            ],
+          },
+        ],
+      } as any;
+      const options = { apiKey: "token" } as any;
+
+      fetchWithSsrFGuardMock.mockResolvedValue(
+        mockFetchResult(new Response("data: [DONE]\n", { status: 200 })),
+      );
+
+      const streamFn = wrapStreamFn({} as ProviderWrapStreamFnContext);
+      await streamFn(model, context, options);
+
+      const sentBody = JSON.parse(fetchWithSsrFGuardMock.mock.calls[0][0].init.body);
+      const userMsg = sentBody.messages.find((m: { role: string }) => m.role === "user");
+      // Block-array user content must be flattened to text, not sent as null
+      expect(typeof userMsg?.content).toBe("string");
+      expect(userMsg?.content).toBe("Hello World");
+    });
   });
 
   describe("SSE resilience", () => {

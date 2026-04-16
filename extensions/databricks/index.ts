@@ -212,14 +212,11 @@ function mapDatabricksMessages(context: {
       continue;
     }
 
-    // For tool-result messages, flatten content block arrays to a text string
-    // so the outbound payload matches the OpenAI/Databricks text-only expectation.
-    let content: string | null;
-    if (role === "tool") {
-      content = extractTextContent(msg.content);
-    } else {
-      content = typeof msg.content === "string" ? msg.content : null;
-    }
+    // Flatten content block arrays to a text string for all non-assistant roles
+    // (user, system, tool) so the outbound payload matches the OpenAI/Databricks
+    // text-only expectation. Block-array user messages (e.g. replayed sessions
+    // stored as [{type:"text",text:"..."}]) would otherwise be sent as null.
+    const content = extractTextContent(msg.content) || null;
 
     result.push({
       role,
