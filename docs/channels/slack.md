@@ -188,6 +188,7 @@ openclaw gateway
     "event_subscriptions": {
       "bot_events": [
         "app_mention",
+        "assistant_thread_started",
         "channel_rename",
         "member_joined_channel",
         "member_left_channel",
@@ -275,6 +276,7 @@ openclaw gateway
       "request_url": "https://gateway-host.example.com/slack/events",
       "bot_events": [
         "app_mention",
+        "assistant_thread_started",
         "channel_rename",
         "member_joined_channel",
         "member_left_channel",
