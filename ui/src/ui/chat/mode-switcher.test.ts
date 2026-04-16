@@ -17,9 +17,14 @@ describe("resolveCurrentMode", () => {
     expect(mode.id).toBe("bypass");
   });
 
-  it("falls back to Ask for deny + off (plan mode is owned by #67538 runtime, not this UI)", () => {
-    const mode = resolveCurrentMode("deny", "off");
-    expect(mode.id).toBe("ask");
+  it("returns Plan mode when planMode='plan' (overrides permission mode display)", () => {
+    const mode = resolveCurrentMode("allowlist", "off", "plan");
+    expect(mode.id).toBe("plan");
+  });
+
+  it("ignores planMode='normal' (falls through to permission mode)", () => {
+    const mode = resolveCurrentMode("allowlist", "off", "normal");
+    expect(mode.id).toBe("accept");
   });
 
   it("falls back to Ask permissions for unknown combos", () => {
@@ -51,7 +56,7 @@ describe("handleModeShortcut", () => {
     } as unknown as KeyboardEvent;
   }
 
-  it("returns correct mode for Ctrl+1 through Ctrl+3", () => {
+  it("returns correct mode for Ctrl+1 through Ctrl+4 (Ask/Accept/Plan/Bypass)", () => {
     for (const mode of MODE_DEFINITIONS) {
       const result = handleModeShortcut(makeKeyEvent(mode.shortcut, true, false));
       expect(result).not.toBeNull();
@@ -59,8 +64,15 @@ describe("handleModeShortcut", () => {
     }
   });
 
-  it("returns null for Ctrl+4 (Plan mode toggle is not in this PR)", () => {
-    expect(handleModeShortcut(makeKeyEvent("4", true, false))).toBeNull();
+  it("Ctrl+3 returns Plan mode", () => {
+    const result = handleModeShortcut(makeKeyEvent("3", true, false));
+    expect(result?.id).toBe("plan");
+    expect(result?.planMode).toBe("plan");
+  });
+
+  it("Ctrl+4 returns Bypass mode", () => {
+    const result = handleModeShortcut(makeKeyEvent("4", true, false));
+    expect(result?.id).toBe("bypass");
   });
 
   it("returns null for Ctrl+5 (no matching mode)", () => {
@@ -113,5 +125,67 @@ describe("handleModeShortcut", () => {
     } as unknown as KeyboardEvent;
     handleModeShortcut(e);
     expect(prevented).toBe(false);
+  });
+});
+
+describe("focus guard (input/textarea/contenteditable)", () => {
+  function makeKeyEvent(key: string): KeyboardEvent {
+    return {
+      key,
+      ctrlKey: true,
+      metaKey: false,
+      shiftKey: false,
+      altKey: false,
+      preventDefault: () => {},
+    } as unknown as KeyboardEvent;
+  }
+
+  it("returns null when an <input> has focus", () => {
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+    try {
+      expect(handleModeShortcut(makeKeyEvent("1"))).toBeNull();
+    } finally {
+      input.remove();
+    }
+  });
+
+  it("returns null when a <textarea> has focus", () => {
+    const ta = document.createElement("textarea");
+    document.body.appendChild(ta);
+    ta.focus();
+    try {
+      expect(handleModeShortcut(makeKeyEvent("1"))).toBeNull();
+    } finally {
+      ta.remove();
+    }
+  });
+
+  it("returns null when a contenteditable element has focus", () => {
+    const div = document.createElement("div");
+    div.setAttribute("contenteditable", "true");
+    div.tabIndex = 0;
+    // jsdom doesn't fully implement isContentEditable from the contenteditable
+    // attribute, so set the property directly to simulate browser behavior.
+    Object.defineProperty(div, "isContentEditable", {
+      value: true,
+      configurable: true,
+    });
+    document.body.appendChild(div);
+    div.focus();
+    try {
+      expect(handleModeShortcut(makeKeyEvent("1"))).toBeNull();
+    } finally {
+      div.remove();
+    }
+  });
+
+  it("works normally when no input has focus", () => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    const result = handleModeShortcut(makeKeyEvent("1"));
+    expect(result?.id).toBe("ask");
   });
 });

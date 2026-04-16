@@ -2,9 +2,17 @@
  * Mode switcher for the chat input toolbar.
  *
  * Renders a pill/chip showing the current execution mode with a dropdown
- * menu for switching between modes. Each mode maps to a combination of
- * existing session fields (execSecurity + execAsk), so no new protocol
- * schema is required.
+ * menu for switching between modes.
+ *
+ * Permission modes (Ask/Accept/Bypass) map to the existing session fields
+ * `execSecurity` + `execAsk`, so no protocol schema change is required for
+ * those.
+ *
+ * Plan mode is its own dimension — it sets `planMode: "plan"` via
+ * `sessions.patch` (added in PR-8) and activates the runtime mutation gate
+ * from #67538b. NOT mapped to execSecurity (that would block read-only exec
+ * which plan mode explicitly needs for research). Permission mode and plan
+ * mode coexist: a session can be in plan-mode-with-allowlist, etc.
  */
 
 import { html, nothing, type TemplateResult } from "lit";
@@ -14,10 +22,18 @@ export interface ModeDefinition {
   label: string;
   shortLabel: string;
   shortcut: string;
-  /** Mapped to session execSecurity field */
-  execSecurity: string;
-  /** Mapped to session execAsk field */
-  execAsk: string;
+  /**
+   * Permission mode mapping (Ask/Accept/Bypass only).
+   * Plan mode does NOT set these — see `planMode` field instead.
+   */
+  execSecurity?: string;
+  execAsk?: string;
+  /**
+   * Plan mode toggle. When set to "plan", selecting this mode calls
+   * sessions.patch with `planMode: "plan"`, activating the runtime
+   * mutation gate from #67538b. PR-8 wires the RPC dispatch.
+   */
+  planMode?: "plan" | "normal";
   icon: TemplateResult;
 }
 
@@ -62,6 +78,20 @@ const unlockIcon = html`<svg
   <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
   <path d="M7 11V7a5 5 0 0 1 9.9-1" />
 </svg>`;
+const planIcon = html`<svg
+  width="14"
+  height="14"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  aria-hidden="true"
+>
+  <path d="M9 11l3 3L22 4" />
+  <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+</svg>`;
 
 export const MODE_DEFINITIONS: ModeDefinition[] = [
   {
@@ -82,17 +112,26 @@ export const MODE_DEFINITIONS: ModeDefinition[] = [
     execAsk: "off",
     icon: checkIcon,
   },
-  // Note: "Plan mode" UI toggle is intentionally NOT included here.
-  // Plan mode is owned by the runtime PlanModeSessionState introduced in #67538
-  // (mutation gate + approval state machine). The UI toggle for it requires a
-  // protocol contract change (sessions.patch planMode field) and lands as a
-  // separate PR after #67538 merges. Setting execSecurity:"deny" here would
-  // be wrong because plan mode explicitly ALLOWS read-only exec for research.
+  // Plan mode: own dimension (not a permission permutation). Selecting Plan
+  // calls sessions.patch with planMode:"plan" — wired in PR-8. The runtime
+  // mutation gate from #67538b activates server-side. This entry has no
+  // execSecurity/execAsk because plan mode coexists with whatever permission
+  // mode is current. The mode switcher will show Plan as the active label
+  // while plan mode is on; switching to any non-plan mode patches back to
+  // planMode:"normal".
+  {
+    id: "plan",
+    label: "Plan mode",
+    shortLabel: "Plan",
+    shortcut: "3",
+    planMode: "plan",
+    icon: planIcon,
+  },
   {
     id: "bypass",
     label: "Bypass permissions",
     shortLabel: "Bypass",
-    shortcut: "3",
+    shortcut: "4",
     execSecurity: "full",
     execAsk: "off",
     icon: unlockIcon,
@@ -101,10 +140,24 @@ export const MODE_DEFINITIONS: ModeDefinition[] = [
 
 /**
  * Derives the current mode from session state.
+ *
+ * Plan mode wins when active — the chip displays "Plan" regardless of the
+ * underlying permission mode, because plan mode is the most specific signal
+ * about agent behavior.
  */
-export function resolveCurrentMode(execSecurity?: string, execAsk?: string): ModeDefinition {
+export function resolveCurrentMode(
+  execSecurity?: string,
+  execAsk?: string,
+  planMode?: "plan" | "normal",
+): ModeDefinition {
+  if (planMode === "plan") {
+    const planEntry = MODE_DEFINITIONS.find((m) => m.id === "plan");
+    if (planEntry) {
+      return planEntry;
+    }
+  }
   const match = MODE_DEFINITIONS.find(
-    (m) => m.execSecurity === execSecurity && m.execAsk === execAsk,
+    (m) => !m.planMode && m.execSecurity === execSecurity && m.execAsk === execAsk,
   );
   return match ?? MODE_DEFINITIONS[0];
 }
@@ -125,13 +178,19 @@ export function renderModeSwitcher(params: {
   const { currentMode, menuOpen, onToggleMenu, onSelectMode } = params;
 
   return html`
-    <div class="agent-chat__mode-switcher">
+    <div class="agent-chat__mode-switcher" aria-label="Execution mode selector">
       <button
         type="button"
         class="agent-chat__mode-chip"
         @click=${onToggleMenu}
-        title="Switch mode (Ctrl+1-3)"
-        aria-haspopup="true"
+        @keydown=${(e: KeyboardEvent) => {
+          if (e.key === "Escape" && menuOpen) {
+            e.preventDefault();
+            onToggleMenu();
+          }
+        }}
+        title="Switch mode (Ctrl+1-4)"
+        aria-haspopup="menu"
         aria-expanded="${menuOpen ? "true" : "false"}"
       >
         ${currentMode.icon}
@@ -177,13 +236,28 @@ export function renderModeSwitcher(params: {
 }
 
 /**
- * Handles keyboard shortcuts for mode switching (Ctrl+1 through Ctrl+3).
+ * Handles keyboard shortcuts for mode switching (Ctrl+1 through Ctrl+4).
  * Returns the selected mode if a shortcut matched, or null.
+ *
+ * Focus guard: when the user is typing in an input/textarea/contenteditable
+ * surface, Ctrl+digit should not steal the keystroke. This prevents the
+ * shortcut from interfering with users typing in the chat composer or
+ * any other text field.
  */
 export function handleModeShortcut(e: KeyboardEvent): ModeDefinition | null {
   // Only bare Ctrl+digit — exclude Cmd (macOS tab switch), Shift, and Alt modifiers.
   if (!e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) {
     return null;
+  }
+  // Focus guard: skip when user is typing.
+  if (typeof document !== "undefined") {
+    const active = document.activeElement;
+    if (active) {
+      const tag = active.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || (active as HTMLElement).isContentEditable) {
+        return null;
+      }
+    }
   }
   const mode = MODE_DEFINITIONS.find((m) => m.shortcut === e.key);
   if (mode) {
