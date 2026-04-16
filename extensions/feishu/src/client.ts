@@ -159,6 +159,20 @@ export type FeishuClientCredentials = {
   config?: Pick<FeishuConfig, "httpTimeoutMs">;
 };
 
+export type FeishuClientLogger = {
+  error: (...msg: unknown[]) => void;
+  warn: (...msg: unknown[]) => void;
+  info: (...msg: unknown[]) => void;
+  debug: (...msg: unknown[]) => void;
+  trace: (...msg: unknown[]) => void;
+};
+
+export type FeishuClientOptions = {
+  // Custom loggers are treated as one-off clients so setup/status probes can
+  // suppress SDK info noise without altering the shared runtime client cache.
+  logger?: FeishuClientLogger;
+};
+
 function resolveConfiguredHttpTimeoutMs(creds: FeishuClientCredentials): number {
   const clampTimeout = (value: number): number => {
     const rounded = Math.floor(value);
@@ -194,12 +208,29 @@ function resolveConfiguredHttpTimeoutMs(creds: FeishuClientCredentials): number 
  * Create or get a cached Feishu client for an account.
  * Accepts any object with appId, appSecret, and optional domain/accountId.
  */
-export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client {
+export function createFeishuClient(
+  creds: FeishuClientCredentials,
+  options: FeishuClientOptions = {},
+): Lark.Client {
   const { accountId = "default", appId, appSecret, domain } = creds;
   const defaultHttpTimeoutMs = resolveConfiguredHttpTimeoutMs(creds);
 
   if (!appId || !appSecret) {
     throw new Error(`Feishu credentials not configured for account "${accountId}"`);
+  }
+
+  const createClient = () =>
+    new feishuClientSdk.Client({
+      appId,
+      appSecret,
+      appType: feishuClientSdk.AppType.SelfBuild,
+      domain: resolveDomain(domain),
+      httpInstance: createTimeoutHttpInstance(defaultHttpTimeoutMs),
+      ...(options.logger ? { logger: options.logger } : {}),
+    });
+
+  if (options.logger) {
+    return createClient();
   }
 
   // Check cache
@@ -215,13 +246,7 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
   }
 
   // Create new client with timeout-aware HTTP instance
-  const client = new feishuClientSdk.Client({
-    appId,
-    appSecret,
-    appType: feishuClientSdk.AppType.SelfBuild,
-    domain: resolveDomain(domain),
-    httpInstance: createTimeoutHttpInstance(defaultHttpTimeoutMs),
-  });
+  const client = createClient();
 
   // Cache it
   clientCache.set(accountId, {

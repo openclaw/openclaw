@@ -347,6 +347,38 @@ describe("createFeishuClient HTTP timeout", () => {
       expect.objectContaining({ timeout: 45_000 }),
     );
   });
+
+  it("passes custom loggers through and bypasses the shared client cache", () => {
+    const logger = {
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+      trace: vi.fn(),
+    };
+
+    const first = createFeishuClient(
+      {
+        appId: "app_logger",
+        appSecret: "secret_logger", // pragma: allowlist secret
+        accountId: "logger-test",
+      },
+      { logger },
+    );
+    const second = createFeishuClient(
+      {
+        appId: "app_logger",
+        appSecret: "secret_logger", // pragma: allowlist secret
+        accountId: "logger-test",
+      },
+      { logger },
+    );
+
+    expect(clientCtorMock).toHaveBeenCalledTimes(2);
+    expect(readCallOptions(clientCtorMock, 0).logger).toBe(logger);
+    expect(readCallOptions(clientCtorMock, 1).logger).toBe(logger);
+    expect(first).not.toBe(second);
+  });
 });
 
 describe("createFeishuWSClient proxy handling", () => {

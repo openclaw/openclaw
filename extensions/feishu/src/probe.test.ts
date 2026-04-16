@@ -126,6 +126,18 @@ describe("probeFeishu", () => {
 
     await expectDefaultSuccessResult();
     expect(requestFn).toHaveBeenCalledTimes(1);
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      DEFAULT_CREDS,
+      expect.objectContaining({
+        logger: expect.objectContaining({
+          error: expect.any(Function),
+          warn: expect.any(Function),
+          info: expect.any(Function),
+          debug: expect.any(Function),
+          trace: expect.any(Function),
+        }),
+      }),
+    );
   });
 
   it("passes the probe timeout to the Feishu request", async () => {
