@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildFullWorkflowArgs,
   countJsonLines,
+  friendlyError,
   manifestOutputCategories,
   normalizePathList,
   normalizeScenarios,
@@ -66,5 +67,22 @@ describe("clawmodeler workbench helpers", () => {
       "maps",
       "tables",
     ]);
+  });
+
+  it("translates engine errors into planner-friendly language", () => {
+    expect(friendlyError("Error: workspace is required")).toMatch(/Pick a workspace folder/u);
+    expect(friendlyError("FileNotFoundError: No such file or directory: 'zones.geojson'")).toMatch(
+      /doesn't exist/u,
+    );
+    expect(friendlyError("PermissionError: [Errno 13] Permission denied")).toMatch(
+      /can't read or write/u,
+    );
+    expect(friendlyError("ModuleNotFoundError: No module named 'clawmodeler_engine'")).toMatch(
+      /engine isn't installed/u,
+    );
+    expect(friendlyError("")).toMatch(/Something went wrong/u);
+    expect(friendlyError("custom short message")).toBe("custom short message");
+    const longLine = "a".repeat(500);
+    expect(friendlyError(longLine).length).toBeLessThanOrEqual(220);
   });
 });

@@ -158,12 +158,103 @@ small {
 }
 
 .eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   margin: 0 0 6px;
   color: #1c6b5a;
   font-size: 12px;
   font-weight: 900;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.step-num {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 50%;
+  background: #1c6b5a;
+  color: #ffffff;
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+.help {
+  color: #65736c;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.check-help {
+  margin-top: -6px;
+}
+
+.panel-hint {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f0f7f3;
+  color: #17211d;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.welcome-banner {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding: 22px;
+  border: 1px solid #1c6b5a;
+  border-radius: 8px;
+  background: linear-gradient(95deg, #e9f3ee 0%, #f6f8f7 70%);
+}
+
+.welcome-copy {
+  flex: 1 1 320px;
+  min-width: 260px;
+}
+
+.welcome-copy h2 {
+  margin: 0 0 6px;
+  font-size: 22px;
+}
+
+.welcome-copy p {
+  margin: 0;
+  color: #31413a;
+  line-height: 1.5;
+}
+
+.welcome-cta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.primary-cta {
+  min-height: 48px;
+  padding: 0 22px;
+  font-size: 16px;
+}
+
+.link-btn {
+  min-height: unset;
+  border: none;
+  background: transparent;
+  color: #1c6b5a;
+  font-weight: 700;
+  text-decoration: underline;
+  padding: 4px 8px;
+}
+
+.link-btn:hover:not(:disabled) {
+  background: transparent;
+  color: #155344;
 }
 
 .run-state {

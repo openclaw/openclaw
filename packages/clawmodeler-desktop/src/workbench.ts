@@ -94,3 +94,55 @@ export function manifestOutputCategories(manifest: Record<string, unknown> | nul
   }
   return Object.keys(outputs).toSorted();
 }
+
+const FRIENDLY_ERROR_PATTERNS: ReadonlyArray<{ pattern: RegExp; message: string }> = [
+  {
+    pattern: /workspace is required/i,
+    message: "Pick a workspace folder first. This is where ClawModeler stores your project files.",
+  },
+  {
+    pattern: /no such file or directory|cannot find the (file|path)/i,
+    message: "One of the paths doesn't exist. Double-check your workspace and input paths.",
+  },
+  {
+    pattern: /permission denied/i,
+    message:
+      "ClawModeler can't read or write that location. Check folder permissions or pick another path.",
+  },
+  {
+    pattern: /no module named ['"]?clawmodeler_engine['"]?/i,
+    message:
+      "The ClawModeler engine isn't installed. Run pip install -e . from the repo root, then retry.",
+  },
+  {
+    pattern: /python3?: ?command not found|python3? is not recognized/i,
+    message: "Python 3 isn't on PATH. Install Python 3.10+ and reopen ClawModeler.",
+  },
+  {
+    pattern: /duckdb/i,
+    message: "DuckDB isn't installed. Click Doctor to see which tools are missing.",
+  },
+  {
+    pattern: /question\.json/i,
+    message:
+      "ClawModeler needs a question.json file describing what to analyze. Check the path you entered.",
+  },
+  {
+    pattern: /method not allowed/i,
+    message: "Internal routing error. Reload the window and try again.",
+  },
+];
+
+export function friendlyError(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "Something went wrong. Open Doctor for details.";
+  }
+  for (const { pattern, message } of FRIENDLY_ERROR_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      return message;
+    }
+  }
+  const firstLine = trimmed.split(/\r?\n/u).at(0) ?? trimmed;
+  return firstLine.length > 220 ? `${firstLine.slice(0, 217)}...` : firstLine;
+}

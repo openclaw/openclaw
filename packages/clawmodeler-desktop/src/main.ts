@@ -2,6 +2,7 @@ import "./styles.css";
 import { invoke } from "@tauri-apps/api/core";
 import {
   buildFullWorkflowArgs,
+  friendlyError,
   manifestOutputCategories,
   normalizePathList,
   normalizeScenarios,
@@ -61,6 +62,7 @@ type AppState = {
   doctor: DoctorResult | null;
   artifacts: WorkspaceArtifacts | null;
   commandLog: string[];
+  onboarded: boolean;
 };
 
 const state: AppState = {
@@ -75,7 +77,13 @@ const state: AppState = {
   doctor: null,
   artifacts: null,
   commandLog: [],
+  onboarded: localStorage.getItem("clawmodeler.onboarded") === "true",
 };
+
+function markOnboarded() {
+  state.onboarded = true;
+  localStorage.setItem("clawmodeler.onboarded", "true");
+}
 
 function requireAppRoot(): HTMLDivElement {
   const element = document.querySelector<HTMLDivElement>("#app");
@@ -215,7 +223,8 @@ async function runAction<T>(label: string, task: () => Promise<ApiResult<T>>) {
     }
     await refreshArtifacts(false);
   } catch (error) {
-    state.status = error instanceof Error ? error.message : String(error);
+    const raw = error instanceof Error ? error.message : String(error);
+    state.status = friendlyError(raw);
   } finally {
     state.busy = false;
     render();
@@ -246,7 +255,8 @@ async function refreshArtifacts(showBusy = true) {
     state.status = "Workspace loaded";
   } catch (error) {
     if (showBusy) {
-      state.status = error instanceof Error ? error.message : String(error);
+      const raw = error instanceof Error ? error.message : String(error);
+      state.status = friendlyError(raw);
     }
   } finally {
     if (showBusy) {
@@ -297,9 +307,16 @@ function bindControls() {
   appRoot
     .querySelector<HTMLButtonElement>("[data-action='demo']")
     ?.addEventListener("click", () => {
+      markOnboarded();
       void runAction("Running demo workflow", () =>
         api("/api/clawmodeler/demo-full", { workspace: state.workspace, runId: state.runId }),
       );
+    });
+  appRoot
+    .querySelector<HTMLButtonElement>("[data-action='dismiss-welcome']")
+    ?.addEventListener("click", () => {
+      markOnboarded();
+      render();
     });
   appRoot
     .querySelector<HTMLButtonElement>("[data-action='full']")
@@ -307,7 +324,8 @@ function bindControls() {
       const inputs = normalizePathList(state.inputPaths);
       const question = state.questionPath.trim();
       if (inputs.length === 0 || !question) {
-        state.status = "Add input paths and a question.json path before running the full workflow.";
+        state.status =
+          "Before running the full workflow, fill in at least one input path and a question.json path. New? Try 'Run the demo' first — no files required.";
         render();
         return;
       }
@@ -345,9 +363,28 @@ function bindControls() {
     });
 }
 
+function renderWelcome(): string {
+  if (state.onboarded || state.artifacts?.manifest) {
+    return "";
+  }
+  return `
+    <section class="welcome-banner">
+      <div class="welcome-copy">
+        <p class="eyebrow">Start here</p>
+        <h2>New to ClawModeler? Run the demo first.</h2>
+        <p>One click builds a complete sample analysis — workspace, scenarios, QA gates, and a plain-English report. No files or setup required.</p>
+      </div>
+      <div class="welcome-cta">
+        <button data-action="demo" class="primary-cta" ${state.busy ? "disabled" : ""}>Run the demo</button>
+        <button data-action="dismiss-welcome" class="link-btn" ${state.busy ? "disabled" : ""}>Skip — I'll set up my own project</button>
+      </div>
+    </section>
+  `;
+}
+
 function renderDoctor() {
   if (!state.doctor) {
-    return `<p class="muted">Run Doctor to check local Python, DuckDB, routing, reporting, and bridge tools.</p>`;
+    return `<p class="muted">Doctor checks which local tools are installed. You need Python 3 — everything else is optional for the demo.</p>`;
   }
   const checks = state.doctor.checks.slice(0, 18);
   return `
@@ -376,7 +413,7 @@ function renderArtifacts() {
   return `
     <section class="panel qa-panel ${qa.tone}">
       <div>
-        <p class="eyebrow">ClawQA</p>
+        <p class="eyebrow"><span class="step-num">3</span> ClawQA</p>
         <h2>${escapeHtml(qa.label)}</h2>
         <p>${qa.blockers.length > 0 ? escapeHtml(qa.blockers.join(", ")) : "No blockers recorded."}</p>
       </div>
@@ -407,12 +444,12 @@ function renderArtifacts() {
     <section class="panel report-panel">
       <div class="section-head">
         <div>
-          <p class="eyebrow">Narrative</p>
+          <p class="eyebrow"><span class="step-num">4</span> Narrative</p>
           <h2>Report Preview</h2>
         </div>
         <span>${report ? "Markdown" : "Waiting"}</span>
       </div>
-      <pre>${escapeHtml(report || "No report has been exported for this run yet.")}</pre>
+      <pre>${escapeHtml(report || "No report yet. Run a workflow to generate a plain-English summary you can share with a client or stakeholder.")}</pre>
     </section>
   `;
 }
@@ -434,20 +471,22 @@ function render() {
           <a href="#qa">QA</a>
           <a href="#report">Report</a>
         </nav>
-        <p class="rail-note">Screening outputs only. Detailed engineering analysis requires a documented external workflow.</p>
+        <p class="rail-note">Screening-level outputs. Use a detailed modeling workflow for final engineering decisions.</p>
       </aside>
 
       <section class="content">
         <header class="topbar">
           <div>
-            <p class="eyebrow">Local-first transportation modeling</p>
-            <h1>Build, run, and verify a sketch-planning workspace.</h1>
+            <p class="eyebrow">Transportation sketch-planning, on your computer</p>
+            <h1>Run a screening analysis without spreadsheets or cloud uploads.</h1>
           </div>
           <div class="run-state ${state.busy ? "busy" : ""}">
             <span></span>
             ${escapeHtml(state.status)}
           </div>
         </header>
+
+        ${renderWelcome()}
 
         <section class="map-strip" aria-label="Planning map">
           <div class="route r1"></div>
@@ -462,7 +501,7 @@ function render() {
           <section class="panel workspace-panel" id="workspace">
             <div class="section-head">
               <div>
-                <p class="eyebrow">Workspace</p>
+                <p class="eyebrow"><span class="step-num">1</span> Workspace</p>
                 <h2>Project Setup</h2>
               </div>
               <button data-action="doctor" ${state.busy ? "disabled" : ""}>Doctor</button>
@@ -471,43 +510,50 @@ function render() {
             <label>
               Workspace path
               <input id="workspace" value="${escapeHtml(state.workspace)}" spellcheck="false" />
+              <small class="help">Folder on your computer where ClawModeler stores this project's files. Pick an empty folder — it will be created if it doesn't exist.</small>
             </label>
             <label>
               Run ID
               <input id="run-id" value="${escapeHtml(state.runId)}" spellcheck="false" />
+              <small class="help">Short name for this analysis run (e.g., "demo", "2026-baseline"). Used to name the output folder.</small>
             </label>
             <label>
               Input paths
               <textarea id="input-paths" rows="5" spellcheck="false" placeholder="/path/zones.geojson&#10;/path/socio.csv&#10;/path/projects.csv">${escapeHtml(
                 state.inputPaths,
               )}</textarea>
+              <small class="help">One path per line. Typical inputs: zones (GeoJSON), socio-economic data (CSV), projects (CSV). Leave blank to use the built-in demo.</small>
             </label>
             <label>
               Question JSON
               <input id="question-path" value="${escapeHtml(
                 state.questionPath,
               )}" placeholder="/path/question.json" spellcheck="false" />
+              <small class="help">Path to a question.json file describing what you want to analyze (scope, metrics, timeframe). Not needed for the demo.</small>
             </label>
             <label>
               Scenarios
               <input id="scenarios" value="${escapeHtml(
                 state.scenarios,
               )}" placeholder="baseline build" spellcheck="false" />
+              <small class="help">Space- or comma-separated names for the scenarios to run (e.g., "baseline build"). Defaults to "baseline".</small>
             </label>
             <label class="check-row">
               <input id="skip-bridges" type="checkbox" ${state.skipBridges ? "checked" : ""} />
               Skip bridge packages
             </label>
+            <small class="help check-help">Bridge packages prep handoff to SUMO/MATSim/UrbanSim/TBEST/DTALite. Skip this unless you're handing off to those tools.</small>
           </section>
 
           <section class="panel actions-panel" id="run">
             <div class="section-head">
               <div>
-                <p class="eyebrow">Run</p>
+                <p class="eyebrow"><span class="step-num">2</span> Run</p>
                 <h2>Workflow</h2>
               </div>
               <button data-action="refresh" ${state.busy ? "disabled" : ""}>Refresh</button>
             </div>
+            <p class="panel-hint">New here? Click <strong>Run Demo</strong> to see a complete sample analysis — no inputs needed.</p>
             <div class="button-grid">
               <button data-action="init" ${state.busy ? "disabled" : ""}>Create Workspace</button>
               <button data-action="demo" ${state.busy ? "disabled" : ""}>Run Demo</button>
