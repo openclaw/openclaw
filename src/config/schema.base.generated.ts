@@ -18339,6 +18339,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
               },
+              botDebounceMs: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+                description:
+                  "Debounce window (ms) applied when the inbound message comes from a bot or agent. Overrides debounceMs for bot senders. Note: byChannel overrides still take precedence over botDebounceMs.",
+              },
               byChannel: {
                 type: "object",
                 propertyNames: {
@@ -27059,6 +27066,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Plugin Marketplace Plugin",
       help: "Plugin entry name inside the source marketplace, used for later updates.",
       tags: ["advanced"],
+    },
+    "messages.inbound.botDebounceMs": {
+      help: "Debounce window (ms) applied when the inbound message comes from a bot or agent. Overrides debounceMs for bot senders. Note: byChannel overrides still take precedence over botDebounceMs.",
+      tags: ["performance"],
     },
     "models.providers.*.headers.*": {
       sensitive: true,
