@@ -223,12 +223,23 @@ function pathComponentsFromRootSync(targetPath: string): string[] {
   }
 }
 
-function isWritableByCurrentProcessSync(candidate: string): boolean {
+function isOwnedByCurrentProcessSync(candidate: string): boolean {
+  if (process.platform === "win32" || typeof process.getuid !== "function") {
+    return false;
+  }
+  try {
+    return fs.statSync(candidate).uid === process.getuid();
+  } catch {
+    return false;
+  }
+}
+
+function isMutableByCurrentProcessSync(candidate: string): boolean {
   try {
     fs.accessSync(candidate, fs.constants.W_OK);
     return true;
   } catch {
-    return false;
+    return isOwnedByCurrentProcessSync(candidate);
   }
 }
 
@@ -239,7 +250,7 @@ function hasMutableSymlinkPathComponentSync(targetPath: string): boolean {
         continue;
       }
       const parentDir = path.dirname(component);
-      if (isWritableByCurrentProcessSync(parentDir)) {
+      if (isMutableByCurrentProcessSync(parentDir)) {
         return true;
       }
     } catch {
@@ -251,8 +262,8 @@ function hasMutableSymlinkPathComponentSync(targetPath: string): boolean {
 
 function pathLooksMutableForShellPayloadSync(targetPath: string): boolean {
   if (
-    isWritableByCurrentProcessSync(targetPath) ||
-    isWritableByCurrentProcessSync(path.dirname(targetPath)) ||
+    isMutableByCurrentProcessSync(targetPath) ||
+    isMutableByCurrentProcessSync(path.dirname(targetPath)) ||
     hasMutableSymlinkPathComponentSync(targetPath)
   ) {
     return true;
@@ -264,8 +275,8 @@ function pathLooksMutableForShellPayloadSync(targetPath: string): boolean {
     return true;
   }
   return (
-    isWritableByCurrentProcessSync(realPath) ||
-    isWritableByCurrentProcessSync(path.dirname(realPath)) ||
+    isMutableByCurrentProcessSync(realPath) ||
+    isMutableByCurrentProcessSync(path.dirname(realPath)) ||
     hasMutableSymlinkPathComponentSync(realPath)
   );
 }
