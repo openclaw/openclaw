@@ -185,6 +185,22 @@ describe("memory runtime auto-enable loading", () => {
     });
   });
 
+  it("omits purpose when callers do not provide one", async () => {
+    const resolvedConfig = { channels: { memory: { enabled: true } } };
+    const runtime = createMemoryRuntimeFixture();
+    getMemoryRuntimeMock.mockReturnValueOnce(undefined).mockReturnValue(runtime);
+
+    await getActiveMemorySearchManager({
+      cfg: resolvedConfig as never,
+      agentId: "main",
+    });
+
+    expect(runtime.getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: resolvedConfig,
+      agentId: "main",
+    });
+  });
+
   it.each([
     {
       name: "does not bootstrap the memory runtime just to close managers",

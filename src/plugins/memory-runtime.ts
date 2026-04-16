@@ -43,7 +43,7 @@ export async function getActiveMemorySearchManager(params: {
   return await runtime.getMemorySearchManager({
     cfg: params.cfg,
     agentId: params.agentId,
-    purpose: params.purpose,
+    ...(params.purpose ? { purpose: params.purpose } : {}),
   });
 }
 
