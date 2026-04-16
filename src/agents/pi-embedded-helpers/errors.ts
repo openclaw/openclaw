@@ -354,7 +354,11 @@ function isHtmlErrorResponse(raw: string, status?: number): boolean {
 }
 
 function isTransportHtmlErrorStatus(status: number | undefined): boolean {
-  return status !== 401 && status !== 403 && status !== 407;
+  return (
+    status === 408 ||
+    status === 499 ||
+    (typeof status === "number" && status >= 500 && status < 600)
+  );
 }
 
 function isOpenAICodexScopeContext(raw: string, provider?: string): boolean {
