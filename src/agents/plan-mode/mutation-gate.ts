@@ -34,6 +34,9 @@ const MUTATION_TOOL_BLOCKLIST = new Set([
 /** Suffix patterns that also indicate mutation tools. */
 const MUTATION_SUFFIX_PATTERNS = [".write", ".edit", ".delete"];
 
+/** Suffix patterns that indicate read-only tools (bypass fail-closed default). */
+const READONLY_SUFFIX_PATTERNS = [".read", ".search", ".list", ".get", ".view"];
+
 /** Tools explicitly allowed during plan mode (bypass blocklist check). */
 const PLAN_MODE_ALLOWED_TOOLS = new Set([
   "read",
@@ -101,7 +104,7 @@ export function checkMutationGate(
       };
     }
     // Block dangerous flags on otherwise-allowed commands.
-    const DANGEROUS_FLAGS = ["-delete", "-exec", "-execdir", "--delete", "-rf", "-i"];
+    const DANGEROUS_FLAGS = ["-delete", "-exec", "-execdir", "--delete", "-rf"];
     const hasFlag = DANGEROUS_FLAGS.some((f) => cmd.includes(` ${f}`) || cmd.includes(` ${f} `));
     if (hasFlag) {
       return {
@@ -138,6 +141,13 @@ export function checkMutationGate(
           `Tool "${toolName}" matches mutation suffix pattern "${suffix}" and is blocked in plan mode. ` +
           "Call exit_plan_mode to proceed.",
       };
+    }
+  }
+
+  // Check read-only suffix patterns — allow MCP read tools like custom.read, data.search.
+  for (const suffix of READONLY_SUFFIX_PATTERNS) {
+    if (normalized.endsWith(suffix)) {
+      return { blocked: false };
     }
   }
 
