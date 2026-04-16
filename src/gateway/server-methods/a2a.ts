@@ -52,16 +52,17 @@ function defaultIsAnnounceSkip(text: string): boolean {
 
 // ── Handlers ──
 
+const a2aBrokerRuntime = createOpenClawA2ABrokerRuntime();
+
 export const a2aHandlers: GatewayRequestHandlers = {
   "a2a.task.request": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateA2ATaskRequestParams, "a2a.task.request", respond)) {
       return;
     }
     try {
-      const runtime = createOpenClawA2ABrokerRuntime();
       const result = await runA2ATaskRequest({
         request: params.request,
-        runtime,
+        runtime: a2aBrokerRuntime,
         buildReplyContext: defaultBuildReplyContext,
         buildAnnounceContext: defaultBuildAnnounceContext,
         isReplySkip: defaultIsReplySkip,
@@ -117,11 +118,10 @@ export const a2aHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const runtime = createOpenClawA2ABrokerRuntime();
       const result = await applyA2ATaskProtocolCancel({
         sessionKey: params.sessionKey,
         cancel: params.cancel,
-        runtime,
+        runtime: a2aBrokerRuntime,
       });
       if (!result) {
         respond(
