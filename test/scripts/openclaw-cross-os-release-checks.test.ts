@@ -1,9 +1,12 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  buildWindowsFreshShellVersionCheckScript,
   buildWindowsPathBootstrapScript,
+  canConnectToLoopbackPort,
   buildDiscordSmokeGuildsConfig,
   buildRealUpdateEnv,
   isImmutableReleaseRef,
@@ -137,6 +140,17 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(persistedOnlyScript).not.toContain("@($userPath, $machinePath, $env:Path)");
   });
 
+  it("prefers the freshly installed Windows CLI under npm's prefix before PATH lookup", () => {
+    const script = buildWindowsFreshShellVersionCheckScript({
+      expectedNeedle: "2026.4.14",
+    });
+    expect(script).toContain(buildWindowsPathBootstrapScript({ includeCurrentProcessPath: false }));
+    expect(script).toContain("Get-Command npm.cmd -ErrorAction SilentlyContinue");
+    expect(script).toContain('$env:Path = "$npmPrefix;$env:Path"');
+    expect(script).toContain("(Join-Path $npmPrefix 'openclaw.cmd')");
+    expect(script).toContain("$cmd = Get-Command openclaw -ErrorAction Stop");
+  });
+
   it("prefers workflow-injected runner override env names over legacy ones", () => {
     expect(
       readRunnerOverrideEnv({
@@ -226,6 +240,20 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(
       resolveInstalledPrefixDirFromCliPath("/Users/runner/.npm-global/bin/openclaw", "darwin"),
     ).toBe("/Users/runner/.npm-global");
+  });
+
+  it("detects whether a managed gateway listener is still reachable on loopback", async () => {
+    const server = createNetServer();
+    await new Promise((resolvePromise) => {
+      server.listen(0, "127.0.0.1", resolvePromise);
+    });
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    expect(await canConnectToLoopbackPort(port)).toBe(true);
+    await new Promise((resolvePromise) => {
+      server.close(resolvePromise);
+    });
+    expect(await canConnectToLoopbackPort(port)).toBe(false);
   });
 
   it("writes Discord smoke config using the strict guild channel schema", () => {

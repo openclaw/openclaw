@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
-import { createServer as createNetServer } from "node:net";
+import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1337,12 +1337,34 @@ $env:Path = [string]::Join(';', $segments)
 `.trim();
 }
 
-async function verifyFreshShellCommand(params) {
-  if (process.platform === "win32") {
-    const script = `
-${buildWindowsPathBootstrapScript()}
-$cmd = Get-Command openclaw -ErrorAction Stop
-$commandPath = $cmd.Source
+export function buildWindowsFreshShellVersionCheckScript(params = {}) {
+  const expectedNeedle = powerShellSingleQuote(params.expectedNeedle ?? "");
+  return `
+${buildWindowsPathBootstrapScript({ includeCurrentProcessPath: false })}
+$commandPath = $null
+$npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
+if ($null -eq $npmCommand) {
+  $npmCommand = Get-Command npm -ErrorAction SilentlyContinue
+}
+if ($null -ne $npmCommand) {
+  $npmPrefix = (& $npmCommand.Source config get prefix 2>$null | Out-String).Trim()
+  if (-not [string]::IsNullOrWhiteSpace($npmPrefix)) {
+    $env:Path = "$npmPrefix;$env:Path"
+    foreach ($candidate in @(
+      (Join-Path $npmPrefix 'openclaw.cmd'),
+      (Join-Path $npmPrefix 'openclaw.ps1')
+    )) {
+      if (Test-Path -LiteralPath $candidate) {
+        $commandPath = $candidate
+        break
+      }
+    }
+  }
+}
+if ([string]::IsNullOrWhiteSpace($commandPath)) {
+  $cmd = Get-Command openclaw -ErrorAction Stop
+  $commandPath = $cmd.Source
+}
 if ($commandPath -match '(?i)\\.ps1$') {
   $cmdPath = [System.IO.Path]::ChangeExtension($commandPath, '.cmd')
   if (Test-Path -LiteralPath $cmdPath) {
@@ -1352,12 +1374,17 @@ if ($commandPath -match '(?i)\\.ps1$') {
 $version = (& $commandPath --version 2>&1 | Out-String).Trim()
 Write-Output "__OPENCLAW_PATH__=$commandPath"
 Write-Output $version
-if ('${powerShellSingleQuote(params.expectedNeedle)}'.Length -gt 0 -and $version -notmatch [regex]::Escape('${powerShellSingleQuote(
-      params.expectedNeedle,
-    )}')) {
-  throw "version mismatch: expected substring ${powerShellSingleQuote(params.expectedNeedle)}"
+if ('${expectedNeedle}'.Length -gt 0 -and $version -notmatch [regex]::Escape('${expectedNeedle}')) {
+  throw "version mismatch: expected substring ${expectedNeedle}"
 }
-`;
+`.trim();
+}
+
+async function verifyFreshShellCommand(params) {
+  if (process.platform === "win32") {
+    const script = buildWindowsFreshShellVersionCheckScript({
+      expectedNeedle: params.expectedNeedle,
+    });
     const result = await runPowerShellScript(script, {
       cwd: params.lane.homeDir,
       env: params.env,
@@ -1525,6 +1552,7 @@ async function startManualGatewayFromInstalledCli(params) {
 }
 
 async function resolveInstalledGatewayStatusArgs(params) {
+  const requireRpc = params.requireRpc !== false;
   const help = await runInstalledCli({
     cliPath: params.cliPath,
     args: ["gateway", "status", "--help"],
@@ -1534,10 +1562,38 @@ async function resolveInstalledGatewayStatusArgs(params) {
     timeoutMs: 15_000,
     check: false,
   });
-  if (help.stdout.includes("--require-rpc") || help.stderr.includes("--require-rpc")) {
+  if (
+    requireRpc &&
+    (help.stdout.includes("--require-rpc") || help.stderr.includes("--require-rpc"))
+  ) {
     return ["gateway", "status", "--deep", "--require-rpc", "--timeout", "5000"];
   }
   return ["gateway", "status", "--deep"];
+}
+
+export async function canConnectToLoopbackPort(port, timeoutMs = 1_000) {
+  if (!Number.isInteger(port) || port <= 0) {
+    return false;
+  }
+  return await new Promise((resolvePromise) => {
+    let settled = false;
+    const socket = createNetConnection({
+      host: "127.0.0.1",
+      port,
+    });
+    const settle = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.destroy();
+      resolvePromise(value);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => settle(true));
+    socket.once("timeout", () => settle(false));
+    socket.once("error", () => settle(false));
+  });
 }
 
 async function waitForInstalledGateway(params) {
@@ -1572,10 +1628,11 @@ async function waitForInstalledGatewayToStop(params) {
     cwd: params.lane.homeDir,
     env: params.env,
     logPath: params.logPath,
+    requireRpc: false,
   });
   const deadline = Date.now() + gatewayReadyDeadlineMs();
   while (Date.now() < deadline) {
-    const result = await runInstalledCli({
+    await runInstalledCli({
       cliPath: params.cliPath,
       args: statusArgs,
       cwd: params.lane.homeDir,
@@ -1584,7 +1641,8 @@ async function waitForInstalledGatewayToStop(params) {
       timeoutMs: 20_000,
       check: false,
     });
-    if (result.exitCode !== 0) {
+    const portReachable = await canConnectToLoopbackPort(params.lane.gatewayPort);
+    if (!portReachable) {
       return;
     }
     await sleep(2_000);
