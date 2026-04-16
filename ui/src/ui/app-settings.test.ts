@@ -70,9 +70,17 @@ type SettingsHost = {
   dreamingModeSaving: boolean;
   dreamDiaryLoading: boolean;
   dreamDiaryActionLoading: boolean;
+  dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
+  dreamDiaryActionArchivePath: string | null;
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
+  wikiImportInsightsLoading: boolean;
+  wikiImportInsightsError: string | null;
+  wikiImportInsights: null;
+  wikiMemoryPalaceLoading: boolean;
+  wikiMemoryPalaceError: string | null;
+  wikiMemoryPalace: null;
 };
 
 function setTestWindowUrl(urlString: string) {
@@ -159,9 +167,17 @@ const createHost = (tab: Tab): SettingsHost => ({
   dreamingModeSaving: false,
   dreamDiaryLoading: false,
   dreamDiaryActionLoading: false,
+  dreamDiaryActionMessage: null,
+  dreamDiaryActionArchivePath: null,
   dreamDiaryError: null,
   dreamDiaryPath: null,
   dreamDiaryContent: null,
+  wikiImportInsightsLoading: false,
+  wikiImportInsightsError: null,
+  wikiImportInsights: null,
+  wikiMemoryPalaceLoading: false,
+  wikiMemoryPalaceError: null,
+  wikiMemoryPalace: null,
 });
 
 describe("setTabFromRoute", () => {

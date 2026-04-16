@@ -1,6 +1,6 @@
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import {
   primeRemoteSkillsCache,
@@ -8,7 +8,6 @@ import {
   setSkillsRemoteRegistry,
 } from "../infra/skills-remote.js";
 import { startTaskRegistryMaintenance } from "../tasks/task-registry.maintenance.js";
-import { startMcpLoopbackServer } from "./mcp-http.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 
@@ -54,14 +53,6 @@ export async function startGatewayEarlyRuntime(params: {
   setSkillsRefreshTimer: (timer: ReturnType<typeof setTimeout> | null) => void;
   loadConfig: () => OpenClawConfig;
 }) {
-  let mcpServer: { port: number; close: () => Promise<void> } | undefined;
-  try {
-    mcpServer = await startMcpLoopbackServer(0);
-    params.log.info(`MCP loopback server listening on http://127.0.0.1:${mcpServer.port}/mcp`);
-  } catch (error) {
-    params.log.warn(`MCP loopback server failed to start: ${String(error)}`);
-  }
-
   let bonjourStop: (() => Promise<void>) | null = null;
   if (!params.minimalTestGateway) {
     const machineDisplayName = await getMachineDisplayName();
@@ -127,7 +118,6 @@ export async function startGatewayEarlyRuntime(params: {
       });
 
   return {
-    mcpServer,
     bonjourStop,
     skillsChangeUnsub,
     maintenance,

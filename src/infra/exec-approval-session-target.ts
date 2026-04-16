@@ -1,7 +1,7 @@
 import { resolveSessionConversationRef } from "../channels/plugins/session-conversation.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
@@ -87,12 +87,15 @@ function normalizeOptionalChannel(value?: string | null): string | undefined {
 export function resolveApprovalRequestSessionConversation(params: {
   request: ApprovalRequestLike;
   channel?: string | null;
+  bundledFallback?: boolean;
 }): ApprovalRequestSessionConversation | null {
   const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
   if (!sessionKey) {
     return null;
   }
-  const resolved = resolveSessionConversationRef(sessionKey);
+  const resolved = resolveSessionConversationRef(sessionKey, {
+    bundledFallback: params.bundledFallback,
+  });
   if (!resolved) {
     return null;
   }

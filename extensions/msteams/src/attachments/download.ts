@@ -10,7 +10,9 @@ import {
   isDownloadableAttachment,
   isRecord,
   isUrlAllowed,
+  type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
+  type MSTeamsAttachmentResolveFn,
   normalizeContentType,
   resolveMediaSsrfPolicy,
   resolveAttachmentFetchPolicy,
@@ -110,6 +112,7 @@ async function fetchWithAuthFallback(params: {
   tokenProvider?: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
+  resolveFn?: MSTeamsAttachmentResolveFn;
   policy: MSTeamsAttachmentFetchPolicy;
 }): Promise<Response> {
   const firstAttempt = await safeFetchWithPolicy({
@@ -117,6 +120,7 @@ async function fetchWithAuthFallback(params: {
     policy: params.policy,
     fetchFn: params.fetchFn,
     requestInit: params.requestInit,
+    resolveFn: params.resolveFn,
   });
   if (firstAttempt.ok) {
     return firstAttempt;
@@ -146,6 +150,7 @@ async function fetchWithAuthFallback(params: {
           ...params.requestInit,
           headers: authHeaders,
         },
+        resolveFn: params.resolveFn,
       });
       if (authAttempt.ok) {
         return authAttempt;
@@ -177,8 +182,15 @@ export async function downloadMSTeamsAttachments(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   fetchFn?: typeof fetch;
+  resolveFn?: MSTeamsAttachmentResolveFn;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
+  /**
+   * Optional logger used to surface inline data decode failures and remote
+   * media download errors. Errors that are not logged here are invisible at
+   * INFO level and block diagnosis of issues like #63396.
+   */
+  logger?: MSTeamsAttachmentDownloadLogger;
 }): Promise<MSTeamsInboundMedia[]> {
   const list = Array.isArray(params.attachments) ? params.attachments : [];
   if (list.length === 0) {
@@ -245,8 +257,10 @@ export async function downloadMSTeamsAttachments(params: {
         contentType: saved.contentType,
         placeholder: inline.placeholder,
       });
-    } catch {
-      // Ignore decode failures and continue.
+    } catch (err) {
+      params.logger?.warn?.("msteams inline attachment decode failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
   for (const candidate of candidates) {
@@ -262,21 +276,38 @@ export async function downloadMSTeamsAttachments(params: {
         placeholder: candidate.placeholder,
         preserveFilenames: params.preserveFilenames,
         ssrfPolicy,
+        // `fetchImpl` below already validates each hop against the hostname
+        // allowlist via `safeFetchWithPolicy`, so skip `fetchRemoteMedia`'s
+        // strict SSRF dispatcher (incompatible with Node 24+ / undici v7;
+        // see issue #63396).
+        useDirectFetch: true,
         fetchImpl: (input, init) =>
           fetchWithAuthFallback({
             url: resolveRequestUrl(input),
             tokenProvider: params.tokenProvider,
             fetchFn: params.fetchFn,
             requestInit: init,
+            resolveFn: params.resolveFn,
             policy,
           }),
       });
       out.push(media);
-    } catch {
-      // Ignore download failures and continue with next candidate.
+    } catch (err) {
+      params.logger?.warn?.("msteams attachment download failed", {
+        error: err instanceof Error ? err.message : String(err),
+        host: safeHostForLog(candidate.url),
+      });
     }
   }
   return out;
+}
+
+function safeHostForLog(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "invalid-url";
+  }
 }
 
 /**

@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 
-const defaultTools = createOpenClawCodingTools({ senderIsOwner: true });
-
 describe("createOpenClawCodingTools", () => {
+  const testConfig: OpenClawConfig = {};
+
   it("preserves action enums in normalized schemas", () => {
+    const defaultTools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
     const toolNames = ["canvas", "nodes", "cron", "gateway", "message"];
     const missingNames = toolNames.filter(
       (name) => !defaultTools.some((candidate) => candidate.name === name),
@@ -56,17 +58,20 @@ describe("createOpenClawCodingTools", () => {
     }
   });
   it("enforces apply_patch availability and canonical names across model/provider constraints", () => {
+    const defaultTools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
     expect(defaultTools.some((tool) => tool.name === "exec")).toBe(true);
     expect(defaultTools.some((tool) => tool.name === "process")).toBe(true);
     expect(defaultTools.some((tool) => tool.name === "apply_patch")).toBe(false);
 
     const openAiTools = createOpenClawCodingTools({
+      config: testConfig,
       modelProvider: "openai",
       modelId: "gpt-5.4",
     });
     expect(openAiTools.some((tool) => tool.name === "apply_patch")).toBe(true);
 
     const codexTools = createOpenClawCodingTools({
+      config: testConfig,
       modelProvider: "openai-codex",
       modelId: "gpt-5.4",
     });
@@ -115,6 +120,7 @@ describe("createOpenClawCodingTools", () => {
     expect(denied.some((tool) => tool.name === "apply_patch")).toBe(false);
 
     const oauthTools = createOpenClawCodingTools({
+      config: testConfig,
       modelProvider: "anthropic",
       modelAuthMode: "oauth",
     });
@@ -126,7 +132,7 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("apply_patch")).toBe(false);
   });
   it("provides top-level object schemas for all tools", () => {
-    const tools = createOpenClawCodingTools();
+    const tools = createOpenClawCodingTools({ config: testConfig });
     const offenders = tools
       .map((tool) => {
         const schema =

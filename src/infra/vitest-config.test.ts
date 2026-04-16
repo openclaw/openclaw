@@ -203,12 +203,13 @@ describe("base vitest config", () => {
   });
 
   it("keeps the base setup file minimal", () => {
-    expect(baseConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
+    expect(baseConfig.test?.setupFiles).toHaveLength(1);
+    expect(baseConfig.test?.setupFiles?.[0]).toMatch(/(?:^|\/)test\/setup\.ts$/u);
   });
 
   it("keeps the base runner non-isolated by default", () => {
     expect(baseConfig.test?.isolate).toBe(false);
-    expect(baseConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(baseConfig.test?.runner).toMatch(/(?:^|\/)test\/non-isolated-runner\.ts$/u);
   });
 });
 
@@ -221,7 +222,7 @@ describe("test scripts", () => {
     };
 
     expect(pkg.scripts?.["test:serial"]).toBe(
-      "OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config vitest.config.ts",
+      "OPENCLAW_TEST_PROJECTS_SERIAL=1 OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/test-projects.mjs",
     );
     expect(pkg.scripts?.["test:fast"]).toBe(
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts",
@@ -234,6 +235,7 @@ describe("test scripts", () => {
     );
     expect(pkg.scripts?.["test:unit:fast:audit"]).toBe("node scripts/test-unit-fast-audit.mjs");
     expect(pkg.scripts?.["test"]).toBe("node scripts/test-projects.mjs");
+    expect(pkg.scripts?.["test:force"]).toBe("node --import tsx scripts/test-force.ts");
     expect(pkg.scripts?.["test:gateway"]).toBe(
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts",
     );

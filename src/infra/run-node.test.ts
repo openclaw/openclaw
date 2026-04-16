@@ -15,8 +15,12 @@ const ROOT_SRC = "src/index.ts";
 const ROOT_TSCONFIG = "tsconfig.json";
 const ROOT_PACKAGE = "package.json";
 const ROOT_TSDOWN = "tsdown.config.ts";
+const GENERATED_A2UI_BUNDLE = "src/canvas-host/a2ui/a2ui.bundle.js";
+const GENERATED_A2UI_BUNDLE_HASH = "src/canvas-host/a2ui/.bundle.hash";
 const DIST_ENTRY = "dist/entry.js";
 const BUILD_STAMP = "dist/.buildstamp";
+const QA_LAB_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-lab.js";
+const QA_LAB_BUNDLED_CLI_ENTRY = "dist/extensions/qa-lab/cli.js";
 const EXTENSION_SRC = bundledPluginFile("demo", "src/index.ts");
 const EXTENSION_MANIFEST = bundledPluginFile("demo", "openclaw.plugin.json");
 const EXTENSION_PACKAGE = bundledPluginFile("demo", "package.json");
@@ -188,6 +192,29 @@ async function runStatusCommand(params: {
   });
 }
 
+async function runQaCommand(params: {
+  tmp: string;
+  spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
+  spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
+  env?: Record<string, string>;
+  runRuntimePostBuild?: (params?: { cwd?: string }) => void;
+}) {
+  return await runNodeMain({
+    cwd: params.tmp,
+    args: ["qa", "suite", "--transport", "qa-channel", "--provider-mode", "mock-openai"],
+    env: {
+      ...process.env,
+      OPENCLAW_RUNNER_LOG: "0",
+      ...params.env,
+    },
+    spawn: params.spawn,
+    ...(params.spawnSync ? { spawnSync: params.spawnSync } : {}),
+    ...(params.runRuntimePostBuild ? { runRuntimePostBuild: params.runRuntimePostBuild } : {}),
+    execPath: process.execPath,
+    platform: process.platform,
+  });
+}
+
 async function expectManifestId(tmp: string, relativePath: string, id: string) {
   await expect(
     fs.readFile(resolvePath(tmp, relativePath), "utf-8").then((raw) => JSON.parse(raw)),
@@ -316,6 +343,80 @@ describe("run-node script", () => {
     });
   });
 
+  it("skips rebuilding for private QA commands when the QA CLI facade is present", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [QA_LAB_PLUGIN_SDK_ENTRY]: "export const qaLab = true;\n",
+          [QA_LAB_BUNDLED_CLI_ENTRY]: "export const registerQaLabCli = () => {};\n",
+        },
+        oldPaths: [
+          ROOT_SRC,
+          ROOT_TSCONFIG,
+          ROOT_PACKAGE,
+          QA_LAB_PLUGIN_SDK_ENTRY,
+          QA_LAB_BUNDLED_CLI_ENTRY,
+        ],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+      const exitCode = await runQaCommand({ tmp, spawn, spawnSync });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([
+        [
+          process.execPath,
+          "openclaw.mjs",
+          "qa",
+          "suite",
+          "--transport",
+          "qa-channel",
+          "--provider-mode",
+          "mock-openai",
+        ],
+      ]);
+    });
+  });
+
+  it("rebuilds private QA commands when the QA bundled CLI surface is missing", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [QA_LAB_PLUGIN_SDK_ENTRY]: "export const qaLab = true;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE, QA_LAB_PLUGIN_SDK_ENTRY],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+      const exitCode = await runQaCommand({ tmp, spawn, spawnSync });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([
+        expectedBuildSpawn(),
+        [
+          process.execPath,
+          "openclaw.mjs",
+          "qa",
+          "suite",
+          "--transport",
+          "qa-channel",
+          "--provider-mode",
+          "mock-openai",
+        ],
+      ]);
+    });
+  });
+
   it("skips runtime postbuild restaging in watch mode when dist is already current", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
@@ -399,7 +500,7 @@ describe("run-node script", () => {
         }
       >(() => ({
         kill: (signal) => {
-          child.kill(String(signal ?? "SIGTERM"));
+          child.kill(signal ?? "SIGTERM");
           return true;
         },
         on: (event, cb) => {
@@ -598,6 +699,30 @@ describe("run-node script", () => {
         createBuildRequirementDeps(tmp, {
           gitHead: "abc123\n",
           gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldBuild: false,
+        reason: "clean",
+      });
+    });
+  });
+
+  it("ignores dirty generated A2UI bundle artifacts when dist is current", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const requirement = resolveBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: ` M ${GENERATED_A2UI_BUNDLE_HASH}\n M ${GENERATED_A2UI_BUNDLE}\n`,
         }),
       );
 

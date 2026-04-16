@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import type { Skill } from "@mariozechner/pi-coding-agent";
 import type { ChatType } from "../../channels/chat-type.js";
-import type { ChannelId } from "../../channels/plugins/types.js";
+import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import type { DeliveryContext } from "../../utils/delivery-context.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 
 export type SessionScope = "per-sender" | "global";
@@ -163,6 +163,7 @@ export type SessionEntry = {
   thinkingLevel?: string;
   fastMode?: boolean;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
   ttsAuto?: TtsAutoMode;
@@ -257,14 +258,39 @@ export type SessionEntry = {
   acp?: SessionAcpMeta;
 };
 
-export function resolveSessionPluginDebugLines(
+function isSessionPluginTraceLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("🔎 ") || /(?:^|\s)(?:Debug|Trace):/.test(trimmed);
+}
+
+export function resolveSessionPluginStatusLines(
   entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
 ): string[] {
   return Array.isArray(entry?.pluginDebugEntries)
     ? entry.pluginDebugEntries.flatMap((pluginEntry) =>
         Array.isArray(pluginEntry?.lines)
           ? pluginEntry.lines.filter(
-              (line): line is string => typeof line === "string" && line.trim().length > 0,
+              (line): line is string =>
+                typeof line === "string" &&
+                line.trim().length > 0 &&
+                !isSessionPluginTraceLine(line),
+            )
+          : [],
+      )
+    : [];
+}
+
+export function resolveSessionPluginTraceLines(
+  entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
+): string[] {
+  return Array.isArray(entry?.pluginDebugEntries)
+    ? entry.pluginDebugEntries.flatMap((pluginEntry) =>
+        Array.isArray(pluginEntry?.lines)
+          ? pluginEntry.lines.filter(
+              (line): line is string =>
+                typeof line === "string" &&
+                line.trim().length > 0 &&
+                isSessionPluginTraceLine(line),
             )
           : [],
       )

@@ -232,3 +232,27 @@ describe("agent-events sequencing", () => {
     ]);
   });
 });
+
+test("clearAgentRunContext also cleans up seqByRun to prevent memory leak (#63643)", () => {
+  // Regression test: seqByRun entries were never deleted when a run ended,
+  // causing unbounded growth over time.
+  registerAgentRunContext("run-leak", { sessionKey: "main" });
+  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
+  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
+
+  // After clearing run context, the sequence counter should also be removed.
+  clearAgentRunContext("run-leak");
+
+  // Emitting a new event on the same runId should start seq from 1 again,
+  // proving the old entry was deleted.
+  const seqs: number[] = [];
+  const stop = onAgentEvent((evt) => {
+    if (evt.runId === "run-leak") {
+      seqs.push(evt.seq);
+    }
+  });
+  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
+  stop();
+
+  expect(seqs).toEqual([1]);
+});

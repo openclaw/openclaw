@@ -1,8 +1,12 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   buildVitestRunPlans,
+  shouldAcquireLocalHeavyCheckLock,
   resolveChangedTargetArgs,
+  resolveParallelFullSuiteConcurrency,
 } from "../../scripts/test-projects.test-support.mjs";
 
 describe("scripts/test-projects changed-target routing", () => {
@@ -193,7 +197,103 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 });
 
+describe("scripts/test-projects local heavy-check lock", () => {
+  it("skips the lock for a single scoped tooling run", () => {
+    expect(
+      shouldAcquireLocalHeavyCheckLock(
+        [
+          {
+            config: "test/vitest/vitest.tooling.config.ts",
+            includePatterns: ["test/scripts/committer.test.ts"],
+            watchMode: false,
+          },
+        ],
+        process.env,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the lock for non-tooling runs", () => {
+    expect(
+      shouldAcquireLocalHeavyCheckLock(
+        [
+          {
+            config: "test/vitest/vitest.unit.config.ts",
+            includePatterns: ["src/infra/vitest-config.test.ts"],
+            watchMode: false,
+          },
+        ],
+        process.env,
+      ),
+    ).toBe(true);
+  });
+
+  it("allows forcing the lock back on", () => {
+    expect(
+      shouldAcquireLocalHeavyCheckLock(
+        [
+          {
+            config: "test/vitest/vitest.tooling.config.ts",
+            includePatterns: ["test/scripts/committer.test.ts"],
+            watchMode: false,
+          },
+        ],
+        {
+          ...process.env,
+          OPENCLAW_TEST_PROJECTS_FORCE_LOCK: "1",
+        },
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("scripts/test-projects full-suite sharding", () => {
+  it("uses the large host-aware local profile on roomy local hosts", () => {
+    expect(
+      resolveParallelFullSuiteConcurrency(
+        61,
+        {},
+        {
+          cpuCount: 14,
+          loadAverage1m: 0,
+          totalMemoryBytes: 48 * 1024 ** 3,
+        },
+      ),
+    ).toBe(10);
+  });
+
+  it("keeps CI full-suite runs serial even on roomy hosts", () => {
+    expect(
+      resolveParallelFullSuiteConcurrency(
+        61,
+        {
+          CI: "true",
+        },
+        {
+          cpuCount: 14,
+          loadAverage1m: 0,
+          totalMemoryBytes: 48 * 1024 ** 3,
+        },
+      ),
+    ).toBe(1);
+  });
+
+  it("keeps explicit parallel overrides ahead of the host-aware profile", () => {
+    expect(
+      resolveParallelFullSuiteConcurrency(
+        61,
+        {
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "3",
+        },
+        {
+          cpuCount: 14,
+          loadAverage1m: 0,
+          totalMemoryBytes: 48 * 1024 ** 3,
+        },
+      ),
+    ).toBe(3);
+  });
+
   it("splits untargeted runs into fixed core shards and per-extension configs", () => {
     const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     const previousSerial = process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
@@ -486,5 +586,45 @@ describe("scripts/test-projects full-suite sharding", () => {
         watchMode: true,
       },
     ]);
+  });
+});
+
+describe("scripts/test-projects parallel cache paths", () => {
+  it("assigns isolated Vitest fs-module cache paths per parallel shard", () => {
+    const specs = applyParallelVitestCachePaths(
+      [
+        { config: "test/vitest/vitest.gateway.config.ts", env: {}, pnpmArgs: [] },
+        { config: "test/vitest/vitest.extension-matrix.config.ts", env: {}, pnpmArgs: [] },
+      ],
+      { cwd: "/repo", env: {} },
+    );
+
+    expect(specs.map((spec) => spec.env)).toEqual([
+      {
+        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
+          "/repo",
+          "node_modules",
+          ".experimental-vitest-cache",
+          "0-test-vitest-vitest.gateway.config.ts",
+        ),
+      },
+      {
+        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
+          "/repo",
+          "node_modules",
+          ".experimental-vitest-cache",
+          "1-test-vitest-vitest.extension-matrix.config.ts",
+        ),
+      },
+    ]);
+  });
+
+  it("keeps an explicit global cache path", () => {
+    const [spec] = applyParallelVitestCachePaths(
+      [{ config: "test/vitest/vitest.gateway.config.ts", env: {}, pnpmArgs: [] }],
+      { cwd: "/repo", env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache" } },
+    );
+
+    expect(spec?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBeUndefined();
   });
 });

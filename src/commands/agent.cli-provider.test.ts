@@ -1,59 +1,41 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./agent-command.test-mocks.js";
 import "../cron/isolated-agent.mocks.js";
-import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as cliRunnerModule from "../agents/cli-runner.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import type { OpenClawConfig } from "../config/config.js";
-import * as configModule from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions.js";
-import { resetAgentEventsForTest, resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import type { RuntimeEnv } from "../runtime.js";
+import * as configIoModule from "../config/io.js";
+import { createDefaultAgentCommandResult } from "./agent-command.test-support.js";
 import {
-  createDefaultAgentCommandResult,
-  mockAgentCommandConfig,
-  withAgentCommandTempHome,
-} from "./agent-command.test-support.js";
+  mockSharedAgentCommandConfig,
+  resetSharedAgentCommandRuntimeState,
+  runtime,
+  withSharedAgentCommandTempHome,
+} from "./agent-runtime-config.test-support.js";
 import { agentCommand } from "./agent.js";
 
-vi.mock("../agents/auth-profiles/store.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/auth-profiles/store.js")>(
-    "../agents/auth-profiles/store.js",
-  );
-  return {
-    ...actual,
-    ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
-  };
-});
-
-const runtime: RuntimeEnv = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(() => {
-    throw new Error("exit");
-  }),
-};
-
-const configSpy = vi.spyOn(configModule, "loadConfig");
-const readConfigFileSnapshotForWriteSpy = vi.spyOn(configModule, "readConfigFileSnapshotForWrite");
+const configSpy = vi.spyOn(configIoModule, "loadConfig");
+const readConfigFileSnapshotForWriteSpy = vi.spyOn(
+  configIoModule,
+  "readConfigFileSnapshotForWrite",
+);
 const runCliAgentSpy = vi.spyOn(cliRunnerModule, "runCliAgent");
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withAgentCommandTempHome("openclaw-agent-cli-", fn);
+  return withSharedAgentCommandTempHome("openclaw-agent-cli-", fn);
 }
 
 function mockConfig(
   home: string,
   storePath: string,
-  agentOverrides?: Parameters<typeof mockAgentCommandConfig>[3],
+  agentOverrides?: Parameters<typeof mockSharedAgentCommandConfig>[3],
 ) {
-  return mockAgentCommandConfig(configSpy, home, storePath, agentOverrides);
+  return mockSharedAgentCommandConfig(configSpy, home, storePath, agentOverrides);
 }
 
 function writeSessionStoreSeed(
@@ -68,6 +50,19 @@ function readSessionStore<T>(storePath: string): Record<string, T> {
   return JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, T>;
 }
 
+async function readSessionMessages(sessionFile: string) {
+  const raw = await fsp.readFile(sessionFile, "utf-8");
+  return raw
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { type?: string; message?: unknown })
+    .filter((entry) => entry.type === "message")
+    .map(
+      (entry) =>
+        entry.message as { role?: string; content?: unknown; provider?: string; model?: string },
+    );
+}
+
 function expectLastEmbeddedProviderModel(provider: string, model: string): void {
   const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
   expect(callArgs?.provider).toBe(provider);
@@ -75,21 +70,8 @@ function expectLastEmbeddedProviderModel(provider: string, model: string): void 
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
-  clearSessionStoreCacheForTest();
-  resetAgentEventsForTest();
-  resetAgentRunContextForTest();
-  resetPluginRuntimeStateForTest();
-  acpManagerTesting.resetAcpSessionManagerForTests();
-  configModule.clearRuntimeConfigSnapshot();
+  resetSharedAgentCommandRuntimeState(readConfigFileSnapshotForWriteSpy);
   runCliAgentSpy.mockResolvedValue(createDefaultAgentCommandResult() as never);
-  vi.mocked(runEmbeddedPiAgent).mockResolvedValue(createDefaultAgentCommandResult());
-  vi.mocked(loadModelCatalog).mockResolvedValue([]);
-  vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
-  readConfigFileSnapshotForWriteSpy.mockResolvedValue({
-    snapshot: { valid: false, resolved: {} as OpenClawConfig },
-    writeOptions: {},
-  } as Awaited<ReturnType<typeof configModule.readConfigFileSnapshotForWrite>>);
 });
 
 describe("agentCommand CLI provider handling", () => {
@@ -166,6 +148,77 @@ describe("agentCommand CLI provider handling", () => {
         }>(store);
         expect(saved["agent:main:subagent:clear-cli-overrides"]?.providerOverride).toBeUndefined();
         expect(saved["agent:main:subagent:clear-cli-overrides"]?.modelOverride).toBeUndefined();
+      });
+    } finally {
+      vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
+    }
+  });
+
+  it("persists successful google-gemini-cli replies into the session transcript", async () => {
+    vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(
+      (provider) => provider.trim().toLowerCase() === "google-gemini-cli",
+    );
+    try {
+      await withTempHome(async (home) => {
+        const store = path.join(home, "sessions.json");
+        const sessionKey = "agent:main:subagent:gemini-cli-transcript";
+        mockConfig(home, store, {
+          model: { primary: "google-gemini-cli/gemini-3.1-pro-preview", fallbacks: [] },
+          models: { "google-gemini-cli/gemini-3.1-pro-preview": {} },
+        });
+
+        runCliAgentSpy.mockResolvedValueOnce({
+          payloads: [{ text: "hello from cli" }],
+          meta: {
+            durationMs: 5,
+            finalAssistantVisibleText: "hello from cli",
+            agentMeta: {
+              sessionId: "cli-session-123",
+              provider: "google-gemini-cli",
+              model: "gemini-3.1-pro-preview",
+              compactionCount: 2,
+              usage: {
+                input: 12,
+                output: 4,
+                cacheRead: 3,
+                cacheWrite: 0,
+                total: 19,
+              },
+            },
+            executionTrace: {
+              winnerProvider: "google-gemini-cli",
+              winnerModel: "gemini-3.1-pro-preview",
+              fallbackUsed: false,
+              runner: "cli",
+            },
+          },
+        } as ReturnType<typeof createDefaultAgentCommandResult>);
+
+        await agentCommand({ message: "persist this", sessionKey }, runtime);
+
+        const saved = readSessionStore<{ sessionFile?: string }>(store);
+        const sessionFile = saved[sessionKey]?.sessionFile;
+        expect(sessionFile).toBeTruthy();
+        expect(saved[sessionKey]).toMatchObject({
+          compactionCount: 2,
+          inputTokens: 12,
+          outputTokens: 4,
+          cacheRead: 3,
+        });
+
+        const messages = await readSessionMessages(sessionFile!);
+        expect(messages).toHaveLength(2);
+        expect(messages[0]).toMatchObject({
+          role: "user",
+          content: "persist this",
+        });
+        expect(messages[1]).toMatchObject({
+          role: "assistant",
+          api: "cli",
+          provider: "google-gemini-cli",
+          model: "gemini-3.1-pro-preview",
+          content: [{ type: "text", text: "hello from cli" }],
+        });
       });
     } finally {
       vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);

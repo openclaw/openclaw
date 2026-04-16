@@ -1,13 +1,15 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import { limitHistoryTurns } from "../history.js";
+import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
 import {
   assembleAttemptContextEngine,
   type AttemptContextEngine,
   resolveAttemptBootstrapContext,
 } from "./attempt.context-engine-helpers.js";
+import { resetEmbeddedAttemptHarness } from "./attempt.spawn-workspace.test-support.js";
 
 async function resolveBootstrapContext(params: {
   contextInjectionMode?: "always" | "continuation-skip";
@@ -37,6 +39,10 @@ async function resolveBootstrapContext(params: {
 }
 
 describe("embedded attempt context injection", () => {
+  beforeEach(() => {
+    resetEmbeddedAttemptHarness();
+  });
+
   it("skips bootstrap reinjection on safe continuation turns when configured", async () => {
     const { result, hasCompletedBootstrapTurn, resolveBootstrapContextForRun } =
       await resolveBootstrapContext({
@@ -67,6 +73,35 @@ describe("embedded attempt context injection", () => {
     expect(result.bootstrapFiles).toEqual([{ name: "AGENTS.md" }]);
     expect(result.contextFiles).toEqual([{ path: "AGENTS.md" }]);
     expect(resolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards senderIsOwner into embedded message-action discovery", async () => {
+    const input = buildEmbeddedMessageActionDiscoveryInput({
+      cfg: {},
+      channel: "matrix",
+      currentChannelId: "room",
+      currentThreadTs: "thread",
+      currentMessageId: 123,
+      accountId: "work",
+      sessionKey: "agent:main",
+      sessionId: "session",
+      agentId: "main",
+      senderId: "@alice:example.org",
+      senderIsOwner: false,
+    });
+
+    expect(input).toMatchObject({
+      channel: "matrix",
+      currentChannelId: "room",
+      currentThreadTs: "thread",
+      currentMessageId: 123,
+      accountId: "work",
+      sessionKey: "agent:main",
+      sessionId: "session",
+      agentId: "main",
+      requesterSenderId: "@alice:example.org",
+      senderIsOwner: false,
+    });
   });
 
   it("never skips heartbeat bootstrap filtering", async () => {

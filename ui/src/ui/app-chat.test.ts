@@ -23,6 +23,16 @@ async function loadChatHelpers(params?: { reload?: boolean }): Promise<void> {
     await import("./app-chat.ts"));
 }
 
+function requestUrl(input: string | URL | Request): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  return input.url;
+}
+
 function makeHost(overrides?: Partial<ChatHost>): ChatHost {
   return {
     client: null,
@@ -107,7 +117,7 @@ describe("refreshChatAvatar", () => {
     const mainRequest = createDeferred<{ avatarUrl?: string }>();
     const opsRequest = createDeferred<{ avatarUrl?: string }>();
     const fetchMock = vi.fn((input: string | URL | Request) => {
-      const url = String(input);
+      const url = requestUrl(input);
       if (url === "avatar/main?meta=1") {
         return Promise.resolve({
           ok: true,

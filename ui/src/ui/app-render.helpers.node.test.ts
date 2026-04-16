@@ -1,15 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
-const { refreshChatMock, refreshChatAvatarMock, loadChatHistoryMock, loadSessionsMock } =
-  vi.hoisted(() => ({
-    refreshChatMock: vi.fn(),
-    refreshChatAvatarMock: vi.fn(),
-    loadChatHistoryMock: vi.fn(),
-    loadSessionsMock: vi.fn(),
-  }));
+const {
+  refreshChatMock,
+  refreshChatAvatarMock,
+  refreshSlashCommandsMock,
+  loadChatHistoryMock,
+  loadSessionsMock,
+} = vi.hoisted(() => ({
+  refreshChatMock: vi.fn(),
+  refreshChatAvatarMock: vi.fn(),
+  refreshSlashCommandsMock: vi.fn(),
+  loadChatHistoryMock: vi.fn(),
+  loadSessionsMock: vi.fn(),
+}));
 
 vi.mock("./app-chat.ts", () => ({
   refreshChat: refreshChatMock,
   refreshChatAvatar: refreshChatAvatarMock,
+}));
+
+vi.mock("./chat/slash-commands.ts", () => ({
+  refreshSlashCommands: (...args: unknown[]) => refreshSlashCommandsMock(...args),
 }));
 
 vi.mock("./controllers/chat.ts", () => ({
@@ -23,6 +33,7 @@ vi.mock("./controllers/sessions.ts", () => ({
 import {
   isCronSessionKey,
   parseSessionKey,
+  resolveAssistantAttachmentAuthToken,
   resolveSessionDisplayName,
   switchChatSession,
 } from "./app-render.helpers.ts";
@@ -120,6 +131,35 @@ describe("parseSessionKey", () => {
       prefix: "",
       fallbackName: "something-unknown",
     });
+  });
+});
+
+describe("resolveAssistantAttachmentAuthToken", () => {
+  it("prefers the explicit gateway token when present", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        settings: { token: "session-token" } as AppViewState["settings"],
+        password: "shared-password",
+      }),
+    ).toBe("session-token");
+  });
+
+  it("falls back to the shared password when token is blank", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        settings: { token: "   " } as AppViewState["settings"],
+        password: "shared-password",
+      }),
+    ).toBe("shared-password");
+  });
+
+  it("returns null when neither auth secret is available", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        settings: { token: "" } as AppViewState["settings"],
+        password: "   ",
+      }),
+    ).toBeNull();
   });
 });
 
@@ -363,6 +403,7 @@ describe("switchChatSession", () => {
     } as unknown as AppViewState;
 
     refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
     loadChatHistoryMock.mockResolvedValue(undefined);
     loadSessionsMock.mockResolvedValue(undefined);
 
@@ -372,12 +413,76 @@ describe("switchChatSession", () => {
     expect(state.chatSideResult).toBeNull();
     expect(state.chatSideResultTerminalRuns.size).toBe(0);
     expect(refreshChatAvatarMock).toHaveBeenCalledWith(state);
+    expect(refreshSlashCommandsMock).toHaveBeenCalledWith({
+      client: undefined,
+      agentId: "main",
+    });
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
     expect(loadSessionsMock).toHaveBeenCalledWith(state, {
       activeMinutes: 0,
       limit: 0,
       includeGlobal: true,
       includeUnknown: true,
+    });
+  });
+
+  it("does not force agentId=main for plain session keys", async () => {
+    const settings: AppViewState["settings"] = {
+      gatewayUrl: "",
+      token: "",
+      locale: "en",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "dark",
+      splitRatio: 0.6,
+      navWidth: 280,
+      navCollapsed: false,
+      navGroupsCollapsed: {},
+      borderRadius: 50,
+      chatFocusMode: false,
+      chatShowThinking: false,
+      chatShowToolCalls: true,
+    };
+    const state = {
+      sessionKey: "main",
+      chatMessage: "",
+      chatAttachments: [],
+      chatMessages: [],
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      chatThinkingLevel: null,
+      chatStream: null,
+      chatSideResult: null,
+      lastError: null,
+      compactionStatus: null,
+      fallbackStatus: null,
+      chatAvatarUrl: null,
+      chatQueue: [],
+      chatRunId: null,
+      chatSideResultTerminalRuns: new Set<string>(),
+      chatStreamStartedAt: null,
+      settings,
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+      client: { request: vi.fn() },
+    } as unknown as AppViewState;
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    switchChatSession(state, "main");
+    await Promise.resolve();
+
+    expect(refreshSlashCommandsMock).toHaveBeenCalledWith({
+      client: state.client,
+      agentId: undefined,
     });
   });
 });

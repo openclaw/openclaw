@@ -1,16 +1,5 @@
 import { vi } from "vitest";
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const original =
-    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
-  return {
-    ...original,
-    getOAuthApiKey: () => undefined,
-    getOAuthProviders: () => [],
-    loginOpenAICodex: vi.fn(),
-  };
-});
-
 vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthApiKey: () => undefined,
   getOAuthProviders: () => [],
@@ -45,7 +34,7 @@ process.env.VITEST = "true";
 process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS ??= "60000";
 // Vitest fork workers can load transitive lockfile helpers many times per worker.
 // Raise listener budget to avoid noisy MaxListeners warnings and warning-stack overhead.
-const TEST_PROCESS_MAX_LISTENERS = 128;
+const TEST_PROCESS_MAX_LISTENERS = 256;
 if (process.getMaxListeners() > 0 && process.getMaxListeners() < TEST_PROCESS_MAX_LISTENERS) {
   process.setMaxListeners(TEST_PROCESS_MAX_LISTENERS);
 }

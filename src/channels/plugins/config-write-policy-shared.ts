@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAccountEntry } from "../../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 
@@ -9,6 +8,10 @@ type AccountConfigWithWrites = {
 type ChannelConfigWithAccounts = {
   configWrites?: boolean;
   accounts?: Record<string, AccountConfigWithWrites>;
+};
+
+type ConfigWritePolicyConfig = {
+  channels?: Record<string, ChannelConfigWithAccounts>;
 };
 
 export type ConfigWriteScopeLike<TChannelId extends string = string> = {
@@ -46,13 +49,13 @@ function listConfigWriteTargetScopes<TChannelId extends string>(
 }
 
 function resolveChannelConfig<TChannelId extends string>(
-  cfg: OpenClawConfig,
+  cfg: ConfigWritePolicyConfig,
   channelId?: TChannelId | null,
 ): ChannelConfigWithAccounts | undefined {
   if (!channelId) {
     return undefined;
   }
-  return (cfg.channels as Record<string, ChannelConfigWithAccounts> | undefined)?.[channelId];
+  return cfg.channels?.[channelId];
 }
 
 function resolveChannelAccountConfig(
@@ -63,7 +66,7 @@ function resolveChannelAccountConfig(
 }
 
 export function resolveChannelConfigWritesShared<TChannelId extends string>(params: {
-  cfg: OpenClawConfig;
+  cfg: ConfigWritePolicyConfig;
   channelId?: TChannelId | null;
   accountId?: string | null;
 }): boolean {
@@ -77,7 +80,7 @@ export function resolveChannelConfigWritesShared<TChannelId extends string>(para
 }
 
 export function authorizeConfigWriteShared<TChannelId extends string>(params: {
-  cfg: OpenClawConfig;
+  cfg: ConfigWritePolicyConfig;
   origin?: ConfigWriteScopeLike<TChannelId>;
   target?: ConfigWriteTargetLike<TChannelId>;
   allowBypass?: boolean;

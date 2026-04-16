@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  normalizeConfigPath,
+  normalizeConfigPaths,
+} from "../../test/helpers/vitest-config-paths.js";
 import { BUNDLED_PLUGIN_LIVE_TEST_GLOB } from "../../test/vitest/vitest.bundled-plugin-paths.ts";
 import liveConfig from "../../test/vitest/vitest.live.config.ts";
 
@@ -10,7 +14,7 @@ describe("live vitest config", () => {
   it("keeps live tests on thread workers with the non-isolated runner", () => {
     expect(liveConfig.test?.pool).toBe("threads");
     expect(liveConfig.test?.isolate).toBe(false);
-    expect(liveConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(normalizeConfigPath(liveConfig.test?.runner)).toBe("test/non-isolated-runner.ts");
   });
 
   it("includes live test globs and runtime setup", () => {
@@ -19,6 +23,8 @@ describe("live vitest config", () => {
       "test/**/*.live.test.ts",
       BUNDLED_PLUGIN_LIVE_TEST_GLOB,
     ]);
-    expect(liveConfig.test?.setupFiles).toContain("test/setup-openclaw-runtime.ts");
+    expect(normalizeConfigPaths(liveConfig.test?.setupFiles)).toContain(
+      "test/setup-openclaw-runtime.ts",
+    );
   });
 });

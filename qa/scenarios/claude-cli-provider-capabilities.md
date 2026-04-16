@@ -1,12 +1,13 @@
-# Claude CLI provider capabilities
+# Claude CLI provider capabilities API key
 
 ```yaml qa-scenario
 id: claude-cli-provider-capabilities
-title: Claude CLI provider capabilities
+title: Claude CLI provider capabilities API key
 surface: model-provider
-objective: Verify the Claude CLI model-provider lane can talk, read an attached image, use bundled MCP tools, and apply workspace skills.
+objective: Verify the Claude CLI model-provider lane can use the Anthropic API key path to talk, read an attached image, use bundled MCP tools, and apply workspace skills.
 successCriteria:
   - A live-frontier run fails fast unless the selected primary provider is claude-cli.
+  - The Claude CLI backend preserves ANTHROPIC_API_KEY for this run instead of using native subscription auth.
   - The agent replies through the Claude CLI provider in a direct chat turn.
   - The agent describes an attached image through the Claude CLI image path.
   - The agent can reach memory via the bundled MCP/tool bridge.
@@ -18,13 +19,14 @@ docsRefs:
   - docs/tools/index.md
 codeRefs:
   - extensions/anthropic/cli-backend.ts
-  - src/agents/cli-backend-provider.ts
+  - src/agents/cli-backends.ts
   - src/mcp/plugin-tools-serve.ts
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model claude-cli/claude-sonnet-4-6 --alt-model claude-cli/claude-sonnet-4-6 --scenario claude-cli-provider-capabilities`.
+  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --cli-auth-mode api-key --model claude-cli/claude-sonnet-4-6 --alt-model claude-cli/claude-sonnet-4-6 --scenario claude-cli-provider-capabilities`.
   config:
+    authMode: api-key
     requiredProvider: claude-cli
     chatPrompt: "Claude CLI provider marker check. Reply exactly: CLAUDE-CLI-CHAT-OK"
     chatExpected: CLAUDE-CLI-CHAT-OK
@@ -50,16 +52,27 @@ execution:
 
 ```yaml qa-flow
 steps:
-  - name: confirms the selected live provider is claude-cli
+  - name: confirms the selected live provider and Claude CLI auth mode
     actions:
       - set: selected
         value:
           expr: splitModelRef(env.primaryModel)
+      - set: preserveEnv
+        value:
+          expr: "String(env.gateway.runtimeEnv.OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV ?? '')"
       - assert:
           expr: "env.providerMode !== 'live-frontier' || selected?.provider === config.requiredProvider"
           message:
             expr: "`expected live primary provider ${config.requiredProvider}, got ${env.primaryModel}`"
-    detailsExpr: "env.providerMode === 'live-frontier' ? `provider=${selected?.provider} model=${selected?.model}` : `mock-compatible provider=${selected?.provider}`"
+      - assert:
+          expr: "env.providerMode !== 'live-frontier' || env.gateway.runtimeEnv.OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE === config.authMode"
+          message:
+            expr: "`expected Claude CLI auth mode ${config.authMode}, got ${env.gateway.runtimeEnv.OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE ?? 'unset'}`"
+      - assert:
+          expr: "env.providerMode !== 'live-frontier' || preserveEnv.includes('ANTHROPIC_API_KEY')"
+          message:
+            expr: "`expected ANTHROPIC_API_KEY to be preserved for Claude CLI API-key QA mode, got ${preserveEnv}`"
+    detailsExpr: "env.providerMode === 'live-frontier' ? `provider=${selected?.provider} model=${selected?.model} auth=${env.gateway.runtimeEnv.OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE} preserve=${preserveEnv}` : `mock-compatible provider=${selected?.provider}`"
   - name: talks through the selected provider
     actions:
       - call: reset

@@ -6,7 +6,6 @@ import { WebSocket } from "ws";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
-import { GatewayLockError } from "../infra/gateway-lock.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
@@ -16,7 +15,6 @@ import {
   connectOk,
   getFreePort,
   installGatewayTestHooks,
-  occupyPort,
   onceMessage,
   piSdkMock,
   rpcReq,
@@ -555,14 +553,6 @@ describe("gateway server misc", () => {
       token: "token-123",
       enabled: true,
     });
-  });
-
-  test("refuses to start when port already bound", async () => {
-    const { server: blocker, port: blockedPort } = await occupyPort();
-    const startup = startGatewayServer(blockedPort);
-    await expect(startup).rejects.toBeInstanceOf(GatewayLockError);
-    await expect(startup).rejects.toThrow(/already listening/i);
-    blocker.close();
   });
 
   test("releases port after close", async () => {

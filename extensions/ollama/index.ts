@@ -6,8 +6,9 @@ import {
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { buildApiKeyCredential } from "openclaw/plugin-sdk/provider-auth";
 import {
-  buildProviderReplayFamilyHooks,
+  OPENAI_COMPATIBLE_REPLAY_HOOKS,
   type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
@@ -33,9 +34,6 @@ import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
 
 const PROVIDER_ID = "ollama";
 const DEFAULT_API_KEY = "ollama-local";
-const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
 
 type OllamaPluginConfig = {
   discovery?: {
@@ -60,9 +58,7 @@ function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.VITEST) || env.NODE_ENV === "test";
 }
 
-function hasMeaningfulExplicitOllamaConfig(
-  providerConfig: OllamaProviderLikeConfig | undefined,
-): boolean {
+function hasMeaningfulExplicitOllamaConfig(providerConfig?: OllamaProviderLikeConfig): boolean {
   if (!providerConfig) {
     return false;
   }
@@ -119,19 +115,27 @@ export default definePluginEntry({
           run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
             const result = await promptAndConfigureOllama({
               cfg: ctx.config,
+              env: ctx.env,
+              opts: ctx.opts as Record<string, unknown> | undefined,
               prompter: ctx.prompter,
-              isRemote: ctx.isRemote,
-              openUrl: ctx.openUrl,
+              secretInputMode: ctx.secretInputMode,
+              allowSecretRefPrompt: ctx.allowSecretRefPrompt,
             });
             return {
               profiles: [
                 {
                   profileId: "ollama:default",
-                  credential: {
-                    type: "api_key",
-                    provider: PROVIDER_ID,
-                    key: DEFAULT_API_KEY,
-                  },
+                  credential: buildApiKeyCredential(
+                    PROVIDER_ID,
+                    result.credential,
+                    undefined,
+                    result.credentialMode
+                      ? {
+                          secretInputMode: result.credentialMode,
+                          config: ctx.config,
+                        }
+                      : undefined,
+                  ),
                 },
               ],
               configPatch: result.config,

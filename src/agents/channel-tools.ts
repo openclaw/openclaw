@@ -5,9 +5,12 @@ import {
   resolveMessageActionDiscoveryChannelId,
   __testing as messageActionTesting,
 } from "../channels/plugins/message-action-discovery.js";
-import type { ChannelAgentTool, ChannelMessageActionName } from "../channels/plugins/types.js";
+import type {
+  ChannelAgentTool,
+  ChannelMessageActionName,
+} from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type ChannelAgentToolMeta = {
   channelId: string;
@@ -41,6 +44,7 @@ export function listChannelSupportedActions(params: {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
 }): ChannelMessageActionName[] {
   const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
   if (!channelId) {
@@ -71,6 +75,7 @@ export function listAllChannelSupportedActions(params: {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
 }): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>();
   for (const plugin of listChannelPlugins()) {

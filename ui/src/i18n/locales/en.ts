@@ -252,6 +252,17 @@ export const en: TranslationMap = {
       cost: "Cost",
       skills: "Skills",
       recentSessions: "Recent Sessions",
+      modelAuth: "Model Auth",
+      modelAuthOk: "{count} ok",
+      modelAuthExpired: "{count} expired",
+      modelAuthExpiring: "{count} expiring",
+      modelAuthProviders: "{count} providers",
+      modelAuthUsageLeft: "{pct}% left",
+      modelAuthExpiresIn: "expires {when}",
+      modelAuthAttentionExpiredTitle: "Model auth expired",
+      modelAuthAttentionExpiringTitle: "Model auth expiring soon",
+      modelAuthAttentionExpiredDesc: "{providers} — re-authenticate with openclaw models auth",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "Attention",
@@ -293,8 +304,10 @@ export const en: TranslationMap = {
     },
     scene: {
       backfill: "Backfill",
+      dedupeDiary: "Dedupe Diary",
       reset: "Reset",
       clearGrounded: "Clear Replayed",
+      repairCache: "Repair Dream Cache",
       working: "Working…",
     },
     phase: {

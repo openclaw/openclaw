@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { BUNDLED_PLUGIN_TEST_GLOB, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
+import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import { createAcpVitestConfig } from "./vitest/vitest.acp.config.ts";
 import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
 import { createAutoReplyCoreVitestConfig } from "./vitest/vitest.auto-reply-core.config.ts";
@@ -93,8 +94,11 @@ describe("createScopedVitestConfig", () => {
   it("applies the non-isolated runner by default", () => {
     const config = createScopedVitestConfig(["src/example.test.ts"], { env: {} });
     expect(config.test?.isolate).toBe(false);
-    expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
-    expect(config.test?.setupFiles).toEqual(["test/setup.ts", "test/setup-openclaw-runtime.ts"]);
+    expect(normalizeConfigPath(config.test?.runner)).toBe("test/non-isolated-runner.ts");
+    expect(normalizeConfigPaths(config.test?.setupFiles)).toEqual([
+      "test/setup.ts",
+      "test/setup-openclaw-runtime.ts",
+    ]);
   });
 
   it("passes through a scoped root dir when provided", () => {
@@ -153,7 +157,7 @@ describe("createScopedVitestConfig", () => {
       setupFiles: ["test/setup.extensions.ts"],
     });
 
-    expect(config.test?.setupFiles).toEqual([
+    expect(normalizeConfigPaths(config.test?.setupFiles)).toEqual([
       "test/setup.ts",
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
@@ -236,13 +240,13 @@ describe("scoped vitest configs", () => {
     ]) {
       expect(config.test?.pool).toBe("threads");
       expect(config.test?.isolate).toBe(false);
-      expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
+      expect(normalizeConfigPath(config.test?.runner)).toBe("test/non-isolated-runner.ts");
     }
 
     for (const config of [defaultGatewayConfig, defaultCommandsConfig, defaultAgentsConfig]) {
       expect(config.test?.pool).toBe("threads");
       expect(config.test?.isolate).toBe(false);
-      expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
+      expect(normalizeConfigPath(config.test?.runner)).toBe("test/non-isolated-runner.ts");
     }
 
     expect(defaultUiConfig.test?.pool).toBe("threads");
@@ -251,9 +255,9 @@ describe("scoped vitest configs", () => {
   });
 
   it("keeps the process lane off the openclaw runtime setup", () => {
-    expect(defaultProcessConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
-    expect(defaultRuntimeConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
-    expect(defaultPluginSdkConfig.test?.setupFiles).toEqual([
+    expect(normalizeConfigPaths(defaultProcessConfig.test?.setupFiles)).toEqual(["test/setup.ts"]);
+    expect(normalizeConfigPaths(defaultRuntimeConfig.test?.setupFiles)).toEqual(["test/setup.ts"]);
+    expect(normalizeConfigPaths(defaultPluginSdkConfig.test?.setupFiles)).toEqual([
       "test/setup.ts",
       "test/setup-openclaw-runtime.ts",
     ]);
@@ -269,14 +273,20 @@ describe("scoped vitest configs", () => {
   });
 
   it("keeps selected plugin-sdk and commands light lanes off the openclaw runtime setup", () => {
-    expect(defaultPluginSdkLightConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
-    expect(defaultCommandsLightConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
+    expect(normalizeConfigPaths(defaultPluginSdkLightConfig.test?.setupFiles)).toEqual([
+      "test/setup.ts",
+    ]);
+    expect(normalizeConfigPaths(defaultCommandsLightConfig.test?.setupFiles)).toEqual([
+      "test/setup.ts",
+    ]);
   });
 
   it("defaults channel tests to threads with the non-isolated runner", () => {
     expect(defaultChannelsConfig.test?.isolate).toBe(false);
     expect(defaultChannelsConfig.test?.pool).toBe("threads");
-    expect(defaultChannelsConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(normalizeConfigPath(defaultChannelsConfig.test?.runner)).toBe(
+      "test/non-isolated-runner.ts",
+    );
   });
 
   it("keeps the core channel lane limited to non-extension roots", () => {
@@ -314,7 +324,9 @@ describe("scoped vitest configs", () => {
   it("defaults extension tests to threads with the non-isolated runner", () => {
     expect(defaultExtensionsConfig.test?.isolate).toBe(false);
     expect(defaultExtensionsConfig.test?.pool).toBe("threads");
-    expect(defaultExtensionsConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(normalizeConfigPath(defaultExtensionsConfig.test?.runner)).toBe(
+      "test/non-isolated-runner.ts",
+    );
   });
 
   it("normalizes extension channel include patterns relative to the scoped dir", () => {
@@ -434,12 +446,12 @@ describe("scoped vitest configs", () => {
     expect(defaultChannelsConfig.test?.exclude).not.toContain(
       bundledPluginFile("telegram", "src/fetch.test.ts"),
     );
-    expect(defaultExtensionsConfig.test?.setupFiles).toEqual([
+    expect(normalizeConfigPaths(defaultExtensionsConfig.test?.setupFiles)).toEqual([
       "test/setup.ts",
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
     ]);
-    expect(defaultExtensionTelegramConfig.test?.setupFiles).toEqual([
+    expect(normalizeConfigPaths(defaultExtensionTelegramConfig.test?.setupFiles)).toEqual([
       "test/setup.ts",
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
@@ -603,7 +615,9 @@ describe("scoped vitest configs", () => {
   it("normalizes shared-core include patterns relative to the scoped dir", () => {
     expect(defaultSharedCoreConfig.test?.dir).toBe(path.join(process.cwd(), "src"));
     expect(defaultSharedCoreConfig.test?.include).toEqual(["shared/**/*.test.ts"]);
-    expect(defaultSharedCoreConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
+    expect(normalizeConfigPaths(defaultSharedCoreConfig.test?.setupFiles)).toEqual([
+      "test/setup.ts",
+    ]);
   });
 
   it("normalizes process include patterns relative to the scoped dir", () => {
@@ -682,6 +696,6 @@ describe("scoped vitest configs", () => {
   it("normalizes utils include patterns relative to the scoped dir", () => {
     expect(defaultUtilsConfig.test?.dir).toBe(path.join(process.cwd(), "src"));
     expect(defaultUtilsConfig.test?.include).toEqual(["utils/**/*.test.ts"]);
-    expect(defaultUtilsConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
+    expect(normalizeConfigPaths(defaultUtilsConfig.test?.setupFiles)).toEqual(["test/setup.ts"]);
   });
 });

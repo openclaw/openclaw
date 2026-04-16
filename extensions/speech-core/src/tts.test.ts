@@ -1,11 +1,8 @@
 import { rmSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import type {
-  SpeechProviderPlugin,
-  SpeechSynthesisRequest,
-} from "openclaw/plugin-sdk/speech-core";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import type { SpeechProviderPlugin, SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 type MockSpeechSynthesisResult = Awaited<ReturnType<SpeechProviderPlugin["synthesize"]>>;
@@ -53,23 +50,38 @@ vi.mock("../api.js", async () => {
   };
 });
 
-const { maybeApplyTtsToPayload } = await import("./tts.js");
+const { _test, maybeApplyTtsToPayload } = await import("./tts.js");
 
-describe("speech-core Discord voice-note routing", () => {
+const nativeVoiceNoteChannels = ["discord", "feishu", "matrix", "telegram", "whatsapp"] as const;
+
+function createTtsConfig(prefsName: string): OpenClawConfig {
+  return {
+    messages: {
+      tts: {
+        enabled: true,
+        provider: "mock",
+        prefsPath: `/tmp/${prefsName}.json`,
+      },
+    },
+  };
+}
+
+describe("speech-core native voice-note routing", () => {
   afterEach(() => {
     synthesizeMock.mockClear();
   });
 
+  it("keeps native voice-note channel support centralized", () => {
+    for (const channel of nativeVoiceNoteChannels) {
+      expect(_test.supportsNativeVoiceNoteTts(channel)).toBe(true);
+      expect(_test.supportsNativeVoiceNoteTts(channel.toUpperCase())).toBe(true);
+    }
+    expect(_test.supportsNativeVoiceNoteTts("slack")).toBe(false);
+    expect(_test.supportsNativeVoiceNoteTts(undefined)).toBe(false);
+  });
+
   it("marks Discord auto TTS replies as native voice messages", async () => {
-    const cfg: OpenClawConfig = {
-      messages: {
-        tts: {
-          enabled: true,
-          provider: "mock",
-          prefsPath: "/tmp/openclaw-speech-core-tts-test.json",
-        },
-      },
-    };
+    const cfg = createTtsConfig("openclaw-speech-core-tts-test");
     const payload: ReplyPayload = {
       text: "This Discord reply should be delivered as a native voice note.",
     };
@@ -87,6 +99,35 @@ describe("speech-core Discord voice-note routing", () => {
         expect.objectContaining({ target: "voice-note" }),
       );
       expect(result.audioAsVoice).toBe(true);
+      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("keeps non-native voice-note channels as regular audio files", async () => {
+    const cfg = createTtsConfig("openclaw-speech-core-tts-slack-test");
+    const payload: ReplyPayload = {
+      text: "Slack replies should be delivered as regular audio attachments.",
+    };
+
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: "slack",
+        kind: "final",
+      });
+
+      expect(synthesizeMock).toHaveBeenCalledWith(
+        expect.objectContaining({ target: "audio-file" }),
+      );
+      expect(result.audioAsVoice).toBeUndefined();
       expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
 
       mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;

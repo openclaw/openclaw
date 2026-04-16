@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
 import { buildContextReply } from "./commands-context-report.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -91,8 +92,8 @@ describe("buildContextReply", () => {
         omitBootstrapLimits: true,
       }),
     );
-    expect(result.text).toContain("Bootstrap max/file: 20,000 chars");
-    expect(result.text).toContain("Bootstrap max/total: 150,000 chars");
+    expect(result.text).toContain("Bootstrap max/file: 12,000 chars");
+    expect(result.text).toContain("Bootstrap max/total: 60,000 chars");
     expect(result.text).not.toContain("Bootstrap max/file: ? chars");
   });
 
@@ -121,5 +122,37 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Actual context usage (cached): unavailable");
     expect(result.text).toContain("Session tokens (cached): unknown / ctx=8,192");
     expect(result.text).not.toContain("~645 tok");
+  });
+
+  it("prefers the target session entry from sessionStore for cached context stats", async () => {
+    const params = makeParams("/context detail", false, {
+      contextTokens: 8_192,
+      totalTokens: 111,
+    });
+    const sessionEntry = {
+      ...params.sessionEntry,
+      sessionId: params.sessionEntry?.sessionId ?? "session-main",
+      updatedAt: params.sessionEntry?.updatedAt ?? 1,
+      totalTokens: 111,
+      totalTokensFresh: true,
+      inputTokens: 100,
+      outputTokens: 11,
+    } satisfies SessionEntry;
+    params.sessionEntry = sessionEntry;
+    params.sessionStore = {
+      [params.sessionKey]: {
+        ...sessionEntry,
+        totalTokens: 900,
+        totalTokensFresh: true,
+        inputTokens: 700,
+        outputTokens: 200,
+      },
+    };
+
+    const result = await buildContextReply(params);
+
+    expect(result.text).toContain("Actual context usage (cached): 900 tok");
+    expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
+    expect(result.text).not.toContain("Actual context usage (cached): 111 tok");
   });
 });

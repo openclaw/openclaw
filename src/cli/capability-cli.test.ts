@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { registerCapabilityCli } from "./capability-cli.js";
 
@@ -58,6 +58,7 @@ const mocks = vi.hoisted(() => ({
     model: "gpt-4.1-mini",
   })),
   generateImage: vi.fn(),
+  generateVideo: vi.fn(),
   transcribeAudioFile: vi.fn(async () => ({ text: "meeting notes" })),
   textToSpeech: vi.fn(async () => ({
     success: true,
@@ -104,6 +105,7 @@ const mocks = vi.hoisted(() => ({
     { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
   ]),
   registerBuiltInMemoryEmbeddingProviders: vi.fn(),
+  buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
   isWebSearchProviderConfigured: vi.fn(() => false),
   isWebFetchProviderConfigured: vi.fn(() => false),
   modelsStatusCommand: vi.fn(
@@ -182,6 +184,11 @@ vi.mock("../media-understanding/runtime.js", () => ({
     mocks.transcribeAudioFile as typeof import("../media-understanding/runtime.js").transcribeAudioFile,
 }));
 
+vi.mock("../media-understanding/provider-registry.js", () => ({
+  buildMediaUnderstandingRegistry:
+    mocks.buildMediaUnderstandingRegistry as typeof import("../media-understanding/provider-registry.js").buildMediaUnderstandingRegistry,
+}));
+
 vi.mock("../plugins/memory-embedding-providers.js", () => ({
   listMemoryEmbeddingProviders:
     mocks.listMemoryEmbeddingProviders as unknown as typeof import("../plugins/memory-embedding-providers.js").listMemoryEmbeddingProviders,
@@ -202,7 +209,7 @@ vi.mock("../image-generation/runtime.js", () => ({
 }));
 
 vi.mock("../video-generation/runtime.js", () => ({
-  generateVideo: vi.fn(),
+  generateVideo: mocks.generateVideo,
   listRuntimeVideoGenerationProviders: vi.fn(() => []),
 }));
 
@@ -238,6 +245,11 @@ vi.mock("../web-fetch/runtime.js", () => ({
 }));
 
 describe("capability cli", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     mocks.runtime.log.mockClear();
     mocks.runtime.error.mockClear();
@@ -278,10 +290,12 @@ describe("capability cli", () => {
     }) as never);
     mocks.describeImageFile.mockClear();
     mocks.generateImage.mockReset();
+    mocks.generateVideo.mockReset();
     mocks.transcribeAudioFile.mockClear();
     mocks.textToSpeech.mockClear();
     mocks.setTtsProvider.mockClear();
     mocks.resolveExplicitTtsOverrides.mockClear();
+    mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
     mocks.createEmbeddingProvider.mockClear();
     mocks.registerMemoryEmbeddingProvider.mockClear();
     mocks.registerBuiltInMemoryEmbeddingProviders.mockClear();
@@ -434,6 +448,85 @@ describe("capability cli", () => {
     );
   });
 
+  it("streams url-only generated videos to --output paths", async () => {
+    mocks.generateVideo.mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      videos: [
+        {
+          url: "https://example.com/generated-video.mp4",
+          mimeType: "video/mp4",
+          fileName: "provider-name.mp4",
+        },
+      ],
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(Buffer.from("video-bytes"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-video-generate-"));
+    const outputBase = path.join(tempDir, "result");
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "video",
+        "generate",
+        "--prompt",
+        "friendly lobster",
+        "--output",
+        outputBase,
+        "--json",
+      ],
+    });
+
+    const outputPath = `${outputBase}.mp4`;
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://example.com/generated-video.mp4",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(await fs.readFile(outputPath, "utf8")).toBe("video-bytes");
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: "video.generate",
+        provider: "vydra",
+        outputs: [
+          expect.objectContaining({
+            path: outputPath,
+            mimeType: "video/mp4",
+            size: 11,
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("fails video generate when a provider returns an undeliverable asset", async () => {
+    mocks.generateVideo.mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      videos: [{ mimeType: "video/mp4" }],
+    });
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "video", "generate", "--prompt", "friendly lobster", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Video asset at index 0 has neither buffer nor url"),
+    );
+  });
+
   it("routes audio transcribe through transcription, not realtime", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -462,6 +555,22 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringMatching(/No transcript returned for audio/),
+    );
+  });
+
+  it("surfaces the underlying transcription failure for audio transcribe", async () => {
+    mocks.transcribeAudioFile.mockRejectedValueOnce(
+      new Error("Audio transcription response missing text"),
+    );
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringMatching(/Audio transcription response missing text/),
     );
   });
 
@@ -817,6 +926,55 @@ describe("capability cli", () => {
         registerMemoryEmbeddingProvider: expect.any(Function),
       }),
     );
+  });
+
+  it("marks env-backed audio providers as configured", async () => {
+    vi.stubEnv("DEEPGRAM_API_KEY", "deepgram-test-key");
+    vi.stubEnv("GROQ_API_KEY", "groq-test-key");
+    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+      new Map([
+        [
+          "deepgram",
+          {
+            id: "deepgram",
+            capabilities: ["audio"],
+            defaultModels: { audio: "nova-3" },
+          },
+        ],
+        [
+          "groq",
+          {
+            id: "groq",
+            capabilities: ["audio"],
+            defaultModels: { audio: "whisper-large-v3-turbo" },
+          },
+        ],
+      ]),
+    );
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "audio", "providers", "--json"],
+    });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith([
+      {
+        available: true,
+        configured: true,
+        selected: false,
+        id: "deepgram",
+        capabilities: ["audio"],
+        defaultModels: { audio: "nova-3" },
+      },
+      {
+        available: true,
+        configured: true,
+        selected: false,
+        id: "groq",
+        capabilities: ["audio"],
+        defaultModels: { audio: "whisper-large-v3-turbo" },
+      },
+    ]);
   });
 
   it("surfaces available, configured, and selected for web providers", async () => {

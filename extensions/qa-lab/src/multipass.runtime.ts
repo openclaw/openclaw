@@ -108,6 +108,7 @@ export type QaMultipassPlan = {
   memory: string;
   disk: string;
   pnpmVersion: string;
+  transportId: string;
   providerMode: "mock-openai" | "live-frontier";
   primaryModel?: string;
   alternateModel?: string;
@@ -279,8 +280,9 @@ function resolveQaLiveCliAuthEnv(baseEnv: NodeJS.ProcessEnv) {
     const codexHome = resolveUserPath(configuredCodexHome, baseEnv);
     return fs.existsSync(codexHome) ? { CODEX_HOME: codexHome } : {};
   }
-  const hostHome = baseEnv.HOME?.trim() || os.homedir();
-  const codexHome = path.join(hostHome, ".codex");
+  const hostHome = baseEnv.HOME?.trim();
+  const effectiveHome = hostHome || os.homedir();
+  const codexHome = path.join(effectiveHome, ".codex");
   return fs.existsSync(codexHome) ? { CODEX_HOME: codexHome } : {};
 }
 
@@ -329,6 +331,7 @@ function appendScenarioArgs(command: string[], scenarioIds: string[]) {
 export function createQaMultipassPlan(params: {
   repoRoot: string;
   outputDir?: string;
+  transportId?: string;
   providerMode?: "mock-openai" | "live-frontier";
   primaryModel?: string;
   alternateModel?: string;
@@ -342,7 +345,8 @@ export function createQaMultipassPlan(params: {
 }) {
   const outputDir = params.outputDir ?? createQaMultipassOutputDir(params.repoRoot);
   const scenarioIds = [...new Set(params.scenarioIds ?? [])];
-  const providerMode = params.providerMode ?? "mock-openai";
+  const transportId = params.transportId?.trim() || "qa-channel";
+  const providerMode = params.providerMode ?? "live-frontier";
   const forwardedEnv = providerMode === "live-frontier" ? resolveForwardedLiveEnv() : {};
   const hostCodexHomePath = forwardedEnv.CODEX_HOME;
   const liveProviderConfig =
@@ -359,6 +363,8 @@ export function createQaMultipassPlan(params: {
       "openclaw",
       "qa",
       "suite",
+      "--transport",
+      transportId,
       "--provider-mode",
       providerMode,
       "--output-dir",
@@ -385,6 +391,7 @@ export function createQaMultipassPlan(params: {
     memory: params.memory ?? qaMultipassDefaultResources.memory,
     disk: params.disk ?? qaMultipassDefaultResources.disk,
     pnpmVersion: validatePnpmVersion(resolvePnpmVersion(params.repoRoot)),
+    transportId,
     providerMode,
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
@@ -629,6 +636,7 @@ async function tryCopyGuestBootstrapLog(plan: QaMultipassPlan) {
 export async function runQaMultipass(params: {
   repoRoot: string;
   outputDir?: string;
+  transportId?: string;
   providerMode?: "mock-openai" | "live-frontier";
   primaryModel?: string;
   alternateModel?: string;

@@ -1,27 +1,34 @@
 import fs from "node:fs";
 import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.mjs";
+import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
-import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 import {
+  forwardVitestOutput,
+  installVitestNoOutputWatchdog,
+  resolveVitestCliEntry,
+  resolveVitestNodeArgs,
+  resolveVitestNoOutputTimeoutMs,
+  shouldSuppressVitestStderrLine,
+} from "./run-vitest.mjs";
+import {
+  applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   createVitestRunSpecs,
   parseTestProjectsArgs,
   resolveParallelFullSuiteConcurrency,
   resolveChangedTargetArgs,
+  shouldAcquireLocalHeavyCheckLock,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mjs";
 import {
+  forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "./vitest-process-group.mjs";
 
 // Keep this shim so `pnpm test -- src/foo.test.ts` still forwards filters
 // cleanly instead of leaking pnpm's passthrough sentinel to Vitest.
-const releaseLock = acquireLocalHeavyCheckLockSync({
-  cwd: process.cwd(),
-  env: process.env,
-  toolName: "test",
-});
+let releaseLock = () => {};
 let lockReleased = false;
 
 const FULL_SUITE_CONFIG_WEIGHT = new Map([
@@ -32,8 +39,13 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   ["test/vitest/vitest.gateway-methods.config.ts", 177],
   ["test/vitest/vitest.commands.config.ts", 175],
   ["test/vitest/vitest.agents.config.ts", 170],
+  ["test/vitest/vitest.extension-voice-call.config.ts", 169],
   ["test/vitest/vitest.extensions.config.ts", 168],
+  ["test/vitest/vitest.extension-channels.config.ts", 167],
+  ["test/vitest/vitest.runtime-config.config.ts", 166],
+  ["test/vitest/vitest.contracts.config.ts", 165],
   ["test/vitest/vitest.tasks.config.ts", 165],
+  ["test/vitest/vitest.channels.config.ts", 164],
   ["test/vitest/vitest.unit-fast.config.ts", 160],
   ["test/vitest/vitest.auto-reply-reply.config.ts", 155],
   ["test/vitest/vitest.infra.config.ts", 145],
@@ -41,14 +53,13 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   ["test/vitest/vitest.cron.config.ts", 135],
   ["test/vitest/vitest.wizard.config.ts", 130],
   ["test/vitest/vitest.unit-src.config.ts", 125],
-  ["test/vitest/vitest.extension-channels.config.ts", 100],
-  ["test/vitest/vitest.extension-matrix.config.ts", 98],
+  ["test/vitest/vitest.extension-matrix.config.ts", 100],
   ["test/vitest/vitest.extension-providers.config.ts", 96],
   ["test/vitest/vitest.extension-telegram.config.ts", 94],
   ["test/vitest/vitest.extension-whatsapp.config.ts", 92],
   ["test/vitest/vitest.auto-reply-core.config.ts", 90],
   ["test/vitest/vitest.cli.config.ts", 86],
-  ["test/vitest/vitest.channels.config.ts", 84],
+  ["test/vitest/vitest.media.config.ts", 84],
   ["test/vitest/vitest.plugins.config.ts", 82],
   ["test/vitest/vitest.bundled.config.ts", 80],
   ["test/vitest/vitest.commands-light.config.ts", 48],
@@ -61,7 +72,6 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   ["test/vitest/vitest.tooling.config.ts", 32],
   ["test/vitest/vitest.unit-security.config.ts", 30],
   ["test/vitest/vitest.unit-support.config.ts", 28],
-  ["test/vitest/vitest.contracts.config.ts", 26],
   ["test/vitest/vitest.extension-zalo.config.ts", 24],
   ["test/vitest/vitest.extension-bluebubbles.config.ts", 22],
   ["test/vitest/vitest.extension-irc.config.ts", 20],
@@ -72,7 +82,6 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   ["test/vitest/vitest.extension-diffs.config.ts", 8],
   ["test/vitest/vitest.extension-memory.config.ts", 6],
   ["test/vitest/vitest.extension-msteams.config.ts", 4],
-  ["test/vitest/vitest.extension-voice-call.config.ts", 2],
 ]);
 const releaseLockOnce = () => {
   if (lockReleased) {
@@ -103,17 +112,45 @@ function runVitestSpec(spec) {
       detached: shouldUseDetachedVitestProcessGroup(),
       pnpmArgs: spec.pnpmArgs,
       env: spec.env,
+      stdio: ["inherit", "pipe", "pipe"],
     });
     const teardownChildCleanup = installVitestProcessGroupCleanup({ child });
+    const teardownNoOutputWatchdog = installVitestNoOutputWatchdog({
+      streams: [child.stdout, child.stderr],
+      timeoutMs: resolveVitestNoOutputTimeoutMs(spec.env),
+      label: spec.config,
+      log: (message) => {
+        console.error(message);
+      },
+      onTimeout: () => {
+        forwardSignalToVitestProcessGroup({
+          child,
+          signal: "SIGTERM",
+          kill: process.kill.bind(process),
+        });
+      },
+      onForceKill: () => {
+        forwardSignalToVitestProcessGroup({
+          child,
+          signal: "SIGKILL",
+          kill: process.kill.bind(process),
+        });
+      },
+    });
+
+    forwardVitestOutput(child.stdout, process.stdout);
+    forwardVitestOutput(child.stderr, process.stderr, shouldSuppressVitestStderrLine);
 
     child.on("exit", (code, signal) => {
       teardownChildCleanup();
+      teardownNoOutputWatchdog();
       cleanupVitestRunSpec(spec);
       resolve({ code: code ?? 1, signal });
     });
 
     child.on("error", (error) => {
       teardownChildCleanup();
+      teardownNoOutputWatchdog();
       cleanupVitestRunSpec(spec);
       reject(error);
     });
@@ -121,14 +158,15 @@ function runVitestSpec(spec) {
 }
 
 function applyDefaultParallelVitestWorkerBudget(specs, env) {
-  if (env.OPENCLAW_VITEST_MAX_WORKERS || env.OPENCLAW_TEST_WORKERS) {
+  if (env.OPENCLAW_VITEST_MAX_WORKERS || env.OPENCLAW_TEST_WORKERS || isCiLikeEnv(env)) {
     return specs;
   }
+  const { vitestMaxWorkers } = resolveLocalFullSuiteProfile(env);
   return specs.map((spec) => ({
     ...spec,
     env: {
       ...spec.env,
-      OPENCLAW_VITEST_MAX_WORKERS: "2",
+      OPENCLAW_VITEST_MAX_WORKERS: String(vitestMaxWorkers),
     },
   }));
 }
@@ -159,6 +197,7 @@ async function runVitestSpecsParallel(specs, concurrency) {
       console.error(`[test] starting ${spec.config}`);
       const result = await runVitestSpec(spec);
       if (result.signal) {
+        console.error(`[test] ${spec.config} exited by signal ${result.signal}`);
         releaseLockOnce();
         process.kill(process.pid, result.signal);
         return;
@@ -203,6 +242,14 @@ async function main() {
           cwd: process.cwd(),
         });
 
+  releaseLock = shouldAcquireLocalHeavyCheckLock(runSpecs, process.env)
+    ? acquireLocalHeavyCheckLockSync({
+        cwd: process.cwd(),
+        env: process.env,
+        toolName: "test",
+      })
+    : () => {};
+
   const isFullSuiteRun =
     targetArgs.length === 0 &&
     changedTargetArgs === null &&
@@ -210,10 +257,24 @@ async function main() {
   if (isFullSuiteRun) {
     const concurrency = resolveParallelFullSuiteConcurrency(runSpecs.length, process.env);
     if (concurrency > 1) {
+      const localFullSuiteProfile = resolveLocalFullSuiteProfile(process.env);
       const parallelSpecs = applyDefaultParallelVitestWorkerBudget(
-        orderFullSuiteSpecsForParallelRun(runSpecs),
+        applyParallelVitestCachePaths(orderFullSuiteSpecsForParallelRun(runSpecs), {
+          cwd: process.cwd(),
+          env: process.env,
+        }),
         process.env,
       );
+      if (
+        !isCiLikeEnv(process.env) &&
+        !process.env.OPENCLAW_TEST_PROJECTS_PARALLEL &&
+        !process.env.OPENCLAW_VITEST_MAX_WORKERS &&
+        !process.env.OPENCLAW_TEST_WORKERS &&
+        localFullSuiteProfile.shardParallelism === 10 &&
+        localFullSuiteProfile.vitestMaxWorkers === 2
+      ) {
+        console.error("[test] using host-aware local full-suite profile: shards=10 workers=2");
+      }
       console.error(
         `[test] running ${parallelSpecs.length} Vitest shards with parallelism ${concurrency}`,
       );
@@ -231,8 +292,10 @@ async function main() {
 
   let exitCode = 0;
   for (const spec of runSpecs) {
+    console.error(`[test] starting ${spec.config}`);
     const result = await runVitestSpec(spec);
     if (result.signal) {
+      console.error(`[test] ${spec.config} exited by signal ${result.signal}`);
       releaseLockOnce();
       process.kill(process.pid, result.signal);
       return;

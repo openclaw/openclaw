@@ -8,6 +8,7 @@ minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
   - "acpx"
+  - "axios"
   - "basic-ftp"
   - "hono"
   - "openclaw"
@@ -17,9 +18,13 @@ minimumReleaseAgeExclude:
   - "@hono/node-server"
   - "@mariozechner/*"
   - "@typescript/native-preview*"
+  - "@types/node"
+  - "@rolldown/*"
   - "@oxlint/*"
   - "@oxfmt/*"
   - "axios@1.15.0"
+  - "discord-api-types"
+  - "rolldown"
   - "sqlite-vec"
   - "sqlite-vec-*"
 

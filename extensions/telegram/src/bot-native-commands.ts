@@ -941,7 +941,14 @@ export const registerTelegramNativeCommands = ({
                 return;
               }
               const result = await deliverReplies({
-                replies: [payload],
+                replies: [
+                  payload.replyToId
+                    ? payload
+                    : {
+                        ...payload,
+                        replyToId: String(msg.message_id),
+                      },
+                ],
                 ...deliveryBaseOptions,
                 silent: runtimeTelegramCfg.silentErrorReplies === true && payload.isError === true,
               });

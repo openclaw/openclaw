@@ -33,9 +33,11 @@ import {
   markTaskRunningByRunId,
   markTaskTerminalById,
   recordTaskProgressByRunId,
+  resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
   resolveTaskForLookupToken,
+  setTaskRegistryControlRuntimeForTests,
   setTaskRegistryDeliveryRuntimeForTests,
   setTaskProgressById,
   setTaskTimingById,
@@ -205,6 +207,12 @@ describe("task-registry", () => {
     setTaskRegistryDeliveryRuntimeForTests({
       sendMessage: hoisted.sendMessageMock,
     });
+    setTaskRegistryControlRuntimeForTests({
+      getAcpSessionManager: () => ({
+        cancelSession: hoisted.cancelSessionMock,
+      }),
+      killSubagentRunAdmin: async (params) => hoisted.killSubagentRunAdminMock(params),
+    });
   });
 
   afterEach(() => {
@@ -218,6 +226,7 @@ describe("task-registry", () => {
     resetHeartbeatWakeStateForTests();
     resetAgentRunContextForTest();
     resetCronActiveJobsForTests();
+    resetTaskRegistryControlRuntimeForTests();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryMaintenanceRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
@@ -1441,6 +1450,55 @@ describe("task-registry", () => {
       expect(getTaskById(task.taskId)).toMatchObject({
         status: "running",
       });
+    });
+  });
+
+  it("does not leak unhandled rejections when the scheduled maintenance sweep fails", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      vi.useFakeTimers();
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const unhandled: unknown[] = [];
+      const onUnhandledRejection = (reason: unknown) => {
+        unhandled.push(reason);
+      };
+      process.on("unhandledRejection", onUnhandledRejection);
+
+      setTaskRegistryMaintenanceRuntimeForTests({
+        readAcpSessionEntry: () => ({
+          cfg: {} as never,
+          storePath: "",
+          sessionKey: "",
+          storeSessionKey: "",
+          entry: undefined,
+          storeReadFailed: false,
+        }),
+        loadSessionStore: () => ({}),
+        resolveStorePath: () => "",
+        parseAgentSessionKey: () => null,
+        isCronJobActive: () => false,
+        getAgentRunContext: () => undefined,
+        deleteTaskRecordById: () => false,
+        ensureTaskRegistryReady: () => {},
+        getTaskById: () => undefined,
+        listTaskRecords: () => {
+          throw new Error("maintenance boom");
+        },
+        markTaskLostById: () => null,
+        maybeDeliverTaskTerminalUpdate: async () => null,
+        resolveTaskForLookupToken: () => undefined,
+        setTaskCleanupAfterById: () => null,
+      });
+
+      try {
+        startTaskRegistryMaintenance();
+        await vi.advanceTimersByTimeAsync(5_000);
+        await flushAsyncWork();
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", onUnhandledRejection);
+      }
     });
   });
 

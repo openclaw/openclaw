@@ -55,6 +55,16 @@ function setGatewayRuntimeScopes(scopes: readonly string[] | undefined): void {
   } as unknown as ReturnType<typeof runtimeApi.getPluginRuntimeGatewayRequestScope>);
 }
 
+function responseChunkText(chunk: unknown): string {
+  if (typeof chunk === "string") {
+    return chunk;
+  }
+  if (Buffer.isBuffer(chunk)) {
+    return chunk.toString();
+  }
+  return "";
+}
+
 function createMockRequest(
   method: string,
   url: string,
@@ -98,13 +108,13 @@ function createMockResponse(): ServerResponse & {
   });
 
   res.write = function (chunk: unknown) {
-    data += String(chunk);
+    data += responseChunkText(chunk);
     return true;
   };
 
   res.end = function (chunk?: unknown) {
     if (chunk) {
-      data += String(chunk);
+      data += responseChunkText(chunk);
     }
     return this;
   };
