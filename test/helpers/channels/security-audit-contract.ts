@@ -1,16 +1,17 @@
 import { loadBundledPluginPublicSurfaceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
-type DiscordSecuritySurface = typeof import("@openclaw/discord/contract-api.js");
+type DiscordSecurityAuditSurface =
+  typeof import("@openclaw/discord/security-audit-contract-api.js");
 type FeishuSecuritySurface = typeof import("@openclaw/feishu/security-contract-api.js");
 type SlackSecuritySurface = typeof import("@openclaw/slack/security-contract-api.js");
 type SynologyChatSecuritySurface = typeof import("@openclaw/synology-chat/contract-api.js");
 type TelegramSecuritySurface = typeof import("@openclaw/telegram/contract-api.js");
 type ZalouserSecuritySurface = typeof import("@openclaw/zalouser/contract-api.js");
 
-function loadDiscordSecuritySurface(): DiscordSecuritySurface {
-  return loadBundledPluginPublicSurfaceSync<DiscordSecuritySurface>({
+function loadDiscordSecurityAuditSurface(): DiscordSecurityAuditSurface {
+  return loadBundledPluginPublicSurfaceSync<DiscordSecurityAuditSurface>({
     pluginId: "discord",
-    artifactBasename: "contract-api.js",
+    artifactBasename: "security-audit-contract-api.js",
   });
 }
 
@@ -49,11 +50,11 @@ function loadZalouserSecuritySurface(): ZalouserSecuritySurface {
   });
 }
 
-export const collectDiscordSecurityAuditFindings: DiscordSecuritySurface["collectDiscordSecurityAuditFindings"] =
+export const collectDiscordSecurityAuditFindings: DiscordSecurityAuditSurface["collectDiscordSecurityAuditFindings"] =
   ((...args) =>
-    loadDiscordSecuritySurface().collectDiscordSecurityAuditFindings(
+    loadDiscordSecurityAuditSurface().collectDiscordSecurityAuditFindings(
       ...args,
-    )) as DiscordSecuritySurface["collectDiscordSecurityAuditFindings"];
+    )) as DiscordSecurityAuditSurface["collectDiscordSecurityAuditFindings"];
 
 export const collectFeishuSecurityAuditFindings: FeishuSecuritySurface["collectFeishuSecurityAuditFindings"] =
   ((...args) =>
