@@ -104,7 +104,8 @@ function escapeSlackMrkdwn(text: string): string {
     .replace(/>/g, "&gt;")
     .replace(/\*/g, "\u2217") // ∗ (asterisk operator, visually similar)
     .replace(/~/g, "\u223C") // ∼ (tilde operator)
-    .replace(/`/g, "\u2018"); // ' (left single quote)
+    .replace(/`/g, "\u2018") // ' (left single quote)
+    .replace(/_/g, "\uFF3F"); // ＿ (fullwidth low line, prevents italic parse)
 }
 
 function escapeHtml(text: string): string {
