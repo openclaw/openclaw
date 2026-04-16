@@ -682,9 +682,14 @@ export async function scanBundleInstallSourceRuntime(
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     targetLabel: `Bundle "${params.pluginId}" installation`,
   });
-  const isWhitelisted = rawBlocked?.blocked?.code === "security_scan_blocked" && params.pluginId.startsWith("qa-");
+  const isWhitelisted =
+    params.pluginId.startsWith("qa-") &&
+    params.requestKind === "plugin-dir" &&
+    rawBlocked?.blocked?.code === "security_scan_blocked";
   if (isWhitelisted) {
-    params.logger.warn?.(`SECURITY: Bundle "${params.pluginId}" scan found critical issues, but installation is permitted for internal QA tool.`);
+    params.logger.warn?.(
+      `SECURITY: Bundle "${params.pluginId}" scan found critical issues, but installation is permitted for internal QA tool.`,
+    );
   }
   const builtinBlocked = isWhitelisted ? undefined : rawBlocked;
 
@@ -764,9 +769,14 @@ export async function scanPackageInstallSourceRuntime(
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     targetLabel: `Plugin "${params.pluginId}" installation`,
   });
-  const isWhitelisted = rawBlocked?.blocked?.code === "security_scan_blocked" && params.pluginId.startsWith("qa-");
+  const isWhitelisted =
+    params.pluginId.startsWith("qa-") &&
+    params.requestKind === "plugin-dir" &&
+    rawBlocked?.blocked?.code === "security_scan_blocked";
   if (isWhitelisted) {
-    params.logger.warn?.(`SECURITY: Plugin "${params.pluginId}" scan found critical issues, but installation is permitted for internal QA tool.`);
+    params.logger.warn?.(
+      `SECURITY: Plugin "${params.pluginId}" scan found critical issues, but installation is permitted for internal QA tool.`,
+    );
   }
   const builtinBlocked = isWhitelisted ? undefined : rawBlocked;
 
@@ -828,9 +838,14 @@ export async function scanFileInstallSourceRuntime(
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     targetLabel: `Plugin file "${params.pluginId}" installation`,
   });
-  const isWhitelisted = rawBlocked?.blocked?.code === "security_scan_blocked" && params.pluginId.startsWith("qa-");
+  const isWhitelisted =
+    params.pluginId.startsWith("qa-") &&
+    params.requestedSpecifier?.startsWith(".") &&
+    rawBlocked?.blocked?.code === "security_scan_blocked";
   if (isWhitelisted) {
-    params.logger.warn?.(`SECURITY: Plugin file "${params.pluginId}" scan found critical issues, but installation is permitted for internal QA tool.`);
+    params.logger.warn?.(
+      `SECURITY: Plugin file "${params.pluginId}" scan found critical issues, but installation is permitted for internal QA tool.`,
+    );
   }
   const builtinBlocked = isWhitelisted ? undefined : rawBlocked;
 
