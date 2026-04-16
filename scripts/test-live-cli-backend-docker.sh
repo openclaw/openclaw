@@ -362,7 +362,6 @@ DOCKER_AUTH_ENV=(
 if [[ "$CLI_PROVIDER" == "codex-cli" && "$CLI_AUTH_MODE" == "api-key" ]]; then
   DOCKER_AUTH_ENV+=(
     -e OPENAI_API_KEY="${OPENAI_API_KEY:-}"
-    -e OPENAI_BASE_URL="${OPENAI_BASE_URL:-}"
   )
 elif [[ "$CLI_PROVIDER" == "claude-cli" && "$CLI_AUTH_MODE" == "subscription" ]]; then
   DOCKER_AUTH_ENV+=(
