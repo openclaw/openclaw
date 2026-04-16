@@ -22,7 +22,7 @@ export const QINIU_MODEL_CATALOG: ModelDefinitionConfig[] = [
   {
     id: QINIU_DEFAULT_MODEL_ID,
     name: "DeepSeek V3",
-    reasoning: true,
+    reasoning: false,
     input: ["text"],
     contextWindow: QINIU_DEFAULT_CONTEXT_WINDOW,
     maxTokens: QINIU_DEFAULT_MAX_TOKENS,
