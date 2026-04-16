@@ -9,6 +9,7 @@ import {
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { findModelInCatalog } from "../agents/model-catalog.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   normalizeStoredOverrideModel,
@@ -1000,10 +1001,20 @@ export async function resolveGatewayModelSupportsImages(params: {
 
   try {
     const catalog = await params.loadGatewayModelCatalog();
-    const modelEntry = catalog.find(
-      (entry) =>
-        entry.id === params.model && (!params.provider || entry.provider === params.provider),
-    );
+    // Use case-insensitive lookup so user-configured model IDs that differ
+    // only in casing (e.g. from persisted session rows vs. config) still
+    // resolve to the correct catalog entry and its capability declarations.
+    let modelEntry: ModelCatalogEntry | undefined;
+    if (params.provider) {
+      // Provider is known — scope the lookup to that provider only so a
+      // model that exists under a different provider does not satisfy the
+      // check (fail-closed intent preserved).
+      modelEntry = findModelInCatalog(catalog, params.provider, params.model);
+    } else {
+      // No provider context — fall back to a model-ID-only lookup.
+      const normalizedModelId = params.model.toLowerCase().trim();
+      modelEntry = catalog.find((entry) => entry.id.toLowerCase().trim() === normalizedModelId);
+    }
     const normalizedProvider = normalizeOptionalLowercaseString(params.provider);
     const normalizedCandidates = [
       normalizeLowercaseStringOrEmpty(params.model),
