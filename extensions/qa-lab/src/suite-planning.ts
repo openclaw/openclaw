@@ -6,6 +6,7 @@ import type { QaTransportId } from "./qa-transport-registry.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 
 const DEFAULT_QA_SUITE_CONCURRENCY = 64;
+const QA_MERGE_PATCH_BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
 
@@ -108,6 +109,9 @@ function applyQaMergePatch(base: unknown, patch: unknown): unknown {
   }
   const result = isQaPlainObject(base) ? { ...base } : {};
   for (const [key, value] of Object.entries(patch)) {
+    if (QA_MERGE_PATCH_BLOCKED_KEYS.has(key)) {
+      continue;
+    }
     if (value === null) {
       delete result[key];
       continue;

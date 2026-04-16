@@ -269,7 +269,12 @@ export function tryResolveUiAsset(
     return null;
   }
   const safePath = pathname === "/" ? "/index.html" : pathname;
-  const decoded = decodeURIComponent(safePath);
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(safePath);
+  } catch {
+    return null;
+  }
   const candidate = path.resolve(distDir, `.${decoded.startsWith("/") ? decoded : `/${decoded}`}`);
   const relative = path.relative(distDir, candidate);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {

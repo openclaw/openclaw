@@ -179,6 +179,21 @@ describe("qa suite planning helpers", () => {
     });
   });
 
+  it("ignores prototype-mutating keys in scenario startup config patches", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("polluted", {
+        gatewayConfigPatch: JSON.parse(
+          `{"plugins":{"entries":{}},"__proto__":{"polluted":true},"constructor":{"prototype":{"polluted":true}}}`,
+        ) as Record<string, unknown>,
+      }),
+    ];
+
+    const patch = collectQaSuiteGatewayConfigPatch(scenarios);
+
+    expect(patch).toEqual({ plugins: { entries: {} } });
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+
   it("collects gateway runtime options across selected scenarios", () => {
     const scenarios = [
       makeQaSuiteTestScenario("plain"),

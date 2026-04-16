@@ -104,6 +104,10 @@ function resolveMatrixQaAttachmentKind(msgtype: string | undefined) {
   }
 }
 
+function isLikelyMatrixQaFilenameBody(value: string) {
+  return !value.includes("\n") && /\.[a-z0-9][a-z0-9._-]{0,24}$/i.test(value);
+}
+
 function resolveMatrixQaAttachmentSummary(params: {
   body?: string;
   filename?: string;
@@ -114,10 +118,14 @@ function resolveMatrixQaAttachmentSummary(params: {
     return undefined;
   }
   const body = params.body?.trim() ?? "";
-  const filename = params.filename?.trim() ?? "";
+  const explicitFilename = params.filename?.trim() ?? "";
+  const inferredFilename =
+    !explicitFilename && body && isLikelyMatrixQaFilenameBody(body) ? body : "";
+  const filename = explicitFilename || inferredFilename;
+  const caption = body && body !== filename ? body : "";
   return {
     kind,
-    ...(body && body !== filename ? { caption: body } : {}),
+    ...(caption ? { caption } : {}),
     ...(filename ? { filename } : {}),
   };
 }
@@ -164,6 +172,11 @@ export function normalizeMatrixQaObservedEvent(
     type === "m.reaction" && typeof relatesTo?.event_id === "string"
       ? relatesTo.event_id
       : undefined;
+  const attachment = resolveMatrixQaAttachmentSummary({
+    body: typeof messageContent.body === "string" ? messageContent.body : undefined,
+    filename: normalizedFilename,
+    msgtype: normalizedMsgtype,
+  });
 
   return {
     kind: resolveMatrixQaObservedEventKind({ msgtype: normalizedMsgtype, type }),
@@ -208,18 +221,6 @@ export function normalizeMatrixQaObservedEvent(
           },
         }
       : {}),
-    ...(resolveMatrixQaAttachmentSummary({
-      body: typeof messageContent.body === "string" ? messageContent.body : undefined,
-      filename: normalizedFilename,
-      msgtype: normalizedMsgtype,
-    })
-      ? {
-          attachment: resolveMatrixQaAttachmentSummary({
-            body: typeof messageContent.body === "string" ? messageContent.body : undefined,
-            filename: normalizedFilename,
-            msgtype: normalizedMsgtype,
-          }),
-        }
-      : {}),
+    ...(attachment ? { attachment } : {}),
   };
 }

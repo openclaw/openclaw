@@ -263,6 +263,10 @@ async function uploadMatrixQaContent(params: {
   if (fileName) {
     url.searchParams.set("filename", fileName);
   }
+  const uploadBody: Uint8Array<ArrayBuffer> =
+    params.buffer.buffer instanceof ArrayBuffer
+      ? new Uint8Array(params.buffer.buffer, params.buffer.byteOffset, params.buffer.byteLength)
+      : Uint8Array.from(params.buffer);
   const response = await params.fetchImpl(url, {
     method: "POST",
     headers: {
@@ -270,7 +274,7 @@ async function uploadMatrixQaContent(params: {
       "content-type": params.contentType ?? "application/octet-stream",
       ...(params.accessToken ? { authorization: `Bearer ${params.accessToken}` } : {}),
     },
-    body: new Uint8Array(params.buffer),
+    body: uploadBody,
     signal: AbortSignal.timeout(20_000),
   });
   const body = (await response.json().catch(() => ({}))) as {

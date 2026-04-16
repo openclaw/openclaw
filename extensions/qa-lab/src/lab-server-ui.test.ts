@@ -74,4 +74,18 @@ describe("qa-lab server ui helpers", () => {
     expect(tryResolveUiAsset("/", uiDistDir, rootDir)).toBe(path.join(uiDistDir, "index.html"));
     expect(tryResolveUiAsset("/../dist-other/secret.txt", uiDistDir, rootDir)).toBeNull();
   });
+
+  it("rejects malformed percent-encoded UI asset paths", async () => {
+    const uiDistDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-ui-malformed-"));
+    cleanups.push(async () => {
+      await rm(uiDistDir, { recursive: true, force: true });
+    });
+    await writeFile(
+      path.join(uiDistDir, "index.html"),
+      "<!doctype html><html><body>bundle-root</body></html>",
+      "utf8",
+    );
+
+    expect(tryResolveUiAsset("/%E0%A4", uiDistDir, uiDistDir)).toBeNull();
+  });
 });

@@ -238,8 +238,9 @@ describe("matrix driver client", () => {
     expect(requests[0]?.url).toBe(
       "http://127.0.0.1:28008/_matrix/media/v3/upload?filename=red-top-blue-bottom.png",
     );
-    expect(requests[0]?.body instanceof Uint8Array || Buffer.isBuffer(requests[0]?.body)).toBe(
-      true,
+    expect(requests[0]?.body).toBeInstanceOf(Uint8Array);
+    expect(Array.from(requests[0]?.body as Uint8Array)).toEqual(
+      Array.from(Buffer.from("png-bytes")),
     );
     expect(requests[1]?.url).toContain(
       "/_matrix/client/v3/rooms/!room%3Amatrix-qa.test/send/m.room.message/",
