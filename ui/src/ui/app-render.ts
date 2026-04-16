@@ -1384,6 +1384,7 @@ export function renderApp(state: AppViewState) {
                   state.chatStreamStartedAt = null;
                   state.chatRunId = null;
                   state.chatQueue = [];
+                  state.chatMessages = [];
                   state.resetToolStream();
                   state.resetChatScroll();
                   state.applySettings({

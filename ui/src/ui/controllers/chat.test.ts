@@ -631,6 +631,84 @@ describe("loadChatHistory", () => {
     expect(state.lastError).toBeNull();
   });
 
+  it("does not clear chatStream when a run is still active", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatRunId: "run-active",
+      chatStream: "partial response so far",
+      chatStreamStartedAt: Date.now(),
+    });
+
+    await loadChatHistory(state);
+
+    // chatMessages is updated from history
+    expect(state.chatMessages).toHaveLength(1);
+    // chatStream must NOT be wiped — the in-flight message isn't in history yet
+    expect(state.chatStream).toBe("partial response so far");
+    expect(state.chatStreamStartedAt).not.toBeNull();
+  });
+
+  it("does not replace non-empty chatMessages with empty history", async () => {
+    // Simulates the case where loadChatHistory is triggered before the session file
+    // has been written to disk (SessionManager only flushes after the first assistant
+    // message). The server returns [] but we must not wipe optimistic UI messages.
+    const request = vi.fn().mockResolvedValue({ messages: [] });
+    const existingMessages = [{ role: "user", content: [{ type: "text", text: "hello" }] }];
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: existingMessages,
+      chatRunId: "run-active",
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual(existingMessages);
+  });
+
+  it("does not replace chatMessages when server history has fewer user/assistant messages (post-compaction)", async () => {
+    // After context compaction the session file is shorter (compacted) and chat.history
+    // returns fewer user/assistant messages preceded by a system compaction divider.
+    // Replacing chatMessages with this shorter list would wipe pre-compaction messages
+    // and cause the "Compaction" system message to appear unexpectedly mid-conversation.
+    const compactionMsg = {
+      role: "system",
+      content: [{ type: "text", text: "Compaction" }],
+      __openclaw: { kind: "compaction" },
+    };
+    const recentUserMsg = { role: "user", content: [{ type: "text", text: "recent q" }] };
+    const recentAssistantMsg = {
+      role: "assistant",
+      content: [{ type: "text", text: "recent a" }],
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [compactionMsg, recentUserMsg, recentAssistantMsg],
+    });
+    const existingMessages = [
+      { role: "user", content: [{ type: "text", text: "old q1" }] },
+      { role: "assistant", content: [{ type: "text", text: "old a1" }] },
+      { role: "user", content: [{ type: "text", text: "old q2" }] },
+      { role: "assistant", content: [{ type: "text", text: "old a2" }] },
+      { role: "user", content: [{ type: "text", text: "recent q" }] },
+      { role: "assistant", content: [{ type: "text", text: "recent a" }] },
+    ];
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: existingMessages,
+    });
+
+    await loadChatHistory(state);
+
+    // Server returned 2 user/assistant messages (after compaction), but current
+    // chatMessages has 6 — the existing messages must be preserved.
+    expect(state.chatMessages).toEqual(existingMessages);
+  });
+
   it("shows a targeted message when chat history is unauthorized", async () => {
     const request = vi.fn().mockRejectedValue(
       new GatewayRequestError({

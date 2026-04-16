@@ -490,6 +490,7 @@ export function renderChatMobileToggle(state: AppViewState) {
 export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   state.sessionKey = nextSessionKey;
   state.chatMessage = "";
+  state.chatMessages = [];
   state.chatStream = null;
   // P1: Clear queued chat items from the previous session
   (state as unknown as { chatQueue: unknown[] }).chatQueue = [];

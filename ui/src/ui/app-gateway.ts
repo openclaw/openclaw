@@ -287,7 +287,12 @@ function handleTerminalChatEvent(
   // Check if tool events were seen before resetting (resetToolStream clears toolStreamOrder).
   const toolHost = host as unknown as Parameters<typeof resetToolStream>[0];
   const hadToolEvents = toolHost.toolStreamOrder.length > 0;
-  resetToolStream(toolHost);
+  // When tool events were seen, defer resetToolStream until after history loads.
+  // Resetting immediately clears chatToolMessages and chatStreamSegments, causing
+  // a visible gap where tool cards disappear and only reappear once history returns.
+  if (!hadToolEvents || state !== "final") {
+    resetToolStream(toolHost);
+  }
   void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
   const runId = payload?.runId;
   if (runId && host.refreshSessionsAfterChat.has(runId)) {
@@ -299,9 +304,12 @@ function handleTerminalChatEvent(
     }
   }
   // Reload history when tools were used so the persisted tool results
-  // replace the now-cleared streaming state.
+  // replace the now-cleared streaming state. Reset tool stream only after
+  // history arrives so tool cards remain visible during the network round-trip.
   if (hadToolEvents && state === "final") {
-    void loadChatHistory(host as unknown as OpenClawApp);
+    void loadChatHistory(host as unknown as OpenClawApp).then(() => {
+      resetToolStream(toolHost);
+    });
     return true;
   }
   return false;

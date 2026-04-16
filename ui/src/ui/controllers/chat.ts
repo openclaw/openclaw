@@ -83,13 +83,39 @@ export async function loadChatHistory(state: ChatState) {
       },
     );
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
+    const filtered = messages.filter((message) => !isAssistantSilentReply(message));
+    // Guard: don't replace chatMessages if the server returned fewer user/assistant
+    // messages than we currently have.  Two known scenarios where this matters:
+    //
+    // 1. Session not yet persisted — the Pi SessionManager only flushes to disk after
+    //    the first assistant message arrives, so an early reload returns [] and would
+    //    wipe the optimistic user message the UI just added.
+    //
+    // 2. Post-compaction reload — after context compaction, chat.history reads the
+    //    compacted (shorter) JSONL file which omits pre-compaction messages.  Replacing
+    //    chatMessages with this shorter list causes old messages to disappear and a
+    //    "Compaction" divider to appear unexpectedly mid-conversation.
+    //
+    // Strategy: count non-system messages (user + assistant) in both lists.  Only
+    // replace when the server has at least as many as the client currently holds —
+    // i.e., it is additive or equal, never subtractive.  If chatMessages is empty
+    // (initial load, session switch, clear-history flow) always replace.
+    const countNonSystem = (msgs: unknown[]) =>
+      msgs.filter((m) => (m as { role?: string }).role?.toLowerCase() !== "system").length;
+    const filteredNonSystem = countNonSystem(filtered);
+    const currentNonSystem = countNonSystem(state.chatMessages);
+    if (state.chatMessages.length === 0 || filteredNonSystem >= currentNonSystem) {
+      state.chatMessages = filtered;
+    }
     state.chatThinkingLevel = res.thinkingLevel ?? null;
-    // Clear all streaming state — history includes tool results and text
-    // inline, so keeping streaming artifacts would cause duplicates.
-    maybeResetToolStream(state);
-    state.chatStream = null;
-    state.chatStreamStartedAt = null;
+    // Clear streaming state only when no run is active. If a run is still in
+    // progress its message isn't in history yet, so wiping chatStream here
+    // would cause the streamed text to vanish and reappear on the final event.
+    if (!state.chatRunId) {
+      maybeResetToolStream(state);
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+    }
   } catch (err) {
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
