@@ -65,17 +65,16 @@ def file_date(path: Path) -> datetime | None:
     return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
 
 
-def is_evergreen(path: Path) -> bool:
-    name = path.name
-    if name in EVERGREEN_NAMES:
+def is_evergreen(path: Path, base: Path) -> bool:
+    if path.name in EVERGREEN_NAMES:
         return True
-    if path.parent.name == "memory" and not DATED_RE.search(name):
+    if path.parent == base and not DATED_RE.search(path.name):
         return True
     return False
 
 
-def age_bucket(path: Path) -> str:
-    if is_evergreen(path):
+def age_bucket(path: Path, base: Path) -> str:
+    if is_evergreen(path, base):
         return "EVERGREEN"
     dt = file_date(path)
     if dt is None:
@@ -125,7 +124,11 @@ def check_contradiction(title: str, snippet: str) -> list[str]:
     text = f"{title} {snippet}".lower()
     hits = []
     for pos, neg in CONTRADICTION_PAIRS:
-        if pos in text and neg in text:
+        # Strip all occurrences of the negative phrase before checking for the
+        # positive so that "not deployed" alone doesn't satisfy both halves.
+        # Then use \b so "committed" can't match inside "uncommitted".
+        stripped = re.sub(re.escape(neg), "", text)
+        if re.search(r"\b" + re.escape(pos) + r"\b", stripped) and neg in text:
             hits.append(f"'{pos}' vs '{neg}'")
     return hits
 
@@ -143,7 +146,7 @@ def check_dark_qmd(title: str) -> tuple[bool, int]:
         data = json.loads(raw)
         results = data if isinstance(data, list) else data.get("results", [])
         for r in results:
-            r_title = r.get("file", r.get("path", ""))
+            r_title = r.get("title", "") or Path(r.get("file", r.get("path", ""))).stem
             if jaccard(title, r_title) > 0.5:
                 return False, len(results)
         return True, len(results)
@@ -179,7 +182,7 @@ def run(memory_dir: str, limit: int, use_qmd: bool, as_json: bool):
 
     for i, (path, title) in enumerate(titles):
         flags = []
-        bucket = age_bucket(path)
+        bucket = age_bucket(path, base)
         buckets[bucket] = buckets.get(bucket, 0) + 1
         if bucket in ("STALE", "DEAD"):
             flags.append(bucket)
