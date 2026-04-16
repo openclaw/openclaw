@@ -55,9 +55,29 @@ const PLAN_MODE_ALLOWED_TOOLS = new Set([
  * the call is allowed. Otherwise exec is blocked.
  */
 const READ_ONLY_EXEC_PREFIXES = [
-  "ls", "cat", "pwd", "git status", "git log", "git diff", "git show",
-  "which", "find", "grep", "rg", "head", "tail", "wc", "file", "stat",
-  "du", "df", "echo", "printenv", "whoami", "hostname", "uname",
+  "ls",
+  "cat",
+  "pwd",
+  "git status",
+  "git log",
+  "git diff",
+  "git show",
+  "which",
+  "find",
+  "grep",
+  "rg",
+  "head",
+  "tail",
+  "wc",
+  "file",
+  "stat",
+  "du",
+  "df",
+  "echo",
+  "printenv",
+  "whoami",
+  "hostname",
+  "uname",
 ];
 
 export interface MutationGateResult {
@@ -94,8 +114,9 @@ export function checkMutationGate(
   // but reject commands containing shell compound operators first.
   if ((normalized === "exec" || normalized === "bash") && execCommand) {
     const cmd = execCommand.trim().toLowerCase();
-    // Block shell compound operators and newlines that could chain commands.
-    if (/[;|&`\n\r]|\$\(|>>?/.test(cmd)) {
+    // Block shell compound operators, newlines, process substitution, and
+    // other metacharacters that could chain or redirect commands.
+    if (/[;|&`\n\r]|\$\(|>>?|<\(|>\(/.test(cmd)) {
       return {
         blocked: true,
         reason:
@@ -104,19 +125,18 @@ export function checkMutationGate(
       };
     }
     // Block dangerous flags on otherwise-allowed commands.
-    const DANGEROUS_FLAGS = ["-delete", "-exec", "-execdir", "--delete", "-rf"];
+    // Uses word-boundary regex to avoid false matches on substrings
+    // (e.g., -executable should not match -exec). Tabs are treated as
+    // whitespace separators alongside spaces.
+    const DANGEROUS_FLAGS = ["-delete", "-exec", "-execdir", "--delete", "-rf", "--output"];
     const hasFlag = DANGEROUS_FLAGS.some((f) => {
-      const idx = cmd.indexOf(` ${f}`);
-      if (idx === -1) return false;
-      const afterFlag = idx + f.length + 1;
-      // Flag must be at end of command or followed by space/non-alphanumeric
-      return afterFlag >= cmd.length || /[\s\W]/.test(cmd[afterFlag]);
+      const escaped = f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`(?:^|[\\s])${escaped}(?:[\\s=]|$)`, "i").test(cmd);
     });
     if (hasFlag) {
       return {
         blocked: true,
-        reason:
-          `Tool "${toolName}" command contains a dangerous flag and is blocked in plan mode.`,
+        reason: `Tool "${toolName}" command contains a dangerous flag and is blocked in plan mode.`,
       };
     }
     const isReadOnly = READ_ONLY_EXEC_PREFIXES.some(
