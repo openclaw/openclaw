@@ -104,8 +104,7 @@ on:
       OPENCLAW_DISCORD_SMOKE_CHANNEL_ID:
         required: false
 
-permissions:
-  contents: read
+permissions: read-all
 
 concurrency:
   group: openclaw-cross-os-release-checks-${{ inputs.ref }}-${{ inputs.provider }}-${{ inputs.mode }}
