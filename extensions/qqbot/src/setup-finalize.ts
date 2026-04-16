@@ -108,7 +108,7 @@ export async function finalizeQQBotSetup(params: {
   const configured = isQQBotAccountConfigured(next, accountId);
 
   const mode = await params.prompter.select({
-    message: configured ? "QQ Bot 已绑定，选择操作" : "选择 QQ Bot 绑定方式",
+    message: configured ? "QQ 已绑定，选择操作" : "选择 QQ 绑定方式",
     options: [
       {
         value: "qr",

@@ -25,7 +25,7 @@ import type { ResolvedQQBotAccount } from "./types.js";
 export const qqbotMeta = {
   id: "qqbot",
   label: "QQ Bot",
-  selectionLabel: "QQ Bot",
+  selectionLabel: "QQ Bot (Bot API)",
   docsPath: "/channels/qqbot",
   blurb: "Connect to QQ via official QQ Bot API",
   order: 50,

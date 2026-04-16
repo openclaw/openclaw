@@ -1,4 +1,7 @@
-import { createStandardChannelSetupStatus, setSetupChannelEnabled } from "openclaw/plugin-sdk/setup";
+import {
+  createStandardChannelSetupStatus,
+  setSetupChannelEnabled,
+} from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { listQQBotAccountIds, resolveQQBotAccount } from "./config.js";
 import { isAccountConfigured } from "./engine/config/resolve.js";
@@ -11,9 +14,9 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
   status: createStandardChannelSetupStatus({
     channelLabel: "QQ Bot",
     configuredLabel: "configured",
-    unconfiguredLabel: "not linked",
+    unconfiguredLabel: "needs AppID + AppSercet",
     configuredHint: "configured",
-    unconfiguredHint: "not linked",
+    unconfiguredHint: "needs AppID + AppSercet",
     configuredScore: 1,
     unconfiguredScore: 6,
     resolveConfigured: ({ cfg, accountId }) =>
