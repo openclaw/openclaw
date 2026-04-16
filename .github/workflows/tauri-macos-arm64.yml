@@ -242,6 +242,7 @@ jobs:
           DSYM_PATH="$(find apps/desktop-tauri/src-tauri/target/aarch64-apple-darwin/release -name '*.dSYM' -print -quit)"
           RELEASE_ASSET_DIR="$RUNNER_TEMP/openclaw-macos-arm64-release"
           APP_ZIP_PATH="$RELEASE_ASSET_DIR/OpenClaw-Beta-${VERSION}-macOS-arm64.zip"
+          RELEASE_DMG_PATH="$RELEASE_ASSET_DIR/OpenClaw-Beta-${VERSION}-macOS-arm64.dmg"
           NOTARY_ZIP_PATH="$RUNNER_TEMP/OpenClaw-Beta-${VERSION}-macOS-arm64.notary.zip"
           DSYM_ZIP_PATH="$RELEASE_ASSET_DIR/OpenClaw-Beta-${VERSION}-macOS-arm64.dSYM.zip"
 
@@ -255,6 +256,7 @@ jobs:
             echo "dmg_path=$DMG_PATH"
             echo "dsym_path=$DSYM_PATH"
             echo "app_zip_path=$APP_ZIP_PATH"
+            echo "release_dmg_path=$RELEASE_DMG_PATH"
             echo "notary_zip_path=$NOTARY_ZIP_PATH"
             echo "dsym_zip_path=$DSYM_ZIP_PATH"
             echo "release_asset_dir=$RELEASE_ASSET_DIR"
@@ -326,11 +328,7 @@ jobs:
       - name: Stage macOS release assets
         run: |
           set -euo pipefail
-          cp "${{ steps.artifacts.outputs.app_zip_path }}" "${{ steps.artifacts.outputs.release_asset_dir }}/"
-          cp "${{ steps.artifacts.outputs.dmg_path }}" "${{ steps.artifacts.outputs.release_asset_dir }}/"
-          if [[ -n "${{ steps.artifacts.outputs.dsym_path }}" && -f "${{ steps.artifacts.outputs.dsym_zip_path }}" ]]; then
-            cp "${{ steps.artifacts.outputs.dsym_zip_path }}" "${{ steps.artifacts.outputs.release_asset_dir }}/"
-          fi
+          cp "${{ steps.artifacts.outputs.dmg_path }}" "${{ steps.artifacts.outputs.release_dmg_path }}"
 
       - name: Upload macOS release bundle artifact
         uses: actions/upload-artifact@v4

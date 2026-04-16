@@ -319,4 +319,6 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          gh release upload "$RELEASE_TAG" release-artifacts/* --repo "$GITHUB_REPOSITORY" --clobber
+          mapfile -t release_files < <(find release-artifacts -type f \( -name '*.exe' -o -name 'WINDOWS-SHA256SUMS.txt' \) | sort)
+          [[ ${#release_files[@]} -gt 0 ]] || { echo "No Windows release files found."; exit 1; }
+          gh release upload "$RELEASE_TAG" "${release_files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
