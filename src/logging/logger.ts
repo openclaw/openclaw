@@ -7,12 +7,13 @@ import {
   resolvePreferredOpenClawTmpDir,
 } from "../infra/tmp-openclaw-dir.js";
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
-import type { ConsoleStyle } from "./console.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
+import type { LoggerSettings } from "./types.js";
+export type { LoggerSettings } from "./types.js";
 
 type ProcessWithBuiltinModule = NodeJS.Process & {
   getBuiltinModule?: (id: string) => unknown;
@@ -49,14 +50,6 @@ const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 500 * 1024 * 1024; // 500 MB
 
 const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
-
-export type LoggerSettings = {
-  level?: LogLevel;
-  file?: string;
-  maxFileBytes?: number;
-  consoleLevel?: LogLevel;
-  consoleStyle?: ConsoleStyle;
-};
 
 type LogObj = { date?: Date } & Record<string, unknown>;
 

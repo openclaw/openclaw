@@ -18,8 +18,6 @@ export type NodeListNode = {
   connected?: boolean;
   connectedAtMs?: number;
   approvedAtMs?: number;
-  lastSeenAtMs?: number;
-  lastSeenReason?: string;
 };
 
 export type PendingRequest = {
@@ -49,8 +47,6 @@ export type PairedNode = {
   createdAtMs?: number;
   approvedAtMs?: number;
   lastConnectedAtMs?: number;
-  lastSeenAtMs?: number;
-  lastSeenReason?: string;
 };
 
 export type PairingList = {

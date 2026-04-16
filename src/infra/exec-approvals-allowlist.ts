@@ -21,7 +21,7 @@ import {
   type ExecutableResolution,
   type ShellChainOperator,
 } from "./exec-approvals-analysis.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.js";
+import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import {
   detectInterpreterInlineEvalArgv,
   isInterpreterLikeAllowlistPattern,

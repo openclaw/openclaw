@@ -3,7 +3,10 @@
 openclaw_live_stage_source_tree() {
   local dest_dir="${1:?destination directory required}"
 
+  set +e
   tar -C /src \
+    --warning=no-file-changed \
+    --ignore-failed-read \
     --exclude=.git \
     --exclude=node_modules \
     --exclude=dist \
@@ -14,12 +17,20 @@ openclaw_live_stage_source_tree() {
     --exclude=.tmp-precommit-venv \
     --exclude=.worktrees \
     --exclude=__openclaw_vitest__ \
+    --exclude=relay.sock \
+    --exclude='*.sock' \
+    --exclude='*/*.sock' \
     --exclude='apps/*/.build' \
     --exclude='apps/*/*.bun-build' \
     --exclude='apps/*/.gradle' \
     --exclude='apps/*/.kotlin' \
     --exclude='apps/*/build' \
     -cf - . | tar -C "$dest_dir" -xf -
+  local status=$?
+  set -e
+  if [ "$status" -gt 1 ]; then
+    return "$status"
+  fi
 }
 
 openclaw_live_link_runtime_tree() {
@@ -43,10 +54,21 @@ openclaw_live_stage_state_dir() {
     # Sandbox workspaces can accumulate root-owned artifacts from prior Docker
     # runs. They are not needed for live-test auth/config staging and can make
     # temp-dir cleanup fail on exit, so keep them out of the staged state copy.
+    set +e
     tar -C "$source_dir" \
+      --warning=no-file-changed \
+      --ignore-failed-read \
       --exclude=workspace \
       --exclude=sandboxes \
+      --exclude=relay.sock \
+      --exclude='*.sock' \
+      --exclude='*/*.sock' \
       -cf - . | tar -C "$dest_dir" -xf -
+    local status=$?
+    set -e
+    if [ "$status" -gt 1 ]; then
+      return "$status"
+    fi
     chmod -R u+rwX "$dest_dir" || true
     if [ -d "$source_dir/workspace" ] && [ ! -e "$dest_dir/workspace" ]; then
       ln -s "$source_dir/workspace" "$dest_dir/workspace"

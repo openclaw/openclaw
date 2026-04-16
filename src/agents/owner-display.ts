@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type OwnerDisplaySetting = {

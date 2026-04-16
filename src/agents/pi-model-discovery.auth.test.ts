@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { resolvePiCredentialMapFromStore } from "./pi-auth-credentials.js";
 import {
   addEnvBackedPiCredentials,
+  normalizeDiscoveredPiModel,
   scrubLegacyStaticAuthJsonEntriesForDiscovery,
 } from "./pi-model-discovery.js";
 
@@ -122,8 +123,12 @@ describe("discoverAuthStorage", () => {
   });
 
   it("includes env-backed provider auth when no auth profile exists", async () => {
-    const previous = process.env.MISTRAL_API_KEY;
+    const previousMistral = process.env.MISTRAL_API_KEY;
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const previousDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
     process.env.MISTRAL_API_KEY = "mistral-env-test-key";
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
     try {
       const credentials = addEnvBackedPiCredentials({}, process.env);
 
@@ -132,11 +137,74 @@ describe("discoverAuthStorage", () => {
         key: "mistral-env-test-key",
       });
     } finally {
-      if (previous === undefined) {
+      if (previousMistral === undefined) {
         delete process.env.MISTRAL_API_KEY;
       } else {
-        process.env.MISTRAL_API_KEY = previous;
+        process.env.MISTRAL_API_KEY = previousMistral;
+      }
+      if (previousBundledPluginsDir === undefined) {
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+      }
+      if (previousDisableBundledPlugins === undefined) {
+        delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+      } else {
+        process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundledPlugins;
       }
     }
+  });
+
+  it("normalizes stale discovered openai-codex rows when api metadata is missing", () => {
+    const normalized = normalizeDiscoveredPiModel(
+      {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+      "/tmp/agent",
+    ) as {
+      api?: string;
+      baseUrl?: string;
+    };
+
+    expect(normalized).toMatchObject({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+    });
+  });
+
+  it("canonicalizes stale discovered openai-codex backend-api/v1 rows", () => {
+    const normalized = normalizeDiscoveredPiModel(
+      {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+      "/tmp/agent",
+    ) as {
+      api?: string;
+      baseUrl?: string;
+    };
+
+    expect(normalized).toMatchObject({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+    });
   });
 });

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import {
@@ -20,8 +21,6 @@ import {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   normalizeChannelId,
-  updatePairedDeviceMetadata,
-  updatePairedNodeMetadata,
   normalizeMainKey,
   normalizeRpcAttachmentsToChatAttachments,
   parseMessageWithAttachments,
@@ -40,8 +39,11 @@ const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
 const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
 const VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS = 1500;
 const MAX_RECENT_VOICE_TRANSCRIPTS = 200;
+const EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS = 10 * 60 * 1000;
+const MAX_RECENT_EXEC_FINISHED_RUNS = 2000;
 
 const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
+const recentExecFinishedRuns = new Map<string, number>();
 
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
@@ -117,6 +119,48 @@ function shouldDropDuplicateVoiceTranscript(params: {
   return false;
 }
 
+function shouldDropDuplicateExecFinished(params: {
+  sessionKey: string;
+  runId: string;
+  now: number;
+}): boolean {
+  const fingerprint = `${params.sessionKey}::${params.runId}`;
+  const previousTs = recentExecFinishedRuns.get(fingerprint);
+  if (
+    typeof previousTs === "number" &&
+    params.now - previousTs <= EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS
+  ) {
+    return true;
+  }
+
+  recentExecFinishedRuns.set(fingerprint, params.now);
+  if (recentExecFinishedRuns.size > MAX_RECENT_EXEC_FINISHED_RUNS) {
+    const cutoff = params.now - EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS;
+    for (const [key, ts] of recentExecFinishedRuns) {
+      if (ts < cutoff) {
+        recentExecFinishedRuns.delete(key);
+      }
+      if (recentExecFinishedRuns.size <= MAX_RECENT_EXEC_FINISHED_RUNS) {
+        break;
+      }
+    }
+    while (recentExecFinishedRuns.size > MAX_RECENT_EXEC_FINISHED_RUNS) {
+      const oldestKey = recentExecFinishedRuns.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      recentExecFinishedRuns.delete(oldestKey);
+    }
+  }
+
+  return false;
+}
+
+export function resetNodeEventDeduplicationForTests() {
+  recentVoiceTranscripts.clear();
+  recentExecFinishedRuns.clear();
+}
+
 function compactExecEventOutput(raw: string) {
   const normalized = raw.replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -144,7 +188,7 @@ function compactNotificationEventText(raw: string) {
 type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
 
 async function touchSessionStore(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   storePath: LoadedSessionEntry["storePath"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
@@ -182,7 +226,7 @@ async function touchSessionStore(params: {
 
 function queueSessionStoreTouch(params: {
   ctx: NodeEventContext;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   storePath: LoadedSessionEntry["storePath"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
@@ -234,7 +278,7 @@ function parsePayloadObject(payloadJSON?: string | null): Record<string, unknown
 }
 
 async function sendReceiptAck(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   deps: NodeEventContext["deps"];
   sessionKey: string;
   channel: string;
@@ -265,12 +309,7 @@ async function sendReceiptAck(params: {
   });
 }
 
-export const handleNodeEvent = async (
-  ctx: NodeEventContext,
-  nodeId: string,
-  evt: NodeEvent,
-  opts?: { nodePairingIds?: readonly string[] },
-) => {
+export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
   switch (evt.event) {
     case "voice.transcript": {
       const obj = parsePayloadObject(evt.payloadJSON);
@@ -602,14 +641,14 @@ export const handleNodeEvent = async (
       }
 
       const runId = normalizeOptionalString(obj.runId) ?? "";
-      const command = normalizeOptionalString(obj.command) ?? "";
+      const command = sanitizeInboundSystemTags(normalizeOptionalString(obj.command) ?? "");
       const exitCode =
         typeof obj.exitCode === "number" && Number.isFinite(obj.exitCode)
           ? obj.exitCode
           : undefined;
       const timedOut = obj.timedOut === true;
-      const output = normalizeOptionalString(obj.output) ?? "";
-      const reason = normalizeOptionalString(obj.reason) ?? "";
+      const output = sanitizeInboundSystemTags(normalizeOptionalString(obj.output) ?? "");
+      const reason = sanitizeInboundSystemTags(normalizeOptionalString(obj.reason) ?? "");
 
       let text = "";
       if (evt.event === "exec.started") {
@@ -624,6 +663,16 @@ export const handleNodeEvent = async (
         if (!shouldNotify) {
           return;
         }
+        if (
+          runId &&
+          shouldDropDuplicateExecFinished({
+            sessionKey,
+            runId,
+            now: Date.now(),
+          })
+        ) {
+          return;
+        }
         text = `Exec finished (node=${nodeId}${runId ? ` id=${runId}` : ""}, ${exitLabel})`;
         if (compactOutput) {
           text += `\n${compactOutput}`;
@@ -635,11 +684,17 @@ export const handleNodeEvent = async (
         }
       }
 
-      enqueueSystemEvent(text, { sessionKey, contextKey: runId ? `exec:${runId}` : "exec" });
-      // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
-      // keys should keep legacy unscoped behavior so enabled non-main heartbeat
-      // agents still run when no explicit agent session is provided.
-      requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
+      const queued = enqueueSystemEvent(text, {
+        sessionKey,
+        contextKey: runId ? `exec:${runId}` : "exec",
+        trusted: false,
+      });
+      if (queued) {
+        // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
+        // keys should keep legacy unscoped behavior so enabled non-main heartbeat
+        // agents still run when no explicit agent session is provided.
+        requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
+      }
       return;
     }
     case "push.apns.register": {
@@ -682,35 +737,6 @@ export const handleNodeEvent = async (
         }
       } catch (err) {
         ctx.logGateway.warn(`push apns register failed node=${nodeId}: ${formatForLog(err)}`);
-      }
-      return;
-    }
-    case "node.presence.alive": {
-      const obj = parsePayloadObject(evt.payloadJSON);
-      if (!obj) {
-        return;
-      }
-      const trigger = normalizeOptionalString(obj.trigger) ?? "background";
-      const receivedAtMs = Date.now();
-      const nodePairingIds = new Set<string>(
-        opts?.nodePairingIds?.length ? opts.nodePairingIds : [nodeId],
-      );
-      try {
-        await Promise.all([
-          ...[...nodePairingIds].map(
-            async (pairedNodeId) =>
-              await updatePairedNodeMetadata(pairedNodeId, {
-                lastSeenAtMs: receivedAtMs,
-                lastSeenReason: trigger,
-              }),
-          ),
-          updatePairedDeviceMetadata(nodeId, {
-            lastSeenAtMs: receivedAtMs,
-            lastSeenReason: trigger,
-          }),
-        ]);
-      } catch (err) {
-        ctx.logGateway.warn(`node presence alive failed node=${nodeId}: ${formatForLog(err)}`);
       }
       return;
     }

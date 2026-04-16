@@ -50,8 +50,6 @@ export type NodePairingPairedNode = NodeApprovedSurface & {
   createdAtMs: number;
   approvedAtMs: number;
   lastConnectedAtMs?: number;
-  lastSeenAtMs?: number;
-  lastSeenReason?: string;
 };
 
 export type NodePairingList = {
@@ -331,8 +329,6 @@ export async function updatePairedNodeMetadata(
       bins: patch.bins ?? existing.bins,
       permissions: patch.permissions ?? existing.permissions,
       lastConnectedAtMs: patch.lastConnectedAtMs ?? existing.lastConnectedAtMs,
-      lastSeenAtMs: patch.lastSeenAtMs ?? existing.lastSeenAtMs,
-      lastSeenReason: patch.lastSeenReason ?? existing.lastSeenReason,
     };
 
     state.pairedByNodeId[normalized] = next;

@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileStore } from "./types.js";
 
@@ -110,6 +110,11 @@ async function expectResolvedApiKey(params: {
 }
 
 beforeAll(loadOAuthModuleForTest);
+
+afterAll(() => {
+  vi.doUnmock("../cli-credentials.js");
+  vi.doUnmock("../../plugins/provider-runtime.runtime.js");
+});
 
 describe("resolveApiKeyForProfile config compatibility", () => {
   it("accepts token credentials when config mode is oauth", async () => {

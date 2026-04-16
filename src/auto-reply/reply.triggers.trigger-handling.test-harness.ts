@@ -4,7 +4,7 @@ import os from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, expect, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
 import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
@@ -64,6 +64,10 @@ const installPiEmbeddedMock = () =>
   }));
 
 installPiEmbeddedMock();
+
+vi.doMock("../agents/pi-embedded-runner/runs.js", () => ({
+  abortEmbeddedPiRun: (...args: unknown[]) => piEmbeddedMocks.abortEmbeddedPiRun(...args),
+}));
 
 const providerUsageMocks = vi.hoisted(() => ({
   loadProviderUsageSummary: vi.fn().mockResolvedValue({
@@ -442,7 +446,7 @@ export async function runGreetingPromptForBareNewOrReset(params: {
   expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
   const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
   expect(prompt).toContain("A new session was started via /new or /reset");
-  expect(prompt).toContain("Run your Session Startup sequence");
+  expect(prompt).toContain("If runtime-provided startup context is included for this first turn");
 }
 
 export function installTriggerHandlingE2eTestHooks() {

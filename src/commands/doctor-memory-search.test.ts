@@ -16,7 +16,9 @@ type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
 const checkQmdBinaryAvailability = vi.hoisted(() =>
   vi.fn<CheckQmdBinaryAvailability>(async () => ({ available: true })),
 );
+const auditDreamingArtifacts = vi.hoisted(() => vi.fn());
 const auditShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
+const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
 const repairShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
 
 vi.mock("../terminal/note.js", () => ({
@@ -47,7 +49,9 @@ vi.mock("../memory-host-sdk/engine-qmd.js", () => ({
 }));
 
 vi.mock("../plugin-sdk/memory-core-engine-runtime.js", () => ({
+  auditDreamingArtifacts,
   auditShortTermPromotionArtifacts,
+  repairDreamingArtifacts,
   repairShortTermPromotionArtifacts,
   getBuiltinMemoryEmbeddingProviderDoctorMetadata: vi.fn((provider: string) => {
     if (provider === "gemini") {
@@ -75,6 +79,47 @@ vi.mock("../plugin-sdk/memory-core-engine-runtime.js", () => ({
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
 import { maybeRepairMemoryRecallHealth, noteMemoryRecallHealth } from "./doctor-memory-search.js";
 import { detectLegacyWorkspaceDirs } from "./doctor-workspace.js";
+
+function resetMemoryRecallMocks() {
+  auditShortTermPromotionArtifacts.mockReset();
+  auditShortTermPromotionArtifacts.mockResolvedValue({
+    storePath: "/tmp/agent-default/workspace/memory/.dreams/short-term-recall.json",
+    lockPath: "/tmp/agent-default/workspace/memory/.dreams/short-term-promotion.lock",
+    exists: true,
+    entryCount: 1,
+    promotedCount: 0,
+    spacedEntryCount: 0,
+    conceptTaggedEntryCount: 1,
+    invalidEntryCount: 0,
+    issues: [],
+  });
+  auditDreamingArtifacts.mockReset();
+  auditDreamingArtifacts.mockResolvedValue({
+    sessionCorpusDir: "/tmp/agent-default/workspace/memory/.dreams/session-corpus",
+    sessionCorpusFileCount: 0,
+    suspiciousSessionCorpusFileCount: 0,
+    suspiciousSessionCorpusLineCount: 0,
+    sessionIngestionPath: "/tmp/agent-default/workspace/memory/.dreams/session-ingestion.json",
+    sessionIngestionExists: false,
+    issues: [],
+  });
+  repairDreamingArtifacts.mockReset();
+  repairDreamingArtifacts.mockResolvedValue({
+    changed: false,
+    archivedDreamsDiary: false,
+    archivedSessionCorpus: false,
+    archivedSessionIngestion: false,
+    archivedPaths: [],
+    warnings: [],
+  });
+  repairShortTermPromotionArtifacts.mockReset();
+  repairShortTermPromotionArtifacts.mockResolvedValue({
+    changed: false,
+    removedInvalidEntries: 0,
+    rewroteStore: false,
+    removedStaleLock: false,
+  });
+}
 
 describe("noteMemorySearchHealth", () => {
   const cfg = {} as OpenClawConfig;
@@ -111,25 +156,7 @@ describe("noteMemorySearchHealth", () => {
     });
     checkQmdBinaryAvailability.mockReset();
     checkQmdBinaryAvailability.mockResolvedValue({ available: true });
-    auditShortTermPromotionArtifacts.mockReset();
-    auditShortTermPromotionArtifacts.mockResolvedValue({
-      storePath: "/tmp/agent-default/workspace/memory/.dreams/short-term-recall.json",
-      lockPath: "/tmp/agent-default/workspace/memory/.dreams/short-term-promotion.lock",
-      exists: true,
-      entryCount: 1,
-      promotedCount: 0,
-      spacedEntryCount: 0,
-      conceptTaggedEntryCount: 1,
-      invalidEntryCount: 0,
-      issues: [],
-    });
-    repairShortTermPromotionArtifacts.mockReset();
-    repairShortTermPromotionArtifacts.mockResolvedValue({
-      changed: false,
-      removedInvalidEntries: 0,
-      rewroteStore: false,
-      removedStaleLock: false,
-    });
+    resetMemoryRecallMocks();
   });
 
   it("does not warn when local provider is set with no explicit modelPath (default model fallback)", async () => {
@@ -317,6 +344,53 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("does not warn for lmstudio when gateway probe is ready", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "lmstudio",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("warns when lmstudio gateway probe reports embeddings are not ready", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "lmstudio",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: false, error: "LM API token missing" },
+    });
+
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain('provider "lmstudio" is configured');
+    expect(message).toContain("embeddings are not ready");
+  });
+
+  it("warns when lmstudio gateway probe is unavailable", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "lmstudio",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: false, ready: false },
+    });
+
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain('provider "lmstudio" is configured');
+    expect(message).toContain("could not confirm embeddings are ready");
+    expect(message).toContain("openclaw memory status --deep");
+  });
+
   it("notes when gateway probe reports embeddings ready and CLI API key is missing", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "gemini",
@@ -429,25 +503,7 @@ describe("memory recall doctor integration", () => {
 
   beforeEach(() => {
     note.mockClear();
-    auditShortTermPromotionArtifacts.mockReset();
-    auditShortTermPromotionArtifacts.mockResolvedValue({
-      storePath: "/tmp/agent-default/workspace/memory/.dreams/short-term-recall.json",
-      lockPath: "/tmp/agent-default/workspace/memory/.dreams/short-term-promotion.lock",
-      exists: true,
-      entryCount: 1,
-      promotedCount: 0,
-      spacedEntryCount: 0,
-      conceptTaggedEntryCount: 1,
-      invalidEntryCount: 0,
-      issues: [],
-    });
-    repairShortTermPromotionArtifacts.mockReset();
-    repairShortTermPromotionArtifacts.mockResolvedValue({
-      changed: false,
-      removedInvalidEntries: 0,
-      rewroteStore: false,
-      removedStaleLock: false,
-    });
+    resetMemoryRecallMocks();
   });
 
   function createPrompter(overrides: Partial<DoctorPrompter> = {}): DoctorPrompter {
@@ -547,6 +603,47 @@ describe("memory recall doctor integration", () => {
     expect(message).toContain("Memory recall artifacts repaired:");
     expect(message).toContain("rewrote recall store");
     expect(message).toContain("removed stale promotion lock");
+  });
+
+  it("runs dreaming artifact repair during doctor --fix", async () => {
+    auditDreamingArtifacts.mockResolvedValueOnce({
+      sessionCorpusDir: "/tmp/agent-default/workspace/memory/.dreams/session-corpus",
+      sessionCorpusFileCount: 2,
+      suspiciousSessionCorpusFileCount: 1,
+      suspiciousSessionCorpusLineCount: 3,
+      sessionIngestionPath: "/tmp/agent-default/workspace/memory/.dreams/session-ingestion.json",
+      sessionIngestionExists: true,
+      issues: [
+        {
+          severity: "warn",
+          code: "dreaming-session-corpus-self-ingested",
+          message:
+            "Dreaming session corpus appears to contain self-ingested narrative content (3 suspicious lines).",
+          fixable: true,
+        },
+      ],
+    });
+    repairDreamingArtifacts.mockResolvedValueOnce({
+      changed: true,
+      archiveDir: "/tmp/agent-default/workspace/.openclaw-repair/dreaming/2026-04-11T21-35-00-000Z",
+      archivedDreamsDiary: false,
+      archivedSessionCorpus: true,
+      archivedSessionIngestion: true,
+      archivedPaths: [],
+      warnings: [],
+    });
+    const prompter = createPrompter();
+
+    await maybeRepairMemoryRecallHealth({ cfg, prompter });
+
+    expect(prompter.confirmRuntimeRepair).toHaveBeenCalled();
+    expect(repairDreamingArtifacts).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/agent-default/workspace",
+    });
+    const message = String(note.mock.calls.at(-1)?.[0] ?? "");
+    expect(message).toContain("Dreaming artifacts repaired:");
+    expect(message).toContain("archived session corpus");
+    expect(message).toContain("archived session-ingestion state");
   });
 });
 

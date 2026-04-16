@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -38,7 +39,7 @@ import { resolveAnnounceOrigin, type DeliveryContext } from "./subagent-announce
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.js";
+import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 export { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 
@@ -64,7 +65,7 @@ function resolveDirectAnnounceTransientRetryDelaysMs() {
     : ([5_000, 10_000, 20_000] as const);
 }
 
-export function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): number {
+export function resolveSubagentAnnounceTimeoutMs(cfg: OpenClawConfig): number {
   const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
   if (typeof configured !== "number" || !Number.isFinite(configured)) {
     return DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS;

@@ -12,8 +12,6 @@ export type KnownNodeDevicePairingSource = {
   clientMode?: string;
   remoteIp?: string;
   approvedAtMs?: number;
-  lastSeenAtMs?: number;
-  lastSeenReason?: string;
 };
 
 export type KnownNodeApprovedSource = {
@@ -30,8 +28,6 @@ export type KnownNodeApprovedSource = {
   commands: string[];
   permissions?: Record<string, boolean>;
   approvedAtMs?: number;
-  lastSeenAtMs?: number;
-  lastSeenReason?: string;
 };
 
 export type KnownNodeEntry = {
@@ -71,8 +67,6 @@ function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSo
     clientMode: entry.clientMode,
     remoteIp: entry.remoteIp,
     approvedAtMs: entry.approvedAtMs,
-    lastSeenAtMs: entry.lastSeenAtMs,
-    lastSeenReason: entry.lastSeenReason,
   };
 }
 
@@ -91,41 +85,6 @@ function buildApprovedNodeSource(entry: NodePairingPairedNode): KnownNodeApprove
     commands: entry.commands ?? [],
     permissions: entry.permissions,
     approvedAtMs: entry.approvedAtMs,
-    lastSeenAtMs: entry.lastSeenAtMs,
-    lastSeenReason: entry.lastSeenReason,
-  };
-}
-
-function resolveEffectiveLastSeen(entry: {
-  devicePairing?: KnownNodeDevicePairingSource;
-  nodePairing?: KnownNodeApprovedSource;
-  live?: NodeSession;
-}): Pick<NodeListNode, "lastSeenAtMs" | "lastSeenReason"> {
-  const { devicePairing, nodePairing, live } = entry;
-  const candidates = [
-    live?.connectedAtMs ? { ts: live.connectedAtMs, reason: "connect" } : null,
-    nodePairing?.lastSeenAtMs
-      ? { ts: nodePairing.lastSeenAtMs, reason: nodePairing.lastSeenReason }
-      : null,
-    devicePairing?.lastSeenAtMs
-      ? { ts: devicePairing.lastSeenAtMs, reason: devicePairing.lastSeenReason }
-      : null,
-  ].filter((candidate) => candidate !== null);
-  const winner = candidates.reduce<{
-    ts: number;
-    reason?: string;
-  } | null>((best, candidate) => {
-    if (!candidate) {
-      return best;
-    }
-    if (!best || candidate.ts > best.ts) {
-      return candidate;
-    }
-    return best;
-  }, null);
-  return {
-    lastSeenAtMs: winner?.ts,
-    lastSeenReason: winner?.reason,
   };
 }
 
@@ -136,7 +95,6 @@ function buildEffectiveKnownNode(entry: {
   live?: NodeSession;
 }): NodeListNode {
   const { nodeId, devicePairing, nodePairing, live } = entry;
-  const { lastSeenAtMs, lastSeenReason } = resolveEffectiveLastSeen(entry);
   return {
     nodeId,
     displayName: live?.displayName ?? nodePairing?.displayName ?? devicePairing?.displayName,
@@ -157,8 +115,6 @@ function buildEffectiveKnownNode(entry: {
     permissions: live?.permissions ?? nodePairing?.permissions,
     connectedAtMs: live?.connectedAtMs,
     approvedAtMs: nodePairing?.approvedAtMs ?? devicePairing?.approvedAtMs,
-    lastSeenAtMs,
-    lastSeenReason,
     paired: Boolean(devicePairing ?? nodePairing),
     connected: Boolean(live),
   };

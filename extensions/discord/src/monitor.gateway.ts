@@ -1,10 +1,11 @@
-import type { EventEmitter } from "node:events";
 import type { DiscordGatewayHandle } from "./monitor/gateway-handle.js";
 import {
   DiscordGatewayEvent,
   DiscordGatewayLifecycleError,
   DiscordGatewaySupervisor,
 } from "./monitor/gateway-supervisor.js";
+
+export { getDiscordGatewayEmitter } from "./monitor/gateway-supervisor.js";
 
 export type WaitForDiscordGatewayStopParams = {
   gateway?: DiscordGatewayHandle;
@@ -13,10 +14,6 @@ export type WaitForDiscordGatewayStopParams = {
   onGatewayEvent?: (event: DiscordGatewayEvent) => "continue" | "stop";
   registerForceStop?: (forceStop: (err: unknown) => void) => void;
 };
-
-export function getDiscordGatewayEmitter(gateway?: unknown): EventEmitter | undefined {
-  return (gateway as { emitter?: EventEmitter } | undefined)?.emitter;
-}
 
 export async function waitForDiscordGatewayStop(
   params: WaitForDiscordGatewayStopParams,

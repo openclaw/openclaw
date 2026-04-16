@@ -3,35 +3,29 @@ import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import type {
+  MediaGenerationNormalizationMetadataInput,
+  MediaNormalizationEntry,
+  MediaNormalizationValue,
+} from "./normalization.types.js";
 
 export type ParsedProviderModelRef = {
   provider: string;
   model: string;
 };
-
-export type MediaNormalizationValue = string | number | boolean;
-
-export type MediaNormalizationEntry<TValue extends MediaNormalizationValue> = {
-  requested?: TValue;
-  applied?: TValue;
-  derivedFrom?: string;
-  supportedValues?: readonly TValue[];
-};
-
-export type MediaGenerationNormalizationMetadataInput = {
-  size?: MediaNormalizationEntry<string>;
-  aspectRatio?: MediaNormalizationEntry<string>;
-  resolution?: MediaNormalizationEntry<string>;
-  durationSeconds?: MediaNormalizationEntry<number>;
-};
+export type {
+  MediaGenerationNormalizationMetadataInput,
+  MediaNormalizationEntry,
+  MediaNormalizationValue,
+} from "./normalization.types.js";
 
 export function hasMediaNormalizationEntry<TValue extends MediaNormalizationValue>(
   entry: MediaNormalizationEntry<TValue> | undefined,
