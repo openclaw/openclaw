@@ -475,6 +475,21 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+function buildThreadBindingUnavailableError(mode: SpawnSubagentMode): string {
+  if (mode === "session") {
+    return (
+      'sessions_spawn(mode="session") is only available on channels that expose thread bindings (e.g. Discord threads, Slack threads, Telegram forum topics). ' +
+      "This request is not running on a channel that can bind a subagent thread. " +
+      'Use mode="run" for one-shot subagent work, or sessions_send(sessionKey=...) to keep talking to a persistent session without thread binding.'
+    );
+  }
+  return (
+    "thread=true is only available on channels that expose thread bindings (e.g. Discord threads, Slack threads, Telegram forum topics). " +
+    "This request is not running on a channel that can bind a subagent thread. " +
+    "Retry without thread=true, or re-run sessions_spawn from a channel that supports threads."
+  );
+}
+
 async function ensureThreadBindingForSubagentSpawn(params: {
   hookRunner: SubagentLifecycleHookRunner | null;
   childSessionKey: string;
@@ -491,17 +506,15 @@ async function ensureThreadBindingForSubagentSpawn(params: {
 }): Promise<
   { status: "ok"; deliveryOrigin?: DeliveryContext } | { status: "error"; error: string }
 > {
-  const hookRunner = params.hookRunner;
-  if (!hookRunner?.hasHooks("subagent_spawning")) {
+  if (!params.hookRunner?.hasHooks("subagent_spawning")) {
     return {
       status: "error",
-      error:
-        "thread=true is unavailable because no channel plugin registered subagent_spawning hooks.",
+      error: buildThreadBindingUnavailableError(params.mode),
     };
   }
 
   try {
-    const result = await hookRunner.runSubagentSpawning(
+    const result = await params.hookRunner.runSubagentSpawning(
       {
         childSessionKey: params.childSessionKey,
         agentId: params.agentId,
@@ -520,6 +533,12 @@ async function ensureThreadBindingForSubagentSpawn(params: {
       return {
         status: "error",
         error: error || "Failed to prepare thread binding for this subagent session.",
+      };
+    }
+    if (!result) {
+      return {
+        status: "error",
+        error: buildThreadBindingUnavailableError(params.mode),
       };
     }
     if (result?.status !== "ok" || !result.threadBindingReady) {
@@ -578,7 +597,9 @@ export async function spawnSubagentDirect(
   if (spawnMode === "session" && !requestThreadBinding) {
     return {
       status: "error",
-      error: 'mode="session" requires thread=true so the subagent can stay bound to a thread.',
+      error:
+        'sessions_spawn(mode="session") requires thread=true so the subagent can stay bound to a channel thread. ' +
+        'Retry with { mode: "session", thread: true } on a channel that supports threads, use mode="run" for one-shot work, or use sessions_send(sessionKey=...) to keep talking to a persistent session without thread binding.',
     };
   }
   const cleanup =
