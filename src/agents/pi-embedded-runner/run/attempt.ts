@@ -182,9 +182,11 @@ import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import {
   assembleAttemptContextEngine,
+  buildLoopPromptCacheInfo,
   buildContextEnginePromptCacheInfo,
   findCurrentAttemptAssistantMessage,
   finalizeAttemptContextEngineTurn,
+  resolvePromptCacheTouchTimestamp,
   resolveAttemptBootstrapContext,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
@@ -1071,6 +1073,24 @@ export async function runEmbeddedAttempt(
           tokenBudget: params.contextTokenBudget,
           modelId: params.modelId,
           getPrePromptMessageCount: () => prePromptMessageCount,
+          getRuntimeContext: ({ messages, prePromptMessageCount: loopPrePromptMessageCount }) =>
+            buildAfterTurnRuntimeContext({
+              attempt: params,
+              workspaceDir: effectiveWorkspace,
+              agentDir,
+              tokenBudget: params.contextTokenBudget,
+              promptCache:
+                promptCache ??
+                buildLoopPromptCacheInfo({
+                  messagesSnapshot: messages,
+                  prePromptMessageCount: loopPrePromptMessageCount,
+                  retention: effectivePromptCacheRetention,
+                  fallbackLastCacheTouchAt: readLastCacheTtlTimestamp(sessionManager, {
+                    provider: params.provider,
+                    modelId: params.modelId,
+                  }),
+                }),
+            }),
         });
       }
       const cacheTrace = createCacheTrace({
@@ -2235,13 +2255,18 @@ export async function runEmbeddedAttempt(
                 changes: cacheBreak?.changes ?? promptCacheChangesForTurn,
               }
             : undefined;
+        const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(sessionManager, {
+          provider: params.provider,
+          modelId: params.modelId,
+        });
         promptCache = buildContextEnginePromptCacheInfo({
           retention: effectivePromptCacheRetention,
           lastCallUsage,
           observation: promptCacheObservation,
-          lastCacheTouchAt: readLastCacheTtlTimestamp(sessionManager, {
-            provider: params.provider,
-            modelId: params.modelId,
+          lastCacheTouchAt: resolvePromptCacheTouchTimestamp({
+            lastCallUsage,
+            assistantTimestamp: currentAttemptAssistant?.timestamp,
+            fallbackLastCacheTouchAt,
           }),
         });
 
