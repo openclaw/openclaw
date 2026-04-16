@@ -22,7 +22,6 @@ import {
   formatAssistantErrorText,
   isContextOverflowError,
 } from "./errors.js";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import {
   classifyProviderSpecificError,
   matchesProviderContextOverflow,
