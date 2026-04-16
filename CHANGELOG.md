@@ -110,6 +110,7 @@ Docs: https://docs.openclaw.ai
 - Agents/context engines: keep loop-hook and final `afterTurn` prompt-cache touch metadata aligned with the current assistant turn so cache-aware context engines retain accurate cache TTL state during tool loops. (#67767) thanks @jalehman.
 - Memory/dreaming: strip AI-facing inbound metadata envelopes from session-corpus user turns before normalization so REM topic extraction sees the user's actual message text, including array-shaped split envelopes. (#66548) Thanks @zqchris.
 - Agents/errors: detect standalone Cloudflare/CDN HTML challenge pages before transport DNS classification so provider block pages no longer appear as local DNS lookup failures. (#67704) Thanks @chris-yyau.
+- Agents/failover: avoid treating bare leading `402 ...` prose as billing errors while still recognizing proxy subscription failures. (#45827) Thanks @junyuc25.
 - Security/approvals: redact secrets in exec approval prompts so inline approval review can no longer leak credential material in rendered prompt content. (#61077, #64790)
 - CLI/configure: re-read the persisted config hash after writes so config updates stop failing with stale-hash races. (#64188, #66528)
 - CLI/update: prune stale packaged `dist` chunks after npm upgrades and keep downgrade/verify inventory checks compat-safe so global upgrades stop failing on stale chunk imports. (#66959) Thanks @obviyus.
@@ -2014,10 +2015,6 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/edit tool: accept common path/text alias spellings, show current file contents on exact-match failures, and avoid false edit failures after successful writes. (#52516) thanks @mbelinky.
-
-### Fixes
-
-- Agents/failover: avoid treating bare leading `402 ...` prose as billing errors while still recognizing proxy subscription failures. (#45827) Thanks @junyuc25.
 
 ## 2026.3.13
 
