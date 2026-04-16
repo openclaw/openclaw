@@ -91,13 +91,23 @@ export function checkMutationGate(
   // but reject commands containing shell compound operators first.
   if ((normalized === "exec" || normalized === "bash") && execCommand) {
     const cmd = execCommand.trim().toLowerCase();
-    // Block shell compound operators that could chain arbitrary commands.
-    if (/[;|&`]|\$\(|>>?/.test(cmd)) {
+    // Block shell compound operators and newlines that could chain commands.
+    if (/[;|&`\n\r]|\$\(|>>?/.test(cmd)) {
       return {
         blocked: true,
         reason:
-          `Tool "${toolName}" command contains shell operators and is blocked in plan mode. ` +
+          `Tool "${toolName}" command contains shell operators or newlines and is blocked in plan mode. ` +
           "Only simple read-only commands are allowed.",
+      };
+    }
+    // Block dangerous flags on otherwise-allowed commands.
+    const DANGEROUS_FLAGS = ["-delete", "-exec", "-execdir", "--delete", "-rf", "-i"];
+    const hasFlag = DANGEROUS_FLAGS.some((f) => cmd.includes(` ${f}`) || cmd.includes(` ${f} `));
+    if (hasFlag) {
+      return {
+        blocked: true,
+        reason:
+          `Tool "${toolName}" command contains a dangerous flag and is blocked in plan mode.`,
       };
     }
     const isReadOnly = READ_ONLY_EXEC_PREFIXES.some(
