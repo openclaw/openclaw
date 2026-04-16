@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { resolveWebhooksPluginConfig } from "./config.js";
+import { resolveWebhooksPluginConfig, resolveWebhooksPluginConfigSync } from "./config.js";
 
 describe("resolveWebhooksPluginConfig", () => {
   it("resolves default paths and SecretRef-backed secrets", async () => {
@@ -82,5 +82,47 @@ describe("resolveWebhooksPluginConfig", () => {
         env: {},
       }),
     ).rejects.toThrow(/conflicts with routes\.first\.path/i);
+  });
+
+  it("resolves inline string secrets synchronously", () => {
+    const routes = resolveWebhooksPluginConfigSync({
+      pluginConfig: {
+        routes: {
+          visionclaw: {
+            sessionKey: "agent:main:main",
+            secret: "shared-secret",
+          },
+        },
+      },
+    });
+
+    expect(routes).toEqual([
+      {
+        routeId: "visionclaw",
+        path: "/plugins/webhooks/visionclaw",
+        sessionKey: "agent:main:main",
+        secret: "shared-secret",
+        controllerId: "webhooks/visionclaw",
+      },
+    ]);
+  });
+
+  it("returns null from the sync resolver when a route secret needs async resolution", () => {
+    const routes = resolveWebhooksPluginConfigSync({
+      pluginConfig: {
+        routes: {
+          visionclaw: {
+            sessionKey: "agent:main:main",
+            secret: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_WEBHOOK_SECRET",
+            },
+          },
+        },
+      },
+    });
+
+    expect(routes).toBeNull();
   });
 });

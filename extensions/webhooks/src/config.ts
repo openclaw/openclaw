@@ -42,6 +42,42 @@ export type ResolvedWebhookRouteConfig = {
   description?: string;
 };
 
+export function resolveWebhooksPluginConfigSync(params: {
+  pluginConfig: unknown;
+}): ResolvedWebhookRouteConfig[] | null {
+  const parsed = webhooksPluginConfigSchema.parse(params.pluginConfig ?? {});
+  const resolvedRoutes: ResolvedWebhookRouteConfig[] = [];
+  const seenPaths = new Map<string, string>();
+
+  for (const [routeId, route] of Object.entries(parsed.routes)) {
+    if (!route.enabled) {
+      continue;
+    }
+    if (typeof route.secret !== "string") {
+      return null;
+    }
+    const path = normalizeWebhookPath(route.path ?? `/plugins/webhooks/${routeId}`);
+    const existingRouteId = seenPaths.get(path);
+    if (existingRouteId) {
+      throw new Error(
+        `webhooks.routes.${routeId}.path conflicts with routes.${existingRouteId}.path (${path}).`,
+      );
+    }
+
+    seenPaths.set(path, routeId);
+    resolvedRoutes.push({
+      routeId,
+      path,
+      sessionKey: route.sessionKey,
+      secret: route.secret,
+      controllerId: route.controllerId ?? `webhooks/${routeId}`,
+      ...(route.description ? { description: route.description } : {}),
+    });
+  }
+
+  return resolvedRoutes;
+}
+
 export async function resolveWebhooksPluginConfig(params: {
   pluginConfig: unknown;
   cfg: OpenClawConfig;
