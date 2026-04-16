@@ -152,40 +152,52 @@ describe("classifyFailoverReason with provider patterns", () => {
 });
 
 describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
-  // Real Cloudflare error bodies — the HTTP status arrives via signal.status,
-  // the message is the raw response body starting with <!doctype html>.
   const cloudflareHtml502 =
     "<!doctype html><html><head><title>502 Bad Gateway</title></head>" +
     "<body><h1>502 Bad Gateway</h1><p>cloudflare-nginx</p></body></html>";
-
   const cloudflareHtml503 =
     "<!doctype html><html><head><title>503</title></head>" +
     "<body><h1>Service Unavailable</h1><p>Please try again. Rate limit exceeded.</p></body></html>";
+  const html401 =
+    "<!doctype html><html><head><title>401 Unauthorized</title></head>" +
+    "<body><h1>Unauthorized</h1></body></html>";
+  const html403 =
+    "<!doctype html><html><head><title>403 Forbidden</title></head>" +
+    "<body><h1>Forbidden</h1></body></html>";
+  const html407 =
+    "<!doctype html><html><head><title>407 Proxy Authentication Required</title></head>" +
+    "<body><h1>Proxy Authentication Required</h1></body></html>";
 
-  it("classifies Cloudflare HTML 502 as timeout, not rate_limit", () => {
+  it("classifies Cloudflare HTML 502 as timeout", () => {
     expect(classifyFailoverReason(`502 ${cloudflareHtml502}`)).toBe("timeout");
   });
 
-  it("classifies Cloudflare HTML 503 with rate-limit text as timeout, not rate_limit", () => {
-    // The HTML body contains "Rate limit exceeded" — before the fix, pattern
-    // matchers would pick this up and return "rate_limit". The HTML early-exit
-    // in classifyFailoverSignal should short-circuit before that happens.
+  it("classifies Cloudflare HTML 503 with rate-limit text as timeout", () => {
     expect(classifyFailoverReason(`503 ${cloudflareHtml503}`)).toBe("timeout");
   });
 
-  it("classifies runtime failure kind as upstream_html for non-403 HTML", () => {
+  it("preserves auth classification for 401 HTML", () => {
+    expect(classifyFailoverReason(`401 ${html401}`)).toBe("auth");
+  });
+
+  it("preserves auth classification for 403 HTML", () => {
+    expect(classifyFailoverReason(`403 ${html403}`)).toBe("auth");
+  });
+
+  it("classifies runtime failure kind as upstream_html for non-auth HTML", () => {
     expect(classifyProviderRuntimeFailureKind({ status: 502, message: cloudflareHtml502 })).toBe(
       "upstream_html",
     );
   });
 
-  it("still classifies 403 HTML as auth_html_403", () => {
-    const html403 =
-      "<!doctype html><html><head><title>403 Forbidden</title></head>" +
-      "<body><h1>Forbidden</h1></body></html>";
+  it("classifies 403 HTML runtime failures as auth_html_403", () => {
     expect(classifyProviderRuntimeFailureKind({ status: 403, message: html403 })).toBe(
       "auth_html_403",
     );
+  });
+
+  it("classifies 407 HTML runtime failures as proxy", () => {
+    expect(classifyProviderRuntimeFailureKind({ status: 407, message: html407 })).toBe("proxy");
   });
 
   it("does not misclassify JSON API rate-limit responses as HTML", () => {

@@ -337,15 +337,22 @@ function isHtmlErrorResponse(raw: string, status?: number): boolean {
   if (!trimmed) {
     return false;
   }
+  const candidate = extractLeadingHttpStatus(trimmed)
+    ? trimmed
+    : trimmed.replace(/^error:\s*/i, "").trim();
   const inferred =
     typeof status === "number" && Number.isFinite(status)
       ? status
-      : extractLeadingHttpStatus(trimmed)?.code;
+      : extractLeadingHttpStatus(candidate)?.code;
   if (typeof inferred !== "number" || inferred < 400) {
     return false;
   }
-  const rest = extractLeadingHttpStatus(trimmed)?.rest ?? trimmed;
+  const rest = extractLeadingHttpStatus(candidate)?.rest ?? candidate;
   return HTML_BODY_RE.test(rest) && HTML_CLOSE_RE.test(rest);
+}
+
+function isTransportHtmlErrorStatus(status: number | undefined): boolean {
+  return status !== 401 && status !== 403 && status !== 407;
 }
 
 function isOpenAICodexScopeContext(raw: string, provider?: string): boolean {
@@ -760,10 +767,11 @@ function classifyFailoverClassificationFromMessage(
 
 export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassification | null {
   const inferredStatus = inferSignalStatus(signal);
-  // Short-circuit HTML error pages (e.g. Cloudflare 502/503/520-524) before
-  // running pattern-based message classifiers, which can misinterpret HTML
-  // body content as rate-limit or other structured API errors.
-  if (signal.message && isHtmlErrorResponse(signal.message, inferredStatus)) {
+  if (
+    signal.message &&
+    isTransportHtmlErrorStatus(inferredStatus) &&
+    isHtmlErrorResponse(signal.message, inferredStatus)
+  ) {
     return toReasonClassification("timeout");
   }
   const messageClassification = signal.message
@@ -800,11 +808,11 @@ export function classifyProviderRuntimeFailureKind(
   if (message && isAuthScopeErrorMessage(message, status, normalizedSignal.provider)) {
     return "auth_scope";
   }
-  if (message && isHtmlErrorResponse(message, status)) {
-    return status === 403 ? "auth_html_403" : "upstream_html";
-  }
   if (message && isProxyErrorMessage(message, status)) {
     return "proxy";
+  }
+  if (message && isHtmlErrorResponse(message, status)) {
+    return status === 403 ? "auth_html_403" : "upstream_html";
   }
   const failoverClassification = classifyFailoverSignal({
     ...normalizedSignal,
