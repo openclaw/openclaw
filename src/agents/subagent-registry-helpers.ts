@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, promises as fs } from "node:fs";
+import { existsSync, openSync, fstatSync, readSync, closeSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import {
@@ -213,12 +213,64 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
   }
 }
 
+/** Tool-call block types that indicate the assistant turn is still in progress. */
+const TOOL_CALL_BLOCK_TYPES = new Set([
+  "tool_use",
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "function_call",
+]);
+
+/** Maximum bytes to read from the tail of a transcript file. */
+const TRANSCRIPT_TAIL_BYTES = 32 * 1024;
+
+/**
+ * Read the tail of a file (up to `maxBytes`) and return lines from it.
+ * Falls back to empty array on any I/O error.
+ */
+function readTailLines(filePath: string, maxBytes: number): string[] {
+  let fd: number | undefined;
+  try {
+    fd = openSync(filePath, "r");
+    const stat = fstatSync(fd);
+    const fileSize = stat.size;
+    if (fileSize === 0) {
+      return [];
+    }
+    const readSize = Math.min(maxBytes, fileSize);
+    const offset = fileSize - readSize;
+    const buf = Buffer.alloc(readSize);
+    readSync(fd, buf, 0, readSize, offset);
+    const text = buf.toString("utf-8");
+    // When reading a partial tail, the first line is likely truncated; drop it.
+    const lines = text.split("\n").filter(Boolean);
+    if (offset > 0 && lines.length > 0) {
+      lines.shift();
+    }
+    return lines;
+  } catch {
+    return [];
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // best effort
+      }
+    }
+  }
+}
+
 /**
  * Check whether a subagent run's transcript contains a completed (non-pending) assistant reply.
  * Used to recover runs that finished successfully before a gateway restart but whose
  * completion wasn't persisted to the run registry.
  */
-function hasCompletedTranscript(entry: SubagentRunRecord): boolean {
+function hasCompletedTranscript(
+  entry: SubagentRunRecord,
+  storeCache?: Map<string, Record<string, SessionEntry>>,
+): boolean {
   try {
     const childSessionKey = entry.childSessionKey?.trim();
     if (!childSessionKey) {
@@ -227,7 +279,11 @@ function hasCompletedTranscript(entry: SubagentRunRecord): boolean {
     const cfg = loadConfig();
     const agentId = resolveAgentIdFromSessionKey(childSessionKey);
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    const store = loadSessionStore(storePath);
+    let store = storeCache?.get(storePath);
+    if (!store) {
+      store = loadSessionStore(storePath);
+      storeCache?.set(storePath, store);
+    }
     const sessionEntry = findSessionEntryByKey(store, childSessionKey);
     if (!sessionEntry?.sessionId) {
       return false;
@@ -241,22 +297,32 @@ function hasCompletedTranscript(entry: SubagentRunRecord): boolean {
     if (!existsSync(sessionFilePath)) {
       return false;
     }
-    const lines = readFileSync(sessionFilePath, "utf-8").split("\n").filter(Boolean);
+    const lines = readTailLines(sessionFilePath, TRANSCRIPT_TAIL_BYTES);
     for (let i = lines.length - 1; i >= 0; i--) {
       try {
         const parsed = JSON.parse(lines[i]) as { message?: unknown };
-        const msg = (parsed.message ?? parsed) as { role?: string; content?: unknown };
+        const msg = (parsed.message ?? parsed) as {
+          role?: string;
+          content?: unknown;
+          stopReason?: unknown;
+        };
         if (msg.role === "assistant" && msg.content) {
+          // Skip errored/aborted turns -- they are not successful completions.
+          if (msg.stopReason === "error" || msg.stopReason === "aborted") {
+            continue;
+          }
           const blocks = Array.isArray(msg.content) ? msg.content : [msg.content];
           const hasPendingTool = blocks.some(
             (b: unknown) =>
               typeof b === "object" &&
               b !== null &&
-              (b as Record<string, unknown>).type === "tool_use",
+              TOOL_CALL_BLOCK_TYPES.has((b as Record<string, unknown>).type as string),
           );
-          if (!hasPendingTool) {
-            return true;
+          // A pending tool call means the turn is in-progress; short-circuit.
+          if (hasPendingTool) {
+            return false;
           }
+          return true;
         }
         if (msg.role === "user" || msg.role === "system") {
           break;
@@ -278,13 +344,14 @@ export function reconcileOrphanedRun(params: {
   source: "restore" | "resume";
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
+  storeCache?: Map<string, Record<string, SessionEntry>>;
 }) {
   const now = Date.now();
   let changed = false;
   // Before marking as errored, check whether the transcript shows the run already
   // completed successfully. This recovers runs that finished before a gateway restart
   // but whose completion wasn't flushed to the run registry.
-  if (typeof params.entry.endedAt !== "number" && hasCompletedTranscript(params.entry)) {
+  if (typeof params.entry.endedAt !== "number" && hasCompletedTranscript(params.entry, params.storeCache)) {
     params.entry.endedAt = now;
     const completedOutcome: SubagentRunOutcome = withSubagentOutcomeTiming(
       { status: "ok" },
@@ -371,6 +438,7 @@ export function reconcileOrphanedRestoredRuns(params: {
         source: "restore",
         runs: params.runs,
         resumedRuns: params.resumedRuns,
+        storeCache,
       })
     ) {
       changed = true;
