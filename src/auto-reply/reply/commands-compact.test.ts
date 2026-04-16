@@ -31,8 +31,12 @@ vi.mock("./commands-compact.runtime.js", () => ({
   waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { compactEmbeddedPiSession, incrementCompactionCount, resolveSessionFilePathOptions } =
-  await import("./commands-compact.runtime.js");
+const {
+  compactEmbeddedPiSession,
+  formatContextUsageShort,
+  incrementCompactionCount,
+  resolveSessionFilePathOptions,
+} = await import("./commands-compact.runtime.js");
 
 function buildCompactParams(
   commandBodyNormalized: string,
@@ -56,6 +60,7 @@ function buildCompactParams(
     },
     sessionKey: "agent:main:main",
     sessionStore: {},
+    contextTokens: 272_000,
     resolveDefaultThinkingLevel: async () => "medium",
   } as unknown as HandleCommandsParams;
 }
@@ -321,5 +326,38 @@ describe("handleCompactCommand", () => {
         tokensAfter: 321,
       }),
     );
+  });
+
+  it("uses the current resolved context tokens instead of a stale target-session fallback", async () => {
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+    });
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        contextTokens: 272_000,
+        sessionKey: "agent:target:whatsapp:direct:12345",
+        sessionEntry: {
+          sessionId: "wrapper-session",
+          updatedAt: Date.now(),
+          contextTokens: 111,
+        },
+        sessionStore: {
+          "agent:target:whatsapp:direct:12345": {
+            sessionId: "target-session",
+            updatedAt: Date.now(),
+            contextTokens: 200_000,
+          },
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(vi.mocked(formatContextUsageShort)).toHaveBeenCalledWith(12_345, 272_000);
   });
 });
