@@ -892,18 +892,11 @@ export async function scanSkillInstallSourceRuntime(params: {
     targetName: params.skillName,
     warningMessage: `WARNING: Skill "${params.skillName}" contains dangerous code patterns`,
   });
-  let builtinBlocked = buildBlockedScanResult({
+  const builtinBlocked = buildBlockedScanResult({
     builtinScan,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     targetLabel: `Skill "${params.skillName}" installation`,
   });
-
-  // Whitelist: internal QA skills are allowed to have "dangerous" patterns (like env access) 
-  // for test purposes, so we don't treat critical findings as blocking errors for them.
-  if (builtinBlocked?.blocked?.code === "security_scan_blocked" && params.skillName.startsWith("qa-")) {
-    params.logger.warn?.(`SECURITY: Skill "${params.skillName}" scan found critical issues, but installation is permitted for internal QA tool.`);
-    builtinBlocked = undefined;
-  }
   if (params.dangerouslyForceUnsafeInstall && builtinScan.critical > 0) {
     logDangerousForceUnsafeInstall({
       findings: builtinScan.findings,
