@@ -988,21 +988,21 @@ async function validateScriptFileForShellBleed(params: {
 
     // Common failure mode: shell env var syntax leaking into Python/JS.
     // We deliberately match all-caps/underscore vars to avoid false positives with `$` as a JS identifier.
-    const envVarRegex = /\$[A-Z_][A-Z0-9_]{1,}/g;
-    const first = envVarRegex.exec(content);
+    const first = findFirstLikelyShellEnvToken({
+      content,
+      scriptKind: target.kind,
+    });
     if (first) {
-      const idx = first.index;
-      const before = content.slice(0, idx);
+      const before = content.slice(0, first.index);
       const line = before.split("\n").length;
-      const token = first[0];
       throw new Error(
         [
-          `exec preflight: detected likely shell variable injection (${token}) in ${target.kind} script: ${path.basename(
+          `exec preflight: detected likely shell variable injection (${first.token}) in ${target.kind} script: ${path.basename(
             absPath,
           )}:${line}.`,
           target.kind === "python"
-            ? `In Python, use os.environ.get(${JSON.stringify(token.slice(1))}) instead of raw ${token}.`
-            : `In Node.js, use process.env[${JSON.stringify(token.slice(1))}] instead of raw ${token}.`,
+            ? `In Python, use os.environ.get(${JSON.stringify(first.token.slice(1))}) instead of raw ${first.token}.`
+            : `In Node.js, use process.env[${JSON.stringify(first.token.slice(1))}] instead of raw ${first.token}.`,
           "(If this is inside a string literal on purpose, escape it or restructure the code.)",
         ].join("\n"),
       );
@@ -1022,6 +1022,97 @@ async function validateScriptFileForShellBleed(params: {
       }
     }
   }
+}
+
+type ShellEnvTokenMatch = {
+  index: number;
+  token: string;
+};
+
+function findFirstLikelyShellEnvToken(params: {
+  content: string;
+  scriptKind: "python" | "node";
+}): ShellEnvTokenMatch | null {
+  const envVarRegex = /\$[A-Z_][A-Z0-9_]{1,}/g;
+  if (params.scriptKind === "node") {
+    const first = envVarRegex.exec(params.content);
+    return first ? { index: first.index, token: first[0] } : null;
+  }
+
+  const ignoredRanges = collectPythonIgnoredRanges(params.content);
+  for (const match of params.content.matchAll(envVarRegex)) {
+    const idx = match.index;
+    if (idx === undefined) {
+      continue;
+    }
+    if (!isOffsetInRanges(idx, ignoredRanges)) {
+      return { index: idx, token: match[0] };
+    }
+  }
+  return null;
+}
+
+type OffsetRange = { start: number; end: number };
+
+function collectPythonIgnoredRanges(content: string): OffsetRange[] {
+  const ranges: OffsetRange[] = [];
+  let i = 0;
+  while (i < content.length) {
+    const ch = content[i];
+    if (ch === "#") {
+      const start = i;
+      i += 1;
+      while (i < content.length && content[i] !== "\n") {
+        i += 1;
+      }
+      ranges.push({ start, end: i });
+      continue;
+    }
+    if (ch !== "'" && ch !== '"') {
+      i += 1;
+      continue;
+    }
+
+    const quote = ch;
+    const isTriple = content[i + 1] === quote && content[i + 2] === quote;
+    const start = i;
+    if (isTriple) {
+      i += 3;
+      while (i < content.length) {
+        if (content[i] === quote && content[i + 1] === quote && content[i + 2] === quote) {
+          i += 3;
+          break;
+        }
+        i += 1;
+      }
+      ranges.push({ start, end: i });
+      continue;
+    }
+
+    i += 1;
+    while (i < content.length) {
+      if (content[i] === "\\") {
+        i += 2;
+        continue;
+      }
+      if (content[i] === quote) {
+        i += 1;
+        break;
+      }
+      i += 1;
+    }
+    ranges.push({ start, end: i });
+  }
+  return ranges;
+}
+
+function isOffsetInRanges(offset: number, ranges: OffsetRange[]): boolean {
+  for (const range of ranges) {
+    if (offset >= range.start && offset < range.end) {
+      return true;
+    }
+  }
+  return false;
 }
 
 type ParsedExecApprovalCommand = {

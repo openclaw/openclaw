@@ -78,6 +78,63 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("allows dollar-prefixed text inside python strings and comments", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const pyPath = path.join(tmp, "safe-dollar.py");
+      await fs.writeFile(
+        pyPath,
+        [
+          '"""',
+          "Guide for traders using $SIM labels.",
+          '"""',
+          "def main():",
+          "    total = 42.5",
+          '    # Keep $DM_JSON in docs only.',
+          '    print(f"Total: ${total:.2f}")',
+          "",
+          'if __name__ == "__main__":',
+          "    main()",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const result = await tool.execute("call-python-safe-dollar-strings", {
+        command: "python safe-dollar.py",
+        workdir: tmp,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(text).toContain("Total: $42.50");
+      expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
+
+  it("still blocks python shell env var injection outside string literals", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const pyPath = path.join(tmp, "mixed.py");
+      await fs.writeFile(
+        pyPath,
+        [
+          "def main():",
+          "    payload = $DM_JSON",
+          '    print("This label is fine: $SIM")',
+          "",
+          'if __name__ == "__main__":',
+          "    main()",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-python-mixed-dollar", {
+          command: "python mixed.py",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
   it("blocks obvious shell-as-js output before node execution", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const jsPath = path.join(tmp, "bad.js");
