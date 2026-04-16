@@ -43,7 +43,7 @@ function readNumberParam(params: Record<string, unknown>, key: string): number {
 }
 
 function resolveDynamicLspToolName(params: {
-  action: "hover" | "definition" | "references";
+  action: "hover" | "definition" | "references" | "diagnostics" | "symbols";
   server?: string;
   runtimeToolNames: string[];
 }): string | null {
@@ -52,7 +52,11 @@ function resolveDynamicLspToolName(params: {
       ? "lsp_hover_"
       : params.action === "definition"
         ? "lsp_definition_"
-        : "lsp_references_";
+        : params.action === "references"
+          ? "lsp_references_"
+          : params.action === "diagnostics"
+            ? "lsp_diagnostics_"
+            : "lsp_symbols_";
   const candidates = params.runtimeToolNames.filter((name) => name.startsWith(prefix));
   if (candidates.length === 0) {
     return null;
@@ -103,7 +107,7 @@ export function createLspTool(options: LspToolOptions): AnyAgentTool {
         reservedToolNames: [],
       });
       try {
-        if (!["hover", "definition", "references"].includes(action)) {
+        if (!["hover", "definition", "references", "diagnostics", "symbols"].includes(action)) {
           return jsonResult({
             status: "failed",
             action,
@@ -132,11 +136,16 @@ export function createLspTool(options: LspToolOptions): AnyAgentTool {
           throw new ToolInputError(`missing dynamic LSP tool: ${dynamicName}`);
         }
 
-        const toolInput: Record<string, unknown> = {
-          uri: resolveLspUri(params, options.workspaceDir),
-          line: readNumberParam(params, "line"),
-          character: readNumberParam(params, "character"),
-        };
+        const toolInput: Record<string, unknown> = {};
+        if (action === "symbols") {
+          toolInput.query = readStringParam(params, "query") ?? "";
+        } else {
+          toolInput.uri = resolveLspUri(params, options.workspaceDir);
+        }
+        if (action === "hover" || action === "definition" || action === "references") {
+          toolInput.line = readNumberParam(params, "line");
+          toolInput.character = readNumberParam(params, "character");
+        }
         if (action === "references") {
           toolInput.includeDeclaration =
             typeof params.includeDeclaration === "boolean" ? params.includeDeclaration : true;

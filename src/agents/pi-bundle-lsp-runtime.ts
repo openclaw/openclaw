@@ -28,6 +28,7 @@ type LspServerCapabilities = {
   definitionProvider?: boolean;
   referencesProvider?: boolean;
   diagnosticProvider?: boolean;
+  workspaceSymbolProvider?: boolean;
   [key: string]: unknown;
 };
 
@@ -269,6 +270,50 @@ function buildLspTools(session: LspSession): AnyAgentTool[] {
           context: { includeDeclaration: params.includeDeclaration ?? true },
         });
         return formatLspResult(serverLabel, "references", result);
+      },
+    });
+  }
+
+  if (caps.workspaceSymbolProvider) {
+    tools.push({
+      name: `lsp_symbols_${serverLabel}`,
+      label: `LSP Workspace Symbols (${serverLabel})`,
+      description: `Search workspace symbols via the ${serverLabel} language server.`,
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Symbol query text." },
+        },
+        required: [],
+      },
+      execute: async (_toolCallId, input) => {
+        const params = input as { query?: string };
+        const result = await sendRequest(session, "workspace/symbol", {
+          query: typeof params.query === "string" ? params.query : "",
+        });
+        return formatLspResult(serverLabel, "symbols", result);
+      },
+    });
+  }
+
+  if (caps.diagnosticProvider) {
+    tools.push({
+      name: `lsp_diagnostics_${serverLabel}`,
+      label: `LSP Diagnostics (${serverLabel})`,
+      description: `Fetch diagnostics for a file via the ${serverLabel} language server.`,
+      parameters: {
+        type: "object",
+        properties: {
+          uri: { type: "string", description: "File URI (file:///path/to/file)" },
+        },
+        required: ["uri"],
+      },
+      execute: async (_toolCallId, input) => {
+        const params = input as { uri: string };
+        const result = await sendRequest(session, "textDocument/diagnostic", {
+          textDocument: { uri: params.uri },
+        });
+        return formatLspResult(serverLabel, "diagnostics", result);
       },
     });
   }

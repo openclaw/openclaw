@@ -103,4 +103,73 @@ describe("createLspTool", () => {
       }),
     );
   });
+
+  it("dispatches symbols action with query payload", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text", text: "symbols-ok" }],
+      details: { lspServer: "ts", lspMethod: "symbols" },
+    }));
+    lspRuntimeMock.createBundleLspToolRuntime.mockResolvedValueOnce({
+      tools: [
+        {
+          name: "lsp_symbols_ts",
+          label: "symbols",
+          description: "symbols",
+          parameters: { type: "object", properties: {} },
+          execute,
+        },
+      ],
+      sessions: [{ serverName: "ts", capabilities: {} }],
+      dispose: vi.fn(async () => {}),
+    });
+
+    const { createLspTool } = await import("./lsp-tool.js");
+    const tool = createLspTool({ workspaceDir: "/tmp/workspace" });
+    const result = await tool.execute("tool-4", {
+      action: "symbols",
+      query: "mySymbol",
+    });
+
+    expect(execute).toHaveBeenCalledWith("lsp-dispatch", { query: "mySymbol" });
+    expect(result).toMatchObject({
+      details: { lspServer: "ts", lspMethod: "symbols" },
+    });
+  });
+
+  it("dispatches diagnostics action with path-derived uri", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text", text: "diagnostics-ok" }],
+      details: { lspServer: "ts", lspMethod: "diagnostics" },
+    }));
+    lspRuntimeMock.createBundleLspToolRuntime.mockResolvedValueOnce({
+      tools: [
+        {
+          name: "lsp_diagnostics_ts",
+          label: "diagnostics",
+          description: "diagnostics",
+          parameters: { type: "object", properties: {} },
+          execute,
+        },
+      ],
+      sessions: [{ serverName: "ts", capabilities: {} }],
+      dispose: vi.fn(async () => {}),
+    });
+
+    const { createLspTool } = await import("./lsp-tool.js");
+    const tool = createLspTool({ workspaceDir: "/tmp/workspace" });
+    const result = await tool.execute("tool-5", {
+      action: "diagnostics",
+      path: "src/a.ts",
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      "lsp-dispatch",
+      expect.objectContaining({
+        uri: expect.stringMatching(/^file:\/\//),
+      }),
+    );
+    expect(result).toMatchObject({
+      details: { lspServer: "ts", lspMethod: "diagnostics" },
+    });
+  });
 });
