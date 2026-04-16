@@ -52,6 +52,9 @@ export type A2ATaskEnvelopeV1 = {
     idempotencyKey?: string;
     correlationId?: string;
   };
+  runtime?: {
+    cancelTarget?: A2ATaskCancelTarget;
+  };
 };
 
 export type A2ATaskConstraints = NonNullable<A2ATaskEnvelopeV1["constraints"]>;
@@ -59,6 +62,19 @@ export type A2ATaskConstraints = NonNullable<A2ATaskEnvelopeV1["constraints"]>;
 export type A2ATaskError = {
   code: string;
   message?: string;
+};
+
+export type A2ATaskCancelTarget = {
+  kind: "session_run";
+  sessionKey: string;
+  runId?: string;
+};
+
+export type A2ATaskAbortResult = {
+  attempted: boolean;
+  aborted: boolean;
+  status: "aborted" | "no-active-run" | "error";
+  errorMessage?: string;
 };
 
 export type A2ATaskRecord = {
@@ -128,6 +144,9 @@ export type A2AExchangeRequest = {
   maxPingPongTurns: number;
   roundOneReply?: string;
   waitRunId?: string;
+  correlationId?: string;
+  parentRunId?: string;
+  cancelTarget?: A2ATaskCancelTarget;
 };
 
 export type A2ATaskRequest = {
@@ -153,6 +172,7 @@ export type A2ATaskRequest = {
     maxPingPongTurns?: number;
     roundOneReply?: string;
     waitRunId?: string;
+    cancelTarget?: A2ATaskCancelTarget;
   };
 };
 
@@ -161,6 +181,7 @@ export type A2ATaskUpdate = {
   taskId: string;
   correlationId?: string;
   parentRunId?: string;
+  at?: number;
   executionStatus?: Exclude<A2AExecutionStatus, "cancelled">;
   summary?: string;
   output?: unknown;
@@ -175,9 +196,11 @@ export type A2ATaskCancel = {
   taskId: string;
   correlationId?: string;
   parentRunId?: string;
+  at?: number;
   reason?: string;
   runId?: string;
   targetSessionKey?: string;
+  cancelTarget?: A2ATaskCancelTarget;
 };
 
 export type A2ATaskProtocolStatus = {
@@ -192,6 +215,8 @@ export type A2ATaskProtocolStatus = {
   output?: unknown;
   error?: A2ATaskError;
   updatedAt: number;
+  startedAt?: number;
+  heartbeatAt?: number;
   hasHeartbeat: boolean;
 };
 
@@ -205,7 +230,7 @@ export type A2ATaskUpdateResult = A2ATaskProtocolStatus & {
 
 export type A2ATaskCancelResult = A2ATaskProtocolStatus & {
   method: "a2a.task.cancel";
-  abortStatus?: "aborted" | "no-active-run" | "error" | "not-attempted";
+  abortStatus?: A2ATaskAbortResult["status"] | "not-attempted";
 };
 
 export type A2APublishAnnouncementResult = {
@@ -257,11 +282,7 @@ export interface A2ABrokerRuntime {
     target: A2AAnnounceTarget;
     message: string;
   }): Promise<A2APublishAnnouncementResult>;
-  abortTaskRun?(params: { sessionKey: string; runId?: string }): Promise<{
-    attempted: boolean;
-    aborted: boolean;
-    status: "aborted" | "no-active-run" | "error";
-    errorMessage?: string;
-  }>;
+  abortTask?(params: { target: A2ATaskCancelTarget }): Promise<A2ATaskAbortResult>;
+  abortTaskRun?(params: { sessionKey: string; runId?: string }): Promise<A2ATaskAbortResult>;
   warn(event: string, meta: Record<string, unknown>): void;
 }

@@ -1,0 +1,58 @@
+{
+  "id": "a2a-broker-adapter",
+  "name": "A2A Broker Adapter",
+  "description": "Config-only opt-in surface for standalone A2A broker routing.",
+  "uiHints": {
+    "baseUrl": {
+      "label": "Broker Base URL",
+      "help": "Base URL for the standalone a2a-broker service."
+    },
+    "edgeSecret": {
+      "label": "Edge Secret",
+      "help": "Optional x-a2a-edge-secret header value for protected broker routes.",
+      "sensitive": true
+    },
+    "requester.id": {
+      "label": "Requester ID",
+      "help": "Default x-a2a-requester-id header when OpenClaw calls the broker directly."
+    },
+    "requester.kind": {
+      "label": "Requester Kind",
+      "help": "Default x-a2a-requester-kind header when OpenClaw calls the broker directly."
+    },
+    "requester.role": {
+      "label": "Requester Role",
+      "help": "Default x-a2a-requester-role header when OpenClaw calls the broker directly."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://"
+      },
+      "edgeSecret": {
+        "type": ["string", "object"]
+      },
+      "requester": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["session", "node", "user", "service"]
+          },
+          "role": {
+            "type": "string",
+            "enum": ["hub", "live-trader", "researcher", "analyst", "operator"]
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,33 +1,30 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { createA2ATaskEventLogSink } from "../a2a/log.js";
 import {
   buildA2ATaskEnvelopeFromExchange,
-  buildA2ATaskRequestFromExchange,
-  runA2ATaskRequest,
+  loadA2ATaskProtocolStatusById,
   type A2AExchangeRequest,
-  type A2ATaskEventSink,
+  type A2ATaskCancelTarget,
 } from "./sessions-send-broker.js";
 import {
-  buildAgentToAgentAnnounceContext,
-  buildAgentToAgentReplyContext,
-  isAnnounceSkip,
-  isReplySkip,
-} from "./sessions-send-helpers.js";
-import {
   __testing as openClawA2ATesting,
-  createOpenClawA2ABrokerRuntime,
+  createOpenClawSessionsSendA2AAdapter,
+  type SessionsSendA2AAdapter,
 } from "./sessions-send-openclaw-adapter.js";
+import {
+  createStandaloneBrokerSessionsSendA2AAdapter,
+  shouldUseStandaloneBrokerSessionsSendAdapter,
+} from "./sessions-send-standalone-broker-adapter.js";
 
-const defaultSessionsSendA2AHelpers = {
-  createEventSink(params: { targetSessionKey: string; taskId: string }): A2ATaskEventSink {
-    return createA2ATaskEventLogSink({
-      sessionKey: params.targetSessionKey,
-      taskId: params.taskId,
-    });
-  },
+const defaultSessionsSendA2ADeps = {
+  createAdapter: (): SessionsSendA2AAdapter => createOpenClawSessionsSendA2AAdapter(),
+  createBrokerAdapter: (config: OpenClawConfig): SessionsSendA2AAdapter =>
+    createStandaloneBrokerSessionsSendA2AAdapter({ config }),
+  shouldUseBrokerAdapter: (config?: OpenClawConfig): boolean =>
+    shouldUseStandaloneBrokerSessionsSendAdapter(config),
 };
 
-let sessionsSendA2AHelpers = defaultSessionsSendA2AHelpers;
+let sessionsSendA2ADeps = defaultSessionsSendA2ADeps;
 
 export function buildSessionsSendA2AExchangeRequest(params: {
   targetSessionKey: string;
@@ -39,6 +36,9 @@ export function buildSessionsSendA2AExchangeRequest(params: {
   requesterChannel?: GatewayMessageChannel;
   roundOneReply?: string;
   waitRunId?: string;
+  correlationId?: string;
+  parentRunId?: string;
+  cancelTarget?: A2ATaskCancelTarget;
 }): A2AExchangeRequest {
   return {
     requester: params.requesterSessionKey
@@ -57,6 +57,17 @@ export function buildSessionsSendA2AExchangeRequest(params: {
     maxPingPongTurns: params.maxPingPongTurns,
     roundOneReply: params.roundOneReply,
     waitRunId: params.waitRunId,
+    correlationId: params.correlationId ?? params.waitRunId,
+    parentRunId: params.parentRunId ?? params.waitRunId,
+    cancelTarget:
+      params.cancelTarget ??
+      (params.targetSessionKey
+        ? {
+            kind: "session_run",
+            sessionKey: params.targetSessionKey,
+            ...(params.waitRunId ? { runId: params.waitRunId } : {}),
+          }
+        : undefined),
   };
 }
 
@@ -70,40 +81,81 @@ export async function runSessionsSendA2AFlow(params: {
   requesterChannel?: GatewayMessageChannel;
   roundOneReply?: string;
   waitRunId?: string;
+  correlationId?: string;
+  parentRunId?: string;
+  cancelTarget?: A2ATaskCancelTarget;
+  config?: OpenClawConfig;
 }) {
   const exchangeRequest = buildSessionsSendA2AExchangeRequest(params);
-  const taskRequest = buildA2ATaskRequestFromExchange({
+  const adapter = selectSessionsSendA2AAdapter(params.config);
+  return await adapter.runTaskRequest({
     request: exchangeRequest,
     taskId: params.waitRunId,
   });
-  const envelope = buildA2ATaskEnvelopeFromExchange({
-    request: exchangeRequest,
-    taskId: params.waitRunId,
+}
+
+export async function reconcileSessionsSendA2ATask(params: {
+  sessionKey: string;
+  taskId: string;
+  config?: OpenClawConfig;
+}) {
+  const adapter = selectSessionsSendA2AAdapter(params.config);
+  if (!adapter.reconcileTaskStatus) {
+    return loadA2ATaskProtocolStatusById({
+      sessionKey: params.sessionKey,
+      taskId: params.taskId,
+    });
+  }
+  return adapter.reconcileTaskStatus({
+    sessionKey: params.sessionKey,
+    taskId: params.taskId,
   });
-  const result = await runA2ATaskRequest({
-    request: taskRequest,
-    eventSink: sessionsSendA2AHelpers.createEventSink({
-      targetSessionKey: params.targetSessionKey,
-      taskId: envelope.taskId,
-    }),
-    runtime: createOpenClawA2ABrokerRuntime(),
-    buildReplyContext: buildAgentToAgentReplyContext,
-    buildAnnounceContext: buildAgentToAgentAnnounceContext,
-    isReplySkip,
-    isAnnounceSkip,
+}
+
+export async function cancelSessionsSendA2ATask(params: {
+  sessionKey: string;
+  taskId: string;
+  reason?: string;
+  config?: OpenClawConfig;
+}) {
+  const adapter = selectSessionsSendA2AAdapter(params.config);
+  if (!adapter.cancelTask) {
+    return undefined;
+  }
+  return adapter.cancelTask({
+    sessionKey: params.sessionKey,
+    taskId: params.taskId,
+    reason: params.reason,
   });
-  return result.record;
+}
+
+function selectSessionsSendA2AAdapter(config?: OpenClawConfig): SessionsSendA2AAdapter {
+  return config && sessionsSendA2ADeps.shouldUseBrokerAdapter(config)
+    ? sessionsSendA2ADeps.createBrokerAdapter(config)
+    : sessionsSendA2ADeps.createAdapter();
 }
 
 export const __testing = {
   ...openClawA2ATesting,
-  setHelpersForTest(overrides?: Partial<typeof defaultSessionsSendA2AHelpers>) {
-    sessionsSendA2AHelpers = overrides
+  setAdapterFactoryForTest(createAdapter?: typeof defaultSessionsSendA2ADeps.createAdapter) {
+    sessionsSendA2ADeps = createAdapter
       ? {
-          ...defaultSessionsSendA2AHelpers,
+          ...defaultSessionsSendA2ADeps,
+          createAdapter,
+        }
+      : defaultSessionsSendA2ADeps;
+  },
+  setAdapterSelectionForTest(
+    overrides?: Partial<
+      Pick<typeof defaultSessionsSendA2ADeps, "createBrokerAdapter" | "shouldUseBrokerAdapter">
+    >,
+  ) {
+    sessionsSendA2ADeps = overrides
+      ? {
+          ...defaultSessionsSendA2ADeps,
           ...overrides,
         }
-      : defaultSessionsSendA2AHelpers;
+      : defaultSessionsSendA2ADeps;
   },
   buildTaskEnvelopeForTest(params: {
     targetSessionKey: string;
@@ -115,6 +167,9 @@ export const __testing = {
     requesterChannel?: GatewayMessageChannel;
     roundOneReply?: string;
     waitRunId?: string;
+    correlationId?: string;
+    parentRunId?: string;
+    cancelTarget?: A2ATaskCancelTarget;
   }) {
     return buildA2ATaskEnvelopeFromExchange({
       request: buildSessionsSendA2AExchangeRequest(params),
