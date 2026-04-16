@@ -63,6 +63,11 @@ export function resolvePlanApproval(
         approval: "timed_out",
         updatedAt: now,
       };
+
+    default: {
+      const _exhaustive: never = action;
+      return current;
+    }
   }
 }
 
