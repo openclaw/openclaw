@@ -231,7 +231,12 @@ export function resolveOpenClawMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
-  const planTemplate = parsePlanTemplate(metadataObj["plan-template"]);
+  // Accept both kebab-case (`plan-template`) and camelCase (`planTemplate`)
+  // frontmatter keys. Codex P1 (PR #67541 r3096435164) — natural authors
+  // following the `primaryEnv`/`skillKey` camelCase convention would have
+  // their templates silently ignored otherwise. Kebab-case wins on conflict
+  // for backward compatibility with existing skills.
+  const planTemplate = parsePlanTemplate(metadataObj["plan-template"] ?? metadataObj.planTemplate);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: readStringValue(metadataObj.emoji),

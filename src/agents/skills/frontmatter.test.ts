@@ -65,3 +65,33 @@ describe("resolveOpenClawMetadata install validation", () => {
     expect(install).toBeUndefined();
   });
 });
+
+describe("resolveOpenClawMetadata planTemplate (Codex P1 r3096435164)", () => {
+  it("parses kebab-case `plan-template` key (legacy)", () => {
+    const meta = resolveOpenClawMetadata({
+      metadata: '{"openclaw":{"plan-template":[{"step":"Tag release"},{"step":"Publish"}]}}',
+    });
+    expect(meta?.planTemplate).toEqual([{ step: "Tag release" }, { step: "Publish" }]);
+  });
+
+  it("parses camelCase `planTemplate` key (natural — was silently ignored)", () => {
+    const meta = resolveOpenClawMetadata({
+      metadata: '{"openclaw":{"planTemplate":[{"step":"Tag release"},{"step":"Publish"}]}}',
+    });
+    expect(meta?.planTemplate).toEqual([{ step: "Tag release" }, { step: "Publish" }]);
+  });
+
+  it("kebab-case wins on conflict (backward compat)", () => {
+    const meta = resolveOpenClawMetadata({
+      metadata: '{"openclaw":{"plan-template":[{"step":"Old"}],"planTemplate":[{"step":"New"}]}}',
+    });
+    expect(meta?.planTemplate).toEqual([{ step: "Old" }]);
+  });
+
+  it("returns undefined planTemplate when neither key is present", () => {
+    const meta = resolveOpenClawMetadata({
+      metadata: '{"openclaw":{"primaryEnv":"node"}}',
+    });
+    expect(meta?.planTemplate).toBeUndefined();
+  });
+});
