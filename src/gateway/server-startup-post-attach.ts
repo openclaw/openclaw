@@ -294,7 +294,7 @@ export async function startGatewaySidecars(params: {
         for (const { entry, eventText } of toReplay) {
           enqueueSystemEvent(eventText, {
             sessionKey,
-            contextKey: `pending-inbound:${entry.channel}:${entry.id}`,
+            contextKey: `pending-inbound:${entry.channel}${entry.accountId ? `:${entry.accountId}` : ""}:${entry.id}`,
           });
           params.log.warn(
             `pending-inbound: replayed ${entry.channel}:${entry.id} -> session ${sessionKey}`,
