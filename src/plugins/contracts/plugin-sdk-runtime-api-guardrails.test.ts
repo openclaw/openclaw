@@ -107,6 +107,16 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export * from "openclaw/plugin-sdk/nextcloud-talk";',
     'export { setNextcloudTalkRuntime } from "./src/runtime.js";',
   ],
+  [bundledPluginFile({
+    rootDir: ROOT_DIR,
+    pluginId: "qa-channel",
+    relativePath: "runtime-api.ts",
+  })]: [
+    'export * from "./src/bus-client.js";',
+    'export * from "./src/channel.js";',
+    'export * from "./src/runtime-api.js";',
+    'export * from "./src/runtime.js";',
+  ],
   [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "signal", relativePath: "runtime-api.ts" })]: [
     'export * from "./src/runtime-api.js";',
     'export { setSignalRuntime } from "./src/runtime.js";',

@@ -22,6 +22,17 @@ describe("plugin-sdk qa-channel", () => {
     });
   });
 
+  it("surfaces runtime seam resolution failures without fallback", async () => {
+    loadBundledPluginPublicSurfaceModuleSync.mockImplementation(() => {
+      throw new Error("Unable to resolve bundled plugin public surface qa-channel/runtime-api.js");
+    });
+    const { buildQaTarget } = await import("./qa-channel.js");
+
+    expect(() => buildQaTarget({ chatType: "direct", conversationId: "main" })).toThrow(
+      "Unable to resolve bundled plugin public surface qa-channel/runtime-api.js",
+    );
+  });
+
   it("keeps the qa facade cold until a value is used", async () => {
     const module = await import("./qa-channel.js");
 
@@ -30,7 +41,7 @@ describe("plugin-sdk qa-channel", () => {
     expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledTimes(1);
   });
 
-  it("delegates qa helpers through the bundled public surface", async () => {
+  it("delegates qa helpers through the bundled runtime seam", async () => {
     const { buildQaTarget, formatQaTarget } = await import("./qa-channel.js");
     const input = { chatType: "direct" as const, conversationId: "main" };
 
@@ -39,7 +50,7 @@ describe("plugin-sdk qa-channel", () => {
     expect(buildQaTargetImpl).toHaveBeenCalledTimes(2);
     expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
       dirName: "qa-channel",
-      artifactBasename: "api.js",
+      artifactBasename: "runtime-api.js",
     });
   });
 });

@@ -1,5 +1,5 @@
 // Manual facade. Keep loader boundary explicit.
-type FacadeModule = typeof import("@openclaw/qa-channel/api.js");
+type FacadeModule = typeof import("@openclaw/qa-channel/runtime-api.js");
 import {
   createLazyFacadeObjectValue,
   loadBundledPluginPublicSurfaceModuleSync,
@@ -8,7 +8,7 @@ import {
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
     dirName: "qa-channel",
-    artifactBasename: "api.js",
+    artifactBasename: "runtime-api.js",
   });
 }
 
@@ -63,25 +63,30 @@ export const sendQaBusMessage: FacadeModule["sendQaBusMessage"] = ((...args) =>
 export const setQaChannelRuntime: FacadeModule["setQaChannelRuntime"] = ((...args) =>
   loadFacadeModule().setQaChannelRuntime(...args)) as FacadeModule["setQaChannelRuntime"];
 
-export type QaBusAttachment = import("@openclaw/qa-channel/api.js").QaBusAttachment;
-export type QaBusConversation = import("@openclaw/qa-channel/api.js").QaBusConversation;
-export type QaBusConversationKind = import("@openclaw/qa-channel/api.js").QaBusConversationKind;
-export type QaBusCreateThreadInput = import("@openclaw/qa-channel/api.js").QaBusCreateThreadInput;
-export type QaBusDeleteMessageInput = import("@openclaw/qa-channel/api.js").QaBusDeleteMessageInput;
-export type QaBusEditMessageInput = import("@openclaw/qa-channel/api.js").QaBusEditMessageInput;
-export type QaBusEvent = import("@openclaw/qa-channel/api.js").QaBusEvent;
+export type QaBusAttachment = import("@openclaw/qa-channel/runtime-api.js").QaBusAttachment;
+export type QaBusConversation = import("@openclaw/qa-channel/runtime-api.js").QaBusConversation;
+export type QaBusConversationKind =
+  import("@openclaw/qa-channel/runtime-api.js").QaBusConversationKind;
+export type QaBusCreateThreadInput =
+  import("@openclaw/qa-channel/runtime-api.js").QaBusCreateThreadInput;
+export type QaBusDeleteMessageInput =
+  import("@openclaw/qa-channel/runtime-api.js").QaBusDeleteMessageInput;
+export type QaBusEditMessageInput =
+  import("@openclaw/qa-channel/runtime-api.js").QaBusEditMessageInput;
+export type QaBusEvent = import("@openclaw/qa-channel/runtime-api.js").QaBusEvent;
 export type QaBusInboundMessageInput =
-  import("@openclaw/qa-channel/api.js").QaBusInboundMessageInput;
-export type QaBusMessage = import("@openclaw/qa-channel/api.js").QaBusMessage;
+  import("@openclaw/qa-channel/runtime-api.js").QaBusInboundMessageInput;
+export type QaBusMessage = import("@openclaw/qa-channel/runtime-api.js").QaBusMessage;
 export type QaBusOutboundMessageInput =
-  import("@openclaw/qa-channel/api.js").QaBusOutboundMessageInput;
-export type QaBusPollInput = import("@openclaw/qa-channel/api.js").QaBusPollInput;
-export type QaBusPollResult = import("@openclaw/qa-channel/api.js").QaBusPollResult;
+  import("@openclaw/qa-channel/runtime-api.js").QaBusOutboundMessageInput;
+export type QaBusPollInput = import("@openclaw/qa-channel/runtime-api.js").QaBusPollInput;
+export type QaBusPollResult = import("@openclaw/qa-channel/runtime-api.js").QaBusPollResult;
 export type QaBusReactToMessageInput =
-  import("@openclaw/qa-channel/api.js").QaBusReactToMessageInput;
-export type QaBusReadMessageInput = import("@openclaw/qa-channel/api.js").QaBusReadMessageInput;
+  import("@openclaw/qa-channel/runtime-api.js").QaBusReactToMessageInput;
+export type QaBusReadMessageInput =
+  import("@openclaw/qa-channel/runtime-api.js").QaBusReadMessageInput;
 export type QaBusSearchMessagesInput =
-  import("@openclaw/qa-channel/api.js").QaBusSearchMessagesInput;
-export type QaBusStateSnapshot = import("@openclaw/qa-channel/api.js").QaBusStateSnapshot;
-export type QaBusThread = import("@openclaw/qa-channel/api.js").QaBusThread;
-export type QaBusWaitForInput = import("@openclaw/qa-channel/api.js").QaBusWaitForInput;
+  import("@openclaw/qa-channel/runtime-api.js").QaBusSearchMessagesInput;
+export type QaBusStateSnapshot = import("@openclaw/qa-channel/runtime-api.js").QaBusStateSnapshot;
+export type QaBusThread = import("@openclaw/qa-channel/runtime-api.js").QaBusThread;
+export type QaBusWaitForInput = import("@openclaw/qa-channel/runtime-api.js").QaBusWaitForInput;
