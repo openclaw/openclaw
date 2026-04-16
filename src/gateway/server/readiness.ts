@@ -13,7 +13,18 @@ export type ReadinessResult = {
   ready: boolean;
   failing: string[];
   uptimeMs: number;
+  bootCompleted?: boolean;
 };
+
+// Global boot-completed flag. Set by the gateway startup hook runner
+// after all internal hooks (including boot-md) have finished.
+let _bootCompleted = false;
+export function setBootCompleted(): void {
+  _bootCompleted = true;
+}
+export function isBootCompleted(): boolean {
+  return _bootCompleted;
+}
 
 export type ReadinessChecker = () => ReadinessResult;
 
@@ -77,6 +88,6 @@ export function createReadinessChecker(deps: {
 
     cachedAt = now;
     cachedState = { ready: failing.length === 0, failing };
-    return { ...cachedState, uptimeMs };
+    return { ...cachedState, uptimeMs, bootCompleted: _bootCompleted };
   };
 }

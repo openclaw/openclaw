@@ -81,7 +81,7 @@ describe("createReadinessChecker", () => {
       const manager = createHealthyDiscordManager(startedAt, Date.now() - 1_000);
 
       const readiness = createReadinessChecker({ channelManager: manager, startedAt });
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
+      expect(readiness()).toMatchObject({ ready: true, failing: [], uptimeMs: 300_000 });
     });
   });
 
@@ -104,7 +104,7 @@ describe("createReadinessChecker", () => {
           },
         },
       });
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
+      expect(readiness()).toMatchObject({ ready: true, failing: [], uptimeMs: 300_000 });
     });
   });
 
@@ -122,7 +122,7 @@ describe("createReadinessChecker", () => {
           },
         },
       });
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 30_000 });
+      expect(readiness()).toMatchObject({ ready: true, failing: [], uptimeMs: 30_000 });
     });
   });
 
@@ -140,7 +140,7 @@ describe("createReadinessChecker", () => {
           },
         },
       });
-      expect(readiness()).toEqual({ ready: false, failing: ["discord"], uptimeMs: 300_000 });
+      expect(readiness()).toMatchObject({ ready: false, failing: ["discord"], uptimeMs: 300_000 });
     });
   });
 
@@ -161,7 +161,7 @@ describe("createReadinessChecker", () => {
           },
         },
       });
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
+      expect(readiness()).toMatchObject({ ready: true, failing: [], uptimeMs: 300_000 });
     });
   });
 
@@ -181,7 +181,7 @@ describe("createReadinessChecker", () => {
           },
         },
       });
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 1_860_000 });
+      expect(readiness()).toMatchObject({ ready: true, failing: [], uptimeMs: 1_860_000 });
     });
   });
 
@@ -201,7 +201,7 @@ describe("createReadinessChecker", () => {
           },
         },
       });
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 1_860_000 });
+      expect(readiness()).toMatchObject({ ready: true, failing: [], uptimeMs: 1_860_000 });
     });
   });
 
@@ -221,13 +221,13 @@ describe("createReadinessChecker", () => {
         },
         cacheTtlMs: 1_000,
       });
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
+      expect(readiness()).toMatchObject({ ready: true, failing: [], uptimeMs: 300_000 });
       vi.advanceTimersByTime(500);
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_500 });
+      expect(readiness()).toMatchObject({ ready: true, failing: [], uptimeMs: 300_500 });
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
 
       vi.advanceTimersByTime(600);
-      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 301_100 });
+      expect(readiness()).toMatchObject({ ready: true, failing: [], uptimeMs: 301_100 });
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
     });
   });

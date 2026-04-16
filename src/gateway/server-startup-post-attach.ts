@@ -28,6 +28,7 @@ import {
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
+import { setBootCompleted } from "./server/readiness.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -191,8 +192,12 @@ export async function startGatewaySidecars(params: {
         deps: params.deps,
         workspaceDir: params.defaultWorkspaceDir,
       });
-      void triggerInternalHook(hookEvent);
+      void triggerInternalHook(hookEvent).then(() => {
+        setBootCompleted();
+      });
     }, 250);
+  } else {
+    setBootCompleted();
   }
 
   let pluginServices: PluginServicesHandle | null = null;
