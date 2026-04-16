@@ -6,6 +6,12 @@
 - **One-Click Installation**: Added support for direct installation via a PowerShell one-liner (`iex (irm ...)`).
 - **Remote Binary Lookup**: Enhanced `install.ps1` to automatically download the latest `OpenClaw.exe` from GitHub if not found locally.
 
+### Fixed
+- **Tauri Sidecar Resolution**: Updated Rust logic to correctly find bundled gateway binaries using target-triple suffixes (e.g., `-x86_64-pc-windows-msvc`) and search in both `binaries/` and root directories.
+- **Uninstaller Persistence for IEX**: Ensured the `uninstall.ps1` script is correctly saved to the installation directory even when run via in-memory `Invoke-Expression`.
+- **UAC Elevation for IEX**: Fixed an issue where the installer failed to relaunch as Administrator when executed via `Invoke-Expression` (One-Click flow).
+- **Official Repository Sync**: Corrected the fallback binary download path to use the official `openclaw/openclaw` repository for better security and trust.
+
 ---
 
 ## [2026-04-16] - Production Hardening & Monitoring Update

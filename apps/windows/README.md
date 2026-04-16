@@ -49,7 +49,7 @@ To generate the production `.msi` or `.exe` installer:
 For the easiest installation, open **PowerShell as Administrator** and run the following command:
 
 ```powershell
-iex (irm https://raw.githubusercontent.com/aliyevaladddin/openclaw/main/scripts/windows/install.ps1)
+iex (irm https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/windows/install.ps1)
 ```
 
 This command will automatically download the installer, fetch the latest dependencies, and set up OpenClaw for you.

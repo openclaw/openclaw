@@ -51,33 +51,53 @@ struct GatewayMetrics {
     restarts: u32,
 }
 
-// Determines the command to launch OpenClaw (binary directly, no cmd /C)
+// Determines the command to launch OpenClaw (handles Tauri-suffixed sidecars)
 fn get_openclaw_command() -> (String, Vec<String>) {
-    let sidecar_name = if cfg!(windows) { "openclaw.exe" } else { "openclaw" };
-    let fallback_name = if cfg!(windows) { "openclaw.cmd" } else { "openclaw" };
+    let arch = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "i686"
+    };
+
+    let target_triple = format!("{}-pc-windows-msvc", arch);
+    let sidecar_name = format!("openclaw-{}.exe", target_triple);
+    let legacy_sidecar = "openclaw.exe";
+    let fallback_name = "openclaw.cmd";
 
     if let Ok(exe_path) = env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            let sidecar = exe_dir.join(sidecar_name);
-            // Validate sidecar exists, isn't the wrapper itself, and is > 0 bytes
-            if sidecar.exists() {
-                let is_self = if let (Ok(s), Ok(c)) = (sidecar.canonicalize(), exe_path.canonicalize()) {
-                    s == c
-                } else {
-                    false
-                };
+            // Priority list:
+            // 1. Tauri-suffixed sidecar in binaries/ folder
+            // 2. Tauri-suffixed sidecar in the same folder
+            // 3. Legacy openclaw.exe (for manual developer builds)
+            let candidates = vec![
+                exe_dir.join("binaries").join(&sidecar_name),
+                exe_dir.join(&sidecar_name),
+                exe_dir.join(legacy_sidecar),
+            ];
 
-                if !is_self {
-                    if let Ok(metadata) = sidecar.metadata() {
-                        if metadata.len() > 0 {
-                            return (sidecar.to_string_lossy().to_string(), vec![]);
+            for sidecar in candidates {
+                if sidecar.exists() {
+                    let is_self = if let (Ok(s), Ok(c)) = (sidecar.canonicalize(), exe_path.canonicalize()) {
+                        s == c
+                    } else {
+                        false
+                    };
+
+                    if !is_self {
+                        if let Ok(metadata) = sidecar.metadata() {
+                            if metadata.len() > 0 {
+                                return (sidecar.to_string_lossy().to_string(), vec![]);
+                            }
                         }
                     }
                 }
             }
         }
     }
-    // Fallback: direct binary invocation via PATH
+    // Final fallback: hope it's on the system PATH
     (fallback_name.to_string(), vec![])
 }
 

@@ -9,7 +9,15 @@ param(
 # 0. Admin & Context Check
 if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "Administrator privileges required. Relaunching..." -ForegroundColor Yellow
-    $arguments = "-ExecutionPolicy Bypass -File `"$($myinvocation.mycommand.definition)`""
+    
+    $scriptPath = $MyInvocation.MyCommand.Path
+    if (-not $scriptPath) {
+        # Running via IEX (no file path). Save content to a temp file to allow -File relaunch.
+        $scriptPath = Join-Path $env:TEMP "install_openclaw.ps1"
+        $MyInvocation.MyCommand.Definition | Out-File -FilePath $scriptPath -Encoding utf8
+    }
+
+    $arguments = "-ExecutionPolicy Bypass -File `"$scriptPath`""
     if ($Uninstall) { $arguments += " -Uninstall" }
     if ($Silent) { $arguments += " -Silent" }
     $arguments += " -InstallPath `"$InstallPath`""
@@ -108,7 +116,7 @@ if (-not $srcExe) { $srcExe = Get-Item -Path (Join-Path $PSScriptRoot "..\..\app
 # NEW: Automatic remote download if no local binary is found
 if (-not $srcExe) {
     Write-Host "Local binary not found. Attempting to download latest release from GitHub..." -ForegroundColor Cyan
-    $repo = "aliyevaladddin/openclaw"
+    $repo = "openclaw/openclaw"
     $assetName = "OpenClaw.exe"
     try {
         $releaseUrl = "https://github.com/$repo/releases/latest/download/$assetName"
@@ -132,7 +140,12 @@ Copy-Item $srcExe.FullName -Destination (Join-Path $InstallPath "OpenClaw.exe") 
 
 # Persistent Uninstaller
 $UninstallerTarget = Join-Path $InstallPath "uninstall.ps1"
-Copy-Item $PSCommandPath $UninstallerTarget -Force
+if ($PSCommandPath) {
+    Copy-Item $PSCommandPath $UninstallerTarget -Force
+} else {
+    # Running via IEX (no command path). Persist the in-memory script content.
+    $MyInvocation.MyCommand.Definition | Out-File -FilePath $UninstallerTarget -Encoding utf8
+}
 
 # 4. Shortcuts
 $ExePath  = Join-Path $InstallPath "OpenClaw.exe"
