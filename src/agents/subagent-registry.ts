@@ -489,6 +489,7 @@ async function notifyContextEngineSubagentEnded(params: {
       allowGatewaySubagentBinding: true,
     });
     const engine = await resolveSubagentRegistryContextEngine(cfg, {
+      agentDir: resolveOpenClawAgentDir(),
       workspaceDir: params.workspaceDir,
     });
     if (!engine.onSubagentEnded) {
