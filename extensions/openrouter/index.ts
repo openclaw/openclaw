@@ -17,6 +17,8 @@ import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.j
 import { buildOpenrouterProvider } from "./provider-catalog.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
 
+export { injectAutoRouterPlugin } from "./stream.js";
+
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;

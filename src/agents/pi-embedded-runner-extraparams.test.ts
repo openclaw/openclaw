@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { injectAutoRouterPlugin } from "../../extensions/openrouter/index.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
@@ -224,7 +225,48 @@ function installFullProviderRuntimeDepsForTest() {
         }
         return streamFn;
       }
-      return params.context.streamFn;
+      if (params.provider !== "openrouter") {
+        return params.context.streamFn;
+      }
+
+      const providerRouting =
+        params.context.extraParams?.provider != null &&
+        typeof params.context.extraParams.provider === "object"
+          ? (params.context.extraParams.provider as Record<string, unknown>)
+          : undefined;
+      let streamFn = params.context.streamFn;
+      if (providerRouting) {
+        const underlying = streamFn;
+        streamFn = (model, context, options) =>
+          (underlying as StreamFn)(
+            {
+              ...model,
+              compat: { ...model.compat, openRouterRouting: providerRouting },
+            },
+            context,
+            options,
+          );
+      }
+
+      let autoRouterAllowedModels: string[] = [];
+      const autoRouterConfig = params.context.extraParams?.autoRouter;
+      if (autoRouterConfig != null && typeof autoRouterConfig === "object") {
+        const rawAllowedModels = (autoRouterConfig as Record<string, unknown>).allowedModels;
+        if (Array.isArray(rawAllowedModels) && rawAllowedModels.length > 0) {
+          const validModels = rawAllowedModels.filter((m): m is string => typeof m === "string");
+          if (validModels.length > 0) {
+            autoRouterAllowedModels = validModels;
+            streamFn = injectAutoRouterPlugin(streamFn, validModels);
+          }
+        }
+      }
+
+      const skipReasoningInjection =
+        params.context.modelId === "auto" ||
+        isProxyReasoningUnsupported(params.context.modelId) ||
+        autoRouterAllowedModels.some(isProxyReasoningUnsupported);
+      const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
+      return createOpenRouterSystemCacheWrapper(createOpenRouterWrapper(streamFn, thinkingLevel));
     },
   });
 }
@@ -553,6 +595,165 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]).not.toHaveProperty("reasoning");
+  });
+
+  it("injects auto-router plugin into payload when autoRouter.allowedModels is configured", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/openrouter/auto": {
+                params: {
+                  autoRouter: {
+                    allowedModels: ["anthropic/claude-haiku-4-5", "google/gemini-2.5-flash"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "openrouter",
+      "openrouter/auto",
+    );
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "openrouter/auto",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.plugins).toEqual([
+      {
+        id: "auto-router",
+        allowed_models: ["anthropic/claude-haiku-4-5", "google/gemini-2.5-flash"],
+      },
+    ]);
+  });
+
+  it("does not inject plugins when autoRouter.allowedModels is absent", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openrouter", "openrouter/auto");
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "openrouter/auto",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).not.toHaveProperty("plugins");
+  });
+
+  it("does not inject plugins when autoRouter.allowedModels is an empty array", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/openrouter/auto": {
+                params: { autoRouter: { allowedModels: [] } },
+              },
+            },
+          },
+        },
+      },
+      "openrouter",
+      "openrouter/auto",
+    );
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "openrouter/auto",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).not.toHaveProperty("plugins");
+  });
+
+  it("suppresses reasoning injection when autoRouter.allowedModels contains x-ai models", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/openrouter/auto": {
+                params: {
+                  autoRouter: {
+                    allowedModels: ["x-ai/grok-3-mini", "x-ai/grok-3"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "openrouter",
+      "openrouter/auto",
+      undefined,
+      "low",
+    );
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "openrouter/auto",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).not.toHaveProperty("reasoning");
+    expect(payloads[0]?.plugins).toEqual([
+      { id: "auto-router", allowed_models: ["x-ai/grok-3-mini", "x-ai/grok-3"] },
+    ]);
   });
 
   it("injects parallel_tool_calls for openai-completions payloads when configured", () => {
