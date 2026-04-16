@@ -35,6 +35,13 @@ export type SkillsLimitsConfig = {
   maxSkillsPromptChars?: number;
   /** Max size (bytes) allowed for a SKILL.md file to be considered. */
   maxSkillFileBytes?: number;
+  /**
+   * Max number of plan-template steps a single skill may seed via
+   * `update_plan` at activation. Templates exceeding this length are
+   * truncated and a `skill_plan_template_truncated` warning event is
+   * emitted. Default: 50.
+   */
+  maxPlanTemplateSteps?: number;
 };
 
 export type SkillsConfig = {
