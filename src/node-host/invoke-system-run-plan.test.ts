@@ -865,6 +865,28 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
+  it("keeps fail-closed behavior for owner-controlled read-only absolute binaries", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-owned-readonly-binding-"));
+    const binaryPath = path.join(tmp, "tool");
+    try {
+      fs.copyFileSync(resolveNativeBinaryFixturePath(), binaryPath);
+      fs.chmodSync(binaryPath, 0o555);
+      fs.chmodSync(tmp, 0o555);
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", binaryPath],
+        rawCommand: binaryPath,
+        cwd: tmp,
+      });
+      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+    } finally {
+      fs.chmodSync(tmp, 0o755);
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("keeps fail-closed behavior for symlinked binaries with writable targets", () => {
     if (process.platform === "win32") {
       return;
