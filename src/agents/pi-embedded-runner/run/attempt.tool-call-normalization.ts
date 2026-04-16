@@ -73,6 +73,9 @@ const CLAW_CODE_TOOL_ALIAS_MAP: Readonly<Record<string, ClawCodeAliasResolution>
   testingpermission: { toolName: "testing_permission" },
   lsp: { toolName: "lsp" },
   mcpdemoecho: { toolName: "mcp" },
+  memoryreflect: { toolName: "hermes", action: "memory_reflect" },
+  skillsuggest: { toolName: "hermes", action: "skill_suggest" },
+  longplan: { toolName: "hermes", action: "long_plan" },
 };
 
 function canonicalizeToolName(value: string): string {

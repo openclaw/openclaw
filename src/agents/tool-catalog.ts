@@ -246,6 +246,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "hermes",
+    label: "hermes",
+    description: "Hermes MCP routing bridge",
+    sectionId: "automation",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "lsp",
     label: "lsp",
     description: "Language server bridge",

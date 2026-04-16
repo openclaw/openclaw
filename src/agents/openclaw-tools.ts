@@ -33,6 +33,7 @@ import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
+import { createHermesTool } from "./tools/hermes-tool.js";
 import { createLspTool } from "./tools/lsp-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createMcpTool } from "./tools/mcp-tool.js";
@@ -266,6 +267,12 @@ export function createOpenClawTools(
       config: options?.config,
     }),
     createMcpTool({
+      sessionId: options?.sessionId,
+      agentSessionKey: options?.agentSessionKey,
+      workspaceDir,
+      config: options?.config,
+    }),
+    createHermesTool({
       sessionId: options?.sessionId,
       agentSessionKey: options?.agentSessionKey,
       workspaceDir,
