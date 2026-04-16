@@ -142,11 +142,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
     const authoritativeEntry = store[sessionKey] ?? entry;
     const authoritativeModel = authoritativeEntry.model?.trim();
     const authoritativeProvider = authoritativeEntry.modelProvider?.trim();
-    const runtimeModelChanged = Boolean(
-      authoritativeModel &&
-      authoritativeProvider &&
-      (authoritativeModel !== modelUsed.trim() || authoritativeProvider !== providerUsed.trim()),
-    );
+    const runtimeModelChanged =
+      (Boolean(authoritativeModel) && authoritativeModel !== modelUsed.trim()) ||
+      (Boolean(authoritativeProvider) && authoritativeProvider !== providerUsed.trim());
     const merged = mergeSessionEntry(store[sessionKey], {
       ...next,
       ...(typeof resolvedContextTokens === "number" && resolvedContextTokens > 0

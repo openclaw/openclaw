@@ -257,6 +257,56 @@ describe("updateSessionStoreAfterAgentRun", () => {
     resetContextWindowCacheForTest();
   });
 
+  it("clears stale contextTokens when the authoritative entry only has a model and that model changed", async () => {
+    resetContextWindowCacheForTest();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = `agent:main:discord:channel:${randomUUID()}`;
+    const sessionId = randomUUID();
+    const persistedEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      model: "gpt-5.4",
+      contextTokens: 272_000,
+    };
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({ [sessionKey]: persistedEntry }, null, 2),
+      "utf8",
+    );
+
+    const staleInMemory: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+      },
+    };
+
+    await updateSessionStoreAfterAgentRun({
+      cfg: {} as never,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore: staleInMemory,
+      defaultProvider: "openai-codex",
+      defaultModel: "gpt-5.4",
+      result: {
+        payloads: [],
+        meta: {
+          agentMeta: {
+            provider: "openai-codex",
+            model: "gpt-5.4-mini",
+          },
+        },
+      } as never,
+    });
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(persisted?.contextTokens).toBeUndefined();
+    expect(staleInMemory[sessionKey]?.contextTokens).toBeUndefined();
+    resetContextWindowCacheForTest();
+  });
+
   it("stores and reloads the runtime model for explicit session-id-only runs", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
     const storePath = path.join(dir, "sessions.json");
