@@ -63,6 +63,7 @@ type OpenClawReadToolOptions = {
   root?: string;
   containerWorkdir?: string;
   bridge?: SandboxFsBridge;
+  getBaseUrl?: () => string; // New option for dynamic base URL
 };
 
 // --- OPERATIONS HELPERS ---
@@ -234,6 +235,18 @@ function normalizePathForUrl(filePath: string): string {
   }
   
   return normalized;
+}
+
+function getMediaUrl(filePath: string, getBaseUrl?: () => string): string {
+  const normalizedPath = normalizePathForUrl(filePath);
+  const encodedPath = normalizedPath.split("/").map(encodeURIComponent).join("/");
+  
+  // Use dynamic base URL if provided, otherwise fall back to localhost
+  const baseUrl = getBaseUrl?.() || "http://localhost:18791";
+  
+  // Ensure no double slashes
+  const cleanBaseUrl = baseUrl.replace(/\/$/, "");
+  return `${cleanBaseUrl}${encodedPath}`;
 }
 
 type SandboxToolParams = {
@@ -649,9 +662,12 @@ export function createOpenClawReadTool(
 
           // Host mode - can list directories
           const files = await fs.readdir(inputPath);
+          
+          // Sort files for deterministic output (fixes cache determinism issue)
+          const sortedFiles = [...files].sort((a, b) => a.localeCompare(b));
 
           let truncated = false;
-          let fileList = files;
+          let fileList = sortedFiles;
           if (fileList.length > MAX_DIR_ENTRIES) {
             truncated = true;
             fileList = fileList.slice(0, MAX_DIR_ENTRIES);
@@ -673,9 +689,8 @@ export function createOpenClawReadTool(
         const ext = inputPath.toLowerCase().split(".").pop() ?? "";
         const fileName = path.basename(inputPath);
         
-        // Build valid media URLs for all platforms
-        const normalizedPath = normalizePathForUrl(inputPath);
-        const mediaUrl = `http://localhost:18791${normalizedPath.split("/").map(encodeURIComponent).join("/")}`;
+        // Build valid media URLs using dynamic base URL (fixes localhost hardcoding issue)
+        const mediaUrl = getMediaUrl(inputPath, options?.getBaseUrl);
 
         if (IMAGE_EXTENSIONS.has(ext)) {
           if (signal?.aborted) {
