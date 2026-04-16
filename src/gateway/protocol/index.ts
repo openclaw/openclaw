@@ -779,6 +779,7 @@ export type {
   SessionsCompactParams,
   SessionsUsageParams,
   CronJob,
+  CronGetParams,
   CronListParams,
   CronStatusParams,
   CronAddParams,
