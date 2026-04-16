@@ -44,7 +44,17 @@ export function resolvePlanApproval(
 ): PlanModeSessionState {
   const now = Date.now();
 
-  // Stale timeout — user already resolved the approval.
+  // Ignore stale timeouts when approval is already resolved, and ignore
+  // actions on terminal states (approved, edited, timed_out). Rejected
+  // state can transition to approve/edit (user changes mind) or reject
+  // again (revised feedback).
+  if (
+    current.approval !== "pending" &&
+    current.approval !== "rejected" &&
+    current.approval !== "none"
+  ) {
+    return current;
+  }
   if (action === "timeout" && current.approval !== "pending") {
     return current;
   }
