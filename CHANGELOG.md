@@ -14,22 +14,13 @@ Docs: https://docs.openclaw.ai
 
 - Anthropic/models: default Anthropic selections, `opus` aliases, Claude CLI defaults, and bundled image understanding to Claude Opus 4.7.
 - Google/TTS: add Gemini text-to-speech support to the bundled `google` plugin, including provider registration, voice selection, WAV reply output, PCM telephony output, and setup/docs guidance. (#67515) Thanks @barronlroth.
-
-### Fixes
-
-- Agents/skills: sort prompt-facing `available_skills` entries by skill name after merging sources so `skills.load.extraDirs` order no longer changes prompt-cache prefixes. (#64198) Thanks @Bartok9.
-- Agents/context + Memory: trim default startup/skills prompt budgets, cap `memory_get` excerpts by default with explicit continuation metadata, and keep QMD reads aligned with the same bounded excerpt contract so long sessions pull less context by default without losing deterministic follow-up reads.
-- BlueBubbles/inbound: restore inbound image attachment downloads on Node 22+ by stripping incompatible bundled-undici dispatchers from the non-SSRF fetch path, accept `updated-message` webhooks carrying attachments, use event-type-aware dedup keys so attachment follow-ups are not rejected as duplicates, and retry attachment fetch from the BB API when the initial webhook arrives with an empty array. (#64105, #61861, #65430, #67510) Thanks @omarshahine.
-- CLI/update: prune stale packaged `dist` chunks after npm upgrades and keep downgrade/verify inventory checks compat-safe so global upgrades stop failing on stale chunk imports. (#66959) Thanks @obviyus.
-- Gateway/tools: anchor trusted local `MEDIA:` tool-result passthrough on the exact raw name of this run's registered built-in tools, and reject client tool definitions whose names normalize-collide with a built-in or with another client tool in the same request (`400 invalid_request_error` on both JSON and SSE paths), so a client-supplied tool named like a built-in can no longer inherit its local-media trust. (#67303)
-- OpenAI Codex/models: normalize stale native transport metadata in both runtime resolution and discovery/listing so legacy `openai-codex` rows with missing `api` or `https://chatgpt.com/backend-api/v1` self-heal to the canonical Codex transport instead of routing requests through broken HTML/Cloudflare paths, combining the original fixes proposed in #66969 (saamuelng601-pixel) and #67159 (hclsys). (#67635)
-
-## 2026.4.15-beta.2
-
-### Changes
-
-- Anthropic/models: default Anthropic selections, `opus` aliases, Claude CLI defaults, and bundled image understanding to Claude Opus 4.7.
-- Google/TTS: add Gemini text-to-speech support to the bundled `google` plugin, including provider registration, voice selection, WAV reply output, PCM telephony output, and setup/docs guidance. (#67515) Thanks @barronlroth.
+- Control UI/Overview: add a Model Auth status card showing OAuth token health and provider rate-limit pressure at a glance, with attention callouts when OAuth tokens are expiring or expired. Backed by a new `models.authStatus` gateway method that strips credentials and caches for 60s. (#66211) Thanks @omarshahine.
+- Memory/LanceDB: add cloud storage support to `memory-lancedb` so durable memory indexes can run on remote object storage instead of local disk only. (#63502) Thanks @rugvedS07.
+- GitHub Copilot/memory search: add a GitHub Copilot embedding provider for memory search, and expose a dedicated Copilot embedding host helper so plugins can reuse the transport while honoring remote overrides, token refresh, and safer payload validation. (#61718) Thanks @feiskyer and @vincentkoc.
+- Agents/local models: add experimental `agents.defaults.experimental.localModelLean: true` to drop heavyweight default tools like `browser`, `cron`, and `message`, reducing prompt size for weaker local-model setups without changing the normal path. (#66495) Thanks @ImLukeF.
+- Packaging/plugins: localize bundled plugin runtime deps to their owning extensions, trim the published docs payload, and tighten install/package-manager guardrails so published builds stay leaner and core stops carrying extension-owned runtime baggage. (#67099) Thanks @vincentkoc.
+- QA/Matrix: split Matrix live QA into a source-linked `qa-matrix` runner and keep repo-private `qa-*` surfaces out of packaged and published builds. (#66723) Thanks @gumadeiras.
+- Docs/showcase: add a scannable hero, complete section jump links, and a responsive video grid for community examples. (#48493) Thanks @jchopard69.
 
 ### Fixes
 
@@ -76,21 +67,6 @@ Docs: https://docs.openclaw.ai
 - Agents/context engines: keep loop-hook and final `afterTurn` prompt-cache touch metadata aligned with the current assistant turn so cache-aware context engines retain accurate cache TTL state during tool loops. (#67767) thanks @jalehman.
 - Memory/dreaming: strip AI-facing inbound metadata envelopes from session-corpus user turns before normalization so REM topic extraction sees the user's actual message text, including array-shaped split envelopes. (#66548) Thanks @zqchris.
 - Agents/errors: detect standalone Cloudflare/CDN HTML challenge pages before transport DNS classification so provider block pages no longer appear as local DNS lookup failures. (#67704) Thanks @chris-yyau.
-
-## 2026.4.15-beta.1
-
-### Changes
-
-- Control UI/Overview: add a Model Auth status card showing OAuth token health and provider rate-limit pressure at a glance, with attention callouts when OAuth tokens are expiring or expired. Backed by a new `models.authStatus` gateway method that strips credentials and caches for 60s. (#66211) Thanks @omarshahine.
-- Memory/LanceDB: add cloud storage support to `memory-lancedb` so durable memory indexes can run on remote object storage instead of local disk only. (#63502) Thanks @rugvedS07.
-- GitHub Copilot/memory search: add a GitHub Copilot embedding provider for memory search, and expose a dedicated Copilot embedding host helper so plugins can reuse the transport while honoring remote overrides, token refresh, and safer payload validation. (#61718) Thanks @feiskyer and @vincentkoc.
-- Agents/local models: add experimental `agents.defaults.experimental.localModelLean: true` to drop heavyweight default tools like `browser`, `cron`, and `message`, reducing prompt size for weaker local-model setups without changing the normal path. (#66495) Thanks @ImLukeF.
-- Packaging/plugins: localize bundled plugin runtime deps to their owning extensions, trim the published docs payload, and tighten install/package-manager guardrails so published builds stay leaner and core stops carrying extension-owned runtime baggage. (#67099) Thanks @vincentkoc.
-- QA/Matrix: split Matrix live QA into a source-linked `qa-matrix` runner and keep repo-private `qa-*` surfaces out of packaged and published builds. (#66723) Thanks @gumadeiras.
-- Docs/showcase: add a scannable hero, complete section jump links, and a responsive video grid for community examples. (#48493) Thanks @jchopard69.
-
-### Fixes
-
 - Security/approvals: redact secrets in exec approval prompts so inline approval review can no longer leak credential material in rendered prompt content. (#61077, #64790)
 - CLI/configure: re-read the persisted config hash after writes so config updates stop failing with stale-hash races. (#64188, #66528)
 - CLI/update: prune stale packaged `dist` chunks after npm upgrades and keep downgrade/verify inventory checks compat-safe so global upgrades stop failing on stale chunk imports. (#66959) Thanks @obviyus.
@@ -122,7 +98,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/documents: sanitize binary reply context and ZIP-like archive extraction so `.epub` and `.mobi` uploads can no longer leak raw binary into prompt context through reply metadata or archive-to-`text/plain` coercion. (#66877) Thanks @martinfrancois.
 - Telegram/native commands: restore plugin-registry-backed auto defaults for native commands and native skills so Telegram slash commands keep registering when `commands.native` and `commands.nativeSkills` stay on `auto`. (#66843) Thanks @kashevk0.
 - OpenRouter/Qwen3: parse `reasoning_details` stream deltas as thinking content without skipping same-chunk tool calls, so Qwen3 replies no longer fail empty on OpenRouter and mixed reasoning/tool-call chunks still execute normally. (#66905) Thanks @bladin.
-- fix(bluebubbles): replay missed webhook messages after gateway restart via a persistent per-account cursor and `/api/v1/message/query?after=<ts>` pass, so messages delivered while the gateway was down no longer disappear. Uses the existing `processMessage` path and is deduped by #66816's inbound GUID cache. (#66857, #66721) Thanks @omarshahine.
+- BlueBubbles/catchup: replay missed webhook messages after gateway restart via a persistent per-account cursor and `/api/v1/message/query?after=<ts>` pass, so messages delivered while the gateway was down no longer disappear. Uses the existing `processMessage` path and is deduped by #66816's inbound GUID cache. (#66857, #66721) Thanks @omarshahine.
 - Telegram/native commands: keep Telegram command-sync cache process-local so gateway restarts re-register the menu instead of trusting stale on-disk sync state after Telegram cleared commands out-of-band. (#66730) Thanks @nightq.
 - Audio/self-hosted STT: restore `models.providers.*.request.allowPrivateNetwork` for audio transcription so private or LAN speech-to-text endpoints stop tripping SSRF blocks after the v2026.4.14 regression. (#66692) Thanks @jhsmith409.
 - Auto-reply/media: allow workspace-rooted absolute media paths in auto-reply send flows so valid local media references no longer fail path validation. (#66689)
