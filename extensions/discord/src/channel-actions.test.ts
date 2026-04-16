@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { withEnv } from "../../../src/test-utils/env.js";
 
 const handleDiscordMessageActionMock = vi.hoisted(() =>
   vi.fn(async () => ({ content: [], details: { ok: true } })),
@@ -15,20 +16,22 @@ const { discordMessageActions } = await import("./channel-actions.js");
 
 describe("discordMessageActions", () => {
   it("returns no tool actions when no token-sourced Discord accounts are enabled", () => {
-    const discovery = discordMessageActions.describeMessageTool?.({
-      cfg: {
-        channels: {
-          discord: {
-            enabled: true,
+    withEnv({ DISCORD_BOT_TOKEN: undefined }, () => {
+      const discovery = discordMessageActions.describeMessageTool?.({
+        cfg: {
+          channels: {
+            discord: {
+              enabled: true,
+            },
           },
-        },
-      } as OpenClawConfig,
-    });
+        } as OpenClawConfig,
+      });
 
-    expect(discovery).toEqual({
-      actions: [],
-      capabilities: [],
-      schema: null,
+      expect(discovery).toEqual({
+        actions: [],
+        capabilities: [],
+        schema: null,
+      });
     });
   });
 
