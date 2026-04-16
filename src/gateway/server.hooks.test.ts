@@ -260,7 +260,14 @@ describe("gateway server hooks", () => {
         messages: [{ id: "msg-1", from: "Ada", subject: "Hello", snippet: "Hi", body: "Body" }],
       });
       expect(response.status).toBe(200);
-      await waitForSystemEvent();
+      await vi.waitFor(() => expect(cronIsolatedRun).toHaveBeenCalledTimes(1), {
+        timeout: 5_000,
+      });
+      const runResult = cronIsolatedRun.mock.results[0];
+      if (runResult?.type !== "return") {
+        throw new Error("hook dispatch did not return a run promise");
+      }
+      await runResult.value;
 
       const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         sessionKey?: string;
