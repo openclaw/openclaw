@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,7 +12,8 @@ import {
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
 import { isPathWithin } from "../commands/cleanup-utils.js";
-import { resolveHomeDir, resolveUserPath } from "../utils.js";
+import { isNotFoundPathError } from "../infra/path-guards.js";
+import { resolveHomeDir, resolveUserPath, shortenHomePath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 
 export type BackupCreateOptions = {
@@ -127,8 +128,61 @@ function buildTempArchivePath(outputPath: string): string {
   return `${outputPath}.${randomUUID()}.tmp`;
 }
 
+async function createTarArchiveWithMissingSkip(
+  params: {
+    file: string;
+    gzip?: boolean;
+    portable?: boolean;
+    preservePaths?: boolean;
+    onWriteEntry?: (entry: unknown) => void;
+  },
+  files: string[],
+): Promise<string[]> {
+  const skipped: string[] = [];
+  const pack = new tar.Pack({
+    file: params.file,
+    gzip: params.gzip,
+    portable: params.portable,
+    preservePaths: params.preservePaths,
+    onWriteEntry: params.onWriteEntry,
+  });
+  const stream = createWriteStream(params.file);
+  pack.pipe(stream);
+
+  await new Promise<void>((resolve, reject) => {
+    stream.on("error", reject);
+    stream.on("close", resolve);
+    pack.on("error", (err: unknown) => {
+      if (isNotFoundPathError(err)) {
+        const p = (err as NodeJS.ErrnoException).path;
+        if (typeof p === "string") {
+          skipped.push(p);
+        }
+        return;
+      }
+      reject(err instanceof Error ? err : new Error(String(err)));
+    });
+
+    for (const file of files) {
+      pack.add(file);
+    }
+    pack.end();
+  });
+
+  return skipped;
+}
+
 function isLinkUnsupportedError(code: string | undefined): boolean {
   return code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EPERM";
+}
+
+function resolveAssetKindForPath(filePath: string, assets: BackupAsset[]): string {
+  for (const asset of assets) {
+    if (filePath === asset.sourcePath || isPathWithin(filePath, asset.sourcePath)) {
+      return asset.kind;
+    }
+  }
+  return "state";
 }
 
 async function publishTempArchive(params: {
@@ -342,15 +396,15 @@ export async function createBackupArchive(
     });
     await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
-    await tar.c(
+    const skippedPaths = await createTarArchiveWithMissingSkip(
       {
         file: tempArchivePath,
         gzip: true,
         portable: true,
         preservePaths: true,
         onWriteEntry: (entry) => {
-          entry.path = remapArchiveEntryPath({
-            entryPath: entry.path,
+          (entry as { path: string }).path = remapArchiveEntryPath({
+            entryPath: (entry as { path: string }).path,
             manifestPath,
             archiveRoot,
           });
@@ -358,6 +412,14 @@ export async function createBackupArchive(
       },
       [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
     );
+    for (const skippedPath of skippedPaths) {
+      result.skipped.push({
+        kind: resolveAssetKindForPath(skippedPath, result.assets),
+        sourcePath: skippedPath,
+        displayPath: shortenHomePath(skippedPath),
+        reason: "cleaned up during backup",
+      });
+    }
     await publishTempArchive({ tempArchivePath, outputPath });
   } finally {
     await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
