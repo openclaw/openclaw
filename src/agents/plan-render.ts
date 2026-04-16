@@ -57,11 +57,13 @@ export function renderPlanChecklist(
         return `${markers[s.status] ?? "[ ]"} ${label}`;
       }
 
-      case "slack-mrkdwn":
-        if (s.status === "completed") return `✅ ${label}`;
-        if (s.status === "in_progress") return `⏳ *${label}*`;
-        if (s.status === "cancelled") return `❌ ~${label}~`;
-        return `⬚ ${label}`;
+      case "slack-mrkdwn": {
+        const escaped = escapeSlackMrkdwn(label);
+        if (s.status === "completed") return `✅ ${escaped}`;
+        if (s.status === "in_progress") return `⏳ *${escaped}*`;
+        if (s.status === "cancelled") return `❌ ~${escaped}~`;
+        return `⬚ ${escaped}`;
+      }
     }
   });
 
@@ -89,8 +91,20 @@ export function renderPlanWithHeader(
     case "plaintext":
       return `${title}\n${checklist}`;
     case "slack-mrkdwn":
-      return `*${title}*\n${checklist}`;
+      return `*${escapeSlackMrkdwn(title)}*\n${checklist}`;
   }
+}
+
+/** Escapes Slack mrkdwn control characters: *, ~, `, _, and angle brackets. */
+function escapeSlackMrkdwn(text: string): string {
+  // Replace angle-bracket tokens first, then mrkdwn formatting chars.
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\*/g, "\u2217") // ∗ (asterisk operator, visually similar)
+    .replace(/~/g, "\u223C") // ∼ (tilde operator)
+    .replace(/`/g, "\u2018"); // ' (left single quote)
 }
 
 function escapeHtml(text: string): string {
