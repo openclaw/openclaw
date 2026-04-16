@@ -860,6 +860,43 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(toolCalls[13]).toMatchObject({ name: "send_user_message", arguments: { message: "done" } });
   });
 
+  it("replays invalid claw-code samples without masking downstream validation failures", async () => {
+    const toolCalls = [
+      { type: "toolCall", name: "ToolSearch", arguments: {} },
+      { type: "toolCall", name: "CronDelete", arguments: {} },
+      { type: "toolCall", name: "LSP", arguments: { action: "diagnostics" } },
+      { type: "toolCall", name: "Sleep", arguments: { duration_ms: 999_999_999 } },
+      { type: "toolCall", name: "Config", arguments: { setting: "" } },
+      { type: "toolCall", name: "UnknownFutureTool", arguments: { a: 1 } },
+    ];
+    const finalMessage = { role: "assistant", content: toolCalls };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const allowed = new Set(["tool_search", "cron", "lsp", "sleep", "config_compat"]);
+    const stream = await invokeWrappedStream(baseFn, allowed);
+    await stream.result();
+
+    // Name normalization still happens when possible.
+    expect(toolCalls[0]).toMatchObject({ name: "tool_search" });
+    expect(toolCalls[1]).toMatchObject({ name: "cron", arguments: { action: "remove" } });
+    expect(toolCalls[2]).toMatchObject({ name: "lsp", arguments: { action: "diagnostics" } });
+    expect(toolCalls[3]).toMatchObject({ name: "sleep", arguments: { ms: 999_999_999 } });
+    expect(toolCalls[4]).toMatchObject({ name: "config_compat", arguments: { setting: "" } });
+
+    // Unknown future tools remain unchanged so unknown-tool handling can surface clearly.
+    expect(toolCalls[5]).toMatchObject({ name: "UnknownFutureTool", arguments: { a: 1 } });
+
+    // Crucially, normalization does not invent missing required fields.
+    expect((toolCalls[0] as { arguments: Record<string, unknown> }).arguments.query).toBeUndefined();
+    expect((toolCalls[1] as { arguments: Record<string, unknown> }).arguments.jobId).toBeUndefined();
+    expect((toolCalls[2] as { arguments: Record<string, unknown> }).arguments.uri).toBeUndefined();
+  });
+
   it("maps provider-prefixed tool names to allowed canonical tools", async () => {
     const partialToolCall = { type: "toolCall", name: " functions.read " };
     const messageToolCall = { type: "toolCall", name: " functions.write " };
