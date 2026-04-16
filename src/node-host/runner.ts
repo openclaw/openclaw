@@ -6,7 +6,12 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
-import { NODE_EXEC_APPROVALS_COMMANDS, NODE_SYSTEM_RUN_COMMANDS } from "../infra/node-commands.js";
+import {
+  NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_FILE_READ_COMMAND,
+  NODE_FILE_WRITE_COMMAND,
+  NODE_SYSTEM_RUN_COMMANDS,
+} from "../infra/node-commands.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
@@ -192,6 +197,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     commands: [
       ...NODE_SYSTEM_RUN_COMMANDS,
       ...NODE_EXEC_APPROVALS_COMMANDS,
+      NODE_FILE_READ_COMMAND,
+      NODE_FILE_WRITE_COMMAND,
       ...pluginNodeHost.commands,
     ],
     pathEnv,
