@@ -7,7 +7,7 @@ function stripWhatsAppTargetPrefixes(value: string): string {
   let candidate = value.trim();
   for (;;) {
     const before = candidate;
-    candidate = candidate.replace(/^whatsapp:/i, "").trim();
+    candidate = candidate.replace(/^(whatsapp:|group:)/i, "").trim();
     if (candidate === before) {
       return candidate;
     }
