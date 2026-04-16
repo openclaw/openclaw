@@ -687,7 +687,7 @@ describe("gateway server hooks", () => {
       mockIsolatedRunOkOnce();
       const resNoAgent = await postHook(port, "/hooks/agent", { message: "No explicit agent" });
       expect(resNoAgent.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       const noAgentCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
@@ -700,7 +700,7 @@ describe("gateway server hooks", () => {
         agentId: "hooks",
       });
       expect(resAllowed.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       const allowedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
