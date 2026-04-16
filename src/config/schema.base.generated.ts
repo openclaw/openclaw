@@ -18343,6 +18343,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+                title: "Bot/Agent Inbound Debounce (ms)",
                 description:
                   "Debounce window (ms) applied when the inbound message comes from a bot or agent. Overrides debounceMs for bot senders. Note: byChannel overrides still take precedence over botDebounceMs.",
               },
@@ -26774,6 +26775,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Per-channel inbound debounce overrides keyed by provider id in milliseconds. Use this where some providers send message fragments more aggressively than others.",
       tags: ["advanced"],
     },
+    "messages.inbound.botDebounceMs": {
+      label: "Bot/Agent Inbound Debounce (ms)",
+      help: "Debounce window (ms) applied when the inbound message comes from a bot or agent. Overrides debounceMs for bot senders. Note: byChannel overrides still take precedence over botDebounceMs.",
+      tags: ["performance"],
+    },
     "messages.tts": {
       label: "Message Text-to-Speech",
       help: "Text-to-speech policy for reading agent replies aloud on supported voice or audio surfaces. Keep disabled unless voice playback is part of your operator/user workflow.",
@@ -27066,10 +27072,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Plugin Marketplace Plugin",
       help: "Plugin entry name inside the source marketplace, used for later updates.",
       tags: ["advanced"],
-    },
-    "messages.inbound.botDebounceMs": {
-      help: "Debounce window (ms) applied when the inbound message comes from a bot or agent. Overrides debounceMs for bot senders. Note: byChannel overrides still take precedence over botDebounceMs.",
-      tags: ["performance"],
     },
     "models.providers.*.headers.*": {
       sensitive: true,
