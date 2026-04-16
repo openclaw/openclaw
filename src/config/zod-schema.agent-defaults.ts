@@ -225,9 +225,13 @@ export const AgentDefaultsSchema = z
           .object({
             /** Enable auto-continuation for planning-only turns. Default: false. */
             enabled: z.boolean().optional(),
-            /** Max consecutive auto-continue turns before pausing for user review. Default: 5. */
-            maxTurns: z.number().int().min(1).max(20).optional(),
-            /** Pause auto-continue when the agent produces mutating tool calls. Default: true. */
+            /**
+             * Max auto-continue cycles before pausing for user review. Default: 3.
+             * Each cycle = 1 ACK injection + up to 3 planning retries = ~4 API calls.
+             * Total worst-case calls = 1 + (maxCycles × 4). Default 3 = ~13 calls max.
+             */
+            maxCycles: z.number().int().min(1).max(10).optional(),
+            /** Pause auto-continue when any attempt in the run produces mutating tool calls. Default: true. */
             stopOnMutation: z.boolean().optional(),
           })
           .strict()

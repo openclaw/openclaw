@@ -294,14 +294,18 @@ export type AgentDefaultsConfig = {
     /**
      * Auto-continuation for planning-only turns. When enabled, the runner
      * automatically injects an ACK fast-path instruction instead of surfacing
-     * the plan to the user, up to `maxTurns` consecutive auto-continues.
+     * the plan to the user, up to `maxCycles` consecutive auto-continue cycles.
+     * Each cycle = 1 ACK injection + up to 3 planning retries = ~4 API calls.
      */
     autoContinue?: {
       /** Enable auto-continuation. Default: false. */
       enabled?: boolean;
-      /** Max consecutive auto-continue turns before pausing. Default: 5. */
-      maxTurns?: number;
-      /** Pause when the agent produces mutating tool calls. Default: true. */
+      /**
+       * Max auto-continue cycles before pausing for user review. Default: 3.
+       * Total worst-case API calls = 1 + (maxCycles x 4). Default 3 = ~13 calls max.
+       */
+      maxCycles?: number;
+      /** Pause when any attempt in the run produces mutating tool calls. Default: true. */
       stopOnMutation?: boolean;
     };
   };

@@ -85,13 +85,13 @@ export function resolveAgentExecutionContract(
 
 export type ResolvedAutoContinueConfig = {
   enabled: boolean;
-  maxTurns: number;
+  maxCycles: number;
   stopOnMutation: boolean;
 };
 
 const DEFAULT_AUTO_CONTINUE: ResolvedAutoContinueConfig = {
   enabled: false,
-  maxTurns: 5,
+  maxCycles: 3,
   stopOnMutation: true,
 };
 
@@ -107,7 +107,7 @@ export function resolveAgentAutoContinue(
   }
   return {
     enabled: merged.enabled ?? DEFAULT_AUTO_CONTINUE.enabled,
-    maxTurns: merged.maxTurns ?? DEFAULT_AUTO_CONTINUE.maxTurns,
+    maxCycles: merged.maxCycles ?? DEFAULT_AUTO_CONTINUE.maxCycles,
     stopOnMutation: merged.stopOnMutation ?? DEFAULT_AUTO_CONTINUE.stopOnMutation,
   };
 }
