@@ -270,9 +270,7 @@ async function uploadMatrixQaContent(params: {
       "content-type": params.contentType ?? "application/octet-stream",
       ...(params.accessToken ? { authorization: `Bearer ${params.accessToken}` } : {}),
     },
-    body: new Blob([Uint8Array.from(params.buffer)], {
-      type: params.contentType ?? "application/octet-stream",
-    }),
+    body: new Uint8Array(params.buffer),
     signal: AbortSignal.timeout(20_000),
   });
   const body = (await response.json().catch(() => ({}))) as {
