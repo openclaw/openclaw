@@ -12,9 +12,9 @@
  * no change to existing flow).
  */
 
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import crypto from "node:crypto";
 
 export interface StoredPlanStep {
   step: string;
@@ -41,8 +41,12 @@ function hasControlOrForbiddenChars(s: string): boolean {
   for (let i = 0; i < s.length; i++) {
     const code = s.charCodeAt(i);
     // Block ASCII control chars (0x00-0x1F) and Windows-forbidden chars.
-    if (code <= 0x1f) { return true; }
-    if ("<>:\"|?*".includes(s[i])) { return true; }
+    if (code <= 0x1f) {
+      return true;
+    }
+    if ('<>:"|?*'.includes(s[i])) {
+      return true;
+    }
   }
   return false;
 }
@@ -82,7 +86,9 @@ export class PlanStore {
       const plan = JSON.parse(content) as StoredPlan;
       // Verify stored namespace matches requested namespace to catch corruption.
       if (plan.namespace !== undefined && plan.namespace !== namespace) {
-        throw new Error(`Plan namespace mismatch on read: expected "${namespace}", found "${plan.namespace}"`);
+        throw new Error(
+          `Plan namespace mismatch on read: expected "${namespace}", found "${plan.namespace}"`,
+        );
       }
       return plan;
     } catch (err: unknown) {
@@ -99,10 +105,10 @@ export class PlanStore {
    * Callers should acquire a lock first for concurrent safety.
    */
   async write(namespace: string, plan: StoredPlan): Promise<void> {
+    const planFile = this.planPath(namespace); // validates namespace first (path traversal, etc.)
     if (plan.namespace !== namespace) {
       throw new Error(`Plan namespace mismatch: expected "${namespace}", got "${plan.namespace}"`);
     }
-    const planFile = this.planPath(namespace);
     const dir = path.dirname(planFile);
     await fs.mkdir(dir, { recursive: true });
 
@@ -113,7 +119,11 @@ export class PlanStore {
       await fs.rename(tmpFile, planFile);
     } catch (err) {
       // Clean up temp file on failure.
-      try { await fs.unlink(tmpFile); } catch { /* ignore */ }
+      try {
+        await fs.unlink(tmpFile);
+      } catch {
+        /* ignore */
+      }
       throw err;
     }
   }
@@ -157,7 +167,11 @@ export class PlanStore {
       } catch (err: unknown) {
         // Ensure handle is closed on any error path.
         if (handle) {
-          try { await handle.close(); } catch { /* ignore */ }
+          try {
+            await handle.close();
+          } catch {
+            /* ignore */
+          }
         }
         if ((err as NodeJS.ErrnoException).code === "EEXIST") {
           // Lock exists. Check if stale.
@@ -177,7 +191,9 @@ export class PlanStore {
         }
       }
     }
-    throw new Error(`Failed to acquire plan lock for namespace "${namespace}" after ${maxRetries} retries`);
+    throw new Error(
+      `Failed to acquire plan lock for namespace "${namespace}" after ${maxRetries} retries`,
+    );
   }
 
   /**
