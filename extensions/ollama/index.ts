@@ -18,7 +18,7 @@ import {
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
 } from "./api.js";
-import { OLLAMA_DEFAULT_BASE_URL, OLLAMA_DEFAULT_MODEL } from "./src/defaults.js";
+import { OLLAMA_DEFAULT_BASE_URL, OLLAMA_DEFAULT_CONTEXT_WINDOW, OLLAMA_DEFAULT_MODEL } from "./src/defaults.js";
 import {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
   createOllamaEmbeddingProvider,
@@ -255,7 +255,7 @@ export default definePluginEntry({
           name: `Ollama (${OLLAMA_DEFAULT_MODEL})`,
           reasoning: false,
           input: ["text"],
-          contextWindow: undefined,
+          contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW,
         },
       ],
       resolveReasoningOutputMode: () => "native",
