@@ -261,10 +261,11 @@ explicitly promotes one as public.
   <Accordion title="Memory subpaths">
     | Subpath | Key exports |
     | --- | --- |
+    | `plugin-sdk/embeddings` | Stable embedding provider API — factory functions (`createOpenAiEmbeddingProvider`, `createGeminiEmbeddingProvider`, …), registry (`getMemoryEmbeddingProvider`, `listMemoryEmbeddingProviders`), and `MemoryEmbeddingProvider` type. Preferred over the internal `memory-core-host-engine-embeddings` path. |
     | `plugin-sdk/memory-core` | Bundled memory-core helper surface for manager/config/file/CLI helpers |
     | `plugin-sdk/memory-core-engine-runtime` | Memory index/search runtime facade |
     | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine exports |
-    | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding engine exports |
+    | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding engine exports (prefer `plugin-sdk/embeddings`) |
     | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine exports |
     | `plugin-sdk/memory-core-host-engine-storage` | Memory host storage engine exports |
     | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers |
