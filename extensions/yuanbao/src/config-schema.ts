@@ -1,5 +1,3 @@
-import type { ChannelConfigSchema } from "openclaw/plugin-sdk";
-
 /**
  * 私聊（DM）消息处理配置 schema
  *
@@ -63,7 +61,7 @@ import type { ChannelConfigSchema } from "openclaw/plugin-sdk";
 //   additionalProperties: false,
 // };
 
-export const yuanbaoConfigSchema: ChannelConfigSchema = {
+export const yuanbaoConfigSchema = {
   schema: {
     $schema: "http://json-schema.org/draft-07/schema#",
     type: "object",

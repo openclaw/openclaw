@@ -11,9 +11,10 @@
 import { randomBytes, createHash } from "node:crypto";
 import { createReadStream, statSync, existsSync } from "node:fs";
 import { writeFile, mkdir } from "node:fs/promises";
-import { tmpdir, homedir } from "node:os";
+import { homedir } from "node:os";
 import path, { basename, extname, join } from "node:path";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { apiGetDownloadUrl, apiGetUploadInfo } from "../../access/api.js";
 import type { CosUploadConfig } from "../../access/api.js";
 import type { ResolvedYuanbaoAccount } from "../../types.js";
@@ -687,7 +688,7 @@ export async function downloadMediasToLocalFiles(
   }
 
   const maxBytes = account.mediaMaxMb * 1024 * 1024;
-  const cacheDir = join(tmpdir(), "yuanbao-media");
+  const cacheDir = join(resolvePreferredOpenClawTmpDir(), "yuanbao-media");
 
   // 最多下载 20 个Media，并发执行
   const tasks = medias.slice(0, 20).map(async ({ url, mediaName }, i) => {

@@ -8,7 +8,7 @@
     "cos-nodejs-sdk-v5": "^2.15.4",
     "protobufjs": "^7.5.4",
     "uuid": "^13.0.0",
-    "ws": "^8.19.0"
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.37",

@@ -41,6 +41,8 @@ export {
   decodeQueryGroupInfoRsp,
   encodeGetGroupMemberListReq,
   decodeGetGroupMemberListRsp,
+  encodeSyncInformationReq,
+  decodeSyncInformationRsp,
   BIZ_MSG_TYPES,
 } from "./biz-codec.js";
 
@@ -78,4 +80,8 @@ export type {
   WsGetGroupMemberListData,
   WsGetGroupMemberListResponse,
   WsGroupMember,
+  WsSyncInformationData,
+  WsSyncInformationResponse,
+  WsSyncCommand,
+  WsSyncCommandsData,
 } from "./types.js";

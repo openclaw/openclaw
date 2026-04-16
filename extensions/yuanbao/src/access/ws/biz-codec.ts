@@ -25,6 +25,8 @@ import type {
   WsQueryGroupInfoResponse,
   WsGetGroupMemberListData,
   WsGetGroupMemberListResponse,
+  WsSyncInformationData,
+  WsSyncInformationResponse,
 } from "./types.js";
 
 // 模块级Logger instance
@@ -60,6 +62,8 @@ export const BIZ_MSG_TYPES = {
   SendPrivateHeartbeatRsp: `${PKG}.SendPrivateHeartbeatRsp`,
   SendGroupHeartbeatReq: `${PKG}.SendGroupHeartbeatReq`,
   SendGroupHeartbeatRsp: `${PKG}.SendGroupHeartbeatRsp`,
+  SyncInformationReq: `${PKG}.SyncInformationReq`,
+  SyncInformationRsp: `${PKG}.SyncInformationRsp`,
 } as const;
 
 /**
@@ -546,5 +550,44 @@ export function decodeSendGroupHeartbeatRsp(
     code: decoded.code || 0,
     msg: decoded.msg || "",
     message: decoded.msg || "",
+  };
+}
+
+// ============ SyncInformation 编解码 ============
+
+/**
+ * 编码 SyncInformationReq（同步命令列表等信息到后台）
+ *
+ * @param data - 同步信息请求数据
+ * @returns 编码后的二进制数据
+ */
+export function encodeSyncInformationReq(data: WsSyncInformationData): Uint8Array | null {
+  return encodeBizPB(BIZ_MSG_TYPES.SyncInformationReq, {
+    syncType: data.syncType,
+    botVersion: data.botVersion,
+    pluginVersion: data.pluginVersion,
+    ...(data.commandData ? { commandData: data.commandData } : {}),
+  });
+}
+
+/**
+ * 解码 SyncInformationRsp
+ *
+ * @param data - 二进制响应数据
+ * @param msgId - 请求消息 ID
+ * @returns 解码后的响应对象，失败返回 null
+ */
+export function decodeSyncInformationRsp(
+  data: Uint8Array | ArrayBuffer,
+  msgId: string,
+): WsSyncInformationResponse | null {
+  const decoded = decodeBizPB(BIZ_MSG_TYPES.SyncInformationRsp, data);
+  if (!decoded) {
+    return null;
+  }
+  return {
+    msgId,
+    code: decoded.code || 0,
+    msg: decoded.msg || "",
   };
 }

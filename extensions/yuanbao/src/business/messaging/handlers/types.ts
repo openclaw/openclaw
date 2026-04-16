@@ -57,6 +57,10 @@ export type ExtractTextFromMsgBodyResult = {
   /** Media资源列表（Image、文件等） */
   medias: MediaItem[];
   mentions: MentionItem[];
+  /** @bot 时从 @mention 文本中提取的 bot 显示名称（不含 @ 前缀） */
+  botUsername?: string;
+  /** 链接卡片中提取的 URL 列表（供 LinkUnderstanding 使用） */
+  linkUrls: string[];
 };
 
 // ============ 出站内容项 ============

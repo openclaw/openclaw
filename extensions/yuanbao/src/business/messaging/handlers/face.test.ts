@@ -21,7 +21,7 @@ function makeMockCtx(botId = "bot-001"): MessageHandlerContext {
 }
 
 function makeResData(): ExtractTextFromMsgBodyResult {
-  return { rawBody: "", isAtBot: false, medias: [], mentions: [] };
+  return { rawBody: "", isAtBot: false, medias: [], mentions: [], linkUrls: [] };
 }
 
 // ============ extract ============

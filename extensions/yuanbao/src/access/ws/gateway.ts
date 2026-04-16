@@ -10,6 +10,7 @@
  */
 
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
+import { buildSyncCommandsPayload } from "../../business/commands/slash-commands/index.js";
 import { handleInboundMessage } from "../../business/inbound/index.js";
 import { resolveTraceContext } from "../../business/trace/context.js";
 import { createLog } from "../../logger.js";
@@ -75,6 +76,13 @@ export async function startYuanbaoWsGateway(params: StartWsGatewayParams): Promi
           connected: true,
           wsConnectId: data.connectId,
           lastConnectedAt: Date.now(),
+        });
+
+        // 建联成功后同步命令列表到后台
+        syncCommandsToServer(client, account.accountId, config).catch((err) => {
+          gwlog.warn(`[${account.accountId}] 同步命令列表失败（不影响正常功能）`, {
+            error: String(err),
+          });
         });
       },
       onDispatch: (pushEvent: WsPushEvent) => {
@@ -458,4 +466,46 @@ function handleWsDispatchEvent(params: {
       `[${account.accountId}][dispatch] WS ${isGroup ? "group " : ""} message handler failed: ${String(err)}`,
     );
   });
+}
+
+// ============ 命令列表同步 ============
+
+/**
+ * 建联成功后同步命令列表到后台
+ *
+ * - bot_commands: 通过 listChatCommandsForConfig 从 OpenClaw 框架动态获取
+ * - plugin_commands: 从插件注册阶段动态收集的命令列表
+ * 同步失败不影响正常功能，仅打印警告日志。
+ *
+ * @param client - 当前活跃的 WebSocket 客户端
+ * @param accountId - 账号标识（用于日志）
+ * @param config - OpenClaw 配置
+ */
+async function syncCommandsToServer(
+  client: YuanbaoWsClient,
+  accountId: string,
+  config?: OpenClawConfig,
+): Promise<void> {
+  const slog = createLog("ws");
+  const payload = await buildSyncCommandsPayload(config);
+  // 按 SyncInformationReq proto 结构打印完整请求内容
+  slog.info(`[${accountId}] 同步命令列表 请求内容:`, {
+    sync_type: payload.syncType,
+    bot_version: payload.botVersion,
+    plugin_version: payload.pluginVersion,
+    command_data: {
+      bot_commands: payload.commandData.botCommands,
+      plugin_commands: payload.commandData.pluginCommands,
+    },
+  });
+
+  const rsp = await client.syncInformation(payload);
+
+  slog.info(`[${accountId}] SyncInformationRsp 响应内容:`, { code: rsp.code, msg: rsp.msg });
+
+  if (rsp.code !== 0) {
+    slog.warn(`[${accountId}] 同步命令列表返回非零码: code=${rsp.code}, msg=${rsp.msg}`);
+  } else {
+    slog.info(`[${accountId}] 同步命令列表成功`);
+  }
 }

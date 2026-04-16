@@ -16,6 +16,7 @@ let mockExtractResult = {
   isAtBot: false,
   medias: [] as any[],
   mentions: [] as any[],
+  linkUrls: [] as string[],
 };
 
 // 仅在第一个测试中注册 mock（后续测试复用同一 mock 实例）
@@ -28,6 +29,7 @@ function setupMocks(
     isAtBot?: boolean;
     medias?: any[];
     mentions?: any[];
+    linkUrls?: string[];
   },
 ) {
   mockExtractResult = {
@@ -35,6 +37,7 @@ function setupMocks(
     isAtBot: extractResult?.isAtBot ?? false,
     medias: extractResult?.medias ?? [],
     mentions: extractResult?.mentions ?? [],
+    linkUrls: extractResult?.linkUrls ?? [],
   };
   if (!mockRegistered) {
     t.mock.module("../../messaging/extract.js", {

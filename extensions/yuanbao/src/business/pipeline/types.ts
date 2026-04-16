@@ -64,6 +64,8 @@ export interface PipelineContext {
   medias: MediaItem[];
   isAtBot: boolean;
   mentions: MentionItem[];
+  /** 链接卡片中提取的 URL 列表（供 LinkUnderstanding 使用） */
+  linkUrls: string[];
 
   /** resolveQuote 填充 */
   quoteInfo?: QuoteInfo;

@@ -33,6 +33,7 @@ export function extractTextFromMsgBody(
     isAtBot: false,
     medias: [],
     mentions: [],
+    linkUrls: [],
   };
 
   if (!msgBody || !Array.isArray(msgBody)) {

@@ -33,12 +33,16 @@ export const extractContent: MiddlewareDescriptor = {
       groupCode: ctx.groupCode,
     };
 
-    const { rawBody, isAtBot, medias, mentions } = extractTextFromMsgBody(minCtx, raw.msg_body);
+    const { rawBody, isAtBot, medias, mentions, linkUrls } = extractTextFromMsgBody(
+      minCtx,
+      raw.msg_body,
+    );
 
     ctx.rawBody = rawBody;
     ctx.isAtBot = isAtBot;
     ctx.medias = medias;
     ctx.mentions = mentions ?? [];
+    ctx.linkUrls = linkUrls ?? [];
 
     ctx.log.info("[extract-content] received message", {
       isGroup,

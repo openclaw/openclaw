@@ -69,6 +69,11 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("venice", "models.ts", 552),
   bundledPluginCallsite("vercel-ai-gateway", "models.ts", 181),
   bundledPluginCallsite("voice-call", "src/providers/twilio/api.ts", 23),
+  bundledPluginCallsite("yuanbao", "src/access/http/request.ts", 234),
+  bundledPluginCallsite("yuanbao", "src/access/http/request.ts", 462),
+  bundledPluginCallsite("yuanbao", "src/access/http/request.ts", 520),
+  bundledPluginCallsite("yuanbao", "src/business/commands/log-upload/cos-upload.ts", 119),
+  bundledPluginCallsite("yuanbao", "src/business/utils/media.ts", 391),
 ]);
 
 function isRawFetchCall(expression) {

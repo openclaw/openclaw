@@ -23,6 +23,8 @@ import {
   decodeQueryGroupInfoRsp,
   encodeGetGroupMemberListReq,
   decodeGetGroupMemberListRsp,
+  encodeSyncInformationReq,
+  decodeSyncInformationRsp,
 } from "./biz-codec.js";
 import {
   decodeConnMsg,
@@ -52,6 +54,8 @@ import type {
   WsGetGroupMemberListData,
   WsGetGroupMemberListResponse,
   WsPushEvent,
+  WsSyncInformationData,
+  WsSyncInformationResponse,
 } from "./types.js";
 
 // ============ Default值 ============
@@ -110,6 +114,8 @@ export const BIZ_CMD = {
   SendPrivateHeartbeat: "send_private_heartbeat",
   /** 群聊回复状态心跳 */
   SendGroupHeartbeat: "send_group_heartbeat",
+  /** 同步信息（命令列表等） */
+  SyncInformation: "sync_information",
 } as const;
 
 const BIZ_MODULE = "yuanbao_openclaw_proxy";
@@ -418,6 +424,28 @@ export class YuanbaoWsClient {
       BIZ_MODULE,
       encoded,
       decodeSendGroupHeartbeatRsp,
+    );
+  }
+
+  /**
+   * 同步信息到后台（命令列表等）
+   * @param data - 同步信息请求数据
+   */
+  syncInformation(data: WsSyncInformationData): Promise<WsSyncInformationResponse> {
+    this.log.info("[同步] 发送 SyncInformation 请求", {
+      syncType: data.syncType,
+      botVersion: data.botVersion,
+      pluginVersion: data.pluginVersion,
+    });
+    const encoded = encodeSyncInformationReq(data);
+    if (!encoded) {
+      return Promise.reject(new Error("Failed to encode SyncInformationReq"));
+    }
+    return this.sendAndWaitWith(
+      BIZ_CMD.SyncInformation,
+      BIZ_MODULE,
+      encoded,
+      decodeSyncInformationRsp,
     );
   }
 

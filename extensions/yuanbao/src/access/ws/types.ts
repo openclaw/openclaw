@@ -228,3 +228,32 @@ export type WsHeartbeatResponse = {
   msg?: string;
   message?: string;
 };
+
+// ============ SyncInformation ============
+
+/** SyncInformation 命令项 */
+export type WsSyncCommand = {
+  name: string;
+  description: string;
+};
+
+/** SyncInformation 命令数据（sync_type=1） */
+export type WsSyncCommandsData = {
+  botCommands: WsSyncCommand[];
+  pluginCommands: WsSyncCommand[];
+};
+
+/** SyncInformation 请求数据 */
+export type WsSyncInformationData = {
+  syncType: number;
+  botVersion: string;
+  pluginVersion: string;
+  commandData?: WsSyncCommandsData;
+};
+
+/** SyncInformation 响应 */
+export type WsSyncInformationResponse = {
+  msgId: string;
+  code: number;
+  msg: string;
+};

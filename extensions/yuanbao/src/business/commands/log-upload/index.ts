@@ -1,8 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/core";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { resolveYuanbaoAccount } from "../../../accounts.js";
 import { sanitize, createLog } from "../../../logger.js";
 import { uploadToCos } from "./cos-upload.js";
@@ -149,7 +149,7 @@ function buildTimestamp(): string {
 async function persistTempBundle(
   lines: string[],
 ): Promise<{ dir: string; jsonlPath: string; gzipPath: string; gzipBytes: number }> {
-  const baseDir = join(tmpdir(), "openclaw-log-export-");
+  const baseDir = join(resolvePreferredOpenClawTmpDir(), "openclaw-log-export-");
   const dir = await mkdtemp(baseDir);
   const ts = buildTimestamp();
   const jsonlPath = join(dir, `openclaw-log-${ts}.jsonl`);

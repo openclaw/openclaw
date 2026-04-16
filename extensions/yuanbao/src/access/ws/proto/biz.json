@@ -470,6 +470,75 @@
                           "id": 2
                         }
                       }
+                    },
+                    "SyncInformationType": {
+                      "values": {
+                        "SYNC_INFORMATION_TYPE_UNSPECIFIED": 0,
+                        "SYNC_INFORMATION_TYPE_COMMANDS": 1
+                      }
+                    },
+                    "Command": {
+                      "fields": {
+                        "name": {
+                          "type": "string",
+                          "id": 1
+                        },
+                        "description": {
+                          "type": "string",
+                          "id": 2
+                        }
+                      }
+                    },
+                    "SyncCommandsData": {
+                      "fields": {
+                        "botCommands": {
+                          "rule": "repeated",
+                          "type": "Command",
+                          "id": 1
+                        },
+                        "pluginCommands": {
+                          "rule": "repeated",
+                          "type": "Command",
+                          "id": 2
+                        }
+                      }
+                    },
+                    "SyncInformationReq": {
+                      "oneofs": {
+                        "data": {
+                          "oneof": ["commandData"]
+                        }
+                      },
+                      "fields": {
+                        "syncType": {
+                          "type": "SyncInformationType",
+                          "id": 1
+                        },
+                        "botVersion": {
+                          "type": "string",
+                          "id": 2
+                        },
+                        "pluginVersion": {
+                          "type": "string",
+                          "id": 3
+                        },
+                        "commandData": {
+                          "type": "SyncCommandsData",
+                          "id": 11
+                        }
+                      }
+                    },
+                    "SyncInformationRsp": {
+                      "fields": {
+                        "code": {
+                          "type": "int32",
+                          "id": 1
+                        },
+                        "msg": {
+                          "type": "string",
+                          "id": 2
+                        }
+                      }
                     }
                   }
                 }

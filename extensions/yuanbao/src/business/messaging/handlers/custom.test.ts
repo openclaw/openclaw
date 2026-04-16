@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { MessageHandlerContext } from "../context.js";
-import { customHandler, buildAtUserMsgBodyItem } from "./custom.js";
+import { customHandler, buildAtUserMsgBodyItem } from "./custom/index.js";
 import type { ExtractTextFromMsgBodyResult } from "./types.js";
 
 function makeMockCtx(botId = "bot-001"): MessageHandlerContext {
@@ -21,7 +21,7 @@ function makeMockCtx(botId = "bot-001"): MessageHandlerContext {
 }
 
 function makeResData(): ExtractTextFromMsgBodyResult {
-  return { rawBody: "", isAtBot: false, medias: [], mentions: [] };
+  return { rawBody: "", isAtBot: false, medias: [], mentions: [], linkUrls: [] };
 }
 
 // ============ extract ============
@@ -39,7 +39,10 @@ void test("customHandler extract 识别 @Bot 消息", () => {
 
   const result = customHandler.extract(ctx, elem, resData);
   assert.equal(resData.isAtBot, true);
-  assert.equal(result, undefined); // @Bot 自己的文本被过滤
+  assert.equal(result, "@Bot"); // @Bot 文本保留（用于 botUsername 提取）
+  assert.equal(resData.botUsername, "Bot"); // 提取 bot 显示名称（去除 @ 前缀）
+  assert.equal(resData.mentions.length, 1); // @Bot 也记录到 mentions
+  assert.equal(resData.mentions[0].userId, "bot-001");
 });
 
 void test("customHandler extract 识别 @其他用户 消息", () => {
@@ -60,7 +63,7 @@ void test("customHandler extract 识别 @其他用户 消息", () => {
   assert.equal(resData.mentions[0].userId, "user-123");
 });
 
-void test("customHandler extract 非 @ 自定义消息返回 [custom]", () => {
+void test("customHandler extract 非 @ 自定义消息返回 [当前消息暂不支持查看]", () => {
   const ctx = makeMockCtx();
   const resData = makeResData();
 
@@ -71,7 +74,7 @@ void test("customHandler extract 非 @ 自定义消息返回 [custom]", () => {
     },
   };
 
-  assert.equal(customHandler.extract(ctx, elem, resData), "[custom]");
+  assert.equal(customHandler.extract(ctx, elem, resData), "[当前消息暂不支持查看]");
 });
 
 // ============ buildMsgBody ============

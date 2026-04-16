@@ -183,6 +183,7 @@ function buildPipelineContext(primary: DebouncerItem, items: DebouncerItem[]): P
     medias: [],
     isAtBot: false,
     mentions: [],
+    linkUrls: [],
     commandAuthorized: false,
     rewrittenBody: "",
     hasControlCommand: false,
