@@ -1054,6 +1054,22 @@ export async function resolveGatewayModelSupportsImages(params: {
     ) {
       return true;
     }
+    // Fallback for Qwen vision models that may be excluded from the catalog
+    // due to base URL restrictions (e.g., coding.dashscope.aliyuncs.com filters
+    // out qwen3.6-plus). Trust common vision model patterns regardless of provider.
+    if (
+      normalizedCandidates.some(
+        (candidate) =>
+          candidate === "qwen3.6-plus" ||
+          candidate.startsWith("qwen-vl") ||
+          candidate.startsWith("qwen3-vl") ||
+          candidate.startsWith("qwen2.5-vl") ||
+          candidate.startsWith("qwen2-vl") ||
+          candidate.startsWith("qwen-vision"),
+      )
+    ) {
+      return true;
+    }
     return false;
   } catch {
     return false;

@@ -1004,4 +1004,44 @@ describe("resolveGatewayModelSupportsImages", () => {
       }),
     ).resolves.toBe(true);
   });
+
+  test("treats qwen3.6-plus as image-capable when not found in catalog (coding.dashscope base URL)", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "qwen3.6-plus",
+        provider: "bailian",
+        loadGatewayModelCatalog: async () => [],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("treats qwen-vl-* models as image-capable when not found in catalog", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "qwen-vl-max",
+        provider: "qwen",
+        loadGatewayModelCatalog: async () => [],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("treats qwen2.5-vl models as image-capable when not found in catalog", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "qwen2.5-vl-72b",
+        provider: "qwen",
+        loadGatewayModelCatalog: async () => [],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("returns false for unknown non-vision models not in catalog", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "some-unknown-model",
+        provider: "some-provider",
+        loadGatewayModelCatalog: async () => [],
+      }),
+    ).resolves.toBe(false);
+  });
 });
