@@ -1,13 +1,11 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { Command } from "commander";
-import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   loadBundledPluginPublicSurfaceModuleSync,
   tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
+import { resolvePrivateQaBundledPluginsEnv } from "./private-qa-bundled-env.js";
 
 export type QaRunnerCliRegistration = {
   commandName: string;
@@ -56,7 +54,7 @@ function isMissingQaRuntimeError(error: unknown) {
 }
 
 export function loadQaRuntimeModule(): QaRuntimeSurface {
-  const env = resolvePrivateQaRunnerEnv();
+  const env = resolvePrivateQaBundledPluginsEnv();
   return loadBundledPluginPublicSurfaceModuleSync<QaRuntimeSurface>({
     dirName: ["qa", "lab"].join("-"),
     artifactBasename: ["runtime-api", "js"].join("."),
@@ -76,36 +74,8 @@ export function isQaRuntimeAvailable(): boolean {
   }
 }
 
-function resolvePrivateQaRunnerEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): NodeJS.ProcessEnv | undefined {
-  if (env.OPENCLAW_ENABLE_PRIVATE_QA_CLI !== "1") {
-    return undefined;
-  }
-  const packageRoot = resolveOpenClawPackageRootSync({
-    argv1: process.argv[1],
-    cwd: process.cwd(),
-    moduleUrl: import.meta.url,
-  });
-  if (!packageRoot) {
-    return undefined;
-  }
-  const sourceExtensionsDir = path.join(packageRoot, "extensions");
-  if (
-    !fs.existsSync(path.join(packageRoot, ".git")) ||
-    !fs.existsSync(path.join(packageRoot, "src")) ||
-    !fs.existsSync(sourceExtensionsDir)
-  ) {
-    return undefined;
-  }
-  return {
-    ...env,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: sourceExtensionsDir,
-  };
-}
-
 function listDeclaredQaRunnerPlugins(
-  env: NodeJS.ProcessEnv | undefined = resolvePrivateQaRunnerEnv(),
+  env: NodeJS.ProcessEnv | undefined = resolvePrivateQaBundledPluginsEnv(),
 ): Array<
   PluginManifestRecord & {
     qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
@@ -167,7 +137,7 @@ function loadQaRunnerRuntimeSurface(
 }
 
 export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution[] {
-  const env = resolvePrivateQaRunnerEnv();
+  const env = resolvePrivateQaBundledPluginsEnv();
   const contributions = new Map<string, QaRunnerCliContribution>();
 
   for (const plugin of listDeclaredQaRunnerPlugins(env)) {
