@@ -670,7 +670,7 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
       // Preserve HEARTBEAT.md directives (non-task content)
       if (params.heartbeatFileContent) {
         const directives = params.heartbeatFileContent
-          .replace(/^[\s\S]*?^tasks:[\s\S]*?(?=^[^\s]|^$)/m, "")
+          .replace(/^tasks:[\s\S]*?(?=^[^\s]|^$)/m, "")
           .trim();
         if (directives) {
           prompt += `\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
