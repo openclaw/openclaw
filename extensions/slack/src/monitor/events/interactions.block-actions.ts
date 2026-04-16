@@ -661,13 +661,15 @@ async function wakeSlackReplySession(params: {
       : `slack:group:${parsed.channelId}`;
 
   const [
-    { resolveAgentRoute },
+    { resolveAgentRoute, resolveThreadSessionKeys },
     { finalizeInboundContext, dispatchReplyWithDispatcher },
     { createChannelReplyPipeline },
+    { deliverReplies },
   ] = await Promise.all([
     import("openclaw/plugin-sdk/routing"),
     import("openclaw/plugin-sdk/reply-runtime"),
     import("openclaw/plugin-sdk/channel-reply-pipeline"),
+    import("../replies.js"),
   ]);
 
   const route = resolveAgentRoute({
@@ -680,6 +682,15 @@ async function wakeSlackReplySession(params: {
       id: isDirectMessage ? parsed.userId : parsed.channelId,
     },
   });
+
+  // Derive thread-scoped session key when the interaction came from a thread,
+  // consistent with prepareSlackMessage's resolveThreadSessionKeys usage.
+  const threadId = parsed.threadTs ?? undefined;
+  const threadKeys = resolveThreadSessionKeys({
+    baseSessionKey: route.sessionKey,
+    threadId,
+  });
+  const sessionKey = threadKeys.sessionKey;
 
   const ctxPayload = finalizeInboundContext({
     Body: replyText,
@@ -696,7 +707,7 @@ async function wakeSlackReplySession(params: {
     WasMentioned: true,
     MessageSid: `interaction:${parsed.messageTs ?? String(Date.now())}`,
     Timestamp: Date.now(),
-    SessionKey: route.sessionKey,
+    SessionKey: sessionKey,
     AccountId: route.accountId,
     OriginatingChannel: "slack" as const,
     OriginatingTo: `user:${parsed.userId}`,
@@ -709,8 +720,9 @@ async function wakeSlackReplySession(params: {
     accountId: route.accountId,
   });
 
-  const { deliverReplies } = await import("../replies.js");
-  const replyThreadTs = parsed.threadTs ?? parsed.messageTs;
+  // Respect replyToMode: only thread replies when the mode is not "off".
+  const replyThreadTs =
+    ctx.replyToMode !== "off" ? (parsed.threadTs ?? parsed.messageTs) : undefined;
 
   await dispatchReplyWithDispatcher({
     ctx: ctxPayload,

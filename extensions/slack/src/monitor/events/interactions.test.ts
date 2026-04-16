@@ -21,23 +21,20 @@ const createChannelReplyPipelineMock = vi.hoisted(() =>
 );
 const finalizeInboundContextMock = vi.hoisted(() => vi.fn((ctx: unknown) => ctx));
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const original = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...original,
-    dispatchReplyWithDispatcher: dispatchReplyWithDispatcherMock,
-    finalizeInboundContext: finalizeInboundContextMock,
-  };
-});
-vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
-  const original = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
-  return { ...original, resolveAgentRoute: resolveAgentRouteMock };
-});
-vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", async (importOriginal) => {
-  const original =
-    await importOriginal<typeof import("openclaw/plugin-sdk/channel-reply-pipeline")>();
-  return { ...original, createChannelReplyPipeline: createChannelReplyPipelineMock };
-});
+vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
+  dispatchReplyWithDispatcher: dispatchReplyWithDispatcherMock,
+  finalizeInboundContext: finalizeInboundContextMock,
+}));
+vi.mock("openclaw/plugin-sdk/routing", () => ({
+  resolveAgentRoute: resolveAgentRouteMock,
+  resolveThreadSessionKeys: vi.fn(({ baseSessionKey }: { baseSessionKey: string }) => ({
+    sessionKey: baseSessionKey,
+    parentSessionKey: undefined,
+  })),
+}));
+vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
+  createChannelReplyPipeline: createChannelReplyPipelineMock,
+}));
 vi.mock("../replies.js", () => ({
   deliverReplies: vi.fn(async () => {}),
 }));
@@ -47,10 +44,7 @@ let enqueueSystemEventSpy: ReturnType<typeof vi.spyOn>;
 let dispatchPluginInteractiveHandlerSpy: ReturnType<typeof vi.spyOn>;
 let resolvePluginConversationBindingApprovalSpy: ReturnType<typeof vi.spyOn>;
 let buildPluginBindingResolvedTextSpy: ReturnType<typeof vi.spyOn>;
-let dispatchReplyWithDispatcherSpy: ReturnType<typeof vi.spyOn>;
-let resolveAgentRouteSpy: ReturnType<typeof vi.spyOn>;
-let createChannelReplyPipelineSpy: ReturnType<typeof vi.spyOn>;
-let finalizeInboundContextSpy: ReturnType<typeof vi.spyOn>;
+
 
 type RegisteredHandler = (args: {
   ack: () => Promise<void>;
@@ -242,21 +236,6 @@ describe("registerSlackInteractionEvents", () => {
         (buildPluginBindingResolvedTextMock as (...innerArgs: unknown[]) => string)(
           ...args,
         )) as typeof conversationBinding.buildPluginBindingResolvedText);
-    const replyRuntime = await import("openclaw/plugin-sdk/reply-runtime");
-    const routingRuntime = await import("openclaw/plugin-sdk/routing");
-    const pipelineRuntime = await import("openclaw/plugin-sdk/channel-reply-pipeline");
-    dispatchReplyWithDispatcherSpy = vi
-      .spyOn(replyRuntime, "dispatchReplyWithDispatcher")
-      .mockImplementation(dispatchReplyWithDispatcherMock as never);
-    finalizeInboundContextSpy = vi
-      .spyOn(replyRuntime, "finalizeInboundContext")
-      .mockImplementation(finalizeInboundContextMock as never);
-    resolveAgentRouteSpy = vi
-      .spyOn(routingRuntime, "resolveAgentRoute")
-      .mockImplementation(resolveAgentRouteMock as never);
-    createChannelReplyPipelineSpy = vi
-      .spyOn(pipelineRuntime, "createChannelReplyPipeline")
-      .mockImplementation(createChannelReplyPipelineMock as never);
     ({ registerSlackInteractionEvents } = await import("./interactions.js"));
   });
 
