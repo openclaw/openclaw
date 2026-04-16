@@ -98,8 +98,10 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
-function supportsAdaptiveThinking(modelId: string): boolean {
+export function supportsAdaptiveThinking(modelId: string): boolean {
   return (
+    modelId.includes("opus-4-7") ||
+    modelId.includes("opus-4.7") ||
     modelId.includes("opus-4-6") ||
     modelId.includes("opus-4.6") ||
     modelId.includes("sonnet-4-6") ||
@@ -107,7 +109,7 @@ function supportsAdaptiveThinking(modelId: string): boolean {
   );
 }
 
-function mapThinkingLevelToEffort(
+export function mapAdaptiveThinkingLevelToEffort(
   level: ThinkingLevel,
   modelId: string,
 ): NonNullable<AnthropicOptions["effort"]> {
@@ -117,8 +119,24 @@ function mapThinkingLevelToEffort(
       return "low";
     case "medium":
       return "medium";
+    case "high":
+      return "high";
     case "xhigh":
-      return modelId.includes("opus-4-6") || modelId.includes("opus-4.6") ? "max" : "high";
+      // Anthropic introduced a separate `xhigh` effort on Opus 4.7 (extended exploration),
+      // but their docs order `max > xhigh`. Openclaw's `xhigh` ThinkingLevel means
+      // "top of scale", so we always map it to `max` where supported to give users the
+      // highest effort consistently across 4.6 and 4.7 models.
+      if (
+        modelId.includes("opus-4-7") ||
+        modelId.includes("opus-4.7") ||
+        modelId.includes("opus-4-6") ||
+        modelId.includes("opus-4.6") ||
+        modelId.includes("sonnet-4-6") ||
+        modelId.includes("sonnet-4.6")
+      ) {
+        return "max";
+      }
+      return "high";
     default:
       return "high";
   }
@@ -616,7 +634,7 @@ function resolveAnthropicTransportOptions(
   }
   if (supportsAdaptiveThinking(model.id)) {
     resolved.thinkingEnabled = true;
-    resolved.effort = mapThinkingLevelToEffort(options.reasoning, model.id);
+    resolved.effort = mapAdaptiveThinkingLevelToEffort(options.reasoning, model.id);
     return resolved;
   }
   const adjusted = adjustMaxTokensForThinking({

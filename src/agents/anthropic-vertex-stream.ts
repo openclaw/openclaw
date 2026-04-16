@@ -9,8 +9,10 @@ import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
-
-type AnthropicVertexEffort = NonNullable<AnthropicOptions["effort"]>;
+import {
+  mapAdaptiveThinkingLevelToEffort,
+  supportsAdaptiveThinking,
+} from "./anthropic-transport-stream.js";
 
 function resolveAnthropicVertexMaxTokens(params: {
   modelMaxTokens: number | undefined;
@@ -110,22 +112,11 @@ export function createAnthropicVertexStreamFn(
     };
 
     if (options?.reasoning) {
-      const isAdaptive =
-        model.id.includes("opus-4-6") ||
-        model.id.includes("opus-4.6") ||
-        model.id.includes("sonnet-4-6") ||
-        model.id.includes("sonnet-4.6");
+      const isAdaptive = supportsAdaptiveThinking(model.id);
 
       if (isAdaptive) {
         opts.thinkingEnabled = true;
-        const effortMap: Record<string, AnthropicVertexEffort> = {
-          minimal: "low",
-          low: "low",
-          medium: "medium",
-          high: "high",
-          xhigh: model.id.includes("opus-4-6") || model.id.includes("opus-4.6") ? "max" : "high",
-        };
-        opts.effort = effortMap[options.reasoning] ?? "high";
+        opts.effort = mapAdaptiveThinkingLevelToEffort(options.reasoning, model.id);
       } else {
         opts.thinkingEnabled = true;
         const budgets = options.thinkingBudgets;

@@ -130,7 +130,7 @@ describe("createAnthropicVertexStreamFn", () => {
     );
   });
 
-  it("maps xhigh reasoning to max effort for adaptive Opus models", () => {
+  it("plumbs adaptive-thinking effort from the shared mapper into vertex stream options", () => {
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5");
     const model = makeModel({ id: "claude-opus-4-6", maxTokens: 64000 });
 
