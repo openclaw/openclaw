@@ -29,7 +29,7 @@ const THREAT_PATTERNS: ThreatPattern[] = [
     re: /act\s+as\s+(if|though)\s+you\s+(have\s+no|don['\u2019]t\s+have)\s+(restrictions|limits|rules)/i,
     id: "bypass_restrictions",
   },
-  { re: /<!--[^>]*(?:ignore|override|system|secret|hidden)[^>]*-->/i, id: "html_comment_injection" },
+  { re: /<!--[\s\S]*?(?:ignore|override|system|secret|hidden)[\s\S]*?-->/i, id: "html_comment_injection" },
   { re: /<\s*div\s+style\s*=\s*["'][\s\S]*?display\s*:\s*none/i, id: "hidden_div" },
   { re: /translate\s+.*\s+into\s+.*\s+and\s+(execute|run|eval)/i, id: "translate_execute" },
   {
