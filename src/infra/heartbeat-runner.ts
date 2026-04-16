@@ -523,7 +523,7 @@ async function resolveHeartbeatPreflight(params: {
   heartbeat?: HeartbeatConfig;
   forcedSessionKey?: string;
   reason?: string;
-}): Promise<HeartbeatPreflight> {
+}): Promise<{ preflight: HeartbeatPreflight; heartbeatFileContent?: string }> {
   const reasonFlags = resolveHeartbeatReasonFlags(params.reason);
   const session = resolveHeartbeatSession(
     params.cfg,
@@ -563,7 +563,7 @@ async function resolveHeartbeatPreflight(params: {
     reasonFlags.isCronEventReason ||
     reasonFlags.isWakeReason ||
     hasTaggedCronEvents;
-  const basePreflight = {
+  const preflight = {
     ...reasonFlags,
     session,
     pendingEventEntries,
@@ -573,7 +573,7 @@ async function resolveHeartbeatPreflight(params: {
   } satisfies Omit<HeartbeatPreflight, "skipReason">;
 
   if (shouldBypassFileGates) {
-    return basePreflight;
+    return { preflight };
   }
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
@@ -583,22 +583,28 @@ async function resolveHeartbeatPreflight(params: {
     const tasks = parseHeartbeatTasks(heartbeatFileContent);
     if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) && tasks.length === 0) {
       return {
-        ...basePreflight,
-        skipReason: "empty-heartbeat-file",
-        tasks: [],
+        preflight: {
+          ...preflight,
+          skipReason: "empty-heartbeat-file",
+          tasks: [],
+        },
+        heartbeatFileContent,
       };
     }
     return {
-      ...basePreflight,
-      tasks,
+      preflight: {
+        ...preflight,
+        tasks,
+      },
+      heartbeatFileContent,
     };
   } catch (err: unknown) {
     if (hasErrnoCode(err, "ENOENT")) {
-      return basePreflight;
+      return { preflight };
     }
   }
 
-  return basePreflight;
+  return { preflight };
 }
 
 type HeartbeatPromptResolution = {
@@ -626,6 +632,7 @@ function resolveHeartbeatRunPrompt(params: {
   canRelayToUser: boolean;
   workspaceDir: string;
   startedAt: number;
+  heartbeatFileContent?: string;
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
   const pendingEvents = params.preflight.shouldInspectPendingEvents
@@ -660,6 +667,15 @@ ${taskList}
 
 After completing all due tasks, reply HEARTBEAT_OK.`;
 
+      // Preserve HEARTBEAT.md directives (non-task content)
+      if (params.heartbeatFileContent) {
+        const directives = params.heartbeatFileContent
+          .replace(/^[\s\S]*?^tasks:[\s\S]*?(?=^[^\s]|^$)/m, "")
+          .trim();
+        if (directives) {
+          prompt += `\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
+        }
+      }
       return { prompt, hasExecCompletion: false, hasCronEvents: false };
     }
     // No tasks due - skip this heartbeat to avoid wasteful API calls
@@ -714,7 +730,7 @@ export async function runHeartbeatOnce(opts: {
   }
 
   // Preflight centralizes trigger classification, event inspection, and HEARTBEAT.md gating.
-  const preflight = await resolveHeartbeatPreflight({
+  const { preflight, heartbeatFileContent } = await resolveHeartbeatPreflight({
     cfg,
     agentId,
     heartbeat,
@@ -801,6 +817,7 @@ export async function runHeartbeatOnce(opts: {
     canRelayToUser,
     workspaceDir,
     startedAt,
+    heartbeatFileContent,
   });
 
   // If no tasks are due, skip heartbeat entirely
