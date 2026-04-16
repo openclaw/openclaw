@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PlanStore, type StoredPlan, type StoredPlanStep } from "./plan-store.js";
 
 let tmpDir: string;
@@ -39,15 +39,48 @@ describe("PlanStore", () => {
       expect(result).toEqual(SAMPLE_PLAN);
     });
 
-    it("creates nested directory if missing", async () => {
-      await store.write("deep/nested/ns", { ...SAMPLE_PLAN, namespace: "deep/nested/ns" });
-      const result = await store.read("deep/nested/ns");
+    it("creates the namespace directory if missing", async () => {
+      const ns = "fresh-ns";
+      await store.write(ns, { ...SAMPLE_PLAN, namespace: ns });
+      const result = await store.read(ns);
       expect(result).not.toBeNull();
     });
 
     it("rejects namespace with path traversal", async () => {
       await expect(store.read("../../etc")).rejects.toThrow("Invalid plan namespace");
       await expect(store.write("../escape", SAMPLE_PLAN)).rejects.toThrow("Invalid plan namespace");
+    });
+
+    it("rejects nested-path namespace (cross-namespace lock collision defense)", async () => {
+      await expect(store.read("foo/bar")).rejects.toThrow("Invalid plan namespace");
+      await expect(store.write("foo/.lock", SAMPLE_PLAN)).rejects.toThrow("Invalid plan namespace");
+    });
+
+    it("rejects namespace with backslash separator", async () => {
+      await expect(store.read("foo\\bar")).rejects.toThrow("Invalid plan namespace");
+    });
+
+    it("rejects namespace with null byte / control chars", async () => {
+      await expect(store.read("foo\x00bar")).rejects.toThrow("Invalid plan namespace");
+      await expect(store.read("foo\x01bar")).rejects.toThrow("Invalid plan namespace");
+    });
+
+    it("rejects Windows reserved device names", async () => {
+      for (const name of ["CON", "PRN", "AUX", "NUL", "COM1", "LPT9", "con.txt", "nul.json"]) {
+        await expect(store.read(name)).rejects.toThrow("Invalid plan namespace");
+      }
+    });
+
+    it("rejects namespace longer than 128 chars", async () => {
+      const tooLong = "a".repeat(129);
+      await expect(store.read(tooLong)).rejects.toThrow("Invalid plan namespace");
+    });
+
+    it("accepts standard namespace patterns", async () => {
+      for (const ns of ["session-abc", "user_123", "v2.plan", "Mixed-Case_99"]) {
+        await store.write(ns, { ...SAMPLE_PLAN, namespace: ns });
+        expect(await store.read(ns)).not.toBeNull();
+      }
     });
 
     it("rejects namespace mismatch in write", async () => {
@@ -83,9 +116,7 @@ describe("PlanStore", () => {
         { step: "Run tests", status: "pending" },
         { step: "Build", status: "pending" },
       ];
-      const incoming: StoredPlanStep[] = [
-        { step: "Run tests", status: "completed" },
-      ];
+      const incoming: StoredPlanStep[] = [{ step: "Run tests", status: "completed" }];
       const merged = store.mergeSteps(existing, incoming, "session-abc");
       expect(merged).toHaveLength(2);
       expect(merged[0].status).toBe("completed");
@@ -94,12 +125,8 @@ describe("PlanStore", () => {
     });
 
     it("appends new steps not in existing", () => {
-      const existing: StoredPlanStep[] = [
-        { step: "Run tests", status: "completed" },
-      ];
-      const incoming: StoredPlanStep[] = [
-        { step: "Deploy", status: "pending" },
-      ];
+      const existing: StoredPlanStep[] = [{ step: "Run tests", status: "completed" }];
+      const incoming: StoredPlanStep[] = [{ step: "Deploy", status: "pending" }];
       const merged = store.mergeSteps(existing, incoming);
       expect(merged).toHaveLength(2);
       expect(merged[1].step).toBe("Deploy");
@@ -111,9 +138,7 @@ describe("PlanStore", () => {
         { step: "B", status: "pending" },
         { step: "C", status: "pending" },
       ];
-      const incoming: StoredPlanStep[] = [
-        { step: "B", status: "completed" },
-      ];
+      const incoming: StoredPlanStep[] = [{ step: "B", status: "completed" }];
       const merged = store.mergeSteps(existing, incoming);
       expect(merged.map((s) => s.step)).toEqual(["A", "B", "C"]);
     });

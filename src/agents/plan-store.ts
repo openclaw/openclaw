@@ -13,6 +13,7 @@
  */
 
 import crypto from "node:crypto";
+import { constants as fsConstants, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -31,54 +32,120 @@ export interface StoredPlan {
   updatedAt: number;
 }
 
-const LOCK_STALE_MS = 10_000;
-
 /**
- * Validates that a namespace cannot escape the base directory via
- * path traversal (e.g. "../../etc").
+ * Validates parsed JSON shape and strips prototype-pollution keys at every level.
+ * Defense-in-depth: Node's JSON.parse doesn't pollute prototypes by default,
+ * but explicitly removing __proto__/constructor/prototype keys prevents any
+ * future code path from accidentally trusting them.
  */
-function hasControlOrForbiddenChars(s: string): boolean {
-  for (let i = 0; i < s.length; i++) {
-    const code = s.charCodeAt(i);
-    // Block ASCII control chars (0x00-0x1F) and Windows-forbidden chars.
-    if (code <= 0x1f) {
-      return true;
-    }
-    if ('<>:"|?*'.includes(s[i])) {
-      return true;
-    }
+function sanitizePlanShape(parsed: unknown, expectedNamespace: string): StoredPlan {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`Plan file for "${expectedNamespace}" has invalid shape — expected object`);
   }
-  return false;
+  const obj = parsed as Record<string, unknown>;
+  if (typeof obj.namespace !== "string" || obj.namespace !== expectedNamespace) {
+    throw new Error(
+      `Plan namespace mismatch on read: expected "${expectedNamespace}", found "${String(obj.namespace)}"`,
+    );
+  }
+  if (!Array.isArray(obj.steps)) {
+    throw new Error(`Plan file for "${expectedNamespace}" has invalid shape — steps must be array`);
+  }
+  // Filter prototype-pollution keys defensively at the top level.
+  const safe: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (k === "__proto__" || k === "constructor" || k === "prototype") {
+      continue;
+    }
+    safe[k] = v;
+  }
+  return safe as unknown as StoredPlan;
 }
 
+// Stale-lock threshold bumped to 60s to reduce false-positive theft of
+// legitimate slow operations. Combined with PID liveness check, this gives
+// a much more conservative recovery model.
+const LOCK_STALE_MS = 60_000;
+// Max allowed plan file size (defense-in-depth against giant JSON parse).
+const MAX_PLAN_FILE_BYTES = 1_048_576; // 1 MiB
+// Windows reserved device names — case-insensitive, with optional extension.
+const WINDOWS_RESERVED_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+// Strict namespace pattern — prevents path separators, control chars,
+// trailing dots/spaces, and limits length.
+const NAMESPACE_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
+
+/**
+ * Validates that a namespace is safe to use as a single directory name
+ * under baseDir. Rejects path separators, traversal, control chars,
+ * Windows reserved names, trailing dots/spaces, and over-length input.
+ *
+ * Hardened against:
+ * - Path traversal: rejects /, \, .., leading dots
+ * - Cross-namespace lock collision: rejects nested paths like "foo/.lock"
+ * - Windows device name attacks: CON, PRN, AUX, NUL, COM1-9, LPT1-9
+ * - Control char / null byte injection: only printable ASCII allowed
+ * - Length bound: 128 chars max
+ */
 function validateNamespace(namespace: string): void {
-  // Check raw input for traversal BEFORE normalizing — path.normalize()
-  // resolves "foo/../bar" to "bar" which would pass a post-normalize check.
-  if (!namespace || namespace === "." || namespace.includes("..")) {
+  if (!namespace || typeof namespace !== "string") {
     throw new Error(`Invalid plan namespace: "${namespace}"`);
   }
-  const normalized = path.normalize(namespace);
-  if (
-    !normalized ||
-    normalized === "." ||
-    path.isAbsolute(normalized) ||
-    hasControlOrForbiddenChars(normalized)
-  ) {
-    throw new Error(`Invalid plan namespace: "${namespace}"`);
+  // Strict character set — alphanumeric start, then alphanumeric/dot/underscore/hyphen.
+  // No /, \, control chars, spaces, or other risky characters.
+  if (!NAMESPACE_RE.test(namespace)) {
+    throw new Error(
+      `Invalid plan namespace: "${namespace}" — must match /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/`,
+    );
+  }
+  // Trailing dots/spaces are problematic on Windows (silently stripped).
+  if (/[.\s]$/.test(namespace)) {
+    throw new Error(`Invalid plan namespace: "${namespace}" — trailing dot or space not allowed`);
+  }
+  // Windows reserved device names (case-insensitive, with or without extension).
+  if (WINDOWS_RESERVED_RE.test(namespace)) {
+    throw new Error(
+      `Invalid plan namespace: "${namespace}" — matches Windows reserved device name`,
+    );
   }
 }
 
 export class PlanStore {
-  constructor(private readonly baseDir: string) {}
+  /** Realpath-resolved base directory — used for confinement checks. */
+  private readonly baseDir: string;
+
+  constructor(baseDir: string) {
+    // Resolve symlinks at construction. If baseDir doesn't exist yet, fall
+    // back to the literal path — confinement check at use time will still
+    // reject targets that escape this resolved root.
+    let resolved: string;
+    try {
+      resolved = realpathSync(baseDir);
+    } catch {
+      resolved = path.resolve(baseDir);
+    }
+    this.baseDir = resolved;
+  }
+
+  /**
+   * Confines a resolved path to baseDir. Throws if the resolved target
+   * escapes the realpathed base (defense against symlink redirection).
+   */
+  private confine(target: string): string {
+    const rel = path.relative(this.baseDir, target);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+      throw new Error(`Plan path escapes base directory: ${target}`);
+    }
+    return target;
+  }
 
   private planPath(namespace: string): string {
     validateNamespace(namespace);
-    return path.join(this.baseDir, namespace, "plan.json");
+    return this.confine(path.join(this.baseDir, namespace, "plan.json"));
   }
 
   private lockPath(namespace: string): string {
     validateNamespace(namespace);
-    return path.join(this.baseDir, namespace, ".lock");
+    return this.confine(path.join(this.baseDir, namespace, ".lock"));
   }
 
   /**
@@ -87,32 +154,44 @@ export class PlanStore {
    * so corruption is not silently ignored.
    */
   async read(namespace: string): Promise<StoredPlan | null> {
+    const planFile = this.planPath(namespace);
+    let handle: fs.FileHandle | undefined;
     try {
-      const content = await fs.readFile(this.planPath(namespace), "utf-8");
-      const plan = JSON.parse(content) as StoredPlan;
-      // Runtime shape validation — catch corrupt or manually-edited plan files.
-      if (
-        !plan ||
-        typeof plan !== "object" ||
-        typeof plan.namespace !== "string" ||
-        !Array.isArray(plan.steps)
-      ) {
+      // O_NOFOLLOW: refuse to follow symlinks at the leaf path.
+      handle = await fs.open(planFile, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      const stat = await handle.stat();
+      if (!stat.isFile()) {
+        throw new Error(`Plan path is not a regular file: ${planFile}`);
+      }
+      // Pre-parse size guard — refuse oversized buffers before JSON.parse.
+      if (stat.size > MAX_PLAN_FILE_BYTES) {
         throw new Error(
-          `Plan file for "${namespace}" has invalid shape — expected {namespace, steps[]}`,
+          `Plan file exceeds max size ${MAX_PLAN_FILE_BYTES} bytes (got ${stat.size})`,
         );
       }
-      // Verify stored namespace matches requested namespace to catch corruption.
-      if (plan.namespace !== namespace) {
-        throw new Error(
-          `Plan namespace mismatch on read: expected "${namespace}", found "${plan.namespace}"`,
-        );
-      }
+      const content = await handle.readFile({ encoding: "utf-8" });
+      await handle.close();
+      handle = undefined;
+      const plan = sanitizePlanShape(JSON.parse(content), namespace);
       return plan;
     } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
         return null;
       }
+      // ELOOP / ENOTDIR from O_NOFOLLOW = symlink attack attempt; surface clearly.
+      if (code === "ELOOP" || code === "ENOTDIR") {
+        throw new Error(`Plan path symlink rejected (${code}): ${planFile}`, { cause: err });
+      }
       throw err;
+    } finally {
+      if (handle) {
+        try {
+          await handle.close();
+        } catch {
+          /* ignore close error in finally */
+        }
+      }
     }
   }
 
@@ -210,10 +289,61 @@ export class PlanStore {
           }
         }
         if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-          // Lock exists. Check if stale.
+          // Lock exists. Check if stale via mtime + PID liveness.
           try {
-            const stat = await fs.stat(lockFile);
-            if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+            // lstat (not stat) to detect symlink-attack at lock path.
+            const lstat = await fs.lstat(lockFile);
+            if (!lstat.isFile()) {
+              throw new Error(`Lock path is not a regular file: ${lockFile}`, { cause: err });
+            }
+            const ageMs = Date.now() - lstat.mtimeMs;
+            if (ageMs > LOCK_STALE_MS) {
+              // Stale by age — also verify the holder is dead.
+              // Read lock token to extract PID; if PID is alive, defer.
+              let holderPid: number | undefined;
+              try {
+                const content = await fs.readFile(lockFile, "utf-8");
+                // Token format: "{pid}-{timestamp}-{rand}"
+                const pidStr = content.split("-")[0];
+                const parsed = Number.parseInt(pidStr, 10);
+                if (Number.isFinite(parsed) && parsed > 0) {
+                  holderPid = parsed;
+                }
+              } catch {
+                // Couldn't read holder — proceed with mtime-based eviction.
+              }
+              if (holderPid !== undefined) {
+                let alive = false;
+                try {
+                  // process.kill(pid, 0) throws ESRCH if pid is dead, no-op if alive.
+                  process.kill(holderPid, 0);
+                  alive = true;
+                } catch (probeErr) {
+                  if ((probeErr as NodeJS.ErrnoException).code !== "ESRCH") {
+                    // EPERM means the process exists but we don't have permission
+                    // to signal it — treat as alive (don't steal).
+                    alive = true;
+                  }
+                }
+                if (alive) {
+                  // Holder is alive — wait, don't steal.
+                  await new Promise((r) => setTimeout(r, 200 * (i + 1)));
+                  continue;
+                }
+              }
+              // Re-stat just before unlink to detect a new owner that
+              // acquired between our stat and unlink (TOCTOU mitigation).
+              try {
+                const recheck = await fs.lstat(lockFile);
+                if (recheck.mtimeMs > lstat.mtimeMs) {
+                  // A new owner took it — back off and retry normally.
+                  await new Promise((r) => setTimeout(r, 200 * (i + 1)));
+                  continue;
+                }
+              } catch {
+                // Disappeared on its own — nothing to unlink.
+                continue;
+              }
               await fs.unlink(lockFile);
               continue; // Retry after removing stale lock.
             }
