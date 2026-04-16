@@ -211,6 +211,25 @@ describe("mention neutralization", () => {
     const result = renderPlanChecklist(steps, "plaintext");
     expect(result).toContain("@alice");
   });
+
+  it("plaintext renderPlanWithHeader: neutralizes @everyone in TITLE (Codex P2 r3095517064)", () => {
+    // Adversarial regression: prior implementation neutralized step labels
+    // but emitted the title verbatim. A model-derived title like
+    // `@everyone release plan` would still trigger mentions.
+    const steps: PlanStepForRender[] = [{ step: "Tag release", status: "pending" }];
+    const result = renderPlanWithHeader("@everyone release plan", steps, "plaintext");
+    expect(result).not.toMatch(/@everyone\b/);
+    expect(result).toContain("release plan");
+  });
+
+  it("plaintext renderPlanWithHeader: neutralizes @channel and @here in TITLE", () => {
+    const steps: PlanStepForRender[] = [{ step: "S", status: "pending" }];
+    const result1 = renderPlanWithHeader("@channel deploy now", steps, "plaintext");
+    expect(result1).not.toMatch(/@channel\b/);
+
+    const result2 = renderPlanWithHeader("@here urgent", steps, "plaintext");
+    expect(result2).not.toMatch(/@here\b/);
+  });
 });
 
 describe("activeForm fallback", () => {

@@ -128,7 +128,12 @@ export function renderPlanWithHeader(
     case "markdown":
       return `### ${safeTitle}\n${checklist}`;
     case "plaintext":
-      return `${safeTitle}\n${checklist}`;
+      // Codex P2 #67534 r3095517064: neutralize @mentions in the title
+      // path too — checklist labels are already protected by
+      // neutralizeMentions() above, but a model-derived title like
+      // `@everyone release plan` would still trigger mentions on
+      // platforms that follow plaintext mention conventions.
+      return `${neutralizeMentions(safeTitle)}\n${checklist}`;
     case "slack-mrkdwn":
       return `*${escapeSlackMrkdwn(safeTitle)}*\n${checklist}`;
     default: {
@@ -185,7 +190,6 @@ function warnUnknownStatus(status: string): void {
     return;
   }
   warnedStatuses.add(status);
-  // eslint-disable-next-line no-console
   console.warn(
     `[plan-render] Unknown plan step status "${status}", falling back to pending rendering.`,
   );
