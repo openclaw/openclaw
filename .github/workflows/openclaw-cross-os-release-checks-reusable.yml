@@ -430,6 +430,7 @@ jobs:
           OPENCLAW_DISCORD_SMOKE_BOT_TOKEN: ${{ secrets.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN }}
           OPENCLAW_DISCORD_SMOKE_GUILD_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_GUILD_ID }}
           OPENCLAW_DISCORD_SMOKE_CHANNEL_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_CHANNEL_ID }}
+          # Mapped environment variables for safe shell usage (prevents template injection)
           OPENCLAW_RELEASE_CHECK_OS: ${{ matrix.os_id }}
           OPENCLAW_RELEASE_CHECK_RUNNER: ${{ matrix.runner }}
           CANDIDATE_FILE_NAME: ${{ needs.prepare.outputs.candidate_file_name }}
@@ -438,7 +439,10 @@ jobs:
           BASELINE_SPEC: ${{ needs.prepare.outputs.baseline_spec }}
           BASELINE_FILE_NAME: ${{ needs.prepare.outputs.baseline_file_name }}
           INPUT_PROVIDER: ${{ inputs.provider }}
+          INPUT_PREVIOUS_VERSION: ${{ inputs.previous_version }}
+          INPUT_REF: ${{ inputs.ref }}
           MATRIX_LANE: ${{ matrix.lane }}
+          MATRIX_SUITE: ${{ matrix.suite }}
           MATRIX_ARTIFACT_NAME: ${{ matrix.artifact_name }}
         run: |
           DISCORD_ARGS=()
@@ -446,25 +450,27 @@ jobs:
             DISCORD_ARGS+=(--run-discord-roundtrip true)
           fi
           pnpm dlx "tsx@${TSX_VERSION}" workflow/scripts/openclaw-cross-os-release-checks.ts \
-            --candidate-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/candidate/${{ needs.prepare.outputs.candidate_file_name }}" \
-            --candidate-version "${{ needs.prepare.outputs.candidate_version }}" \
-            --source-sha "${{ needs.prepare.outputs.source_sha }}" \
-            --baseline-spec "${{ needs.prepare.outputs.baseline_spec }}" \
-            --previous-version "${{ inputs.previous_version }}" \
-            --baseline-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/baseline/${{ needs.prepare.outputs.baseline_file_name }}" \
-            --provider "${{ inputs.provider }}" \
-            --mode "${{ matrix.lane }}" \
-            --suite "${{ matrix.suite }}" \
-            --ref "${{ inputs.ref }}" \
+            --candidate-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/candidate/${CANDIDATE_FILE_NAME}" \
+            --candidate-version "${CANDIDATE_VERSION}" \
+            --source-sha "${SOURCE_SHA}" \
+            --baseline-spec "${BASELINE_SPEC}" \
+            --previous-version "${INPUT_PREVIOUS_VERSION}" \
+            --baseline-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/baseline/${BASELINE_FILE_NAME}" \
+            --provider "${INPUT_PROVIDER}" \
+            --mode "${MATRIX_LANE}" \
+            --suite "${MATRIX_SUITE}" \
+            --ref "${INPUT_REF}" \
             "${DISCORD_ARGS[@]}" \
-            --output-dir "$RUNNER_TEMP/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}"
+            --output-dir "$RUNNER_TEMP/openclaw-cross-os-release-checks/${MATRIX_ARTIFACT_NAME}-${MATRIX_SUITE}"
 
       - name: Summarize release checks
         if: always()
         shell: bash
         env:
-          SUMMARY_PATH: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}/summary.md
+          MATRIX_ARTIFACT_NAME: ${{ matrix.artifact_name }}
+          MATRIX_SUITE: ${{ matrix.suite }}
         run: |
+          SUMMARY_PATH="${RUNNER_TEMP}/openclaw-cross-os-release-checks/${MATRIX_ARTIFACT_NAME}-${MATRIX_SUITE}/summary.md"
           if [[ -f "${SUMMARY_PATH}" ]]; then
             cat "${SUMMARY_PATH}" >> "$GITHUB_STEP_SUMMARY"
           else
@@ -473,8 +479,12 @@ jobs:
 
       - name: Upload release-check artifacts
         if: always()
+        env:
+          MATRIX_ARTIFACT_NAME: ${{ matrix.artifact_name }}
+          MATRIX_SUITE: ${{ matrix.suite }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
         uses: actions/upload-artifact@v7
         with:
-          name: openclaw-cross-os-release-checks-${{ matrix.artifact_name }}-${{ matrix.suite }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}
+          name: openclaw-cross-os-release-checks-${{ env.MATRIX_ARTIFACT_NAME }}-${{ env.MATRIX_SUITE }}-${{ env.GITHUB_RUN_ID }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ env.MATRIX_ARTIFACT_NAME }}-${{ env.MATRIX_SUITE }}
           if-no-files-found: error
