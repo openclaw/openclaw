@@ -106,6 +106,6 @@ export function sanitizeContextFileForInjection(
   // Sanitize filename to prevent injection via crafted file paths.
   // Use sanitizeForPromptLiteral to strip all Cc/Cf/Zl/Zp chars (bidi overrides,
   // zero-width chars, etc.), not just brackets/newlines.
-  const safeFilename = sanitizeForPromptLiteral(filename).replace(/[[\]]/g, "_");
+  const safeFilename = sanitizeForPromptLiteral(filename).replace(/[[\]]/g, "_") || "unknown";
   return `[BLOCKED: ${safeFilename} contained potential prompt injection (${findings.join(", ")}). Content not loaded.]`;
 }
