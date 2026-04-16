@@ -265,9 +265,6 @@ function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): 
 }
 
 function extractAssistantMessageText(message: SessionTranscriptAssistantMessage): string | null {
-  if (typeof message.text === "string" && message.text.trim()) {
-    return message.text.trim();
-  }
   if (!Array.isArray(message.content)) {
     return null;
   }
@@ -314,11 +311,12 @@ async function findLatestEquivalentAssistantMessageId(
         }
         const candidateText = extractAssistantMessageText(candidate);
         if (candidateText !== expectedText) {
-          continue;
+          return undefined;
         }
         if (typeof parsed.id === "string" && parsed.id) {
           return parsed.id;
         }
+        return undefined;
       } catch {
         continue;
       }
