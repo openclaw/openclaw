@@ -471,7 +471,8 @@ export function createOpenClawReadTool(
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
 
       const rawPath = typeof record?.path === "string" ? record.path : ".";
-      const offset = typeof record?.offset === 'number' ? record.offset : 0;
+      // Default offset to 1 to fix pagination regression
+      const offset = typeof record?.offset === 'number' ? record.offset : 1;
       const limit = typeof record?.limit === 'number' ? record.limit : undefined;
 
       const rootDirResolved = options?.root ? path.resolve(options.root) : process.cwd();
@@ -663,7 +664,7 @@ export function createOpenClawReadTool(
           text = await fs.readFile(inputPath, "utf-8");
         }
 
-        if (offset > 0 || limit !== undefined) {
+        if (offset > 1 || limit !== undefined) {
           const lines = text.split('\n');
           const start = Math.max(0, Math.min(offset - 1, lines.length));
           const end = limit !== undefined ? Math.min(start + limit, lines.length) : lines.length;
