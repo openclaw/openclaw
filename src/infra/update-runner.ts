@@ -417,6 +417,15 @@ async function pathsReferToSameLocation(left: string, right: string): Promise<bo
   return (await resolveComparablePath(left)) === (await resolveComparablePath(right));
 }
 
+async function looksLikeGitCheckout(root: string): Promise<boolean> {
+  try {
+    await fs.access(path.join(root, ".git"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function shouldRetryWindowsInstallIgnoringScripts(manager: "pnpm" | "bun" | "npm"): boolean {
   return process.platform === "win32" && manager === "pnpm";
 }
@@ -538,6 +547,16 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const pkgRoot = await findPackageRoot(candidates);
 
   let gitRoot = await resolveGitRoot(runCommand, candidates, timeoutMs);
+  if (!gitRoot && pkgRoot) {
+    const cwdRoot = normalizeDir(opts.cwd);
+    if (
+      cwdRoot &&
+      (await pathsReferToSameLocation(cwdRoot, pkgRoot)) &&
+      (await looksLikeGitCheckout(cwdRoot))
+    ) {
+      gitRoot = await resolveComparablePath(cwdRoot);
+    }
+  }
   if (gitRoot && pkgRoot && !(await pathsReferToSameLocation(gitRoot, pkgRoot))) {
     gitRoot = null;
   }
