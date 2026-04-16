@@ -26,12 +26,12 @@ import type { Credentials } from "../api/messages.js";
 import { MessageApi as MessageApiClass } from "../api/messages.js";
 import { getNextMsgSeq } from "../api/routes.js";
 import { TokenManager } from "../api/token.js";
-import type {
-  ChatScope,
+import {
   MediaFileType,
-  MessageResponse,
-  OutboundMeta,
-  ApiLogger,
+  type ChatScope,
+  type MessageResponse,
+  type OutboundMeta,
+  type ApiLogger,
 } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
@@ -345,10 +345,10 @@ export async function sendText(
   }
 
   if (target.type === "dm") {
-    return api.sendDmMessage(target.id, content, c, opts?.msgId);
+    return api.sendDmMessage({ guildId: target.id, content, creds: c, msgId: opts?.msgId });
   }
 
-  return api.sendChannelMessage(target.id, content, c, opts?.msgId);
+  return api.sendChannelMessage({ channelId: target.id, content, creds: c, msgId: opts?.msgId });
 }
 
 /**
@@ -385,15 +385,20 @@ export async function sendProactiveText(
 /**
  * Send a typing indicator to a C2C user.
  */
-export async function sendInputNotify(
-  openid: string,
-  creds: AccountCreds,
-  msgId?: string,
-  inputSecond = 60,
-): Promise<{ refIdx?: string }> {
-  const api = getOrCreateMessageApi(creds.appId);
-  const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
-  return api.sendInputNotify(openid, c, msgId, inputSecond);
+export async function sendInputNotify(opts: {
+  openid: string;
+  creds: AccountCreds;
+  msgId?: string;
+  inputSecond?: number;
+}): Promise<{ refIdx?: string }> {
+  const api = getOrCreateMessageApi(opts.creds.appId);
+  const c: Credentials = { appId: opts.creds.appId, clientSecret: opts.creds.clientSecret };
+  return api.sendInputNotify({
+    openid: opts.openid,
+    creds: c,
+    msgId: opts.msgId,
+    inputSecond: opts.inputSecond,
+  });
 }
 
 /**
@@ -451,7 +456,7 @@ export async function sendImage(
   const uploadResult = await mediaApi().uploadMedia(
     scope,
     target.id,
-    1 as MediaFileType,
+    MediaFileType.IMAGE,
     c,
     uploadOpts,
   );
@@ -468,14 +473,11 @@ export async function sendImage(
     content: opts?.content,
   });
 
-  const api = getOrCreateMessageApi(creds.appId);
-  if ((result as { ext_info?: { ref_idx?: string } }).ext_info?.ref_idx) {
-    const hook = (api as unknown as { messageSentHook?: (refIdx: string, m: OutboundMeta) => void })
-      .messageSentHook;
-    hook?.((result as unknown as { ext_info: { ref_idx: string } }).ext_info.ref_idx, meta);
+  if (result.ext_info?.ref_idx) {
+    getOrCreateMessageApi(creds.appId).notifyMessageSent(result.ext_info.ref_idx, meta);
   }
 
-  return result as MessageResponse;
+  return result;
 }
 
 // ============ Voice sending ============
@@ -501,7 +503,7 @@ export async function sendVoiceMessage(
   const scope: ChatScope = target.type;
   const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
 
-  const uploadResult = await mediaApi().uploadMedia(scope, target.id, 3 as MediaFileType, c, {
+  const uploadResult = await mediaApi().uploadMedia(scope, target.id, MediaFileType.VOICE, c, {
     url: opts.voiceUrl,
     fileData: opts.voiceBase64,
   });
@@ -510,18 +512,15 @@ export async function sendVoiceMessage(
     msgId: opts.msgId,
   });
 
-  const api = getOrCreateMessageApi(creds.appId);
-  if ((result as { ext_info?: { ref_idx?: string } }).ext_info?.ref_idx) {
-    const hook = (api as unknown as { messageSentHook?: (refIdx: string, m: OutboundMeta) => void })
-      .messageSentHook;
-    hook?.((result as unknown as { ext_info: { ref_idx: string } }).ext_info.ref_idx, {
+  if (result.ext_info?.ref_idx) {
+    getOrCreateMessageApi(creds.appId).notifyMessageSent(result.ext_info.ref_idx, {
       mediaType: "voice",
       ...(opts.ttsText ? { ttsText: opts.ttsText } : {}),
       ...(opts.filePath ? { mediaLocalPath: opts.filePath } : {}),
     });
   }
 
-  return result as MessageResponse;
+  return result;
 }
 
 // ============ Video sending ============
@@ -547,7 +546,7 @@ export async function sendVideoMessage(
   const scope: ChatScope = target.type;
   const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
 
-  const uploadResult = await mediaApi().uploadMedia(scope, target.id, 2 as MediaFileType, c, {
+  const uploadResult = await mediaApi().uploadMedia(scope, target.id, MediaFileType.VIDEO, c, {
     url: opts.videoUrl,
     fileData: opts.videoBase64,
   });
@@ -557,11 +556,8 @@ export async function sendVideoMessage(
     content: opts.content,
   });
 
-  const api = getOrCreateMessageApi(creds.appId);
-  if ((result as { ext_info?: { ref_idx?: string } }).ext_info?.ref_idx) {
-    const hook = (api as unknown as { messageSentHook?: (refIdx: string, m: OutboundMeta) => void })
-      .messageSentHook;
-    hook?.((result as unknown as { ext_info: { ref_idx: string } }).ext_info.ref_idx, {
+  if (result.ext_info?.ref_idx) {
+    getOrCreateMessageApi(creds.appId).notifyMessageSent(result.ext_info.ref_idx, {
       text: opts.content,
       mediaType: "video",
       ...(opts.videoUrl ? { mediaUrl: opts.videoUrl } : {}),
@@ -569,7 +565,7 @@ export async function sendVideoMessage(
     });
   }
 
-  return result as MessageResponse;
+  return result;
 }
 
 // ============ File sending ============
@@ -595,7 +591,7 @@ export async function sendFileMessage(
   const scope: ChatScope = target.type;
   const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
 
-  const uploadResult = await mediaApi().uploadMedia(scope, target.id, 4 as MediaFileType, c, {
+  const uploadResult = await mediaApi().uploadMedia(scope, target.id, MediaFileType.FILE, c, {
     url: opts.fileUrl,
     fileData: opts.fileBase64,
     fileName: opts.fileName,
@@ -605,18 +601,15 @@ export async function sendFileMessage(
     msgId: opts.msgId,
   });
 
-  const api = getOrCreateMessageApi(creds.appId);
-  if ((result as { ext_info?: { ref_idx?: string } }).ext_info?.ref_idx) {
-    const hook = (api as unknown as { messageSentHook?: (refIdx: string, m: OutboundMeta) => void })
-      .messageSentHook;
-    hook?.((result as unknown as { ext_info: { ref_idx: string } }).ext_info.ref_idx, {
+  if (result.ext_info?.ref_idx) {
+    getOrCreateMessageApi(creds.appId).notifyMessageSent(result.ext_info.ref_idx, {
       mediaType: "file",
       mediaUrl: opts.fileUrl,
       mediaLocalPath: opts.localFilePath ?? opts.fileName,
     });
   }
 
-  return result as MessageResponse;
+  return result;
 }
 
 // ============ Helpers ============

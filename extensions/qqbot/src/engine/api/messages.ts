@@ -63,6 +63,17 @@ export class MessageApi {
     this.messageSentHook = callback;
   }
 
+  /** Trigger the message-sent hook from external callers (e.g. media send flows). */
+  notifyMessageSent(refIdx: string, meta: OutboundMeta): void {
+    if (this.messageSentHook) {
+      try {
+        this.messageSentHook(refIdx, meta);
+      } catch (err) {
+        this.logger?.error?.(`[messages] onMessageSent hook error: ${formatErrorMessage(err)}`);
+      }
+    }
+  }
+
   // ---- Unified message sending ----
 
   /**
@@ -114,53 +125,54 @@ export class MessageApi {
   // ---- Channel / DM ----
 
   /** Send a channel message. */
-  async sendChannelMessage(
-    channelId: string,
-    content: string,
-    creds: Credentials,
-    msgId?: string,
-  ): Promise<MessageResponse> {
-    const token = await this.tokenManager.getAccessToken(creds.appId, creds.clientSecret);
-    return this.client.request<MessageResponse>(token, "POST", channelMessagePath(channelId), {
-      content,
-      ...(msgId ? { msg_id: msgId } : {}),
+  async sendChannelMessage(opts: {
+    channelId: string;
+    content: string;
+    creds: Credentials;
+    msgId?: string;
+  }): Promise<MessageResponse> {
+    const token = await this.tokenManager.getAccessToken(opts.creds.appId, opts.creds.clientSecret);
+    return this.client.request<MessageResponse>(token, "POST", channelMessagePath(opts.channelId), {
+      content: opts.content,
+      ...(opts.msgId ? { msg_id: opts.msgId } : {}),
     });
   }
 
   /** Send a DM (guild direct message). */
-  async sendDmMessage(
-    guildId: string,
-    content: string,
-    creds: Credentials,
-    msgId?: string,
-  ): Promise<MessageResponse> {
-    const token = await this.tokenManager.getAccessToken(creds.appId, creds.clientSecret);
-    return this.client.request<MessageResponse>(token, "POST", dmMessagePath(guildId), {
-      content,
-      ...(msgId ? { msg_id: msgId } : {}),
+  async sendDmMessage(opts: {
+    guildId: string;
+    content: string;
+    creds: Credentials;
+    msgId?: string;
+  }): Promise<MessageResponse> {
+    const token = await this.tokenManager.getAccessToken(opts.creds.appId, opts.creds.clientSecret);
+    return this.client.request<MessageResponse>(token, "POST", dmMessagePath(opts.guildId), {
+      content: opts.content,
+      ...(opts.msgId ? { msg_id: opts.msgId } : {}),
     });
   }
 
   // ---- C2C Input Notify ----
 
   /** Send a typing indicator to a C2C user. */
-  async sendInputNotify(
-    openid: string,
-    creds: Credentials,
-    msgId?: string,
-    inputSecond = 60,
-  ): Promise<{ refIdx?: string }> {
-    const token = await this.tokenManager.getAccessToken(creds.appId, creds.clientSecret);
-    const msgSeq = msgId ? getNextMsgSeq(msgId) : 1;
+  async sendInputNotify(opts: {
+    openid: string;
+    creds: Credentials;
+    msgId?: string;
+    inputSecond?: number;
+  }): Promise<{ refIdx?: string }> {
+    const inputSecond = opts.inputSecond ?? 60;
+    const token = await this.tokenManager.getAccessToken(opts.creds.appId, opts.creds.clientSecret);
+    const msgSeq = opts.msgId ? getNextMsgSeq(opts.msgId) : 1;
     const response = await this.client.request<{ ext_info?: { ref_idx?: string } }>(
       token,
       "POST",
-      messagePath("c2c", openid),
+      messagePath("c2c", opts.openid),
       {
         msg_type: 6,
         input_notify: { input_type: 1, input_second: inputSecond },
         msg_seq: msgSeq,
-        ...(msgId ? { msg_id: msgId } : {}),
+        ...(opts.msgId ? { msg_id: opts.msgId } : {}),
       },
     );
     return { refIdx: response.ext_info?.ref_idx };

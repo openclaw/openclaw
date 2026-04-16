@@ -6,7 +6,7 @@
  */
 
 /** QQ Bot WebSocket intents grouped by permission level. */
-export const INTENTS = {
+const INTENTS = {
   GUILDS: 1 << 0,
   GUILD_MEMBERS: 1 << 1,
   PUBLIC_GUILD_MESSAGES: 1 << 30,
@@ -17,9 +17,6 @@ export const INTENTS = {
 /** Full intent mask: groups + DMs + channels. */
 export const FULL_INTENTS =
   INTENTS.PUBLIC_GUILD_MESSAGES | INTENTS.DIRECT_MESSAGE | INTENTS.GROUP_AND_C2C;
-
-/** Human-readable description of the full intent set. */
-export const FULL_INTENTS_DESC = "groups + DMs + channels";
 
 /** Exponential backoff delays for reconnection attempts (ms). */
 export const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000, 60000] as const;

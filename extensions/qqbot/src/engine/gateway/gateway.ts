@@ -181,12 +181,12 @@ async function startTypingForEvent(
     const creds = accountToCreds(account);
     const rawNotifyFn = createRawInputNotifyFn(account.appId);
     try {
-      const resp = await senderSendInputNotify(
-        event.senderId,
+      const resp = await senderSendInputNotify({
+        openid: event.senderId,
         creds,
-        event.messageId,
-        TYPING_INPUT_SECOND,
-      );
+        msgId: event.messageId,
+        inputSecond: TYPING_INPUT_SECOND,
+      });
       const keepAlive = new TypingKeepAlive(
         () => getAccessToken(account.appId, account.clientSecret),
         () => clearTokenCache(account.appId),
@@ -202,12 +202,12 @@ async function startTypingForEvent(
       const errMsg = String(notifyErr);
       if (errMsg.includes("token") || errMsg.includes("401") || errMsg.includes("11244")) {
         clearTokenCache(account.appId);
-        const resp = await senderSendInputNotify(
-          event.senderId,
+        const resp = await senderSendInputNotify({
+          openid: event.senderId,
           creds,
-          event.messageId,
-          TYPING_INPUT_SECOND,
-        );
+          msgId: event.messageId,
+          inputSecond: TYPING_INPUT_SECOND,
+        });
         const keepAlive = new TypingKeepAlive(
           () => getAccessToken(account.appId, account.clientSecret),
           () => clearTokenCache(account.appId),

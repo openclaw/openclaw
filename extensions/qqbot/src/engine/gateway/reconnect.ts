@@ -13,6 +13,7 @@ import {
   MAX_RECONNECT_ATTEMPTS,
   MAX_QUICK_DISCONNECT_COUNT,
   QUICK_DISCONNECT_THRESHOLD,
+  GatewayCloseCode,
 } from "./constants.js";
 
 /** Logger interface for reconnect diagnostics. */
@@ -96,8 +97,12 @@ export class ReconnectState {
    */
   handleClose(code: number, isAborted: boolean): CloseAction {
     // Fatal: bot offline or banned.
-    if (code === 4914 || code === 4915) {
-      const reason = code === 4914 ? "offline/sandbox-only" : "banned";
+    if (
+      code === GatewayCloseCode.INSUFFICIENT_INTENTS ||
+      code === GatewayCloseCode.DISALLOWED_INTENTS
+    ) {
+      const reason =
+        code === GatewayCloseCode.INSUFFICIENT_INTENTS ? "offline/sandbox-only" : "banned";
       this.log?.error(`[qqbot:${this.accountId}] Bot is ${reason}. Please contact QQ platform.`);
       return {
         shouldReconnect: false,
@@ -109,7 +114,7 @@ export class ReconnectState {
     }
 
     // Invalid token.
-    if (code === 4004) {
+    if (code === GatewayCloseCode.AUTH_FAILED) {
       this.log?.info(
         `[qqbot:${this.accountId}] Invalid token (4004), will refresh token and reconnect`,
       );
@@ -123,7 +128,7 @@ export class ReconnectState {
     }
 
     // Rate limited.
-    if (code === 4008) {
+    if (code === GatewayCloseCode.RATE_LIMITED) {
       this.log?.info(
         `[qqbot:${this.accountId}] Rate limited (4008), waiting ${RATE_LIMIT_DELAY}ms`,
       );
@@ -138,11 +143,15 @@ export class ReconnectState {
     }
 
     // Session invalid / seq invalid / session timeout.
-    if (code === 4006 || code === 4007 || code === 4009) {
+    if (
+      code === GatewayCloseCode.INVALID_SESSION ||
+      code === GatewayCloseCode.SEQ_OUT_OF_RANGE ||
+      code === GatewayCloseCode.SESSION_TIMEOUT
+    ) {
       const codeDesc: Record<number, string> = {
-        4006: "session no longer valid",
-        4007: "invalid seq on resume",
-        4009: "session timed out",
+        [GatewayCloseCode.INVALID_SESSION]: "session no longer valid",
+        [GatewayCloseCode.SEQ_OUT_OF_RANGE]: "invalid seq on resume",
+        [GatewayCloseCode.SESSION_TIMEOUT]: "session timed out",
       };
       this.log?.info(
         `[qqbot:${this.accountId}] Error ${code} (${codeDesc[code]}), will re-identify`,
@@ -157,10 +166,10 @@ export class ReconnectState {
     }
 
     // Internal server errors.
-    if (code >= 4900 && code <= 4913) {
+    if (code >= GatewayCloseCode.SERVER_ERROR_START && code <= GatewayCloseCode.SERVER_ERROR_END) {
       this.log?.info(`[qqbot:${this.accountId}] Internal error (${code}), will re-identify`);
       return {
-        shouldReconnect: !isAborted && code !== 1000,
+        shouldReconnect: !isAborted && code !== GatewayCloseCode.NORMAL,
         clearSession: true,
         refreshToken: true,
         fatal: false,
@@ -196,7 +205,7 @@ export class ReconnectState {
 
     // Default: reconnect with backoff.
     return {
-      shouldReconnect: !isAborted && code !== 1000,
+      shouldReconnect: !isAborted && code !== GatewayCloseCode.NORMAL,
       clearSession: false,
       refreshToken: false,
       fatal: false,

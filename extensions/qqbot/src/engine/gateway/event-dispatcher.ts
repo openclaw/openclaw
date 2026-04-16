@@ -6,10 +6,11 @@
  */
 
 import { recordKnownUser } from "../session/known-users.js";
+import type { InteractionEvent } from "../types.js";
 import { parseRefIndices } from "../utils/text-parsing.js";
 import { readOptionalMessageSceneExt } from "./codec.js";
+import { GatewayEvent } from "./constants.js";
 import type { QueuedMessage } from "./message-queue.js";
-import type { InteractionEvent } from "../types.js";
 import type {
   C2CMessageEvent,
   GuildMessageEvent,
@@ -40,16 +41,16 @@ export function dispatchEvent(
   accountId: string,
   _log?: GatewayLogger,
 ): DispatchResult {
-  if (eventType === "READY") {
+  if (eventType === GatewayEvent.READY) {
     const d = data as { session_id: string };
     return { action: "ready", data, sessionId: d.session_id };
   }
 
-  if (eventType === "RESUMED") {
+  if (eventType === GatewayEvent.RESUMED) {
     return { action: "resumed", data };
   }
 
-  if (eventType === "C2C_MESSAGE_CREATE") {
+  if (eventType === GatewayEvent.C2C_MESSAGE_CREATE) {
     const ev = data as C2CMessageEvent;
     recordKnownUser({
       openid: ev.author.user_openid,
@@ -74,7 +75,7 @@ export function dispatchEvent(
     };
   }
 
-  if (eventType === "AT_MESSAGE_CREATE") {
+  if (eventType === GatewayEvent.AT_MESSAGE_CREATE) {
     const ev = data as GuildMessageEvent;
     const refs = parseRefIndices(
       readOptionalMessageSceneExt(ev as unknown as Record<string, unknown>),
@@ -97,7 +98,7 @@ export function dispatchEvent(
     };
   }
 
-  if (eventType === "DIRECT_MESSAGE_CREATE") {
+  if (eventType === GatewayEvent.DIRECT_MESSAGE_CREATE) {
     const ev = data as GuildMessageEvent;
     const refs = parseRefIndices(
       readOptionalMessageSceneExt(ev as unknown as Record<string, unknown>),
@@ -119,7 +120,7 @@ export function dispatchEvent(
     };
   }
 
-  if (eventType === "GROUP_AT_MESSAGE_CREATE") {
+  if (eventType === GatewayEvent.GROUP_AT_MESSAGE_CREATE) {
     const ev = data as GroupMessageEvent;
     recordKnownUser({
       openid: ev.author.member_openid,
@@ -146,7 +147,7 @@ export function dispatchEvent(
     };
   }
 
-  if (eventType === "INTERACTION_CREATE") {
+  if (eventType === GatewayEvent.INTERACTION_CREATE) {
     return { action: "interaction", event: data as InteractionEvent };
   }
 

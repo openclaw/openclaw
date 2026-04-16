@@ -7,7 +7,13 @@
  * - Uses `withRetry` from the shared retry engine.
  */
 
-import type { ChatScope, MediaFileType, UploadMediaResponse, ApiLogger } from "../types.js";
+import {
+  MediaFileType,
+  type ChatScope,
+  type UploadMediaResponse,
+  type MessageResponse,
+  type ApiLogger,
+} from "../types.js";
 import { ApiClient } from "./client.js";
 import { withRetry, UPLOAD_RETRY_POLICY } from "./retry.js";
 import { mediaUploadPath, getNextMsgSeq } from "./routes.js";
@@ -103,7 +109,7 @@ export class MediaApi {
     } else if (opts.fileData) {
       body.file_data = opts.fileData;
     }
-    if ((fileType as number) === 4 /* FILE */ && opts.fileName) {
+    if (fileType === MediaFileType.FILE && opts.fileName) {
       body.file_name = this.sanitize(opts.fileName);
     }
 
@@ -155,13 +161,13 @@ export class MediaApi {
       msgId?: string;
       content?: string;
     },
-  ): Promise<{ id: string; timestamp: string | number }> {
+  ): Promise<MessageResponse> {
     const token = await this.tokenManager.getAccessToken(creds.appId, creds.clientSecret);
     const msgSeq = opts?.msgId ? getNextMsgSeq(opts.msgId) : 1;
     const path =
       scope === "c2c" ? `/v2/users/${targetId}/messages` : `/v2/groups/${targetId}/messages`;
 
-    return this.client.request(token, "POST", path, {
+    return this.client.request<MessageResponse>(token, "POST", path, {
       msg_type: 7,
       media: { file_info: fileInfo },
       msg_seq: msgSeq,

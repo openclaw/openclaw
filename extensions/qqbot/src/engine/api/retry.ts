@@ -77,7 +77,7 @@ export async function withRetry<T>(
       }
 
       // Check whether this error is retryable under the standard policy.
-      if (policy.shouldRetry && !policy.shouldRetry(lastError, attempt)) {
+      if (policy.shouldRetry?.(lastError, attempt) === false) {
         throw lastError;
       }
 
