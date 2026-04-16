@@ -125,6 +125,35 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded.fresh).toBeDefined();
   });
 
+  it("canonicalizes persisted session transcript paths into the sessions dir on save", async () => {
+    const sessionsDir = path.join(testDir, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    storePath = path.join(sessionsDir, "sessions.json");
+
+    const sessionId = "canon-session";
+    const outsideDir = path.join(testDir, "workspace-like-paths");
+    await fs.mkdir(outsideDir, { recursive: true });
+    const outsidePath = path.join(outsideDir, `${sessionId}.jsonl`);
+    const store: Record<string, SessionEntry> = {
+      "agent:main:archive:restored:canon": {
+        sessionId,
+        updatedAt: Date.now(),
+        sessionFile: outsidePath,
+        transcriptPath: outsidePath,
+      },
+    };
+
+    await saveSessionStore(storePath, store, { skipMaintenance: true });
+
+    const raw = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, SessionEntry>;
+    const canonicalSessionsDir = await fs
+      .realpath(sessionsDir)
+      .catch(() => path.resolve(sessionsDir));
+    const expectedPath = path.join(canonicalSessionsDir, `${sessionId}.jsonl`);
+    expect(raw["agent:main:archive:restored:canon"]?.sessionFile).toBe(expectedPath);
+    expect(raw["agent:main:archive:restored:canon"]?.transcriptPath).toBe(expectedPath);
+  });
+
   it("archives transcript files for stale sessions pruned on write", async () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 

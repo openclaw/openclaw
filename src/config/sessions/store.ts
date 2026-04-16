@@ -7,7 +7,10 @@ import {
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -18,6 +21,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
+import { resolveSessionFilePath } from "./paths.js";
 import {
   dropSessionStoreObjectCache,
   getSerializedSessionStore,
@@ -78,6 +82,55 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
 
 export function normalizeStoreSessionKey(sessionKey: string): string {
   return normalizeLowercaseStringOrEmpty(sessionKey);
+}
+
+function normalizePersistedSessionTranscriptPaths(
+  store: Record<string, SessionEntry>,
+  storePath: string,
+): void {
+  const sessionsDir = path.dirname(path.resolve(storePath));
+  for (const [key, entry] of Object.entries(store)) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const sessionId = normalizeOptionalString(entry.sessionId);
+    if (!sessionId) {
+      continue;
+    }
+    const nextWithTranscript = entry as SessionEntry & { transcriptPath?: string };
+    const hasSessionFile =
+      typeof entry.sessionFile === "string" && entry.sessionFile.trim().length > 0;
+    const hasTranscriptPath =
+      typeof nextWithTranscript.transcriptPath === "string" &&
+      nextWithTranscript.transcriptPath.trim().length > 0;
+    if (!hasSessionFile && !hasTranscriptPath) {
+      continue;
+    }
+
+    let canonicalPath: string;
+    try {
+      canonicalPath = resolveSessionFilePath(sessionId, entry, { sessionsDir });
+    } catch {
+      continue;
+    }
+
+    let next = entry;
+    if (hasSessionFile && entry.sessionFile !== canonicalPath) {
+      if (next === entry) {
+        next = { ...entry };
+      }
+      next.sessionFile = canonicalPath;
+    }
+    if (hasTranscriptPath && nextWithTranscript.transcriptPath !== canonicalPath) {
+      if (next === entry) {
+        next = { ...entry } as SessionEntry;
+      }
+      (next as SessionEntry & { transcriptPath?: string }).transcriptPath = canonicalPath;
+    }
+    if (next !== entry) {
+      store[key] = next;
+    }
+  }
 }
 
 export function resolveSessionStoreEntry(params: {
@@ -279,6 +332,7 @@ async function saveSessionStoreUnlocked(
   opts?: SaveSessionStoreOptions,
 ): Promise<void> {
   normalizeSessionStore(store);
+  normalizePersistedSessionTranscriptPaths(store, storePath);
 
   if (!opts?.skipMaintenance) {
     // Resolve maintenance config once (avoids repeated loadConfig() calls).

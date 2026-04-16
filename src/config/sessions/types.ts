@@ -127,6 +127,8 @@ export type SessionEntry = {
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
+  /** Legacy alias preserved for compatibility with older callers and tool surfaces. */
+  transcriptPath?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
   /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
