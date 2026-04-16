@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   countOutboundMedia,
+  createNormalizedOutboundDeliverer,
   deliverFormattedTextWithAttachments,
   deliverTextOrMediaReply,
   hasOutboundMedia,
   hasOutboundReplyContent,
   hasOutboundText,
   isNumericTargetId,
+  normalizeOutboundReplyPayload,
   resolveOutboundMediaUrls,
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
@@ -70,6 +72,41 @@ describe("sendPayloadWithChunkedTextAndMedia", () => {
   });
 });
 
+describe("normalizeOutboundReplyPayload", () => {
+  it("normalizes a media array alias into mediaUrls and mediaUrl", () => {
+    expect(
+      normalizeOutboundReplyPayload({
+        text: "done",
+        media: ["https://example.com/a.png", "https://example.com/b.png"],
+      }),
+    ).toEqual({
+      text: "done",
+      mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+      mediaUrl: "https://example.com/a.png",
+      replyToId: undefined,
+    });
+  });
+});
+
+describe("createNormalizedOutboundDeliverer", () => {
+  it("accepts media alias payloads from loose callers", async () => {
+    const deliver = vi.fn(async () => {});
+    const normalizedDeliver = createNormalizedOutboundDeliverer(deliver);
+
+    await normalizedDeliver({
+      text: "done",
+      media: ["https://example.com/a.png", "https://example.com/b.png"],
+    });
+
+    expect(deliver).toHaveBeenCalledWith({
+      text: "done",
+      mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+      mediaUrl: "https://example.com/a.png",
+      replyToId: undefined,
+    });
+  });
+});
+
 describe("resolveOutboundMediaUrls", () => {
   it.each([
     {
@@ -77,8 +114,17 @@ describe("resolveOutboundMediaUrls", () => {
       payload: {
         mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
         mediaUrl: "https://example.com/legacy.png",
+        media: ["https://example.com/alias.png"],
       },
       expected: ["https://example.com/a.png", "https://example.com/b.png"],
+    },
+    {
+      name: "falls back to the media alias array",
+      payload: {
+        media: ["https://example.com/alias-a.png", "https://example.com/alias-b.png"],
+        mediaUrl: "https://example.com/legacy.png",
+      },
+      expected: ["https://example.com/alias-a.png", "https://example.com/alias-b.png"],
     },
     {
       name: "falls back to the legacy single-media field",
@@ -117,7 +163,27 @@ describe("hasOutboundMedia", () => {
   it("reports whether normalized payloads include media", () => {
     expect(hasOutboundMedia({ mediaUrls: ["https://example.com/a.png"] })).toBe(true);
     expect(hasOutboundMedia({ mediaUrl: "https://example.com/legacy.png" })).toBe(true);
+    expect(hasOutboundMedia({ media: ["https://example.com/alias.png"] })).toBe(true);
     expect(hasOutboundMedia({})).toBe(false);
+  });
+});
+
+describe("resolveSendableOutboundReplyParts", () => {
+  it("accepts media alias payloads when normalizing sendable parts", () => {
+    expect(
+      resolveSendableOutboundReplyParts({
+        text: "done",
+        media: [" https://example.com/a.png ", "https://example.com/b.png"],
+      }),
+    ).toMatchObject({
+      text: "done",
+      trimmedText: "done",
+      mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+      mediaCount: 2,
+      hasText: true,
+      hasMedia: true,
+      hasContent: true,
+    });
   });
 });
 

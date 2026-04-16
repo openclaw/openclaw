@@ -12,6 +12,17 @@ export type OutboundReplyPayload = {
   replyToId?: string;
 };
 
+function normalizeLooseMediaAlias(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) {
+    const normalized = value.filter(
+      (entry): entry is string => typeof entry === "string" && entry.length > 0,
+    );
+    return normalized.length > 0 ? normalized : undefined;
+  }
+  const single = readStringValue(value);
+  return single ? [single] : undefined;
+}
+
 export type SendableOutboundReplyParts = {
   text: string;
   trimmedText: string;
@@ -34,12 +45,9 @@ export function normalizeOutboundReplyPayload(
   payload: Record<string, unknown>,
 ): OutboundReplyPayload {
   const text = readStringValue(payload.text);
-  const mediaUrls = Array.isArray(payload.mediaUrls)
-    ? payload.mediaUrls.filter(
-        (entry): entry is string => typeof entry === "string" && entry.length > 0,
-      )
-    : undefined;
-  const mediaUrl = readStringValue(payload.mediaUrl);
+  const mediaUrls =
+    normalizeLooseMediaAlias(payload.mediaUrls) ?? normalizeLooseMediaAlias(payload.media);
+  const mediaUrl = readStringValue(payload.mediaUrl) ?? mediaUrls?.[0];
   const replyToId = readStringValue(payload.replyToId);
   return {
     text,
@@ -66,9 +74,14 @@ export function createNormalizedOutboundDeliverer(
 export function resolveOutboundMediaUrls(payload: {
   mediaUrls?: string[];
   mediaUrl?: string;
+  media?: string | string[];
 }): string[] {
   if (payload.mediaUrls?.length) {
     return payload.mediaUrls;
+  }
+  const aliasMedia = normalizeLooseMediaAlias(payload.media);
+  if (aliasMedia?.length) {
+    return aliasMedia;
   }
   if (payload.mediaUrl) {
     return [payload.mediaUrl];
@@ -82,12 +95,20 @@ export function resolvePayloadMediaUrls(payload: SendPayloadContext["payload"]):
 }
 
 /** Count outbound media items after legacy single-media fallback normalization. */
-export function countOutboundMedia(payload: { mediaUrls?: string[]; mediaUrl?: string }): number {
+export function countOutboundMedia(payload: {
+  mediaUrls?: string[];
+  mediaUrl?: string;
+  media?: string | string[];
+}): number {
   return resolveOutboundMediaUrls(payload).length;
 }
 
 /** Check whether an outbound payload includes any media after normalization. */
-export function hasOutboundMedia(payload: { mediaUrls?: string[]; mediaUrl?: string }): boolean {
+export function hasOutboundMedia(payload: {
+  mediaUrls?: string[];
+  mediaUrl?: string;
+  media?: string | string[];
+}): boolean {
   return countOutboundMedia(payload) > 0;
 }
 
@@ -99,7 +120,7 @@ export function hasOutboundText(payload: { text?: string }, options?: { trim?: b
 
 /** Check whether an outbound payload includes any sendable text or media. */
 export function hasOutboundReplyContent(
-  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string; media?: string | string[] },
   options?: { trimText?: boolean },
 ): boolean {
   return hasOutboundText(payload, { trim: options?.trimText }) || hasOutboundMedia(payload);
@@ -107,7 +128,7 @@ export function hasOutboundReplyContent(
 
 /** Normalize reply payload text/media into a trimmed, sendable shape for delivery paths. */
 export function resolveSendableOutboundReplyParts(
-  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string; media?: string | string[] },
   options?: { text?: string },
 ): SendableOutboundReplyParts {
   const text = options?.text ?? payload.text ?? "";
