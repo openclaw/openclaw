@@ -24,15 +24,15 @@ describe("resolvePlanApproval", () => {
     expect(result.confirmedAt).toBeUndefined();
   });
 
-  it("reject transitions to normal mode", () => {
+  it("reject stays in plan mode", () => {
     const result = resolvePlanApproval(BASE_STATE, "reject");
-    expect(result.mode).toBe("normal");
+    expect(result.mode).toBe("plan");
     expect(result.approval).toBe("rejected");
   });
 
-  it("timeout transitions to normal mode with timed_out state", () => {
+  it("timeout stays in plan mode with timed_out state", () => {
     const result = resolvePlanApproval(BASE_STATE, "timeout");
-    expect(result.mode).toBe("normal");
+    expect(result.mode).toBe("plan");
     expect(result.approval).toBe("timed_out");
   });
 

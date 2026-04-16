@@ -56,7 +56,7 @@ export function resolvePlanApproval(
     case "reject":
       return {
         ...current,
-        mode: "normal",
+        mode: "plan",  // STAY in plan mode after rejection
         approval: "rejected",
         confirmedAt: undefined,
         updatedAt: now,
@@ -65,7 +65,7 @@ export function resolvePlanApproval(
     case "timeout":
       return {
         ...current,
-        mode: "normal",
+        mode: "plan",  // STAY in plan mode after timeout
         approval: "timed_out",
         confirmedAt: undefined,
         updatedAt: now,
