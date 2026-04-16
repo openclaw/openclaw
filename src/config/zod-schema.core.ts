@@ -667,6 +667,8 @@ export const QueueSchema = z
 export const InboundDebounceSchema = z
   .object({
     debounceMs: z.number().int().nonnegative().optional(),
+    /** Debounce interval (ms) applied when the inbound message comes from a bot or agent. */
+    botDebounceMs: z.number().int().nonnegative().optional(),
     byChannel: DebounceMsBySurfaceSchema,
   })
   .strict()

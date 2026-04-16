@@ -18339,6 +18339,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
               },
+              botDebounceMs: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+                title: "Bot/Agent Inbound Debounce (ms)",
+                description:
+                  "Debounce window (ms) applied when the inbound message comes from a bot or agent. Overrides debounceMs for bot senders. Note: byChannel overrides still take precedence over botDebounceMs.",
+              },
               byChannel: {
                 type: "object",
                 propertyNames: {
@@ -26766,6 +26774,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Inbound Debounce by Channel (ms)",
       help: "Per-channel inbound debounce overrides keyed by provider id in milliseconds. Use this where some providers send message fragments more aggressively than others.",
       tags: ["advanced"],
+    },
+    "messages.inbound.botDebounceMs": {
+      label: "Bot/Agent Inbound Debounce (ms)",
+      help: "Debounce window (ms) applied when the inbound message comes from a bot or agent. Overrides debounceMs for bot senders. Note: byChannel overrides still take precedence over botDebounceMs.",
+      tags: ["performance"],
     },
     "messages.tts": {
       label: "Message Text-to-Speech",

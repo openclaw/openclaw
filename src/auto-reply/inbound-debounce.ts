@@ -22,6 +22,8 @@ export function resolveInboundDebounceMs(params: {
   cfg: OpenClawConfig;
   channel: string;
   overrideMs?: number;
+  /** When true, `botDebounceMs` is preferred over the base `debounceMs`. */
+  senderIsBot?: boolean;
 }): number {
   const inbound = params.cfg.messages?.inbound;
   const override = resolveMs(params.overrideMs);
@@ -29,8 +31,9 @@ export function resolveInboundDebounceMs(params: {
     byChannel: inbound?.byChannel,
     channel: params.channel,
   });
+  const botDebounce = params.senderIsBot ? resolveMs(inbound?.botDebounceMs) : undefined;
   const base = resolveMs(inbound?.debounceMs);
-  return override ?? byChannel ?? base ?? 0;
+  return override ?? byChannel ?? botDebounce ?? base ?? 0;
 }
 
 type DebounceBuffer<T> = {
