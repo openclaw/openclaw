@@ -29,7 +29,7 @@ export interface PlanTemplatePayload {
  */
 export function buildPlanTemplatePayload(
   skillName: string,
-  template: SkillPlanTemplateStep[],
+  template?: SkillPlanTemplateStep[],
 ): PlanTemplatePayload | null {
   if (!template || template.length === 0) {
     return null;
@@ -48,6 +48,8 @@ export function buildPlanTemplatePayload(
 /**
  * Checks whether a skill entry has a non-empty plan template.
  */
-export function hasSkillPlanTemplate(metadata?: { planTemplate?: SkillPlanTemplateStep[] }): boolean {
+export function hasSkillPlanTemplate(metadata?: {
+  planTemplate?: SkillPlanTemplateStep[];
+}): boolean {
   return Array.isArray(metadata?.planTemplate) && metadata.planTemplate.length > 0;
 }
