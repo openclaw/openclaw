@@ -12,11 +12,25 @@ export async function preflightWebLoginWithQrStart(
   return await preflightWebLoginWithQrStart(...args);
 }
 
+export async function readExistingWebLoginWithQrResult(
+  ...args: Parameters<ReadExistingWebLoginWithQrResult>
+): Promise<ReturnType<ReadExistingWebLoginWithQrResult>> {
+  const { readExistingWebLoginWithQrResult } = await loadLoginQrModule();
+  return readExistingWebLoginWithQrResult(...args);
+}
+
 export async function startWebLoginWithQr(
   ...args: Parameters<StartWebLoginWithQr>
 ): ReturnType<StartWebLoginWithQr> {
   const { startWebLoginWithQr: startWebLoginWithQrLocal } = await loadLoginQrModule();
   return await startWebLoginWithQrLocal(...args);
+}
+
+export async function startWebLoginWithQrAfterPreflight(
+  ...args: Parameters<StartWebLoginWithQrAfterPreflight>
+): ReturnType<StartWebLoginWithQrAfterPreflight> {
+  const { startWebLoginWithQrAfterPreflight } = await loadLoginQrModule();
+  return await startWebLoginWithQrAfterPreflight(...args);
 }
 
 export async function waitForWebLogin(

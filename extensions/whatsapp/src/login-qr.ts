@@ -297,10 +297,20 @@ export async function startWebLoginWithQr(
     beforeCredentialPersistence?: () => Promise<void>;
   } = {},
 ): Promise<StartWebLoginWithQrResult> {
+  const activeQr = readExistingWebLoginWithQrResult(opts);
+  if (activeQr) {
+    return activeQr;
+  }
   const preflight = await preflightWebLoginWithQrStart(opts);
   if (preflight) {
     return preflight;
   }
+  return await startWebLoginWithQrAfterPreflight(opts);
+}
+
+export async function startWebLoginWithQrAfterPreflight(
+  opts: WebLoginStartParams = {},
+): Promise<StartWebLoginWithQrResult> {
   const runtime = opts.runtime ?? defaultRuntime;
   const cfg = getRuntimeConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });

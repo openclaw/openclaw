@@ -1,5 +1,7 @@
 import {
   preflightWebLoginWithQrStart as preflightWebLoginWithQrStartImpl,
+  readExistingWebLoginWithQrResult as readExistingWebLoginWithQrResultImpl,
+  startWebLoginWithQrAfterPreflight as startWebLoginWithQrAfterPreflightImpl,
   startWebLoginWithQr as startWebLoginWithQrImpl,
   waitForWebLogin as waitForWebLoginImpl,
 } from "../login-qr-runtime.js";
@@ -34,10 +36,22 @@ export async function preflightWebLoginWithQrStart(
   return await preflightWebLoginWithQrStartImpl(...args);
 }
 
+export async function readExistingWebLoginWithQrResult(
+  ...args: Parameters<ReadExistingWebLoginWithQrResult>
+): Promise<Awaited<ReturnType<ReadExistingWebLoginWithQrResult>>> {
+  return await readExistingWebLoginWithQrResultImpl(...args);
+}
+
 export async function startWebLoginWithQr(
   ...args: Parameters<StartWebLoginWithQr>
 ): ReturnType<StartWebLoginWithQr> {
   return await startWebLoginWithQrImpl(...args);
+}
+
+export async function startWebLoginWithQrAfterPreflight(
+  ...args: Parameters<StartWebLoginWithQrAfterPreflight>
+): ReturnType<StartWebLoginWithQrAfterPreflight> {
+  return await startWebLoginWithQrAfterPreflightImpl(...args);
 }
 
 export async function waitForWebLogin(

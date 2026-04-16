@@ -298,6 +298,12 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
   stopAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<void>;
   /** Keep gateway auth bypass resolution mirrored through a lightweight top-level `gateway-auth-api.ts` artifact. */
   resolveGatewayAuthBypassPaths?: (params: { cfg: OpenClawConfig }) => string[];
+  loginWithQrStartExisting?: (params: {
+    accountId?: string;
+    force?: boolean;
+    timeoutMs?: number;
+    verbose?: boolean;
+  }) => Promise<ChannelLoginWithQrStartResult | null>;
   loginWithQrStartPreflight?: (params: {
     accountId?: string;
     force?: boolean;

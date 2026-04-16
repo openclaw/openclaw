@@ -104,6 +104,47 @@ describe("webHandlers", () => {
     );
   });
 
+  it("returns an existing QR before running preflight", async () => {
+    const stopChannel = vi.fn(async () => undefined);
+    const respond = vi.fn();
+    const loginWithQrStart = vi.fn(async () => ({
+      qrDataUrl: "data:image/png;base64,new-qr",
+      message: "Scan this QR in WhatsApp -> Linked Devices.",
+    }));
+    const loginWithQrStartExisting = vi.fn(async () => ({
+      qrDataUrl: "data:image/png;base64,existing-qr",
+      message: "QR already active. Scan it in WhatsApp -> Linked Devices.",
+    }));
+    const loginWithQrStartPreflight = vi.fn(async () => null);
+    hoisted.listChannelPlugins.mockReturnValue([
+      createWebLoginPlugin({
+        loginWithQrStart,
+        loginWithQrStartExisting,
+        loginWithQrStartPreflight,
+      }),
+    ]);
+
+    await webHandlers["web.login.start"](
+      createHandlerOptions({
+        respond,
+        stopChannel,
+      }),
+    );
+
+    expect(loginWithQrStartExisting).toHaveBeenCalledOnce();
+    expect(loginWithQrStartPreflight).not.toHaveBeenCalled();
+    expect(stopChannel).not.toHaveBeenCalled();
+    expect(loginWithQrStart).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        qrDataUrl: "data:image/png;base64,existing-qr",
+        message: "QR already active. Scan it in WhatsApp -> Linked Devices.",
+      },
+      undefined,
+    );
+  });
+
   it("stops the channel before starting QR login when preflight allows it", async () => {
     const stopChannel = vi.fn(async () => undefined);
     const respond = vi.fn();

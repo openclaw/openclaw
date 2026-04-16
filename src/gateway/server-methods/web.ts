@@ -193,6 +193,11 @@ export const webHandlers: GatewayRequestHandlers = {
         verbose: Boolean(params.verbose),
         accountId,
       };
+      const existingResult = await provider.gateway.loginWithQrStartExisting?.(loginParams);
+      if (existingResult) {
+        respond(true, existingResult, undefined);
+        return;
+      }
       const preflightResult = await provider.gateway.loginWithQrStartPreflight?.(loginParams);
       if (preflightResult) {
         respond(true, preflightResult, undefined);
