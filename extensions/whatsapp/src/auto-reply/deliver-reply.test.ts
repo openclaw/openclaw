@@ -14,7 +14,7 @@ const hookMocks = vi.hoisted(() => {
         }
     >
   >(async () => undefined);
-  const runMessageSent = vi.fn(async () => undefined);
+  const runMessageSent = vi.fn<(...args: unknown[]) => Promise<undefined>>(async () => undefined);
   const hasHooks = vi.fn((name: string) => name === "message_sending" || name === "message_sent");
   return {
     runner: {
