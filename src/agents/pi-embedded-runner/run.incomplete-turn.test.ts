@@ -18,6 +18,9 @@ import {
   extractPlanningOnlyPlanDetails,
   isLikelyExecutionAckPrompt,
   PLANNING_ONLY_RETRY_INSTRUCTION,
+  PLANNING_ONLY_RETRY_INSTRUCTION_FIRM,
+  PLANNING_ONLY_RETRY_INSTRUCTION_FINAL,
+  resolveEscalatingPlanningRetryInstruction,
   REASONING_ONLY_RETRY_INSTRUCTION,
   resolveAckExecutionFastPathInstruction,
   resolveEmptyResponseRetryInstruction,
@@ -105,7 +108,8 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       } as OpenClawConfig,
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    // Three retries (strict-agentic retry cap) plus the original attempt = 4 calls.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
     expect(result.payloads).toEqual([
       {
         text: STRICT_AGENTIC_BLOCKED_TEXT,
@@ -179,8 +183,8 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       } as OpenClawConfig,
     });
 
-    // Two retries (strict-agentic retry cap) plus the original attempt = 3 calls.
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    // Three retries (strict-agentic retry cap) plus the original attempt = 4 calls.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
     expect(result.payloads).toEqual([
       {
         text: STRICT_AGENTIC_BLOCKED_TEXT,
@@ -612,11 +616,24 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(retryInstruction).toContain("Act now");
   });
 
-  it("allows one retry by default and two retries for strict-agentic runs", () => {
+  it("allows one retry by default and three retries for strict-agentic runs", () => {
     expect(resolvePlanningOnlyRetryLimit("default")).toBe(1);
-    expect(resolvePlanningOnlyRetryLimit("strict-agentic")).toBe(2);
+    expect(resolvePlanningOnlyRetryLimit("strict-agentic")).toBe(3);
     expect(STRICT_AGENTIC_BLOCKED_TEXT).toContain("plan-only turns");
     expect(STRICT_AGENTIC_BLOCKED_TEXT).toContain("advanced the task");
+  });
+
+  it("escalates retry instruction urgency based on attempt index", () => {
+    expect(resolveEscalatingPlanningRetryInstruction(0)).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+    expect(resolveEscalatingPlanningRetryInstruction(1)).toBe(PLANNING_ONLY_RETRY_INSTRUCTION_FIRM);
+    expect(resolveEscalatingPlanningRetryInstruction(2)).toBe(
+      PLANNING_ONLY_RETRY_INSTRUCTION_FINAL,
+    );
+    expect(resolveEscalatingPlanningRetryInstruction(5)).toBe(
+      PLANNING_ONLY_RETRY_INSTRUCTION_FINAL,
+    );
+    expect(PLANNING_ONLY_RETRY_INSTRUCTION_FIRM).toContain("CRITICAL");
+    expect(PLANNING_ONLY_RETRY_INSTRUCTION_FINAL).toContain("FINAL WARNING");
   });
 
   it("detects short execution approval prompts", () => {

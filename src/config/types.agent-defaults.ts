@@ -269,6 +269,19 @@ export type AgentDefaultsConfig = {
      * - strict-agentic: on OpenAI/OpenAI Codex GPT-5-family runs, keep acting until hitting a real blocker
      */
     executionContract?: EmbeddedPiExecutionContract;
+    /**
+     * Auto-continuation for planning-only turns. When enabled, the runner
+     * automatically injects an ACK fast-path instruction instead of surfacing
+     * the plan to the user, up to `maxTurns` consecutive auto-continues.
+     */
+    autoContinue?: {
+      /** Enable auto-continuation. Default: false. */
+      enabled?: boolean;
+      /** Max consecutive auto-continue turns before pausing. Default: 5. */
+      maxTurns?: number;
+      /** Pause when the agent produces mutating tool calls. Default: true. */
+      stopOnMutation?: boolean;
+    };
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;

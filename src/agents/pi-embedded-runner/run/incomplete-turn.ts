@@ -76,7 +76,7 @@ const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
   "ls",
 ]);
 const DEFAULT_PLANNING_ONLY_RETRY_LIMIT = 1;
-const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
+const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 3;
 // Allow one immediate continuation plus one follow-up continuation before
 // surfacing the existing incomplete-turn error path.
 export const DEFAULT_REASONING_ONLY_RETRY_LIMIT = 2;
@@ -129,6 +129,10 @@ const ACTIONABLE_PROMPT_REQUEST_RE =
 
 export const PLANNING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. If a real blocker prevents action, reply with the exact blocker in one sentence.";
+export const PLANNING_ONLY_RETRY_INSTRUCTION_FIRM =
+  "CRITICAL: You have described the plan multiple times without acting. You MUST call a tool in this turn. No more planning or narration. If a real blocker prevents action, state the exact blocker in one sentence. Otherwise, call the first tool NOW.";
+export const PLANNING_ONLY_RETRY_INSTRUCTION_FINAL =
+  "FINAL WARNING: You have described the plan without executing it. Call a tool immediately or this task will be cancelled. No planning. No restating. Execute the first step right now.";
 export const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 export const EMPTY_RESPONSE_RETRY_INSTRUCTION =
@@ -513,6 +517,20 @@ export function resolvePlanningOnlyRetryLimit(
   return executionContract === "strict-agentic"
     ? STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT
     : DEFAULT_PLANNING_ONLY_RETRY_LIMIT;
+}
+
+/**
+ * Returns an escalating retry instruction based on the current attempt number.
+ * Attempt 0 = first retry (standard), 1 = firm, 2+ = final warning.
+ */
+export function resolveEscalatingPlanningRetryInstruction(attemptIndex: number): string {
+  if (attemptIndex <= 0) {
+    return PLANNING_ONLY_RETRY_INSTRUCTION;
+  }
+  if (attemptIndex === 1) {
+    return PLANNING_ONLY_RETRY_INSTRUCTION_FIRM;
+  }
+  return PLANNING_ONLY_RETRY_INSTRUCTION_FINAL;
 }
 
 export function resolvePlanningOnlyRetryInstruction(params: {

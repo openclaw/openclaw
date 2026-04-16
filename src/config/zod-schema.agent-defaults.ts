@@ -185,6 +185,17 @@ export const AgentDefaultsSchema = z
           .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
           .optional(),
         executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+        autoContinue: z
+          .object({
+            /** Enable auto-continuation for planning-only turns. Default: false. */
+            enabled: z.boolean().optional(),
+            /** Max consecutive auto-continue turns before pausing for user review. Default: 5. */
+            maxTurns: z.number().int().min(1).max(20).optional(),
+            /** Pause auto-continue when the agent produces mutating tool calls. Default: true. */
+            stopOnMutation: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
