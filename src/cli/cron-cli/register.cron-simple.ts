@@ -35,7 +35,6 @@ export function registerCronSimpleCommands(cron: Command) {
       .command("get")
       .description("Show a cron job by id")
       .argument("<id>", "Job id")
-      .option("--json", "Output JSON", false)
       .action(async (id, opts) => {
         try {
           const res = await callGatewayFromCli("cron.get", opts, { id });
@@ -53,7 +52,6 @@ export function registerCronSimpleCommands(cron: Command) {
       .alias("delete")
       .description("Remove a cron job")
       .argument("<id>", "Job id")
-      .option("--json", "Output JSON", false)
       .action(async (id, opts) => {
         try {
           const res = await callGatewayFromCli("cron.remove", opts, { id });
