@@ -31,6 +31,37 @@
                 "type": "boolean"
               }
             }
+          },
+          "rerank": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "shadowOnRecall": {
+                "type": "boolean"
+              },
+              "salienceWeight": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 2
+              },
+              "recencyHalfLifeDays": {
+                "type": "number",
+                "minimum": 0
+              },
+              "pinnedBoost": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 5
+              },
+              "supersededPenalty": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
           }
         }
       },

@@ -13,6 +13,7 @@ import {
   resolveMemoryCorePluginConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import type { RerankFn } from "./memory-v2/rerank/index.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   clampResultsByInjectedChars,
@@ -180,6 +181,7 @@ async function executeMemoryReadResult<T>(params: {
 export function createMemorySearchTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
+  rerank?: RerankFn;
 }) {
   return createMemoryTool({
     options,
@@ -293,7 +295,19 @@ export function createMemorySearchTool(options: {
                 corpus: requestedCorpus,
               })
             : [];
-          const results = [...surfacedMemoryResults, ...supplementResults]
+          const merged = [...surfacedMemoryResults, ...supplementResults];
+          let workspaceDir: string | undefined;
+          if (memory && !("error" in memory)) {
+            workspaceDir = memory.manager.status().workspaceDir;
+          }
+          const reranked = options.rerank
+            ? await options.rerank(merged as never, {
+                ...(options.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
+                ...(agentId ? { agentId } : {}),
+                ...(workspaceDir ? { workspaceDir } : {}),
+              })
+            : merged;
+          const results = (reranked as typeof merged)
             .toSorted((left, right) => {
               if (left.score !== right.score) {
                 return right.score - left.score;
