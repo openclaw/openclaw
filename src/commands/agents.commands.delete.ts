@@ -1,22 +1,16 @@
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
-import {
-  loadSessionStore,
-  resolveSessionTranscriptsDirForAgent,
-  resolveStorePath,
-  updateSessionStore,
-} from "../config/sessions.js";
-import { getLogger } from "../logging/logger.js";
-import {
-  DEFAULT_AGENT_ID,
-  normalizeAgentId,
-  resolveAgentIdFromSessionKey,
-} from "../routing/session-key.js";
+import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
-import { createQuietRuntime, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
+import {
+  createQuietRuntime,
+  purgeAgentSessionStoreEntries,
+  requireValidConfigFileSnapshot,
+} from "./agents.command-shared.js";
 import { findAgentEntryIndex, listAgentEntries, pruneAgentConfig } from "./agents.config.js";
 import { moveToTrash } from "./onboard-helpers.js";
 
@@ -91,24 +85,7 @@ export async function agentsDeleteCommand(
   }
 
   // Purge session store entries for this agent so orphaned sessions cannot be targeted (#65524).
-  try {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    const store = loadSessionStore(storePath);
-    const hasEntries = Object.keys(store).some(
-      (key) => resolveAgentIdFromSessionKey(key) === agentId,
-    );
-    if (hasEntries) {
-      await updateSessionStore(storePath, (s) => {
-        for (const key of Object.keys(s)) {
-          if (resolveAgentIdFromSessionKey(key) === agentId) {
-            delete s[key];
-          }
-        }
-      });
-    }
-  } catch (err) {
-    getLogger().debug("session store purge skipped during agent delete", err);
-  }
+  await purgeAgentSessionStoreEntries(cfg, agentId);
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   await moveToTrash(workspaceDir, quietRuntime);
