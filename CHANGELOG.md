@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 - BlueBubbles/catchup: add a per-message retry ceiling (`catchup.maxFailureRetries`, default 10) so a persistently-failing message with a malformed payload no longer wedges the catchup cursor forever. After N consecutive `processMessage` failures against the same GUID, catchup logs a WARN, skips that message on subsequent sweeps, and lets the cursor advance past it. Transient failures still retry from the same point as before. Also fixes a lost-update race in the persistent dedupe file lock that silently dropped inbound GUIDs on concurrent writes, a dedupe file naming migration gap on version upgrade, and a balloon-event bypass that let catchup replay debouncer-coalesced events as standalone messages. (#67426, #66870) Thanks @omarshahine.
 - Ollama/chat: strip the `ollama/` provider prefix from Ollama chat request model ids so configured refs like `ollama/qwen3:14b-q8_0` stop 404ing against the Ollama API. (#67457) Thanks @suboss87.
 - QA/Matrix: split the private QA lab runtime into smaller tested modules, add Matrix media contract coverage for image understanding and generated-image delivery, and update the memory-dreaming QA sweep to assert the separate phase-report layout. (#67430) Thanks @gumadeiras.
+- Agents/tools: resolve non-workspace host tilde paths against the OS home directory and keep edit recovery aligned with that same path target, so `~/...` host edit/write operations stop failing or reading back the wrong file when `OPENCLAW_HOME` differs. (#62804) Thanks @stainlu.
 
 ## 2026.4.15-beta.1
 
