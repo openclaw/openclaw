@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
@@ -519,11 +520,14 @@ async function runModelRun(params: {
   const cfg = loadConfig();
   const agentId = resolveDefaultAgentId(cfg);
   if (params.transport === "local") {
+    const sessionId = `cap-model-run-${randomUUID()}`;
     const result = await agentCommand(
       {
         message: params.prompt,
         agentId,
         model: params.model,
+        sessionId,
+        sessionKey: `agent:${agentId}:explicit:${sessionId}`,
         json: false,
       },
       {

@@ -8,6 +8,7 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
+  resolveSessionTranscriptPathInDir,
 } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore, normalizeStoreSessionKey } from "./store.js";
@@ -64,12 +65,19 @@ export async function resolveSessionTranscriptFile(params: {
 
   if (params.sessionStore && params.storePath) {
     const threadIdFromSessionKey = parseSessionThreadInfo(params.sessionKey).threadId;
+    const fallbackSessionsDir = sessionPathOpts?.sessionsDir;
     const fallbackSessionFile = !sessionEntry?.sessionFile
-      ? resolveSessionTranscriptPath(
-          params.sessionId,
-          params.agentId,
-          params.threadId ?? threadIdFromSessionKey,
-        )
+      ? fallbackSessionsDir
+        ? resolveSessionTranscriptPathInDir(
+            params.sessionId,
+            fallbackSessionsDir,
+            params.threadId ?? threadIdFromSessionKey,
+          )
+        : resolveSessionTranscriptPath(
+            params.sessionId,
+            params.agentId,
+            params.threadId ?? threadIdFromSessionKey,
+          )
       : undefined;
     const resolvedSessionFile = await resolveAndPersistSessionFile({
       sessionId: params.sessionId,

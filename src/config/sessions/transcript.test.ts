@@ -2,10 +2,12 @@ import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
+import { loadSessionStore } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
+  resolveSessionTranscriptFile,
 } from "./transcript.js";
 
 describe("appendAssistantMessageToSessionTranscript", () => {
@@ -284,5 +286,31 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(emitSpy).toHaveBeenCalledWith(result.sessionFile);
     }
     emitSpy.mockRestore();
+  });
+
+  it("uses the profile-local sessions dir when resolving fresh transcript fallback paths", async () => {
+    const profileLocalStorePath = fixture.storePath();
+    const store = {
+      [sessionKey]: {
+        sessionId,
+        chatType: "direct",
+        channel: "discord",
+      },
+    };
+    fs.writeFileSync(profileLocalStorePath, JSON.stringify(store), "utf-8");
+    const sessionStore = loadSessionStore(profileLocalStorePath, { skipCache: true });
+
+    const result = await resolveSessionTranscriptFile({
+      sessionId,
+      sessionKey,
+      sessionEntry: sessionStore[sessionKey],
+      sessionStore,
+      storePath: profileLocalStorePath,
+      agentId: "main",
+    });
+
+    expect(result.sessionFile).toBe(
+      resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir()),
+    );
   });
 });
