@@ -36,7 +36,7 @@ const UpdatePlanToolSchema = Type.Object({
           }),
         ),
       },
-      { additionalProperties: true },
+      { additionalProperties: false },
     ),
     {
       minItems: 1,
