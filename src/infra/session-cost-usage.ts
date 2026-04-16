@@ -249,13 +249,19 @@ async function scanTranscriptFile(params: {
       continue;
     }
 
-    if (entry.usage && entry.costTotal === undefined) {
+    if (entry.usage) {
       const cost = resolveModelCostConfig({
         provider: entry.provider,
         model: entry.model,
         config: params.config,
       });
-      entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+      if (cost?.tieredPricing && cost.tieredPricing.length > 0) {
+        // When tiered pricing is configured, always recompute to override
+        // the flat-rate cost that the transport layer wrote into the transcript.
+        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+      } else if (entry.costTotal === undefined) {
+        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+      }
     }
 
     params.onEntry(entry);
