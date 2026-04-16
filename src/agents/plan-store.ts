@@ -38,6 +38,21 @@ export interface StoredPlan {
  * but explicitly removing __proto__/constructor/prototype keys prevents any
  * future code path from accidentally trusting them.
  */
+const VALID_STEP_STATUSES = new Set(["pending", "in_progress", "completed", "cancelled"]);
+
+/**
+ * Validates parsed JSON shape and strips prototype-pollution keys at every level.
+ * Defense-in-depth: Node's JSON.parse doesn't pollute prototypes by default,
+ * but explicitly removing __proto__/constructor/prototype keys prevents any
+ * future code path from accidentally trusting them.
+ *
+ * Codex P2 (PR #67542 r3094816890): the prior shallow check (namespace is
+ * string + steps is array) let malformed files like `steps: [null]` or
+ * missing `createdAt`/`updatedAt` slip through, then crashed downstream
+ * code (e.g. `mergeSteps()` reading `step.step`) instead of surfacing a
+ * clear read-time error. This function now validates EVERY field needed
+ * by downstream consumers.
+ */
 function sanitizePlanShape(parsed: unknown, expectedNamespace: string): StoredPlan {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`Plan file for "${expectedNamespace}" has invalid shape — expected object`);
@@ -50,6 +65,44 @@ function sanitizePlanShape(parsed: unknown, expectedNamespace: string): StoredPl
   }
   if (!Array.isArray(obj.steps)) {
     throw new Error(`Plan file for "${expectedNamespace}" has invalid shape — steps must be array`);
+  }
+  // Per-step validation — fail fast at read time instead of crashing in
+  // mergeSteps()/render() with a confusing TypeError later.
+  for (let i = 0; i < obj.steps.length; i += 1) {
+    const step: unknown = obj.steps[i];
+    if (!step || typeof step !== "object" || Array.isArray(step)) {
+      throw new Error(
+        `Plan file for "${expectedNamespace}" has invalid step at index ${i} — expected object, got ${Array.isArray(step) ? "array" : typeof step}`,
+      );
+    }
+    const s = step as Record<string, unknown>;
+    if (typeof s.step !== "string" || s.step.length === 0) {
+      throw new Error(
+        `Plan file for "${expectedNamespace}" has invalid step at index ${i} — \`step\` must be a non-empty string`,
+      );
+    }
+    if (typeof s.status !== "string" || !VALID_STEP_STATUSES.has(s.status)) {
+      throw new Error(
+        `Plan file for "${expectedNamespace}" has invalid step at index ${i} — \`status\` must be one of ${[...VALID_STEP_STATUSES].join(", ")}, got "${String(s.status)}"`,
+      );
+    }
+    if (s.activeForm !== undefined && typeof s.activeForm !== "string") {
+      throw new Error(
+        `Plan file for "${expectedNamespace}" has invalid step at index ${i} — \`activeForm\` must be a string when present`,
+      );
+    }
+  }
+  // Required timestamps. Numeric only — string ISO timestamps would silently
+  // pass `typeof === "number"` checks downstream as NaN.
+  if (typeof obj.createdAt !== "number" || !Number.isFinite(obj.createdAt) || obj.createdAt < 0) {
+    throw new Error(
+      `Plan file for "${expectedNamespace}" has invalid \`createdAt\` — expected non-negative number`,
+    );
+  }
+  if (typeof obj.updatedAt !== "number" || !Number.isFinite(obj.updatedAt) || obj.updatedAt < 0) {
+    throw new Error(
+      `Plan file for "${expectedNamespace}" has invalid \`updatedAt\` — expected non-negative number`,
+    );
   }
   // Filter prototype-pollution keys defensively at the top level.
   const safe: Record<string, unknown> = {};
