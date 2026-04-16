@@ -71,6 +71,7 @@ function createCronHarness(
         ...job,
         ...(job.schedule ? { schedule: { ...job.schedule } } : {}),
         ...(job.payload ? { payload: { ...job.payload } } : {}),
+        ...(job.delivery ? { delivery: { ...job.delivery } } : {}),
       }));
     },
     async add(input) {
@@ -84,6 +85,7 @@ function createCronHarness(
         sessionTarget: input.sessionTarget,
         wakeMode: input.wakeMode,
         payload: { ...input.payload },
+        ...(input.delivery ? { delivery: { ...input.delivery } } : {}),
         createdAtMs: Date.now(),
       });
       return {};
@@ -104,6 +106,7 @@ function createCronHarness(
         ...(patch.sessionTarget ? { sessionTarget: patch.sessionTarget } : {}),
         ...(patch.wakeMode ? { wakeMode: patch.wakeMode } : {}),
         ...(patch.payload ? { payload: { ...patch.payload } } : {}),
+        ...(patch.delivery ? { delivery: { ...patch.delivery } } : {}),
       };
       return {};
     },
@@ -434,6 +437,9 @@ describe("short-term dreaming cron reconciliation", () => {
       name: constants.MANAGED_DREAMING_CRON_NAME,
       sessionTarget: "isolated",
       wakeMode: "now",
+      delivery: {
+        mode: "none",
+      },
       payload: {
         kind: "agentTurn",
         message: constants.DREAMING_SYSTEM_EVENT_TEXT,
@@ -471,6 +477,9 @@ describe("short-term dreaming cron reconciliation", () => {
       payload: {
         kind: "systemEvent",
         text: "stale-text",
+      },
+      delivery: {
+        mode: "announce",
       },
       createdAtMs: 1,
     };
@@ -510,6 +519,9 @@ describe("short-term dreaming cron reconciliation", () => {
         sessionTarget: "isolated",
         wakeMode: "now",
         schedule: desired.schedule,
+        delivery: {
+          mode: "none",
+        },
         payload: desired.payload,
       },
     });
@@ -771,6 +783,9 @@ describe("gateway startup reconciliation", () => {
           kind: "cron",
           expr: "15 4 * * *",
           tz: "UTC",
+        },
+        delivery: {
+          mode: "none",
         },
       });
       expect(logger.info).toHaveBeenCalledWith(
