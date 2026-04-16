@@ -20,15 +20,19 @@ import {
   shouldSkipPackedTarballValidation,
   utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
+import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "../src/infra/npm-update-compat-sidecars.ts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
 
+const LEGACY_UPDATE_COMPAT_PACKED_PATHS = [
+  ...NPM_UPDATE_COMPAT_SIDECAR_PATHS,
+].toSorted() as readonly string[];
 const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;
 
-describe("package files qa-channel compatibility stub", () => {
-  it("does not exclude the qa-channel subtree before packing the legacy runtime stub", () => {
+describe("package files compatibility stubs", () => {
+  it("packs the legacy update verifier runtime stubs", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: unknown };
 
     expect(pkg.files).toEqual(expect.arrayContaining(LEGACY_UPDATE_COMPAT_PACKED_PATHS));
@@ -349,23 +353,21 @@ describe("collectForbiddenPackedPathErrors", () => {
       ]),
     ).toEqual([
       'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
-      'npm package must not include private QA channel artifact "dist/extensions/qa-channel/runtime-api.js".',
-      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
       'npm package must not include private QA lab type artifact "dist/plugin-sdk/extensions/qa-lab/cli.d.ts".',
       'npm package must not include private QA suite artifact "qa/scenarios/index.md".',
     ]);
   });
 
-  it("rejects legacy update verifier QA runtime sidecars", () => {
+  it("allows only the legacy update verifier runtime sidecars", () => {
     expect(
       collectForbiddenPackedPathErrors([
         "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-lab/runtime-api.js",
+        "dist/extensions/qa-lab/src/runtime-api.js",
       ]),
     ).toEqual([
-      'npm package must not include private QA channel artifact "dist/extensions/qa-channel/runtime-api.js".',
-      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
+      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/runtime-api.js".',
     ]);
   });
 

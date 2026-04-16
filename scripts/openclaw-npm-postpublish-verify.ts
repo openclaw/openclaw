@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "../src/infra/npm-update-compat-sidecars.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import {
@@ -47,9 +48,6 @@ type InstalledBundledExtensionManifestRecord = {
 const MAX_BUNDLED_EXTENSION_MANIFEST_BYTES = 1024 * 1024;
 const LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER =
   "Failed to load legacy context engine runtime.";
-const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
-  (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
-);
 const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/^node:/u, "")));
 const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
 const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 2 * 1024 * 1024;
@@ -57,6 +55,15 @@ const MAX_INSTALLED_ROOT_DIST_JS_FILES = 5000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
 const require = createRequire(import.meta.url);
 const acorn = require("acorn") as typeof import("acorn");
+const LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS = [
+  ...NPM_UPDATE_COMPAT_SIDECAR_PATHS,
+].toSorted() as readonly string[];
+const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = [
+  ...BUNDLED_RUNTIME_SIDECAR_PATHS.filter((relativePath) =>
+    listBundledPluginPackArtifacts().includes(relativePath),
+  ),
+  ...LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS,
+] as const;
 
 export type PublishedInstallScenario = {
   name: string;

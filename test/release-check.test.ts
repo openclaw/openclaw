@@ -22,6 +22,7 @@ import {
   PACKED_CLI_SMOKE_COMMANDS,
   packageNameFromSpecifier,
 } from "../scripts/release-check.ts";
+import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "../src/infra/npm-update-compat-sidecars.ts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
 import { bundledDistPluginFile, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 
@@ -35,6 +36,9 @@ function makePackResult(filename: string, unpackedSize: number) {
 
 const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
+const legacyUpdateCompatPackedPaths = [
+  ...NPM_UPDATE_COMPAT_SIDECAR_PATHS,
+].toSorted() as readonly string[];
 
 describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
@@ -449,6 +453,7 @@ describe("collectForbiddenPackPaths", () => {
         "dist/index.js",
         "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-lab/runtime-api.js",
+        "dist/extensions/qa-lab/src/runtime-api.js",
         "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
         "dist/plugin-sdk/qa-lab.js",
         "dist/plugin-sdk/qa-runtime.js",
@@ -456,8 +461,7 @@ describe("collectForbiddenPackPaths", () => {
         "qa/scenarios/index.md",
       ]),
     ).toEqual([
-      "dist/extensions/qa-channel/runtime-api.js",
-      "dist/extensions/qa-lab/runtime-api.js",
+      "dist/extensions/qa-lab/src/runtime-api.js",
       "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
       "dist/plugin-sdk/qa-lab.js",
       "qa/scenarios/index.md",
@@ -549,6 +553,7 @@ describe("collectMissingPackPaths", () => {
         ...requiredBundledPluginPackPaths,
         ...requiredPluginSdkPackPaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
+        ...legacyUpdateCompatPackedPaths,
         "scripts/npm-runner.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
         "scripts/postinstall-bundled-plugins.mjs",

@@ -13,13 +13,18 @@ import {
   normalizeInstalledBinaryVersion,
   resolveInstalledBinaryPath,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
+import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "../src/infra/npm-update-compat-sidecars.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 
 const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
   (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
 );
+const LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS = [
+  ...NPM_UPDATE_COMPAT_SIDECAR_PATHS,
+].toSorted() as readonly string[];
 const REQUIRED_INSTALLED_RUNTIME_SIDECAR_PATHS = [
   ...PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS,
+  ...LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS,
 ] as const;
 
 describe("buildPublishedInstallScenarios", () => {
@@ -367,7 +372,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     }
   });
 
-  it("accepts legacy qa channel sidecar directories without package.json", () => {
+  it("accepts legacy update sidecar directories without package.json", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -375,12 +380,10 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
         version: "2026.4.10",
         dependencies: {},
       });
-      mkdirSync(join(packageRoot, "dist/extensions/qa-channel"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist/extensions/qa-channel/runtime-api.js"),
-        "export {};\n",
-        "utf8",
-      );
+      for (const relativePath of LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS) {
+        mkdirSync(dirname(join(packageRoot, relativePath)), { recursive: true });
+        writeFileSync(join(packageRoot, relativePath), "export {};\n", "utf8");
+      }
 
       expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
     } finally {

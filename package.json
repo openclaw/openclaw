@@ -42,6 +42,7 @@
     "!dist/extensions/qa-channel/test-api.js",
     "dist/extensions/qa-channel/runtime-api.js",
     "!dist/extensions/qa-lab/**",
+    "dist/extensions/qa-lab/runtime-api.js",
     "!dist/extensions/qa-matrix/**",
     "!dist/plugin-sdk/extensions/qa-lab/**",
     "!dist/plugin-sdk/qa-lab.*",

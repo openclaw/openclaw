@@ -19,6 +19,7 @@ describe("package dist inventory", () => {
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/current-BR6xv1a1.js",
         "dist/extensions/qa-channel/runtime-api.js",
+        "dist/extensions/qa-lab/runtime-api.js",
       ]);
       await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toEqual([]);
 
@@ -53,7 +54,14 @@ describe("package dist inventory", () => {
         "runtime-api.js",
       );
       const omittedQaChunk = path.join(packageRoot, "dist", "extensions", "qa-channel", "cli.js");
-      const omittedQaLabChunk = path.join(packageRoot, "dist", "extensions", "qa-lab", "cli.js");
+      const omittedQaLabChunk = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "qa-lab",
+        "src",
+        "runtime-api.js",
+      );
       const omittedQaMatrixChunk = path.join(
         packageRoot,
         "dist",
@@ -118,6 +126,7 @@ describe("package dist inventory", () => {
       const omittedMap = path.join(packageRoot, "dist", "feature.runtime.js.map");
       await fs.mkdir(path.dirname(packagedQaChannelRuntime), { recursive: true });
       await fs.mkdir(path.dirname(packagedQaLabRuntime), { recursive: true });
+      await fs.mkdir(path.dirname(omittedQaLabChunk), { recursive: true });
       await fs.mkdir(path.dirname(omittedQaMatrixChunk), { recursive: true });
       await fs.mkdir(path.dirname(omittedQaLabTypes), { recursive: true });
       await fs.mkdir(path.dirname(omittedRuntimeDepsStamp), { recursive: true });
@@ -151,6 +160,7 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/extensions/qa-channel/runtime-api.js",
+        "dist/extensions/qa-lab/runtime-api.js",
         "dist/plugin-sdk/qa-runtime.js",
         "dist/qa-runtime-B9LDtssJ.js",
       ]);
