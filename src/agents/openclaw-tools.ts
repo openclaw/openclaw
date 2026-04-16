@@ -100,6 +100,12 @@ export function createOpenClawTools(
     /** Ephemeral session UUID — regenerated on /new and /reset. */
     sessionId?: string;
     /**
+     * Stable run identifier for this agent invocation. Threaded into
+     * `update_plan` so its merge mode can persist plan state on
+     * `AgentRunContext` keyed by runId (#67514).
+     */
+    runId?: string;
+    /**
      * Workspace directory to pass to spawned subagents for inheritance.
      * Defaults to workspaceDir. Use this to pass the actual agent workspace when the
      * session itself is running in a copied-workspace sandbox (`ro` or `none`) so
@@ -254,7 +260,7 @@ export function createOpenClawTools(
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,
     })
-      ? [createUpdatePlanTool()]
+      ? [createUpdatePlanTool({ runId: options?.runId })]
       : []),
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,

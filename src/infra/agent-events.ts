@@ -105,6 +105,19 @@ export type AgentEventPayload = {
   sessionKey?: string;
 };
 
+/**
+ * Snapshot of a plan step persisted on the run context for #67514's
+ * merge mode. Stored as a structural type to avoid pulling agent/tool
+ * types into the infra layer. The string-typed `status` matches the
+ * runtime `PLAN_STEP_STATUSES` union exported from
+ * `src/agents/tools/update-plan-tool.ts`.
+ */
+export type PlanStepSnapshot = {
+  step: string;
+  status: string;
+  activeForm?: string;
+};
+
 export type AgentRunContext = {
   sessionKey?: string;
   verboseLevel?: VerboseLevel;
@@ -115,6 +128,13 @@ export type AgentRunContext = {
   registeredAt?: number;
   /** Timestamp of last activity (updated on every emitAgentEvent). */
   lastActiveAt?: number;
+  /**
+   * Last plan steps seen by `update_plan` in this run (#67514). Used by
+   * merge mode to compute the merged plan against the previous state.
+   * In-memory only — survives within a run, cleared with the context.
+   * Disk-persistence (cross-session) is owned by `PlanStore` (#67542).
+   */
+  lastPlanSteps?: PlanStepSnapshot[];
 };
 
 type AgentEventState = {
