@@ -1,0 +1,45 @@
+{
+  "name": "@openclaw/line",
+  "version": "2026.4.15-beta.1",
+  "private": true,
+  "description": "OpenClaw LINE channel plugin",
+  "type": "module",
+  "dependencies": {
+    "@line/bot-sdk": "^11.0.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.15-beta.1"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "line",
+      "label": "LINE",
+      "selectionLabel": "LINE (Messaging API)",
+      "detailLabel": "LINE Bot",
+      "docsPath": "/channels/line",
+      "docsLabel": "line",
+      "blurb": "LINE Messaging API webhook bot.",
+      "systemImage": "message",
+      "order": 75,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/line",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.10"
+    }
+  }
+}

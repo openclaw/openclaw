@@ -1,0 +1,190 @@
+/* =============================================
+   CHAT TEXT STYLING
+   ============================================= */
+
+.chat-thinking {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+:root[data-theme-mode="light"] .chat-thinking {
+  border-color: rgba(16, 24, 40, 0.25);
+  background: rgba(16, 24, 40, 0.04);
+}
+
+.chat-text {
+  font-size: 14px;
+  line-height: 1.5;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.chat-text :where(p, ul, ol, pre, blockquote, table) {
+  margin: 0;
+}
+
+.chat-text :where(p + p, p + ul, p + ol, p + pre, p + blockquote) {
+  margin-top: 0.75em;
+}
+
+.chat-text :where(ul, ol) {
+  padding-left: 1.5em;
+}
+
+.chat-text :where(li + li) {
+  margin-top: 0.25em;
+}
+
+/* Hide default marker only for unordered task lists; ordered lists keep numbers */
+.chat-text :where(ul > .task-list-item),
+.sidebar-markdown :where(ul > .task-list-item),
+.chat-thinking :where(ul > .task-list-item) {
+  list-style: none;
+}
+
+.chat-text :where(.task-list-item-checkbox),
+.sidebar-markdown :where(.task-list-item-checkbox),
+.chat-thinking :where(.task-list-item-checkbox) {
+  margin-right: 0.4em;
+  vertical-align: middle;
+}
+
+.chat-text :where(a) {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-text :where(a:hover) {
+  opacity: 0.8;
+}
+
+.chat-text :where(code) {
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+.chat-text :where(.markdown-inline-image) {
+  display: block;
+  max-width: min(100%, 420px);
+  max-height: 320px;
+  width: auto;
+  height: auto;
+  margin-top: 0.75em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+  object-fit: contain;
+}
+
+.chat-text :where(:not(pre) > code) {
+  background: rgba(0, 0, 0, 0.15);
+  padding: 0.15em 0.4em;
+  border-radius: var(--radius-sm);
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+
+.chat-text :where(pre) {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+
+.chat-text :where(pre code) {
+  background: none;
+  padding: 0;
+}
+
+.chat-text :where(blockquote) {
+  border-left: 3px solid var(--border-strong);
+  padding-left: 12px;
+  margin-left: 0;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 8px 12px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.chat-text :where(blockquote blockquote) {
+  margin-top: 8px;
+  border-left-color: var(--border-hover);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.chat-text :where(blockquote blockquote blockquote) {
+  border-left-color: var(--muted-strong);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+:root[data-theme-mode="light"] .chat-text :where(blockquote) {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+:root[data-theme-mode="light"] .chat-text :where(blockquote blockquote) {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+:root[data-theme-mode="light"] .chat-text :where(blockquote blockquote blockquote) {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+:root[data-theme-mode="light"] .chat-text :where(:not(pre) > code) {
+  background: rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+:root[data-theme-mode="light"] .chat-text :where(pre) {
+  background: rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.chat-text :where(hr) {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1em 0;
+}
+
+/* =============================================
+   RTL (Right-to-Left) SUPPORT
+   ============================================= */
+
+.chat-text[dir="rtl"] {
+  text-align: right;
+}
+
+.chat-text[dir="rtl"] :where(ul, ol) {
+  padding-left: 0;
+  padding-right: 1.5em;
+}
+
+.chat-text[dir="rtl"] :where(blockquote) {
+  border-left: none;
+  border-right: 3px solid var(--border);
+  padding-left: 0;
+  padding-right: 1em;
+}
+
+@media (max-width: 640px) {
+  .chat-text :where(pre) {
+    padding: 8px 10px;
+    font-size: 12px;
+    border-radius: var(--radius-sm);
+  }
+
+  .chat-text :where(.markdown-inline-image) {
+    max-width: 100%;
+    max-height: 240px;
+  }
+
+  .chat-text :where(blockquote) {
+    padding: 6px 10px;
+  }
+}
