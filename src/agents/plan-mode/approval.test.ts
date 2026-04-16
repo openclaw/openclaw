@@ -70,14 +70,35 @@ describe("resolvePlanApproval", () => {
   });
 
   it("clears feedback on approval", () => {
+    const pending: PlanModeSessionState = {
+      ...BASE_STATE,
+      approval: "pending",
+      feedback: "old feedback",
+      rejectionCount: 1,
+    };
+    const result = resolvePlanApproval(pending, "approve");
+    expect(result.feedback).toBeUndefined();
+  });
+
+  it("allows transitions from rejected state (user changes mind)", () => {
     const rejected: PlanModeSessionState = {
       ...BASE_STATE,
       approval: "rejected",
       feedback: "old feedback",
-      rejectionCount: 1,
     };
     const result = resolvePlanApproval(rejected, "approve");
+    expect(result.approval).toBe("approved");
     expect(result.feedback).toBeUndefined();
+  });
+
+  it("ignores actions on terminal states (approved, edited, timed_out)", () => {
+    const approved: PlanModeSessionState = {
+      ...BASE_STATE,
+      approval: "approved",
+      confirmedAt: 3000,
+    };
+    const result = resolvePlanApproval(approved, "reject", "too late");
+    expect(result.approval).toBe("approved"); // no-op
   });
 });
 
