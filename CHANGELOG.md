@@ -47,6 +47,7 @@ Docs: https://docs.openclaw.ai
 - Codex/app-server: parse Desktop-originated app-server user agents such as `Codex Desktop/0.118.0`, keeping the version gate working when the Codex CLI inherits a multi-word originator. (#64666) Thanks @cyrusaf.
 - Cron/announce delivery: keep isolated announce `NO_REPLY` stripping case-insensitive across direct and text delivery, preserve structured media-only sends when a caption strips silent, and derive main-session awareness from the cleaned payloads so silent captions no longer leak stale `NO_REPLY` text. (#65016) Thanks @BKF-Gitty.
 - Sessions/Codex: skip redundant `delivery-mirror` transcript appends only when the latest assistant message has the same visible text, preventing duplicate visible replies on Codex-backed turns without suppressing repeated answers across turns. (#67185) Thanks @andyylin.
+- Auto-reply/prompt-cache: keep volatile inbound chat IDs out of the stable system prompt so task-scoped adapters can reuse prompt caches across runs, while preserving conversation metadata for the user turn and media-only messages. (#65071) Thanks @MonkeyLeeT.
 
 ## 2026.4.15-beta.1
 
