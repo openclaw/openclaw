@@ -75,6 +75,36 @@ function trimOutput(text: string, maxChars?: number): string {
   return trimmed.slice(0, maxChars).trim();
 }
 
+/** Kesha Voice Kit (`kesha --json`): `[{ text, lang, textLanguage?, audioLanguage? }]` */
+function extractKeshaText(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("[")) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return null;
+    }
+    const first = parsed[0] as Record<string, unknown>;
+    if (typeof first.text !== "string" || !first.text.trim()) {
+      return null;
+    }
+    const text = first.text.trim();
+    const langObj = (first.textLanguage ?? first.audioLanguage) as
+      | { code?: unknown; confidence?: unknown }
+      | undefined;
+    const code = typeof langObj?.code === "string" ? langObj.code : typeof first.lang === "string" ? first.lang : null;
+    if (!code) {
+      return text;
+    }
+    const conf = typeof langObj?.confidence === "number" ? `, confidence: ${langObj.confidence.toFixed(2)}` : "";
+    return `${text}\n[lang: ${code}${conf}]`;
+  } catch {
+    return null;
+  }
+}
+
 function extractSherpaOnnxText(raw: string): string | null {
   const tryParse = (value: string): string | null => {
     const trimmed = value.trim();
@@ -209,6 +239,13 @@ async function resolveCliOutput(params: {
 
   if (commandId === "sherpa-onnx-offline") {
     const response = extractSherpaOnnxText(params.stdout);
+    if (response) {
+      return response;
+    }
+  }
+
+  if (commandId === "kesha" || commandId === "parakeet") {
+    const response = extractKeshaText(params.stdout);
     if (response) {
       return response;
     }
