@@ -223,8 +223,24 @@ export function looksLikePromptInjection(text: string): boolean {
   return PROMPT_INJECTION_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
+/**
+ * Pattern matching [media attached: ...] and [media attached N/M: ...] annotations.
+ * These are written by the Gateway's claim-check offload when a user sends an image.
+ * When a message containing such an annotation is stored as a long-term memory and
+ * later recalled, the verbatim text must NOT be re-interpreted as a live media
+ * reference by detectImageReferences() because that makes old memories look like
+ * fresh media attachments.
+ */
+const MEDIA_ATTACHED_PATTERN = /\[media attached(?:\s+\d+\/\d+)?:[^\]]*\]/gi;
+
 export function escapeMemoryForPrompt(text: string): string {
-  return text.replace(/[&<>"']/g, (char) => PROMPT_ESCAPE_MAP[char] ?? char);
+  // Strip [media attached: ...] annotations before HTML-escaping so that
+  // detectImageReferences() cannot re-parse them as live media references.
+  const stripped = text
+    .replace(MEDIA_ATTACHED_PATTERN, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return stripped.replace(/[&<>"']/g, (char) => PROMPT_ESCAPE_MAP[char] ?? char);
 }
 
 // ============================================================================
@@ -336,7 +352,10 @@ export function sanitizeForMemoryCapture(text: string): string {
   cleaned = cleaned.replace(/<active_memory_plugin>[\s\S]*?<\/active_memory_plugin>/g, "");
 
   // Collapse whitespace and trim
-  cleaned = cleaned.replace(/\n{3,}/g, "\n\n").replace(/[ \t]{2,}/g, " ").trim();
+  cleaned = cleaned
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
 
   return cleaned;
 }
