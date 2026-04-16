@@ -354,4 +354,36 @@ describe("buildWorkspaceSkillSnapshot", () => {
       omits: ["root-big-skill"],
     });
   });
+
+  it("does not redirect to skills/skills when root already has skills", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const skillsRoot = await fixtureSuite.createCaseDir("skills-root");
+
+    // Create a skill at the root level: skillsRoot/my-skill/SKILL.md
+    await writeSkill({
+      dir: path.join(skillsRoot, "my-skill"),
+      name: "my-skill",
+      description: "Skill at root level",
+    });
+
+    // Create a skills/skills subdirectory (should NOT cause redirect)
+    await fs.mkdir(path.join(skillsRoot, "skills", "decoy"), { recursive: true });
+    await fs.writeFile(path.join(skillsRoot, "skills", "decoy", "SKILL.md"), "");
+
+    const snapshot = buildSnapshot(workspaceDir, {
+      config: {
+        skills: {
+          load: {
+            extraDirs: [skillsRoot],
+          },
+        },
+      },
+    });
+
+    // my-skill should be loaded; decoy should NOT (because skillsRoot is the root)
+    expectSnapshotNamesAndPrompt(snapshot, {
+      contains: ["my-skill"],
+      omits: ["decoy"],
+    });
+  });
 });

@@ -306,8 +306,29 @@ function resolveNestedSkillsRoot(
   dir: string,
   opts?: {
     maxEntriesToScan?: number;
+    maxSkillFileBytes?: number;
   },
 ): { baseDir: string; note?: string } {
+  // Early exit: if dir already has valid skills (dir/*/SKILL.md with parseable frontmatter,
+  // excluding 'skills' subdir), dir is a valid skills root - don't redirect to nested.
+  const dirDirs = listChildDirectories(dir);
+  const earlyExitLimit = Math.max(0, opts?.maxEntriesToScan ?? 100);
+  const maxBytes = opts?.maxSkillFileBytes ?? DEFAULT_MAX_SKILL_FILE_BYTES;
+  for (const name of dirDirs.slice(0, earlyExitLimit)) {
+    if (name === "skills") continue;
+    const skillMdPath = path.join(dir, name, "SKILL.md");
+    if (fs.existsSync(skillMdPath)) {
+      const frontmatter = readSkillFrontmatterSafe({
+        rootDir: dir,
+        filePath: skillMdPath,
+        maxBytes: maxBytes,
+      });
+      if (frontmatter?.description?.trim()) {
+        return { baseDir: dir };
+      }
+    }
+  }
+
   const nested = path.join(dir, "skills");
   try {
     if (!fs.existsSync(nested) || !fs.statSync(nested).isDirectory()) {
@@ -361,6 +382,7 @@ function loadSkillEntries(
     const rootRealPath = tryRealpath(rootDir) ?? rootDir;
     const resolved = resolveNestedSkillsRoot(params.dir, {
       maxEntriesToScan: limits.maxCandidatesPerRoot,
+      maxSkillFileBytes: limits.maxSkillFileBytes,
     });
     const baseDir = resolved.baseDir;
     const baseDirRealPath = resolveContainedSkillPath({
