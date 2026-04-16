@@ -35,7 +35,7 @@ export function formatSystemRunAllowlistMissMessage(params?: {
   if (params?.windowsShellWrapperBlocked) {
     return (
       "SYSTEM_RUN_DENIED: allowlist miss " +
-      "(Windows shell wrappers like cmd.exe /c require approval; " +
+      "(Windows shell wrappers like cmd.exe /c or powershell -Command require approval; " +
       "approve once/always or run with --ask on-miss|always)"
     );
   }
@@ -63,13 +63,10 @@ export function evaluateSystemRunPolicy(params: {
 }): SystemRunPolicyDecision {
   // POSIX node execution intentionally uses `/bin/sh -lc` as a transport wrapper.
   // Keep allowlist decisions based on the analyzed inner shell payload there.
-  // Windows `cmd.exe /c` wrappers still require explicit approval because they
+  // Windows shell wrappers still require explicit approval because they can
   // change execution semantics for builtins and quoting/parsing behavior.
   const windowsShellWrapperBlocked =
-    params.security === "allowlist" &&
-    params.shellWrapperInvocation &&
-    params.isWindows &&
-    params.cmdInvocation;
+    params.security === "allowlist" && params.shellWrapperInvocation && params.isWindows;
   const shellWrapperBlocked = windowsShellWrapperBlocked;
   const analysisOk = shellWrapperBlocked ? false : params.analysisOk;
   const allowlistSatisfied = shellWrapperBlocked ? false : params.allowlistSatisfied;

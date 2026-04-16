@@ -147,6 +147,17 @@ describe("evaluateSystemRunPolicy", () => {
     expect(denied.errorMessage).toContain("Windows shell wrappers like cmd.exe /c");
   });
 
+  it("blocks Windows PowerShell wrappers in allowlist mode", () => {
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({ isWindows: true, cmdInvocation: false, shellWrapperInvocation: true }),
+      ),
+    );
+    expect(denied.shellWrapperBlocked).toBe(true);
+    expect(denied.windowsShellWrapperBlocked).toBe(true);
+    expect(denied.errorMessage).toContain("powershell -Command");
+  });
+
   it("does not block Windows cmd.exe invocations without inline shell-wrapper transport", () => {
     const allowed = expectAllowedDecision(
       evaluateSystemRunPolicy(
