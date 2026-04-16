@@ -39,7 +39,18 @@ function requestUrl(input: string | URL | Request): string {
   return input.url;
 }
 
-function makeHost(overrides?: Partial<ChatHost>): ChatHost {
+type ChatHostRuntimeState = {
+  toolStreamById: Map<string, unknown>;
+  toolStreamOrder: string[];
+  chatToolMessages: unknown[];
+  chatStreamSegments: Array<{ text: string; ts: number }>;
+  toolStreamSyncTimer: number | null;
+  chatHasAutoScrolled: boolean;
+  chatUserNearBottom: boolean;
+  chatNewMessagesBelow: boolean;
+};
+
+function makeHost(overrides?: Partial<ChatHost>): ChatHost & ChatHostRuntimeState {
   return {
     client: null,
     toolStreamById: new Map(),
@@ -591,14 +602,12 @@ describe("handleSendChat", () => {
       }) as unknown as typeof fetch,
     );
     let host!: ChatHost;
-    let resolveHistory: (() => void) | null = null;
+    const historyLoaded = createDeferred<void>();
     const request = vi.fn((method: string) => {
       if (method === "chat.history") {
-        return new Promise((resolve) => {
-          resolveHistory = () => {
-            host.sessionKey = "secondary";
-            resolve({ messages: [], thinkingLevel: null });
-          };
+        return historyLoaded.promise.then(() => {
+          host.sessionKey = "secondary";
+          return { messages: [], thinkingLevel: null };
         });
       }
       if (method === "sessions.list") {
@@ -625,11 +634,7 @@ describe("handleSendChat", () => {
     });
 
     const refreshPromise = refreshChat(host, { scheduleScroll: false });
-    const resolve = resolveHistory;
-    if (!resolve) {
-      throw new Error("expected pending history resolver");
-    }
-    resolve();
+    historyLoaded.resolve(undefined);
     await refreshPromise;
 
     expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
@@ -648,7 +653,7 @@ describe("handleSendChat", () => {
         json: async () => ({}),
       }) as unknown as typeof fetch,
     );
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "chat.history") {
         return { messages: [], thinkingLevel: null };
       }
@@ -814,17 +819,24 @@ describe("handleSendChat", () => {
     await refreshChat(host, { scheduleScroll: false });
     await refreshChat(host, { scheduleScroll: false });
 
-    const chatSendCalls = request.mock.calls.filter(
-      (args): args is [string, Record<string, unknown>] =>
-        args[0] === "chat.send" && !!args[1] && typeof args[1] === "object",
-    );
+    const chatSendCalls = request.mock.calls.filter(([method]) => method === "chat.send") as Array<
+      [string, unknown?]
+    >;
     expect(chatSendCalls).toHaveLength(2);
-    expect(chatSendCalls[0]?.[1]).toMatchObject({
-      idempotencyKey: "hidden-autostart-id",
-    });
-    expect(chatSendCalls[1]?.[1]).toMatchObject({
-      idempotencyKey: "hidden-autostart-id",
-    });
+    const firstSendParams = chatSendCalls[0]?.[1];
+    const secondSendParams = chatSendCalls[1]?.[1];
+    expect(firstSendParams).toBeDefined();
+    expect(secondSendParams).toBeDefined();
+    expect(firstSendParams).toEqual(
+      expect.objectContaining({
+        idempotencyKey: "hidden-autostart-id",
+      }),
+    );
+    expect(secondSendParams).toEqual(
+      expect.objectContaining({
+        idempotencyKey: "hidden-autostart-id",
+      }),
+    );
     expect(host.chatAutostart).toBeNull();
   });
 });
