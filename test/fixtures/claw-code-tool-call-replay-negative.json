@@ -1,0 +1,8 @@
+[
+  { "type": "toolCall", "name": "ToolSearch", "arguments": {} },
+  { "type": "toolCall", "name": "CronDelete", "arguments": {} },
+  { "type": "toolCall", "name": "LSP", "arguments": { "action": "diagnostics" } },
+  { "type": "toolCall", "name": "Sleep", "arguments": { "duration_ms": 999999999 } },
+  { "type": "toolCall", "name": "Config", "arguments": { "setting": "" } },
+  { "type": "toolCall", "name": "UnknownFutureTool", "arguments": { "a": 1 } }
+]

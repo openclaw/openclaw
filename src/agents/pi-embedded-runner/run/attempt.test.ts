@@ -30,9 +30,10 @@ type FakeWrappedStream = {
   [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
 };
 
-type ReplayFixture = {
-  positive: Array<{ type: string; name: string; arguments?: Record<string, unknown> }>;
-  negative: Array<{ type: string; name: string; arguments?: Record<string, unknown> }>;
+type ReplayToolCall = {
+  type: string;
+  name: string;
+  arguments?: Record<string, unknown>;
 };
 
 function createFakeStream(params: {
@@ -63,9 +64,12 @@ async function invokeWrappedTestStream(
   return await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
 }
 
-function loadClawCodeReplayFixture(): ReplayFixture {
-  const fixturePath = path.resolve(process.cwd(), "test/fixtures/claw-code-tool-call-replay.json");
-  return JSON.parse(readFileSync(fixturePath, "utf8")) as ReplayFixture;
+function loadClawCodeReplayFixture(kind: "positive" | "negative"): ReplayToolCall[] {
+  const fixturePath = path.resolve(
+    process.cwd(),
+    `test/fixtures/claw-code-tool-call-replay-${kind}.json`,
+  );
+  return JSON.parse(readFileSync(fixturePath, "utf8")) as ReplayToolCall[];
 }
 
 describe("resolvePromptBuildHookResult", () => {
@@ -802,7 +806,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   });
 
   it("replays representative claw-code tool-call samples through normalization", async () => {
-    const toolCalls = structuredClone(loadClawCodeReplayFixture().positive);
+    const toolCalls = structuredClone(loadClawCodeReplayFixture("positive"));
     const finalMessage = { role: "assistant", content: toolCalls };
     const baseFn = vi.fn(() =>
       createFakeStream({
@@ -858,7 +862,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   });
 
   it("replays invalid claw-code samples without masking downstream validation failures", async () => {
-    const toolCalls = structuredClone(loadClawCodeReplayFixture().negative);
+    const toolCalls = structuredClone(loadClawCodeReplayFixture("negative"));
     const finalMessage = { role: "assistant", content: toolCalls };
     const baseFn = vi.fn(() =>
       createFakeStream({
