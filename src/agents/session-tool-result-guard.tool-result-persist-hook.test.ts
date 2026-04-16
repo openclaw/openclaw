@@ -11,8 +11,8 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { buildEmbeddedExtensionFactories } from "./pi-embedded-runner/extensions.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
@@ -304,8 +304,8 @@ describe("tool_result persistence with tool_result_before_model", () => {
 
     appendToolCallAndResult(sm);
     const toolResult = getPersistedToolResult(sm);
-    const text = toolResult.content.find((block: { type: string }) => block.type === "text")?.text;
-    expect(typeof text).toBe("string");
+    expect(toolResult).toBeTruthy();
+    const text = getToolResultText(toolResult);
     expect(text.length).toBeLessThanOrEqual(120);
     expect(text).toContain("truncated");
   });
@@ -486,8 +486,8 @@ describe("tool_result persistence with tool_result_before_model", () => {
 
     appendToolCallAndResult(sm);
     const toolResult = getPersistedToolResult(sm);
-    const text = toolResult.content.find((block: { type: string }) => block.type === "text")?.text;
-    expect(typeof text).toBe("string");
+    expect(toolResult).toBeTruthy();
+    const text = getToolResultText(toolResult);
     expect(text.length).toBeLessThanOrEqual(120);
     expect(text).toContain("truncated");
   });
