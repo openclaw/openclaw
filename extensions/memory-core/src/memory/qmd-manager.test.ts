@@ -4715,6 +4715,119 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("falls back to direct qmd query when mcporter returns an empty result set", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "search",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      if (cmd === "qmd" && args[0] === "query") {
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            {
+              docid: path.join(workspaceDir, "file.md"),
+              file: path.join(workspaceDir, "file.md"),
+              collection: "workspace",
+              score: 0.9,
+              snippet: "fallback hit",
+            },
+          ]),
+        );
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    vi.spyOn(
+      manager as unknown as { resolveDocLocation: (docid: string) => Promise<unknown> },
+      "resolveDocLocation",
+    ).mockResolvedValue({
+      rel: "file.md",
+      abs: path.join(workspaceDir, "file.md"),
+      source: "memory",
+    });
+    await expect(
+      manager.search("fallback", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        path: "file.md",
+        source: "memory",
+        snippet: "fallback hit",
+      }),
+    ]);
+    expect(spawnMock).toHaveBeenCalledWith(
+      "qmd",
+      expect.arrayContaining(["query"]),
+      expect.anything(),
+    );
+    await manager.close();
+  });
+
+  it("keeps empty success when direct qmd fallback also fails", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      if (cmd === "qmd" && args[0] === "query") {
+        queueMicrotask(() => child.emit("error", new Error("qmd unavailable")));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const onDebug = vi.fn();
+    const { manager } = await createManager();
+    await expect(
+      manager.search("fallback", {
+        sessionKey: "agent:main:slack:dm:u123",
+        onDebug,
+      }),
+    ).resolves.toEqual([]);
+    expect(onDebug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "qmd",
+        fallback: "mcporter-empty-result",
+      }),
+    );
+    await manager.close();
+  });
+
   it("sets busy_timeout on qmd sqlite connections", async () => {
     const { manager } = await createManager();
     const indexPath = (manager as unknown as { indexPath: string }).indexPath;

@@ -55,8 +55,6 @@ import {
 import { asRecord } from "../dreaming-shared.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
 
-type SqliteDatabase = import("node:sqlite").DatabaseSync;
-
 const log = createSubsystemLogger("memory");
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
@@ -320,10 +318,10 @@ export class QmdMemoryManager implements MemorySearchManager {
   >();
   private readonly maxQmdOutputChars = MAX_QMD_OUTPUT_CHARS;
   private readonly sessionExporter: SessionExporterConfig | null;
-  private updateTimer: NodeJS.Timeout | null = null;
-  private embedTimer: NodeJS.Timeout | null = null;
+  private updateTimer: ReturnType<typeof setTimeout> | null = null;
+  private embedTimer: ReturnType<typeof setTimeout> | null = null;
   private watcher: FSWatcher | null = null;
-  private watchTimer: NodeJS.Timeout | null = null;
+  private watchTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingUpdate: Promise<void> | null = null;
   private queuedForcedUpdate: Promise<void> | null = null;
   private queuedForcedRuns = 0;
@@ -1220,6 +1218,33 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       parsed = await runSearchAttempt(false);
     }
+    if (mcporterEnabled && parsed.length === 0) {
+      searchFallbackReason = "mcporter-empty-result";
+      const fallbackSearchCommand = "query";
+      try {
+        const collectionGroups = await this.resolveCollectionSearchGroups(collectionNames);
+        parsed =
+          collectionGroups.length > 1
+            ? await this.runQueryAcrossCollectionGroups(
+                trimmed,
+                limit,
+                collectionGroups,
+                fallbackSearchCommand,
+              )
+            : await (async () => {
+                const fallbackArgs = this.buildSearchArgs(fallbackSearchCommand, trimmed, limit);
+                fallbackArgs.push(
+                  ...this.buildCollectionFilterArgs(collectionGroups[0] ?? collectionNames),
+                );
+                const fallback = await this.runQmd(fallbackArgs, {
+                  timeoutMs: this.qmd.limits.timeoutMs,
+                });
+                return parseQmdQueryJson(fallback.stdout, fallback.stderr);
+              })();
+      } catch (fallbackErr) {
+        log.warn(`qmd direct fallback failed after mcporter empty result: ${String(fallbackErr)}`);
+      }
+    }
     const results: MemorySearchResult[] = [];
     for (const entry of parsed) {
       const docHints = this.normalizeDocHints({
@@ -1430,7 +1455,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     await this.pendingUpdate?.catch(() => undefined);
     await this.queuedForcedUpdate?.catch(() => undefined);
     if (this.db) {
-      this.db.close();
+      (this.db as import("node:sqlite").DatabaseSync).close();
       this.db = null;
     }
   }
@@ -2155,19 +2180,20 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  private ensureDb(): SqliteDatabase {
+  private ensureDb(): import("node:sqlite").DatabaseSync {
     if (this.db) {
-      return this.db;
+      return this.db as import("node:sqlite").DatabaseSync;
     }
     const { DatabaseSync } = requireNodeSqlite();
-    this.db = new DatabaseSync(this.indexPath, { readOnly: true });
+    const db = new DatabaseSync(this.indexPath, { readOnly: true });
     // busy_timeout is per-connection; set it on every open so concurrent
     // processes retry instead of failing immediately with SQLITE_BUSY.
     // Use a lower value than the write path (5 s) because this read-only
     // connection runs synchronous queries on the main thread via DatabaseSync.
     // In WAL mode readers rarely block, so 1 s is a safe upper bound.
-    this.db.exec("PRAGMA busy_timeout = 1000");
-    return this.db;
+    db.exec("PRAGMA busy_timeout = 1000");
+    this.db = db;
+    return db;
   }
 
   private async exportSessions(): Promise<void> {
