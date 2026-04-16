@@ -173,7 +173,12 @@ export async function sendPayloadWithChunkedTextAndMedia<
   sendMedia: (ctx: TContext & { text: string; mediaUrl: string }) => Promise<TResult>;
   emptyResult: TResult;
 }): Promise<TResult> {
-  const payload = params.ctx.payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string };
+  const payload = params.ctx.payload as {
+    text?: string;
+    mediaUrls?: string[];
+    mediaUrl?: string;
+    media?: string | string[];
+  };
   const text = payload.text ?? "";
   const urls = resolveOutboundMediaUrls(payload);
   if (!text && urls.length === 0) {
