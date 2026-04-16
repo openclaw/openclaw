@@ -908,7 +908,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         return resolved.version;
       });
     }
-    cmp = currentVersion && targetVersion ? compareSemverStrings(currentVersion, targetVersion) : null;
+    cmp =
+      currentVersion && targetVersion ? compareSemverStrings(currentVersion, targetVersion) : null;
     downgradeRisk =
       canResolveRegistryVersionForPackageTarget(tag) &&
       !fallbackToLatest &&
@@ -990,9 +991,17 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
-  if (downgradeRisk && !opts.yes) {
-    const verbGerund = cmp != null ? (cmp > 0 ? "Downgrading" : cmp < 0 ? "Upgrading" : "Downgrading") : "Downgrading";
-    const verbNoun = cmp != null ? (cmp > 0 ? "Downgrade" : cmp < 0 ? "Upgrade" : "Downgrade") : "Downgrade";
+  if ((downgradeRisk || (cmp != null && cmp < 0)) && !opts.yes) {
+    const verbGerund =
+      cmp != null
+        ? cmp > 0
+          ? "Downgrading"
+          : cmp < 0
+            ? "Upgrading"
+            : "Downgrading"
+        : "Downgrading";
+    const verbNoun =
+      cmp != null ? (cmp > 0 ? "Downgrade" : cmp < 0 ? "Upgrade" : "Downgrade") : "Downgrade";
 
     if (!process.stdin.isTTY || opts.json) {
       defaultRuntime.error(
