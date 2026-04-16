@@ -10,7 +10,6 @@ const state = vi.hoisted(() => ({
   clearAgentRunContextMock: vi.fn(),
   updateSessionStoreAfterAgentRunMock: vi.fn(),
   deliverAgentCommandResultMock: vi.fn(),
-  effectiveFallbacksMock: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock("./model-fallback.js", () => ({
@@ -214,7 +213,7 @@ vi.mock("./agent-scope.js", () => ({
   listAgentIds: () => ["default"],
   resolveAgentConfig: () => undefined,
   resolveAgentDir: () => "/tmp/agent",
-  resolveEffectiveModelFallbacks: state.effectiveFallbacksMock,
+  resolveEffectiveModelFallbacks: state.resolveEffectiveModelFallbacksMock,
   resolveSessionAgentId: () => "default",
   resolveAgentSkillsFilter: () => undefined,
   resolveAgentWorkspaceDir: () => "/tmp/workspace",
