@@ -306,6 +306,7 @@ export async function initSessionState(params: {
   let persistedReasoning: string | undefined;
   let persistedTtsAuto: TtsAutoMode | undefined;
   let persistedModelOverride: string | undefined;
+  let persistedModelOverrideSource: SessionEntry["modelOverrideSource"];
   let persistedProviderOverride: string | undefined;
   let persistedAuthProfileOverride: string | undefined;
   let persistedAuthProfileOverrideSource: SessionEntry["authProfileOverrideSource"];
@@ -461,6 +462,7 @@ export async function initSessionState(params: {
     persistedReasoning = entry.reasoningLevel;
     persistedTtsAuto = entry.ttsAuto;
     persistedModelOverride = entry.modelOverride;
+    persistedModelOverrideSource = entry.modelOverrideSource;
     persistedProviderOverride = entry.providerOverride;
     persistedAuthProfileOverride = entry.authProfileOverride;
     persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
@@ -480,11 +482,25 @@ export async function initSessionState(params: {
       persistedTrace = entry.traceLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      persistedModelOverride = entry.modelOverride;
-      persistedProviderOverride = entry.providerOverride;
-      persistedAuthProfileOverride = entry.authProfileOverride;
-      persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
-      persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
+      // Only preserve user-explicit model overrides across resets; auto-
+      // fallback overrides (modelOverrideSource === "auto") should be cleared
+      // so the session falls back to the configured default.  Legacy entries
+      // without a source field are treated as user-explicit for backward
+      // compatibility (same logic as gateway session-reset-service).
+      const preserveModelOverride =
+        entry.modelOverrideSource === "user" ||
+        (entry.modelOverrideSource === undefined && Boolean(entry.modelOverride));
+      if (preserveModelOverride) {
+        persistedModelOverride = entry.modelOverride;
+        persistedModelOverrideSource = "user";
+        persistedProviderOverride = entry.providerOverride;
+      }
+      // Same treatment for auth profile overrides.
+      if (entry.authProfileOverrideSource === "user" && entry.authProfileOverride) {
+        persistedAuthProfileOverride = entry.authProfileOverride;
+        persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
+        persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
+      }
       // Explicit /new and /reset should rotate the underlying CLI conversation too.
       // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.
       persistedLabel = entry.label;
@@ -579,6 +595,7 @@ export async function initSessionState(params: {
     ttsAuto: persistedTtsAuto ?? baseEntry?.ttsAuto,
     responseUsage: baseEntry?.responseUsage,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
+    modelOverrideSource: persistedModelOverrideSource ?? baseEntry?.modelOverrideSource,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
     authProfileOverride: persistedAuthProfileOverride ?? baseEntry?.authProfileOverride,
     authProfileOverrideSource:
