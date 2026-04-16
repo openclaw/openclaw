@@ -47,5 +47,11 @@ steps:
               params: [candidate]
               expr: "candidate.conversation.id === 'qa-room' && candidate.text.includes('update_plan')"
           - expr: liveTurnTimeoutMs(env, 120000)
+      - assert:
+          expr: "message.toolCalls?.some(tc => tc.name === 'update_plan') ?? false"
+          message: "Agent must call update_plan to create the plan"
+      - assert:
+          expr: "message.toolCalls?.some(tc => { const p = tc.params; return p?.plan?.some(s => s.status === 'cancelled'); }) ?? true"
+          message: "If a step fails, it should be marked cancelled (not silently dropped or marked completed)"
     detailsExpr: message.text
 ```
