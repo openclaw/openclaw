@@ -53,8 +53,7 @@ const statusIndicator = document.getElementById('status-indicator');
 const startBtn = document.getElementById('start-btn');
 const stopBtn = document.getElementById('stop-btn');
 
-let gatewayPort = 18789;
-invoke('get_port').then(p => { gatewayPort = p; }).catch(() => {});
+
 
 async function updateDashboard() {
   try {
@@ -98,7 +97,7 @@ async function updateDashboard() {
 }
 
 setInterval(updateDashboard, 2000);
-updateDashboard();
+void updateDashboard();
 
 startBtn.addEventListener('click', async () => {
    try {
