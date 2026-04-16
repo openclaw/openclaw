@@ -4,12 +4,30 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 
+const loadWebMediaMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../media/web-media.js", async () => {
+  const actual = await vi.importActual<typeof import("../../media/web-media.js")>(
+    "../../media/web-media.js",
+  );
+  return {
+    ...actual,
+    loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
+  };
+});
+
 describe("runMessageAction core send routing", () => {
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
+    loadWebMediaMock.mockReset();
   });
 
   it("promotes caption to message for media sends when message is empty", async () => {
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("cat"),
+      contentType: "image/png",
+      fileName: "cat.png",
+    });
     const sendMedia = vi.fn().mockResolvedValue({
       channel: "testchat",
       messageId: "m1",
@@ -65,6 +83,11 @@ describe("runMessageAction core send routing", () => {
   });
 
   it("does not misclassify send as poll when zero-valued poll params are present", async () => {
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("hello"),
+      contentType: "text/plain",
+      fileName: "file.txt",
+    });
     const sendMedia = vi.fn().mockResolvedValue({
       channel: "testchat",
       messageId: "m2",
