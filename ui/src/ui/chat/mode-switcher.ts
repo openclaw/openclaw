@@ -139,11 +139,47 @@ export const MODE_DEFINITIONS: ModeDefinition[] = [
 ];
 
 /**
+ * Synthetic "Custom" mode displayed when the current
+ * `(execSecurity, execAsk)` pair doesn't match any preset.
+ *
+ * Carries the actual values via `execSecurity`/`execAsk` so a future
+ * tooltip/devtools surface can show the live state, and so picking a
+ * preset from the menu makes the user's intent explicit (instead of
+ * silently coercing the unrecognized state to a preset).
+ */
+const CUSTOM_MODE_ICON = html`<svg
+  width="14"
+  height="14"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  aria-hidden="true"
+>
+  <circle cx="12" cy="12" r="3" />
+  <path
+    d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+  />
+</svg>`;
+
+/**
  * Derives the current mode from session state.
  *
- * Plan mode wins when active — the chip displays "Plan" regardless of the
- * underlying permission mode, because plan mode is the most specific signal
- * about agent behavior.
+ * Plan mode wins when active — the chip displays "Plan" regardless of
+ * the underlying permission mode, because plan mode is the most specific
+ * signal about agent behavior.
+ *
+ * If `(execSecurity, execAsk)` matches no preset (e.g. `security=deny`
+ * for sandbox-backed sessions, or `ask=always` set elsewhere), a
+ * synthetic "Custom" `ModeDefinition` is returned that carries the
+ * actual values — instead of silently mislabeling the chip as "Ask".
+ *
+ * Codex P1 (PR #67721 r3094970182): the prior fallback to
+ * `MODE_DEFINITIONS[0]` (Ask) made the UI report Ask for valid
+ * non-preset states and could quietly rewrite those states when the
+ * user picked from the menu.
  */
 export function resolveCurrentMode(
   execSecurity?: string,
@@ -159,7 +195,22 @@ export function resolveCurrentMode(
   const match = MODE_DEFINITIONS.find(
     (m) => !m.planMode && m.execSecurity === execSecurity && m.execAsk === execAsk,
   );
-  return match ?? MODE_DEFINITIONS[0];
+  if (match) {
+    return match;
+  }
+  // No preset match — fabricate a "Custom" entry instead of forcing Ask.
+  // Synthesizing a fresh object means selecting another mode from the
+  // menu is a real state change (currentMode.id !== chosen.id) and can
+  // be intentionally confirmed by the caller.
+  return {
+    id: "custom",
+    label: "Custom permissions",
+    shortLabel: "Custom",
+    shortcut: "",
+    icon: CUSTOM_MODE_ICON,
+    ...(execSecurity !== undefined ? { execSecurity } : {}),
+    ...(execAsk !== undefined ? { execAsk } : {}),
+  };
 }
 
 export interface ModeSwitcherState {

@@ -27,14 +27,29 @@ describe("resolveCurrentMode", () => {
     expect(mode.id).toBe("accept");
   });
 
-  it("falls back to Ask permissions for unknown combos", () => {
+  it("returns a Custom mode for unknown combos (was: forced Ask, fixed P1 r3094970182)", () => {
     const mode = resolveCurrentMode("unknown", "unknown");
-    expect(mode.id).toBe("ask");
+    expect(mode.id).toBe("custom");
+    expect(mode.shortLabel).toBe("Custom");
+    expect(mode.execSecurity).toBe("unknown");
+    expect(mode.execAsk).toBe("unknown");
   });
 
-  it("falls back to Ask permissions for undefined inputs", () => {
+  it("returns Custom for undefined inputs (no execSecurity / execAsk)", () => {
     const mode = resolveCurrentMode(undefined, undefined);
-    expect(mode.id).toBe("ask");
+    expect(mode.id).toBe("custom");
+    expect(mode.execSecurity).toBeUndefined();
+    expect(mode.execAsk).toBeUndefined();
+  });
+
+  it("returns Custom for sandbox-backed deny security (real-world non-preset state)", () => {
+    // Codex P1 evidence: resolveExecDefaults commonly yields security=deny
+    // for sandbox-backed sessions; previously this displayed as Ask and
+    // could be unintentionally loosened on menu interaction.
+    const mode = resolveCurrentMode("deny", "off");
+    expect(mode.id).toBe("custom");
+    expect(mode.execSecurity).toBe("deny");
+    expect(mode.execAsk).toBe("off");
   });
 });
 
