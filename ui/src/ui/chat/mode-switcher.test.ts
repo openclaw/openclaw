@@ -287,13 +287,17 @@ describe("renderModeSwitcher (jsdom render — Copilot r3095798778)", () => {
     expect(host.querySelector("button.agent-chat__mode-chip")?.getAttribute("aria-expanded")).toBe(
       "true",
     );
-    // Menu container is rendered when open.
+    // Menu container is rendered when open. We deliberately do NOT
+    // declare role="menu" because we don't implement the WAI-ARIA menu
+    // keyboard contract (arrow nav, Home/End, focus trap). Plain
+    // <button> children give native focus + Escape-on-chip without
+    // making a false ARIA promise (Codex/Copilot #67721 r3095798757).
     const menu = host.querySelector(".agent-chat__mode-menu");
     expect(menu).not.toBeNull();
-    expect(menu?.getAttribute("role")).toBe("menu");
+    expect(menu?.getAttribute("role")).toBeNull();
   });
 
-  it("renders one menuitem per MODE_DEFINITIONS entry when menu is open", () => {
+  it("renders one button per MODE_DEFINITIONS entry when menu is open", () => {
     const ask = MODE_DEFINITIONS.find((m) => m.id === "ask")!;
     const host = renderToHost({
       currentMode: ask,
