@@ -30,6 +30,8 @@ const TOOL_CALL_JSON_PAYLOAD_START_RE =
 const TOOL_CALL_XML_PAYLOAD_START_RE =
   /^\s*(?:\r?\n\s*)?<(?:function|invoke|parameters?|arguments?)\b/i;
 
+type ToolCallPayloadKind = "json" | "xml" | null;
+
 function endsInsideQuotedString(text: string, start: number, end: number): boolean {
   let quoteChar: "'" | '"' | null = null;
   let isEscaped = false;
@@ -110,9 +112,36 @@ function findTagCloseIndex(text: string, start: number): number {
   return -1;
 }
 
-function looksLikeToolCallPayloadStart(text: string, start: number): boolean {
+function detectToolCallPayloadKind(text: string, start: number): ToolCallPayloadKind {
   const rest = text.slice(start);
-  return TOOL_CALL_JSON_PAYLOAD_START_RE.test(rest) || TOOL_CALL_XML_PAYLOAD_START_RE.test(rest);
+  if (TOOL_CALL_JSON_PAYLOAD_START_RE.test(rest)) {
+    return "json";
+  }
+  if (TOOL_CALL_XML_PAYLOAD_START_RE.test(rest)) {
+    return "xml";
+  }
+  return null;
+}
+
+function isLikelyStandaloneFunctionToolCall(
+  text: string,
+  tagStart: number,
+  tag: ParsedToolCallTag,
+): boolean {
+  if (tag.tagName !== "function" || tag.isClose || tag.isSelfClosing || tag.isTruncated) {
+    return false;
+  }
+
+  if (!/\bname\s*=/.test(text.slice(tag.contentStart, tag.end))) {
+    return false;
+  }
+
+  let idx = tagStart - 1;
+  while (idx >= 0 && (text[idx] === " " || text[idx] === "\t")) {
+    idx -= 1;
+  }
+
+  return idx < 0 || text[idx] === "\n" || text[idx] === "\r" || /[.!?:]/.test(text[idx]);
 }
 
 function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | null {
@@ -176,7 +205,9 @@ export function stripToolCallXmlTags(text: string): string {
   let result = "";
   let lastIndex = 0;
   let inToolCallBlock = false;
-  let toolCallContentStart = 0;
+  let toolCallBlockContentStart = 0;
+  let toolCallBlockNeedsQuoteBalance = false;
+  let toolCallBlockStart = 0;
   let toolCallBlockTagName: string | null = null;
   const visibleTagBalance = new Map<string, number>();
 
@@ -218,17 +249,19 @@ export function stripToolCallXmlTags(text: string): string {
         continue;
       }
       const payloadStart = tag.isTruncated ? tag.contentStart : tag.end;
-      // For <tool_call> and <function>, check both JSON and XML payloads.
-      // Models like Gemma emit standalone <function> blocks with nested
-      // <parameter> XML that must also be caught (#67093).
-      // For other tags keep JSON-only to avoid stripping prose examples.
-      const hasToolCallPayloadStart =
+      const payloadKind =
         tag.tagName === "tool_call" || tag.tagName === "function"
-          ? looksLikeToolCallPayloadStart(text, payloadStart)
-          : TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(payloadStart));
-      if (!tag.isClose && hasToolCallPayloadStart) {
+          ? detectToolCallPayloadKind(text, payloadStart)
+          : TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(payloadStart))
+            ? "json"
+            : null;
+      const shouldStripStandaloneFunction =
+        tag.tagName !== "function" || isLikelyStandaloneFunctionToolCall(text, idx, tag);
+      if (!tag.isClose && payloadKind && shouldStripStandaloneFunction) {
         inToolCallBlock = true;
-        toolCallContentStart = tag.end;
+        toolCallBlockContentStart = tag.end;
+        toolCallBlockNeedsQuoteBalance = payloadKind === "json";
+        toolCallBlockStart = idx;
         toolCallBlockTagName = tag.tagName;
         if (tag.isTruncated) {
           lastIndex = text.length;
@@ -248,9 +281,11 @@ export function stripToolCallXmlTags(text: string): string {
       tag.isClose &&
       (tag.tagName === toolCallBlockTagName ||
         (toolCallBlockTagName === "tool_result" && tag.tagName === "tool_call")) &&
-      !endsInsideQuotedString(text, toolCallContentStart, idx)
+      (!toolCallBlockNeedsQuoteBalance ||
+        !endsInsideQuotedString(text, toolCallBlockContentStart, idx))
     ) {
       inToolCallBlock = false;
+      toolCallBlockNeedsQuoteBalance = false;
       toolCallBlockTagName = null;
     }
 
@@ -260,6 +295,8 @@ export function stripToolCallXmlTags(text: string): string {
 
   if (!inToolCallBlock) {
     result += text.slice(lastIndex);
+  } else if (toolCallBlockTagName === "function") {
+    result += text.slice(toolCallBlockStart);
   }
 
   return result;
