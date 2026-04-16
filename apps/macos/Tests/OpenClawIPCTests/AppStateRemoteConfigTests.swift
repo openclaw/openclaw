@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import OpenClaw
 
@@ -92,6 +93,61 @@ struct AppStateRemoteConfigTests {
             remoteTokenDirty: false)
 
         #expect(remote["url"] as? String == "ws://127.0.0.1:18789")
+    }
+
+    @Test
+    func updatedRemoteGatewayConfigDoesNotPreservePortForHostnamePrefixCollision() {
+        let remote = AppState._testUpdatedRemoteGatewayConfig(
+            current: ["url": "ws://example.attacker.tld:19999"],
+            transport: .ssh,
+            remoteUrl: "",
+            remoteHost: "example.com",
+            remoteTarget: "alice@example.com",
+            remoteIdentity: "",
+            remoteToken: "",
+            remoteTokenDirty: false)
+
+        #expect(remote["url"] as? String == "ws://127.0.0.1:18789")
+    }
+
+    @Test
+    func appStateInitDoesNotInferLoopbackHostIntoRemoteTarget() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [remoteTargetKey: ""])
+        {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "url": "ws://127.0.0.1:19999",
+                    ],
+                ],
+            ])
+            let state = AppState(preview: true)
+            #expect(state.remoteTarget == "")
+        }
+    }
+
+    @Test
+    func appStateInitPreservesExistingRemoteTargetWhenRemoteUrlIsLoopback() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [remoteTargetKey: "alice@gateway.example"])
+        {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "url": "ws://127.0.0.1:19999",
+                    ],
+                ],
+            ])
+            let state = AppState(preview: true)
+            #expect(state.remoteTarget == "alice@gateway.example")
+        }
     }
 
     @Test

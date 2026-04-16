@@ -9,7 +9,6 @@ enum GatewayDiscoverySelectionSupport {
         gateway: GatewayDiscoveryModel.DiscoveredGateway,
         state: AppState)
     {
-        let discoveredServicePort = GatewayDiscoveryHelpers.serviceEndpoint(for: gateway)?.port
         let preferredTransport = self.preferredTransport(
             for: gateway,
             current: state.remoteTransport)
@@ -20,9 +19,7 @@ enum GatewayDiscoverySelectionSupport {
         if preferredTransport == .direct {
             state.remoteUrl = GatewayDiscoveryHelpers.directUrl(for: gateway) ?? ""
         } else {
-            state.remoteUrl = self.sshTunnelGatewayUrl(
-                current: state.remoteUrl,
-                preferredPort: discoveredServicePort)
+            state.remoteUrl = self.sshTunnelGatewayUrl(current: state.remoteUrl)
         }
         state.remoteTarget = GatewayDiscoveryHelpers.sshTarget(for: gateway) ?? ""
 
@@ -47,10 +44,7 @@ enum GatewayDiscoverySelectionSupport {
         }
     }
 
-    private static func sshTunnelGatewayUrl(current: String, preferredPort: Int?) -> String {
-        if let preferredPort, (1...65535).contains(preferredPort) {
-            return "ws://127.0.0.1:\(preferredPort)"
-        }
+    private static func sshTunnelGatewayUrl(current: String) -> String {
         let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let url = URL(string: trimmed), let host = url.host else {
             return self.defaultSshTunnelGatewayUrl

@@ -318,7 +318,8 @@ final class AppState {
         if resolvedConnectionMode == .remote,
            configRemoteTransport != .direct,
            storedRemoteTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let host = AppState.remoteHost(from: configRemoteUrl)
+           let host = AppState.remoteHost(from: configRemoteUrl),
+           !LoopbackHost.isLoopbackHost(host)
         {
             self.remoteTarget = "\(NSUserName())@\(host)"
         } else {
@@ -392,14 +393,12 @@ final class AppState {
         guard !trimmed.isEmpty, let url = URL(string: trimmed), let host = url.host else {
             return "ws://127.0.0.1:18789"
         }
-        let normalizedExpectedHost = expectedRemoteHost?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
+        let normalizedExpectedHost = Self.canonicalHost(expectedRemoteHost)
         let shouldPreservePort: Bool
         if LoopbackHost.isLoopbackHost(host) {
             shouldPreservePort = true
-        } else if let normalizedExpectedHost, !normalizedExpectedHost.isEmpty {
-            shouldPreservePort = OpenClawConfigFile.hostKey(host) == OpenClawConfigFile.hostKey(normalizedExpectedHost)
+        } else if let normalizedExpectedHost {
+            shouldPreservePort = Self.canonicalHost(host) == normalizedExpectedHost
         } else {
             shouldPreservePort = false
         }
@@ -408,6 +407,19 @@ final class AppState {
         }
         let port = url.port ?? 18789
         return "ws://127.0.0.1:\(port)"
+    }
+
+    private static func canonicalHost(_ raw: String?) -> String? {
+        guard var host = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !host.isEmpty
+        else {
+            return nil
+        }
+        host = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        while host.hasSuffix(".") {
+            host.removeLast()
+        }
+        return host.isEmpty ? nil : host
     }
 
     private static func updateGatewayString(
@@ -547,7 +559,8 @@ final class AppState {
         let targetMode = desiredMode ?? self.connectionMode
         if targetMode == .remote,
            remoteTransport != .direct,
-           let host = AppState.remoteHost(from: remoteUrl)
+           let host = AppState.remoteHost(from: remoteUrl),
+           !LoopbackHost.isLoopbackHost(host)
         {
             self.updateRemoteTarget(host: host)
         }

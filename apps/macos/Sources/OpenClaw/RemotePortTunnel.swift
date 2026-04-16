@@ -152,15 +152,30 @@ final class RemotePortTunnel {
         else {
             return nil
         }
-        let sshKey = OpenClawConfigFile.hostKey(sshHost)
-        let urlKey = OpenClawConfigFile.hostKey(host)
-        guard !sshKey.isEmpty, !urlKey.isEmpty else { return nil }
-        guard sshKey == urlKey else {
+        guard let normalizedSSHHost = self.canonicalHost(sshHost),
+              let normalizedUrlHost = self.canonicalHost(host)
+        else {
+            return nil
+        }
+        guard normalizedSSHHost == normalizedUrlHost else {
             Self.logger.debug(
                 "remote url host mismatch sshHost=\(sshHost, privacy: .public) urlHost=\(host, privacy: .public)")
             return nil
         }
         return port
+    }
+
+    private static func canonicalHost(_ raw: String?) -> String? {
+        guard var host = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !host.isEmpty
+        else {
+            return nil
+        }
+        host = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        while host.hasSuffix(".") {
+            host.removeLast()
+        }
+        return host.isEmpty ? nil : host
     }
 
     private static func findPort(preferred: UInt16?, allowRandom: Bool) async throws -> UInt16 {
