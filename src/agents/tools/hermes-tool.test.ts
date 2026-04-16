@@ -65,6 +65,28 @@ describe("createHermesTool", () => {
     });
   });
 
+  it("infers long_plan when action is omitted but planning intent is explicit", async () => {
+    const runtime = {
+      getCatalog: vi.fn(),
+      callTool: vi.fn(async () => ({ content: [{ type: "text", text: "ok" }] })),
+      getServerAuthState: vi.fn(),
+    };
+    mcpRuntimeMock.getOrCreateSessionMcpRuntime.mockResolvedValueOnce(runtime);
+
+    const { createHermesTool } = await import("./hermes-tool.js");
+    const tool = createHermesTool({
+      sessionId: "session-hermes-2b",
+      workspaceDir: "/tmp/workspace",
+    });
+    await tool.execute("tool-2b", {
+      prompt: "Please create a multi-phase roadmap with milestones for this migration",
+    });
+
+    expect(runtime.callTool).toHaveBeenCalledWith("hermes", "long_plan", {
+      prompt: "Please create a multi-phase roadmap with milestones for this migration",
+    });
+  });
+
   it("supports explicit call passthrough", async () => {
     const runtime = {
       getCatalog: vi.fn(),
@@ -129,4 +151,3 @@ describe("createHermesTool", () => {
     });
   });
 });
-

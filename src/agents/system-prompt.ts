@@ -277,6 +277,25 @@ function buildExecutionBiasSection(params: { isMinimal: boolean }) {
   ];
 }
 
+function buildHermesRoutingSection(params: {
+  isMinimal: boolean;
+  availableTools: Set<string>;
+}) {
+  if (params.isMinimal || !params.availableTools.has("hermes")) {
+    return [];
+  }
+  return [
+    "## Hermes Routing",
+    "When both local tools and Hermes are available, route by intent:",
+    "- Default to local OpenClaw tools for direct execution (files, shell, channels, device actions, cron writes).",
+    "- Use `hermes` `action=memory_reflect` for cross-session reflection, memory synthesis, or historical pattern extraction.",
+    "- Use `hermes` `action=skill_suggest` to propose reusable skills/workflows/templates from repeated task patterns.",
+    "- Use `hermes` `action=long_plan` for long-horizon decomposition (multi-phase roadmap, milestones, dependency planning).",
+    "- If a Hermes call fails or times out, continue locally and provide a degraded but actionable result.",
+    "",
+  ];
+}
+
 function normalizeProviderPromptBlock(value?: string): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -461,6 +480,8 @@ export function buildAgentSystemPrompt(params: {
     subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
+    hermes:
+      "Route long-horizon planning, memory reflection, and skill suggestion to Hermes via MCP (actions: memory_reflect|skill_suggest|long_plan)",
     image: "Analyze an image with the configured image model",
     image_generate: "Generate images with the configured image-generation model",
   };
@@ -489,6 +510,7 @@ export function buildAgentSystemPrompt(params: {
     "sessions_send",
     "subagents",
     "session_status",
+    "hermes",
     "image",
     "image_generate",
   ];
@@ -695,6 +717,10 @@ export function buildAgentSystemPrompt(params: {
       fallback: buildExecutionBiasSection({
         isMinimal,
       }),
+    }),
+    ...buildHermesRoutingSection({
+      isMinimal,
+      availableTools,
     }),
     ...buildOverridablePromptSection({
       override: providerStablePrefix,

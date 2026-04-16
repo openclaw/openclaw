@@ -81,6 +81,22 @@ function resolvePromptLike(params: Record<string, unknown>): string | undefined 
   );
 }
 
+function inferHermesAction(params: Record<string, unknown>): "memory_reflect" | "skill_suggest" | "long_plan" {
+  const text = resolvePromptLike(params)?.toLowerCase() ?? "";
+  const hasLongPlanSignal =
+    /\b(plan|roadmap|milestone|phases?|decompose|strategy|long[-\s]?term|quarter)\b/.test(text);
+  if (hasLongPlanSignal) {
+    return "long_plan";
+  }
+  const hasSkillSignal = /\b(skill|workflow|playbook|template|optimi[sz]e|sop|automation)\b/.test(
+    text,
+  );
+  if (hasSkillSignal) {
+    return "skill_suggest";
+  }
+  return "memory_reflect";
+}
+
 function buildRouteInput(params: Record<string, unknown>): Record<string, unknown> {
   const base = resolveRecord(params.input ?? params.arguments);
   const prompt = resolvePromptLike(params);
@@ -116,7 +132,7 @@ export function createHermesTool(options: HermesToolOptions): AnyAgentTool {
           | "call"
           | "catalog"
           | "status"
-          | undefined) ?? "memory_reflect";
+          | undefined) ?? inferHermesAction(params);
       const server = readStringParam(params, "server") ?? defaultServer;
       const runtime = await getOrCreateSessionMcpRuntime({
         sessionId: resolveRuntimeSessionId(options),

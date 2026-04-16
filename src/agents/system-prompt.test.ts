@@ -296,6 +296,19 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_send");
   });
 
+  it("includes Hermes routing strategy when hermes tool is available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["hermes", "exec", "read"],
+    });
+
+    expect(prompt).toContain("## Hermes Routing");
+    expect(prompt).toContain("action=memory_reflect");
+    expect(prompt).toContain("action=skill_suggest");
+    expect(prompt).toContain("action=long_plan");
+    expect(prompt).toContain("If a Hermes call fails or times out, continue locally");
+  });
+
   it("documents ACP sessions_spawn agent targeting requirements", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
