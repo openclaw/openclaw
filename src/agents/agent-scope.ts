@@ -102,14 +102,17 @@ export function resolveAgentAutoContinue(
   const defaultAc = cfg?.agents?.defaults?.embeddedPi?.autoContinue;
   const agentAc =
     agentId && cfg ? resolveAgentConfig(cfg, agentId)?.embeddedPi?.autoContinue : undefined;
-  const merged = agentAc ?? defaultAc;
-  if (!merged) {
-    return DEFAULT_AUTO_CONTINUE;
-  }
+  // Codex P2 (PR #67538 r3095650458): merge per-field, not wholesale.
+  // Prior `agentAc ?? defaultAc` discarded the entire defaults object as
+  // soon as the per-agent block existed at all, so an agent setting only
+  // `enabled: true` would silently reset `maxCycles`/`stopOnMutation` away
+  // from the configured defaults. Cascade is per-field:
+  //   per-agent → agents.defaults → DEFAULT_AUTO_CONTINUE constant.
   return {
-    enabled: merged.enabled ?? DEFAULT_AUTO_CONTINUE.enabled,
-    maxCycles: merged.maxCycles ?? DEFAULT_AUTO_CONTINUE.maxCycles,
-    stopOnMutation: merged.stopOnMutation ?? DEFAULT_AUTO_CONTINUE.stopOnMutation,
+    enabled: agentAc?.enabled ?? defaultAc?.enabled ?? DEFAULT_AUTO_CONTINUE.enabled,
+    maxCycles: agentAc?.maxCycles ?? defaultAc?.maxCycles ?? DEFAULT_AUTO_CONTINUE.maxCycles,
+    stopOnMutation:
+      agentAc?.stopOnMutation ?? defaultAc?.stopOnMutation ?? DEFAULT_AUTO_CONTINUE.stopOnMutation,
   };
 }
 
