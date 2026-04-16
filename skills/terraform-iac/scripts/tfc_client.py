@@ -656,14 +656,14 @@ def prompt_lambda(org, workspace, outdir):
 
     CODE_TEMPLATES = {
         "python": {
-            "rest-api": '''import json\n\ndef handler(event, context):\n    method = event.get("httpMethod", "GET")\n    path = event.get("path", "/")\n    body = event.get("body")\n    if body:\n        try:\n            body = json.loads(body)\n        except Exception:\n            pass\n\n    # --- YOUR LOGIC HERE ---\n    response_body = {{\n        "message": "Hello from {name}",\n        "method": method,\n        "path": path,\n    }}\n\n    return {{\n        "statusCode": 200,\n        "headers": {{"Content-Type": "application/json"}},\n        "body": json.dumps(response_body),\n    }}\n''',
+            "rest-api": '''import json\n\ndef handler(event, context):\n    # API Gateway v2 (HTTP API) event structure, with v1 fallback\n    rc = event.get("requestContext", {{}})\n    http = rc.get("http", {{}})\n    method = http.get("method") or event.get("httpMethod", "GET")\n    path = event.get("rawPath") or event.get("path", "/")\n    body = event.get("body")\n    if body and isinstance(body, str):\n        try:\n            body = json.loads(body)\n        except Exception:\n            pass\n\n    # --- YOUR LOGIC HERE ---\n    response_body = {{\n        "message": "Hello from {name}",\n        "method": method,\n        "path": path,\n    }}\n\n    return {{\n        "statusCode": 200,\n        "headers": {{"Content-Type": "application/json"}},\n        "body": json.dumps(response_body),\n    }}\n''',
             "data-processor": '''import json\n\ndef handler(event, context):\n    """Process incoming data records."""\n    records = event.get("Records", [event])\n    results = []\n    for record in records:\n        # --- YOUR PROCESSING LOGIC HERE ---\n        processed = {{\n            "status": "processed",\n            "input": record,\n        }}\n        results.append(processed)\n\n    return {{\n        "statusCode": 200,\n        "processed": len(results),\n        "results": results,\n    }}\n''',
             "cron-job": '''import json\nfrom datetime import datetime\n\ndef handler(event, context):\n    """Scheduled task triggered by EventBridge."""\n    now = datetime.utcnow().isoformat()\n    print(f"Cron triggered at {{now}}")\n\n    # --- YOUR SCHEDULED LOGIC HERE ---\n    result = {{\n        "status": "completed",\n        "timestamp": now,\n        "message": "Scheduled task for {name} ran successfully",\n    }}\n\n    print(json.dumps(result))\n    return result\n''',
             "s3-trigger": '''import json\nimport urllib.parse\n\ndef handler(event, context):\n    """Process S3 event notifications."""\n    for record in event.get("Records", []):\n        bucket = record["s3"]["bucket"]["name"]\n        key = urllib.parse.unquote_plus(record["s3"]["object"]["key"])\n        size = record["s3"]["object"].get("size", 0)\n        print(f"New object: s3://{{bucket}}/{{key}} ({{size}} bytes)")\n\n        # --- YOUR S3 PROCESSING LOGIC HERE ---\n\n    return {{"statusCode": 200, "processed": len(event.get("Records", []))}}\n''',
             "custom": '''import json\n\ndef handler(event, context):\n    """Lambda function: {purpose}"""\n\n    # --- IMPLEMENT: {purpose} ---\n\n    return {{\n        "statusCode": 200,\n        "body": json.dumps({{"message": "Success"}}),\n    }}\n''',
         },
         "node": {
-            "rest-api": '''export const handler = async (event) => {{\n  const method = event.httpMethod || "GET";\n  const path = event.path || "/";\n  let body = event.body;\n  if (body) try {{ body = JSON.parse(body); }} catch (e) {{}}\n\n  // --- YOUR LOGIC HERE ---\n  const responseBody = {{\n    message: "Hello from {name}",\n    method,\n    path,\n  }};\n\n  return {{\n    statusCode: 200,\n    headers: {{ "Content-Type": "application/json" }},\n    body: JSON.stringify(responseBody),\n  }};\n}};\n''',
+            "rest-api": '''export const handler = async (event) => {{\n  // API Gateway v2 (HTTP API) event structure, with v1 fallback\n  const method = event.requestContext?.http?.method || event.httpMethod || "GET";\n  const path = event.rawPath || event.path || "/";\n  let body = event.body;\n  if (body && typeof body === "string") try {{ body = JSON.parse(body); }} catch (e) {{}}\n\n  // --- YOUR LOGIC HERE ---\n  const responseBody = {{\n    message: "Hello from {name}",\n    method,\n    path,\n  }};\n\n  return {{\n    statusCode: 200,\n    headers: {{ "Content-Type": "application/json" }},\n    body: JSON.stringify(responseBody),\n  }};\n}};\n''',
             "data-processor": '''export const handler = async (event) => {{\n  const records = event.Records || [event];\n  const results = [];\n  for (const record of records) {{\n    // --- YOUR PROCESSING LOGIC HERE ---\n    results.push({{ status: "processed", input: record }});\n  }}\n  return {{ statusCode: 200, processed: results.length, results }};\n}};\n''',
             "cron-job": '''export const handler = async (event) => {{\n  const now = new Date().toISOString();\n  console.log(`Cron triggered at ${{now}}`);\n\n  // --- YOUR SCHEDULED LOGIC HERE ---\n\n  return {{ status: "completed", timestamp: now, message: "Scheduled task ran" }};\n}};\n''',
             "s3-trigger": '''export const handler = async (event) => {{\n  for (const record of event.Records || []) {{\n    const bucket = record.s3.bucket.name;\n    const key = decodeURIComponent(record.s3.object.key.replace(/\\+/g, " "));\n    console.log(`New object: s3://${{bucket}}/${{key}}`);\n    // --- YOUR S3 PROCESSING LOGIC HERE ---\n  }}\n  return {{ statusCode: 200, processed: (event.Records || []).length }};\n}};\n''',
@@ -1054,7 +1054,7 @@ echo "=== Testing Lambda: {name} ==="
 echo "\n--- Direct Invoke ---"
 aws lambda invoke \\
   --function-name {name} \\
-  --payload '{{"httpMethod":"GET","path":"/"}}' \\
+  --payload '{{"version":"2.0","rawPath":"/","requestContext":{{"http":{{"method":"GET","path":"/"}}}}}}' \\
   --cli-binary-format raw-in-base64-out \\
   --region {region} \\
   /tmp/lambda-response.json
@@ -2176,12 +2176,18 @@ resource "aws_ssoadmin_account_assignment" "{grp_safe}_workload" {{
 
     # Generate import block for existing organizations
     org_import_block = ""
+    org_lifecycle_block = ""
     if has_existing_org:
         org_import_block = f"""
 import {{
   to = aws_organizations_organization.this
   id = "{existing_org_id}"
 }}
+"""
+        org_lifecycle_block = """
+  lifecycle {
+    ignore_changes = [aws_service_access_principals]
+  }
 """
 
     main_tf = f"""terraform {{
@@ -2215,7 +2221,7 @@ resource "aws_organizations_organization" "this" {{
   ]
   enabled_policy_types = ["SERVICE_CONTROL_POLICY"]
   feature_set          = "ALL"
-
+{org_lifecycle_block}
   # If your organization already exists, import it:
   #   terraform import aws_organizations_organization.this <org-id>
   # The org-id is printed by: aws organizations describe-organization
