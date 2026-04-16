@@ -298,12 +298,10 @@ const RETRYABLE_402_SCOPED_RESULT_HINTS = [
   "exhausted",
 ] as const;
 const RAW_402_MARKER_RE =
-  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment required\b|^\s*402\s+.*used up your points\b/i;
+  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+(?:payment required\b|.*used up your points\b|no available asset for api access\b)/i;
 const BARE_LEADING_402_RE = /^\s*402\b/i;
 const LEADING_402_WRAPPER_RE =
   /^(?:error[:\s-]+)?(?:(?:http\s*)?402(?:\s+payment required)?|payment required)(?:[:\s-]+|$)/i;
-const LEADING_BARE_402_RE = /^\s*402\s+\S/i;
-const LEADING_402_PAYMENT_REQUIRED_RE = /^\s*402\s+payment required\b/i;
 const TIMEOUT_ERROR_CODES = new Set([
   "ETIMEDOUT",
   "ESOCKETTIMEDOUT",
@@ -540,18 +538,6 @@ function classify402Message(message: string): PaymentRequiredFailoverReason {
   return "billing";
 }
 
-function hasBareLeading402Signal(text: string): boolean {
-  return (
-    hasQuotaRefreshWindowSignal(text) ||
-    hasExplicit402BillingSignal(text) ||
-    isRateLimitErrorMessage(text) ||
-    hasRetryable402TransientSignal(text) ||
-    text.includes("used up your points") ||
-    text.includes("no available asset for api access") ||
-    (text.includes("purchase") && text.includes("subscription"))
-  );
-}
-
 function classifyFailoverReasonFrom402Text(raw: string): PaymentRequiredFailoverReason | null {
   if (RAW_402_MARKER_RE.test(raw)) {
     return classify402Message(raw);
@@ -561,15 +547,6 @@ function classifyFailoverReasonFrom402Text(raw: string): PaymentRequiredFailover
   }
   const normalized = normalize402Message(raw);
   if (!normalized || !hasKnownBareLeading402Signal(normalized)) {
-    return null;
-  }
-  const normalized = normalize402Message(raw);
-  if (
-    normalized &&
-    LEADING_BARE_402_RE.test(raw) &&
-    !LEADING_402_PAYMENT_REQUIRED_RE.test(raw) &&
-    !hasBareLeading402Signal(normalized)
-  ) {
     return null;
   }
   return classify402Message(raw);
@@ -621,7 +598,15 @@ function classifyFailoverClassificationFromHttpStatus(
   }
 
   if (status === 402) {
-    return toReasonClassification(message ? classify402Message(message) : "billing");
+    if (!message) {
+      return toReasonClassification("billing");
+    }
+    const leadingStatus = extractLeadingHttpStatus(message.trim());
+    if (leadingStatus?.code === 402) {
+      const reasonFrom402Text = classifyFailoverReasonFrom402Text(message);
+      return reasonFrom402Text ? toReasonClassification(reasonFrom402Text) : messageClassification;
+    }
+    return toReasonClassification(classify402Message(message));
   }
   if (status === 429) {
     return toReasonClassification("rate_limit");
