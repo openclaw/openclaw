@@ -62,7 +62,10 @@ That lane provisions a disposable Tuwunel homeserver in Docker, registers
 temporary driver, SUT, and observer users, creates one private room, then runs
 the real Matrix plugin inside a QA gateway child. The live transport lane keeps
 the child config scoped to the transport under test, so Matrix runs without
-`qa-channel` in the child config.
+`qa-channel` in the child config. It writes the structured report artifacts and
+a combined stdout/stderr log into the selected Matrix QA output directory. To
+capture the outer `scripts/run-node.mjs` build/launcher output too, set
+`OPENCLAW_RUN_NODE_OUTPUT_LOG=<path>` to a repo-local log file.
 
 For a transport-real Telegram smoke lane, run:
 
