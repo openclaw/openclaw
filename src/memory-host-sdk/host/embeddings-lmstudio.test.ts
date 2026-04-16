@@ -1,17 +1,40 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const ensureLmstudioModelLoadedMock = vi.hoisted(() => vi.fn());
 const resolveLmstudioRuntimeApiKeyMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../plugin-sdk/lmstudio-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugin-sdk/lmstudio-runtime.js")>();
-  return {
-    ...actual,
-    ensureLmstudioModelLoaded: (...args: unknown[]) => ensureLmstudioModelLoadedMock(...args),
-    resolveLmstudioRuntimeApiKey: (...args: unknown[]) => resolveLmstudioRuntimeApiKeyMock(...args),
-  };
-});
+vi.mock("../../plugin-sdk/lmstudio-runtime.js", () => ({
+  buildLmstudioAuthHeaders: ({
+    apiKey,
+    json,
+    headers,
+  }: {
+    apiKey?: string;
+    json?: boolean;
+    headers?: Record<string, string>;
+  }) => ({
+    ...(json ? { "Content-Type": "application/json" } : {}),
+    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+    ...headers,
+  }),
+  ensureLmstudioModelLoaded: (...args: unknown[]) => ensureLmstudioModelLoadedMock(...args),
+  LMSTUDIO_DEFAULT_EMBEDDING_MODEL: "text-embedding-nomic-embed-text-v1.5",
+  LMSTUDIO_PROVIDER_ID: "lmstudio",
+  resolveLmstudioInferenceBase: (baseUrl?: string) => {
+    const normalized = (baseUrl || "http://localhost:1234").replace(/\/+$/u, "");
+    if (normalized.endsWith("/api/v1")) {
+      return normalized.slice(0, -"/api/v1".length) + "/v1";
+    }
+    if (normalized.endsWith("/v1")) {
+      return normalized;
+    }
+    return `${normalized}/v1`;
+  },
+  resolveLmstudioProviderHeaders: ({ headers }: { headers?: Record<string, string> }) =>
+    headers ?? {},
+  resolveLmstudioRuntimeApiKey: (...args: unknown[]) => resolveLmstudioRuntimeApiKeyMock(...args),
+}));
 
 let createLmstudioEmbeddingProvider: typeof import("./embeddings-lmstudio.js").createLmstudioEmbeddingProvider;
 
@@ -35,9 +58,11 @@ describe("embeddings-lmstudio", () => {
     return fetchMock;
   }
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ createLmstudioEmbeddingProvider } = await import("./embeddings-lmstudio.js"));
+  });
+
+  beforeEach(() => {
     ensureLmstudioModelLoadedMock.mockReset();
     resolveLmstudioRuntimeApiKeyMock.mockReset();
   });

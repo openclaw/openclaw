@@ -27,6 +27,11 @@ const {
   resolveCredentialsMock: vi.fn(),
 }));
 
+vi.mock("../../agents/model-auth.js", async () => {
+  const { createModelAuthMockModule } = await import("../../test-utils/model-auth-mock.js");
+  return createModelAuthMockModule();
+});
+
 vi.mock("./embeddings-ollama.js", () => ({
   createOllamaEmbeddingProvider: createOllamaEmbeddingProviderMock,
 }));
@@ -660,7 +665,7 @@ describe("local embedding ensureContext concurrency", () => {
   it("loads the model only once when embedBatch is called concurrently", async () => {
     const { provider, getLlamaSpy, loadModelSpy, createContextSpy } =
       await setupLocalProviderWithMockedInit({
-        initializationDelayMs: 50,
+        initializationDelayMs: 5,
       });
 
     const results = await Promise.all([
@@ -701,7 +706,7 @@ describe("local embedding ensureContext concurrency", () => {
   it("shares initialization when embedQuery and embedBatch start concurrently", async () => {
     const { provider, getLlamaSpy, loadModelSpy, createContextSpy } =
       await setupLocalProviderWithMockedInit({
-        initializationDelayMs: 50,
+        initializationDelayMs: 5,
       });
 
     const [queryA, batch, queryB] = await Promise.all([
