@@ -442,12 +442,23 @@ export function createTelegramThreadBindingManager(
   }
 
   // Clean up bindings to stale/failed ACP sessions on startup
-  const staleSessionKeys = new Set<string>();
+  // Group bindings by targetSessionKey to avoid redundant session store reads
+  const bindingsByTargetSession = new Map<string, TelegramThreadBindingRecord[]>();
   for (const binding of getThreadBindingsState().bindingsByAccountConversation.values()) {
     if (binding.targetKind !== "acp") {
       continue;
     }
-    const sessionEntry = readAcpSessionEntry({ sessionKey: binding.targetSessionKey });
+    const existing = bindingsByTargetSession.get(binding.targetSessionKey);
+    if (existing) {
+      existing.push(binding);
+    } else {
+      bindingsByTargetSession.set(binding.targetSessionKey, [binding]);
+    }
+  }
+
+  const staleSessionKeys = new Set<string>();
+  for (const [targetSessionKey, bindings] of bindingsByTargetSession) {
+    const sessionEntry = readAcpSessionEntry({ sessionKey: targetSessionKey });
     if (!sessionEntry || sessionEntry.storeReadFailed) {
       continue;
     }
@@ -458,7 +469,7 @@ export function createTelegramThreadBindingManager(
       sessionEntry.entry.status === "timeout" ||
       sessionEntry.entry.acp?.state === "error";
     if (isStale) {
-      staleSessionKeys.add(binding.targetSessionKey);
+      staleSessionKeys.add(targetSessionKey);
     }
   }
 
