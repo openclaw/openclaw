@@ -10,12 +10,14 @@ import {
 import { observeTopbar, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
 import {
   applySettingsFromUrl,
+  attachThemeListener,
   detachThemeListener,
   inferBasePath,
   syncTabWithLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
+import { renderMermaidInContainer } from "./markdown.ts";
 import type { Tab } from "./navigation.ts";
 
 type LifecycleHost = {
@@ -28,9 +30,6 @@ type LifecycleHost = {
   assistantAvatar: string | null;
   assistantAgentId: string | null;
   serverVersion: string | null;
-  localMediaPreviewRoots: string[];
-  embedSandboxMode: "strict" | "scripts" | "trusted";
-  allowExternalEmbedUrls: boolean;
   chatHasAutoScrolled: boolean;
   chatManualRefreshInFlight: boolean;
   chatLoading: boolean;
@@ -51,6 +50,7 @@ export function handleConnected(host: LifecycleHost) {
   const bootstrapReady = loadControlUiBootstrapConfig(host);
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
+  attachThemeListener(host as unknown as Parameters<typeof attachThemeListener>[0]);
   window.addEventListener("popstate", host.popStateHandler);
   void bootstrapReady.finally(() => {
     if (host.connectGeneration !== connectGeneration) {
@@ -67,8 +67,24 @@ export function handleConnected(host: LifecycleHost) {
   }
 }
 
-export function handleFirstUpdated(host: LifecycleHost) {
+export function handleFirstUpdated(
+  host: LifecycleHost & { querySelector?: (selectors: string) => Element | null },
+) {
   observeTopbar(host as unknown as Parameters<typeof observeTopbar>[0]);
+
+  // Render mermaid diagrams after DOM is ready
+  requestAnimationFrame(() => {
+    const hostWithQuery = host as unknown as {
+      querySelector?: (selectors: string) => Element | null;
+    };
+    const chatContainer =
+      typeof hostWithQuery.querySelector === "function"
+        ? hostWithQuery.querySelector(".chat-thread")
+        : null;
+    if (chatContainer) {
+      void renderMermaidInContainer(chatContainer as HTMLElement);
+    }
+  });
 }
 
 export function handleDisconnected(host: LifecycleHost) {
@@ -110,6 +126,20 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
       host as unknown as Parameters<typeof scheduleChatScroll>[0],
       forcedByTab || forcedByLoad || streamJustStarted || !host.chatHasAutoScrolled,
     );
+
+    // Render mermaid diagrams when chat updates (after DOM updates)
+    requestAnimationFrame(() => {
+      const hostWithQuery = host as unknown as {
+        querySelector?: (selectors: string) => Element | null;
+      };
+      const chatContainer =
+        typeof hostWithQuery.querySelector === "function"
+          ? hostWithQuery.querySelector(".chat-thread")
+          : null;
+      if (chatContainer) {
+        void renderMermaidInContainer(chatContainer as HTMLElement);
+      }
+    });
   }
   if (
     host.tab === "logs" &&
