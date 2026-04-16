@@ -238,6 +238,55 @@ export function setSalience(db: DatabaseSync, refId: string, salience: number | 
   return Number(result.changes) > 0;
 }
 
+export type RefIdResolution =
+  | { kind: "match"; refId: string }
+  | { kind: "ambiguous"; input: string; candidates: readonly string[]; hasMore: boolean }
+  | { kind: "miss"; input: string };
+
+// Max candidates returned in the ambiguous case. Small enough to keep
+// error messages scannable; `hasMore` indicates there were additional
+// candidates beyond the cap so operators know to provide a longer prefix.
+export const REF_ID_AMBIGUOUS_CANDIDATE_CAP = 5;
+
+// Resolves a user-supplied ref id or unique prefix to a canonical ref id.
+// Exact match always takes priority so full ref ids continue to round-trip
+// identically. On no exact match, performs a prefix lookup with the LIKE
+// metacharacters `%`, `_`, and `\` escaped so a ref id containing those
+// characters literally cannot accidentally widen the search. Empty or
+// whitespace-only input is treated as a miss rather than matching every
+// row. Returns match/ambiguous/miss as a discriminated union so callers
+// cannot silently proceed with a mutation on an unresolved prefix.
+export function resolveRefIdByPrefix(db: DatabaseSync, raw: string): RefIdResolution {
+  const input = raw.trim();
+  if (input.length === 0) {
+    return { kind: "miss", input };
+  }
+  const exact = db.prepare(`SELECT ref_id FROM memory_v2_records WHERE ref_id = ?`).get(input) as
+    | { ref_id: string }
+    | undefined;
+  if (exact) {
+    return { kind: "match", refId: exact.ref_id };
+  }
+  const escaped = input.replace(/[\\%_]/g, "\\$&");
+  const rows = db
+    .prepare(
+      `SELECT ref_id FROM memory_v2_records WHERE ref_id LIKE ? ESCAPE '\\' ORDER BY ref_id LIMIT ?`,
+    )
+    .all(`${escaped}%`, REF_ID_AMBIGUOUS_CANDIDATE_CAP + 1) as Array<{ ref_id: string }>;
+  if (rows.length === 0) {
+    return { kind: "miss", input };
+  }
+  if (rows.length === 1) {
+    return { kind: "match", refId: rows[0].ref_id };
+  }
+  return {
+    kind: "ambiguous",
+    input,
+    candidates: rows.slice(0, REF_ID_AMBIGUOUS_CANDIDATE_CAP).map((r) => r.ref_id),
+    hasMore: rows.length > REF_ID_AMBIGUOUS_CANDIDATE_CAP,
+  };
+}
+
 export function touchLastAccessed(db: DatabaseSync, refId: string, ts: number): boolean {
   const result = db
     .prepare(`UPDATE memory_v2_records SET last_accessed_at = ? WHERE ref_id = ?`)

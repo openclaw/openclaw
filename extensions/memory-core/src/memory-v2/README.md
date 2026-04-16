@@ -10,9 +10,9 @@ Everything described here is **off by default**. Nothing in this foundation chan
 - An ingest pipeline wired to `agent_end` that writes sidecar rows for successful agent turns when ingest is enabled.
 - A rerank wrapper wired into `memory_search` that reorders results using salience, recency, pinning, and supersession signals when rerank is enabled.
 - An optional shadow-touch path that updates `last_accessed_at` for memory-v2 hits returned by search (useful later for recency scoring).
-- An `openclaw memory sidecar` CLI: `stats` and `list` inspect the sidecar (read-only); `pin`, `status`, and `salience` each touch exactly one column of an existing record by its full ref id, covering every input the rerank pass reads (`pinnedBoost`, `supersededPenalty`, `salienceWeight`).
+- An `openclaw memory sidecar` CLI: `stats` and `list` inspect the sidecar (read-only); `pin`, `status`, and `salience` each touch exactly one column of an existing record, addressed by either the full ref id or a unique ref-id prefix, covering every input the rerank pass reads (`pinnedBoost`, `supersededPenalty`, `salienceWeight`).
 
-**Not shipped:** supersession-link writes (the `superseded_by` column — `status` only flips the enum), ref-id prefix matching, dreaming-phase integration, and any form of automatic promotion or demotion. A future change adds each of these surfaces explicitly.
+**Not shipped:** supersession-link writes (the `superseded_by` column — `status` only flips the enum), dreaming-phase integration, and any form of automatic promotion or demotion. A future change adds each of these surfaces explicitly.
 
 ## Opt-in configuration
 
@@ -83,6 +83,17 @@ If the rerank wrapper throws at runtime it falls back to identity (returning the
 
 `openclaw memory sidecar` inspects and lightly curates the sidecar database for the default agent (or the agent passed with `--agent`). `stats` and `list` are strictly read-only. `pin`, `status`, and `salience` are the only writes, and each touches exactly one column of an existing row — no inserts, no other column writes.
 
+### Ref-id resolution
+
+`pin`, `status`, and `salience` all accept either a full sidecar ref id or a unique **prefix** of one. Resolution runs once per agent against that agent's own sidecar and is shared by all three writers:
+
+- **Exact match** always wins — a full ref id continues to round-trip identically, even if it happens to be a prefix of a longer id.
+- **Unique prefix** resolves to the single matching full ref id and the write proceeds against it.
+- **Ambiguous prefix** (2+ matches) prints the first few candidates and does **not** mutate anything. A longer prefix disambiguates. The candidate list is capped (5 by default); if there were more matches than were shown, a `… and more` hint appears so operators know to narrow further.
+- **No match** prints `ref-id not found: <input>` and does **not** mutate anything.
+
+Empty / whitespace-only input is treated as a miss rather than a wildcard. LIKE metacharacters (`%`, `_`, `\`) in the input are escaped so a ref id containing them literally cannot accidentally widen the search.
+
 ### `memory sidecar stats`
 
 Row counts by status and source, pinned count, schema version, and the oldest/newest timestamps.
@@ -114,7 +125,7 @@ openclaw memory sidecar list --json
 
 ### `memory sidecar pin`
 
-Flip the `pinned` flag on an existing sidecar record. Requires the **full** ref id — no prefix matching in this slice. Get a full ref id from `memory sidecar list --json` (the human-readable list truncates to the first 8 characters for display).
+Flip the `pinned` flag on an existing sidecar record. `<ref-id>` is the full sidecar ref id or a unique prefix (see "Ref-id resolution" below). The human-readable `list` output truncates ref ids to 8 characters for display; the 8-character prefix is usually unique and is the expected shape operators copy-paste back into `pin`.
 
 ```
 openclaw memory sidecar pin <ref-id>
@@ -123,19 +134,19 @@ openclaw memory sidecar pin <ref-id> --agent my-agent
 openclaw memory sidecar pin <ref-id> --json
 ```
 
-| Option         | Description                                                                          |
-| -------------- | ------------------------------------------------------------------------------------ |
-| `<ref-id>`     | Required positional. Full sidecar ref id. Unknown ids report "ref-id not found".     |
-| `--unpin`      | Clear the pinned flag instead of setting it.                                         |
-| `--agent <id>` | Target a specific agent's sidecar (default: default agent).                          |
-| `--json`       | Emit JSON (`[{ agentId, dbPath, initialized, outcome: { refId, found, pinned } }]`). |
-| `--verbose`    | Verbose logging for diagnostics.                                                     |
+| Option         | Description                                                                                                                                                               |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<ref-id>`     | Required positional. Full sidecar ref id or unique prefix; ambiguous or missing ids are rejected.                                                                         |
+| `--unpin`      | Clear the pinned flag instead of setting it.                                                                                                                              |
+| `--agent <id>` | Target a specific agent's sidecar (default: default agent).                                                                                                               |
+| `--json`       | Emit JSON (`[{ agentId, dbPath, initialized, resolution, outcome }]`; see "Ref-id resolution" above; `outcome` is `{ refId, found, pinned }` on match, `null` otherwise). |
+| `--verbose`    | Verbose logging for diagnostics.                                                                                                                                          |
 
 The command is scoped and safe: it updates `pinned` and nothing else, touches one row at most per agent, and fails the operation quietly (reports `ref-id not found`) rather than inserting placeholder rows when the id is unknown. The rerank `pinnedBoost` weight already reads this flag (see the rerank table above), so pinning takes effect the next time the rerank pass runs.
 
 ### `memory sidecar status`
 
-Set the lifecycle `status` of an existing sidecar record. Accepts exactly `active`, `superseded`, `archived`, or `deleted` (case-sensitive). Requires the **full** ref id — no prefix matching in this slice.
+Set the lifecycle `status` of an existing sidecar record. Accepts exactly `active`, `superseded`, `archived`, or `deleted` (case-sensitive). `<ref-id>` is the full sidecar ref id or a unique prefix (see "Ref-id resolution" below).
 
 ```
 openclaw memory sidecar status <ref-id> active
@@ -144,19 +155,19 @@ openclaw memory sidecar status <ref-id> archived --agent my-agent
 openclaw memory sidecar status <ref-id> deleted --json
 ```
 
-| Option         | Description                                                                          |
-| -------------- | ------------------------------------------------------------------------------------ |
-| `<ref-id>`     | Required positional. Full sidecar ref id. Unknown ids report "ref-id not found".     |
-| `<status>`     | Required positional. One of `active`, `superseded`, `archived`, `deleted`.           |
-| `--agent <id>` | Target a specific agent's sidecar (default: default agent).                          |
-| `--json`       | Emit JSON (`[{ agentId, dbPath, initialized, outcome: { refId, found, status } }]`). |
-| `--verbose`    | Verbose logging for diagnostics.                                                     |
+| Option         | Description                                                                                                                                                               |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<ref-id>`     | Required positional. Full sidecar ref id or unique prefix; ambiguous or missing ids are rejected.                                                                         |
+| `<status>`     | Required positional. One of `active`, `superseded`, `archived`, `deleted`.                                                                                                |
+| `--agent <id>` | Target a specific agent's sidecar (default: default agent).                                                                                                               |
+| `--json`       | Emit JSON (`[{ agentId, dbPath, initialized, resolution, outcome }]`; see "Ref-id resolution" above; `outcome` is `{ refId, found, status }` on match, `null` otherwise). |
+| `--verbose`    | Verbose logging for diagnostics.                                                                                                                                          |
 
 Invalid `<status>` values are rejected before any database work with a single-line `invalid status …` warning. **No transition gating:** any source status can be written to any target status, including `deleted → active`. The command mirrors the behavior of the underlying `markStatus` primitive. Operators who need transition rules should enforce them externally. The rerank `supersededPenalty` weight already reads this column (see the rerank table above), so flipping to `superseded` takes effect the next time the rerank pass runs.
 
 ### `memory sidecar salience`
 
-Set or clear the salience of an existing sidecar record. `<value>` is either a finite number (positive, negative, or zero) or the literal sentinel `clear`. **`0` and `clear` are distinct**: `0` is a recorded zero-salience value; `clear` writes SQL `NULL` (never set). Requires the **full** ref id — no prefix matching in this slice.
+Set or clear the salience of an existing sidecar record. `<value>` is either a finite number (positive, negative, or zero) or the literal sentinel `clear`. **`0` and `clear` are distinct**: `0` is a recorded zero-salience value; `clear` writes SQL `NULL` (never set). `<ref-id>` is the full sidecar ref id or a unique prefix (see "Ref-id resolution" below).
 
 ```
 openclaw memory sidecar salience <ref-id> 0.7
@@ -167,13 +178,13 @@ openclaw memory sidecar salience <ref-id> 0.5 --agent my-agent
 openclaw memory sidecar salience <ref-id> 0.5 --json
 ```
 
-| Option         | Description                                                                            |
-| -------------- | -------------------------------------------------------------------------------------- |
-| `<ref-id>`     | Required positional. Full sidecar ref id. Unknown ids report "ref-id not found".       |
-| `<value>`      | Required positional. A finite number, or the literal `clear` to write `NULL`.          |
-| `--agent <id>` | Target a specific agent's sidecar (default: default agent).                            |
-| `--json`       | Emit JSON (`[{ agentId, dbPath, initialized, outcome: { refId, found, salience } }]`). |
-| `--verbose`    | Verbose logging for diagnostics.                                                       |
+| Option         | Description                                                                                                                                                                 |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<ref-id>`     | Required positional. Full sidecar ref id or unique prefix; ambiguous or missing ids are rejected.                                                                           |
+| `<value>`      | Required positional. A finite number, or the literal `clear` to write `NULL`.                                                                                               |
+| `--agent <id>` | Target a specific agent's sidecar (default: default agent).                                                                                                                 |
+| `--json`       | Emit JSON (`[{ agentId, dbPath, initialized, resolution, outcome }]`; see "Ref-id resolution" above; `outcome` is `{ refId, found, salience }` on match, `null` otherwise). |
+| `--verbose`    | Verbose logging for diagnostics.                                                                                                                                            |
 
 Invalid `<value>` input — empty, `NaN`, `Infinity`, non-numeric strings, or `CLEAR` (case-sensitive) — is rejected before any database work. Empty strings are rejected explicitly so `Number("") === 0` cannot sneak through as a silent zero-salience write. **No range gating:** any finite number is accepted; operators who want bounds should enforce them externally. The rerank `salienceWeight` weight already reads this column (see the rerank table above), so salience writes take effect the next time the rerank pass runs.
 

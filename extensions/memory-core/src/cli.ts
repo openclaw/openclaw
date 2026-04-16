@@ -291,7 +291,7 @@ export function registerMemoryCli(program: Command) {
     .description("Pin or unpin a sidecar record by its full ref id")
     .argument(
       "<ref-id>",
-      "Full sidecar ref id (no prefix matching in this slice; get full ids via `memory sidecar list --json`)",
+      "Full sidecar ref id or unique prefix (ambiguous or missing ids are rejected without mutating anything; use `memory sidecar list --json` to find full ids)",
     )
     .option("--unpin", "Clear the pinned flag instead of setting it", false)
     .option("--agent <id>", "Agent id (default: default agent)")
@@ -306,7 +306,7 @@ export function registerMemoryCli(program: Command) {
     .description("Set the status of a sidecar record by its full ref id")
     .argument(
       "<ref-id>",
-      "Full sidecar ref id (no prefix matching in this slice; get full ids via `memory sidecar list --json`)",
+      "Full sidecar ref id or unique prefix (ambiguous or missing ids are rejected without mutating anything; use `memory sidecar list --json` to find full ids)",
     )
     .argument("<status>", "One of: active | superseded | archived | deleted")
     .option("--agent <id>", "Agent id (default: default agent)")
@@ -329,7 +329,7 @@ export function registerMemoryCli(program: Command) {
     )
     .argument(
       "<ref-id>",
-      "Full sidecar ref id (no prefix matching in this slice; get full ids via `memory sidecar list --json`)",
+      "Full sidecar ref id or unique prefix (ambiguous or missing ids are rejected without mutating anything; use `memory sidecar list --json` to find full ids)",
     )
     .argument("<value>", "A finite number (e.g. 0.7, -1.2, 0) or the literal `clear` to set NULL")
     .option("--agent <id>", "Agent id (default: default agent)")

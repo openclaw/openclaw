@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -61,15 +62,12 @@ import {
   readSidecarStats,
   SIDECAR_STATUS_VALUES,
   type SidecarListRow,
-  type SidecarPinOutcome,
-  type SidecarSalienceOutcome,
   type SidecarStatsSummary,
-  type SidecarStatus,
-  type SidecarStatusOutcome,
   writeSidecarPin,
   writeSidecarSalience,
   writeSidecarStatus,
 } from "./memory-v2/cli/sidecar-cli.js";
+import { type RefIdResolution, resolveRefIdByPrefix } from "./memory-v2/sidecar-repo.js";
 import { SIDECAR_DB_RELATIVE_PATH, openSidecarDatabase } from "./memory-v2/sidecar-store.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import {
@@ -2115,20 +2113,28 @@ export async function runMemorySidecarList(opts: MemorySidecarListCommandOptions
   }
 }
 
-type SidecarPinEntry = {
+// Shared per-agent entry for every sidecar writer (pin / status / salience).
+// Encodes resolution separately from the write outcome so JSON consumers can
+// tell whether the write ran (resolution.kind === "match") or was skipped
+// because the ref id was ambiguous / absent.
+type ResolvedWriteEntry<O> = {
   agentId: string;
   dbPath: string;
   initialized: boolean;
-  outcome: SidecarPinOutcome | null;
+  resolution: RefIdResolution | null;
+  outcome: O | null;
 };
 
-async function collectSidecarPinEntries(
+// Per-agent: resolve the user-supplied ref id or prefix, then call doWrite
+// only on an unambiguous match. On ambiguous or miss, record the resolution
+// and leave the sidecar untouched.
+async function collectResolvedWriteEntries<O>(
   cfg: OpenClawConfig,
   agentIds: readonly string[],
-  refId: string,
-  pinned: boolean,
-): Promise<SidecarPinEntry[]> {
-  const entries: SidecarPinEntry[] = [];
+  rawRefId: string,
+  doWrite: (db: DatabaseSync, resolvedRefId: string) => O,
+): Promise<ResolvedWriteEntry<O>[]> {
+  const entries: ResolvedWriteEntry<O>[] = [];
   for (const agentId of agentIds) {
     await withMemoryManagerForAgent({
       cfg,
@@ -2141,17 +2147,20 @@ async function collectSidecarPinEntries(
         }
         const dbPath = path.join(workspaceDir, SIDECAR_DB_RELATIVE_PATH);
         if (!fsSync.existsSync(dbPath)) {
-          entries.push({ agentId, dbPath, initialized: false, outcome: null });
+          entries.push({
+            agentId,
+            dbPath,
+            initialized: false,
+            resolution: null,
+            outcome: null,
+          });
           return;
         }
         const db = openSidecarDatabase(dbPath);
         try {
-          entries.push({
-            agentId,
-            dbPath,
-            initialized: true,
-            outcome: writeSidecarPin(db, refId, pinned),
-          });
+          const resolution = resolveRefIdByPrefix(db, rawRefId);
+          const outcome = resolution.kind === "match" ? doWrite(db, resolution.refId) : null;
+          entries.push({ agentId, dbPath, initialized: true, resolution, outcome });
         } finally {
           db.close();
         }
@@ -2159,6 +2168,59 @@ async function collectSidecarPinEntries(
     });
   }
   return entries;
+}
+
+// Text renderer shared by every resolve+write command. Walks the entries in
+// the order they were collected and emits:
+//   - "sidecar not initialized" when the per-agent sidecar db is missing,
+//   - a "ref-id not found" line on a miss,
+//   - a multi-line ambiguity block listing up to REF_ID_AMBIGUOUS_CANDIDATE_CAP
+//     candidates plus a hint to provide a longer prefix when `hasMore`,
+//   - the caller-supplied outcome line on a successful match.
+function renderResolvedWriteEntries<O>(
+  entries: readonly ResolvedWriteEntry<O>[],
+  formatOutcomeLine: (outcome: O) => string,
+): void {
+  const rich = isRich();
+  const heading = (text: string) => colorize(rich, theme.heading, text);
+  const muted = (text: string) => colorize(rich, theme.muted, text);
+  for (const entry of entries) {
+    defaultRuntime.log(heading(`Memory v2 sidecar — ${entry.agentId}`));
+    defaultRuntime.log(muted(`path: ${shortenHomePath(entry.dbPath)}`));
+    if (!entry.initialized || entry.resolution === null) {
+      defaultRuntime.log(
+        muted("sidecar not initialized (enable memoryV2.ingest to start populating)."),
+      );
+      defaultRuntime.log("");
+      continue;
+    }
+    if (entry.resolution.kind === "miss") {
+      defaultRuntime.log(`  ref-id not found: ${entry.resolution.input}`);
+      defaultRuntime.log("");
+      continue;
+    }
+    if (entry.resolution.kind === "ambiguous") {
+      const countLabel = entry.resolution.hasMore
+        ? `${entry.resolution.candidates.length}+`
+        : String(entry.resolution.candidates.length);
+      defaultRuntime.log(
+        `  ref-id prefix "${entry.resolution.input}" is ambiguous (matched ${countLabel}):`,
+      );
+      for (const candidate of entry.resolution.candidates) {
+        defaultRuntime.log(`    ${candidate}`);
+      }
+      if (entry.resolution.hasMore) {
+        defaultRuntime.log("    … and more — provide a longer prefix to disambiguate.");
+      }
+      defaultRuntime.log("");
+      continue;
+    }
+    // resolution.kind === "match" → the write ran and produced an outcome.
+    if (entry.outcome !== null) {
+      defaultRuntime.log(`  ${formatOutcomeLine(entry.outcome)}`);
+    }
+    defaultRuntime.log("");
+  }
 }
 
 export async function runMemorySidecarPin(
@@ -2166,14 +2228,10 @@ export async function runMemorySidecarPin(
   opts: MemorySidecarPinCommandOptions,
 ): Promise<void> {
   setVerbose(Boolean(opts.verbose));
-  const refId = (refIdArg ?? "").trim();
-  if (refId.length === 0) {
-    // Commander enforces the required positional, so this branch only fires
-    // if runMemorySidecarPin is driven programmatically with an empty arg.
+  const rawRefId = (refIdArg ?? "").trim();
+  if (rawRefId.length === 0) {
     defaultRuntime.log(
-      theme.warn(
-        "memory sidecar pin: <ref-id> is required (full ref id; no prefix matching in this slice).",
-      ),
+      theme.warn("memory sidecar pin: <ref-id> is required (full id or unique prefix)."),
     );
     return;
   }
@@ -2181,75 +2239,15 @@ export async function runMemorySidecarPin(
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentIds = resolveAgentIds(cfg, opts.agent);
   const pinned = opts.unpin !== true;
-  const entries = await collectSidecarPinEntries(cfg, agentIds, refId, pinned);
+  const entries = await collectResolvedWriteEntries(cfg, agentIds, rawRefId, (db, resolvedId) =>
+    writeSidecarPin(db, resolvedId, pinned),
+  );
 
   if (opts.json) {
     defaultRuntime.writeJson(entries);
     return;
   }
-
-  const rich = isRich();
-  const heading = (text: string) => colorize(rich, theme.heading, text);
-  const muted = (text: string) => colorize(rich, theme.muted, text);
-  for (const entry of entries) {
-    defaultRuntime.log(heading(`Memory v2 sidecar — ${entry.agentId}`));
-    defaultRuntime.log(muted(`path: ${shortenHomePath(entry.dbPath)}`));
-    if (!entry.initialized || !entry.outcome) {
-      defaultRuntime.log(
-        muted("sidecar not initialized (enable memoryV2.ingest to start populating)."),
-      );
-      defaultRuntime.log("");
-      continue;
-    }
-    defaultRuntime.log(`  ${formatSidecarPinLine(entry.outcome)}`);
-    defaultRuntime.log("");
-  }
-}
-
-type SidecarStatusEntry = {
-  agentId: string;
-  dbPath: string;
-  initialized: boolean;
-  outcome: SidecarStatusOutcome | null;
-};
-
-async function collectSidecarStatusEntries(
-  cfg: OpenClawConfig,
-  agentIds: readonly string[],
-  refId: string,
-  status: SidecarStatus,
-): Promise<SidecarStatusEntry[]> {
-  const entries: SidecarStatusEntry[] = [];
-  for (const agentId of agentIds) {
-    await withMemoryManagerForAgent({
-      cfg,
-      agentId,
-      purpose: "status",
-      run: async (manager) => {
-        const workspaceDir = manager.status().workspaceDir;
-        if (!workspaceDir) {
-          return;
-        }
-        const dbPath = path.join(workspaceDir, SIDECAR_DB_RELATIVE_PATH);
-        if (!fsSync.existsSync(dbPath)) {
-          entries.push({ agentId, dbPath, initialized: false, outcome: null });
-          return;
-        }
-        const db = openSidecarDatabase(dbPath);
-        try {
-          entries.push({
-            agentId,
-            dbPath,
-            initialized: true,
-            outcome: writeSidecarStatus(db, refId, status),
-          });
-        } finally {
-          db.close();
-        }
-      },
-    });
-  }
-  return entries;
+  renderResolvedWriteEntries(entries, formatSidecarPinLine);
 }
 
 export async function runMemorySidecarStatus(
@@ -2258,12 +2256,10 @@ export async function runMemorySidecarStatus(
   opts: MemorySidecarStatusCommandOptions,
 ): Promise<void> {
   setVerbose(Boolean(opts.verbose));
-  const refId = (refIdArg ?? "").trim();
-  if (refId.length === 0) {
+  const rawRefId = (refIdArg ?? "").trim();
+  if (rawRefId.length === 0) {
     defaultRuntime.log(
-      theme.warn(
-        "memory sidecar status: <ref-id> is required (full ref id; no prefix matching in this slice).",
-      ),
+      theme.warn("memory sidecar status: <ref-id> is required (full id or unique prefix)."),
     );
     return;
   }
@@ -2280,75 +2276,15 @@ export async function runMemorySidecarStatus(
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory sidecar status");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentIds = resolveAgentIds(cfg, opts.agent);
-  const entries = await collectSidecarStatusEntries(cfg, agentIds, refId, status);
+  const entries = await collectResolvedWriteEntries(cfg, agentIds, rawRefId, (db, resolvedId) =>
+    writeSidecarStatus(db, resolvedId, status),
+  );
 
   if (opts.json) {
     defaultRuntime.writeJson(entries);
     return;
   }
-
-  const rich = isRich();
-  const heading = (text: string) => colorize(rich, theme.heading, text);
-  const muted = (text: string) => colorize(rich, theme.muted, text);
-  for (const entry of entries) {
-    defaultRuntime.log(heading(`Memory v2 sidecar — ${entry.agentId}`));
-    defaultRuntime.log(muted(`path: ${shortenHomePath(entry.dbPath)}`));
-    if (!entry.initialized || !entry.outcome) {
-      defaultRuntime.log(
-        muted("sidecar not initialized (enable memoryV2.ingest to start populating)."),
-      );
-      defaultRuntime.log("");
-      continue;
-    }
-    defaultRuntime.log(`  ${formatSidecarStatusLine(entry.outcome)}`);
-    defaultRuntime.log("");
-  }
-}
-
-type SidecarSalienceEntry = {
-  agentId: string;
-  dbPath: string;
-  initialized: boolean;
-  outcome: SidecarSalienceOutcome | null;
-};
-
-async function collectSidecarSalienceEntries(
-  cfg: OpenClawConfig,
-  agentIds: readonly string[],
-  refId: string,
-  salience: number | null,
-): Promise<SidecarSalienceEntry[]> {
-  const entries: SidecarSalienceEntry[] = [];
-  for (const agentId of agentIds) {
-    await withMemoryManagerForAgent({
-      cfg,
-      agentId,
-      purpose: "status",
-      run: async (manager) => {
-        const workspaceDir = manager.status().workspaceDir;
-        if (!workspaceDir) {
-          return;
-        }
-        const dbPath = path.join(workspaceDir, SIDECAR_DB_RELATIVE_PATH);
-        if (!fsSync.existsSync(dbPath)) {
-          entries.push({ agentId, dbPath, initialized: false, outcome: null });
-          return;
-        }
-        const db = openSidecarDatabase(dbPath);
-        try {
-          entries.push({
-            agentId,
-            dbPath,
-            initialized: true,
-            outcome: writeSidecarSalience(db, refId, salience),
-          });
-        } finally {
-          db.close();
-        }
-      },
-    });
-  }
-  return entries;
+  renderResolvedWriteEntries(entries, formatSidecarStatusLine);
 }
 
 export async function runMemorySidecarSalience(
@@ -2357,12 +2293,10 @@ export async function runMemorySidecarSalience(
   opts: MemorySidecarSalienceCommandOptions,
 ): Promise<void> {
   setVerbose(Boolean(opts.verbose));
-  const refId = (refIdArg ?? "").trim();
-  if (refId.length === 0) {
+  const rawRefId = (refIdArg ?? "").trim();
+  if (rawRefId.length === 0) {
     defaultRuntime.log(
-      theme.warn(
-        "memory sidecar salience: <ref-id> is required (full ref id; no prefix matching in this slice).",
-      ),
+      theme.warn("memory sidecar salience: <ref-id> is required (full id or unique prefix)."),
     );
     return;
   }
@@ -2380,27 +2314,13 @@ export async function runMemorySidecarSalience(
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory sidecar salience");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentIds = resolveAgentIds(cfg, opts.agent);
-  const entries = await collectSidecarSalienceEntries(cfg, agentIds, refId, salience);
+  const entries = await collectResolvedWriteEntries(cfg, agentIds, rawRefId, (db, resolvedId) =>
+    writeSidecarSalience(db, resolvedId, salience),
+  );
 
   if (opts.json) {
     defaultRuntime.writeJson(entries);
     return;
   }
-
-  const rich = isRich();
-  const heading = (text: string) => colorize(rich, theme.heading, text);
-  const muted = (text: string) => colorize(rich, theme.muted, text);
-  for (const entry of entries) {
-    defaultRuntime.log(heading(`Memory v2 sidecar — ${entry.agentId}`));
-    defaultRuntime.log(muted(`path: ${shortenHomePath(entry.dbPath)}`));
-    if (!entry.initialized || !entry.outcome) {
-      defaultRuntime.log(
-        muted("sidecar not initialized (enable memoryV2.ingest to start populating)."),
-      );
-      defaultRuntime.log("");
-      continue;
-    }
-    defaultRuntime.log(`  ${formatSidecarSalienceLine(entry.outcome)}`);
-    defaultRuntime.log("");
-  }
+  renderResolvedWriteEntries(entries, formatSidecarSalienceLine);
 }
