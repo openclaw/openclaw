@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { markStatus, setPinned, type SidecarStatus } from "../sidecar-repo.js";
+import { markStatus, setPinned, setSalience, type SidecarStatus } from "../sidecar-repo.js";
 
 export type { SidecarStatus };
 
@@ -209,6 +209,59 @@ export function formatStatusLine(outcome: SidecarStatusOutcome): string {
     return `ref-id not found: ${outcome.refId}`;
   }
   return `status=${outcome.status} ${outcome.refId}`;
+}
+
+// Discriminated union so callers cannot conflate "set to zero" with "clear
+// to NULL" — the two have distinct meanings in the sidecar and the rerank
+// scoring path must keep them distinct.
+export type SidecarSalienceArg = { kind: "set"; value: number } | { kind: "clear" };
+
+// Returns null for anything that is neither a finite number nor the literal
+// `clear` sentinel. Empty-after-trim is rejected explicitly so `Number("")`
+// (which returns 0) cannot sneak through as a silent zero-salience write.
+// No range gating — any finite number is accepted.
+export function parseSidecarSalienceArg(raw: string): SidecarSalienceArg | null {
+  const trimmed = raw.trim();
+  if (trimmed === "clear") {
+    return { kind: "clear" };
+  }
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const n = Number(trimmed);
+  if (!Number.isFinite(n)) {
+    return null;
+  }
+  return { kind: "set", value: n };
+}
+
+export type SidecarSalienceOutcome = {
+  refId: string;
+  found: boolean;
+  salience: number | null;
+};
+
+// Admin-level salience write by full ref id. `salience` is a finite number
+// for a set, or `null` to clear. Reuses the existing setSalience repo
+// primitive; no range gating (trust the operator — same posture as the
+// status writer's no-transition-gating).
+export function writeSidecarSalience(
+  db: DatabaseSync,
+  refId: string,
+  salience: number | null,
+): SidecarSalienceOutcome {
+  const found = setSalience(db, refId, salience);
+  return { refId, found, salience };
+}
+
+export function formatSalienceLine(outcome: SidecarSalienceOutcome): string {
+  if (!outcome.found) {
+    return `ref-id not found: ${outcome.refId}`;
+  }
+  if (outcome.salience === null) {
+    return `salience=clear ${outcome.refId}`;
+  }
+  return `salience=${outcome.salience} ${outcome.refId}`;
 }
 
 function formatTs(ts: number | null): string {

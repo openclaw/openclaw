@@ -50,3 +50,5 @@ export type MemorySidecarPinCommandOptions = MemoryCommandOptions & {
 };
 
 export type MemorySidecarStatusCommandOptions = MemoryCommandOptions;
+
+export type MemorySidecarSalienceCommandOptions = MemoryCommandOptions;

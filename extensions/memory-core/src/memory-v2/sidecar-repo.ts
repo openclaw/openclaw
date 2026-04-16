@@ -228,6 +228,16 @@ export function setPinned(db: DatabaseSync, refId: string, pinned: boolean): boo
   return Number(result.changes) > 0;
 }
 
+// `null` explicitly clears the salience signal and is distinct from `0`,
+// which is a recorded zero-salience value. Callers must preserve this
+// distinction at the CLI layer.
+export function setSalience(db: DatabaseSync, refId: string, salience: number | null): boolean {
+  const result = db
+    .prepare(`UPDATE memory_v2_records SET salience = ? WHERE ref_id = ?`)
+    .run(salience, refId);
+  return Number(result.changes) > 0;
+}
+
 export function touchLastAccessed(db: DatabaseSync, refId: string, ts: number): boolean {
   const result = db
     .prepare(`UPDATE memory_v2_records SET last_accessed_at = ? WHERE ref_id = ?`)

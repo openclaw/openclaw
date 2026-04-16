@@ -5,12 +5,15 @@ import { ensureSidecarSchema } from "../sidecar-schema.js";
 import {
   DEFAULT_LIST_LIMIT,
   formatPinLine,
+  formatSalienceLine,
   formatStatusLine,
+  parseSidecarSalienceArg,
   parseSidecarStatus,
   readSidecarList,
   readSidecarStats,
   SIDECAR_STATUS_VALUES,
   writeSidecarPin,
+  writeSidecarSalience,
   writeSidecarStatus,
 } from "./sidecar-cli.js";
 
@@ -437,6 +440,167 @@ describe("formatStatusLine", () => {
       "status=archived refs:abc",
     );
     expect(formatStatusLine({ refId: "refs:missing", found: false, status: "active" })).toBe(
+      "ref-id not found: refs:missing",
+    );
+  });
+});
+
+describe("parseSidecarSalienceArg", () => {
+  it("parses finite positive and negative numbers as { kind: 'set', value }", () => {
+    expect(parseSidecarSalienceArg("0.7")).toEqual({ kind: "set", value: 0.7 });
+    expect(parseSidecarSalienceArg("-1.25")).toEqual({ kind: "set", value: -1.25 });
+    expect(parseSidecarSalienceArg("42")).toEqual({ kind: "set", value: 42 });
+  });
+
+  it("treats zero as a recorded value distinct from clear", () => {
+    expect(parseSidecarSalienceArg("0")).toEqual({ kind: "set", value: 0 });
+    expect(parseSidecarSalienceArg("0.0")).toEqual({ kind: "set", value: 0 });
+    expect(parseSidecarSalienceArg("-0")).toEqual({ kind: "set", value: -0 });
+  });
+
+  it("recognizes the literal `clear` sentinel (with surrounding whitespace)", () => {
+    expect(parseSidecarSalienceArg("clear")).toEqual({ kind: "clear" });
+    expect(parseSidecarSalienceArg("  clear\n")).toEqual({ kind: "clear" });
+  });
+
+  it("rejects empty / whitespace-only input rather than silently treating it as zero", () => {
+    expect(parseSidecarSalienceArg("")).toBeNull();
+    expect(parseSidecarSalienceArg("   ")).toBeNull();
+    expect(parseSidecarSalienceArg("\t")).toBeNull();
+  });
+
+  it("rejects NaN, Infinity, and non-numeric input", () => {
+    expect(parseSidecarSalienceArg("NaN")).toBeNull();
+    expect(parseSidecarSalienceArg("Infinity")).toBeNull();
+    expect(parseSidecarSalienceArg("-Infinity")).toBeNull();
+    expect(parseSidecarSalienceArg("abc")).toBeNull();
+    expect(parseSidecarSalienceArg("1.2.3")).toBeNull();
+    expect(parseSidecarSalienceArg("CLEAR")).toBeNull();
+    expect(parseSidecarSalienceArg("null")).toBeNull();
+  });
+});
+
+describe("writeSidecarSalience", () => {
+  let db: DatabaseSync;
+
+  beforeEach(() => {
+    db = new DatabaseSync(":memory:");
+    ensureSidecarSchema(db);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  const seededRefId = (): string =>
+    memoryRefId({
+      source: "memory",
+      path: "memory/a.md",
+      startLine: 1,
+      endLine: 5,
+      contentHash: "memory/a.md:1000",
+    });
+
+  const seedWithSalience = (salience: number | null) => {
+    insertRow(db, {
+      source: "memory",
+      path: "memory/a.md",
+      startLine: 1,
+      endLine: 5,
+      status: "active",
+      pinned: false,
+      salience,
+      createdAt: 1000,
+      lastAccessedAt: null,
+    });
+  };
+
+  it("sets a finite number on an existing row and reports found=true", () => {
+    seedWithSalience(null);
+    const id = seededRefId();
+
+    const outcome = writeSidecarSalience(db, id, 0.7);
+
+    expect(outcome).toEqual({ refId: id, found: true, salience: 0.7 });
+    const row = db.prepare("SELECT salience FROM memory_v2_records WHERE ref_id = ?").get(id) as {
+      salience: number | null;
+    };
+    expect(row.salience).toBe(0.7);
+  });
+
+  it("clears the salience to NULL when given null", () => {
+    seedWithSalience(0.5);
+    const id = seededRefId();
+
+    const outcome = writeSidecarSalience(db, id, null);
+
+    expect(outcome).toEqual({ refId: id, found: true, salience: null });
+    const row = db.prepare("SELECT salience FROM memory_v2_records WHERE ref_id = ?").get(id) as {
+      salience: number | null;
+    };
+    expect(row.salience).toBeNull();
+  });
+
+  it("treats zero as a distinct stored value — 0.0 is not NULL", () => {
+    seedWithSalience(null);
+    const id = seededRefId();
+
+    const outcome = writeSidecarSalience(db, id, 0);
+
+    expect(outcome).toEqual({ refId: id, found: true, salience: 0 });
+    const row = db.prepare("SELECT salience FROM memory_v2_records WHERE ref_id = ?").get(id) as {
+      salience: number | null;
+    };
+    expect(row.salience).toBe(0);
+    expect(row.salience).not.toBeNull();
+  });
+
+  it("reports found=false without throwing or inserting when the ref id is unknown", () => {
+    const outcome = writeSidecarSalience(db, "refs:memory:does-not-exist:0-0:abc", 0.3);
+
+    expect(outcome.found).toBe(false);
+    expect(outcome.salience).toBe(0.3);
+    expect(outcome.refId).toBe("refs:memory:does-not-exist:0-0:abc");
+
+    const total = db.prepare("SELECT COUNT(*) AS n FROM memory_v2_records").get() as { n: number };
+    expect(total.n).toBe(0);
+  });
+
+  it("produces a stable JSON shape (refId, found, salience) for --json callers", () => {
+    seedWithSalience(null);
+    const id = seededRefId();
+
+    const outcome = writeSidecarSalience(db, id, 0.42);
+
+    expect(Object.keys(outcome).toSorted()).toEqual(["found", "refId", "salience"]);
+    expect(JSON.parse(JSON.stringify(outcome))).toEqual({
+      refId: id,
+      found: true,
+      salience: 0.42,
+    });
+
+    // Clear-path JSON shape: salience serializes as null, not the string "clear".
+    const cleared = writeSidecarSalience(db, id, null);
+    expect(JSON.parse(JSON.stringify(cleared))).toEqual({
+      refId: id,
+      found: true,
+      salience: null,
+    });
+  });
+});
+
+describe("formatSalienceLine", () => {
+  it("renders set / clear / not-found text shapes from the outcome", () => {
+    expect(formatSalienceLine({ refId: "refs:abc", found: true, salience: 0.7 })).toBe(
+      "salience=0.7 refs:abc",
+    );
+    expect(formatSalienceLine({ refId: "refs:abc", found: true, salience: 0 })).toBe(
+      "salience=0 refs:abc",
+    );
+    expect(formatSalienceLine({ refId: "refs:abc", found: true, salience: null })).toBe(
+      "salience=clear refs:abc",
+    );
+    expect(formatSalienceLine({ refId: "refs:missing", found: false, salience: 0.1 })).toBe(
       "ref-id not found: refs:missing",
     );
   });

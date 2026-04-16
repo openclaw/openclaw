@@ -10,9 +10,9 @@ Everything described here is **off by default**. Nothing in this foundation chan
 - An ingest pipeline wired to `agent_end` that writes sidecar rows for successful agent turns when ingest is enabled.
 - A rerank wrapper wired into `memory_search` that reorders results using salience, recency, pinning, and supersession signals when rerank is enabled.
 - An optional shadow-touch path that updates `last_accessed_at` for memory-v2 hits returned by search (useful later for recency scoring).
-- An `openclaw memory sidecar` CLI: `stats` and `list` inspect the sidecar (read-only); `pin` flips the `pinned` flag on a record by its full ref id; `status` sets one of the four lifecycle values on a record by its full ref id.
+- An `openclaw memory sidecar` CLI: `stats` and `list` inspect the sidecar (read-only); `pin`, `status`, and `salience` each touch exactly one column of an existing record by its full ref id, covering every input the rerank pass reads (`pinnedBoost`, `supersededPenalty`, `salienceWeight`).
 
-**Not shipped:** salience writes, supersession-link writes (the `superseded_by` column — `status` only flips the enum), ref-id prefix matching, dreaming-phase integration, and any form of automatic promotion or demotion. A future change adds each of these surfaces explicitly.
+**Not shipped:** supersession-link writes (the `superseded_by` column — `status` only flips the enum), ref-id prefix matching, dreaming-phase integration, and any form of automatic promotion or demotion. A future change adds each of these surfaces explicitly.
 
 ## Opt-in configuration
 
@@ -81,7 +81,7 @@ If the rerank wrapper throws at runtime it falls back to identity (returning the
 
 ## Sidecar CLI
 
-`openclaw memory sidecar` inspects and lightly curates the sidecar database for the default agent (or the agent passed with `--agent`). `stats` and `list` are strictly read-only. `pin` and `status` are the only writes, and each touches exactly one column of an existing row — no inserts, no other column writes.
+`openclaw memory sidecar` inspects and lightly curates the sidecar database for the default agent (or the agent passed with `--agent`). `stats` and `list` are strictly read-only. `pin`, `status`, and `salience` are the only writes, and each touches exactly one column of an existing row — no inserts, no other column writes.
 
 ### `memory sidecar stats`
 
@@ -154,7 +154,30 @@ openclaw memory sidecar status <ref-id> deleted --json
 
 Invalid `<status>` values are rejected before any database work with a single-line `invalid status …` warning. **No transition gating:** any source status can be written to any target status, including `deleted → active`. The command mirrors the behavior of the underlying `markStatus` primitive. Operators who need transition rules should enforce them externally. The rerank `supersededPenalty` weight already reads this column (see the rerank table above), so flipping to `superseded` takes effect the next time the rerank pass runs.
 
-If the sidecar database has not been initialized yet (for example, because `memoryV2.ingest.enabled` has never been on in this workspace), all four subcommands print a "sidecar not initialized" notice and exit without error.
+### `memory sidecar salience`
+
+Set or clear the salience of an existing sidecar record. `<value>` is either a finite number (positive, negative, or zero) or the literal sentinel `clear`. **`0` and `clear` are distinct**: `0` is a recorded zero-salience value; `clear` writes SQL `NULL` (never set). Requires the **full** ref id — no prefix matching in this slice.
+
+```
+openclaw memory sidecar salience <ref-id> 0.7
+openclaw memory sidecar salience <ref-id> -0.25
+openclaw memory sidecar salience <ref-id> 0
+openclaw memory sidecar salience <ref-id> clear
+openclaw memory sidecar salience <ref-id> 0.5 --agent my-agent
+openclaw memory sidecar salience <ref-id> 0.5 --json
+```
+
+| Option         | Description                                                                            |
+| -------------- | -------------------------------------------------------------------------------------- |
+| `<ref-id>`     | Required positional. Full sidecar ref id. Unknown ids report "ref-id not found".       |
+| `<value>`      | Required positional. A finite number, or the literal `clear` to write `NULL`.          |
+| `--agent <id>` | Target a specific agent's sidecar (default: default agent).                            |
+| `--json`       | Emit JSON (`[{ agentId, dbPath, initialized, outcome: { refId, found, salience } }]`). |
+| `--verbose`    | Verbose logging for diagnostics.                                                       |
+
+Invalid `<value>` input — empty, `NaN`, `Infinity`, non-numeric strings, or `CLEAR` (case-sensitive) — is rejected before any database work. Empty strings are rejected explicitly so `Number("") === 0` cannot sneak through as a silent zero-salience write. **No range gating:** any finite number is accepted; operators who want bounds should enforce them externally. The rerank `salienceWeight` weight already reads this column (see the rerank table above), so salience writes take effect the next time the rerank pass runs.
+
+If the sidecar database has not been initialized yet (for example, because `memoryV2.ingest.enabled` has never been on in this workspace), all five subcommands print a "sidecar not initialized" notice and exit without error.
 
 ## Verification flow
 

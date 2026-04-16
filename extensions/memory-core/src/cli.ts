@@ -13,6 +13,7 @@ import type {
   MemorySearchCommandOptions,
   MemorySidecarListCommandOptions,
   MemorySidecarPinCommandOptions,
+  MemorySidecarSalienceCommandOptions,
   MemorySidecarStatusCommandOptions,
 } from "./cli.types.js";
 import {
@@ -93,6 +94,15 @@ async function runMemorySidecarStatus(
 ) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemorySidecarStatus(refIdArg, statusArg, opts);
+}
+
+async function runMemorySidecarSalience(
+  refIdArg: string | undefined,
+  salienceArg: string | undefined,
+  opts: MemorySidecarSalienceCommandOptions,
+) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemorySidecarSalience(refIdArg, salienceArg, opts);
 }
 
 export function registerMemoryCli(program: Command) {
@@ -309,6 +319,29 @@ export function registerMemoryCli(program: Command) {
         opts: MemorySidecarStatusCommandOptions,
       ) => {
         await runMemorySidecarStatus(refIdArg, statusArg, opts);
+      },
+    );
+
+  sidecar
+    .command("salience")
+    .description(
+      "Set or clear the salience of a sidecar record by its full ref id (0 is distinct from clear)",
+    )
+    .argument(
+      "<ref-id>",
+      "Full sidecar ref id (no prefix matching in this slice; get full ids via `memory sidecar list --json`)",
+    )
+    .argument("<value>", "A finite number (e.g. 0.7, -1.2, 0) or the literal `clear` to set NULL")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--json", "Print JSON")
+    .option("--verbose", "Verbose logging", false)
+    .action(
+      async (
+        refIdArg: string | undefined,
+        valueArg: string | undefined,
+        opts: MemorySidecarSalienceCommandOptions,
+      ) => {
+        await runMemorySidecarSalience(refIdArg, valueArg, opts);
       },
     );
 }
