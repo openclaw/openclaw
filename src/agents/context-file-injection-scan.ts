@@ -98,5 +98,7 @@ export function sanitizeContextFileForInjection(
   if (!detected) {
     return content;
   }
-  return `[BLOCKED: ${filename} contained potential prompt injection (${findings.join(", ")}). Content not loaded.]`;
+  // Sanitize filename to prevent injection via crafted file paths.
+  const safeFilename = filename.replace(/[\[\]\n\r]/g, "_");
+  return `[BLOCKED: ${safeFilename} contained potential prompt injection (${findings.join(", ")}). Content not loaded.]`;
 }
