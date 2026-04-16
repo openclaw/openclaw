@@ -248,7 +248,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "hermes",
     label: "hermes",
-    description: "Hermes MCP routing bridge",
+    description: "Hermes full MCP bridge (memory/skill/plan/conversations/messages/channels/approvals)",
     sectionId: "automation",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

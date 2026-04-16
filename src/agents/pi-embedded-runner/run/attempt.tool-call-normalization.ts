@@ -76,6 +76,16 @@ const CLAW_CODE_TOOL_ALIAS_MAP: Readonly<Record<string, ClawCodeAliasResolution>
   memoryreflect: { toolName: "hermes", action: "memory_reflect" },
   skillsuggest: { toolName: "hermes", action: "skill_suggest" },
   longplan: { toolName: "hermes", action: "long_plan" },
+  conversationslist: { toolName: "hermes", action: "conversations_list" },
+  conversationget: { toolName: "hermes", action: "conversation_get" },
+  messagesread: { toolName: "hermes", action: "messages_read" },
+  attachmentsfetch: { toolName: "hermes", action: "attachments_fetch" },
+  eventspoll: { toolName: "hermes", action: "events_poll" },
+  eventswait: { toolName: "hermes", action: "events_wait" },
+  messagessend: { toolName: "hermes", action: "messages_send" },
+  channelslist: { toolName: "hermes", action: "channels_list" },
+  permissionslistopen: { toolName: "hermes", action: "permissions_list_open" },
+  permissionsrespond: { toolName: "hermes", action: "permissions_respond" },
 };
 
 function canonicalizeToolName(value: string): string {

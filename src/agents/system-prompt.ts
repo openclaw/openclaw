@@ -288,6 +288,7 @@ function buildHermesRoutingSection(params: {
     "## Hermes Routing",
     "When both local tools and Hermes are available, route by intent:",
     "- Default to local OpenClaw tools for direct execution (files, shell, channels, device actions, cron writes).",
+    "- Hermes conversation bridge actions are available: conversations_list, conversation_get, messages_read, attachments_fetch, events_poll, events_wait, messages_send, channels_list, permissions_list_open, permissions_respond.",
     "- Use `hermes` `action=memory_reflect` for cross-session reflection, memory synthesis, or historical pattern extraction.",
     "- Use `hermes` `action=skill_suggest` to propose reusable skills/workflows/templates from repeated task patterns.",
     "- Use `hermes` `action=long_plan` for long-horizon decomposition (multi-phase roadmap, milestones, dependency planning).",

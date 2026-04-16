@@ -303,6 +303,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Hermes Routing");
+    expect(prompt).toContain("conversations_list");
     expect(prompt).toContain("action=memory_reflect");
     expect(prompt).toContain("action=skill_suggest");
     expect(prompt).toContain("action=long_plan");

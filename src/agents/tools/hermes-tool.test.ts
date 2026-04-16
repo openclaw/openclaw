@@ -121,6 +121,79 @@ describe("createHermesTool", () => {
     });
   });
 
+  it("routes messages_read with session_key shim", async () => {
+    const runtime = {
+      getCatalog: vi.fn(),
+      callTool: vi.fn(async () => ({ content: [{ type: "text", text: "ok" }] })),
+      getServerAuthState: vi.fn(),
+    };
+    mcpRuntimeMock.getOrCreateSessionMcpRuntime.mockResolvedValueOnce(runtime);
+
+    const { createHermesTool } = await import("./hermes-tool.js");
+    const tool = createHermesTool({
+      sessionId: "session-hermes-3b",
+      workspaceDir: "/tmp/workspace",
+    });
+    await tool.execute("tool-3b", {
+      action: "messages_read",
+      sessionKey: "telegram:123",
+      limit: 20,
+    });
+
+    expect(runtime.callTool).toHaveBeenCalledWith("hermes", "messages_read", {
+      session_key: "telegram:123",
+      limit: 20,
+    });
+  });
+
+  it("routes messages_send with required fields", async () => {
+    const runtime = {
+      getCatalog: vi.fn(),
+      callTool: vi.fn(async () => ({ content: [{ type: "text", text: "ok" }] })),
+      getServerAuthState: vi.fn(),
+    };
+    mcpRuntimeMock.getOrCreateSessionMcpRuntime.mockResolvedValueOnce(runtime);
+
+    const { createHermesTool } = await import("./hermes-tool.js");
+    const tool = createHermesTool({
+      sessionId: "session-hermes-3c",
+      workspaceDir: "/tmp/workspace",
+    });
+    await tool.execute("tool-3c", {
+      action: "messages_send",
+      target: "telegram:123",
+      message: "hello",
+    });
+
+    expect(runtime.callTool).toHaveBeenCalledWith("hermes", "messages_send", {
+      target: "telegram:123",
+      message: "hello",
+      prompt: "hello",
+    });
+  });
+
+  it("rejects missing required fields for hermes mapped actions", async () => {
+    const runtime = {
+      getCatalog: vi.fn(),
+      callTool: vi.fn(async () => ({ content: [{ type: "text", text: "ok" }] })),
+      getServerAuthState: vi.fn(),
+    };
+    mcpRuntimeMock.getOrCreateSessionMcpRuntime.mockResolvedValueOnce(runtime);
+
+    const { createHermesTool } = await import("./hermes-tool.js");
+    const tool = createHermesTool({
+      sessionId: "session-hermes-3d",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    await expect(
+      tool.execute("tool-3d", {
+        action: "attachments_fetch",
+        session_key: "telegram:123",
+      }),
+    ).rejects.toThrow("session_key and message_id required");
+  });
+
   it("returns status from MCP auth state", async () => {
     const runtime = {
       getCatalog: vi.fn(),
