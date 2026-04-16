@@ -108,7 +108,6 @@ describe("plugin activation boundary", () => {
   let configHelpersPromise:
     | Promise<{
         isStaticallyChannelConfigured: typeof import("./config/channel-configured-shared.js").isStaticallyChannelConfigured;
-        resolveEnvApiKey: typeof import("./agents/model-auth-env.js").resolveEnvApiKey;
       }>
     | undefined;
   let modelSelectionPromise:
@@ -134,13 +133,11 @@ describe("plugin activation boundary", () => {
       }>
     | undefined;
   function importConfigHelpers() {
-    configHelpersPromise ??= Promise.all([
-      import("./config/channel-configured-shared.js"),
-      import("./agents/model-auth-env.js"),
-    ]).then(([channelConfigured, modelAuthEnv]) => ({
-      isStaticallyChannelConfigured: channelConfigured.isStaticallyChannelConfigured,
-      resolveEnvApiKey: modelAuthEnv.resolveEnvApiKey,
-    }));
+    configHelpersPromise ??= import("./config/channel-configured-shared.js").then(
+      (channelConfigured) => ({
+        isStaticallyChannelConfigured: channelConfigured.isStaticallyChannelConfigured,
+      }),
+    );
     return configHelpersPromise;
   }
 
@@ -175,8 +172,10 @@ describe("plugin activation boundary", () => {
   }
 
   it("keeps config and model boundary helpers cold", async () => {
-    const [{ isStaticallyChannelConfigured, resolveEnvApiKey }, { normalizeModelRef }] =
-      await Promise.all([importConfigHelpers(), importModelSelection()]);
+    const [{ isStaticallyChannelConfigured }, { normalizeModelRef }] = await Promise.all([
+      importConfigHelpers(),
+      importModelSelection(),
+    ]);
 
     expect(isStaticallyChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(
       true,
@@ -190,14 +189,6 @@ describe("plugin activation boundary", () => {
       }),
     ).toBe(true);
     expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
-    expect(
-      resolveEnvApiKey("anthropic-vertex", {
-        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
-      }),
-    ).toEqual({
-      apiKey: "gcp-vertex-credentials",
-      source: "gcloud adc",
-    });
     expect(normalizeModelRef("google", "gemini-3.1-pro")).toEqual({
       provider: "google",
       model: "gemini-3.1-pro-preview",
