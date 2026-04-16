@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   type LocationTouchOutcome,
@@ -6,7 +5,7 @@ import {
   recordTouchedLocations,
 } from "../location/location-touch.js";
 import { type MemorySource, memoryLocationId } from "../ref.js";
-import { openSidecarDatabase } from "../sidecar-store.js";
+import { createSidecarOpener } from "../sidecar-store.js";
 import { loadSidecarSignalsByLocations } from "./lookup.js";
 import { applyRerank } from "./score.js";
 import type { RerankConfig, RerankContext, RerankFn, RerankableResult } from "./types.js";
@@ -46,7 +45,7 @@ export function buildRerankWrapper(
     return identityFn;
   }
 
-  const openDb = deps.openDb ?? createDefaultOpener();
+  const openDb = deps.openDb ?? createSidecarOpener();
   const loadSignals = deps.loadSignals ?? loadSidecarSignalsByLocations;
   const touch = deps.touch ?? recordTouchedLocations;
   const logWarn = deps.logWarn ?? (() => {});
@@ -113,18 +112,4 @@ function locationIdOf(result: {
     startLine: result.startLine,
     endLine: result.endLine,
   });
-}
-
-function createDefaultOpener(): (workspaceDir: string) => DatabaseSync {
-  const cache = new Map<string, DatabaseSync>();
-  return (workspaceDir) => {
-    const cached = cache.get(workspaceDir);
-    if (cached) {
-      return cached;
-    }
-    const dbPath = path.join(workspaceDir, "memory", "v2-sidecar.db");
-    const db = openSidecarDatabase(dbPath);
-    cache.set(workspaceDir, db);
-    return db;
-  };
 }

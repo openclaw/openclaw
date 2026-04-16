@@ -1,7 +1,6 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { runIngest } from "./ingest/handler.js";
-import { openSidecarDatabase } from "./sidecar-store.js";
+import { createSidecarOpener } from "./sidecar-store.js";
 
 // Public-config gate. Reads `memoryV2.ingest.enabled` from the plugin config
 // without any schema dep; default is false. Type-guarded so a malformed config
@@ -48,7 +47,7 @@ export type IngestWiringDeps = {
 };
 
 export function buildAgentEndHandler(deps: IngestWiringDeps = {}): AgentEndHandler {
-  const openDb = deps.openDb ?? createDefaultOpener();
+  const openDb = deps.openDb ?? createSidecarOpener();
   const ingest = deps.runIngest ?? runIngest;
   const logWarn = deps.logWarn ?? (() => {});
   const now = deps.now ?? Date.now;
@@ -87,20 +86,6 @@ export function registerMemoryV2Ingest(api: RegisterApi, deps: IngestWiringDeps 
   }
   api.on("agent_end", buildAgentEndHandler(deps));
   return true;
-}
-
-function createDefaultOpener(): (workspaceDir: string) => DatabaseSync {
-  const cache = new Map<string, DatabaseSync>();
-  return (workspaceDir) => {
-    const cached = cache.get(workspaceDir);
-    if (cached) {
-      return cached;
-    }
-    const dbPath = path.join(workspaceDir, "memory", "v2-sidecar.db");
-    const db = openSidecarDatabase(dbPath);
-    cache.set(workspaceDir, db);
-    return db;
-  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
