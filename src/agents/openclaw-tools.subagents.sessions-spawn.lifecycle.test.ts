@@ -652,6 +652,51 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(spawnAccountId).toBe("bot-alpha-room-a");
   });
 
+  it("sessions_spawn strips channel-side prefixes from agentTo before bound-account lookup", async () => {
+    let spawnAccountId: string | undefined;
+    const rawRoomId = "!exampleRoomId:example.org";
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      messages: { queue: { debounceMs: 0 } },
+      agents: { defaults: { subagents: { allowAgents: ["bot-alpha"] } } },
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: rawRoomId },
+            accountId: "bot-alpha",
+          },
+        },
+      ],
+    });
+    setupSessionsSpawnGatewayMock({
+      onAgentSubagentSpawn: (params) => {
+        const rec = params as { accountId?: string } | undefined;
+        spawnAccountId = rec?.accountId;
+      },
+    });
+
+    // agentTo arrives in delivery-target format (room:<id>), while the binding
+    // stores the raw id. Without prefix normalization the exact peer match
+    // would silently fail and the caller account would leak to the child.
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "matrix",
+      agentAccountId: "bot-beta",
+      agentTo: `room:${rawRoomId}`,
+    });
+
+    const result = await tool.execute("call-prefixed-to", {
+      task: "do thing",
+      agentId: "bot-alpha",
+      cleanup: "keep",
+    });
+    expect(result.details).toMatchObject({ status: "accepted", runId: expect.any(String) });
+    expect(spawnAccountId).toBe("bot-alpha");
+  });
+
   it("sessions_spawn preserves the caller's account for same-agent subagent spawns", async () => {
     let spawnAccountId: string | undefined;
     const room = "!someRoom:example.org";
