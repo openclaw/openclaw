@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { WizardCancelledError } from "../../wizard/prompts.js";
 import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
 import {
   promptResolvedAllowFrom,
@@ -455,6 +456,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
               });
             },
           });
+          if (typeof rawValue !== "string") throw new WizardCancelledError();
           const trimmedValue = rawValue.trim();
           if (!trimmedValue && textInput.required === false) {
             if (textInput.applyEmptyValue) {

@@ -6,6 +6,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-ke
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
+import { WizardCancelledError } from "../../wizard/prompts.js";
 import {
   moveSingleAccountChannelSectionToDefaultAccount,
   patchScopedAccountConfig,
@@ -51,6 +52,7 @@ export const promptAccountId: PromptAccountId = async (params: PromptAccountIdPa
     message: `New ${params.label} account id`,
     validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
   });
+  if (typeof entered !== "string") throw new WizardCancelledError();
   const normalized = normalizeAccountId(entered);
   if ((normalizeOptionalString(entered) ?? "") !== normalized) {
     await params.prompter.note(
@@ -985,13 +987,14 @@ export async function promptSingleChannelToken(params: {
   keepPrompt: string;
   inputPrompt: string;
 }): Promise<{ useEnv: boolean; token: string | null }> {
-  const promptToken = async (): Promise<string> =>
-    (
-      await params.prompter.text({
-        message: params.inputPrompt,
-        validate: (value) => (value?.trim() ? undefined : "Required"),
-      })
-    ).trim();
+  const promptToken = async (): Promise<string> => {
+    const raw = await params.prompter.text({
+      message: params.inputPrompt,
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    if (typeof raw !== "string") throw new WizardCancelledError();
+    return raw.trim();
+  };
 
   if (params.canUseEnv) {
     const keepEnv = await params.prompter.confirm({
@@ -1218,6 +1221,7 @@ export async function promptParsedAllowFromForAccount<TConfig extends OpenClawCo
       return params.parseEntries(raw).error;
     },
   });
+  if (typeof entry !== "string") throw new WizardCancelledError();
   const parsed = params.parseEntries(entry);
   const unique =
     params.mergeEntries?.({
@@ -1515,6 +1519,7 @@ export async function promptResolvedAllowFrom(params: {
       initialValue: params.existing[0] ? String(params.existing[0]) : undefined,
       validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
     });
+    if (typeof entry !== "string") throw new WizardCancelledError();
     const parts = params.parseInputs(entry);
     if (!params.token) {
       const ids = parts.map(params.parseId).filter(Boolean) as string[];

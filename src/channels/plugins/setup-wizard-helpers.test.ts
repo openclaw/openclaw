@@ -505,6 +505,21 @@ describe("promptSingleChannelToken", () => {
     expect(result).toEqual(expected);
     expect(prompter.text).toHaveBeenCalledTimes(expectTextCalls);
   });
+
+  it("throws WizardCancelledError when prompter.text returns undefined (#67649)", async () => {
+    const prompter = {
+      confirm: vi.fn(async () => false),
+      text: vi.fn(async () => undefined as unknown as string),
+    };
+    await expect(
+      runPromptSingleToken({
+        prompter,
+        accountConfigured: false,
+        canUseEnv: false,
+        hasConfigToken: false,
+      }),
+    ).rejects.toThrow("wizard cancelled");
+  });
 });
 
 describe("promptSingleChannelSecretInput", () => {
