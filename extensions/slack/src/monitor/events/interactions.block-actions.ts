@@ -641,6 +641,106 @@ function enqueueSlackBlockActionEvent(params: {
   });
 }
 
+async function wakeSlackReplySession(params: {
+  ctx: SlackMonitorContext;
+  parsed: ParsedSlackBlockAction;
+  auth: { channelType?: "im" | "mpim" | "channel" | "group" };
+  replyText: string;
+}): Promise<void> {
+  const { ctx, parsed, auth, replyText } = params;
+  if (!parsed.channelId || !replyText) {
+    return;
+  }
+  const channelType = auth.channelType;
+  const isDirectMessage = channelType === "im";
+  const isRoom = channelType === "channel" || channelType === "group";
+  const from = isDirectMessage
+    ? `slack:${parsed.userId}`
+    : isRoom
+      ? `slack:channel:${parsed.channelId}`
+      : `slack:group:${parsed.channelId}`;
+
+  const [
+    { resolveAgentRoute },
+    { finalizeInboundContext, dispatchReplyWithDispatcher },
+    { createChannelReplyPipeline },
+  ] = await Promise.all([
+    import("openclaw/plugin-sdk/routing"),
+    import("openclaw/plugin-sdk/reply-runtime"),
+    import("openclaw/plugin-sdk/channel-reply-pipeline"),
+  ]);
+
+  const route = resolveAgentRoute({
+    cfg: ctx.cfg,
+    channel: "slack",
+    accountId: ctx.accountId,
+    teamId: ctx.teamId || undefined,
+    peer: {
+      kind: isDirectMessage ? "direct" : isRoom ? "channel" : "group",
+      id: isDirectMessage ? parsed.userId : parsed.channelId,
+    },
+  });
+
+  const ctxPayload = finalizeInboundContext({
+    Body: replyText,
+    BodyForAgent: replyText,
+    RawBody: replyText,
+    From: from,
+    To: `interaction:${parsed.userId}`,
+    ChatType: isDirectMessage ? "direct" : "channel",
+    ConversationLabel: isDirectMessage ? parsed.userId : `#${parsed.channelId}`,
+    SenderName: parsed.userId,
+    SenderId: parsed.userId,
+    Provider: "slack" as const,
+    Surface: "slack" as const,
+    WasMentioned: true,
+    MessageSid: `interaction:${parsed.messageTs ?? String(Date.now())}`,
+    Timestamp: Date.now(),
+    SessionKey: route.sessionKey,
+    AccountId: route.accountId,
+    OriginatingChannel: "slack" as const,
+    OriginatingTo: `user:${parsed.userId}`,
+  });
+
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+    cfg: ctx.cfg,
+    agentId: route.agentId,
+    channel: "slack",
+    accountId: route.accountId,
+  });
+
+  const { deliverReplies } = await import("../replies.js");
+  const replyThreadTs = parsed.threadTs ?? parsed.messageTs;
+
+  await dispatchReplyWithDispatcher({
+    ctx: ctxPayload,
+    cfg: ctx.cfg,
+    dispatcherOptions: {
+      ...replyPipeline,
+      deliver: async (payload) => {
+        await deliverReplies({
+          replies: [payload],
+          target: parsed.channelId!,
+          token: ctx.botToken,
+          accountId: ctx.accountId,
+          runtime: ctx.runtime,
+          textLimit: ctx.textLimit,
+          replyThreadTs,
+          replyToMode: ctx.replyToMode,
+        });
+      },
+      onError: (err: unknown, info: { kind: string }) => {
+        ctx.runtime.log?.(
+          `slack:interaction wake ${info.kind} reply failed: ${String(err)}`,
+        );
+      },
+    },
+    replyOptions: {
+      onModelSelected,
+    },
+  });
+}
+
 function buildSlackConfirmationBlocks(params: {
   parsed: ParsedSlackBlockAction;
   originalBlocks: unknown[];
@@ -784,6 +884,18 @@ async function handleSlackBlockAction(params: {
     parsed,
     respond,
   });
+  if (isSlackReplyActionId(parsed.actionId) && pluginInteractionData) {
+    wakeSlackReplySession({
+      ctx: params.ctx,
+      parsed,
+      auth,
+      replyText: pluginInteractionData,
+    }).catch((err) => {
+      params.ctx.runtime.log?.(
+        `slack:interaction wake failed for reply action: ${String(err)}`,
+      );
+    });
+  }
 }
 
 export function registerSlackBlockActionHandler(params: {

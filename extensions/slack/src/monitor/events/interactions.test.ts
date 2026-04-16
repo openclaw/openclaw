@@ -10,12 +10,47 @@ const dispatchPluginInteractiveHandlerMock = vi.hoisted(() =>
 );
 const resolvePluginConversationBindingApprovalMock = vi.hoisted(() => vi.fn());
 const buildPluginBindingResolvedTextMock = vi.hoisted(() => vi.fn(() => "Binding updated."));
+const dispatchReplyWithDispatcherMock = vi.hoisted(() =>
+  vi.fn(async () => ({ counts: { final: 1, tool: 0, block: 0 } })),
+);
+const resolveAgentRouteMock = vi.hoisted(() =>
+  vi.fn(() => ({ agentId: "test", sessionKey: "test:session", accountId: "default" })),
+);
+const createChannelReplyPipelineMock = vi.hoisted(() =>
+  vi.fn(() => ({ onModelSelected: vi.fn() })),
+);
+const finalizeInboundContextMock = vi.hoisted(() => vi.fn((ctx: unknown) => ctx));
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const original = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...original,
+    dispatchReplyWithDispatcher: dispatchReplyWithDispatcherMock,
+    finalizeInboundContext: finalizeInboundContextMock,
+  };
+});
+vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
+  const original = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
+  return { ...original, resolveAgentRoute: resolveAgentRouteMock };
+});
+vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("openclaw/plugin-sdk/channel-reply-pipeline")>();
+  return { ...original, createChannelReplyPipeline: createChannelReplyPipelineMock };
+});
+vi.mock("../replies.js", () => ({
+  deliverReplies: vi.fn(async () => {}),
+}));
 
 let registerSlackInteractionEvents: typeof import("./interactions.js").registerSlackInteractionEvents;
 let enqueueSystemEventSpy: ReturnType<typeof vi.spyOn>;
 let dispatchPluginInteractiveHandlerSpy: ReturnType<typeof vi.spyOn>;
 let resolvePluginConversationBindingApprovalSpy: ReturnType<typeof vi.spyOn>;
 let buildPluginBindingResolvedTextSpy: ReturnType<typeof vi.spyOn>;
+let dispatchReplyWithDispatcherSpy: ReturnType<typeof vi.spyOn>;
+let resolveAgentRouteSpy: ReturnType<typeof vi.spyOn>;
+let createChannelReplyPipelineSpy: ReturnType<typeof vi.spyOn>;
+let finalizeInboundContextSpy: ReturnType<typeof vi.spyOn>;
 
 type RegisteredHandler = (args: {
   ack: () => Promise<void>;
@@ -135,6 +170,11 @@ function createContext(overrides?: {
   const ctx = {
     app,
     accountId: "default",
+    cfg: {} as never,
+    botToken: "xoxb-test",
+    teamId: "T9",
+    replyToMode: "all" as const,
+    textLimit: 4000,
     runtime: { log: runtimeLog },
     dmEnabled: overrides?.dmEnabled ?? true,
     dmPolicy: overrides?.dmPolicy ?? ("open" as const),
@@ -202,6 +242,21 @@ describe("registerSlackInteractionEvents", () => {
         (buildPluginBindingResolvedTextMock as (...innerArgs: unknown[]) => string)(
           ...args,
         )) as typeof conversationBinding.buildPluginBindingResolvedText);
+    const replyRuntime = await import("openclaw/plugin-sdk/reply-runtime");
+    const routingRuntime = await import("openclaw/plugin-sdk/routing");
+    const pipelineRuntime = await import("openclaw/plugin-sdk/channel-reply-pipeline");
+    dispatchReplyWithDispatcherSpy = vi
+      .spyOn(replyRuntime, "dispatchReplyWithDispatcher")
+      .mockImplementation(dispatchReplyWithDispatcherMock as never);
+    finalizeInboundContextSpy = vi
+      .spyOn(replyRuntime, "finalizeInboundContext")
+      .mockImplementation(finalizeInboundContextMock as never);
+    resolveAgentRouteSpy = vi
+      .spyOn(routingRuntime, "resolveAgentRoute")
+      .mockImplementation(resolveAgentRouteMock as never);
+    createChannelReplyPipelineSpy = vi
+      .spyOn(pipelineRuntime, "createChannelReplyPipeline")
+      .mockImplementation(createChannelReplyPipelineMock as never);
     ({ registerSlackInteractionEvents } = await import("./interactions.js"));
   });
 
@@ -221,6 +276,14 @@ describe("registerSlackInteractionEvents", () => {
       handled: false,
       duplicate: false,
     });
+    dispatchReplyWithDispatcherMock.mockClear();
+    dispatchReplyWithDispatcherMock.mockResolvedValue({ counts: { final: 1, tool: 0, block: 0 } });
+    resolveAgentRouteMock.mockClear();
+    resolveAgentRouteMock.mockReturnValue({ agentId: "test", sessionKey: "test:session", accountId: "default" });
+    createChannelReplyPipelineMock.mockClear();
+    createChannelReplyPipelineMock.mockReturnValue({ onModelSelected: vi.fn() });
+    finalizeInboundContextMock.mockClear();
+    finalizeInboundContextMock.mockImplementation((ctx: unknown) => ctx);
   });
 
   it("enqueues structured events and updates button rows", async () => {
@@ -2028,6 +2091,86 @@ describe("registerSlackInteractionEvents", () => {
     expect(payload.payloadTruncated).toBe(true);
     expect(Array.isArray(payload.inputs) ? payload.inputs.length : 0).toBeLessThanOrEqual(3);
     expect((payload.inputsOmitted ?? 0) >= 1).toBe(true);
+  });
+
+  it("wakes agent session when reply button is clicked", async () => {
+    const { ctx, runtimeLog, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "reply_actions",
+        value: "Yes please",
+        text: { type: "plain_text", text: "Yes please" },
+      },
+    });
+
+    // Enqueue still happens (existing behavior preserved)
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+
+    // Wait for the fire-and-forget wake dispatch to complete
+    await vi.waitFor(() => {
+      expect(dispatchReplyWithDispatcherMock).toHaveBeenCalledTimes(1);
+    });
+    expect(resolveAgentRouteMock).toHaveBeenCalledTimes(1);
+    expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
+    const ctxArg = finalizeInboundContextMock.mock.calls[0]?.[0] as { Body?: string } | undefined;
+    expect(ctxArg?.Body).toBe("Yes please");
+  });
+
+  it("does not wake agent session for non-reply actions", async () => {
+    const { ctx, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        message: {
+          ts: "111.222",
+          blocks: [{ type: "actions", block_id: "verify_block", elements: [] }],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:verify",
+        block_id: "verify_block",
+        value: "approved",
+      },
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    // Give microtasks time to settle
+    await new Promise((r) => setTimeout(r, 50));
+    expect(dispatchReplyWithDispatcherMock).not.toHaveBeenCalled();
   });
 });
 const selectedDateTimeEpoch = 1_771_632_300;
