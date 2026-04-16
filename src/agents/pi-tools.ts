@@ -256,6 +256,15 @@ export function createOpenClawCodingTools(options?: {
   sessionId?: string;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
+  /**
+   * Current plan-mode session state (PR-8). When `"plan"`, the runtime
+   * mutation gate (src/agents/plan-mode/mutation-gate.ts) blocks
+   * write/edit/exec/etc. The embedded runner reads
+   * `SessionEntry.planMode.mode` once when assembling tools and
+   * threads it through to the before-tool-call hook so the gate fires
+   * without re-loading the session store on every call.
+   */
+  planMode?: "plan" | "normal";
   /** What initiated this run (for trigger-specific tool restrictions). */
   trigger?: string;
   /** Relative workspace path that memory-triggered writes may append to. */
@@ -679,6 +688,10 @@ export function createOpenClawCodingTools(options?: {
       sessionId: options?.sessionId,
       runId: options?.runId,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
+      // PR-8: thread plan-mode state into the before-tool-call hook so
+      // the mutation gate fires without re-loading the session store
+      // on every tool call.
+      ...(options?.planMode ? { planMode: options.planMode } : {}),
     }),
   );
   const withAbort = options?.abortSignal

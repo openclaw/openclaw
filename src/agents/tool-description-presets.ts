@@ -9,6 +9,10 @@ export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Send a message to another vis
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn sub-agent or ACP sessions.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status, usage, and model state.";
 export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track a short structured work plan.";
+export const ENTER_PLAN_MODE_TOOL_DISPLAY_SUMMARY =
+  "Enter plan mode — block mutation tools until the user approves a plan.";
+export const EXIT_PLAN_MODE_TOOL_DISPLAY_SUMMARY =
+  "Exit plan mode and request user approval of the proposed plan.";
 
 export function describeSessionsListTool(): string {
   return [
@@ -53,5 +57,23 @@ export function describeUpdatePlanTool(): string {
     "Update the current structured work plan for this run.",
     "Use this for non-trivial multi-step work so the plan stays current while execution continues.",
     "Keep steps short, mark at most one step as `in_progress`, and skip this tool for simple one-step tasks.",
+  ].join(" ");
+}
+
+export function describeEnterPlanModeTool(): string {
+  return [
+    "Enter plan mode for this session.",
+    "Mutation tools (write, edit, exec, bash, sessions_send, etc.) become BLOCKED until you call exit_plan_mode and the user approves the proposed plan.",
+    "Read-only tools (read, web_search, web_fetch, update_plan) remain available so you can investigate before proposing changes.",
+    "Use this when the user explicitly asks for a plan-first workflow, or when the agent wants to confirm a multi-step change before executing.",
+  ].join(" ");
+}
+
+export function describeExitPlanModeTool(): string {
+  return [
+    "Exit plan mode and request user approval of the proposed plan.",
+    "Pass the current plan steps via `plan` (use the same shape as update_plan).",
+    "The runtime emits an approval request — the user can Approve (mutations unlock), Reject with feedback (you stay in plan mode and revise), or let it Time Out.",
+    "Call this only after you have proposed a plan via update_plan; calling it without a plan is rejected.",
   ].join(" ");
 }

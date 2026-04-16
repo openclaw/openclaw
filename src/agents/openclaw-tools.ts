@@ -8,6 +8,7 @@ import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js
 import { applyNodesToolWorkspaceGuard } from "./openclaw-tools.nodes-workspace-guard.js";
 import {
   collectPresentOpenClawTools,
+  isPlanModeToolsEnabledForOpenClawTools,
   isUpdatePlanToolEnabledForOpenClawTools,
 } from "./openclaw-tools.registration.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -17,6 +18,8 @@ import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
+import { createEnterPlanModeTool } from "./tools/enter-plan-mode-tool.js";
+import { createExitPlanModeTool } from "./tools/exit-plan-mode-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
@@ -261,6 +264,13 @@ export function createOpenClawTools(
       modelId: options?.modelId,
     })
       ? [createUpdatePlanTool({ runId: options?.runId })]
+      : []),
+    // PR-8: plan-mode tools — gated behind agents.defaults.planMode.enabled.
+    // Default OFF; opt-in via config. When enabled, registers the agent-visible
+    // affordances that pair with the runtime mutation gate
+    // (src/agents/plan-mode/mutation-gate.ts) and SessionEntry.planMode state.
+    ...(isPlanModeToolsEnabledForOpenClawTools({ config: resolvedConfig })
+      ? [createEnterPlanModeTool(), createExitPlanModeTool()]
       : []),
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,

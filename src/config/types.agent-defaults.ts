@@ -287,6 +287,35 @@ export type AgentDefaultsConfig = {
       stopOnMutation?: boolean;
     };
   };
+  /**
+   * Plan mode toggle (PR-8 integration). Default OFF — opt-in.
+   *
+   * When enabled, the runtime registers `enter_plan_mode` and
+   * `exit_plan_mode` tools and activates the mutation gate so a
+   * session in `planMode.mode === "plan"` blocks write/edit/exec/etc
+   * until the user approves the proposed plan via the approval flow.
+   *
+   * Read-only tools (read, web_search, web_fetch, update_plan) remain
+   * available so the agent can investigate before proposing changes.
+   */
+  planMode?: {
+    /** Master switch. Default: false. */
+    enabled?: boolean;
+    /**
+     * Optional list of model-id regex patterns. When a session's model
+     * matches any pattern AND the user has not explicitly toggled plan
+     * mode, the runtime auto-enters plan mode at session start. Default
+     * empty — no auto-enable. Common use: `["^openai/gpt-5\\."]` to
+     * route GPT-5.x family into plan-first by default.
+     */
+    autoEnableFor?: string[];
+    /**
+     * Seconds an unanswered approval request stays pending before
+     * timing out. The agent receives a `[PLAN_DECISION] decision: expired`
+     * injection on timeout and stays in plan mode. Default: 600 (10 min).
+     */
+    approvalTimeoutSeconds?: number;
+  };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */

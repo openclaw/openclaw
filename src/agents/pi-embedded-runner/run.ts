@@ -691,6 +691,11 @@ export async function runEmbeddedPiAgent(
           const attempt = await runEmbeddedAttemptWithBackend({
             sessionId: params.sessionId,
             sessionKey: resolvedSessionKey,
+            // PR-8: thread plan-mode state through to the attempt so the
+            // before-tool-call hook arms the mutation gate. Without this
+            // the field added to attempt's params + the threading through
+            // pi-tools is dead code (Codex P1 #67840 r3096735975).
+            ...(params.planMode ? { planMode: params.planMode } : {}),
             trigger: params.trigger,
             memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,

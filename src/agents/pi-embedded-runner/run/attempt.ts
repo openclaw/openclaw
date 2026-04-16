@@ -565,6 +565,10 @@ export async function runEmbeddedAttempt(
             sessionKey: sandboxSessionKey,
             sessionId: params.sessionId,
             runId: params.runId,
+            // PR-8: thread plan-mode state through so the
+            // before-tool-call hook arms the mutation gate without
+            // re-loading the session store on every tool call.
+            ...(params.planMode ? { planMode: params.planMode } : {}),
             agentDir,
             workspaceDir: effectiveWorkspace,
             // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
