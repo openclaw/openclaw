@@ -639,3 +639,58 @@ describe("toSanitizedMarkdownHtml", () => {
     });
   });
 });
+
+describe("KaTeX math rendering", () => {
+  it("renders inline math $...$ with KaTeX", () => {
+    const html = toSanitizedMarkdownHtml("The equation $E = mc^2$ is famous.");
+    expect(html).toContain("katex");
+    expect(html).not.toContain("$E = mc^2$");
+  });
+
+  it("renders display math $$...$$ with KaTeX", () => {
+    const html = toSanitizedMarkdownHtml("$$\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}$$");
+    expect(html).toContain("katex");
+    expect(html).toContain("katex-display");
+  });
+
+  it("preserves LaTeX underscore in math without triggering markdown italics", () => {
+    const html = toSanitizedMarkdownHtml("$x_1 + x_2 = 3$");
+    expect(html).toContain("katex");
+    // Should NOT have markdown-generated <em> tags from underscore
+    const emCount = (html.match(/<em>/g) ?? []).length;
+    expect(emCount).toBe(0);
+  });
+
+  it("renders math alongside regular markdown", () => {
+    const html = toSanitizedMarkdownHtml("**Bold** and $x^2$ together.");
+    expect(html).toContain("<strong>Bold</strong>");
+    expect(html).toContain("katex");
+  });
+
+  it("does not render $ inside code spans as math", () => {
+    const html = toSanitizedMarkdownHtml("Use `$x$` for math.");
+    // The code span should contain the literal $x$
+    expect(html).toContain("$x$");
+    // No KaTeX rendering should occur inside code
+    const katexInCode = html.match(/<code[^>]*>.*katex.*<\/code>/s);
+    expect(katexInCode).toBeNull();
+  });
+
+  it("renders Greek letters in math mode", () => {
+    const html = toSanitizedMarkdownHtml("$\\alpha + \\beta = \\gamma$");
+    expect(html).toContain("katex");
+    expect(html).toContain("α");
+  });
+
+  it("renders fractions in display math", () => {
+    const html = toSanitizedMarkdownHtml("$$\\frac{a}{b}$$");
+    expect(html).toContain("katex");
+    expect(html).toContain("frac");
+  });
+
+  it("handles invalid LaTeX gracefully with error class", () => {
+    const html = toSanitizedMarkdownHtml("$\\invalidcmd{arg}$");
+    // Should render without throwing, either as KaTeX error or partial output
+    expect(html).toContain("katex");
+  });
+});

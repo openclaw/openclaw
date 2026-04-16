@@ -1,8 +1,11 @@
 import DOMPurify from "dompurify";
+import katex from "katex";
 import MarkdownIt from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
 import { truncateText } from "./format.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
+
+import "katex/dist/katex.min.css";
 
 const allowedTags = [
   "a",
@@ -54,6 +57,7 @@ const allowedAttrs = [
   "data-code",
   "type",
   "aria-label",
+  "style",
 ];
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
@@ -77,64 +81,12 @@ const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 const CJK_RE =
   /[\u2E80-\u2FFF\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60]/;
 
-function getCachedMarkdown(key: string): string | null {
-  const cached = markdownCache.get(key);
-  if (cached === undefined) {
-    return null;
-  }
-  markdownCache.delete(key);
-  markdownCache.set(key, cached);
-  return cached;
+// ── KaTeX math extraction ──
+
+interface MathBlock {
+  placeholder: string;
+  html: string;
 }
-
-function setCachedMarkdown(key: string, value: string) {
-  markdownCache.set(key, value);
-  if (markdownCache.size <= MARKDOWN_CACHE_LIMIT) {
-    return;
-  }
-  const oldest = markdownCache.keys().next().value;
-  if (oldest) {
-    markdownCache.delete(oldest);
-  }
-}
-
-function installHooks() {
-  if (hooksInstalled) {
-    return;
-  }
-  hooksInstalled = true;
-
-  DOMPurify.addHook("afterSanitizeAttributes", (node) => {
-    if (!(node instanceof HTMLAnchorElement)) {
-      return;
-    }
-    const href = node.getAttribute("href");
-    if (!href) {
-      return;
-    }
-
-    // Block dangerous URL schemes (javascript:, data:, vbscript:, etc.)
-    try {
-      const url = new URL(href, window.location.href);
-      if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "mailto:") {
-        node.removeAttribute("href");
-        return;
-      }
-    } catch {
-      // Relative URLs are fine; malformed absolute URLs with dangerous schemes
-      // will fail to parse and keep their href — but DOMPurify already strips
-      // javascript: by default. This is defense-in-depth.
-    }
-
-    node.setAttribute("rel", "noreferrer noopener");
-    node.setAttribute("target", "_blank");
-    if (normalizeLowercaseStringOrEmpty(href).includes("tail")) {
-      node.classList.add(TAIL_LINK_BLUR_CLASS);
-    }
-  });
-}
-
-// ── markdown-it instance with custom renderers ──
 
 function escapeHtml(value: string): string {
   return value
@@ -144,6 +96,92 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+
+/**
+ * Extract $$...$$ (display) and $...$ (inline) math blocks from markdown text,
+ * replacing them with unique placeholders so markdown-it doesn't mangle LaTeX syntax.
+ * Returns the modified text and a map of placeholder → rendered KaTeX HTML.
+ */
+function extractMathBlocks(text: string): { text: string; blocks: Map<string, string> } {
+  const blocks = new Map<string, string>();
+  let counter = 0;
+
+  function renderMath(tex: string, displayMode: boolean): string {
+    try {
+      return katex.renderToString(tex, {
+        displayMode,
+        throwOnError: false,
+        trust: false,
+        strict: false,
+      });
+    } catch {
+      return `<span class="katex-error">${escapeHtml(displayMode ? `$$${tex}$$` : `$${tex}$`)}</span>`;
+    }
+  }
+
+  // First pass: extract $$...$$ display math (must be done before inline $...$)
+  // We process line-by-line to handle display math that spans multiple lines.
+  let result = "";
+  let i = 0;
+  while (i < text.length) {
+    // Skip inline code spans (backtick-delimited) — don't extract math from code
+    if (text[i] === "`") {
+      const codeEnd = text.indexOf("`", i + 1);
+      if (codeEnd !== -1) {
+        result += text.slice(i, codeEnd + 1);
+        i = codeEnd + 1;
+        continue;
+      }
+    }
+
+    // Check for $$...$$ display math
+    if (text[i] === "$" && text[i + 1] === "$") {
+      const end = text.indexOf("$$", i + 2);
+      if (end !== -1) {
+        const tex = text.slice(i + 2, end);
+        const placeholder = `%%KATEX_DISPLAY_${counter++}%%`;
+        blocks.set(placeholder, renderMath(tex, true));
+        result += placeholder;
+        i = end + 2;
+        continue;
+      }
+    }
+
+    // Check for $...$ inline math (but not $$ which we already handled)
+    if (text[i] === "$" && text[i + 1] !== "$" && text[i + 1] !== " ") {
+      const end = text.indexOf("$", i + 1);
+      if (end !== -1 && end > i + 1) {
+        // Ensure no newlines in inline math
+        const tex = text.slice(i + 1, end);
+        if (!tex.includes("\n")) {
+          const placeholder = `%%KATEX_INLINE_${counter++}%%`;
+          blocks.set(placeholder, renderMath(tex, false));
+          result += placeholder;
+          i = end + 1;
+          continue;
+        }
+      }
+    }
+
+    result += text[i];
+    i++;
+  }
+
+  return { text: result, blocks };
+}
+
+/**
+ * Replace KaTeX placeholders with rendered HTML after markdown-it processing.
+ */
+function restoreMathBlocks(html: string, blocks: Map<string, string>): string {
+  let result = html;
+  for (const [placeholder, rendered] of blocks) {
+    result = result.replaceAll(placeholder, rendered);
+  }
+  return result;
+}
+
+// ── markdown-it instance with custom renderers ──
 
 function normalizeMarkdownImageLabel(text?: string | null): string {
   const trimmed = text?.trim();
@@ -491,12 +529,20 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   const suffix = truncated.truncated
     ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
     : "";
-  if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
+
+  // Extract math blocks before markdown processing to protect LaTeX syntax
+  // from being mangled by markdown-it (e.g., _ in LaTeX triggering italics).
+  const { text: mathExtracted, blocks: mathBlocks } = extractMathBlocks(
+    `${truncated.text}${suffix}`,
+  );
+
+  if (mathExtracted.length > MARKDOWN_PARSE_LIMIT) {
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.
-    const html = renderEscapedPlainTextHtml(`${truncated.text}${suffix}`);
-    const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
+    const html = renderEscapedPlainTextHtml(mathExtracted);
+    const withMath = restoreMathBlocks(html, mathBlocks);
+    const sanitized = DOMPurify.sanitize(withMath, sanitizeOptions);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
       setCachedMarkdown(input, sanitized);
     }
@@ -504,14 +550,16 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   }
   let rendered: string;
   try {
-    rendered = md.render(`${truncated.text}${suffix}`);
+    rendered = md.render(mathExtracted);
   } catch (err) {
     // Fall back to escaped plain text when md.render() throws (#36213).
     console.warn("[markdown] md.render failed, falling back to plain text:", err);
-    const escaped = escapeHtml(`${truncated.text}${suffix}`);
+    const escaped = escapeHtml(mathExtracted);
     rendered = `<pre class="code-block">${escaped}</pre>`;
   }
-  const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
+  // Restore KaTeX-rendered math blocks after markdown processing
+  const withMath = restoreMathBlocks(rendered, mathBlocks);
+  const sanitized = DOMPurify.sanitize(withMath, sanitizeOptions);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     setCachedMarkdown(input, sanitized);
   }

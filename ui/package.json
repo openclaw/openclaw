@@ -14,6 +14,7 @@
     "dompurify": "^3.4.0",
     "lit": "^3.3.2",
     "markdown-it": "^14.1.1",
+    "katex": "^0.16.11",
     "markdown-it-task-lists": "^2.1.1",
     "marked": "^18.0.0"
   },
