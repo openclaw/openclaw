@@ -58,8 +58,37 @@ const DEFAULT_ALLOWLIST: RegExp[] = [
   /(?:^|\/)qa\/scenarios\//i,
 ];
 
+/**
+ * Normalize a filename for allowlist matching:
+ * - Backslashes (Windows) → forward slashes so the regex anchors work
+ *   uniformly across platforms.
+ * - Reject any path containing a `..` segment so an attacker can't
+ *   bypass an allowlisted prefix via traversal
+ *   (e.g. `qa/scenarios/../../etc/passwd`).
+ *
+ * Returns `null` when the path is hostile (any `..` segment) so the
+ * caller treats it as NOT allowlisted (fail-closed).
+ */
+function normalizePathForAllowlist(filename: string): string | null {
+  const normalized = filename.replace(/\\+/g, "/");
+  // Reject literal `..` path segments (anywhere in the path). Using a
+  // segment-level test rather than a substring test so legitimate
+  // filenames like `foo..bar.md` are not falsely rejected.
+  for (const segment of normalized.split("/")) {
+    if (segment === "..") {
+      return null;
+    }
+  }
+  return normalized;
+}
+
 function isAllowlistedPath(filename: string, allowlist: RegExp[] = DEFAULT_ALLOWLIST): boolean {
-  return allowlist.some((re) => re.test(filename));
+  const normalized = normalizePathForAllowlist(filename);
+  if (normalized === null) {
+    // Traversal detected — never allowlist a hostile path.
+    return false;
+  }
+  return allowlist.some((re) => re.test(normalized));
 }
 
 // Ported from Hermes _CONTEXT_INVISIBLE_CHARS (prompt_builder.py:49-52).
@@ -138,12 +167,14 @@ export function sanitizeContextFileForInjection(
   }
   // Allowlist bypass: legitimate security docs that discuss injection patterns
   // shouldn't be blocked from loading. Caller can override the default list.
+  // Bug fix (#67512 hardening): we previously called isAllowlistedPath(filename)
+  // without forwarding the caller-supplied allowlist, so custom allowlists
+  // were silently ignored. Now the custom list (if any) is applied.
   const allowlist = options.allowlist ?? DEFAULT_ALLOWLIST;
-  if (isAllowlistedPath(filename)) {
+  if (isAllowlistedPath(filename, allowlist)) {
     options.onAllowlistBypass?.(filename, findings);
     return content;
   }
-  void allowlist; // referenced via default; kept in signature for callers passing custom lists
   // Sanitize filename to prevent injection via crafted file paths.
   // Use sanitizeForPromptLiteral for Cc/Cf/Zl/Zp chars, then strip brackets
   // (placeholder delimiters) and HTML/markdown angle/ampersand chars
