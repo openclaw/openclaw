@@ -44,16 +44,20 @@ export function readRerankOptions(pluginConfig: unknown): {
 
 type RegisterApi = { pluginConfig?: unknown };
 
-// Returns a RerankFn when the flag is on, undefined when off. The returned
-// function carries its own per-workspace db cache and a try/catch identity
-// fallback (see buildRerankWrapper). Built once per plugin activation.
+// Returns a RerankFn when either `memoryV2.rerank.enabled` or
+// `memoryV2.rerank.shadowOnRecall` is on, and undefined when both are off.
+// With `shadowOnRecall` on and `enabled` off, the returned function is
+// order-preserving and only records recency touches ("shadow-only mode").
+// The returned function carries its own per-workspace db cache and a
+// try/catch identity fallback (see buildRerankWrapper). Built once per
+// plugin activation.
 export function buildMemoryV2Rerank(api: RegisterApi): RerankFn | undefined {
   const opts = readRerankOptions(api.pluginConfig);
-  if (!opts.enabled) {
+  if (!opts.enabled && !opts.shadowOnRecall) {
     return undefined;
   }
   return buildRerankWrapper({
-    enabled: true,
+    enabled: opts.enabled,
     cfg: opts.cfg,
     shadowOnRecall: opts.shadowOnRecall,
   });

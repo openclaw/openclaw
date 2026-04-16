@@ -194,3 +194,74 @@ describe("buildRerankWrapper — enabled", () => {
     ]);
   });
 });
+
+describe("buildRerankWrapper — shadow-only (enabled=false, shadowOnRecall=true)", () => {
+  let db: DatabaseSync;
+
+  beforeEach(() => {
+    db = new DatabaseSync(":memory:");
+    ensureSidecarSchema(db);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("returns identity order and scores when rerank is disabled", async () => {
+    const touch = vi.fn(() => ({ inspected: 0, inserted: 0, refreshed: 0 }));
+    const fn = buildRerankWrapper(
+      { enabled: false, shadowOnRecall: true },
+      { openDb: () => db, touch: touch as never, now: () => 1000 },
+    );
+    const inputs = [result({ score: 0.4 }), result({ path: "b.md", score: 0.9 })];
+    const out = await fn(inputs, { workspaceDir: "/ws" });
+    expect(out.map((r) => r.score)).toEqual([0.4, 0.9]);
+    expect(out.map((r) => r.path)).toEqual(["memory/a.md", "b.md"]);
+  });
+
+  it("calls touch with memory-v2 hits and never calls loadSignals", async () => {
+    const loadSignals = vi.fn();
+    let receivedHits: ReadonlyArray<{ source: string; path: string }> = [];
+    const touch = (
+      _db: DatabaseSync,
+      hits: ReadonlyArray<{ source: string; path: string }>,
+      _now: number,
+    ) => {
+      receivedHits = hits;
+      return { inspected: 0, inserted: 0, refreshed: 0 };
+    };
+    const fn = buildRerankWrapper(
+      { enabled: false, shadowOnRecall: true },
+      {
+        openDb: () => db,
+        loadSignals: loadSignals as never,
+        touch: touch as never,
+        now: () => 5000,
+      },
+    );
+    await fn([result(), result({ source: "sessions", path: "sessions/s.md" })], {
+      workspaceDir: "/ws",
+    });
+    expect(loadSignals).not.toHaveBeenCalled();
+    expect(receivedHits.map((h) => `${h.source}:${h.path}`)).toEqual([
+      "memory:memory/a.md",
+      "sessions:sessions/s.md",
+    ]);
+  });
+
+  it("degrades to identity when openDb throws (warn logged, no throw)", async () => {
+    const logWarn = vi.fn();
+    const fn = buildRerankWrapper(
+      { enabled: false, shadowOnRecall: true },
+      {
+        openDb: () => {
+          throw new Error("disk full");
+        },
+        logWarn: logWarn as never,
+      },
+    );
+    const out = await fn([result({ score: 0.42 })], { workspaceDir: "/ws" });
+    expect(out[0]?.score).toBe(0.42);
+    expect(logWarn).toHaveBeenCalledTimes(1);
+  });
+});

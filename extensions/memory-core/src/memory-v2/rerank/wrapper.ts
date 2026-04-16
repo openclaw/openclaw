@@ -30,10 +30,15 @@ export type RerankWrapperOptions = {
   shadowOnRecall?: boolean;
 };
 
-// Builds a RerankFn. Returns identity (a no-op that returns its input verbatim)
-// when `enabled` is false. When enabled, looks up sidecar signals for each
-// result and rescales `score` per the formula in score.ts. Optionally writes
-// shadow rows for previously-unseen locations (off by default).
+// Builds a RerankFn.
+// - enabled=false, shadowOnRecall=false: identity (returns input verbatim,
+//   no db open).
+// - enabled=true: looks up sidecar signals for each result and rescales
+//   `score` per the formula in score.ts.
+// - shadowOnRecall=true: also writes recency touches for memory-v2 hits.
+//   Valid with or without `enabled`. When `enabled=false`, search order is
+//   unchanged — recency signal is collected without affecting ordering
+//   ("shadow-only mode").
 //
 // All failure modes degrade to identity rather than throwing — the calling
 // tool path must remain resilient.
@@ -41,7 +46,9 @@ export function buildRerankWrapper(
   options: RerankWrapperOptions,
   deps: RerankWiringDeps = {},
 ): RerankFn {
-  if (!options.enabled) {
+  const enabled = options.enabled;
+  const shadowOnRecall = options.shadowOnRecall === true;
+  if (!enabled && !shadowOnRecall) {
     return identityFn;
   }
 
@@ -50,7 +57,6 @@ export function buildRerankWrapper(
   const touch = deps.touch ?? recordTouchedLocations;
   const logWarn = deps.logWarn ?? (() => {});
   const now = deps.now ?? Date.now;
-  const shadowOnRecall = options.shadowOnRecall === true;
 
   return <T extends RerankableResult>(results: readonly T[], ctx: RerankContext): T[] => {
     if (results.length === 0) {
@@ -62,15 +68,20 @@ export function buildRerankWrapper(
     try {
       const db = openDb(ctx.workspaceDir);
       const ts = now();
-      const locationIds = results.map((r) => locationIdOf(r));
-      const signals = loadSignals(db, locationIds);
-      const reranked = applyRerank({
-        results,
-        signalsByLocation: signals,
-        locationIdOf,
-        cfg: options.cfg,
-        now: ts,
-      });
+      let out: T[];
+      if (enabled) {
+        const locationIds = results.map((r) => locationIdOf(r));
+        const signals = loadSignals(db, locationIds);
+        out = applyRerank({
+          results,
+          signalsByLocation: signals,
+          locationIdOf,
+          cfg: options.cfg,
+          now: ts,
+        });
+      } else {
+        out = [...results];
+      }
       if (shadowOnRecall) {
         // Supplement/wiki results reach this wrapper via an `as never` cast
         // in tools.ts and may lack the NOT NULL fields the sidecar insert
@@ -88,7 +99,7 @@ export function buildRerankWrapper(
         }
         touch(db, hits, ts);
       }
-      return reranked;
+      return out;
     } catch (err) {
       logWarn("memory-v2 rerank failed; returning original results", err);
       return [...results];

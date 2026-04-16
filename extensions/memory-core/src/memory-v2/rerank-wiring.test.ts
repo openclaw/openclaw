@@ -83,4 +83,29 @@ describe("buildMemoryV2Rerank", () => {
     );
     expect(out?.[0]?.score).toBe(0.5);
   });
+
+  it("returns a callable RerankFn when shadowOnRecall is true and enabled is false", async () => {
+    const fn = buildMemoryV2Rerank({
+      pluginConfig: {
+        memoryV2: { rerank: { enabled: false, shadowOnRecall: true } },
+      },
+    });
+    expect(typeof fn).toBe("function");
+    // Order- and score-preserving; no db opened without workspaceDir.
+    const out = await fn?.(
+      [{ source: "memory", path: "a.md", startLine: 1, endLine: 2, score: 0.5 }],
+      {},
+    );
+    expect(out?.[0]?.score).toBe(0.5);
+  });
+
+  it("returns undefined when both rerank.enabled and rerank.shadowOnRecall are false", () => {
+    expect(
+      buildMemoryV2Rerank({
+        pluginConfig: {
+          memoryV2: { rerank: { enabled: false, shadowOnRecall: false } },
+        },
+      }),
+    ).toBeUndefined();
+  });
 });
