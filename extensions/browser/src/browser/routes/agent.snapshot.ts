@@ -39,7 +39,7 @@ import {
 } from "./agent.snapshot.plan.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
+import { jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
 
 const CHROME_MCP_OVERLAY_ATTR = "data-openclaw-mcp-overlay";
 
@@ -600,6 +600,104 @@ export function registerBrowserAgentSnapshotRoutes(
         targetId: tab.targetId,
         url: tab.url,
         ...resolved,
+      });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.get("/snapshot-enhanced", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) {
+      return;
+    }
+    const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
+    const interactiveRaw = toBoolean(req.query.interactive);
+    const compactRaw = toBoolean(req.query.compact);
+    const depthRaw = toNumber(req.query.depth);
+    const selector = toStringOrEmpty(req.query.selector);
+    const frameSelector = toStringOrEmpty(req.query.frame);
+
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
+      const pw = await requirePwAi(res, "enhanced snapshot");
+      if (!pw) {
+        return;
+      }
+
+      const snap = await pw.snapshotEnhancedViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        selector: selector.trim() || undefined,
+        frameSelector: frameSelector.trim() || undefined,
+        options: {
+          interactive: interactiveRaw ?? undefined,
+          compact: compactRaw ?? undefined,
+          maxDepth: depthRaw ?? undefined,
+        },
+      });
+
+      return res.json({
+        ok: true,
+        format: "enhanced",
+        targetId: tab.targetId,
+        url: tab.url,
+        snapshot: snap.snapshot,
+        refs: snap.refs,
+        stats: snap.stats,
+        viewport: snap.viewport,
+        visibleText: snap.visibleText,
+        pageMetadata: snap.pageMetadata,
+        interactiveRegionsCount: Object.keys(snap.interactiveRegions).length,
+      });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.get("/snapshot-hybrid", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) {
+      return;
+    }
+    const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
+    const interactiveRaw = toBoolean(req.query.interactive);
+    const compactRaw = toBoolean(req.query.compact);
+    const depthRaw = toNumber(req.query.depth);
+    const selector = toStringOrEmpty(req.query.selector);
+    const frameSelector = toStringOrEmpty(req.query.frame);
+
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
+      const pw = await requirePwAi(res, "hybrid snapshot");
+      if (!pw) {
+        return;
+      }
+
+      const snap = await pw.snapshotHybridViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        selector: selector.trim() || undefined,
+        frameSelector: frameSelector.trim() || undefined,
+        options: {
+          interactive: interactiveRaw ?? undefined,
+          compact: compactRaw ?? undefined,
+          maxDepth: depthRaw ?? undefined,
+        },
+      });
+
+      return res.json({
+        ok: true,
+        format: "hybrid",
+        targetId: tab.targetId,
+        url: tab.url,
+        snapshot: snap.snapshot,
+        refs: snap.refs,
+        stats: snap.stats,
+        viewport: snap.viewport,
+        visibleText: snap.visibleText,
+        pageMetadata: snap.pageMetadata,
+        enhancedRegionsCount: snap.enhancedRegions ? Object.keys(snap.enhancedRegions).length : 0,
       });
     } catch (err) {
       handleRouteError(ctx, res, err);

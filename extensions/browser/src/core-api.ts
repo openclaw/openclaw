@@ -53,6 +53,7 @@ export type {
   BrowserCreateProfileResult,
   BrowserDeleteProfileResult,
   BrowserFormField,
+  BrowserPageMetadata,
   BrowserResetProfileResult,
   BrowserRouteRegistrar,
   BrowserServerState,

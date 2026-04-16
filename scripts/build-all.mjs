@@ -43,6 +43,11 @@ export const BUILD_ALL_STEPS = [
     args: ["--import", "tsx", "scripts/copy-hook-metadata.ts"],
   },
   {
+    label: "copy-browser-page-script",
+    kind: "node",
+    args: ["--import", "tsx", "scripts/copy-browser-page-script.ts"],
+  },
+  {
     label: "copy-export-html-templates",
     kind: "node",
     args: ["--import", "tsx", "scripts/copy-export-html-templates.ts"],
@@ -74,6 +79,7 @@ export const BUILD_ALL_PROFILES = {
     "build-stamp",
     "canvas-a2ui-copy",
     "copy-hook-metadata",
+    "copy-browser-page-script",
     "copy-export-html-templates",
     "write-build-info",
     "write-cli-startup-metadata",

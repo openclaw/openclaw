@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import type { BrowserPageMetadata } from "./browser/client.js";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   browserAct,
@@ -14,6 +15,30 @@ import {
   resolveProfile,
   wrapExternalContent,
 } from "./core-api.js";
+
+function appendEnhancedHybridSnapshotSections(
+  snapshot: {
+    visibleText?: string;
+    pageMetadata?: BrowserPageMetadata;
+  },
+  snapshotText: string,
+): string {
+  const parts = [snapshotText];
+  const visible = snapshot.visibleText?.trim();
+  if (visible) {
+    parts.push("\n\n## Visible text (viewport)\n\n" + visible);
+  }
+  const pm = snapshot.pageMetadata;
+  if (
+    pm &&
+    ((Array.isArray(pm.jsonLd) && pm.jsonLd.length > 0) ||
+      (Array.isArray(pm.microdata) && pm.microdata.length > 0) ||
+      (pm.metaTags && Object.keys(pm.metaTags).length > 0))
+  ) {
+    parts.push("\n\n## Page metadata\n\n" + JSON.stringify(pm, null, 2));
+  }
+  return parts.join("");
+}
 
 const browserToolActionDeps = {
   browserAct,
@@ -181,8 +206,11 @@ export async function executeSnapshotAction(params: {
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
   const snapshotDefaults = browserToolActionDeps.loadConfig().browser?.snapshotDefaults;
-  const format: "ai" | "aria" | undefined =
-    input.snapshotFormat === "ai" || input.snapshotFormat === "aria"
+  const format: "ai" | "aria" | "enhanced" | "hybrid" | undefined =
+    input.snapshotFormat === "ai" ||
+    input.snapshotFormat === "aria" ||
+    input.snapshotFormat === "enhanced" ||
+    input.snapshotFormat === "hybrid"
       ? input.snapshotFormat
       : undefined;
   const mode: "efficient" | undefined =
@@ -209,7 +237,7 @@ export async function executeSnapshotAction(params: {
   const selector = normalizeOptionalString(input.selector);
   const frame = normalizeOptionalString(input.frame);
   const resolvedMaxChars =
-    format === "ai"
+    format === "ai" || format === "enhanced" || format === "hybrid"
       ? hasMaxChars
         ? maxChars
         : mode === "efficient"
@@ -218,31 +246,83 @@ export async function executeSnapshotAction(params: {
       : hasMaxChars
         ? maxChars
         : undefined;
-  const snapshotQuery = {
-    ...(format ? { format } : {}),
-    targetId,
-    limit,
-    ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
-    refs,
-    interactive,
-    compact,
-    depth,
-    selector,
-    frame,
-    labels,
-    mode,
-  };
+  const snapshotPath =
+    format === "enhanced"
+      ? "/snapshot-enhanced"
+      : format === "hybrid"
+        ? "/snapshot-hybrid"
+        : "/snapshot";
+  const snapshotQuery =
+    format === "enhanced" || format === "hybrid"
+      ? {
+          targetId,
+          ...(typeof interactive === "boolean" ? { interactive } : {}),
+          ...(typeof compact === "boolean" ? { compact } : {}),
+          ...(typeof depth === "number" ? { depth } : {}),
+          ...(selector ? { selector } : {}),
+          ...(frame ? { frame } : {}),
+        }
+      : {
+          ...(format ? { format } : {}),
+          targetId,
+          limit,
+          ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+          refs,
+          interactive,
+          compact,
+          depth,
+          selector,
+          frame,
+          labels,
+          mode,
+        };
   const snapshot = proxyRequest
     ? ((await proxyRequest({
         method: "GET",
-        path: "/snapshot",
+        path: snapshotPath,
         profile,
         query: snapshotQuery,
       })) as Awaited<ReturnType<typeof browserSnapshot>>)
     : await browserToolActionDeps.browserSnapshot(baseUrl, {
-        ...snapshotQuery,
+        ...(format === "enhanced" || format === "hybrid"
+          ? { format, ...snapshotQuery }
+          : snapshotQuery),
         profile,
       });
+  if (snapshot.format === "enhanced" || snapshot.format === "hybrid") {
+    let body = snapshot.snapshot ?? "";
+    body = appendEnhancedHybridSnapshotSections(snapshot, body);
+    if (
+      typeof resolvedMaxChars === "number" &&
+      resolvedMaxChars > 0 &&
+      body.length > resolvedMaxChars
+    ) {
+      body = `${body.slice(0, resolvedMaxChars)}\n\n… [truncated]`;
+    }
+    const text = wrapExternalContent(body, {
+      source: "browser",
+      includeWarning: true,
+    });
+    const safeDetails = {
+      ok: true,
+      format: snapshot.format,
+      targetId: snapshot.targetId,
+      url: snapshot.url,
+      stats: snapshot.stats,
+      refs: snapshot.refs ? Object.keys(snapshot.refs).length : undefined,
+      externalContent: {
+        untrusted: true,
+        source: "browser",
+        kind: "snapshot",
+        format: snapshot.format,
+        wrapped: true,
+      },
+    };
+    return {
+      content: [{ type: "text" as const, text }],
+      details: safeDetails,
+    };
+  }
   if (snapshot.format === "ai") {
     const extractedText = snapshot.snapshot ?? "";
     const wrappedSnapshot = wrapExternalContent(extractedText, {

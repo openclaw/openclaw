@@ -28,6 +28,7 @@ export { runBrowserProxyCommand } from "./node-host/invoke-browser.js";
 export type {
   BrowserCreateProfileResult,
   BrowserDeleteProfileResult,
+  BrowserPageMetadata,
   BrowserResetProfileResult,
   BrowserStatus,
   BrowserTab,
