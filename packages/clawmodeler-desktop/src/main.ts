@@ -190,7 +190,7 @@ async function api<T = unknown>(path: string, body?: unknown): Promise<ApiResult
   if (isTauriRuntime()) {
     const payload = await tauriApi<T>(path, body);
     if (!payload.ok) {
-      throw new Error(payload.stderr || payload.error || "ClawModeler command failed");
+      throw apiError(payload.stderr || payload.error || "ClawModeler command failed", payload);
     }
     return payload;
   }
@@ -202,10 +202,17 @@ async function api<T = unknown>(path: string, body?: unknown): Promise<ApiResult
   });
   const payload = (await response.json()) as ApiResult<T>;
   if (!response.ok || !payload.ok) {
-    const detail = payload.stderr || payload.error || `HTTP ${response.status}`;
-    throw new Error(detail);
+    throw apiError(payload.stderr || payload.error || `HTTP ${response.status}`, payload);
   }
   return payload;
+}
+
+type ApiError<T> = Error & { payload?: ApiResult<T> };
+
+function apiError<T>(message: string, payload: ApiResult<T>): ApiError<T> {
+  const error = new Error(message) as ApiError<T>;
+  error.payload = payload;
+  return error;
 }
 
 async function runAction<T>(label: string, task: () => Promise<ApiResult<T>>) {
@@ -234,9 +241,17 @@ async function runAction<T>(label: string, task: () => Promise<ApiResult<T>>) {
 
 async function refreshDoctor() {
   await runAction("Checking local modeling stack", async () => {
-    const result = await api<DoctorResult>("/api/clawmodeler/doctor");
-    state.doctor = result.json ?? null;
-    return result;
+    try {
+      const result = await api<DoctorResult>("/api/clawmodeler/doctor");
+      state.doctor = result.json ?? null;
+      return result;
+    } catch (error) {
+      const payload = (error as ApiError<DoctorResult>).payload;
+      if (payload?.json) {
+        state.doctor = payload.json;
+      }
+      throw error;
+    }
   });
 }
 
@@ -298,10 +313,21 @@ async function pickInputFiles() {
     });
     if (Array.isArray(selected) && selected.length > 0) {
       const existing = state.inputPaths.trim();
-      const appended = selected.join("\n");
-      state.inputPaths = existing ? `${existing}\n${appended}` : appended;
-      saveForm();
-      render();
+      const existingSet = new Set(
+        existing
+          ? existing
+              .split(/\r?\n/)
+              .map((line) => line.trim())
+              .filter(Boolean)
+          : [],
+      );
+      const toAdd = selected.filter((path) => !existingSet.has(path.trim()));
+      if (toAdd.length > 0) {
+        const appended = toAdd.join("\n");
+        state.inputPaths = existing ? `${existing}\n${appended}` : appended;
+        saveForm();
+        render();
+      }
     }
   } catch (error) {
     state.status = friendlyError(error instanceof Error ? error.message : String(error));

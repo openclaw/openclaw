@@ -58,15 +58,17 @@ fn sidecar_candidates(app: &tauri::AppHandle) -> Vec<PathBuf> {
         candidates.push(PathBuf::from(engine_bin));
     }
 
+    let binary_name = format!("clawmodeler-engine{}", std::env::consts::EXE_SUFFIX);
+
     if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(resource_dir.join("clawmodeler-engine"));
-        candidates.push(resource_dir.join("binaries").join("clawmodeler-engine"));
+        candidates.push(resource_dir.join(&binary_name));
+        candidates.push(resource_dir.join("binaries").join(&binary_name));
     }
 
     candidates.push(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("binaries")
-            .join("clawmodeler-engine"),
+            .join(&binary_name),
     );
 
     candidates
