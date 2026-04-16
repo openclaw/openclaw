@@ -257,6 +257,7 @@ export type ProviderRuntimeFailureKind =
   | "auth_scope"
   | "auth_refresh"
   | "auth_html_403"
+  | "upstream_html"
   | "proxy"
   | "rate_limit"
   | "dns"
@@ -669,7 +670,9 @@ function isOpenRouterKeyLimitExceededError(raw: string, provider?: string): bool
 }
 
 function isExactUnknownNoDetailsError(raw: string): boolean {
-  return normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)";
+  return (
+    normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)"
+  );
 }
 
 function classifyFailoverClassificationFromMessage(
@@ -757,6 +760,12 @@ function classifyFailoverClassificationFromMessage(
 
 export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassification | null {
   const inferredStatus = inferSignalStatus(signal);
+  // Short-circuit HTML error pages (e.g. Cloudflare 502/503/520-524) before
+  // running pattern-based message classifiers, which can misinterpret HTML
+  // body content as rate-limit or other structured API errors.
+  if (signal.message && isHtmlErrorResponse(signal.message, inferredStatus)) {
+    return toReasonClassification("timeout");
+  }
   const messageClassification = signal.message
     ? classifyFailoverClassificationFromMessage(signal.message, signal.provider)
     : null;
@@ -791,8 +800,8 @@ export function classifyProviderRuntimeFailureKind(
   if (message && isAuthScopeErrorMessage(message, status, normalizedSignal.provider)) {
     return "auth_scope";
   }
-  if (message && status === 403 && isHtmlErrorResponse(message, status)) {
-    return "auth_html_403";
+  if (message && isHtmlErrorResponse(message, status)) {
+    return status === 403 ? "auth_html_403" : "upstream_html";
   }
   if (message && isProxyErrorMessage(message, status)) {
     return "proxy";
@@ -882,6 +891,14 @@ export function formatAssistantErrorText(
     return (
       "Authentication failed with an HTML 403 response from the provider. " +
       "Re-authenticate and verify your provider account access."
+    );
+  }
+
+  if (providerRuntimeFailureKind === "upstream_html") {
+    return (
+      "The provider returned an HTML error page instead of an API response. " +
+      "This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. " +
+      "Retry in a moment or check provider status."
     );
   }
 

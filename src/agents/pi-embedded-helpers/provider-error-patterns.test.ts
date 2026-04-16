@@ -16,7 +16,11 @@ vi.mock("../../plugins/provider-runtime.js", async () => {
   };
 });
 
-import { classifyFailoverReason, isContextOverflowError } from "./errors.js";
+import {
+  classifyFailoverReason,
+  classifyProviderRuntimeFailureKind,
+  isContextOverflowError,
+} from "./errors.js";
 import {
   classifyProviderSpecificError,
   matchesProviderContextOverflow,
@@ -144,5 +148,49 @@ describe("classifyFailoverReason with provider patterns", () => {
     expect(classifyFailoverReason("model_is_deactivated: this model has been deactivated")).toBe(
       "model_not_found",
     );
+  });
+});
+
+describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
+  // Real Cloudflare error bodies — the HTTP status arrives via signal.status,
+  // the message is the raw response body starting with <!doctype html>.
+  const cloudflareHtml502 =
+    "<!doctype html><html><head><title>502 Bad Gateway</title></head>" +
+    "<body><h1>502 Bad Gateway</h1><p>cloudflare-nginx</p></body></html>";
+
+  const cloudflareHtml503 =
+    "<!doctype html><html><head><title>503</title></head>" +
+    "<body><h1>Service Unavailable</h1><p>Please try again. Rate limit exceeded.</p></body></html>";
+
+  it("classifies Cloudflare HTML 502 as timeout, not rate_limit", () => {
+    expect(classifyFailoverReason(`502 ${cloudflareHtml502}`)).toBe("timeout");
+  });
+
+  it("classifies Cloudflare HTML 503 with rate-limit text as timeout, not rate_limit", () => {
+    // The HTML body contains "Rate limit exceeded" — before the fix, pattern
+    // matchers would pick this up and return "rate_limit". The HTML early-exit
+    // in classifyFailoverSignal should short-circuit before that happens.
+    expect(classifyFailoverReason(`503 ${cloudflareHtml503}`)).toBe("timeout");
+  });
+
+  it("classifies runtime failure kind as upstream_html for non-403 HTML", () => {
+    expect(classifyProviderRuntimeFailureKind({ status: 502, message: cloudflareHtml502 })).toBe(
+      "upstream_html",
+    );
+  });
+
+  it("still classifies 403 HTML as auth_html_403", () => {
+    const html403 =
+      "<!doctype html><html><head><title>403 Forbidden</title></head>" +
+      "<body><h1>Forbidden</h1></body></html>";
+    expect(classifyProviderRuntimeFailureKind({ status: 403, message: html403 })).toBe(
+      "auth_html_403",
+    );
+  });
+
+  it("does not misclassify JSON API rate-limit responses as HTML", () => {
+    const jsonRateLimit =
+      '429 {"error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}';
+    expect(classifyFailoverReason(jsonRateLimit)).toBe("rate_limit");
   });
 });
