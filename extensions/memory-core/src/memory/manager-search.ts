@@ -62,6 +62,21 @@ function extractRelevantSnippet(
     if (full.length > 0 && !queryTerms.includes(full)) {
       queryTerms = [full, ...queryTerms];
     }
+    // For multi-term trigram queries (e.g. "成语接龙 游戏"), the full query
+    // with whitespace may not match verbatim in stored text that lacks the
+    // separator.  Add each individual segment as an anchor candidate so
+    // partial matches can still anchor the snippet.
+    const segments = full
+      .split(/\s+/)
+      .filter((s) => s.length > 0)
+      .sort((a, b) => b.length - a.length);
+    if (segments.length > 1) {
+      for (const seg of segments) {
+        if (!queryTerms.includes(seg)) {
+          queryTerms.push(seg);
+        }
+      }
+    }
   }
 
   // extractKeywords drops pure-numeric tokens (e.g. "404", "2024").
