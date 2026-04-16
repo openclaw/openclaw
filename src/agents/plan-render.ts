@@ -30,7 +30,9 @@ export function renderPlanChecklist(steps: PlanStepForRender[], format: PlanRend
   }
 
   const lines = steps.map((s) => {
-    const rawLabel = s.status === "in_progress" && s.activeForm ? s.activeForm : s.step;
+    // Treat whitespace-only activeForm as missing — fall back to step text.
+    const hasUsableActiveForm = typeof s.activeForm === "string" && s.activeForm.trim().length > 0;
+    const rawLabel = s.status === "in_progress" && hasUsableActiveForm ? s.activeForm! : s.step;
     // Strip newlines from model-generated step text to prevent broken checklists.
     const label = rawLabel.replace(/[\n\r]+/g, " ").trim();
 
@@ -50,26 +52,35 @@ export function renderPlanChecklist(steps: PlanStepForRender[], format: PlanRend
       }
 
       case "markdown": {
+        // Escape user-controlled text to prevent markdown injection
+        // (links, code spans, emphasis, headings).
+        const md = escapeMarkdown(label);
         if (s.status === "completed") {
-          return `- [x] ${label}`;
+          return `- [x] ${md}`;
         }
         if (s.status === "in_progress") {
-          return `- [>] **${label}**`;
+          return `- [>] **${md}**`;
         }
         if (s.status === "cancelled") {
-          return `- [~] ~~${label}~~`;
+          return `- [~] ~~${md}~~`;
         }
-        return `- [ ] ${label}`;
+        return `- [ ] ${md}`;
       }
 
       case "plaintext": {
+        // Neutralize @channel/@here/@everyone mention triggers even in
+        // plaintext (some clients still parse them).
+        const safe = neutralizeMentions(label);
         const markers: Record<PlanStepForRender["status"], string> = {
           completed: "[x]",
           in_progress: "[>]",
           cancelled: "[~]",
           pending: "[ ]",
         };
-        return `${markers[s.status] ?? "[ ]"} ${label}`;
+        if (!Object.hasOwn(markers, s.status)) {
+          warnUnknownStatus(s.status);
+        }
+        return `${markers[s.status] ?? "[ ]"} ${safe}`;
       }
 
       case "slack-mrkdwn": {
@@ -142,5 +153,40 @@ function escapeSlackMrkdwn(text: string): string {
 }
 
 function escapeHtml(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Escapes markdown meta-characters in user-controlled text so a step like
+ * "Deploy `rm -rf /`" or "[click](evil)" doesn't render as a code span or link.
+ */
+function escapeMarkdown(text: string): string {
+  // Order matters: backslash first so we don't re-escape our own escapes.
+  return text.replace(/[\\`*_{}[\]()#+\-.!<>|]/g, "\\$&");
+}
+
+/**
+ * Inserts U+FE6B between '@' and known mention triggers to prevent
+ * @channel / @here / @everyone notifications from user-controlled text.
+ * Mirrors the slack-mrkdwn approach but applied across plaintext too.
+ */
+function neutralizeMentions(text: string): string {
+  return text.replace(/@(channel|here|everyone)\b/gi, "@\uFE6B$1");
+}
+
+const warnedStatuses = new Set<string>();
+function warnUnknownStatus(status: string): void {
+  if (warnedStatuses.has(status)) {
+    return;
+  }
+  warnedStatuses.add(status);
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[plan-render] Unknown plan step status "${status}", falling back to pending rendering.`,
+  );
 }
