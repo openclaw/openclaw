@@ -277,7 +277,9 @@ export function createExecApprovalHandlers(
         decisionPromise,
         respond,
         context,
-        clientConnId: client?.connId,
+        // Keep self-routed approvals pending: the same operator connection that
+        // requested the approval can also resolve it via `/approve`.
+        clientConnId: undefined,
         requestEventName: "exec.approval.requested",
         requestEvent,
         twoPhase,

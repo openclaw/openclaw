@@ -500,8 +500,12 @@ describe("exec approval handlers", () => {
   async function requestExecApproval(params: {
     handlers: ExecApprovalHandlers;
     respond: ReturnType<typeof vi.fn>;
-    context: { broadcast: (event: string, payload: unknown) => void };
+    context: {
+      broadcast: (event: string, payload: unknown) => void;
+      hasExecApprovalClients?: (excludeConnId?: string) => boolean;
+    };
     params?: Record<string, unknown>;
+    client?: ExecApprovalRequestArgs["client"];
   }) {
     const requestParams = {
       ...defaultExecApprovalRequestParams,
@@ -545,7 +549,7 @@ describe("exec approval handlers", () => {
         hasExecApprovalClients: () => true,
         ...params.context,
       }),
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-1", type: "req", method: "exec.approval.request" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -1356,6 +1360,39 @@ describe("exec approval handlers", () => {
       expect.objectContaining({ id: "approval-no-approver", decision: null }),
       undefined,
     );
+  });
+
+  it("keeps approvals pending when only the requesting client can approve", async () => {
+    const { manager, handlers, forwarder, respond, context } =
+      createForwardingExecApprovalFixture();
+    const expireSpy = vi.spyOn(manager, "expire");
+    const hasExecApprovalClients = vi.fn((excludeConnId?: string) => excludeConnId === undefined);
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context: { ...context, hasExecApprovalClients },
+      client: {
+        connId: "operator-conn-1",
+        connect: { scopes: ["operator.approvals"] },
+      } as ExecApprovalRequestArgs["client"],
+      params: { twoPhase: true, timeoutMs: 60_000, id: "approval-self-route", host: "gateway" },
+    });
+
+    await vi.waitFor(() => {
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "accepted", id: "approval-self-route" }),
+        undefined,
+      );
+    });
+
+    expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+    expect(hasExecApprovalClients).toHaveBeenCalledWith(undefined);
+    expect(expireSpy).not.toHaveBeenCalled();
+
+    manager.resolve("approval-self-route", "allow-once");
+    await requestPromise;
   });
 
   it("keeps approvals pending when iOS push delivery accepted the request", async () => {
