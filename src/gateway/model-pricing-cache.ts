@@ -101,7 +101,8 @@ function toPricePerMillion(value: number | null): number {
   if (value === null || value < 0 || !Number.isFinite(value)) {
     return 0;
   }
-  return value * 1_000_000;
+  const scaled = value * 1_000_000;
+  return Number.isFinite(scaled) ? scaled : 0;
 }
 
 function parseOpenRouterPricing(value: unknown): CachedModelPricing | null {
@@ -549,15 +550,28 @@ export async function refreshGatewayModelPricingCache(params: {
       // LiteLLM enriches with tieredPricing when available.
       // If only one source has data, use that one.
       if (openRouterPricing && litellmPricing?.tieredPricing) {
+        // Both sources present and LiteLLM has tiers — merge.
         nextPricing.set(modelKey(ref.provider, ref.model), {
           ...openRouterPricing,
           tieredPricing: litellmPricing.tieredPricing,
         });
-      } else if (litellmPricing) {
-        nextPricing.set(modelKey(ref.provider, ref.model), litellmPricing);
       } else if (openRouterPricing) {
+        // Prefer OpenRouter flat pricing when LiteLLM has no tiers to contribute.
         nextPricing.set(modelKey(ref.provider, ref.model), openRouterPricing);
+      } else if (litellmPricing) {
+        // Only LiteLLM has data — use it as-is.
+        nextPricing.set(modelKey(ref.provider, ref.model), litellmPricing);
       }
+    }
+
+    // If both upstream fetches failed (empty catalogs) and we already have
+    // a healthy cache, preserve it instead of replacing with empty data.
+    // This avoids cost-lookup regressions during transient network outages.
+    const existingMeta = getGatewayModelPricingCacheMetaState();
+    if (nextPricing.size === 0 && existingMeta.size > 0) {
+      log.warn("Both pricing sources returned empty data — retaining existing cache");
+      scheduleRefresh({ config: params.config, fetchImpl });
+      return;
     }
 
     replaceGatewayModelPricingCache(nextPricing);

@@ -70,7 +70,8 @@ export type ModelDefinitionConfig = {
       output: number;
       cacheRead: number;
       cacheWrite: number;
-      range: [number, number];
+      /** Bounded tier: `[start, end)`. Open-ended top tier: `[start]` (normalized to `[start, Infinity]` at load time). */
+      range: [number, number] | [number];
     }>;
   };
   contextWindow: number;

@@ -255,11 +255,10 @@ async function scanTranscriptFile(params: {
         model: entry.model,
         config: params.config,
       });
-      if (cost?.tieredPricing && cost.tieredPricing.length > 0) {
+      if ((cost?.tieredPricing && cost.tieredPricing.length > 0) || entry.costTotal === undefined) {
         // When tiered pricing is configured, always recompute to override
         // the flat-rate cost that the transport layer wrote into the transcript.
-        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
-      } else if (entry.costTotal === undefined) {
+        // Otherwise, only fill in missing cost estimates.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
       }
     }
