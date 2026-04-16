@@ -1,6 +1,33 @@
 name: OpenClaw Live And E2E Checks (Reusable)
 
 on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Ref, tag, or SHA to validate
+        required: true
+        default: main
+        type: string
+      include_repo_e2e:
+        description: Whether to run pnpm test:e2e plus repo-specific extra E2E lanes
+        required: false
+        default: true
+        type: boolean
+      include_release_path_suites:
+        description: Whether to run the Docker release-path suites
+        required: false
+        default: true
+        type: boolean
+      include_openwebui:
+        description: Whether to run the Open WebUI Docker smoke
+        required: false
+        default: true
+        type: boolean
+      include_live_suites:
+        description: Whether to run live-provider coverage
+        required: false
+        default: true
+        type: boolean
   workflow_call:
     inputs:
       ref:
