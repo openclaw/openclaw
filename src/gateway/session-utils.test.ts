@@ -1004,4 +1004,138 @@ describe("resolveGatewayModelSupportsImages", () => {
       }),
     ).resolves.toBe(true);
   });
+
+  test("falls back to explicit provider config when model is missing from catalog and config declares image input", async () => {
+    resetConfigRuntimeState();
+    try {
+      const cfg = {
+        models: {
+          providers: {
+            qwen: {
+              baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+              models: [
+                {
+                  id: "qwen3.6-plus",
+                  name: "qwen3.6-plus",
+                  reasoning: false,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_000_000,
+                  maxTokens: 65_536,
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg, cfg);
+
+      await expect(
+        resolveGatewayModelSupportsImages({
+          model: "qwen3.6-plus",
+          provider: "qwen",
+          loadGatewayModelCatalog: async () => [],
+        }),
+      ).resolves.toBe(true);
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("returns false when model is missing from catalog and explicit config declares text-only input", async () => {
+    resetConfigRuntimeState();
+    try {
+      const cfg = {
+        models: {
+          providers: {
+            qwen: {
+              baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+              models: [
+                {
+                  id: "qwen3-coder-plus",
+                  name: "qwen3-coder-plus",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_000_000,
+                  maxTokens: 65_536,
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg, cfg);
+
+      await expect(
+        resolveGatewayModelSupportsImages({
+          model: "qwen3-coder-plus",
+          provider: "qwen",
+          loadGatewayModelCatalog: async () => [],
+        }),
+      ).resolves.toBe(false);
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("returns false when model is missing from both catalog and explicit provider config", async () => {
+    resetConfigRuntimeState();
+    try {
+      const cfg = {
+        models: {},
+      } as unknown as OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg, cfg);
+
+      await expect(
+        resolveGatewayModelSupportsImages({
+          model: "unknown-model",
+          provider: "unknown-provider",
+          loadGatewayModelCatalog: async () => [],
+        }),
+      ).resolves.toBe(false);
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("catalog hit takes precedence over explicit provider config", async () => {
+    resetConfigRuntimeState();
+    try {
+      const cfg = {
+        models: {
+          providers: {
+            qwen: {
+              baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+              models: [
+                {
+                  id: "qwen3.6-plus",
+                  name: "qwen3.6-plus",
+                  reasoning: false,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_000_000,
+                  maxTokens: 65_536,
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg, cfg);
+
+      await expect(
+        resolveGatewayModelSupportsImages({
+          model: "qwen3.6-plus",
+          provider: "qwen",
+          loadGatewayModelCatalog: async () => [
+            { id: "qwen3.6-plus", name: "qwen3.6-plus", provider: "qwen", input: ["text"] },
+          ],
+        }),
+      ).resolves.toBe(false);
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
 });
+
