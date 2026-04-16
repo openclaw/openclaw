@@ -4,6 +4,7 @@ import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plug
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
+import { warmupBlueBubblesInboundDedupe } from "./inbound-dedupe.js";
 import { asRecord, normalizeWebhookMessage } from "./monitor-normalize.js";
 import { processMessage } from "./monitor-processing.js";
 import type { WebhookTarget } from "./monitor-shared.js";
@@ -414,6 +415,15 @@ async function runBlueBubblesCatchupInner(
     error?.(`[${accountId}] BlueBubbles catchup: cannot resolve server account: ${String(err)}`);
     return null;
   }
+
+  // Ensure legacy→hashed dedupe file migration runs and the on-disk store
+  // is warm before we replay. Without this, an upgrade from a version that
+  // used the old `${safe}.json` naming to the current `${safe}__${hash}.json`
+  // would start with an empty dedupe cache and re-dispatch every message in
+  // the catchup window — producing duplicate replies.
+  await warmupBlueBubblesInboundDedupe(accountId).catch((err) => {
+    error?.(`[${accountId}] BlueBubbles catchup: dedupe warmup failed: ${String(err)}`);
+  });
 
   const { resolved, messages } = await fetchFn(windowStartMs, perRunLimit, {
     baseUrl,
