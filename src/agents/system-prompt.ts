@@ -697,6 +697,10 @@ export function buildAgentSystemPrompt(params: {
       }),
     }),
     ...buildOverridablePromptSection({
+      override: providerSectionOverrides.tool_enforcement,
+      fallback: [],
+    }),
+    ...buildOverridablePromptSection({
       override: providerStablePrefix,
       fallback: [],
     }),
