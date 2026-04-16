@@ -6,16 +6,23 @@
  * usage to plan quota instead of extra usage billing. Without this, OAuth
  * requests are billed as "extra usage" at API rates.
  *
- * The attribution header must appear as its own line/block in the system
- * prompt, starting with "x-anthropic-billing-header:".
+ * The attribution header must appear as its own system prompt block (Block 0)
+ * starting with "x-anthropic-billing-header:".
  */
 
+import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { createHash } from "node:crypto";
 
 /**
  * Hardcoded salt — must match the server-side validation.
  */
 const FINGERPRINT_SALT = "59cf53e54c78";
+
+/**
+ * Claude Code version to report in the attribution header.
+ * Should match the user-agent version sent by the Anthropic provider.
+ */
+const CLAUDE_CODE_VERSION = "2.1.111";
 
 /**
  * Computes a 3-character fingerprint for attribution.
@@ -31,12 +38,54 @@ function computeFingerprint(messageText: string, version: string): string {
 
 /**
  * Build the attribution header line for the system prompt.
- *
- * @param firstUserMessage - Text of the first user message (for fingerprinting)
- * @param version - Claude Code version string
- * @returns Attribution header string, or empty string if inputs are missing
  */
-export function getAttributionHeader(firstUserMessage: string, version: string): string {
+export function getAttributionHeader(
+  firstUserMessage: string,
+  version: string = CLAUDE_CODE_VERSION,
+): string {
   const fingerprint = computeFingerprint(firstUserMessage, version);
   return `x-anthropic-billing-header: cc_version=${version}.${fingerprint}; cc_entrypoint=cli;`;
+}
+
+/**
+ * Extract the text of the first user message from an API params object.
+ */
+function extractFirstUserMessageText(params: Record<string, unknown>): string {
+  const messages = params.messages as Array<{ role: string; content: unknown }> | undefined;
+  if (!messages) return "";
+  const first = messages.find((m) => m.role === "user");
+  if (!first) return "";
+  if (typeof first.content === "string") return first.content;
+  if (Array.isArray(first.content)) {
+    const textBlock = first.content.find(
+      (b: { type?: string }) => b && typeof b === "object" && b.type === "text",
+    );
+    return (textBlock as { text?: string })?.text ?? "";
+  }
+  return "";
+}
+
+/**
+ * Wrap a StreamFn to inject the billing attribution header as Block 0
+ * in the system prompt for Anthropic subscription (OAuth) requests.
+ *
+ * This uses the onPayload callback to mutate the built params before
+ * they're sent to the API, ensuring the attribution header is its own
+ * system prompt block at position 0.
+ */
+export function wrapStreamFnWithAttribution(streamFn: StreamFn): StreamFn {
+  return (model, context, options) => {
+    const wrappedOnPayload = (payload: unknown) => {
+      const params = payload as Record<string, unknown>;
+      const system = params.system as Array<{ type: string; text: string }> | undefined;
+      if (system && Array.isArray(system)) {
+        const firstUserText = extractFirstUserMessageText(params);
+        const header = getAttributionHeader(firstUserText);
+        // Prepend as Block 0
+        system.unshift({ type: "text", text: header });
+      }
+      options?.onPayload?.(payload);
+    };
+    return streamFn(model, context, { ...options, onPayload: wrappedOnPayload });
+  };
 }

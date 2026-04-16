@@ -20,7 +20,7 @@ import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
-import { getAttributionHeader } from "../../anthropic-attribution.js";
+import { wrapStreamFnWithAttribution } from "../../anthropic-attribution.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
@@ -411,13 +411,8 @@ export async function runEmbeddedAttempt(
     const CLAUDE_CODE_SUBSCRIPTION_PREFIX =
       "You are Claude Code, Anthropic's official CLI for Claude.\n\n";
     const rawSystemPrompt = systemPromptOverride();
-    // For subscription providers, prepend the billing attribution header
-    // so Anthropic routes usage to plan quota instead of extra usage.
-    const attributionHeader = needsSubscriptionPrefix
-      ? getAttributionHeader(params.prompt, "2.1.2")
-      : "";
     const systemPromptText = needsSubscriptionPrefix
-      ? attributionHeader + "\n" + CLAUDE_CODE_SUBSCRIPTION_PREFIX + rawSystemPrompt
+      ? CLAUDE_CODE_SUBSCRIPTION_PREFIX + rawSystemPrompt
       : rawSystemPrompt;
 
     const sessionLock = await acquireSessionWriteLock({
@@ -578,6 +573,11 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
+      }
+      // Inject billing attribution header for subscription providers so
+      // Anthropic routes usage to plan quota instead of extra usage.
+      if (needsSubscriptionPrefix) {
+        activeSession.agent.streamFn = wrapStreamFnWithAttribution(activeSession.agent.streamFn);
       }
 
       try {
