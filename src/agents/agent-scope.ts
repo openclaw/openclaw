@@ -83,6 +83,35 @@ export function resolveAgentExecutionContract(
   return agentContract ?? defaultContract;
 }
 
+export type ResolvedAutoContinueConfig = {
+  enabled: boolean;
+  maxTurns: number;
+  stopOnMutation: boolean;
+};
+
+const DEFAULT_AUTO_CONTINUE: ResolvedAutoContinueConfig = {
+  enabled: false,
+  maxTurns: 5,
+  stopOnMutation: true,
+};
+
+export function resolveAgentAutoContinue(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): ResolvedAutoContinueConfig {
+  const defaultAc = cfg?.agents?.defaults?.embeddedPi?.autoContinue;
+  const agentAc = agentId ? resolveAgentConfig(cfg, agentId)?.embeddedPi?.autoContinue : undefined;
+  const merged = agentAc ?? defaultAc;
+  if (!merged) {
+    return DEFAULT_AUTO_CONTINUE;
+  }
+  return {
+    enabled: merged.enabled ?? DEFAULT_AUTO_CONTINUE.enabled,
+    maxTurns: merged.maxTurns ?? DEFAULT_AUTO_CONTINUE.maxTurns,
+    stopOnMutation: merged.stopOnMutation ?? DEFAULT_AUTO_CONTINUE.stopOnMutation,
+  };
+}
+
 export function resolveAgentSkillsFilter(
   cfg: OpenClawConfig,
   agentId: string,

@@ -19,6 +19,7 @@ import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js"
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
   hasConfiguredModelFallbacks,
+  resolveAgentAutoContinue,
   resolveAgentExecutionContract,
   resolveSessionAgentIds,
   resolveAgentWorkspaceDir,
@@ -108,6 +109,7 @@ import {
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
 import {
+  ACK_EXECUTION_FAST_PATH_INSTRUCTION,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   resolveAckExecutionFastPathInstruction,
@@ -116,6 +118,7 @@ import {
   resolveIncompleteTurnPayloadText,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  resolveEscalatingPlanningRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
@@ -599,6 +602,8 @@ export async function runEmbeddedPiAgent(
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
       let planningOnlyRetryAttempts = 0;
+      let autoContinueTurns = 0;
+      const autoContinueConfig = resolveAgentAutoContinue(params.config, params.agentId);
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
@@ -1925,7 +1930,9 @@ export async function runEmbeddedPiAgent(
               });
             }
             planningOnlyRetryAttempts += 1;
-            planningOnlyRetryInstruction = nextPlanningOnlyRetryInstruction;
+            planningOnlyRetryInstruction = resolveEscalatingPlanningRetryInstruction(
+              planningOnlyRetryAttempts - 1,
+            );
             log.warn(
               `planning-only turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${provider}/${modelId} contract=${executionContract} configured=${configuredExecutionContract} — retrying ` +
@@ -1979,6 +1986,24 @@ export async function runEmbeddedPiAgent(
             );
           }
           if (!incompleteTurnText && nextPlanningOnlyRetryInstruction && strictAgenticActive) {
+            // Auto-continue: when enabled and budget remains, inject ACK
+            // fast-path instead of blocking. This keeps the agent working
+            // on planning-heavy tasks without requiring manual "continue".
+            if (
+              autoContinueConfig.enabled &&
+              autoContinueTurns < autoContinueConfig.maxTurns &&
+              (!autoContinueConfig.stopOnMutation ||
+                !attempt.replayMetadata.hadPotentialSideEffects)
+            ) {
+              autoContinueTurns += 1;
+              planningOnlyRetryAttempts = 0;
+              planningOnlyRetryInstruction = ACK_EXECUTION_FAST_PATH_INSTRUCTION;
+              log.info(
+                `auto-continue active: runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `turn=${autoContinueTurns}/${autoContinueConfig.maxTurns} — injecting ACK fast-path`,
+              );
+              continue;
+            }
             log.warn(
               `strict-agentic run exhausted planning-only retries: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${provider}/${modelId} configured=${configuredExecutionContract} — surfacing blocked state`,
