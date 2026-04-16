@@ -2746,6 +2746,65 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
   });
 
+  it("rejects sandbox-oversized non-image attachments as 4xx before staging", async () => {
+    // Regression: resolveChatAttachmentMaxBytes defaults to 20MB, but
+    // stageSandboxMedia caps each file at STAGED_MEDIA_MAX_BYTES (5MB) and
+    // silently drops oversize files. Without a pre-check, a sandbox session
+    // accepting a 5-20MB non-image would fail staging and surface as a
+    // retryable 5xx UNAVAILABLE, misleading clients into retrying a
+    // deterministically broken request.
+    createTranscriptFixture("openclaw-chat-send-sandbox-oversize-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/huge.pdf", contentType: "application/pdf" },
+    ];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    const respond = vi.fn();
+    const context = createChatContext();
+    // 6MB buffer — above STAGED_MEDIA_MAX_BYTES (5MB) but below the 20MB parse cap.
+    const oversized = Buffer.alloc(6 * 1024 * 1024);
+    oversized.set(Buffer.from("%PDF-1.4\n"), 0);
+    const pdf = oversized.toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-sandbox-oversize",
+      message: "read this",
+      requestParams: {
+        attachments: [
+          { type: "file", mimeType: "application/pdf", fileName: "huge.pdf", content: pdf },
+        ],
+      },
+      expectBroadcast: false,
+      waitFor: "none",
+    });
+
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(respond).toHaveBeenCalledTimes(1);
+    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    // 4xx, not 5xx — retrying a file that exceeds the staging cap cannot
+    // succeed, so the failure must be surfaced as a client-side rejection.
+    expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(error?.message ?? String(error)).toMatch(/sandbox staging limit/i);
+    // Orphaned media-store entries are cleaned up before the 4xx surfaces.
+    expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);
+  });
+
   it("passes imageOrder for mixed inline and offloaded chat.send attachments", async () => {
     createTranscriptFixture("openclaw-chat-send-image-order-");
     mockState.finalText = "ok";
