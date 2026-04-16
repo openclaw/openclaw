@@ -88,7 +88,7 @@ export function normalizeReplyPayload(
     if (stripped.didStrip) {
       opts.onHeartbeatStrip?.();
     }
-    if (stripped.shouldSkip && !hasContent(stripped.text)) {
+    if (stripped.shouldSkip && !hasContent(stripped.text) && !payload.sticker) {
       opts.onSkip?.("heartbeat");
       return null;
     }
