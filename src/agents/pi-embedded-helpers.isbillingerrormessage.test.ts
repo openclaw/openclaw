@@ -1219,4 +1219,16 @@ describe("classifyProviderRuntimeFailureKind", () => {
       ),
     ).not.toBe("proxy");
   });
+
+  it("classifies Cloudflare HTML without a leading status code as upstream_html, not dns", () => {
+    const cloudflareNoStatus =
+      '<!DOCTYPE html><html><head><title>Just a moment...</title></head><body>Cloudflare DDoS protection</body></html>';
+    expect(classifyProviderRuntimeFailureKind(cloudflareNoStatus)).toBe("upstream_html");
+  });
+
+  it("classifies HTML with <title> error indicator and no status code as upstream_html", () => {
+    const htmlTitleError =
+      '<!DOCTYPE html><html><head><title>503 Service Temporarily Unavailable - Error</title></head><body>Please try again later</body></html>';
+    expect(classifyProviderRuntimeFailureKind(htmlTitleError)).toBe("upstream_html");
+  });
 });
