@@ -53,6 +53,7 @@ export function normalizeReplyPayloadDirectives(params: {
       replyToTag: params.payload.replyToTag || parsed?.replyToTag,
       replyToCurrent: params.payload.replyToCurrent || parsed?.replyToCurrent,
       audioAsVoice: Boolean(params.payload.audioAsVoice || parsed?.audioAsVoice),
+      interactive: params.payload.interactive ?? parsed?.interactive,
     },
     isSilent: parsed?.isSilent ?? false,
   };

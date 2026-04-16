@@ -11,13 +11,25 @@ const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((entry) => typeof entry === "string");
 
 function normalizeCapabilities(capabilities: CapabilitiesConfig | undefined): string[] | undefined {
-  // Handle object-format capabilities (e.g., { inlineButtons: "dm" }) gracefully.
-  // Channel-specific handlers (like resolveTelegramInlineButtonsScope) process these separately.
-  if (!isStringArray(capabilities)) {
-    return undefined;
+  if (isStringArray(capabilities)) {
+    const normalized = capabilities.map((entry) => entry.trim()).filter(Boolean);
+    return normalized.length > 0 ? normalized : undefined;
   }
-  const normalized = capabilities.map((entry) => entry.trim()).filter(Boolean);
-  return normalized.length > 0 ? normalized : undefined;
+
+  // Handle object-format capabilities (e.g., { inlineButtons: "dm" }).
+  // Channel-specific handlers (like resolveTelegramInlineButtonsScope) process the detailed scope,
+  // but we also surface known capability keys as string flags so the agent system-prompt can see them.
+  if (capabilities && typeof capabilities === "object" && !Array.isArray(capabilities)) {
+    const result: string[] = [];
+    const cap = capabilities as Record<string, unknown>;
+    // inlineButtons: "dm" | "group" | "all" | "allowlist" → surface as "inlinebuttons"
+    if (cap["inlineButtons"] && cap["inlineButtons"] !== "off" && cap["inlineButtons"] !== false) {
+      result.push("inlinebuttons");
+    }
+    return result.length > 0 ? result : undefined;
+  }
+
+  return undefined;
 }
 
 function resolveAccountCapabilities(params: {
