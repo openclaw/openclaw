@@ -13,13 +13,32 @@
  * incomplete-turn.ts (PLANNING_ONLY_PROMISE_RE).
  */
 
+import type { PlanStepStatus } from "./tools/update-plan-tool.js";
+
+/**
+ * Plan step shape accepted by hydration. `status` stays widened to
+ * `string` because hydration consumes data from heterogeneous sources
+ * (compaction snapshots, channel adapters, JSON imports) where the
+ * value is not always pre-narrowed to `PlanStepStatus`. Valid statuses
+ * are listed in `PLAN_STEP_STATUSES`; unknown statuses are filtered out
+ * by the active-set check below.
+ */
 interface PlanStep {
   step: string;
   status: string;
   activeForm?: string;
 }
 
-const ACTIVE_STATUSES = new Set(["pending", "in_progress"]);
+// Active statuses (pending + in_progress) are the subset we replay after
+// compression. The literal tuple is asserted via `satisfies` so this
+// file fails to compile if `PlanStepStatus` ever drops one of these
+// names. The Set is typed `string` so `.has()` accepts the widened
+// input from heterogeneous callers without a cast.
+const ACTIVE_PLAN_STATUSES = [
+  "pending",
+  "in_progress",
+] as const satisfies readonly PlanStepStatus[];
+const ACTIVE_STATUSES: ReadonlySet<string> = new Set<string>(ACTIVE_PLAN_STATUSES);
 
 /**
  * Formats active plan steps for injection after compaction.

@@ -41,7 +41,8 @@ vi.mock("../tools/tts-tool.js", () => ({
 }));
 
 vi.mock("../tools/update-plan-tool.js", () => ({
-  createUpdatePlanTool: () => stubTool("update_plan"),
+  createUpdatePlanTool: (_options?: { runId?: string }) => stubTool("update_plan"),
+  PLAN_STEP_STATUSES: ["pending", "in_progress", "completed", "cancelled"] as const,
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
