@@ -8,12 +8,29 @@ LIVE_IMAGE_NAME="${OPENCLAW_LIVE_IMAGE:-${IMAGE_NAME}-live}"
 CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
-CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-$HOME/.cache/openclaw/docker-cli-tools}"
+TEMP_DIRS=()
+
+cleanup_temp_dirs() {
+  if ((${#TEMP_DIRS[@]} > 0)); then
+    rm -rf "${TEMP_DIRS[@]}"
+  fi
+}
+trap cleanup_temp_dirs EXIT
+
+if [[ -n "${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-}" ]]; then
+  CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR}"
+elif [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  CLI_TOOLS_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cli-tools.XXXXXX")"
+  TEMP_DIRS+=("$CLI_TOOLS_DIR")
+else
+  CLI_TOOLS_DIR="$HOME/.cache/openclaw/docker-cli-tools"
+fi
 
 mkdir -p "$CLI_TOOLS_DIR"
+chmod 0777 "$CLI_TOOLS_DIR" || true
 
 PROFILE_MOUNT=()
-if [[ -f "$PROFILE_FILE" ]]; then
+if [[ -r "$PROFILE_FILE" ]]; then
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
 fi
 
@@ -40,8 +57,14 @@ fi
 
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
-[ -f "$HOME/.profile" ] && source "$HOME/.profile" || true
-export PATH="$HOME/.npm-global/bin:$PATH"
+[ -r "$HOME/.profile" ] && source "$HOME/.profile" || true
+export NPM_CONFIG_PREFIX="${NPM_CONFIG_PREFIX:-$HOME/.npm-global}"
+export npm_config_prefix="$NPM_CONFIG_PREFIX"
+export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$HOME/.npm-cache}"
+export npm_config_cache="$NPM_CONFIG_CACHE"
+mkdir -p "$NPM_CONFIG_PREFIX" "$NPM_CONFIG_CACHE"
+chmod 700 "$NPM_CONFIG_CACHE" || true
+export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
 if ((${#auth_files[@]} > 0)); then
   for auth_file in "${auth_files[@]}"; do
@@ -53,8 +76,8 @@ if ((${#auth_files[@]} > 0)); then
     fi
   done
 fi
-if [ ! -x "$HOME/.npm-global/bin/codex" ]; then
-  npm_config_prefix="$HOME/.npm-global" npm install -g @openai/codex
+if [ ! -x "$NPM_CONFIG_PREFIX/bin/codex" ]; then
+  npm install -g @openai/codex
 fi
 tmp_dir="$(mktemp -d)"
 cleanup() {

@@ -37,7 +37,7 @@ else
 fi
 
 PROFILE_MOUNT=()
-if [[ -f "$PROFILE_FILE" ]]; then
+if [[ -r "$PROFILE_FILE" ]]; then
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
 fi
 
@@ -110,7 +110,7 @@ fi
 
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
-[ -f "$HOME/.profile" ] && source "$HOME/.profile" || true
+[ -r "$HOME/.profile" ] && source "$HOME/.profile" || true
 IFS=',' read -r -a auth_dirs <<<"${OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED:-}"
 IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
 if ((${#auth_dirs[@]} > 0)); then
