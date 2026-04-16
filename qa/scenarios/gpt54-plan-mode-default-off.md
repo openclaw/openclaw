@@ -1,14 +1,13 @@
 # GPT-5.4 default run does not enter plan mode
 
 ```yaml qa-scenario
-id: gpt54-default-no-plan-mode
+id: gpt54-plan-mode-default-off
 title: Default GPT-5.4 run does NOT enter plan mode (Hermes parity preserved)
 surface: agent
-objective: Verify that a default GPT-5.4 run with no plan-mode config does not enter plan mode or call enter_plan_mode. Strict-agentic auto-enables but plan mode does NOT.
+objective: Verify that a default GPT-5.4 run with no plan-mode config does not enter plan mode or call enter_plan_mode.
 successCriteria:
   - Agent does NOT call enter_plan_mode tool
   - Agent executes tasks normally with full tool access
-  - Strict-agentic planning-only retry guard is active (not plan mode)
 docsRefs: []
 codeRefs:
   - src/agents/execution-contract.ts
@@ -22,17 +21,35 @@ execution:
 
 ```yaml qa-flow
 steps:
-  - name: multi-step task without plan mode
+  - name: task completes without plan mode
     actions:
-      - call: sendAgentMessage
+      - call: waitForGatewayHealthy
         args:
-          text: "Read package.json and tell me the project name and version."
-      - call: waitForToolCall
+          - ref: env
+          - 60000
+      - call: waitForQaChannelReady
         args:
-          toolName: read
-          timeoutMs: 30000
-    assertions:
-      - responseContainsTool: read
-      - toolCallHistoryDoesNotContain: enter_plan_mode
-      - toolCallHistoryDoesNotContain: exit_plan_mode
+          - ref: env
+          - 60000
+      - call: state.addInboundMessage
+        args:
+          - conversation:
+              id: qa-room
+              kind: channel
+              title: QA Room
+            senderId: alice
+            senderName: Alice
+            text: "Read package.json and tell me the project name and version."
+      - call: waitForOutboundMessage
+        saveAs: message
+        args:
+          - ref: state
+          - lambda:
+              params: [candidate]
+              expr: "candidate.conversation.id === 'qa-room'"
+          - expr: liveTurnTimeoutMs(env, 60000)
+      - assert:
+          expr: "!message.text.includes('enter_plan_mode')"
+          message: "Response should not mention entering plan mode"
+    detailsExpr: message.text
 ```

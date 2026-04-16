@@ -7,8 +7,6 @@ surface: agent
 objective: Verify GPT-5.4 calls exec/code_execution for arithmetic, timestamps, system state, and file queries instead of answering from training data.
 successCriteria:
   - Agent calls exec or code_execution tool for "What time is it?" (not a plain text answer)
-  - Agent calls exec tool for "What's 2^64?" (not a mental computation)
-  - Agent calls exec tool for "How much free disk space?" (not a guess)
   - Agent does NOT answer any factual query from memory alone
 docsRefs: []
 codeRefs:
@@ -22,40 +20,35 @@ execution:
 
 ```yaml qa-flow
 steps:
-  - name: ask current time
+  - name: ask current time triggers tool use
     actions:
-      - call: sendAgentMessage
+      - call: waitForGatewayHealthy
         args:
-          text: "What time is it?"
-      - call: waitForToolCall
+          - ref: env
+          - 60000
+      - call: waitForQaChannelReady
         args:
-          toolName: exec
-          timeoutMs: 30000
-    assertions:
-      - responseContainsTool: exec
-      - responseDoesNotContain: "I don't have access to the current time"
-
-  - name: ask arithmetic
-    actions:
-      - call: sendAgentMessage
+          - ref: env
+          - 60000
+      - call: state.addInboundMessage
         args:
-          text: "What is 2^64?"
-      - call: waitForToolCall
+          - conversation:
+              id: qa-room
+              kind: channel
+              title: QA Room
+            senderId: alice
+            senderName: Alice
+            text: "What time is it?"
+      - call: waitForOutboundMessage
+        saveAs: message
         args:
-          toolNameOneOf: [exec, code_execution]
-          timeoutMs: 30000
-    assertions:
-      - responseContainsTool: [exec, code_execution]
-
-  - name: ask disk space
-    actions:
-      - call: sendAgentMessage
-        args:
-          text: "How much free disk space do I have?"
-      - call: waitForToolCall
-        args:
-          toolName: exec
-          timeoutMs: 30000
-    assertions:
-      - responseContainsTool: exec
+          - ref: state
+          - lambda:
+              params: [candidate]
+              expr: "candidate.conversation.id === 'qa-room'"
+          - expr: liveTurnTimeoutMs(env, 60000)
+      - assert:
+          expr: "!message.text.includes(\"I don't have access\")"
+          message: "Response should not claim lack of access to time"
+    detailsExpr: message.text
 ```

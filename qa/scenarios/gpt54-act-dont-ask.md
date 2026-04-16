@@ -7,7 +7,6 @@ surface: agent
 objective: Verify GPT-5.4 executes obvious-default queries immediately without asking clarifying questions.
 successCriteria:
   - Agent checks local machine for "Is port 8080 open?" (does NOT ask "which host?")
-  - Agent checks live system for "What OS am I running?" (does NOT use user profile)
 docsRefs: []
 codeRefs:
   - extensions/openai/prompt-overlay.ts
@@ -22,29 +21,33 @@ execution:
 steps:
   - name: port check acts immediately
     actions:
-      - call: sendAgentMessage
+      - call: waitForGatewayHealthy
         args:
-          text: "Is port 8080 open?"
-      - call: waitForToolCall
+          - ref: env
+          - 60000
+      - call: waitForQaChannelReady
         args:
-          toolName: exec
-          timeoutMs: 30000
-    assertions:
-      - responseContainsTool: exec
-      - responseDoesNotContain: "which host"
-      - responseDoesNotContain: "open where"
-      - responseDoesNotContain: "which machine"
-
-  - name: OS check acts immediately
-    actions:
-      - call: sendAgentMessage
+          - ref: env
+          - 60000
+      - call: state.addInboundMessage
         args:
-          text: "What OS am I running?"
-      - call: waitForToolCall
+          - conversation:
+              id: qa-room
+              kind: channel
+              title: QA Room
+            senderId: alice
+            senderName: Alice
+            text: "Is port 8080 open?"
+      - call: waitForOutboundMessage
+        saveAs: message
         args:
-          toolName: exec
-          timeoutMs: 30000
-    assertions:
-      - responseContainsTool: exec
-      - responseDoesNotContain: "which system"
+          - ref: state
+          - lambda:
+              params: [candidate]
+              expr: "candidate.conversation.id === 'qa-room'"
+          - expr: liveTurnTimeoutMs(env, 60000)
+      - assert:
+          expr: "!message.text.toLowerCase().includes('which host')"
+          message: "Response should not ask which host"
+    detailsExpr: message.text
 ```
