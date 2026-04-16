@@ -8,12 +8,6 @@ import {
   mkdirPathWithinRoot,
 } from "../infra/fs-safe.js";
 import { trySafeFileURLToPath } from "../infra/local-file-access.js";
-import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
-import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
-import { detectMime } from "../media/mime.js";
-import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
-import type { ImageSanitizationLimits } from "./image-sanitization.js";
-import { toRelativeWorkspacePath } from "./path-policy.js";
 import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
 import {
   REQUIRED_PARAM_GROUPS,
@@ -34,12 +28,8 @@ export {
 } from "./pi-tools.params.js";
 
 const normalizeToolParams = (params: unknown): Record<string, unknown> | undefined => {
-  if (!params) {
-    return undefined;
-  }
-  if (typeof params === "object") {
-    return params as Record<string, unknown>;
-  }
+  if (!params) {return undefined;}
+  if (typeof params === "object") {return params as Record<string, unknown>;}
   return undefined;
 };
 
@@ -64,12 +54,7 @@ function createSandboxReadOperations(params: SandboxToolParams) {
     readFile: (filePath: string) => params.bridge.readFile({ filePath, cwd: params.root }),
     stat: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }),
     readdir: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(() => []),
-    access: (filePath: string) =>
-      params.bridge.stat({ filePath, cwd: params.root }).then((s) => {
-        if (!s) {
-          throw new Error("ENOENT");
-        }
-      }),
+    access: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(s => { if (!s) { throw new Error("ENOENT"); } })
   };
 }
 
@@ -77,31 +62,21 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
   return {
     writeFile: (filePath: string, data: string) =>
       params.bridge.writeFile({ filePath, data, cwd: params.root, mkdir: true }),
-    mkdir: (filePath: string) => params.bridge.mkdirp({ filePath, cwd: params.root }),
+    mkdir: (filePath: string) => params.bridge.mkdirp({ filePath, cwd: params.root })
   };
 }
 
 function createSandboxEditOperations(params: SandboxToolParams) {
   return {
-    readFile: (filePath: string) => params.bridge.readFile({ filePath, cwd: params.root }),
+    readFile: (filePath: string) =>
+      params.bridge.readFile({ filePath, cwd: params.root }), 
     writeFile: (filePath: string, data: string) =>
       params.bridge.writeFile({ filePath, data, cwd: params.root }),
-    access: (filePath: string) =>
-      params.bridge.stat({ filePath, cwd: params.root }).then((s) => {
-        if (!s) {
-          throw new Error("ENOENT");
-        }
-      }),
+    access: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(s => { if (!s) { throw new Error("ENOENT"); } })
   };
 }
 
-function createHostWriteOperations(
-  root: string,
-  options?: { workspaceOnly?: boolean },
-): {
-  writeFile: (filePath: string, data: string) => Promise<void>;
-  mkdir: (dir: string) => Promise<void>;
-} {
+function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
@@ -111,9 +86,8 @@ function createHostWriteOperations(
         const resolved = path.resolve(dir);
         await fs.mkdir(resolved, { recursive: true });
       },
-      writeFile: (filePath: string, data: string) =>
-        fs.writeFile(path.resolve(filePath), data, "utf-8"),
-    };
+      writeFile: (filePath: string, data: string) => fs.writeFile(path.resolve(filePath), data, "utf-8"),
+    } as const;
   }
 
   // When workspaceOnly is true, enforce workspace boundary
@@ -125,106 +99,32 @@ function createHostWriteOperations(
         data,
         mkdir: true,
       }),
-    mkdir: (relativePath: string) =>
+    mkdir: (relativePath: string) => 
       mkdirPathWithinRoot({
         rootDir: root,
         relativePath,
-      }).then(() => {}),
+      }).then(() => {})
   };
 }
 
-// FIX P1 (workspaceOnly): Respect workspaceOnly flag in createHostEditOperations
-function createHostEditOperations(
-  root: string,
-  options?: { workspaceOnly?: boolean },
-): {
-  readFile: (filePath: string) => Promise<Buffer>;
-  writeFile: (filePath: string, data: string) => Promise<void>;
-  access: (filePath: string) => Promise<void>;
-} {
-  const workspaceOnly = options?.workspaceOnly ?? false;
-
-  if (!workspaceOnly) {
-    // When workspaceOnly is false, allow edits anywhere on the host
-    return {
-      readFile: (filePath: string) =>
-        fs.readFile(path.resolve(filePath), "utf-8").then((buf) => Buffer.from(buf, "utf-8")),
-      writeFile: (filePath: string, data: string) =>
-        fs.writeFile(path.resolve(filePath), data, "utf-8"),
-      access: (filePath: string) => fs.access(path.resolve(filePath)),
-    };
-  }
-
-  // When workspaceOnly is true, enforce workspace boundary
+function createHostEditOperations(root: string, _options?: { workspaceOnly?: boolean }) {
   return {
-    readFile: (relativePath: string) =>
-      readFileWithinRoot({ rootDir: root, relativePath }).then((res) => res.buffer),
+    readFile: (relativePath: string) => 
+      readFileWithinRoot({ rootDir: root, relativePath }).then(res => res.buffer), 
     writeFile: (relativePath: string, data: string) =>
       writeFileWithinRoot({
         rootDir: root,
         relativePath,
         data,
       }),
-    access: (relativePath: string) => fs.access(path.join(root, relativePath)),
+    access: (relativePath: string) => fs.access(path.join(root, relativePath))
   };
 }
 
 function getImageMimeType(ext: string): string {
-  if (ext === "svg") {
-    return "image/svg+xml";
-  }
-  if (ext === "jpg") {
-    return "image/jpeg";
-  }
+  if (ext === "svg") {return "image/svg+xml";}
+  if (ext === "jpg") {return "image/jpeg";}
   return `image/${ext}`;
-}
-
-// FIX P2 (media extensions): Helper functions for consistent MIME type resolution
-function getAudioMimeType(ext: string): string {
-  const mimeMap: Record<string, string> = {
-    mp3: "audio/mpeg",
-    wav: "audio/wav",
-    ogg: "audio/ogg",
-    m4a: "audio/mp4",
-    flac: "audio/flac",
-    aac: "audio/aac",
-    opus: "audio/opus",
-    wma: "audio/x-ms-wma",
-  };
-  return mimeMap[ext] ?? "audio/mpeg";
-}
-
-function getVideoMimeType(ext: string): string {
-  const mimeMap: Record<string, string> = {
-    mp4: "video/mp4",
-    webm: "video/webm",
-    mov: "video/quicktime",
-    avi: "video/x-msvideo",
-    mkv: "video/x-matroska",
-    m4v: "video/x-m4v",
-    mpg: "video/mpeg",
-    mpeg: "video/mpeg",
-  };
-  return mimeMap[ext] ?? "video/mp4";
-}
-
-// FIX P3 (Windows URLs): Helper to normalize file paths to URL-safe path segments
-function normalizePathForUrl(filePath: string): string {
-  // Convert Windows backslashes to forward slashes
-  const normalized = filePath.replace(/\\/g, "/");
-  
-  // Handle Windows drive letters: "C:/" -> "/C:/"
-  // This ensures the URL path is absolute and valid
-  if (/^[a-zA-Z]:\//.test(normalized) || /^[a-zA-Z]:$/.test(normalized)) {
-    return `/${normalized}`;
-  }
-  
-  // Ensure Unix absolute paths start with /
-  if (!normalized.startsWith("/") && path.isAbsolute(filePath)) {
-    return `/${normalized}`;
-  }
-  
-  return normalized;
 }
 
 type SandboxToolParams = {
@@ -265,20 +165,14 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
 }
 
-export function createHostWorkspaceWriteTool(
-  root: string,
-  options?: { workspaceOnly?: boolean },
-) {
+export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
 }
 
-export function createHostWorkspaceEditTool(
-  root: string,
-  options?: { workspaceOnly?: boolean },
-) {
+export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
@@ -444,9 +338,7 @@ async function appendMemoryFlushContent(params: {
     signal: params.signal,
   });
   const separator =
-    existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n")
-      ? "\n"
-      : "";
+    existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
   const next = `${existing}${separator}${params.content}`;
   if (params.sandbox) {
     const parent = path.posix.dirname(params.relativePath);
@@ -556,11 +448,9 @@ export function wrapToolWorkspaceRootGuardWithOptions(
   };
 }
 
-// Supported media file extensions for the read tool
-// FIX P2: Added missing formats (.opus, .wma for audio; .m4v, .mpg, .mpeg for video)
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "bmp", "webp", "svg"]);
-const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma"]);
-const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi", "mkv", "m4v", "mpg", "mpeg"]);
+const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac"]);
+const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi", "mkv"]);
 const MAX_DIR_ENTRIES = 200;
 
 export function createOpenClawReadTool(
@@ -568,7 +458,7 @@ export function createOpenClawReadTool(
   options?: OpenClawReadToolOptions,
 ): AnyAgentTool {
   const useBridge = !!options?.bridge;
-
+  
   return {
     ...base,
     execute: async (toolCallId, params, signal, _onUpdate): Promise<AgentToolResult> => {
@@ -577,26 +467,14 @@ export function createOpenClawReadTool(
       }
 
       const normalized = normalizeToolParams(params);
-      const record =
-        normalized ??
-        (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
+      const record = normalized ?? (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
 
       const rawPath = typeof record?.path === "string" ? record.path : ".";
-      const offset = typeof record?.offset === "number" ? record.offset : 0;
-      const limit = typeof record?.limit === "number" ? record.limit : undefined;
+      const offset = typeof record?.offset === 'number' ? record.offset : 0;
+      const limit = typeof record?.limit === 'number' ? record.limit : undefined;
 
       const rootDirResolved = options?.root ? path.resolve(options.root) : process.cwd();
-function expandTildeToOsHome(filePath: string): string {
-  const home = resolveOsHomeDir();
-  return home ? expandHomePrefix(filePath, { home }) : filePath;
-}
-
-async function writeHostFile(absolutePath: string, content: string) {
-  const resolved = path.resolve(expandTildeToOsHome(absolutePath));
-  await fs.mkdir(path.dirname(resolved), { recursive: true });
-  await fs.writeFile(resolved, content, "utf-8");
-}
 
       const inputPath = resolveToolPathAgainstWorkspaceRoot({
         filePath: rawPath,
@@ -608,12 +486,12 @@ async function writeHostFile(absolutePath: string, content: string) {
         let stats;
         let isDirectory = false;
         let fileSize = 0;
-
+        
         if (useBridge) {
-          const bridgeStats = await options.bridge!.stat({
-            filePath: inputPath,
+          const bridgeStats = await options.bridge!.stat({ 
+            filePath: inputPath, 
             cwd: rootDirResolved,
-            signal,
+            signal 
           });
           if (!bridgeStats) {
             throw new Error(`ENOENT: ${inputPath} not found in sandbox`);
@@ -627,21 +505,9 @@ async function writeHostFile(absolutePath: string, content: string) {
           isDirectory = stats.isDirectory();
           fileSize = stats.size;
         }
-  if (!workspaceOnly) {
-    // When workspaceOnly is false, allow writes anywhere on the host
-    return {
-      mkdir: async (dir: string) => {
-        const resolved = path.resolve(expandTildeToOsHome(dir));
-        await fs.mkdir(resolved, { recursive: true });
-      },
-      writeFile: writeHostFile,
-    } as const;
-  }
 
         if (isDirectory) {
-          if (signal?.aborted) {
-            throw new Error("Read operation aborted");
-          }
+          if (signal?.aborted) { throw new Error("Read operation aborted"); }
 
           // For sandboxed mode, we cannot list directory contents through the bridge
           // because SandboxFsBridge doesn't have a readdir method. Return a message
@@ -649,19 +515,14 @@ async function writeHostFile(absolutePath: string, content: string) {
           if (useBridge) {
             return {
               toolCallId,
-              content: [
-                {
-                  type: "text",
-                  text: `Cannot list directory ${inputPath} in sandboxed mode. Please specify a specific file path.`,
-                },
-              ],
+              content: [{ type: "text", text: `Cannot list directory ${inputPath} in sandboxed mode. Please specify a specific file path.` }],
               details: { path: inputPath },
             } as AgentToolResult;
           }
 
           // Host mode - can list directories
           const files = await fs.readdir(inputPath);
-
+          
           let truncated = false;
           let fileList = files;
           if (fileList.length > MAX_DIR_ENTRIES) {
@@ -670,9 +531,7 @@ async function writeHostFile(absolutePath: string, content: string) {
           }
 
           const listingText = `Listing for ${inputPath}:\n${fileList.join("\n")}${
-            truncated
-              ? `\n\n... and ${fileList.length - MAX_DIR_ENTRIES} more entries not shown (limit: ${MAX_DIR_ENTRIES})`
-              : ""
+            truncated ? `\n\n... and ${files.length - MAX_DIR_ENTRIES} more entries not shown (limit: ${MAX_DIR_ENTRIES})` : ""
           }`;
 
           return {
@@ -684,29 +543,24 @@ async function writeHostFile(absolutePath: string, content: string) {
 
         const ext = inputPath.toLowerCase().split(".").pop() ?? "";
         const fileName = path.basename(inputPath);
-        
-        // FIX P3 (Windows URLs): Build valid media URLs for all platforms
-        const normalizedPath = normalizePathForUrl(inputPath);
-        const mediaUrl = `http://localhost:18791${normalizedPath.split("/").map(encodeURIComponent).join("/")}`;
+        const mediaUrl = `http://localhost:18791${inputPath.split('/').map(encodeURIComponent).join('/')}`;
 
         if (IMAGE_EXTENSIONS.has(ext)) {
-          if (signal?.aborted) {
-            throw new Error("Read operation aborted");
-          }
+          if (signal?.aborted) { throw new Error("Read operation aborted"); }
 
           // Use bridge for file reading if available
           let fileBuffer: Buffer;
           if (useBridge) {
-            const buffer = await options.bridge!.readFile({
-              filePath: inputPath,
+            const buffer = await options.bridge!.readFile({ 
+              filePath: inputPath, 
               cwd: rootDirResolved,
-              signal,
+              signal 
             });
             fileBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
           } else {
             fileBuffer = await fs.readFile(inputPath);
           }
-
+          
           let mimeType = getImageMimeType(ext);
 
           if (options?.imageSanitization) {
@@ -716,11 +570,7 @@ async function writeHostFile(absolutePath: string, content: string) {
 
               const meta = await getImageMetadata(fileBuffer);
               if (meta?.width && meta?.height) {
-                if (
-                  meta.width > maxDimensionPx ||
-                  meta.height > maxDimensionPx ||
-                  fileBuffer.length > maxBytes
-                ) {
+                if (meta.width > maxDimensionPx || meta.height > maxDimensionPx || fileBuffer.length > maxBytes) {
                   const resized = await resizeToJpeg({
                     buffer: fileBuffer,
                     maxSide: maxDimensionPx,
@@ -753,10 +603,14 @@ async function writeHostFile(absolutePath: string, content: string) {
           } as AgentToolResult;
         }
 
-        // FIX P2: Audio handling with extended extension support
         if (AUDIO_EXTENSIONS.has(ext)) {
-          const mimeType = getAudioMimeType(ext);
-
+          const mimeType = ext === "mp3" ? "audio/mpeg" : 
+                           ext === "wav" ? "audio/wav" :
+                           ext === "ogg" ? "audio/ogg" :
+                           ext === "m4a" ? "audio/mp4" :
+                           ext === "flac" ? "audio/flac" :
+                           ext === "aac" ? "audio/aac" : "audio/mpeg";
+          
           return {
             toolCallId,
             content: [
@@ -766,30 +620,19 @@ async function writeHostFile(absolutePath: string, content: string) {
                 filename: fileName,
                 mimeType: mimeType,
               } as const,
-              { type: "text", text: `🎵 [${fileName}](${mediaUrl})` },
+              { type: "text", text: `🎵 [${fileName}](${mediaUrl})` }
             ],
             details: { path: inputPath, size: fileSize },
           } as AgentToolResult;
         }
-  if (!workspaceOnly) {
-    // When workspaceOnly is false, allow edits anywhere on the host
-    return {
-      readFile: async (absolutePath: string) => {
-        const resolved = path.resolve(expandTildeToOsHome(absolutePath));
-        return await fs.readFile(resolved);
-      },
-      writeFile: writeHostFile,
-      access: async (absolutePath: string) => {
-        const resolved = path.resolve(expandTildeToOsHome(absolutePath));
-        await fs.access(resolved);
-      },
-    } as const;
-  }
 
-        // FIX P2: Video handling with extended extension support
         if (VIDEO_EXTENSIONS.has(ext)) {
-          const mimeType = getVideoMimeType(ext);
-
+          const mimeType = ext === "mp4" ? "video/mp4" :
+                           ext === "webm" ? "video/webm" :
+                           ext === "mov" ? "video/quicktime" :
+                           ext === "avi" ? "video/x-msvideo" :
+                           ext === "mkv" ? "video/x-matroska" : "video/mp4";
+          
           return {
             toolCallId,
             content: [
@@ -799,23 +642,21 @@ async function writeHostFile(absolutePath: string, content: string) {
                 filename: fileName,
                 mimeType: mimeType,
               } as const,
-              { type: "text", text: `🎬 [${fileName}](${mediaUrl})` },
+              { type: "text", text: `🎬 [${fileName}](${mediaUrl})` }
             ],
             details: { path: inputPath, size: fileSize },
           } as AgentToolResult;
         }
 
-        if (signal?.aborted) {
-          throw new Error("Read operation aborted");
-        }
-
+        if (signal?.aborted) { throw new Error("Read operation aborted"); }
+        
         // Use bridge for text file reading if available
         let text: string;
         if (useBridge) {
-          const buffer = await options.bridge!.readFile({
-            filePath: inputPath,
+          const buffer = await options.bridge!.readFile({ 
+            filePath: inputPath, 
             cwd: rootDirResolved,
-            signal,
+            signal 
           });
           text = Buffer.isBuffer(buffer) ? buffer.toString("utf-8") : String(buffer);
         } else {
@@ -823,15 +664,13 @@ async function writeHostFile(absolutePath: string, content: string) {
         }
 
         if (offset > 0 || limit !== undefined) {
-          const lines = text.split("\n");
+          const lines = text.split('\n');
           const start = Math.max(0, Math.min(offset - 1, lines.length));
           const end = limit !== undefined ? Math.min(start + limit, lines.length) : lines.length;
-          text = lines.slice(start, end).join("\n");
+          text = lines.slice(start, end).join('\n');
         }
 
-        const maxChars = options?.modelContextWindowTokens
-          ? options.modelContextWindowTokens * 3
-          : 32000;
+        const maxChars = options?.modelContextWindowTokens ? options.modelContextWindowTokens * 3 : 32000;
         if (text.length > maxChars) {
           text = text.slice(0, maxChars) + `\n\n... [Content truncated to ${maxChars} chars]`;
         }
@@ -841,12 +680,11 @@ async function writeHostFile(absolutePath: string, content: string) {
           content: [{ type: "text", text }],
           details: { path: inputPath, size: fileSize, offset, limit },
         } as AgentToolResult;
+
       } catch (error) {
         return {
           toolCallId,
-          content: [
-            { type: "text", text: `Error reading path: ${(error as Error).message}` },
-          ],
+          content: [{ type: "text", text: `Error reading path: ${(error as Error).message}` }],
           details: { path: inputPath },
         } as AgentToolResult;
       }
