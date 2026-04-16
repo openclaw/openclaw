@@ -88,7 +88,15 @@ function isAllowlistedPath(filename: string, allowlist: RegExp[] = DEFAULT_ALLOW
     // Traversal detected — never allowlist a hostile path.
     return false;
   }
-  return allowlist.some((re) => re.test(normalized));
+  // Codex P2 (PR #67512 r3096412188): caller-supplied regexes may have
+  // `g` or `y` flags. Both make `re.test()` mutate `lastIndex`, so
+  // back-to-back tests against the same regex object alternate between
+  // hit and miss. Reset `lastIndex` before each test (defensive — `re.test`
+  // ignores it for non-stateful flags).
+  return allowlist.some((re) => {
+    re.lastIndex = 0;
+    return re.test(normalized);
+  });
 }
 
 // Ported from Hermes _CONTEXT_INVISIBLE_CHARS (prompt_builder.py:49-52).
