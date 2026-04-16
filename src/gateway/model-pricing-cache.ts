@@ -222,17 +222,8 @@ function resolveLiteLLMPricingForRef(params: {
   ref: ModelRef;
   catalog: LiteLLMPricingCatalog;
 }): CachedModelPricing | undefined {
-  const provider = params.ref.provider;
-  const model = params.ref.model;
-  // LiteLLM keys use "provider/model" format
-  const candidates = [`${provider}/${model}`, model];
-  for (const key of candidates) {
-    const pricing = params.catalog.get(key);
-    if (pricing) {
-      return pricing;
-    }
-  }
-  return undefined;
+  // Only use provider-qualified key to avoid cross-provider pricing collisions.
+  return params.catalog.get(`${params.ref.provider}/${params.ref.model}`);
 }
 
 function canonicalizeOpenRouterProvider(provider: string): string {

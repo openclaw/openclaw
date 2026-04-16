@@ -126,7 +126,9 @@ function shouldUseNormalizedCostLookup(params: { provider?: string; model?: stri
  * Supports open-ended ranges such as `[128000]` or `[128000, -1]`,
  * which are converted to `[128000, Infinity]`.
  */
-function normalizeTieredPricing(raw: ModelCostConfig["tieredPricing"]): PricingTier[] | undefined {
+function normalizeTieredPricing(
+  raw: Array<{ input: number; output: number; cacheRead: number; cacheWrite: number; range: [number, number] | [number] }> | undefined,
+): PricingTier[] | undefined {
   if (!raw || raw.length === 0) {
     return undefined;
   }
@@ -170,12 +172,14 @@ function buildProviderCostIndex(
       });
       const cost = { ...model.cost };
       const normalizedTiers = normalizeTieredPricing(cost.tieredPricing);
-      if (normalizedTiers) {
-        cost.tieredPricing = normalizedTiers;
-      } else {
-        delete cost.tieredPricing;
-      }
-      entries.set(modelKey(normalized.provider, normalized.model), cost);
+      const costConfig: ModelCostConfig = {
+        input: cost.input,
+        output: cost.output,
+        cacheRead: cost.cacheRead,
+        cacheWrite: cost.cacheWrite,
+        ...(normalizedTiers ? { tieredPricing: normalizedTiers } : {}),
+      };
+      entries.set(modelKey(normalized.provider, normalized.model), costConfig);
     }
   }
   return entries;
