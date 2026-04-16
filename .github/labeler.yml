@@ -365,6 +365,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/xiaomi/**"
+"extensions: zenmux":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/zenmux/**"
 "extensions: fal":
   - changed-files:
       - any-glob-to-any-file:
