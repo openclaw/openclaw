@@ -60,7 +60,18 @@ function Write-OK($msg)   { Write-Host " OK $msg" -ForegroundColor Green }
 # 1. Prerequisites (VC++, WebView2, Node.js)
 Write-Step "Checking prerequisites..."
 $vcReg = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" -ErrorAction SilentlyContinue
-if (-not $vcReg -or $vcReg.Version -lt "v14.30") {
+if ($vcReg) {
+    $currentVersion = [version]($vcReg.Version -replace 'v', '')
+    $minVersion = [version]("14.30")
+    if ($currentVersion -lt $minVersion) {
+        $shouldInstallVC = $true
+    }
+} else {
+    $shouldInstallVC = $true
+}
+
+if ($shouldInstallVC) {
+    Write-Step "Installing VC++ Redistributable (x64)..."
     $url = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
     $output = "$env:TEMP\vc_redist.x64.exe"
     Invoke-WebRequest -Uri $url -OutFile $output
