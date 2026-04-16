@@ -30,6 +30,7 @@ import {
   TASK_STATUS_DETAIL_MAX_CHARS,
 } from "../../tasks/task-status.js";
 import { loadA2ATaskStatusIndex, type A2ATaskStatusIndexEntry } from "../a2a/list.js";
+import { reconcileSessionsSendA2ATask } from "./sessions-send-tool.a2a.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
   buildAllowedModelSet,
@@ -54,7 +55,6 @@ import {
   resolveSandboxedSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
-import { reconcileSessionsSendA2ATask } from "./sessions-send-tool.a2a.js";
 
 const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -195,10 +195,7 @@ function formatA2ATaskStatusLabel(status: string): string {
 function resolveA2ABrokerAdapterLabel(cfg: OpenClawConfig): string {
   const pluginEntry = cfg.plugins?.entries?.["a2a-broker-adapter"];
   const baseUrl = pluginEntry?.config?.baseUrl;
-  return pluginEntry &&
-    pluginEntry.enabled !== false &&
-    typeof baseUrl === "string" &&
-    baseUrl.trim()
+  return pluginEntry && pluginEntry.enabled !== false && typeof baseUrl === "string" && baseUrl.trim()
     ? "broker on"
     : "broker off";
 }
@@ -206,7 +203,7 @@ function resolveA2ABrokerAdapterLabel(cfg: OpenClawConfig): string {
 function formatA2ATaskDetail(entry: A2ATaskStatusIndexEntry): string | undefined {
   const raw =
     entry.statusCategory === "terminal-failure"
-      ? (entry.error?.message ?? entry.error?.code)
+      ? entry.error?.message ?? entry.error?.code
       : entry.summary;
   const sanitized = sanitizeTaskStatusText(raw, {
     errorContext: entry.statusCategory === "terminal-failure",
@@ -240,28 +237,19 @@ function formatA2ATaskDirection(entry: A2ATaskStatusIndexEntry): string | undefi
   return `${requester ?? "unknown"} → ${target ?? "unknown"}`;
 }
 
-function formatA2ATaskElapsed(
-  entry: A2ATaskStatusIndexEntry,
-  now = Date.now(),
-): string | undefined {
+function formatA2ATaskElapsed(entry: A2ATaskStatusIndexEntry, now = Date.now()): string | undefined {
   const origin = entry.startedAt ?? entry.updatedAt;
   return typeof origin === "number" ? formatRelativeDuration(origin, now) : undefined;
 }
 
-function formatA2AHeartbeatAge(
-  entry: A2ATaskStatusIndexEntry,
-  now = Date.now(),
-): string | undefined {
+function formatA2AHeartbeatAge(entry: A2ATaskStatusIndexEntry, now = Date.now()): string | undefined {
   if (entry.statusCategory !== "active" || typeof entry.heartbeatAt !== "number") {
     return undefined;
   }
   return `heartbeat ${formatRelativeDuration(entry.heartbeatAt, now)} ago`;
 }
 
-function buildA2ATaskLine(
-  index: A2ATaskStatusIndexEntry[],
-  cfg: OpenClawConfig,
-): string | undefined {
+function buildA2ATaskLine(index: A2ATaskStatusIndexEntry[], cfg: OpenClawConfig): string | undefined {
   if (index.length === 0) {
     return undefined;
   }
@@ -285,9 +273,7 @@ function buildA2ATaskLine(
     );
   }
   if (headlineParts.length === 0) {
-    headlineParts.push(
-      `latest ${formatA2ATaskStatusLabel(index[0]?.executionStatus ?? "unknown")}`,
-    );
+    headlineParts.push(`latest ${formatA2ATaskStatusLabel(index[0]?.executionStatus ?? "unknown")}`);
   }
   lines.push(`🔁 A2A: ${headlineParts.join(", ")}`);
 
@@ -730,7 +716,7 @@ export function createSessionStatusTool(opts?: {
         includeTranscriptUsage: true,
       });
       const extraLines = [taskLine, a2aTaskLine].filter(
-        (line): line is string => Boolean(line) && !statusText.includes(line),
+        (line): line is string => typeof line === "string" && !statusText.includes(line),
       );
       const fullStatusText =
         extraLines.length > 0 ? `${statusText}\n${extraLines.join("\n")}` : statusText;

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.js";
+import type { StatusSummary } from "./status.types.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { runExec } from "../process/exec.js";
 import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared.js";
@@ -22,7 +23,7 @@ export function buildColdStartAgentLocalStatuses() {
   };
 }
 
-export function buildColdStartStatusSummary() {
+export function buildColdStartStatusSummary(): StatusSummary {
   return {
     runtimeVersion: null,
     heartbeat: {
