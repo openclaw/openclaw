@@ -1,5 +1,15 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../../agents/model-auth.js";
+import {
+  buildGeminiEmbeddingRequest,
+  buildGeminiTextEmbeddingRequest,
+  createGeminiEmbeddingProvider,
+  DEFAULT_GEMINI_EMBEDDING_MODEL,
+  GEMINI_EMBEDDING_2_MODELS,
+  isGeminiEmbedding2Model,
+  normalizeGeminiModel,
+  resolveGeminiOutputDimensionality,
+} from "./embeddings-gemini.js";
 import {
   createGeminiBatchFetchMock,
   createGeminiFetchMock,
@@ -14,29 +24,6 @@ import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 vi.mock("../../agents/model-auth.js", async () => {
   const { createModelAuthMockModule } = await import("../../test-utils/model-auth-mock.js");
   return createModelAuthMockModule();
-});
-
-let buildGeminiEmbeddingRequest: typeof import("./embeddings-gemini.js").buildGeminiEmbeddingRequest;
-let buildGeminiTextEmbeddingRequest: typeof import("./embeddings-gemini.js").buildGeminiTextEmbeddingRequest;
-let createGeminiEmbeddingProvider: typeof import("./embeddings-gemini.js").createGeminiEmbeddingProvider;
-let DEFAULT_GEMINI_EMBEDDING_MODEL: typeof import("./embeddings-gemini.js").DEFAULT_GEMINI_EMBEDDING_MODEL;
-let GEMINI_EMBEDDING_2_MODELS: typeof import("./embeddings-gemini.js").GEMINI_EMBEDDING_2_MODELS;
-let isGeminiEmbedding2Model: typeof import("./embeddings-gemini.js").isGeminiEmbedding2Model;
-let normalizeGeminiModel: typeof import("./embeddings-gemini.js").normalizeGeminiModel;
-let resolveGeminiOutputDimensionality: typeof import("./embeddings-gemini.js").resolveGeminiOutputDimensionality;
-
-beforeAll(async () => {
-  vi.doUnmock("undici");
-  ({
-    buildGeminiEmbeddingRequest,
-    buildGeminiTextEmbeddingRequest,
-    createGeminiEmbeddingProvider,
-    DEFAULT_GEMINI_EMBEDDING_MODEL,
-    GEMINI_EMBEDDING_2_MODELS,
-    isGeminiEmbedding2Model,
-    normalizeGeminiModel,
-    resolveGeminiOutputDimensionality,
-  } = await import("./embeddings-gemini.js"));
 });
 
 beforeEach(() => {
