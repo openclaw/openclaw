@@ -1,6 +1,7 @@
 import { type ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import plugin from "./index.js";
+import { normalizeDatabricksBaseUrl } from "./onboard.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -534,6 +535,37 @@ describe("Databricks plugin", () => {
         expect.objectContaining({ type: "text_delta", delta: " World" }),
       );
       expect(events).toContainEqual(expect.objectContaining({ type: "done", reason: "stop" }));
+    });
+  });
+
+  describe("normalizeDatabricksBaseUrl", () => {
+    it("returns undefined for empty/whitespace input", () => {
+      expect(normalizeDatabricksBaseUrl(undefined)).toBeUndefined();
+      expect(normalizeDatabricksBaseUrl("")).toBeUndefined();
+      expect(normalizeDatabricksBaseUrl("   ")).toBeUndefined();
+    });
+
+    it("prepends https:// when no scheme is provided", () => {
+      expect(normalizeDatabricksBaseUrl("dbc-xxxx.cloud.databricks.com")).toBe(
+        "https://dbc-xxxx.cloud.databricks.com",
+      );
+    });
+
+    it("preserves https:// URLs", () => {
+      expect(normalizeDatabricksBaseUrl("https://dbc-xxxx.cloud.databricks.com")).toBe(
+        "https://dbc-xxxx.cloud.databricks.com",
+      );
+    });
+
+    it("strips trailing slashes", () => {
+      expect(normalizeDatabricksBaseUrl("https://dbc-xxxx.cloud.databricks.com///")).toBe(
+        "https://dbc-xxxx.cloud.databricks.com",
+      );
+    });
+
+    it("rejects http:// URLs to prevent credential exposure over cleartext", () => {
+      expect(normalizeDatabricksBaseUrl("http://dbc-xxxx.cloud.databricks.com")).toBeUndefined();
+      expect(normalizeDatabricksBaseUrl("http://localhost:8080")).toBeUndefined();
     });
   });
 });

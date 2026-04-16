@@ -8,7 +8,12 @@ export function normalizeDatabricksBaseUrl(url: string | undefined): string | un
   if (!normalized) {
     return undefined;
   }
-  if (!normalized.startsWith("http://") && !normalized.startsWith("https://")) {
+  // Reject http:// — Databricks requests carry bearer tokens in Authorization
+  // headers, so cleartext transport would expose credentials.
+  if (normalized.startsWith("http://")) {
+    return undefined;
+  }
+  if (!normalized.startsWith("https://")) {
     normalized = `https://${normalized}`;
   }
   return normalized.replace(/\/+$/, "");

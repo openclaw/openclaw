@@ -299,10 +299,14 @@ export default definePluginEntry({
         ctx.prompter.text({
           message:
             "Enter Databricks Workspace Base URL (e.g. https://dbc-xxxx.cloud.databricks.com)",
-          validate: (value) =>
-            !normalizeDatabricksBaseUrl(value)
+          validate: (value) => {
+            if (value?.trim().startsWith("http://")) {
+              return "HTTPS is required — Databricks URLs must use https://.";
+            }
+            return !normalizeDatabricksBaseUrl(value)
               ? "Databricks Workspace Base URL is required."
-              : undefined,
+              : undefined;
+          },
         });
 
       const normalizedBaseUrl =
