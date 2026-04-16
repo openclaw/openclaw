@@ -717,14 +717,28 @@ async function persistChatSendImages(params: {
       );
     }
   }
-  const offloadedSaved = params.offloadedRefs.map((ref) => ({
-    id: ref.id,
-    path: ref.path,
-    size: 0,
-    contentType: ref.mimeType,
-  }));
+  // imageOrder now only tracks image slots (see chat-attachments.ts), so split
+  // offloaded refs by mime: image offloads interleave with inline images via
+  // imageOrder, and non-image offloads append to the transcript tail. Without
+  // this split a non-image file would consume the next image slot whenever
+  // both kinds appear in the same request.
+  const imageOffloadedSaved: SavedMedia[] = [];
+  const nonImageOffloadedSaved: SavedMedia[] = [];
+  for (const ref of params.offloadedRefs) {
+    const entry: SavedMedia = {
+      id: ref.id,
+      path: ref.path,
+      size: 0,
+      contentType: ref.mimeType,
+    };
+    if (ref.mimeType.startsWith("image/")) {
+      imageOffloadedSaved.push(entry);
+    } else {
+      nonImageOffloadedSaved.push(entry);
+    }
+  }
   if (params.imageOrder.length === 0) {
-    return [...inlineSaved, ...offloadedSaved];
+    return [...inlineSaved, ...imageOffloadedSaved, ...nonImageOffloadedSaved];
   }
   const saved: SavedMedia[] = [];
   let inlineIndex = 0;
@@ -737,7 +751,7 @@ async function persistChatSendImages(params: {
       }
       continue;
     }
-    const offloaded = offloadedSaved[offloadedIndex++];
+    const offloaded = imageOffloadedSaved[offloadedIndex++];
     if (offloaded) {
       saved.push(offloaded);
     }
@@ -748,11 +762,14 @@ async function persistChatSendImages(params: {
       saved.push(inline);
     }
   }
-  for (; offloadedIndex < offloadedSaved.length; offloadedIndex++) {
-    const offloaded = offloadedSaved[offloadedIndex];
+  for (; offloadedIndex < imageOffloadedSaved.length; offloadedIndex++) {
+    const offloaded = imageOffloadedSaved[offloadedIndex];
     if (offloaded) {
       saved.push(offloaded);
     }
+  }
+  for (const offloaded of nonImageOffloadedSaved) {
+    saved.push(offloaded);
   }
   return saved;
 }
@@ -816,7 +833,7 @@ async function prestageNonImageOffloads(params: {
       MediaType: nonImage[0].mimeType,
       MediaTypes: nonImage.map((ref) => ref.mimeType),
     };
-    await stageSandboxMedia({
+    const stageResult = await stageSandboxMedia({
       ctx: stagingCtx,
       sessionCtx: stagingCtx as TemplateContext,
       cfg: params.cfg,
@@ -824,18 +841,26 @@ async function prestageNonImageOffloads(params: {
       workspaceDir,
     });
 
-    const stagedPaths = stagingCtx.MediaPaths ?? [];
-    const stagedTypes = stagingCtx.MediaTypes ?? nonImage.map((ref) => ref.mimeType);
-    if (stagedPaths.length !== nonImage.length) {
+    // stageSandboxMedia silently keeps unstaged entries as their original
+    // absolute path, so length parity with `nonImage` does not prove every
+    // file landed in the sandbox. The RPC max (20MB via
+    // resolveChatAttachmentMaxBytes) admits files above the staging cap
+    // (STAGED_MEDIA_MAX_BYTES = 5MB); check the returned `staged` map so any
+    // missing source becomes a 5xx MediaOffloadError the client can retry.
+    const stagedSources = stageResult.staged;
+    const missing = nonImage.filter((ref) => !stagedSources.has(ref.path));
+    if (missing.length > 0) {
       throw new Error(
-        `non-image attachment staging incomplete: ${stagedPaths.length}/${nonImage.length} paths staged into sandbox workspace`,
+        `non-image attachment staging incomplete: ${stagedSources.size}/${nonImage.length} paths staged into sandbox workspace (missing: ${missing.map((ref) => ref.path).join(", ")})`,
       );
     }
+    const stagedPaths = stagingCtx.MediaPaths ?? [];
+    const stagedTypes = stagingCtx.MediaTypes ?? nonImage.map((ref) => ref.mimeType);
 
-    const absolutePaths = stagedPaths.map((p) =>
-      path.isAbsolute(p) ? p : path.join(sandbox.workspaceDir, p),
-    );
-    return { paths: absolutePaths, types: stagedTypes, workspaceDir: sandbox.workspaceDir };
+    // Keep stagedPaths sandbox-relative (e.g. `media/inbound/foo.pdf`) so the
+    // agent inside the container can read them. Host-side media-understanding
+    // resolves them via ctx.MediaWorkspaceDir, which we carry separately.
+    return { paths: stagedPaths, types: stagedTypes, workspaceDir: sandbox.workspaceDir };
   } catch (err) {
     await Promise.allSettled(
       params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),

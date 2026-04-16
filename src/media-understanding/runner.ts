@@ -270,8 +270,15 @@ export function resolveMediaAttachmentLocalRoots(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
 }): readonly string[] {
+  // ctx.MediaWorkspaceDir is set by chat.send's prestageNonImageOffloads when
+  // inbound attachments were staged into a sandbox workspace. The paths in
+  // ctx.MediaPaths are kept sandbox-relative (so the agent inside the
+  // container can read them), and the workspace dir is carried separately so
+  // host-side media-understanding can still resolve them via this root list.
+  const workspaceDir = params.ctx.MediaWorkspaceDir;
   return mergeInboundPathRoots(
     getDefaultMediaLocalRoots(),
+    workspaceDir ? [path.resolve(workspaceDir)] : undefined,
     resolveChannelInboundAttachmentRoots(params),
   );
 }

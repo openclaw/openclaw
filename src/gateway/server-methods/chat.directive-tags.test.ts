@@ -69,6 +69,11 @@ const mockState = vi.hoisted(() => ({
   sandboxWorkspace: null as { workspaceDir: string; containerWorkdir?: string } | null,
   stageSandboxMediaError: null as Error | null,
   stagedRelativePaths: null as string[] | null,
+  // `unstagedSources` lets tests simulate partial staging failure: absolute
+  // source paths listed here are excluded from the returned `staged` map even
+  // though ctx still carries their rewritten paths. This mirrors how the real
+  // stageSandboxMedia silently skips over-cap files.
+  unstagedSources: null as string[] | null,
   deleteMediaBufferCalls: [] as Array<{ id: string; subdir?: string }>,
 }));
 
@@ -236,10 +241,26 @@ vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => ({
       if (mockState.stageSandboxMediaError) {
         throw mockState.stageSandboxMediaError;
       }
+      const staged = new Map<string, string>();
+      const originalPaths = params.ctx.MediaPaths ?? [];
       if (mockState.stagedRelativePaths) {
-        params.ctx.MediaPaths = [...mockState.stagedRelativePaths];
-        params.ctx.MediaPath = mockState.stagedRelativePaths[0];
+        const mapping = mockState.stagedRelativePaths;
+        params.ctx.MediaPaths = [...mapping];
+        params.ctx.MediaPath = mapping[0];
+        for (let i = 0; i < mapping.length; i += 1) {
+          const source = originalPaths[i];
+          const dest = mapping[i];
+          if (source && dest) {
+            staged.set(source, dest);
+          }
+        }
       }
+      if (mockState.unstagedSources) {
+        for (const source of mockState.unstagedSources) {
+          staged.delete(source);
+        }
+      }
+      return { staged };
     },
   ),
 }));
@@ -499,6 +520,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.sandboxWorkspace = null;
     mockState.stageSandboxMediaError = null;
     mockState.stagedRelativePaths = null;
+    mockState.unstagedSources = null;
     mockState.deleteMediaBufferCalls = [];
   });
 
@@ -2557,7 +2579,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
   });
 
-  it("absolutizes sandbox-relative MediaPaths so media-understanding can resolve them", async () => {
+  it("preserves sandbox-relative MediaPaths and stores workspace context for media-understanding", async () => {
     createTranscriptFixture("openclaw-chat-send-non-image-absolutize-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -2599,15 +2621,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    // applyMediaUnderstanding resolves `path.isAbsolute(raw) ? raw : path.resolve(raw)`
-    // against the gateway CWD. Relative paths would miss the staged copy, so
-    // prestage rejoins the sandbox workspaceDir to keep the path absolute.
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
-      "/sandbox/workspace/media/inbound/report.pdf",
-    ]);
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe(
-      "/sandbox/workspace/media/inbound/report.pdf",
-    );
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["media/inbound/report.pdf"]);
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe("media/inbound/report.pdf");
+    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBe("/sandbox/workspace");
     expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
   });
 
@@ -2668,6 +2684,66 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(error?.message ?? String(error)).toMatch(/ENOSPC|non-image attachments/i);
     // Orphaned media-store files are cleaned up before the 5xx surfaces.
     expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);
+  });
+
+  it("surfaces partial non-image staging failures as 5xx UNAVAILABLE", async () => {
+    // Regression: stageSandboxMedia keeps unstaged entries as their original
+    // absolute path, so a simple `stagedPaths.length === nonImage.length`
+    // check could not detect when one of the files silently fell out (e.g. a
+    // file between the RPC cap and the staging cap). Prestage must compare
+    // the returned `staged` map against the input refs.
+    createTranscriptFixture("openclaw-chat-send-partial-stage-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
+      { path: "/home/user/.openclaw/media/inbound/oversize.pdf", contentType: "application/pdf" },
+    ];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.stagedRelativePaths = ["media/inbound/report.pdf", "media/inbound/oversize.pdf"];
+    mockState.unstagedSources = ["/home/user/.openclaw/media/inbound/oversize.pdf"];
+    const respond = vi.fn();
+    const context = createChatContext();
+    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-partial-stage",
+      message: "read these",
+      requestParams: {
+        attachments: [
+          { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
+          { type: "file", mimeType: "application/pdf", fileName: "oversize.pdf", content: pdf },
+        ],
+      },
+      expectBroadcast: false,
+      waitFor: "none",
+    });
+
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(respond).toHaveBeenCalledTimes(1);
+    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error?.code).toBe(ErrorCodes.UNAVAILABLE);
+    expect(error?.message ?? String(error)).toMatch(/staging incomplete/i);
+    // Both media-store entries are cleaned up before the 5xx surfaces.
+    expect(mockState.deleteMediaBufferCalls.map((c) => c.id).toSorted()).toEqual([
+      "saved-media",
+      "saved-media",
+    ]);
   });
 
   it("passes imageOrder for mixed inline and offloaded chat.send attachments", async () => {

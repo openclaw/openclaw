@@ -296,6 +296,13 @@ export async function parseMessageWithAttachments(
           `attachment ${label}: non-image attachments (${finalMime}) are not supported on this entrypoint`,
         );
       }
+      // Agent-side hydration (loadImageFromRef via optimizeAndClampImage / GIF
+      // direct compare) caps at MAX_IMAGE_BYTES. Accepting images above that
+      // would offload a file the runner later drops to null — a successful
+      // response with a silently missing image. Reject here so the client
+      // sees an explicit 4xx. Non-image attachments keep the full maxBytes
+      // ceiling because their host path (ctx.MediaPaths → Read/Bash) doesn't
+      // load into the model.
       if (isImage && sizeBytes > MAX_IMAGE_BYTES) {
         throw new Error(
           `attachment ${label}: image exceeds size limit (${sizeBytes} > ${MAX_IMAGE_BYTES} bytes)`,

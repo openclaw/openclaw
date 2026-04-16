@@ -20,6 +20,7 @@ vi.mock("../media/store.js", async (importOriginal) => {
 });
 
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { MAX_IMAGE_BYTES } from "../media/constants.js";
 import {
   buildMessageWithAttachments,
   type ChatAttachment,
@@ -192,7 +193,56 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.images[0]?.mimeType).toBe("image/png");
     expect(parsed.offloadedRefs).toHaveLength(1);
     expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/pdf");
+    expect(parsed.imageOrder).toEqual(["inline"]);
+  });
+
+  it("excludes non-image offloads from imageOrder in mixed batches", async () => {
+    // Regression: a prior revision pushed "offloaded" for every offload,
+    // including non-image files. In a [non-image, inline, offloaded-image]
+    // batch that produced imageOrder=["offloaded","inline","offloaded"] even
+    // though only one `[media attached: media://...]` line is ever appended
+    // to the prompt (for the image offload). extractTrailingAttachmentMediaUris
+    // then read count=2 against one trailing URI, and
+    // mergePromptAttachmentImages placed the single offloaded image into the
+    // first "offloaded" slot — swapping it ahead of the inline image.
+    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
+    const bigPng = Buffer.alloc(2_100_000);
+    bigPng.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    const { parsed } = await parseWithWarnings("x", [
+      { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
+      { type: "image", mimeType: "image/png", fileName: "dot.png", content: PNG_1x1 },
+      {
+        type: "image",
+        mimeType: "image/png",
+        fileName: "big.png",
+        content: bigPng.toString("base64"),
+      },
+    ]);
+    expect(parsed.images).toHaveLength(1);
+    expect(parsed.offloadedRefs.map((ref) => ref.mimeType)).toEqual([
+      "application/pdf",
+      "image/png",
+    ]);
     expect(parsed.imageOrder).toEqual(["inline", "offloaded"]);
+    // The offloaded-image URI is the sole trailing media:// line, matching
+    // imageOrder's single "offloaded" slot.
+    const trailingMediaLines = parsed.message
+      .split("\n")
+      .filter((line) => line.trim().startsWith("[media attached: media://inbound/"));
+    expect(trailingMediaLines).toHaveLength(1);
+  });
+
+  it("rejects oversized images before offload", async () => {
+    const big = Buffer.alloc(MAX_IMAGE_BYTES + 1, 1).toString("base64");
+
+    await expect(
+      parseMessageWithAttachments(
+        "x",
+        [{ type: "image", mimeType: "image/png", fileName: "huge.png", content: big }],
+        { maxBytes: resolveChatAttachmentMaxBytes({} as OpenClawConfig), log: { warn: () => {} } },
+      ),
+    ).rejects.toThrow(/image exceeds size limit/i);
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
   it("preserves specific OOXML mime when sniff returns generic zip (docx)", async () => {
