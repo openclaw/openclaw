@@ -58,6 +58,20 @@ describe("renderPlanChecklist", () => {
     expect(result).toMatch(/✅.*Run tests/);
   });
 
+  it("strips newlines from step labels", () => {
+    const steps: PlanStepForRender[] = [
+      { step: "Run tests\nthen check results", status: "pending" },
+      { step: "Build\r\nartifacts", status: "in_progress", activeForm: "Building\nartifacts" },
+    ];
+    for (const format of ["html", "markdown", "plaintext", "slack-mrkdwn"] as const) {
+      const result = renderPlanChecklist(steps, format);
+      expect(result).not.toContain("\n" + " ");
+      expect(result).not.toContain("\r");
+      expect(result).toContain("Run tests then check results");
+      expect(result).toContain("Building artifacts");
+    }
+  });
+
   it("html: renders cancelled with strikethrough", () => {
     const result = renderPlanChecklist(SAMPLE_STEPS, "html");
     expect(result).toMatch(/❌.*<s>.*Fix broken migration.*<\/s>/);

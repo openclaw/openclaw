@@ -31,8 +31,10 @@ export function renderPlanChecklist(
   }
 
   const lines = steps.map((s) => {
-    const label =
+    const rawLabel =
       s.status === "in_progress" && s.activeForm ? s.activeForm : s.step;
+    // Strip newlines from model-generated step text to prevent broken checklists.
+    const label = rawLabel.replace(/[\n\r]+/g, " ").trim();
 
     switch (format) {
       case "html": {
