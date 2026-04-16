@@ -87,3 +87,4 @@ memory/
 # Watchdog versioned builds and state
 .builds/
 .watchdog/
+.pm2-ecosystem.json
