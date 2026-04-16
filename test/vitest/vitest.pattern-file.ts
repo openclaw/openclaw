@@ -104,5 +104,5 @@ export function narrowIncludePatternsForCli(
     ),
   );
 
-  return [...new Set(matched)];
+  return matched.length > 0 ? [...new Set(matched)] : null;
 }
