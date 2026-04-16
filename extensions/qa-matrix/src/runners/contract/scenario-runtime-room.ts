@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import {
   MATRIX_QA_BLOCK_ROOM_KEY,
   MATRIX_QA_HOMESERVER_ROOM_KEY,
+  MATRIX_QA_MEDIA_ROOM_KEY,
   MATRIX_QA_MEMBERSHIP_ROOM_KEY,
   MATRIX_QA_RESTART_ROOM_KEY,
   resolveMatrixQaScenarioRoomId,
@@ -32,6 +34,62 @@ import {
 import type { MatrixQaCanaryArtifact, MatrixQaScenarioExecution } from "./scenario-types.js";
 
 type MatrixQaThreadScenarioResult = Awaited<ReturnType<typeof runThreadScenario>>;
+const MATRIX_QA_IMAGE_ATTACHMENT_FILENAME = "red-top-blue-bottom.png";
+const MATRIX_QA_IMAGE_COLOR_GROUPS = [["red"], ["blue"]] as const;
+
+function createMatrixQaSplitColorImagePng() {
+  const width = 16;
+  const height = 16;
+  const rgba = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    const isTopHalf = y < height / 2;
+    for (let x = 0; x < width; x += 1) {
+      if (isTopHalf) {
+        fillPixel(rgba, x, y, width, 255, 0, 0);
+        continue;
+      }
+      fillPixel(rgba, x, y, width, 0, 0, 255);
+    }
+  }
+  return encodePngRgba(rgba, width, height);
+}
+
+function buildMatrixQaImageUnderstandingPrompt(sutUserId: string) {
+  return `${sutUserId} Image understanding check: describe the top and bottom colors in the attached image in one short sentence.`;
+}
+
+function buildMatrixQaImageGenerationPrompt(sutUserId: string) {
+  return `${sutUserId} Image generation check: generate a QA lighthouse image and summarize it in one short sentence.`;
+}
+
+function hasMatrixQaExpectedColorReply(body: string | undefined) {
+  const normalizedBody = body?.toLowerCase() ?? "";
+  return MATRIX_QA_IMAGE_COLOR_GROUPS.every((group) =>
+    group.some((color) => normalizedBody.includes(color)),
+  );
+}
+
+function requireMatrixQaImageAttachment(event: MatrixQaObservedEvent, scenarioLabel: string) {
+  if (event.msgtype !== "m.image" || event.attachment?.kind !== "image") {
+    throw new Error(
+      `${scenarioLabel} expected an m.image attachment but saw ${event.msgtype ?? "<none>"}`,
+    );
+  }
+  return event.attachment;
+}
+
+function buildMatrixQaAttachmentDetailLines(params: {
+  attachmentEvent: MatrixQaObservedEvent;
+  label: string;
+}) {
+  return [
+    `${params.label} event: ${params.attachmentEvent.eventId}`,
+    `${params.label} msgtype: ${params.attachmentEvent.msgtype ?? "<none>"}`,
+    `${params.label} attachment kind: ${params.attachmentEvent.attachment?.kind ?? "<none>"}`,
+    `${params.label} attachment filename: ${params.attachmentEvent.attachment?.filename ?? "<none>"}`,
+    `${params.label} body preview: ${params.attachmentEvent.body?.slice(0, 200) ?? "<none>"}`,
+  ];
+}
 
 function assertMatrixQaInReplyTarget(params: {
   actualEventId?: string;
@@ -541,6 +599,110 @@ export async function runBlockStreamingScenario(context: MatrixQaScenarioContext
       `block two event: ${secondBlock.event.eventId}`,
       `block one kind: ${firstBlock.event.kind}`,
       `block two kind: ${secondBlock.event.kind}`,
+    ].join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
+export async function runImageUnderstandingAttachmentScenario(context: MatrixQaScenarioContext) {
+  const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
+  const triggerBody = buildMatrixQaImageUnderstandingPrompt(context.sutUserId);
+  const driverEventId = await client.sendMediaMessage({
+    body: triggerBody,
+    buffer: createMatrixQaSplitColorImagePng(),
+    contentType: "image/png",
+    fileName: MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
+    kind: "image",
+    mentionUserIds: [context.sutUserId],
+    roomId,
+  });
+  const matched = await client.waitForRoomEvent({
+    observedEvents: context.observedEvents,
+    predicate: (event) =>
+      event.roomId === roomId &&
+      event.sender === context.sutUserId &&
+      event.type === "m.room.message" &&
+      event.relatesTo === undefined &&
+      isMatrixQaMessageLikeKind(event.kind) &&
+      hasMatrixQaExpectedColorReply(event.body),
+    roomId,
+    since: startSince,
+    timeoutMs: context.timeoutMs,
+  });
+  advanceMatrixQaActorCursor({
+    actorId: "driver",
+    syncState: context.syncState,
+    nextSince: matched.since,
+    startSince,
+  });
+  const reply = buildMatrixReplyArtifact(matched.event);
+  return {
+    artifacts: {
+      attachmentFilename: MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
+      driverEventId,
+      reply,
+      roomId,
+      triggerBody,
+    },
+    details: [
+      `room id: ${roomId}`,
+      `driver attachment event: ${driverEventId}`,
+      `sent attachment filename: ${MATRIX_QA_IMAGE_ATTACHMENT_FILENAME}`,
+      ...buildMatrixReplyDetails("reply", reply),
+    ].join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
+export async function runGeneratedImageDeliveryScenario(context: MatrixQaScenarioContext) {
+  const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
+  const triggerBody = buildMatrixQaImageGenerationPrompt(context.sutUserId);
+  const driverEventId = await client.sendTextMessage({
+    body: triggerBody,
+    mentionUserIds: [context.sutUserId],
+    roomId,
+  });
+  const matched = await client.waitForRoomEvent({
+    observedEvents: context.observedEvents,
+    predicate: (event) =>
+      event.roomId === roomId &&
+      event.sender === context.sutUserId &&
+      event.type === "m.room.message" &&
+      event.relatesTo === undefined &&
+      event.msgtype === "m.image" &&
+      event.attachment?.kind === "image",
+    roomId,
+    since: startSince,
+    timeoutMs: context.timeoutMs,
+  });
+  advanceMatrixQaActorCursor({
+    actorId: "driver",
+    syncState: context.syncState,
+    nextSince: matched.since,
+    startSince,
+  });
+  const attachment = requireMatrixQaImageAttachment(
+    matched.event,
+    "Matrix generated image delivery scenario",
+  );
+  return {
+    artifacts: {
+      attachmentBodyPreview: matched.event.body?.slice(0, 200),
+      attachmentEventId: matched.event.eventId,
+      attachmentFilename: attachment.filename,
+      attachmentKind: attachment.kind,
+      attachmentMsgtype: matched.event.msgtype,
+      driverEventId,
+      roomId,
+      triggerBody,
+    },
+    details: [
+      `room id: ${roomId}`,
+      `driver event: ${driverEventId}`,
+      ...buildMatrixQaAttachmentDetailLines({
+        attachmentEvent: matched.event,
+        label: "generated image",
+      }),
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }
