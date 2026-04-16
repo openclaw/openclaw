@@ -1192,4 +1192,94 @@ describe("gateway agent handler", () => {
       }),
     );
   });
+
+  describe("abort support for agent RPC runs (issue #42172)", () => {
+    function makeContextWithAbort() {
+      return {
+        ...makeContext(),
+        chatAbortControllers: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatAbortedRuns: new Map(),
+        agentRunSeq: new Map(),
+        removeChatRun: vi.fn().mockReturnValue(undefined),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+      } as unknown as GatewayRequestContext;
+    }
+
+    it("passes abortSignal to agentCommandFromIngress", async () => {
+      primeMainAgentRun();
+
+      let capturedAbortSignal: AbortSignal | undefined;
+      mocks.agentCommand.mockImplementation(async (opts: { abortSignal?: AbortSignal }) => {
+        capturedAbortSignal = opts.abortSignal;
+        return { payloads: [], meta: { durationMs: 0 } };
+      });
+
+      await runMainAgent("test", "abort-signal-test-idem");
+
+      expect(capturedAbortSignal).toBeInstanceOf(AbortSignal);
+      expect(capturedAbortSignal?.aborted).toBe(false);
+    });
+
+    it("registers the run in chatAbortControllers while agentCommandFromIngress is running", async () => {
+      primeMainAgentRun();
+
+      const context = makeContextWithAbort();
+      let resolveAgent!: () => void;
+      mocks.agentCommand.mockImplementation(
+        () =>
+          new Promise<{ payloads: []; meta: { durationMs: number } }>((r) => {
+            resolveAgent = () => r({ payloads: [], meta: { durationMs: 0 } });
+          }),
+      );
+
+      void invokeAgent(
+        {
+          message: "hello",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "reg-test-idem",
+        },
+        { context },
+      );
+      // Yield to let the handler reach dispatchAgentRunFromGateway
+      await Promise.resolve();
+
+      expect(context.chatAbortControllers.has("reg-test-idem")).toBe(true);
+      const entry = context.chatAbortControllers.get("reg-test-idem");
+      expect(entry?.sessionKey).toBe("agent:main:main");
+      expect(entry?.controller).toBeInstanceOf(AbortController);
+      expect(entry?.controller.signal.aborted).toBe(false);
+
+      resolveAgent();
+      // After completion, entry must be cleaned up
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(context.chatAbortControllers.has("reg-test-idem")).toBe(false);
+    });
+
+    it("removes the run from chatAbortControllers when agentCommandFromIngress throws", async () => {
+      primeMainAgentRun();
+
+      const context = makeContextWithAbort();
+      mocks.agentCommand.mockRejectedValue(new Error("upstream failure"));
+
+      await invokeAgent(
+        {
+          message: "fail",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "fail-test-idem",
+        },
+        { context },
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(context.chatAbortControllers.has("fail-test-idem")).toBe(false);
+    });
+  });
 });

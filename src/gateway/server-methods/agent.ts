@@ -37,6 +37,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import {
+  type ChatAbortControllerEntry,
+  resolveChatRunExpiresAtMs,
+} from "../chat-abort.js";
 import { createRunningTaskRun } from "../../tasks/task-executor.js";
 import {
   mergeDeliveryContext,
@@ -231,7 +235,25 @@ function dispatchAgentRunFromGateway(params: {
       // Best-effort only: background task tracking must not block agent runs.
     }
   }
-  void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
+  const now = Date.now();
+  const abortController = new AbortController();
+  const sessionKey = params.ingressOpts.sessionKey ?? "";
+  const abortEntry: ChatAbortControllerEntry = {
+    controller: abortController,
+    sessionId: params.ingressOpts.sessionId ?? params.runId,
+    sessionKey,
+    startedAtMs: now,
+    expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs: 30 * 60 * 1000 }),
+    ownerConnId: undefined,
+    ownerDeviceId: undefined,
+  };
+  params.context.chatAbortControllers.set(params.runId, abortEntry);
+
+  void agentCommandFromIngress(
+    { ...params.ingressOpts, abortSignal: abortController.signal },
+    defaultRuntime,
+    params.context.deps,
+  )
     .then((result) => {
       const payload = {
         runId: params.runId,
@@ -273,6 +295,9 @@ function dispatchAgentRunFromGateway(params: {
         runId: params.runId,
         error: formatForLog(err),
       });
+    })
+    .finally(() => {
+      params.context.chatAbortControllers.delete(params.runId);
     });
 }
 
