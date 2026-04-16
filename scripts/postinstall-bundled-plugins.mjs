@@ -36,10 +36,10 @@ const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
 const LEGACY_UPDATE_COMPAT_SIDECARS = [
   {
-    path: "dist/extensions/qa-lab/runtime-api.js",
-    removedPrefix: "dist/extensions/qa-lab/",
+    path: "dist/extensions/qa-channel/runtime-api.js",
+    removedPrefix: "dist/extensions/qa-channel/",
     content:
-      "// Compatibility stub for older OpenClaw updaters. QA Lab is not packaged.\nexport {};\n",
+      "// Compatibility stub for older OpenClaw updaters. The QA channel implementation is not packaged.\nexport {};\n",
   },
 ];
 const BAILEYS_MEDIA_FILE = join(
