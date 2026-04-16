@@ -27,7 +27,7 @@ const CONTINUATION_SCAN_MAX_RECORDS = 500;
 export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:full";
 
 export function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection {
-  return config?.agents?.defaults?.contextInjection ?? "always";
+  return config?.agents?.defaults?.contextInjection ?? "continuation-skip";
 }
 
 export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<boolean> {

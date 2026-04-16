@@ -3225,7 +3225,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 ],
                 title: "Context Injection",
                 description:
-                  'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+                  'Controls when workspace bootstrap files are injected into the system prompt: "continuation-skip" (default) for safe continuation turns after a completed assistant response, or "always" to inject on every turn.',
               },
               bootstrapMaxChars: {
                 type: "integer",
@@ -24674,7 +24674,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.contextInjection": {
       label: "Context Injection",
-      help: 'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+      help: 'Controls when workspace bootstrap files are injected into the system prompt: "continuation-skip" (default) for safe continuation turns after a completed assistant response, or "always" to inject on every turn.',
       tags: ["advanced"],
     },
     "agents.defaults.bootstrapMaxChars": {

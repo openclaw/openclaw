@@ -200,9 +200,9 @@ export type AgentDefaultsConfig = {
   /**
    * Controls when workspace bootstrap files (AGENTS.md, SOUL.md, etc.) are
    * injected into the system prompt:
-   * - always: inject on every turn (default)
    * - continuation-skip: skip injection on safe continuation turns once the
-   *   transcript already contains a completed assistant turn
+   *   transcript already contains a completed assistant turn (default)
+   * - always: inject on every turn
    */
   contextInjection?: AgentContextInjection;
   /** Max chars for injected bootstrap files before truncation (default: 20000). */

@@ -943,9 +943,10 @@ Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`
 
 ### `agents.defaults.contextInjection`
 
-Controls when workspace bootstrap files are injected into the system prompt. Default: `"always"`.
+Controls when workspace bootstrap files are injected into the system prompt. Default: `"continuation-skip"`.
 
 - `"continuation-skip"`: safe continuation turns (after a completed assistant response) skip workspace bootstrap re-injection, reducing prompt size. Heartbeat runs and post-compaction retries still rebuild context.
+- `"always"`: inject workspace bootstrap files on every turn.
 
 ```json5
 {
