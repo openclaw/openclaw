@@ -289,6 +289,49 @@ describe("applySkillPlanTemplateSeed", () => {
     }
   });
 
+  it("falls back to snapshot.resolvedPlanTemplates when entries is empty (snapshot-backed run path)", async () => {
+    // Adversarial regression (Codex P1 on PR #67541):
+    // resolveEmbeddedRunSkillEntries returns skillEntries=[] whenever a
+    // snapshot is present, which is the main production run path. The
+    // seeder must therefore fall back to snapshot.resolvedPlanTemplates
+    // so it doesn't silently no-op for normal sessions.
+    resetAgentEventsForTest();
+    const { onAgentEvent } = await import("../../infra/agent-events.js");
+    const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
+    const off = onAgentEvent((evt) => events.push({ stream: evt.stream, data: evt.data }));
+
+    try {
+      const result = applySkillPlanTemplateSeed({
+        runId: "run-snapshot",
+        sessionKey: "session-snapshot",
+        entries: [], // empty — snapshot path
+        skillsSnapshot: {
+          prompt: "",
+          skills: [{ name: "release" }],
+          resolvedPlanTemplates: [
+            {
+              skillName: "release",
+              planTemplate: [{ step: "Tag" }, { step: "Publish" }],
+            },
+          ],
+        },
+      });
+
+      expect(result).not.toBeNull();
+      expect(result!.skillName).toBe("release");
+      expect(result!.emittedSteps).toBe(2);
+
+      const planEvents = events.filter((e) => e.stream === "plan");
+      expect(planEvents).toHaveLength(1);
+      expect(planEvents[0].data).toMatchObject({
+        steps: ["Tag", "Publish"],
+        source: "skill_plan_template",
+      });
+    } finally {
+      off();
+    }
+  });
+
   it("warns about truncation and dropped duplicates", async () => {
     resetAgentEventsForTest();
     const warnSpy = vi.spyOn(await import("../../logger.js"), "logWarn");

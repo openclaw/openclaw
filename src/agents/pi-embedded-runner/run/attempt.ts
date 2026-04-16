@@ -422,8 +422,15 @@ export async function runEmbeddedAttempt(
     // tied (use alpha-first as a deterministic winner), or when an
     // existing plan would be clobbered. Idempotency against
     // `AgentRunContext.lastPlanSteps` lands in #67514's follow-up.
+    //
+    // We pass both `entries` and `skillsSnapshot`: in the snapshot-backed
+    // run path `entries` is empty (resolveEmbeddedRunSkillEntries skips
+    // re-loading) and the seeder reads `resolvedPlanTemplates` from the
+    // snapshot instead. Without this fallback the seed would silently
+    // no-op in production sessions.
     applySkillPlanTemplateSeed({
       entries: skillEntries ?? [],
+      ...(params.skillsSnapshot ? { skillsSnapshot: params.skillsSnapshot } : {}),
       runId: params.runId,
       sessionKey: params.sessionKey,
       config: params.config,
