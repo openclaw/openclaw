@@ -1,5 +1,3 @@
-// src/agents/pi-tools.read.ts
-// No top-level import needed - using dynamic import above to avoid circular deps
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
