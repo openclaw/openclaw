@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolvePlanApproval, buildApprovedPlanInjection } from "./approval.js";
+import { buildPlanDecisionInjection } from "./types.js";
 import type { PlanModeSessionState } from "./types.js";
 
 const BASE_STATE: PlanModeSessionState = {
@@ -7,6 +8,7 @@ const BASE_STATE: PlanModeSessionState = {
   approval: "pending",
   enteredAt: 1000,
   updatedAt: 2000,
+  rejectionCount: 0,
 };
 
 describe("resolvePlanApproval", () => {
@@ -15,19 +17,32 @@ describe("resolvePlanApproval", () => {
     expect(result.mode).toBe("normal");
     expect(result.approval).toBe("approved");
     expect(result.confirmedAt).toBeGreaterThan(0);
+    expect(result.feedback).toBeUndefined();
   });
 
-  it("edit re-enters plan mode", () => {
+  it("edit transitions to normal mode (user edits count as approval)", () => {
     const result = resolvePlanApproval(BASE_STATE, "edit");
-    expect(result.mode).toBe("plan");
+    expect(result.mode).toBe("normal");
     expect(result.approval).toBe("edited");
-    expect(result.confirmedAt).toBeUndefined();
+    expect(result.confirmedAt).toBeGreaterThan(0);
   });
 
-  it("reject stays in plan mode", () => {
-    const result = resolvePlanApproval(BASE_STATE, "reject");
+  it("reject stays in plan mode and increments rejectionCount", () => {
+    const result = resolvePlanApproval(BASE_STATE, "reject", "Combine steps 2 and 3");
     expect(result.mode).toBe("plan");
     expect(result.approval).toBe("rejected");
+    expect(result.rejectionCount).toBe(1);
+    expect(result.feedback).toBe("Combine steps 2 and 3");
+  });
+
+  it("accumulates rejectionCount across multiple rejections", () => {
+    let state = BASE_STATE;
+    state = resolvePlanApproval(state, "reject", "Too many steps");
+    expect(state.rejectionCount).toBe(1);
+    state = resolvePlanApproval(state, "reject", "Still too complex");
+    expect(state.rejectionCount).toBe(2);
+    state = resolvePlanApproval(state, "reject");
+    expect(state.rejectionCount).toBe(3);
   });
 
   it("timeout stays in plan mode with timed_out state", () => {
@@ -37,10 +52,14 @@ describe("resolvePlanApproval", () => {
   });
 
   it("ignores stale timeout after approval is already resolved", () => {
-    const approved = { ...BASE_STATE, approval: "approved" as const, mode: "normal" as const };
+    const approved: PlanModeSessionState = {
+      ...BASE_STATE,
+      approval: "approved",
+      mode: "normal",
+    };
     const result = resolvePlanApproval(approved, "timeout");
     expect(result.mode).toBe("normal");
-    expect(result.approval).toBe("approved"); // NOT timed_out
+    expect(result.approval).toBe("approved");
   });
 
   it("preserves enteredAt across all transitions", () => {
@@ -48,6 +67,17 @@ describe("resolvePlanApproval", () => {
       const result = resolvePlanApproval(BASE_STATE, action);
       expect(result.enteredAt).toBe(1000);
     }
+  });
+
+  it("clears feedback on approval", () => {
+    const rejected: PlanModeSessionState = {
+      ...BASE_STATE,
+      approval: "rejected",
+      feedback: "old feedback",
+      rejectionCount: 1,
+    };
+    const result = resolvePlanApproval(rejected, "approve");
+    expect(result.feedback).toBeUndefined();
   });
 });
 
@@ -62,5 +92,33 @@ describe("buildApprovedPlanInjection", () => {
   it("includes instruction to mark cancelled if blocked", () => {
     const result = buildApprovedPlanInjection(["Step 1"]);
     expect(result).toContain("mark it cancelled");
+  });
+});
+
+describe("buildPlanDecisionInjection", () => {
+  it("builds rejection injection with feedback", () => {
+    const result = buildPlanDecisionInjection("rejected", "Too complex");
+    expect(result).toContain("[PLAN_DECISION]");
+    expect(result).toContain("decision: rejected");
+    expect(result).toContain("Too complex");
+    expect(result).toContain("Revise your plan");
+    expect(result).toContain("[/PLAN_DECISION]");
+  });
+
+  it("adds clarification hint after 3+ rejections", () => {
+    const result = buildPlanDecisionInjection("rejected", "still wrong", 3);
+    expect(result).toContain("clarify their goal");
+  });
+
+  it("does not add hint before 3 rejections", () => {
+    const result = buildPlanDecisionInjection("rejected", "nope", 2);
+    expect(result).not.toContain("clarify their goal");
+  });
+
+  it("builds expired injection", () => {
+    const result = buildPlanDecisionInjection("expired");
+    expect(result).toContain("decision: expired");
+    expect(result).toContain("timed out");
+    expect(result).toContain("re-propose");
   });
 });
