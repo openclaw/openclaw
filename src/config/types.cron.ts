@@ -16,7 +16,7 @@ export type CronFailureAlertConfig = {
   enabled?: boolean;
   after?: number;
   cooldownMs?: number;
-  mode?: "announce" | "webhook";
+  mode?: "announce" | "webhook" | "agent-turn";
   accountId?: string;
 };
 
@@ -24,7 +24,7 @@ export type CronFailureDestinationConfig = {
   channel?: string;
   to?: string;
   accountId?: string;
-  mode?: "announce" | "webhook";
+  mode?: "announce" | "webhook" | "agent-turn";
 };
 
 export type CronConfig = {
