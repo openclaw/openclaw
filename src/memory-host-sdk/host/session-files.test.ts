@@ -527,6 +527,108 @@ describe("buildSessionEntry", () => {
     expect(entry?.lineMap).toEqual([3, 4]);
   });
 
+  it("drops direct cron prompt chatter and the immediate assistant follow-up", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "[cron:job-1 Example] Run the nightly sync",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "Running the nightly sync now.",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Did the nightly sync actually change anything?",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "No, everything was already current.",
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "cron-prompt-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.content).toBe(
+      [
+        "User: Did the nightly sync actually change anything?",
+        "Assistant: No, everything was already current.",
+      ].join("\n"),
+    );
+    expect(entry?.lineMap).toEqual([3, 4]);
+  });
+
+  it("drops heartbeat prompt and ack chatter", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content:
+            "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "HEARTBEAT_OK",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Summarize what changed in the inbox today.",
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "heartbeat-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.content).toBe("User: Summarize what changed in the inbox today.");
+    expect(entry?.lineMap).toEqual([3]);
+  });
+
+  it("skips deleted and checkpoint transcripts for dreaming ingestion", async () => {
+    const deletedPath = path.join(tmpDir, "ordinary.jsonl.deleted.2026-02-16T22-27-33.000Z");
+    const checkpointPath = path.join(tmpDir, "ordinary.checkpoint.abc123.jsonl");
+    const content = JSON.stringify({
+      type: "message",
+      message: { role: "user", content: "This should never reach the dreaming corpus." },
+    });
+    await fs.writeFile(deletedPath, content);
+    await fs.writeFile(checkpointPath, content);
+
+    const deletedEntry = await buildSessionEntry(deletedPath);
+    const checkpointEntry = await buildSessionEntry(checkpointPath);
+
+    expect(deletedEntry).not.toBeNull();
+    expect(deletedEntry?.content).toBe("");
+    expect(deletedEntry?.lineMap).toEqual([]);
+    expect(checkpointEntry).not.toBeNull();
+    expect(checkpointEntry?.content).toBe("");
+    expect(checkpointEntry?.lineMap).toEqual([]);
+  });
+
   it("strips internal runtime context blocks before flattening session text", async () => {
     const jsonlLines = [
       JSON.stringify({

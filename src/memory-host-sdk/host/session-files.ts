@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { stripInternalRuntimeContext } from "../../agents/internal-runtime-context.js";
+import { isHeartbeatUserMessage } from "../../auto-reply/heartbeat-filter.js";
+import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
-import { isUsageCountedSessionTranscriptFileName } from "../../config/sessions/artifacts.js";
+import {
+  isSessionArchiveArtifactName,
+  isUsageCountedSessionTranscriptFileName,
+} from "../../config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
 import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
@@ -19,6 +24,7 @@ const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // toxic line. Wrapped continuation lines still map back to the same JSONL line.
 // This limit applies to content only; the role label adds up to 11 chars.
 const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
+const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
 
 export type SessionFileEntry = {
   path: string;
@@ -48,6 +54,15 @@ export type SessionTranscriptClassification = {
   dreamingNarrativeTranscriptPaths: ReadonlySet<string>;
   cronRunTranscriptPaths: ReadonlySet<string>;
 };
+
+function isCheckpointTranscriptFileName(fileName: string): boolean {
+  return fileName.endsWith(".jsonl") && fileName.includes(".checkpoint.");
+}
+
+function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
+  const fileName = path.basename(absPath);
+  return isSessionArchiveArtifactName(fileName) || isCheckpointTranscriptFileName(fileName);
+}
 
 function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
@@ -336,7 +351,18 @@ function isGeneratedSystemWrapperMessage(text: string, role: "user" | "assistant
   return GENERATED_SYSTEM_MESSAGE_RE.test(text);
 }
 
-function shouldSkipGeneratedSystemFollowup(rawText: string, role: "user" | "assistant"): boolean {
+function isGeneratedCronPromptMessage(text: string, role: "user" | "assistant"): boolean {
+  if (role !== "user") {
+    return false;
+  }
+  return DIRECT_CRON_PROMPT_RE.test(text);
+}
+
+function isGeneratedHeartbeatPromptMessage(text: string, role: "user" | "assistant"): boolean {
+  return role === "user" && isHeartbeatUserMessage({ role, content: text }, HEARTBEAT_PROMPT);
+}
+
+function shouldSkipGeneratedPrompt(rawText: string, role: "user" | "assistant"): boolean {
   const strippedInbound = stripInboundMetadataForUserRole(rawText, role);
   const strippedInternal = stripInternalRuntimeContext(strippedInbound);
   const normalized = normalizeSessionText(strippedInternal);
@@ -345,6 +371,8 @@ function shouldSkipGeneratedSystemFollowup(rawText: string, role: "user" | "assi
   }
   return (
     isGeneratedSystemWrapperMessage(normalized, role) ||
+    isGeneratedCronPromptMessage(normalized, role) ||
+    isGeneratedHeartbeatPromptMessage(normalized, role) ||
     isExecCompletionEvent(normalized.replace(GENERATED_SYSTEM_MESSAGE_RE, "").trim())
   );
 }
@@ -357,6 +385,12 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
     return null;
   }
   if (isGeneratedSystemWrapperMessage(normalized, role)) {
+    return null;
+  }
+  if (isGeneratedCronPromptMessage(normalized, role)) {
+    return null;
+  }
+  if (isGeneratedHeartbeatPromptMessage(normalized, role)) {
     return null;
   }
   if (isSilentReplyPayloadText(normalized)) {
@@ -408,6 +442,18 @@ export async function buildSessionEntry(
 ): Promise<SessionFileEntry | null> {
   try {
     const stat = await fs.stat(absPath);
+    if (shouldSkipTranscriptFileForDreaming(absPath)) {
+      return {
+        path: sessionPathForFile(absPath),
+        absPath,
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+        hash: hashText("\n\n"),
+        content: "",
+        lineMap: [],
+        messageTimestampsMs: [],
+      };
+    }
     const raw = await fs.readFile(absPath, "utf-8");
     const lines = raw.split("\n");
     const collected: string[] = [];
@@ -417,7 +463,7 @@ export async function buildSessionEntry(
       opts.generatedByDreamingNarrative ?? isDreamingNarrativeTranscriptFromSessionStore(absPath);
     const generatedByCronRun =
       opts.generatedByCronRun ?? isCronRunTranscriptFromSessionStore(absPath);
-    let skippingGeneratedSystemFollowup = false;
+    let skippingGeneratedFollowup = false;
     for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
       const line = lines[jsonlIdx];
       if (!line.trim()) {
@@ -455,14 +501,12 @@ export async function buildSessionEntry(
       const text = sanitizeSessionText(rawText, message.role);
       if (message.role === "user") {
         if (!text) {
-          skippingGeneratedSystemFollowup = shouldSkipGeneratedSystemFollowup(
-            rawText,
-            message.role,
-          );
+          skippingGeneratedFollowup = shouldSkipGeneratedPrompt(rawText, message.role);
           continue;
         }
-        skippingGeneratedSystemFollowup = false;
-      } else if (skippingGeneratedSystemFollowup) {
+        skippingGeneratedFollowup = false;
+      } else if (skippingGeneratedFollowup) {
+        skippingGeneratedFollowup = false;
         continue;
       }
       if (!text) {
