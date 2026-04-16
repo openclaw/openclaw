@@ -168,6 +168,24 @@ export const SessionsPatchParamsSchema = Type.Object(
     groupActivation: Type.Optional(
       Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
     ),
+    /**
+     * PR-8: toggle plan mode on/off for this session.
+     *
+     * - `"plan"` arms the runtime mutation gate — write/edit/exec/etc.
+     *   are blocked until the user approves a plan via the approval
+     *   flow (or the user toggles back to `"normal"`).
+     * - `"normal"` clears any pending plan-mode state and unblocks
+     *   mutations.
+     * - `null` is treated as `"normal"` (consistent with sibling fields'
+     *   null-semantics for clearing state).
+     *
+     * Only the literal mode value is exposed on the wire; the full
+     * `PlanModeSessionState` object (approvalId, rejectionCount, etc.)
+     * is internal to the server and persisted on `SessionEntry.planMode`.
+     */
+    planMode: Type.Optional(
+      Type.Union([Type.Literal("plan"), Type.Literal("normal"), Type.Null()]),
+    ),
   },
   { additionalProperties: false },
 );
