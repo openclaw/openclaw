@@ -107,6 +107,7 @@ export type ChatState = {
   chatLoading: boolean;
   chatMessages: unknown[];
   chatThinkingLevel: string | null;
+  chatReasoningLevel: string | null;
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
@@ -146,16 +147,17 @@ export async function loadChatHistory(state: ChatState) {
   state.chatLoading = true;
   state.lastError = null;
   try {
-    let res: { messages?: Array<unknown>; thinkingLevel?: string };
+    let res: { messages?: Array<unknown>; thinkingLevel?: string; reasoningLevel?: string };
     for (;;) {
       try {
-        res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
-          "chat.history",
-          {
-            sessionKey,
-            limit: 200,
-          },
-        );
+        res = await state.client.request<{
+          messages?: Array<unknown>;
+          thinkingLevel?: string;
+          reasoningLevel?: string;
+        }>("chat.history", {
+          sessionKey,
+          limit: 200,
+        });
         break;
       } catch (err) {
         if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
@@ -179,6 +181,7 @@ export async function loadChatHistory(state: ChatState) {
     const messages = Array.isArray(res.messages) ? res.messages : [];
     state.chatMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
     state.chatThinkingLevel = res.thinkingLevel ?? null;
+    state.chatReasoningLevel = res.reasoningLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
     maybeResetToolStream(state);
@@ -191,6 +194,7 @@ export async function loadChatHistory(state: ChatState) {
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
       state.chatThinkingLevel = null;
+      state.chatReasoningLevel = null;
       state.lastError = formatMissingOperatorReadScopeMessage("existing chat history");
     } else {
       state.lastError = String(err);

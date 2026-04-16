@@ -51,6 +51,7 @@ export type ChatProps = {
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
   thinkingLevel: string | null;
+  reasoningLevel: string | null;
   showThinking: boolean;
   showToolCalls: boolean;
   loading: boolean;
@@ -1122,7 +1123,7 @@ export function renderChat(props: ChatProps) {
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
-  const reasoningLevel = activeSession?.reasoningLevel ?? "off";
+  const reasoningLevel = props.reasoningLevel ?? activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
     name: props.assistantName,

@@ -77,6 +77,7 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatToolMessages = [];
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
+  state.chatReasoningLevel = null;
   state.chatStream = null;
   state.chatSideResult = null;
   state.lastError = null;
@@ -692,9 +693,11 @@ function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelect
           catalog: state.chatModelCatalog ?? [],
         })
       : "off";
+  const effectiveDefaultLevel =
+    currentOverride === "" && state.chatThinkingLevel ? state.chatThinkingLevel : defaultLevel;
   return {
     currentOverride,
-    defaultLabel: `Default (${defaultLevel})`,
+    defaultLabel: `Default (${effectiveDefaultLevel})`,
     options: buildThinkingOptions(provider, model, currentOverride),
   };
 }
