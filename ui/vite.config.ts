@@ -25,7 +25,7 @@ export default defineConfig(() => {
     base,
     publicDir: path.resolve(here, "public"),
     optimizeDeps: {
-      include: ["lit/directives/repeat.js"],
+      include: ["lit/directives/repeat.js", "markdown-it-task-lists"],
     },
     build: {
       outDir: path.resolve(here, "../dist/control-ui"),

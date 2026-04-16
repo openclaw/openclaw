@@ -132,6 +132,7 @@ function depsInstalled(kind) {
     const require = createRequire(path.join(uiDir, "package.json"));
     require.resolve("vite");
     require.resolve("dompurify");
+    require.resolve("markdown-it-task-lists");
     if (kind === "test") {
       require.resolve("vitest");
       require.resolve("@vitest/browser-playwright");
