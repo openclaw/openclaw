@@ -9,7 +9,7 @@ import {
   buildCaseInsensitiveExtensionGlob,
   classifyMemoryMultimodalPath,
   getMemoryMultimodalExtensions,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+} from "openclaw/plugin-sdk/embeddings";
 import {
   createSubsystemLogger,
   onSessionTranscriptUpdate,

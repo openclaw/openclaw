@@ -22,7 +22,7 @@ import {
   runOpenAiEmbeddingBatches,
   runVoyageEmbeddingBatches,
   type MemoryEmbeddingProviderAdapter,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+} from "openclaw/plugin-sdk/embeddings";
 import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { getProviderEnvVars } from "openclaw/plugin-sdk/provider-env-vars";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";

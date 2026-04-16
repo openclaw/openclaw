@@ -4,7 +4,7 @@ import {
   enforceEmbeddingMaxInputTokens,
   hasNonTextEmbeddingParts,
   type EmbeddingInput,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+} from "openclaw/plugin-sdk/embeddings";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { type SessionFileEntry } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
