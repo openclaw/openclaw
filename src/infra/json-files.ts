@@ -110,6 +110,19 @@ export async function writeTextAtomic(
       // best-effort; ignore on platforms without chmod
     }
     await replaceFileWithWindowsFallback(tmp, filePath, mode);
+    // Fsync the parent directory to ensure the new directory entry is durable
+    // after rename. Without this, a crash could lose the renamed file on POSIX
+    // filesystems that defer directory metadata writes.
+    try {
+      const dirFd = await fs.open(dir, "r");
+      try {
+        await dirFd.sync();
+      } finally {
+        await dirFd.close().catch(() => undefined);
+      }
+    } catch {
+      // best-effort; some platforms/filesystems do not support syncing directories.
+    }
     try {
       const finalStat = await fs.lstat(filePath);
       if (finalStat.isFile()) {
