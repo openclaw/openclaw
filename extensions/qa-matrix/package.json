@@ -5,6 +5,7 @@
   "description": "OpenClaw Matrix QA runner plugin",
   "type": "module",
   "devDependencies": {
+    "@openclaw/matrix": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },

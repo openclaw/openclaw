@@ -23,6 +23,9 @@ export type MatrixQaScenarioId =
   | "matrix-room-block-streaming"
   | "matrix-room-image-understanding-attachment"
   | "matrix-room-generated-image-delivery"
+  | "matrix-media-type-coverage"
+  | "matrix-attachment-only-ignored"
+  | "matrix-unsupported-media-safe"
   | "matrix-dm-reply-shape"
   | "matrix-dm-shared-session-notice"
   | "matrix-dm-thread-reply-override"
@@ -33,12 +36,31 @@ export type MatrixQaScenarioId =
   | "matrix-reaction-notification"
   | "matrix-reaction-threaded"
   | "matrix-reaction-not-a-reply"
+  | "matrix-reaction-redaction-observed"
   | "matrix-restart-resume"
+  | "matrix-post-restart-room-continue"
   | "matrix-room-membership-loss"
   | "matrix-homeserver-restart-resume"
   | "matrix-mention-gating"
+  | "matrix-mention-metadata-spoof-block"
   | "matrix-observer-allowlist-override"
-  | "matrix-allowlist-block";
+  | "matrix-allowlist-block"
+  | "matrix-multi-actor-ordering"
+  | "matrix-inbound-edit-ignored"
+  | "matrix-inbound-edit-no-duplicate-trigger"
+  | "matrix-e2ee-basic-reply"
+  | "matrix-e2ee-thread-follow-up"
+  | "matrix-e2ee-bootstrap-success"
+  | "matrix-e2ee-recovery-key-lifecycle"
+  | "matrix-e2ee-device-sas-verification"
+  | "matrix-e2ee-qr-verification"
+  | "matrix-e2ee-stale-device-hygiene"
+  | "matrix-e2ee-dm-sas-verification"
+  | "matrix-e2ee-restart-resume"
+  | "matrix-e2ee-verification-notice-no-trigger"
+  | "matrix-e2ee-artifact-redaction"
+  | "matrix-e2ee-media-image"
+  | "matrix-e2ee-key-bootstrap-failure";
 
 export type MatrixQaScenarioDefinition = LiveTransportScenarioDefinition<MatrixQaScenarioId> & {
   configOverrides?: MatrixQaConfigOverrides;
@@ -48,6 +70,8 @@ export type MatrixQaScenarioDefinition = LiveTransportScenarioDefinition<MatrixQ
 export const MATRIX_QA_BLOCK_ROOM_KEY = "block";
 export const MATRIX_QA_DRIVER_DM_ROOM_KEY = "driver-dm";
 export const MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY = "driver-dm-shared";
+export const MATRIX_QA_E2EE_ROOM_KEY = "e2ee";
+export const MATRIX_QA_E2EE_VERIFICATION_DM_ROOM_KEY = "e2ee-verification-dm";
 export const MATRIX_QA_HOMESERVER_ROOM_KEY = "homeserver";
 export const MATRIX_QA_MEDIA_ROOM_KEY = "media";
 export const MATRIX_QA_MEMBERSHIP_ROOM_KEY = "membership";
@@ -72,6 +96,7 @@ function buildMatrixQaDmTopology(
 }
 
 function buildMatrixQaSingleGroupTopology(params: {
+  encrypted?: boolean;
   key: string;
   name: string;
   requireMention: boolean;
@@ -80,6 +105,7 @@ function buildMatrixQaSingleGroupTopology(params: {
     defaultRoomKey: "main",
     rooms: [
       {
+        encrypted: params.encrypted === true,
         key: params.key,
         kind: "group",
         members: ["driver", "observer", "sut"],
@@ -143,6 +169,31 @@ const MATRIX_QA_HOMESERVER_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
   name: "Matrix QA Homeserver Restart Room",
   requireMention: true,
 });
+
+const MATRIX_QA_E2EE_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
+  encrypted: true,
+  key: MATRIX_QA_E2EE_ROOM_KEY,
+  name: "Matrix QA E2EE Room",
+  requireMention: true,
+});
+
+const MATRIX_QA_E2EE_VERIFICATION_DM_TOPOLOGY: MatrixQaTopologySpec = {
+  defaultRoomKey: "main",
+  rooms: [
+    {
+      encrypted: true,
+      key: MATRIX_QA_E2EE_VERIFICATION_DM_ROOM_KEY,
+      kind: "dm",
+      members: ["driver", "observer"],
+      name: "Matrix QA E2EE Verification DM",
+    },
+  ],
+};
+
+const MATRIX_QA_E2EE_CONFIG = {
+  encryption: true,
+  startupVerification: "off",
+} satisfies MatrixQaConfigOverrides;
 
 export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   {
@@ -214,13 +265,34 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   {
     id: "matrix-room-image-understanding-attachment",
     timeoutMs: 60_000,
-    title: "Matrix image attachments reach the model vision path",
+    title: "Matrix captioned image attachments reach the model vision path",
     topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
   },
   {
     id: "matrix-room-generated-image-delivery",
     timeoutMs: 60_000,
-    title: "Matrix generated images deliver as real image attachments",
+    title: "Matrix generated images deliver as real image attachments while streaming",
+    topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
+    configOverrides: {
+      streaming: "quiet",
+    },
+  },
+  {
+    id: "matrix-media-type-coverage",
+    timeoutMs: 90_000,
+    title: "Matrix media attachments cover image, audio, video, PDF, and EPUB transport",
+    topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
+  },
+  {
+    id: "matrix-attachment-only-ignored",
+    timeoutMs: 8_000,
+    title: "Matrix attachment-only group media does not bypass mention gating",
+    topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
+  },
+  {
+    id: "matrix-unsupported-media-safe",
+    timeoutMs: 45_000,
+    title: "Matrix unsupported media attachments do not block caption replies",
     topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
   },
   {
@@ -303,10 +375,21 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     title: "Matrix reactions do not trigger a fresh bot reply",
   },
   {
+    id: "matrix-reaction-redaction-observed",
+    timeoutMs: 45_000,
+    title: "Matrix reaction removals are observed as redactions",
+  },
+  {
     id: "matrix-restart-resume",
     standardId: "restart-resume",
     timeoutMs: 60_000,
     title: "Matrix lane resumes cleanly after gateway restart",
+    topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
+  },
+  {
+    id: "matrix-post-restart-room-continue",
+    timeoutMs: 75_000,
+    title: "Matrix restarted room continues after the first recovered reply",
     topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
   },
   {
@@ -328,6 +411,11 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     title: "Matrix room message without mention does not trigger",
   },
   {
+    id: "matrix-mention-metadata-spoof-block",
+    timeoutMs: 8_000,
+    title: "Matrix metadata-only mention spoof does not trigger",
+  },
+  {
     id: "matrix-observer-allowlist-override",
     timeoutMs: 45_000,
     title: "Matrix sender allowlist override lets observer messages trigger replies",
@@ -339,7 +427,113 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     id: "matrix-allowlist-block",
     standardId: "allowlist-block",
     timeoutMs: 8_000,
-    title: "Matrix allowlist blocks non-driver replies",
+    title: "Matrix sender allowlist blocks observer replies",
+  },
+  {
+    id: "matrix-multi-actor-ordering",
+    timeoutMs: 60_000,
+    title: "Matrix blocked observer traffic does not poison later driver replies",
+  },
+  {
+    id: "matrix-inbound-edit-ignored",
+    timeoutMs: 8_000,
+    title: "Matrix inbound edits cannot turn ignored messages into triggers",
+  },
+  {
+    id: "matrix-inbound-edit-no-duplicate-trigger",
+    timeoutMs: 45_000,
+    title: "Matrix inbound edits do not duplicate already handled triggers",
+  },
+  {
+    id: "matrix-e2ee-basic-reply",
+    timeoutMs: 75_000,
+    title: "Matrix E2EE encrypted room replies decrypt end-to-end",
+    topology: MATRIX_QA_E2EE_ROOM_TOPOLOGY,
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-thread-follow-up",
+    timeoutMs: 75_000,
+    title: "Matrix E2EE encrypted threads preserve reply shape",
+    topology: MATRIX_QA_E2EE_ROOM_TOPOLOGY,
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-bootstrap-success",
+    timeoutMs: 90_000,
+    title: "Matrix E2EE bootstrap verifies the owner device and backup",
+    topology: MATRIX_QA_E2EE_ROOM_TOPOLOGY,
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-recovery-key-lifecycle",
+    timeoutMs: 90_000,
+    title: "Matrix E2EE recovery key restores and resets room-key backup",
+    topology: MATRIX_QA_E2EE_ROOM_TOPOLOGY,
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-device-sas-verification",
+    timeoutMs: 90_000,
+    title: "Matrix E2EE device verification completes SAS emoji compare",
+    topology: MATRIX_QA_E2EE_ROOM_TOPOLOGY,
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-qr-verification",
+    timeoutMs: 90_000,
+    title: "Matrix E2EE QR verification completes identity scan",
+    topology: MATRIX_QA_E2EE_ROOM_TOPOLOGY,
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-stale-device-hygiene",
+    timeoutMs: 90_000,
+    title: "Matrix E2EE stale own devices can be removed without deleting the current device",
+    topology: MATRIX_QA_E2EE_ROOM_TOPOLOGY,
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-dm-sas-verification",
+    timeoutMs: 90_000,
+    title: "Matrix E2EE DM verification notices stay scoped and complete SAS",
+    topology: MATRIX_QA_E2EE_VERIFICATION_DM_TOPOLOGY,
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-restart-resume",
+    timeoutMs: 90_000,
+    title: "Matrix E2EE encrypted rooms resume after gateway restart",
+    topology: MATRIX_QA_E2EE_ROOM_TOPOLOGY,
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-verification-notice-no-trigger",
+    timeoutMs: 30_000,
+    title: "Matrix E2EE verification notices do not trigger replies",
+    topology: MATRIX_QA_E2EE_ROOM_TOPOLOGY,
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-artifact-redaction",
+    timeoutMs: 75_000,
+    title: "Matrix E2EE decrypted payloads stay out of default event artifacts",
+    topology: MATRIX_QA_E2EE_ROOM_TOPOLOGY,
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-media-image",
+    timeoutMs: 90_000,
+    title: "Matrix E2EE encrypted image attachments reach the model vision path",
+    topology: MATRIX_QA_E2EE_ROOM_TOPOLOGY,
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-key-bootstrap-failure",
+    timeoutMs: 90_000,
+    title: "Matrix E2EE bootstrap reports room-key backup failures",
+    topology: MATRIX_QA_E2EE_ROOM_TOPOLOGY,
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
   },
 ];
 

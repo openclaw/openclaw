@@ -998,6 +998,9 @@ importers:
 
   extensions/qa-matrix:
     devDependencies:
+      '@openclaw/matrix':
+        specifier: workspace:*
+        version: link:../matrix
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
