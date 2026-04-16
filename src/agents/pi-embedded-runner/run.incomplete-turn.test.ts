@@ -860,16 +860,14 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(mockedMarkAuthProfileFailure).toHaveBeenCalledTimes(2);
-    expect(
-      mockedMarkAuthProfileFailure.mock.calls.map(
-        (call) => (call[0] as { modelId?: string }).modelId,
-      ),
-    ).toEqual(["gpt-5.4", "gpt-5.4"]);
-    expect(
-      mockedMarkAuthProfileFailure.mock.calls.map(
-        (call) => (call[0] as { profileId?: string }).profileId,
-      ),
-    ).toEqual(["openai:p1", "openai:p1"]);
+    expect(mockedMarkAuthProfileFailure.mock.calls.map((call) => call[0]?.modelId)).toEqual([
+      "gpt-5.4",
+      "gpt-5.4",
+    ]);
+    expect(mockedMarkAuthProfileFailure.mock.calls.map((call) => call[0]?.profileId)).toEqual([
+      "openai:p1",
+      "openai:p1",
+    ]);
   });
 
   it("detects structured bullet-only plans with intent cues as planning-only GPT turns", () => {

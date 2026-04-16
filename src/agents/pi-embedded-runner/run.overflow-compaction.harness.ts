@@ -216,7 +216,9 @@ export const mockedGetApiKeyForModel = vi.fn(
     mode: "api-key" as const,
   }),
 );
-export const mockedMarkAuthProfileFailure = vi.fn(async () => {});
+export const mockedMarkAuthProfileFailure = vi.fn(
+  async (_params: { profileId?: string; reason?: string; modelId?: string } = {}) => {},
+);
 export const mockedResolveAuthProfileOrder = vi.fn(() => [] as string[]);
 export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 
