@@ -135,6 +135,30 @@ function resolveNativeBinaryFixturePath(): string {
   throw new Error("expected a native binary fixture path");
 }
 
+function expectShellPayloadApprovalDenied(params: {
+  tmpPrefix: string;
+  fileName: string;
+  body: string;
+}) {
+  if (process.platform === "win32") {
+    return;
+  }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), params.tmpPrefix));
+  try {
+    const scriptPath = path.join(tmp, params.fileName);
+    fs.writeFileSync(scriptPath, params.body);
+    fs.chmodSync(scriptPath, 0o755);
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["/bin/sh", "-lc", scriptPath],
+      rawCommand: scriptPath,
+      cwd: tmp,
+    });
+    expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function expectMutableFileOperandApprovalPlan(fixture: ScriptOperandFixture, cwd: string) {
   const prepared = buildSystemRunApprovalPlan({
     command: fixture.command,
@@ -800,63 +824,27 @@ describe("hardenApprovedExecutionPaths", () => {
   });
 
   it("keeps fail-closed behavior for shell payloads that invoke mutable script files", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-script-binding-"));
-    try {
-      const scriptPath = path.join(tmp, "run.sh");
-      fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
-      fs.chmodSync(scriptPath, 0o755);
-      const prepared = buildSystemRunApprovalPlan({
-        command: ["/bin/sh", "-lc", scriptPath],
-        rawCommand: scriptPath,
-        cwd: tmp,
-      });
-      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    expectShellPayloadApprovalDenied({
+      tmpPrefix: "openclaw-shell-script-binding-",
+      fileName: "run.sh",
+      body: "#!/bin/sh\necho SAFE\n",
+    });
   });
 
   it("keeps fail-closed behavior for empty shell payload files", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-empty-binding-"));
-    try {
-      const scriptPath = path.join(tmp, "empty");
-      fs.writeFileSync(scriptPath, "");
-      fs.chmodSync(scriptPath, 0o755);
-      const prepared = buildSystemRunApprovalPlan({
-        command: ["/bin/sh", "-lc", scriptPath],
-        rawCommand: scriptPath,
-        cwd: tmp,
-      });
-      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    expectShellPayloadApprovalDenied({
+      tmpPrefix: "openclaw-shell-empty-binding-",
+      fileName: "empty",
+      body: "",
+    });
   });
 
   it("does not treat weak MZ text headers as native binaries", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-mz-text-binding-"));
-    try {
-      const scriptPath = path.join(tmp, "mz-script");
-      fs.writeFileSync(scriptPath, "MZ not really a PE file\n");
-      fs.chmodSync(scriptPath, 0o755);
-      const prepared = buildSystemRunApprovalPlan({
-        command: ["/bin/sh", "-lc", scriptPath],
-        rawCommand: scriptPath,
-        cwd: tmp,
-      });
-      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    expectShellPayloadApprovalDenied({
+      tmpPrefix: "openclaw-shell-mz-text-binding-",
+      fileName: "mz-script",
+      body: "MZ not really a PE file\n",
+    });
   });
 
   it.each(unsafeRuntimeInvocationCases)("$name", (testCase) => {

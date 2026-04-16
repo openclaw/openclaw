@@ -310,7 +310,6 @@ function isKnownBinaryExecutableHeader(buffer: Buffer): boolean {
 }
 
 function isLikelyScriptLikePathSync(targetPath: string): boolean {
-  // Stat defensively in case a future caller has not already confirmed the file exists.
   let stat: fs.Stats;
   try {
     stat = fs.statSync(targetPath);
