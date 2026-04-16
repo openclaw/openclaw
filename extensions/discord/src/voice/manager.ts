@@ -5,9 +5,14 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 import { ChannelType, type Client, ReadyListener } from "@buape/carbon";
 import type { VoicePlugin } from "@buape/carbon/voice";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveTtsConfig, type ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  agentCommandFromIngress,
+  getTtsProvider,
+  resolveAgentDir,
+  resolveTtsConfig,
+  resolveTtsPrefsPath,
+  type ResolvedTtsConfig,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -18,7 +23,6 @@ import { parseTtsDirectives } from "openclaw/plugin-sdk/speech";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { getTtsProvider, resolveTtsPrefsPath } from "openclaw/plugin-sdk/tts-runtime";
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug, resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
