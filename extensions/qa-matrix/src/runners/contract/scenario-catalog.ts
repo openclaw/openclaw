@@ -14,6 +14,8 @@ import {
 
 export type MatrixQaScenarioId =
   | "matrix-thread-follow-up"
+  | "matrix-thread-root-preservation"
+  | "matrix-thread-nested-reply-shape"
   | "matrix-thread-isolation"
   | "matrix-top-level-reply-shape"
   | "matrix-room-thread-reply-override"
@@ -27,6 +29,8 @@ export type MatrixQaScenarioId =
   | "matrix-secondary-room-reply"
   | "matrix-secondary-room-open-trigger"
   | "matrix-reaction-notification"
+  | "matrix-reaction-threaded"
+  | "matrix-reaction-not-a-reply"
   | "matrix-restart-resume"
   | "matrix-room-membership-loss"
   | "matrix-homeserver-restart-resume"
@@ -137,6 +141,16 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     standardId: "thread-follow-up",
     timeoutMs: 60_000,
     title: "Matrix thread follow-up reply",
+  },
+  {
+    id: "matrix-thread-root-preservation",
+    timeoutMs: 60_000,
+    title: "Matrix threaded replies keep the original root event",
+  },
+  {
+    id: "matrix-thread-nested-reply-shape",
+    timeoutMs: 60_000,
+    title: "Matrix nested threaded replies keep fallback replies on the root event",
   },
   {
     id: "matrix-thread-isolation",
@@ -256,6 +270,16 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     standardId: "reaction-observation",
     timeoutMs: 45_000,
     title: "Matrix reactions on bot replies are observed",
+  },
+  {
+    id: "matrix-reaction-threaded",
+    timeoutMs: 45_000,
+    title: "Matrix reactions preserve threaded reply targets",
+  },
+  {
+    id: "matrix-reaction-not-a-reply",
+    timeoutMs: 8_000,
+    title: "Matrix reactions do not trigger a fresh bot reply",
   },
   {
     id: "matrix-restart-resume",
