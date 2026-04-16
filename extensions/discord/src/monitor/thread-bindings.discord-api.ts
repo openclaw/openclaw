@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { createDiscordRestClient } from "../client.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { createThreadDiscord } from "../send.messages.js";
+import { parseDiscordTarget } from "../target-parsing.js";
 import { resolveThreadBindingPersonaFromRecord } from "./thread-bindings.persona.js";
 import {
   BINDINGS_BY_THREAD_ID,
@@ -237,6 +238,9 @@ export async function resolveChannelIdForBinding(params: {
   if (explicit) {
     return explicit;
   }
+  // Strip "channel:"/"user:" prefix so Discord API receives a raw snowflake.
+  const rawThreadId =
+    parseDiscordTarget(params.threadId, { defaultKind: "channel" })?.id ?? params.threadId;
   try {
     const rest = createDiscordRestClient(
       {
@@ -245,7 +249,7 @@ export async function resolveChannelIdForBinding(params: {
       },
       params.cfg,
     ).rest;
-    const channel = (await rest.get(Routes.channel(params.threadId))) as {
+    const channel = (await rest.get(Routes.channel(rawThreadId))) as {
       id?: string;
       type?: number;
       parent_id?: string;
@@ -267,7 +271,7 @@ export async function resolveChannelIdForBinding(params: {
     return channelId || null;
   } catch (err) {
     logVerbose(
-      `discord thread binding channel resolve failed for ${params.threadId}: ${summarizeDiscordError(err)}`,
+      `discord thread binding channel resolve failed for ${rawThreadId}: ${summarizeDiscordError(err)}`,
     );
     return null;
   }
