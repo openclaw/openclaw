@@ -17,13 +17,7 @@ import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-pa
 const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
   (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
 );
-const LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS = [
-  "dist/extensions/qa-channel/runtime-api.js",
-] as const;
-const REQUIRED_INSTALLED_RUNTIME_SIDECAR_PATHS = [
-  ...PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS,
-  ...LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS,
-] as const;
+const REQUIRED_INSTALLED_RUNTIME_SIDECAR_PATHS = PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS;
 
 describe("buildPublishedInstallScenarios", () => {
   it("uses a single fresh scenario for plain stable releases", () => {
@@ -315,7 +309,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     }
   });
 
-  it("accepts legacy qa channel sidecar directories without package.json", () => {
+  it("flags bundled extension directories that are missing package.json", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -330,7 +324,9 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
         "utf8",
       );
 
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
+        `installed bundled extension manifest missing: ${join(packageRoot, "dist/extensions/qa-channel/package.json")}.`,
+      ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

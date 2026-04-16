@@ -415,11 +415,20 @@ describe("update global helpers", () => {
         JSON.stringify({ name: "openclaw", version: "1.0.0" }),
         "utf-8",
       );
-      for (const relativePath of NPM_UPDATE_COMPAT_SIDECAR_PATHS) {
-        const absolutePath = path.join(packageRoot, relativePath);
-        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-        await fs.writeFile(absolutePath, "export {};\n", "utf-8");
-      }
+      const qaChannelPackageJson = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "qa-channel",
+        "package.json",
+      );
+      await fs.mkdir(path.dirname(qaChannelPackageJson), { recursive: true });
+      await fs.writeFile(
+        qaChannelPackageJson,
+        JSON.stringify({ name: "@openclaw/qa-channel" }),
+        "utf-8",
+      );
+      await fs.writeFile(path.join(packageRoot, QA_CHANNEL_RUNTIME_API), "export {};\n", "utf-8");
 
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
 

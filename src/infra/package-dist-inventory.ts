@@ -2,12 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
-const PACKAGED_QA_RUNTIME_PATHS = new Set(["dist/extensions/qa-channel/runtime-api.js"]);
-const OMITTED_QA_EXTENSION_PREFIXES = [
-  "dist/extensions/qa-channel/",
-  "dist/extensions/qa-lab/",
-  "dist/extensions/qa-matrix/",
-];
+const OMITTED_QA_EXTENSION_PREFIXES = ["dist/extensions/qa-lab/", "dist/extensions/qa-matrix/"];
 const OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES = ["dist/plugin-sdk/extensions/qa-lab/"];
 const OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES = new Set([
   "dist/plugin-sdk/qa-lab.d.ts",
@@ -50,7 +45,7 @@ function isPackagedDistPath(relativePath: string): boolean {
     return false;
   }
   if (OMITTED_QA_EXTENSION_PREFIXES.some((prefix) => relativePath.startsWith(prefix))) {
-    return PACKAGED_QA_RUNTIME_PATHS.has(relativePath);
+    return false;
   }
   return true;
 }

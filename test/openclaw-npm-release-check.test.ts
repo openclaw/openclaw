@@ -328,11 +328,12 @@ describe("collectForbiddenPackedPathErrors", () => {
     ]);
   });
 
-  it("rejects private qa artifacts in npm pack output", () => {
+  it("allows the packaged qa-channel surface but rejects private qa artifacts", () => {
     expect(
       collectForbiddenPackedPathErrors([
-        "dist/extensions/qa-channel/runtime-api.js",
+        "dist/extensions/qa-channel/api.js",
         "dist/extensions/qa-channel/package.json",
+        "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-lab/runtime-api.js",
         "dist/extensions/qa-lab/src/cli.js",
         "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
@@ -340,7 +341,6 @@ describe("collectForbiddenPackedPathErrors", () => {
         "qa/scenarios/index.md",
       ]),
     ).toEqual([
-      'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
       'npm package must not include private QA lab type artifact "dist/plugin-sdk/extensions/qa-lab/cli.d.ts".',
@@ -349,15 +349,13 @@ describe("collectForbiddenPackedPathErrors", () => {
     ]);
   });
 
-  it("allows only the legacy update verifier QA channel runtime sidecar", () => {
+  it("allows packaged qa-channel sidecars", () => {
     expect(
       collectForbiddenPackedPathErrors([
+        "dist/extensions/qa-channel/api.js",
         "dist/extensions/qa-channel/runtime-api.js",
-        "dist/extensions/qa-lab/runtime-api.js",
       ]),
-    ).toEqual([
-      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
-    ]);
+    ).toEqual([]);
   });
 
   it("rejects root dist chunks that still reference the private qa lab", () => {

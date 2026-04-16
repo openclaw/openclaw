@@ -74,11 +74,6 @@ const FORBIDDEN_PACKED_PATH_RULES = [
       `npm package must not include generated docs artifact "${packedPath}".`,
   },
   {
-    prefix: "dist/extensions/qa-channel/",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA channel artifact "${packedPath}".`,
-  },
-  {
     prefix: "dist/extensions/qa-lab/",
     describe: (packedPath: string) =>
       `npm package must not include private QA lab artifact "${packedPath}".`,

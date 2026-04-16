@@ -44,7 +44,15 @@ describe("package dist inventory", () => {
         "qa-channel",
         "runtime-api.js",
       );
-      const omittedQaChunk = path.join(packageRoot, "dist", "extensions", "qa-channel", "cli.js");
+      const packagedQaApi = path.join(packageRoot, "dist", "extensions", "qa-channel", "api.js");
+      const packagedQaManifest = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "qa-channel",
+        "package.json",
+      );
+      const packagedQaCli = path.join(packageRoot, "dist", "extensions", "qa-channel", "cli.js");
       const omittedQaMatrixChunk = path.join(
         packageRoot,
         "dist",
@@ -78,7 +86,9 @@ describe("package dist inventory", () => {
       await fs.mkdir(path.dirname(omittedExtensionNodeModuleSymlink), { recursive: true });
       await fs.writeFile(path.join(packageRoot, "color-support.js"), "export {};\n", "utf8");
       await fs.writeFile(packagedQaRuntime, "export {};\n", "utf8");
-      await fs.writeFile(omittedQaChunk, "export {};\n", "utf8");
+      await fs.writeFile(packagedQaApi, "export {};\n", "utf8");
+      await fs.writeFile(packagedQaManifest, "{}\n", "utf8");
+      await fs.writeFile(packagedQaCli, "export {};\n", "utf8");
       await fs.writeFile(omittedQaMatrixChunk, "export {};\n", "utf8");
       await fs.writeFile(omittedQaLabPluginSdk, "export {};\n", "utf8");
       await fs.writeFile(omittedQaLabTypes, "export {};\n", "utf8");
@@ -90,6 +100,9 @@ describe("package dist inventory", () => {
       await fs.writeFile(omittedMap, "{}", "utf8");
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
+        "dist/extensions/qa-channel/api.js",
+        "dist/extensions/qa-channel/cli.js",
+        "dist/extensions/qa-channel/package.json",
         "dist/extensions/qa-channel/runtime-api.js",
       ]);
     });

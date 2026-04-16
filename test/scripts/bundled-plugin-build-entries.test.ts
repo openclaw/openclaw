@@ -73,11 +73,17 @@ describe("bundled plugin build entries", () => {
     expect(artifacts).toContain("dist/extensions/matrix/plugin-entry.handlers.runtime.js");
   });
 
-  it("keeps private QA bundles out of required npm pack artifacts", () => {
+  it("packs the qa-channel public surface while keeping private QA bundles out", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
-    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-channel/"))).toBe(
-      false,
+    expect(artifacts).toEqual(
+      expect.arrayContaining([
+        "dist/extensions/qa-channel/api.js",
+        "dist/extensions/qa-channel/openclaw.plugin.json",
+        "dist/extensions/qa-channel/package.json",
+        "dist/extensions/qa-channel/runtime-api.js",
+        "dist/extensions/qa-channel/test-api.js",
+      ]),
     );
     expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-lab/"))).toBe(
       false,
