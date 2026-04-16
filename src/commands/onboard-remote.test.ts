@@ -199,6 +199,39 @@ describe("promptRemoteGatewayConfig", () => {
     expect(next.gateway?.remote?.tlsFingerprint).toBeUndefined();
   });
 
+  it("tolerates undefined token text results by keeping the existing token", async () => {
+    const text: WizardPrompter["text"] = vi.fn(async (params) => {
+      if (params.message === "Gateway WebSocket URL") {
+        return String(params.initialValue);
+      }
+      if (params.message === "Gateway token") {
+        return undefined as never;
+      }
+      return "" as never;
+    }) as WizardPrompter["text"];
+
+    const prompter = createPrompter({
+      confirm: vi.fn(async () => false),
+      select: createSelectPrompter({ "Gateway auth": "token" }),
+      text,
+    });
+
+    const next = await promptRemoteGatewayConfig(
+      {
+        gateway: {
+          remote: {
+            url: "wss://existing.example:18789",
+            token: "keep-me",
+          },
+        },
+      } as OpenClawConfig,
+      prompter,
+    );
+
+    expect(next.gateway?.remote?.url).toBe("wss://existing.example:18789");
+    expect(next.gateway?.remote?.token).toBe("keep-me");
+  });
+
   it("drops discovery tlsFingerprint when the URL is edited after trust confirmation", async () => {
     detectBinary.mockResolvedValue(true);
     discoverGatewayBeacons.mockResolvedValue([

@@ -216,7 +216,7 @@ async function promptPluginFields(params: {
         initialValue: currentStr,
         placeholder: hint.placeholder ?? "value1, value2",
       });
-      const trimmed = input.trim();
+      const trimmed = typeof input === "string" ? input.trim() : currentStr;
       if (trimmed !== currentStr) {
         if (trimmed) {
           const values = trimmed
@@ -239,7 +239,7 @@ async function promptPluginFields(params: {
       initialValue: currentStr,
       placeholder: hint.placeholder,
     });
-    const trimmed = input.trim();
+    const trimmed = typeof input === "string" ? input.trim() : currentStr;
     if (trimmed !== currentStr) {
       // Coerce numeric text input when the schema expects a JSON number or integer.
       if (schemaProp?.type === "number" || schemaProp?.type === "integer") {

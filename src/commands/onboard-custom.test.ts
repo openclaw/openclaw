@@ -168,6 +168,24 @@ describe("promptCustomApiConfig", () => {
     );
   });
 
+  it("tolerates undefined base URL text results by falling back to the initial value", async () => {
+    const prompter = createTestPrompter({
+      text: [] as string[],
+      select: ["plaintext", "openai"],
+    });
+    prompter.text
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("llama3")
+      .mockResolvedValueOnce("custom")
+      .mockResolvedValueOnce("");
+    stubFetchSequence([{ ok: true }]);
+
+    const result = await runPromptCustomApi(prompter);
+
+    expect(result.config.models?.providers?.custom?.baseUrl).toBe(OLLAMA_DEFAULT_BASE_URL_FOR_TEST);
+  });
+
   it("retries when verification fails", async () => {
     const prompter = createTestPrompter({
       text: ["http://localhost:11434/v1", "", "bad-model", "good-model", "custom", ""],

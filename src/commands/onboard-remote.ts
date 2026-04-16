@@ -9,6 +9,7 @@ import {
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
 import type { SecretInputMode } from "./onboard-types.js";
@@ -19,8 +20,8 @@ function buildLabel(beacon: GatewayBonjourBeacon): string {
   return buildGatewayDiscoveryLabel(beacon);
 }
 
-function ensureWsUrl(value: string): string {
-  const trimmed = value.trim();
+function ensureWsUrl(value: string | undefined | null): string {
+  const trimmed = normalizeOptionalString(value) ?? "";
   if (!trimmed) {
     return DEFAULT_GATEWAY_URL;
   }
@@ -193,13 +194,12 @@ export async function promptRemoteGatewayConfig(
       });
       token = resolved.ref;
     } else {
-      token = (
-        await prompter.text({
-          message: "Gateway token",
-          initialValue: typeof token === "string" ? token : undefined,
-          validate: (value) => (value?.trim() ? undefined : "Required"),
-        })
-      ).trim();
+      const tokenInput = await prompter.text({
+        message: "Gateway token",
+        initialValue: typeof token === "string" ? token : undefined,
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      });
+      token = normalizeOptionalString(tokenInput) ?? normalizeOptionalString(token) ?? "";
     }
     password = undefined;
   } else if (authChoice === "password") {
@@ -225,13 +225,12 @@ export async function promptRemoteGatewayConfig(
       });
       password = resolved.ref;
     } else {
-      password = (
-        await prompter.text({
-          message: "Gateway password",
-          initialValue: typeof password === "string" ? password : undefined,
-          validate: (value) => (value?.trim() ? undefined : "Required"),
-        })
-      ).trim();
+      const passwordInput = await prompter.text({
+        message: "Gateway password",
+        initialValue: typeof password === "string" ? password : undefined,
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      });
+      password = normalizeOptionalString(passwordInput) ?? normalizeOptionalString(password) ?? "";
     }
     token = undefined;
   } else {

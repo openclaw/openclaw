@@ -52,6 +52,8 @@ function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
   return level === "on" || level === "full";
 }
 
+const ALWAYS_DETAILED_TOOL_ERRORS = new Set(["apply_patch"]);
+
 function shouldIncludeToolErrorDetails(params: {
   lastToolError: ToolErrorSummary;
   isCronTrigger?: boolean;
@@ -59,6 +61,13 @@ function shouldIncludeToolErrorDetails(params: {
   verboseLevel?: VerboseLevel;
 }): boolean {
   if (isVerboseToolDetailEnabled(params.verboseLevel)) {
+    return true;
+  }
+  if (
+    ALWAYS_DETAILED_TOOL_ERRORS.has(
+      normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "",
+    )
+  ) {
     return true;
   }
   return (

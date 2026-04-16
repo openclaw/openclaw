@@ -450,7 +450,10 @@ async function promptBaseUrlAndKey(params: {
       return URL.canParse(val) ? undefined : "Please enter a valid URL (e.g. http://...)";
     },
   });
-  const baseUrl = baseUrlInput.trim();
+  const baseUrl =
+    normalizeOptionalString(baseUrlInput) ??
+    normalizeOptionalString(params.initialBaseUrl) ??
+    OLLAMA_DEFAULT_BASE_URL;
   const providerHint = buildEndpointIdFromUrl(baseUrl) || "custom";
   let apiKeyInput: SecretInput | undefined;
   const resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
@@ -487,13 +490,12 @@ async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<Cus
 }
 
 async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string> {
-  return (
-    await prompter.text({
-      message: "Model ID",
-      placeholder: "e.g. llama3, claude-3-7-sonnet",
-      validate: (val) => (val.trim() ? undefined : "Model ID is required"),
-    })
-  ).trim();
+  const modelInput = await prompter.text({
+    message: "Model ID",
+    placeholder: "e.g. llama3, claude-3-7-sonnet",
+    validate: (val) => (val.trim() ? undefined : "Model ID is required"),
+  });
+  return normalizeOptionalString(modelInput) ?? "";
 }
 
 async function applyCustomApiRetryChoice(params: {

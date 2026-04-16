@@ -141,6 +141,18 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("always includes apply_patch error details even when verbose mode is off", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "apply_patch", error: "file is outside workspace root" },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Apply Patch",
+      detail: "file is outside workspace root",
+    });
+  });
+
   it.each([
     {
       name: "includes details for mutating tool failures when verbose is on",
