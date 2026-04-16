@@ -197,14 +197,14 @@ describe("plugin activation boundary", () => {
     return browserAmbientImportsPromise;
   }
 
-  it("does not load bundled provider plugins on ambient command imports", async () => {
-    await importAmbientModules();
-
-    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
-  });
-
-  it("does not load bundled plugins for config and env detection helpers", async () => {
-    const { isStaticallyChannelConfigured, resolveEnvApiKey } = await importConfigHelpers();
+  it("keeps ambient core imports cold", async () => {
+    const [, { isStaticallyChannelConfigured, resolveEnvApiKey }, { normalizeModelRef }] =
+      await Promise.all([
+        importAmbientModules(),
+        importConfigHelpers(),
+        importModelSelection(),
+        importBrowserAmbientModules(),
+      ]);
 
     expect(isStaticallyChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(
       true,
@@ -226,12 +226,6 @@ describe("plugin activation boundary", () => {
       apiKey: "gcp-vertex-credentials",
       source: "gcloud adc",
     });
-    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
-  });
-
-  it("does not load provider plugins for static model id normalization", async () => {
-    const { normalizeModelRef } = await importModelSelection();
-
     expect(normalizeModelRef("google", "gemini-3.1-pro")).toEqual({
       provider: "google",
       model: "gemini-3.1-pro-preview",
@@ -283,29 +277,19 @@ describe("plugin activation boundary", () => {
     ]);
   });
 
-  it("keeps browser cleanup helpers cold when browser is disabled", async () => {
-    const browser = await importBrowserHelpers();
+  it("keeps disabled browser cleanup and generic session-binding cleanup cold", async () => {
+    const [browser, { getSessionBindingService }] = await Promise.all([
+      importBrowserHelpers(),
+      import("./infra/outbound/session-binding-service.js"),
+    ]);
 
     await expect(browser.closeTrackedBrowserTabsForSessions({ sessionKeys: [] })).resolves.toBe(0);
-    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
-  });
-
-  it("keeps generic session-binding cleanup helpers cold when plugins are disabled", async () => {
-    const { getSessionBindingService } =
-      await import("./infra/outbound/session-binding-service.js");
-
     await expect(
       getSessionBindingService().unbind({
         targetSessionKey: "agent:main:test",
         reason: "session-reset",
       }),
     ).resolves.toEqual([]);
-    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
-  });
-
-  it("keeps audited browser ambient imports cold", async () => {
-    await importBrowserAmbientModules();
-
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 });
