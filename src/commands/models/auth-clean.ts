@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
+import { sanitizeProfileIdForDisplay } from "../../agents/auth-profiles/sanitize.js";
 import {
   loadAgentLocalAuthProfileStore,
   updateAuthProfileStoreWithLock,
@@ -56,37 +57,6 @@ function collectMediaProfileIds(cfg: Awaited<ReturnType<typeof loadModelsConfig>
   }
 
   return ids;
-}
-
-/**
- * Sanitize a profile ID string for safe output in terminal/log messages.
- * Strips ALL terminal escape sequences and newlines to prevent terminal injection
- * (log forging) via maliciously crafted profile IDs.
- *
- * Handles:
- *   - Standard CSI:  ESC [ ... final        e.g. \x1b[31m, \x1b[1;32m
- *   - Private CSI:   ESC [ ? ... final       e.g. \x1b[?25l (cursor hide)
- *   - OSC:           ESC ] ... BEL/ST        e.g. \x1b]0;title\x07
- *   - DCS/SOS/PM/APC: ESC P/X/^/_ ... ST   e.g. \x1bPdata\x1b\\
- *   - Other Fe:      ESC <single char>       e.g. \x1bc (RIS reset)
- *   - Bare ESC:      ESC at end of string    e.g. "myprofile\x1b"
- */
-function sanitizeProfileId(id: string): string {
-  return (
-    id
-      .replace(
-        // Strip 7-bit ESC-prefixed ANSI/VT control sequences (CSI, OSC, DCS, APC, PM, SOS,
-        // private-use, and bare ESC + any char) to prevent terminal injection via profile IDs.
-        // eslint-disable-next-line no-control-regex
-        /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[\s\S]?)/g,
-        "",
-      )
-      // Strip C1 8-bit control codes (U+0080–U+009F), including \x9b (C1 CSI), which can
-      // construct terminal colour/cursor sequences on xterm-compatible terminals without
-      // a leading ESC byte, bypassing the 7-bit escape strip above (Greptile concern).
-      .replace(/[\x80-\x9f]/g, "")
-      .replace(/[\r\n]/g, "")
-  );
 }
 
 /**
@@ -210,7 +180,7 @@ export async function modelsAuthCleanCommand(
         runtime.log(
           "Warning: openclaw.json has no configured profiles. All store profiles would be removed.",
         );
-        runtime.log(`In store: ${storeProfileIds.map(sanitizeProfileId).join(", ")}`);
+        runtime.log(`In store: ${storeProfileIds.map(sanitizeProfileIdForDisplay).join(", ")}`);
         runtime.log("(dry run -- no changes written)");
       }
       return;
@@ -245,9 +215,11 @@ export async function modelsAuthCleanCommand(
     runtime.log(`Agent:      ${agentId}`);
     runtime.log(`Auth file:  ${authStorePath}`);
     runtime.log(
-      `Configured: ${[...configuredProfiles].map(sanitizeProfileId).join(", ") || "(none)"}`,
+      `Configured: ${[...configuredProfiles].map(sanitizeProfileIdForDisplay).join(", ") || "(none)"}`,
     );
-    runtime.log(`In store:   ${storeProfileIds.map(sanitizeProfileId).join(", ") || "(none)"}`);
+    runtime.log(
+      `In store:   ${storeProfileIds.map(sanitizeProfileIdForDisplay).join(", ") || "(none)"}`,
+    );
   }
 
   if (toRemove.length === 0) {
@@ -260,11 +232,11 @@ export async function modelsAuthCleanCommand(
   if (!opts.json) {
     runtime.log(`\nProfiles to remove (${toRemove.length}):`);
     for (const id of toRemove) {
-      runtime.log(`  - ${sanitizeProfileId(id)}`);
+      runtime.log(`  - ${sanitizeProfileIdForDisplay(id)}`);
     }
     runtime.log(`Profiles to keep (${toKeep.length}):`);
     for (const id of toKeep) {
-      runtime.log(`  + ${sanitizeProfileId(id)}`);
+      runtime.log(`  + ${sanitizeProfileIdForDisplay(id)}`);
     }
   }
 

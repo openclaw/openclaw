@@ -141,10 +141,14 @@ export async function updateAuthProfileStoreWithLock(params: {
       // never load the merged view (ensureAuthProfileStore merges main+agent) because
       // writing that merged view back to agent-local auth-profiles.json would leak main
       // credentials into subagent scope. agentLocalOnly also forces this path explicitly.
+      // For the main-agent path (agentDir undefined, agentLocalOnly false), use
+      // loadAuthProfileStoreForAgent which always reads from disk/cache -- NOT
+      // ensureAuthProfileStore which can return a stale runtime snapshot,
+      // reintroducing the overwrite bug this lock is meant to prevent.
       const useLocalOnly = params.agentLocalOnly || params.agentDir !== undefined;
       const store = useLocalOnly
         ? loadAgentLocalAuthProfileStore(params.agentDir)
-        : ensureAuthProfileStore(params.agentDir);
+        : loadAuthProfileStoreForAgent(undefined);
       const shouldSave = params.updater(store);
       if (shouldSave) {
         saveAuthProfileStore(store, params.agentDir);

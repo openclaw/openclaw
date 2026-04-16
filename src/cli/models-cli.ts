@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { validateProfileId } from "../agents/auth-profiles/sanitize.js";
 import {
   githubCopilotLoginCommand,
   modelsAliasesAddCommand,
@@ -351,10 +352,17 @@ export function registerModelsCli(program: Command) {
     )
     .action(async (opts) => {
       await runModelsCommand(async () => {
+        const profileId = opts.profileId as string | undefined;
+        if (profileId) {
+          const err = validateProfileId(profileId);
+          if (err) {
+            throw new Error(`Invalid --profile-id: ${err}`);
+          }
+        }
         await modelsAuthPasteTokenCommand(
           {
             provider: opts.provider as string | undefined,
-            profileId: opts.profileId as string | undefined,
+            profileId,
             expiresIn: opts.expiresIn as string | undefined,
           },
           defaultRuntime,
@@ -369,9 +377,16 @@ export function registerModelsCli(program: Command) {
     .option("--yes", "Overwrite existing profile without prompting", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
+        const profileId = opts.profileId as string | undefined;
+        if (profileId) {
+          const err = validateProfileId(profileId);
+          if (err) {
+            throw new Error(`Invalid --profile-id: ${err}`);
+          }
+        }
         await githubCopilotLoginCommand(
           {
-            profileId: opts.profileId as string | undefined,
+            profileId,
             yes: Boolean(opts.yes),
           },
           defaultRuntime,

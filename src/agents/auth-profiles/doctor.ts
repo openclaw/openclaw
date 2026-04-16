@@ -4,27 +4,8 @@ import { buildProviderAuthDoctorHintWithPlugin } from "../../plugins/provider-ru
 import { normalizeProviderId } from "../provider-id.js";
 import { listProfilesForProvider } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
+import { sanitizeProfileIdForDisplay } from "./sanitize.js";
 import type { AuthProfileStore } from "./types.js";
-
-/**
- * Sanitize a profile ID before embedding it in error messages or log output.
- * Strips ANSI escape sequences and control characters to prevent terminal/log
- * injection via crafted profile IDs.
- *
- * Handles CSI, OSC, DCS/SOS/PM/APC, and bare ESC sequences.
- */
-function sanitizeProfileIdForDisplay(id: string): string {
-  return (
-    id
-      .replace(
-        // eslint-disable-next-line no-control-regex
-        /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[\s\S]?)/g,
-        "",
-      )
-      // eslint-disable-next-line no-control-regex
-      .replace(/[\u0000-\u001f\u007f]/g, "")
-  );
-}
 
 /**
  * Migration hints for deprecated/removed OAuth providers.
