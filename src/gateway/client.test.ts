@@ -526,7 +526,16 @@ describe("GatewayClient connect auth payload", () => {
     failureDetails: Record<string, unknown>;
   }) {
     emitConnectFailure(params.firstWs, params.connectId, params.failureDetails);
-    await vi.waitFor(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
+    // The reconnect is scheduled via setTimeout inside scheduleReconnect.
+    // Use fake timers to deterministically advance past the reconnect delay
+    // instead of relying on real timers that can be slow under CI load.
+    vi.useFakeTimers();
+    try {
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(wsInstances.length).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
     const ws = getLatestWs();
     ws.emitOpen();
     emitConnectChallenge(ws, "nonce-2");
