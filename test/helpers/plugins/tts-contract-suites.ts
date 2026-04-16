@@ -664,8 +664,19 @@ export function describeTtsConfigContract() {
         });
         const config = resolveTtsConfig(cfg);
         const prefsPath = `/tmp/tts-prefs-google-model-provider-${Date.now()}.json`;
-
-        expect(getTtsProvider(config, prefsPath)).toBe("google");
+        withEnv(
+          {
+            OPENAI_API_KEY: undefined,
+            ELEVENLABS_API_KEY: undefined,
+            XI_API_KEY: undefined,
+            MINIMAX_API_KEY: undefined,
+            GEMINI_API_KEY: undefined,
+            GOOGLE_API_KEY: undefined,
+          },
+          () => {
+            expect(getTtsProvider(config, prefsPath)).toBe("google");
+          },
+        );
       });
     });
 
