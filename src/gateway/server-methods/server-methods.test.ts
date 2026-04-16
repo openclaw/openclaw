@@ -1366,6 +1366,8 @@ describe("exec approval handlers", () => {
     const { manager, handlers, forwarder, respond, context } =
       createForwardingExecApprovalFixture();
     const expireSpy = vi.spyOn(manager, "expire");
+    // Simulate that only the requester can approve:
+    // excluding a connId means "no other approval clients", while no exclusion means one exists.
     const hasExecApprovalClients = vi.fn((excludeConnId?: string) => excludeConnId === undefined);
 
     const requestPromise = requestExecApproval({
