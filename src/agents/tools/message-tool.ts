@@ -734,7 +734,16 @@ function buildMessageToolDescription(options?: {
   currentChannel?: string;
   currentChannelId?: string;
 }): string {
-  const baseDescription = "Send, delete, and manage messages via channel plugins.";
+  const baseDescription =
+    "Deliver a message from the agent to a real human user on the configured channel. " +
+    "Every call produces a visible notification or post on the recipient's device. " +
+    "The `text` content must be written FOR the recipient, not for yourself, " +
+    "and must be in the recipient's language (detect from the recipient's recent messages — never default to English if the recipient writes in another language). " +
+    "It must read like a person typing on that channel: concise, relevant, about the recipient's business or request. " +
+    'DO NOT use this tool to describe what you are about to do ("Now I\'ll...", "Let me...", "I\'ll now...", "I have all the data and will...", "First I need to..."), ' +
+    "to announce which internal tool you are about to call, which file you are about to read, or any step in your own reasoning or workflow — " +
+    "those are internal thoughts that never leave your own process. " +
+    "If the text would not make sense as a standalone message arriving on the recipient's phone — because it describes your own process, or uses a language the recipient doesn't speak, or acknowledges a step the recipient didn't ask about — do NOT call this tool. Stay silent and proceed with your other tools.";
 
   // If we have a current channel, show its actions and list other configured channels
   if (options?.currentChannel) {
