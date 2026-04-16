@@ -79,7 +79,12 @@ export class PlanStore {
   async read(namespace: string): Promise<StoredPlan | null> {
     try {
       const content = await fs.readFile(this.planPath(namespace), "utf-8");
-      return JSON.parse(content) as StoredPlan;
+      const plan = JSON.parse(content) as StoredPlan;
+      // Verify stored namespace matches requested namespace to catch corruption.
+      if (plan.namespace && plan.namespace !== namespace) {
+        throw new Error(`Plan namespace mismatch on read: expected "${namespace}", found "${plan.namespace}"`);
+      }
+      return plan;
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         return null;
@@ -196,9 +201,11 @@ export class PlanStore {
       }
       return s;
     });
+    const appended = new Set<string>();
     for (const s of incoming) {
-      if (!existingStepTexts.has(s.step)) {
+      if (!existingStepTexts.has(s.step) && !appended.has(s.step)) {
         merged.push({ ...s, ...attribution });
+        appended.add(s.step);
       }
     }
     return merged;
