@@ -1,0 +1,150 @@
+import { describe, expect, it } from "vitest";
+import type { AgentRouteBinding } from "../config/types.agents.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveFirstBoundAccountId } from "./bound-account-read.js";
+
+function cfgWithBindings(bindings: AgentRouteBinding[]): OpenClawConfig {
+  return { bindings } as unknown as OpenClawConfig;
+}
+
+describe("resolveFirstBoundAccountId", () => {
+  it("returns exact peer match when caller supplies a matching peerId", () => {
+    const cfg = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: { channel: "matrix", accountId: "bot-alpha-default" },
+      },
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "matrix",
+          peer: { kind: "channel", id: "!roomA:example.org" },
+          accountId: "bot-alpha-room-a",
+        },
+      },
+    ]);
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "matrix",
+        agentId: "bot-alpha",
+        peerId: "!roomA:example.org",
+      }),
+    ).toBe("bot-alpha-room-a");
+  });
+
+  it("prefers wildcard peer binding over channel-only when caller supplies any peerId", () => {
+    const cfg = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: { channel: "matrix", accountId: "bot-alpha-default" },
+      },
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "matrix",
+          peer: { kind: "channel", id: "*" },
+          accountId: "bot-alpha-wildcard",
+        },
+      },
+    ]);
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "matrix",
+        agentId: "bot-alpha",
+        peerId: "!anyRoom:example.org",
+      }),
+    ).toBe("bot-alpha-wildcard");
+  });
+
+  it("prefers channel-only over wildcard peer binding when caller supplies no peerId", () => {
+    const cfg = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "matrix",
+          peer: { kind: "channel", id: "*" },
+          accountId: "bot-alpha-wildcard",
+        },
+      },
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: { channel: "matrix", accountId: "bot-alpha-default" },
+      },
+    ]);
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "matrix",
+        agentId: "bot-alpha",
+      }),
+    ).toBe("bot-alpha-default");
+  });
+
+  it("falls back to peer-specific binding for peerless callers when no channel-only or wildcard binding exists", () => {
+    const cfg = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "matrix",
+          peer: { kind: "channel", id: "!specificRoom:example.org" },
+          accountId: "bot-alpha-specific",
+        },
+      },
+    ]);
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "matrix",
+        agentId: "bot-alpha",
+      }),
+    ).toBe("bot-alpha-specific");
+  });
+
+  it("skips non-matching peer-specific bindings when caller supplies a different peerId", () => {
+    const cfg = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "matrix",
+          peer: { kind: "channel", id: "!otherRoom:example.org" },
+          accountId: "bot-alpha-other",
+        },
+      },
+    ]);
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "matrix",
+        agentId: "bot-alpha",
+        peerId: "!differentRoom:example.org",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when the agent has no binding on the channel", () => {
+    const cfg = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: { channel: "whatsapp", accountId: "bot-alpha-whatsapp" },
+      },
+    ]);
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "matrix",
+        agentId: "bot-alpha",
+      }),
+    ).toBeUndefined();
+  });
+});

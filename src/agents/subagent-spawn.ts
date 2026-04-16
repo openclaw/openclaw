@@ -350,6 +350,10 @@ function resolveRequesterOriginForChild(params: {
   requesterTo?: string;
   requesterThreadId?: string | number;
 }) {
+  // Same-agent spawns (a child of the same agent) must keep the caller's active
+  // inbound account, not re-resolve via bindings — the caller is already acting
+  // as that agent with a specific account, and a lookup could pick a different
+  // binding when the same agent has multiple accounts configured.
   const { peerId: normalizedPeerId, peerKind: inferredPeerKind } = extractRequesterPeer(
     params.requesterChannel,
     params.requesterTo,

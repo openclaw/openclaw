@@ -652,6 +652,44 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(spawnAccountId).toBe("bot-alpha-room-a");
   });
 
+  it("sessions_spawn preserves the caller's account for same-agent subagent spawns", async () => {
+    let spawnAccountId: string | undefined;
+    const room = "!someRoom:example.org";
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      messages: { queue: { debounceMs: 0 } },
+      agents: { defaults: { subagents: { allowAgents: ["bot-alpha"] } } },
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: { channel: "matrix", accountId: "bot-alpha-default" },
+        },
+      ],
+    });
+    setupSessionsSpawnGatewayMock({
+      onAgentSubagentSpawn: (params) => {
+        const rec = params as { accountId?: string } | undefined;
+        spawnAccountId = rec?.accountId;
+      },
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:bot-alpha:session:main",
+      agentChannel: "matrix",
+      agentAccountId: "bot-alpha-adhoc",
+      agentTo: room,
+    });
+
+    // Spawn a child of the same agent (no explicit agentId → defaults to requester).
+    const result = await tool.execute("call-same-agent", {
+      task: "do thing",
+      cleanup: "keep",
+    });
+    expect(result.details).toMatchObject({ status: "accepted", runId: expect.any(String) });
+    expect(spawnAccountId).toBe("bot-alpha-adhoc");
+  });
+
   it("sessions_spawn announces with requester accountId", async () => {
     const ctx = setupSessionsSpawnGatewayMock({});
 

@@ -58,6 +58,7 @@ export function resolveFirstBoundAccountId(params: {
   const normalizedPeerId = params.peerId?.trim() || undefined;
   let wildcardPeerMatch: string | undefined;
   let channelOnlyFallback: string | undefined;
+  let peerlessPeerSpecificFallback: string | undefined;
   for (const binding of listRouteBindings(params.cfg)) {
     const resolved = resolveNormalizedBindingMatch(binding);
     if (
@@ -68,14 +69,27 @@ export function resolveFirstBoundAccountId(params: {
       continue;
     }
     if (resolved.peerId === "*") {
-      wildcardPeerMatch ??= resolved.accountId;
+      if (normalizedPeerId) {
+        wildcardPeerMatch ??= resolved.accountId;
+      } else {
+        // Caller supplied no peer — a wildcard binding has no peer to match against,
+        // so treat it as a last-resort peer-ish fallback rather than letting it
+        // override channel-only bindings.
+        peerlessPeerSpecificFallback ??= resolved.accountId;
+      }
     } else if (resolved.peerId) {
       if (normalizedPeerId && resolved.peerId === normalizedPeerId) {
         return resolved.accountId;
+      }
+      if (!normalizedPeerId) {
+        // Preserves the pre-existing "first match wins" semantics for peerless
+        // callers (e.g. cron delivery resolution) whose only bindings are
+        // peer-specific; otherwise they would silently regress to undefined.
+        peerlessPeerSpecificFallback ??= resolved.accountId;
       }
     } else {
       channelOnlyFallback ??= resolved.accountId;
     }
   }
-  return wildcardPeerMatch ?? channelOnlyFallback;
+  return wildcardPeerMatch ?? channelOnlyFallback ?? peerlessPeerSpecificFallback;
 }
