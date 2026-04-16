@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { GatewayClient } from "../gateway/client.js";
 import {
@@ -32,7 +33,35 @@ import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
 
 const OUTPUT_CAP = 200_000;
 const OUTPUT_EVENT_TAIL = 20_000;
+const FILE_TRANSFER_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+const MIME_TYPES: Record<string, string> = {
+  ".txt": "text/plain",
+  ".json": "application/json",
+  ".html": "text/html",
+  ".css": "text/css",
+  ".js": "application/javascript",
+  ".ts": "application/typescript",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".svg": "image/svg+xml",
+  ".pdf": "application/pdf",
+  ".xml": "application/xml",
+  ".csv": "text/csv",
+  ".md": "text/markdown",
+  ".yaml": "application/yaml",
+  ".yml": "application/yaml",
+  ".zip": "application/zip",
+  ".tar": "application/x-tar",
+  ".gz": "application/gzip",
+};
+
+function guessMimeType(filePath: string): string {
+  return MIME_TYPES[path.extname(filePath).toLowerCase()] ?? "application/octet-stream";
+}
 const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   65001: "utf-8",
   54936: "gb18030",
@@ -478,6 +507,155 @@ export async function handleInvoke(
       const env = sanitizeEnv(undefined);
       const payload = await handleSystemWhich(params, env);
       await sendJsonPayloadResult(client, frame, payload);
+    } catch (err) {
+      await sendInvalidRequestResult(client, frame, err);
+    }
+    return;
+  }
+
+  if (command === "file.read") {
+    try {
+      const params = decodeParams<{ path?: string; encoding?: string }>(frame.paramsJSON);
+      const filePath = typeof params.path === "string" ? params.path.trim() : "";
+      if (!filePath) {
+        await sendErrorResult(client, frame, "INVALID_REQUEST", "path required");
+        return;
+      }
+      if (!filePath.startsWith("/") && !filePath.startsWith("~")) {
+        await sendErrorResult(
+          client,
+          frame,
+          "INVALID_REQUEST",
+          "path must be absolute or ~-prefixed",
+        );
+        return;
+      }
+      const encoding = params.encoding ?? "base64";
+      if (encoding !== "base64" && encoding !== "utf8") {
+        await sendErrorResult(
+          client,
+          frame,
+          "INVALID_REQUEST",
+          `unsupported encoding: ${encoding}`,
+        );
+        return;
+      }
+      const resolved = filePath.startsWith("~")
+        ? path.join(os.homedir(), filePath.slice(1))
+        : filePath;
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(resolved);
+      } catch {
+        await sendErrorResult(client, frame, "NOT_FOUND", `file not found: ${filePath}`);
+        return;
+      }
+      if (stat.size > FILE_TRANSFER_MAX_BYTES) {
+        await sendErrorResult(
+          client,
+          frame,
+          "FILE_TOO_LARGE",
+          `file size ${stat.size} exceeds max ${FILE_TRANSFER_MAX_BYTES} bytes`,
+        );
+        return;
+      }
+      let buf: Buffer;
+      try {
+        buf = fs.readFileSync(resolved);
+      } catch (ioErr) {
+        await sendErrorResult(client, frame, "IO_ERROR", String(ioErr));
+        return;
+      }
+      const data = encoding === "base64" ? buf.toString("base64") : buf.toString("utf8");
+      await sendJsonPayloadResult(client, frame, {
+        data,
+        encoding,
+        size: stat.size,
+        mimeType: guessMimeType(resolved),
+      });
+    } catch (err) {
+      await sendInvalidRequestResult(client, frame, err);
+    }
+    return;
+  }
+
+  if (command === "file.write") {
+    try {
+      const snapshot = readExecApprovalsSnapshot();
+      const security = snapshot.file.defaults?.security;
+      if (security !== "full") {
+        const allAllowlists = Object.values(snapshot.file.agents ?? {});
+        const hasPermission = allAllowlists.some((agent) =>
+          agent.allowlist?.some((entry) => entry.pattern === "file.write"),
+        );
+        if (!hasPermission) {
+          await sendErrorResult(
+            client,
+            frame,
+            "PERMISSION_DENIED",
+            'file.write not in exec-approvals allowlist; add "file.write" to allowedCommands',
+          );
+          return;
+        }
+      }
+      const params = decodeParams<{ path?: string; data?: string; encoding?: string }>(
+        frame.paramsJSON,
+      );
+      const filePath = typeof params.path === "string" ? params.path.trim() : "";
+      if (!filePath) {
+        await sendErrorResult(client, frame, "INVALID_REQUEST", "path required");
+        return;
+      }
+      if (!filePath.startsWith("/") && !filePath.startsWith("~")) {
+        await sendErrorResult(
+          client,
+          frame,
+          "INVALID_REQUEST",
+          "path must be absolute or ~-prefixed",
+        );
+        return;
+      }
+      if (typeof params.data !== "string") {
+        await sendErrorResult(client, frame, "INVALID_REQUEST", "data required");
+        return;
+      }
+      const encoding = params.encoding ?? "base64";
+      if (encoding !== "base64" && encoding !== "utf8") {
+        await sendErrorResult(
+          client,
+          frame,
+          "INVALID_REQUEST",
+          `unsupported encoding: ${encoding}`,
+        );
+        return;
+      }
+      const resolved = filePath.startsWith("~")
+        ? path.join(os.homedir(), filePath.slice(1))
+        : filePath;
+      const buf =
+        encoding === "base64"
+          ? Buffer.from(params.data, "base64")
+          : Buffer.from(params.data, "utf8");
+      if (buf.length > FILE_TRANSFER_MAX_BYTES) {
+        await sendErrorResult(
+          client,
+          frame,
+          "FILE_TOO_LARGE",
+          `data size ${buf.length} exceeds max ${FILE_TRANSFER_MAX_BYTES} bytes`,
+        );
+        return;
+      }
+      try {
+        fs.mkdirSync(path.dirname(resolved), { recursive: true });
+        fs.writeFileSync(resolved, buf);
+      } catch (ioErr) {
+        await sendErrorResult(client, frame, "IO_ERROR", String(ioErr));
+        return;
+      }
+      await sendJsonPayloadResult(client, frame, {
+        path: filePath,
+        size: buf.length,
+      });
     } catch (err) {
       await sendInvalidRequestResult(client, frame, err);
     }
