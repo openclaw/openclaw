@@ -250,11 +250,14 @@ export async function pollAppRegistration(params: {
  *
  * QR codes must be printed without any surrounding box/border decoration,
  * otherwise the pattern is corrupted and cannot be scanned.
+ *
+ * Uses small: false for better compatibility with different terminal
+ * fonts and scanning apps. The larger QR code is more reliably scannable.
  */
 export async function printQrCode(url: string): Promise<void> {
   const mod = await import("qrcode-terminal");
   const qrcode = mod.default ?? mod;
-  qrcode.generate(url, { small: true });
+  qrcode.generate(url, { small: false });
 }
 
 /**
