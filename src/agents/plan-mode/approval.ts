@@ -7,7 +7,7 @@
  * approval lifecycle and resolves the result.
  */
 
-import type { PlanApprovalState, PlanModeSessionState } from "./types.js";
+import type { PlanModeSessionState } from "./types.js";
 
 export interface PlanApprovalConfig {
   /** Seconds before auto-rejecting an unanswered approval. Default: 600 (10 min). */
@@ -38,11 +38,13 @@ export function resolvePlanApproval(
       };
 
     case "edit":
-      // Re-enter plan mode with the edited plan.
+      // Re-enter plan mode with the edited plan. Clear confirmedAt
+      // so the previous approval timestamp doesn't leak into the new cycle.
       return {
         ...current,
         mode: "plan",
         approval: "edited",
+        confirmedAt: undefined,
         updatedAt: now,
       };
 
