@@ -220,6 +220,103 @@ describe("anthropic provider replay hooks", () => {
     ).toBe(false);
   });
 
+  describe("resolves Anthropic 4.7 forward-compat models (#67710)", () => {
+    const runtimeModels = [
+      {
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 32_000,
+      } as ProviderRuntimeModel,
+      {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 32_000,
+      } as ProviderRuntimeModel,
+    ];
+
+    it.each([
+      "claude-opus-4-7",
+      "claude-opus-4.7",
+      "claude-opus-4-7-20260901",
+      "claude-sonnet-4-7",
+      "claude-sonnet-4.7",
+      "claude-sonnet-4-7-20260901",
+    ])("resolves %s from the 4.6 template family", async (modelId) => {
+      const provider = await registerSingleProviderPlugin(anthropicPlugin);
+      const resolved = provider.resolveDynamicModel?.({
+        provider: "anthropic",
+        modelId,
+        modelRegistry: createModelRegistry(runtimeModels),
+      } as ProviderResolveDynamicModelContext);
+
+      expect(resolved).toMatchObject({
+        provider: "anthropic",
+        id: modelId,
+        api: "anthropic-messages",
+        reasoning: true,
+      });
+    });
+
+    it.each(["claude-opus-4-7", "claude-sonnet-4-7"])(
+      "marks %s as a modern model",
+      async (modelId) => {
+        const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+        expect(
+          provider.isModernModelRef?.({
+            provider: "anthropic",
+            modelId,
+          } as never),
+        ).toBe(true);
+      },
+    );
+
+    it("uses off thinking for opus-4-7 (xhigh-capable)", async () => {
+      const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+      expect(
+        provider.resolveDefaultThinkingLevel?.({
+          provider: "anthropic",
+          modelId: "claude-opus-4-7",
+        } as never),
+      ).toBe("off");
+    });
+
+    it("uses adaptive thinking for sonnet-4-7", async () => {
+      const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+      expect(
+        provider.resolveDefaultThinkingLevel?.({
+          provider: "anthropic",
+          modelId: "claude-sonnet-4-7",
+        } as never),
+      ).toBe("adaptive");
+    });
+
+    it("does not resolve unrecognized model variants", async () => {
+      const provider = await registerSingleProviderPlugin(anthropicPlugin);
+      const resolved = provider.resolveDynamicModel?.({
+        provider: "anthropic",
+        modelId: "claude-opus-4-99",
+        modelRegistry: createModelRegistry(runtimeModels),
+      } as ProviderResolveDynamicModelContext);
+
+      expect(resolved).toBeUndefined();
+    });
+  });
+
   it("resolves claude-cli synthetic oauth auth", async () => {
     readClaudeCliCredentialsForRuntimeMock.mockReset();
     readClaudeCliCredentialsForRuntimeMock.mockReturnValue({
