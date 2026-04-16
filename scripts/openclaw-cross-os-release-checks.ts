@@ -653,7 +653,9 @@ async function runUpgradeLane(params) {
       logPath: join(params.logsDir, "upgrade-install-baseline.log"),
     });
 
-    const baseline = readInstalledMetadata(lane.prefixDir);
+    const baseline = {
+      version: readInstalledVersion(lane.prefixDir),
+    };
 
     logLanePhase(lane, "update");
     const updateEnv = buildRealUpdateEnv(env);
@@ -1358,7 +1360,7 @@ $env:Path = [string]::Join(';', $segments)
 export function buildWindowsFreshShellVersionCheckScript(params = {}) {
   const expectedNeedle = powerShellSingleQuote(params.expectedNeedle ?? "");
   return `
-${buildWindowsPathBootstrapScript({ includeCurrentProcessPath: false })}
+${buildWindowsPathBootstrapScript()}
 $commandPath = $null
 $npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
 if ($null -eq $npmCommand) {
@@ -1395,6 +1397,48 @@ Write-Output $version
 if ('${expectedNeedle}'.Length -gt 0 -and $version -notmatch [regex]::Escape('${expectedNeedle}')) {
   throw "version mismatch: expected substring ${expectedNeedle}"
 }
+`.trim();
+}
+
+export function buildWindowsDevUpdateToolchainCheckScript() {
+  return `
+${buildWindowsPathBootstrapScript()}
+function Resolve-CommandPath([string]$Name) {
+  $command = Get-Command $Name -ErrorAction SilentlyContinue
+  if ($null -eq $command) {
+    return $null
+  }
+  $commandPath = $command.Source
+  if ($commandPath -match '(?i)\\.ps1$') {
+    $cmdPath = [System.IO.Path]::ChangeExtension($commandPath, '.cmd')
+    if (Test-Path -LiteralPath $cmdPath) {
+      $commandPath = $cmdPath
+    }
+  }
+  return $commandPath
+}
+$pnpmPath = Resolve-CommandPath 'pnpm'
+if ($null -ne $pnpmPath) {
+  Write-Output "__UPDATE_TOOL__=pnpm"
+  Write-Output "__UPDATE_TOOL_PATH__=$pnpmPath"
+  & $pnpmPath --version
+  return
+}
+$corepackPath = Resolve-CommandPath 'corepack'
+if ($null -ne $corepackPath) {
+  Write-Output "__UPDATE_TOOL__=corepack"
+  Write-Output "__UPDATE_TOOL_PATH__=$corepackPath"
+  & $corepackPath --version
+  return
+}
+$npmPath = Resolve-CommandPath 'npm'
+if ($null -ne $npmPath) {
+  Write-Output "__UPDATE_TOOL__=npm"
+  Write-Output "__UPDATE_TOOL_PATH__=$npmPath"
+  & $npmPath --version
+  return
+}
+throw 'Neither pnpm, corepack, nor npm is discoverable from the reconstructed Windows PATH.'
 `.trim();
 }
 
@@ -1766,45 +1810,7 @@ export function verifyDevUpdateStatus(stdout, options = {}) {
 }
 
 async function verifyWindowsDevUpdateToolchain(params) {
-  const script = `
-${buildWindowsPathBootstrapScript({ includeCurrentProcessPath: false })}
-function Resolve-CommandPath([string]$Name) {
-  $command = Get-Command $Name -ErrorAction SilentlyContinue
-  if ($null -eq $command) {
-    return $null
-  }
-  $commandPath = $command.Source
-  if ($commandPath -match '(?i)\\.ps1$') {
-    $cmdPath = [System.IO.Path]::ChangeExtension($commandPath, '.cmd')
-    if (Test-Path -LiteralPath $cmdPath) {
-      $commandPath = $cmdPath
-    }
-  }
-  return $commandPath
-}
-$pnpmPath = Resolve-CommandPath 'pnpm'
-if ($null -ne $pnpmPath) {
-  Write-Output "__UPDATE_TOOL__=pnpm"
-  Write-Output "__UPDATE_TOOL_PATH__=$pnpmPath"
-  & $pnpmPath --version
-  return
-}
-$corepackPath = Resolve-CommandPath 'corepack'
-if ($null -ne $corepackPath) {
-  Write-Output "__UPDATE_TOOL__=corepack"
-  Write-Output "__UPDATE_TOOL_PATH__=$corepackPath"
-  & $corepackPath --version
-  return
-}
-$npmPath = Resolve-CommandPath 'npm'
-if ($null -ne $npmPath) {
-  Write-Output "__UPDATE_TOOL__=npm"
-  Write-Output "__UPDATE_TOOL_PATH__=$npmPath"
-  & $npmPath --version
-  return
-}
-throw 'Neither pnpm, corepack, nor npm is discoverable from the persisted Windows PATH.'
-`;
+  const script = buildWindowsDevUpdateToolchainCheckScript();
   const result = await runPowerShellScript(script, {
     cwd: params.lane.homeDir,
     env: params.env,
@@ -2553,21 +2559,35 @@ async function runOpenClaw(params) {
   });
 }
 
-function readInstalledMetadata(prefixDir) {
+function readInstalledPackageManifest(prefixDir) {
   const packageRoot = installedPackageRoot(prefixDir);
   const packageJsonPath = join(packageRoot, "package.json");
-  const buildInfoPath = join(packageRoot, "dist", "build-info.json");
   if (!existsSync(packageJsonPath)) {
     throw new Error(`Installed package manifest missing: ${packageJsonPath}`);
   }
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+    version?: unknown;
+  };
+  return { packageJson, packageRoot };
+}
+
+export function readInstalledVersion(prefixDir) {
+  const { packageJson } = readInstalledPackageManifest(prefixDir);
+  return typeof packageJson.version === "string" ? packageJson.version.trim() : "";
+}
+
+function readInstalledMetadata(prefixDir) {
+  const { packageJson, packageRoot } = readInstalledPackageManifest(prefixDir);
+  const buildInfoPath = join(packageRoot, "dist", "build-info.json");
   if (!existsSync(buildInfoPath)) {
     throw new Error(`Installed build info missing: ${buildInfoPath}`);
   }
-  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
-  const buildInfo = JSON.parse(readFileSync(buildInfoPath, "utf8"));
+  const buildInfo = JSON.parse(readFileSync(buildInfoPath, "utf8")) as {
+    commit?: unknown;
+  };
   return {
-    version: String(packageJson.version ?? "").trim(),
-    commit: String(buildInfo.commit ?? "").trim(),
+    version: typeof packageJson.version === "string" ? packageJson.version.trim() : "",
+    commit: typeof buildInfo.commit === "string" ? buildInfo.commit.trim() : "",
   };
 }
 

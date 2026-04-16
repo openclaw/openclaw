@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  buildWindowsDevUpdateToolchainCheckScript,
   buildWindowsFreshShellVersionCheckScript,
   buildWindowsPathBootstrapScript,
   canConnectToLoopbackPort,
@@ -16,6 +17,7 @@ import {
   normalizeWindowsInstalledCliPath,
   parseArgs,
   packageHasScript,
+  readInstalledVersion,
   readRunnerOverrideEnv,
   resolveExplicitBaselineVersion,
   resolveDevUpdateVerificationRef,
@@ -131,7 +133,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
   });
 
-  it("keeps the Windows dev-update toolchain check isolated from runner PATH shims", () => {
+  it("can rebuild the Windows PATH with or without current-process entries", () => {
     expect(buildWindowsPathBootstrapScript()).toContain("@($userPath, $machinePath, $env:Path)");
     const persistedOnlyScript = buildWindowsPathBootstrapScript({
       includeCurrentProcessPath: false,
@@ -144,11 +146,25 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const script = buildWindowsFreshShellVersionCheckScript({
       expectedNeedle: "2026.4.14",
     });
-    expect(script).toContain(buildWindowsPathBootstrapScript({ includeCurrentProcessPath: false }));
+    expect(script).toContain(buildWindowsPathBootstrapScript());
+    expect(script).not.toContain(
+      buildWindowsPathBootstrapScript({ includeCurrentProcessPath: false }),
+    );
     expect(script).toContain("Get-Command npm.cmd -ErrorAction SilentlyContinue");
     expect(script).toContain('$env:Path = "$npmPrefix;$env:Path"');
     expect(script).toContain("(Join-Path $npmPrefix 'openclaw.cmd')");
     expect(script).toContain("$cmd = Get-Command openclaw -ErrorAction Stop");
+  });
+
+  it("keeps Windows dev-update toolchain checks compatible with setup-node PATH shims", () => {
+    const script = buildWindowsDevUpdateToolchainCheckScript();
+    expect(script).toContain(buildWindowsPathBootstrapScript());
+    expect(script).not.toContain(
+      buildWindowsPathBootstrapScript({ includeCurrentProcessPath: false }),
+    );
+    expect(script).toContain("$pnpmPath = Resolve-CommandPath 'pnpm'");
+    expect(script).toContain("$corepackPath = Resolve-CommandPath 'corepack'");
+    expect(script).toContain("$npmPath = Resolve-CommandPath 'npm'");
   });
 
   it("prefers workflow-injected runner override env names over legacy ones", () => {
@@ -327,6 +343,29 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolveExplicitBaselineVersion("openclaw@latest")).toBe("");
     expect(resolveExplicitBaselineVersion("openclaw@2026.4.10")).toBe("2026.4.10");
     expect(resolveExplicitBaselineVersion("2026.4.10")).toBe("2026.4.10");
+  });
+
+  it("reads an installed baseline version without requiring build metadata", () => {
+    const prefixDir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-installed-version-"));
+    try {
+      const packageRoot =
+        process.platform === "win32"
+          ? join(prefixDir, "node_modules", "openclaw")
+          : join(prefixDir, "lib", "node_modules", "openclaw");
+      mkdirSync(packageRoot, { recursive: true });
+      writeFileSync(
+        join(packageRoot, "package.json"),
+        JSON.stringify({
+          name: "openclaw",
+          version: "2026.4.10",
+        }),
+        "utf8",
+      );
+
+      expect(readInstalledVersion(prefixDir)).toBe("2026.4.10");
+    } finally {
+      rmSync(prefixDir, { recursive: true, force: true });
+    }
   });
 
   it("treats missing package scripts as optional in older refs", () => {
