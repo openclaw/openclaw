@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { confirm, isCancel } from "@clack/prompts";
 import {
@@ -121,6 +122,66 @@ function formatCommandFailure(stdout: string, stderr: string): string {
     return "command returned a non-zero exit code";
   }
   return detail.split("\n").slice(-3).join("\n");
+}
+
+function findGatewayServiceEntrypoint(programArguments?: string[]): string | null {
+  if (!programArguments || programArguments.length === 0) {
+    return null;
+  }
+  const gatewayIndex = programArguments.indexOf("gateway");
+  if (gatewayIndex <= 0) {
+    return null;
+  }
+  return programArguments[gatewayIndex - 1] ?? null;
+}
+
+async function normalizeEntrypointPath(
+  pathValue: string,
+  workingDirectory?: string,
+): Promise<string> {
+  const resolvedPath = path.isAbsolute(pathValue)
+    ? pathValue
+    : path.resolve(workingDirectory ?? process.cwd(), pathValue);
+  try {
+    return await fs.realpath(resolvedPath);
+  } catch {
+    return resolvedPath;
+  }
+}
+
+async function detectRunningGatewayForInstall(root: string): Promise<{
+  blocked: boolean;
+  pid?: number;
+}> {
+  const service = resolveGatewayService();
+  const [runtime, command, installEntrypoint] = await Promise.all([
+    service.readRuntime(process.env).catch(() => null),
+    service.readCommand(process.env).catch(() => null),
+    resolveGatewayInstallEntrypoint(root).catch(() => undefined),
+  ]);
+
+  if (runtime?.status !== "running" || !command || !installEntrypoint) {
+    return { blocked: false };
+  }
+
+  const serviceEntrypoint = findGatewayServiceEntrypoint(command.programArguments);
+  if (!serviceEntrypoint) {
+    return { blocked: false };
+  }
+
+  const [normalizedServiceEntrypoint, normalizedInstallEntrypoint] = await Promise.all([
+    normalizeEntrypointPath(serviceEntrypoint, command.workingDirectory),
+    normalizeEntrypointPath(installEntrypoint),
+  ]);
+
+  if (normalizedServiceEntrypoint !== normalizedInstallEntrypoint) {
+    return { blocked: false };
+  }
+
+  return {
+    blocked: true,
+    ...(typeof runtime.pid === "number" ? { pid: runtime.pid } : {}),
+  };
 }
 
 function tryResolveInvocationCwd(): string | undefined {
@@ -1032,6 +1093,40 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       defaultRuntime.error(runtimePreflightError);
       defaultRuntime.exit(1);
       return;
+    }
+  }
+
+  let gatewayStoppedForUpdate = false;
+  if (updateInstallKind === "git") {
+    const gitUpdateRoot = switchToGit ? resolveGitInstallDir() : root;
+    const runningGateway = await detectRunningGatewayForInstall(gitUpdateRoot);
+    if (runningGateway.blocked) {
+      const pidSuffix =
+        typeof runningGateway.pid === "number" ? ` (pid ${runningGateway.pid})` : "";
+      if (opts.restart === false) {
+        defaultRuntime.error(
+          theme.error(`Update blocked: this install's gateway service is still running${pidSuffix}.`),
+        );
+        defaultRuntime.log(
+          theme.warn(
+            "Git-based updates replace dist in place. Stop or restart the gateway first, then rerun `openclaw update`.",
+          ),
+        );
+        defaultRuntime.log(
+          theme.muted(
+            `If this install is service-managed, run \`${replaceCliName(formatCliCommand("openclaw gateway stop"), CLI_NAME)}\` or \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\` first.`,
+          ),
+        );
+        defaultRuntime.exit(1);
+        return;
+      }
+      defaultRuntime.log(
+        theme.warn(
+          `Stopping gateway service for in-place update${pidSuffix}...`,
+        ),
+      );
+      await resolveGatewayService().stop({ stdout: defaultRuntime, env: process.env });
+      gatewayStoppedForUpdate = true;
     }
   }
 
