@@ -36,14 +36,15 @@ export class ApiClient {
   private readonly defaultTimeoutMs: number;
   private readonly fileUploadTimeoutMs: number;
   private readonly logger?: ApiLogger;
-  private readonly userAgent: string;
+  private readonly resolveUserAgent: () => string;
 
   constructor(config: ApiClientConfig = {}) {
     this.baseUrl = config.baseUrl ?? DEFAULT_BASE_URL;
     this.defaultTimeoutMs = config.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.fileUploadTimeoutMs = config.fileUploadTimeoutMs ?? FILE_UPLOAD_TIMEOUT_MS;
     this.logger = config.logger;
-    this.userAgent = config.userAgent ?? "QQBotPlugin/unknown";
+    const ua = config.userAgent ?? "QQBotPlugin/unknown";
+    this.resolveUserAgent = typeof ua === "function" ? ua : () => ua;
   }
 
   /**
@@ -70,7 +71,7 @@ export class ApiClient {
     const headers: Record<string, string> = {
       Authorization: `QQBot ${accessToken}`,
       "Content-Type": "application/json",
-      "User-Agent": this.userAgent,
+      "User-Agent": this.resolveUserAgent(),
     };
 
     const isFileUpload = path.includes("/files");

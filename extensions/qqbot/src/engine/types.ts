@@ -103,8 +103,8 @@ export interface ApiClientConfig {
   fileUploadTimeoutMs?: number;
   /** Logger instance. */
   logger?: ApiLogger;
-  /** User-Agent header value. */
-  userAgent?: string;
+  /** User-Agent header value, or a getter function for dynamic resolution. */
+  userAgent?: string | (() => string);
 }
 
 // ============ Chunked Upload Types ============

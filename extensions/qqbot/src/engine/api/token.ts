@@ -37,11 +37,12 @@ export class TokenManager {
   private readonly fetchPromises = new Map<string, Promise<string>>();
   private readonly refreshControllers = new Map<string, AbortController>();
   private readonly logger?: ApiLogger;
-  private readonly userAgent: string;
+  private readonly resolveUserAgent: () => string;
 
-  constructor(config?: { logger?: ApiLogger; userAgent?: string }) {
+  constructor(config?: { logger?: ApiLogger; userAgent?: string | (() => string) }) {
     this.logger = config?.logger;
-    this.userAgent = config?.userAgent ?? "QQBotPlugin/unknown";
+    const ua = config?.userAgent ?? "QQBotPlugin/unknown";
+    this.resolveUserAgent = typeof ua === "function" ? ua : () => ua;
   }
 
   /**
@@ -210,7 +211,7 @@ export class TokenManager {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "User-Agent": this.userAgent,
+          "User-Agent": this.resolveUserAgent(),
         },
         body: JSON.stringify({ appId, clientSecret }),
       });

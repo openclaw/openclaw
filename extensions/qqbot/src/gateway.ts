@@ -10,7 +10,10 @@
 import { createRequire } from "node:module";
 import { resolveRuntimeServiceVersion } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { registerVersionResolver } from "./engine/commands/slash-commands-impl.js";
+import {
+  registerVersionResolver,
+  registerPluginVersion,
+} from "./engine/commands/slash-commands-impl.js";
 import {
   startGateway as coreStartGateway,
   type CoreGatewayContext,
@@ -24,7 +27,7 @@ import type { ResolvedQQBotAccount } from "./types.js";
 // Register framework SDK version resolver for core/ slash commands.
 registerVersionResolver(resolveRuntimeServiceVersion);
 
-// Inject plugin version into sender (avoids dynamic require inside engine/).
+// Inject plugin + framework versions into sender (avoids dynamic require inside engine/).
 const _require = createRequire(import.meta.url);
 let _pluginVersion = "unknown";
 try {
@@ -32,7 +35,11 @@ try {
 } catch {
   /* fallback */
 }
-initSender({ pluginVersion: _pluginVersion });
+initSender({
+  pluginVersion: _pluginVersion,
+  openclawVersion: resolveRuntimeServiceVersion(),
+});
+registerPluginVersion(_pluginVersion);
 
 export interface GatewayContext {
   account: ResolvedQQBotAccount;

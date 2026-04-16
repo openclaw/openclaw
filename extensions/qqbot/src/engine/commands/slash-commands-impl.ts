@@ -7,7 +7,6 @@
  */
 
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { debugLog } from "../utils/log.js";
 import { getHomeDir, getQQBotDataDir, isWindows } from "../utils/platform.js";
@@ -34,14 +33,6 @@ function resolveRuntimeServiceVersion(): string {
   return _resolveVersion?.() ?? "unknown";
 }
 
-/** Read the plugin package version — injected to avoid plugin-sdk dependency. */
-let _readPluginVersion: (() => string) | null = null;
-
-/** Register the plugin version reader — called by the outer layer. */
-export function registerPluginVersionReader(fn: () => string): void {
-  _readPluginVersion = fn;
-}
-
 const require = createRequire(import.meta.url);
 
 // Re-export core types for backward compatibility.
@@ -53,8 +44,15 @@ export type {
   QueueSnapshot,
 } from "./slash-commands.js";
 
-// Read the package version from package.json.
-const PLUGIN_VERSION = _readPluginVersion?.() ?? "unknown";
+// Plugin version — injected by the outer layer via registerPluginVersion().
+let PLUGIN_VERSION = "unknown";
+
+/** Register the plugin version — called by the outer layer. */
+export function registerPluginVersion(version: string): void {
+  if (version) {
+    PLUGIN_VERSION = version;
+  }
+}
 
 const QQBOT_PLUGIN_GITHUB_URL = "https://github.com/openclaw/openclaw/tree/main/extensions/qqbot";
 const QQBOT_UPGRADE_GUIDE_URL = "https://q.qq.com/qqbot/openclaw/upgrade.html";
@@ -527,7 +525,7 @@ export async function matchSlashCommand(ctx: SlashCommandContext): Promise<Slash
 
 /** Return the plugin version for external callers. */
 export function getPluginVersion(): string {
-  return _readPluginVersion?.() ?? PLUGIN_VERSION;
+  return PLUGIN_VERSION;
 }
 
 // Utility used by /bot-logs command.

@@ -46,10 +46,11 @@ export { MediaFileType } from "../types.js";
 // ============ Plugin User-Agent ============
 
 let _pluginVersion = "unknown";
+let _openclawVersion = "unknown";
 
-/** Build the User-Agent string from the current plugin version. */
+/** Build the User-Agent string from the current plugin and framework versions. */
 function buildUserAgent(): string {
-  return `QQBotPlugin/${_pluginVersion} (Node/${process.versions.node}; ${os.platform()})`;
+  return `QQBotPlugin/${_pluginVersion} (Node/${process.versions.node}; ${os.platform()}; OpenClaw/${_openclawVersion})`;
 }
 
 /** Return the current User-Agent string. */
@@ -61,12 +62,20 @@ export function getPluginUserAgent(): string {
  * Initialize sender with the plugin version.
  * Must be called once during startup before any API calls.
  */
-export function initSender(options: { pluginVersion?: string }): void {
+export function initSender(options: { pluginVersion?: string; openclawVersion?: string }): void {
   if (options.pluginVersion) {
     _pluginVersion = options.pluginVersion;
   }
-  // (Re-)create singletons with the correct UA.
-  _ensureInitialized(true);
+  if (options.openclawVersion) {
+    _openclawVersion = options.openclawVersion;
+  }
+}
+
+/** Update the OpenClaw framework version in the User-Agent (called after runtime injection). */
+export function setOpenClawVersion(version: string): void {
+  if (version) {
+    _openclawVersion = version;
+  }
 }
 
 // ============ Lazy singleton instances ============
@@ -81,13 +90,14 @@ let _client: ApiClient | null = null;
 let _tokenMgr: TokenManager | null = null;
 let _mediaApi: MediaApiClass | null = null;
 
-function _ensureInitialized(force = false): void {
-  if (_client && !force) {
+function _ensureInitialized(): void {
+  if (_client) {
     return;
   }
-  const ua = buildUserAgent();
-  _client = new ApiClient({ logger: _logger, userAgent: ua });
-  _tokenMgr = new TokenManager({ logger: _logger, userAgent: ua });
+  // Pass buildUserAgent as a getter so UA changes propagate automatically
+  // without rebuilding client/tokenMgr or clearing the appRegistry.
+  _client = new ApiClient({ logger: _logger, userAgent: buildUserAgent });
+  _tokenMgr = new TokenManager({ logger: _logger, userAgent: buildUserAgent });
   _mediaApi = new MediaApiClass(_client, _tokenMgr, {
     logger: _logger,
     uploadCache: {
@@ -106,8 +116,6 @@ function _ensureInitialized(force = false): void {
     },
     sanitizeFileName,
   });
-  // Clear per-appId registry since the underlying client changed.
-  _appRegistry.clear();
 }
 
 function client(): ApiClient {
