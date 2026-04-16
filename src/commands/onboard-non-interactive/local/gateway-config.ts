@@ -64,8 +64,7 @@ export function applyNonInteractiveGatewayConfig(params: {
   // plaintext > ambient OPENCLAW_GATEWAY_TOKEN > randomToken(). Ambient env
   // must not rotate a token already written to disk — a stale shell or
   // launchd env var otherwise breaks already-paired clients.
-  let gatewayToken =
-    explicitGatewayToken || existingPlaintextToken || envGatewayToken || undefined;
+  let gatewayToken = explicitGatewayToken || existingPlaintextToken || envGatewayToken || undefined;
   const gatewayTokenRefEnv = normalizeOptionalString(opts.gatewayTokenRefEnv ?? "") ?? "";
 
   if (authMode === "token") {

@@ -9,9 +9,13 @@ import { applyNonInteractiveGatewayConfig } from "./gateway-config.js";
 const randomToken = vi.hoisted(() => vi.fn(() => "generated-random-token"));
 vi.mock("../../onboard-helpers.js", () => ({
   normalizeGatewayTokenInput: (value: unknown): string => {
-    if (typeof value !== "string") return "";
+    if (typeof value !== "string") {
+      return "";
+    }
     const trimmed = value.trim();
-    if (trimmed === "undefined" || trimmed === "null") return "";
+    if (trimmed === "undefined" || trimmed === "null") {
+      return "";
+    }
     return trimmed;
   },
   randomToken,
