@@ -11,6 +11,11 @@ import {
 } from "./api.js";
 import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 
+// Sentinel stored in authStorage when Google Vertex ADC credentials are detected.
+// pi-ai treats any non-empty apiKey as a real key, so we strip it before the call
+// so that pi-ai's streamGoogleVertex uses its native ADC path instead of API-key mode.
+const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
+
 const GOOGLE_GEMINI_PROVIDER_HOOKS = {
   ...buildProviderReplayFamilyHooks({
     family: "google-gemini",
@@ -58,5 +63,15 @@ export function registerGoogleProvider(api: OpenClawPluginApi) {
       }),
     ...GOOGLE_GEMINI_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
+    wrapStreamFn: ({ model, streamFn }) => {
+      if (model?.api !== "google-vertex" || !streamFn) {
+        return undefined;
+      }
+      return (m, ctx, options) => {
+        const apiKey =
+          options?.apiKey === GCP_VERTEX_CREDENTIALS_MARKER ? undefined : options?.apiKey;
+        return streamFn(m, ctx, { ...options, apiKey });
+      };
+    },
   });
 }

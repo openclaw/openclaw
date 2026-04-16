@@ -1323,6 +1323,17 @@ export async function runReplyAgent(params: {
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
+      if (!followupRun.run.silentExpected) {
+        replyOperation.fail("run_failed", new Error("Assistant completed with no reply payloads"));
+        return finalizeWithFollowup(
+          {
+            text: "⚠️ The model completed without returning a usable reply. Please try again.",
+            isError: true,
+          },
+          queueKey,
+          runFollowupTurn,
+        );
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -1354,6 +1365,20 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
+      if (!followupRun.run.silentExpected) {
+        replyOperation.fail(
+          "run_failed",
+          new Error("Assistant completed with no renderable reply payloads"),
+        );
+        return finalizeWithFollowup(
+          {
+            text: "⚠️ The model completed without returning a usable reply. Please try again.",
+            isError: true,
+          },
+          queueKey,
+          runFollowupTurn,
+        );
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 

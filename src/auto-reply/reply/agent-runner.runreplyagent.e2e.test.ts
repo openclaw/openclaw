@@ -1081,6 +1081,21 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(payload.text).toContain("/new");
   });
 
+  it("surfaces a friendly error when a non-silent run completes with no renderable payloads", async () => {
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+      payloads: [{ text: "   \n\t  " }],
+      meta: { durationMs: 1 },
+    }));
+
+    const { run } = createMinimalRun();
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+    expect(payload).toMatchObject({
+      text: expect.stringContaining("without returning a usable reply"),
+      isError: true,
+    });
+  });
+
   it("returns friendly message for role ordering errors thrown as exceptions", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
       throw new Error("400 Incorrect role information");
