@@ -6,16 +6,43 @@ document.querySelector('#app').innerHTML = `
       <h1>OpenClaw<span class="neon-text">_Gateway</span></h1>
     </div>
     <div class="dashboard">
-      <div class="card status-card">
-        <h2>Status</h2>
-        <div id="status-indicator" class="indicator checking">Checking...</div>
-        <button id="start-btn" class="cyber-btn hidden">Start Gateway</button>
-        <button id="stop-btn" class="cyber-btn hidden">Stop Gateway</button>
+      <div class="left-col">
+          <div class="card status-card">
+            <h2>Status</h2>
+            <div id="status-indicator" class="indicator checking">Checking...</div>
+            <button id="start-btn" class="cyber-btn hidden">Start Gateway</button>
+            <button id="stop-btn" class="cyber-btn hidden">Stop Gateway</button>
+          </div>
+          
+          <div class="card metrics-card">
+            <h2>Performance</h2>
+            <div class="metric-item">
+              <span>CPU Usage</span>
+              <div class="progress-bg"><div id="cpu-bar" class="progress-fill" style="width: 0%"></div></div>
+              <span id="cpu-val" class="metric-val">0%</span>
+            </div>
+            <div class="metric-item">
+              <span>Memory</span>
+              <div class="progress-bg"><div id="ram-bar" class="progress-fill" style="width: 0%"></div></div>
+              <span id="ram-val" class="metric-val">0 MB</span>
+            </div>
+            <div class="metric-footer">
+              <div class="sub-metric">
+                <label>Uptime</label>
+                <span id="uptime-val">0:00:00</span>
+              </div>
+              <div class="sub-metric">
+                <label>Restarts</label>
+                <span id="restart-val">0</span>
+              </div>
+            </div>
+          </div>
       </div>
+
       <div class="card logs-card">
         <h2>System Logs</h2>
         <div id="logs-container" class="terminal-logs">
-           <div class="log-line">> System initializing. Waiting for backend sync...</div>
+           <div class="log-line">> System initializing. Waiting for metrics sync...</div>
         </div>
       </div>
     </div>
@@ -29,27 +56,49 @@ const stopBtn = document.getElementById('stop-btn');
 let gatewayPort = 18789;
 invoke('get_port').then(p => { gatewayPort = p; }).catch(() => {});
 
-async function checkHealth() {
+async function updateDashboard() {
   try {
-    const res = await fetch(`http://localhost:${gatewayPort}/health`);
-    if (res.ok) {
+    const metrics = await invoke('get_metrics');
+    
+    // Update status
+    if (metrics.online) {
       statusIndicator.textContent = 'ONLINE';
       statusIndicator.className = 'indicator online';
       startBtn.classList.add('hidden');
       stopBtn.classList.remove('hidden');
     } else {
-      throw new Error("unhealthy");
+      statusIndicator.textContent = 'OFFLINE';
+      statusIndicator.className = 'indicator offline';
+      startBtn.classList.remove('hidden');
+      stopBtn.classList.add('hidden');
     }
-  } catch {
-    statusIndicator.textContent = 'OFFLINE';
-    statusIndicator.className = 'indicator offline';
-    startBtn.classList.remove('hidden');
-    stopBtn.classList.add('hidden');
+
+    // Update metrics
+    const cpu = metrics.cpu_usage.toFixed(1);
+    document.getElementById('cpu-val').textContent = `${cpu}%`;
+    document.getElementById('cpu-bar').style.width = `${Math.min(cpu, 100)}%`;
+
+    const ram = metrics.memory_mb;
+    document.getElementById('ram-val').textContent = `${ram} MB`;
+    const ramPercent = Math.min((ram / 1024) * 100, 100); // Assume 1GB as 100% for scale, or just relative
+    document.getElementById('ram-bar').style.width = `${ramPercent}%`;
+
+    document.getElementById('restart-val').textContent = metrics.restarts;
+    
+    // Format Uptime
+    const s = metrics.uptime_secs;
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    document.getElementById('uptime-val').textContent = `${h}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
+
+  } catch (e) {
+    console.error("Metrics error:", e);
   }
 }
 
-setInterval(() => { void checkHealth(); }, 2000);
-void checkHealth();
+setInterval(updateDashboard, 2000);
+updateDashboard();
 
 startBtn.addEventListener('click', async () => {
    try {
@@ -65,9 +114,15 @@ startBtn.addEventListener('click', async () => {
 stopBtn.addEventListener('click', async () => {
    try {
      await invoke('stop_gateway');
-     appendLog("Gateway stopped.");
+     appendLog("Gateway stopped manually.");
      statusIndicator.textContent = 'OFFLINE';
      statusIndicator.className = 'indicator offline';
+     
+     // Reset bars
+     document.getElementById('cpu-bar').style.width = '0%';
+     document.getElementById('ram-bar').style.width = '0%';
+     document.getElementById('cpu-val').textContent = '0%';
+     document.getElementById('ram-val').textContent = '0 MB';
    } catch(e) {
      appendLog("Stop Error: " + e, "error");
    }
@@ -77,7 +132,7 @@ function appendLog(msg, type="info") {
   const c = document.getElementById('logs-container');
   const d = document.createElement('div');
   d.className = `log-line ${type}`;
-  d.innerText = `> ${msg}`;
+  d.innerText = `[${new Date().toLocaleTimeString()}] > ${msg}`;
   c.appendChild(d);
   c.scrollTop = c.scrollHeight;
 }

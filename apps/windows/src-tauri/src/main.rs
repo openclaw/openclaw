@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 use std::io::{BufReader, BufRead};
+use serde::Serialize;
+use sysinfo::{CpuRefreshKind, ProcessRefreshKind, System, SystemExt, ProcessExt};
 use tauri::{
     AppHandle, Manager, State, SystemTray, SystemTrayEvent, CustomMenuItem, SystemTrayMenu, SystemTrayMenuItem
 };
@@ -21,17 +23,32 @@ struct GatewayState {
     restart_count: Arc<AtomicU32>,
     last_notification: Arc<Mutex<Option<Instant>>>,
     watchdog_session: Arc<AtomicU32>,
+    start_time: Arc<Mutex<Option<Instant>>>,
+    sys: Arc<Mutex<System>>,
 }
 
 impl GatewayState {
     fn new() -> Self {
+        let mut sys = System::new_all();
+        sys.refresh_all();
         Self {
             process: Arc::new(Mutex::new(None)),
             restart_count: Arc::new(AtomicU32::new(0)),
             last_notification: Arc::new(Mutex::new(None)),
             watchdog_session: Arc::new(AtomicU32::new(0)),
+            start_time: Arc::new(Mutex::new(None)),
+            sys: Arc::new(Mutex::new(sys)),
         }
     }
+}
+
+#[derive(Serialize)]
+struct GatewayMetrics {
+    online: bool,
+    cpu_usage: f32,
+    memory_mb: u64,
+    uptime_secs: u64,
+    restarts: u32,
 }
 
 // Determines the command to launch OpenClaw (binary directly, no cmd /C)
@@ -109,6 +126,38 @@ async fn stop_gateway(state: State<'_, GatewayState>) -> Result<String, String> 
     }
 }
 
+#[tauri::command]
+async fn get_metrics(state: State<'_, GatewayState>) -> Result<GatewayMetrics, String> {
+    let mut sys = state.sys.lock().map_err(|e| e.to_string())?;
+    let process_lock = state.process.lock().map_err(|e| e.to_string())?;
+    
+    let mut metrics = GatewayMetrics {
+        online: false,
+        cpu_usage: 0.0,
+        memory_mb: 0,
+        uptime_secs: 0,
+        restarts: state.restart_count.load(Ordering::SeqCst),
+    };
+
+    if let Some(ref child) = *process_lock {
+        let pid = sysinfo::Pid::from(child.id() as usize);
+        
+        // Refresh only the specific process for efficiency
+        sys.refresh_processes_spec(ProcessRefreshKind::new().with_cpu(), false);
+        
+        if let Some(process) = sys.process(pid) {
+            metrics.online = true;
+            metrics.cpu_usage = process.cpu_usage();
+            metrics.memory_mb = process.memory() / 1024 / 1024;
+            if let Some(start) = *state.start_time.lock().unwrap() {
+                metrics.uptime_secs = start.elapsed().as_secs();
+            }
+        }
+    }
+    
+    Ok(metrics)
+}
+
 fn drain_stream<R: std::io::Read + Send + 'static>(stream: R, prefix: &'static str) {
     thread::spawn(move || {
         let reader = BufReader::new(stream);
@@ -136,7 +185,11 @@ fn spawn_gateway(app: AppHandle, state: GatewayState) -> Result<String, String> 
     
     let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn: {}", e))?;
     
-    // Actively drain stdout and stderr to prevent OS buffer full hanging
+    // Set start time
+    if let Ok(mut start) = state.start_time.lock() {
+        *start = Some(Instant::now());
+    }
+
     if let Some(stdout) = child.stdout.take() {
         drain_stream(stdout, "STDOUT:");
     }
@@ -157,6 +210,8 @@ fn spawn_gateway(app: AppHandle, state: GatewayState) -> Result<String, String> 
     Ok("Gateway started with Watchdog protection".into())
 }
 
+// ... rest of main.rs including watchdog_thread, get_port, start_gateway, stop_gateway, main ...
+
 fn watchdog_thread(app: AppHandle, state: GatewayState, session_id: u32) {
     let max_restarts = 3;
     let mut last_start = Instant::now();
@@ -164,6 +219,12 @@ fn watchdog_thread(app: AppHandle, state: GatewayState, session_id: u32) {
     loop {
         thread::sleep(Duration::from_secs(5));
         
+        // Refresh metrics in background so they are ready for the dashboard
+        if let Ok(mut sys) = state.sys.lock() {
+            sys.refresh_cpu();
+            sys.refresh_processes();
+        }
+
         if state.watchdog_session.load(Ordering::SeqCst) != session_id {
             break; // Retiring: A new session has taken over or the process was legally stopped
         }
@@ -305,7 +366,7 @@ fn main() {
             let _ = spawn_gateway(app.handle(), state.inner().clone());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![start_gateway, stop_gateway, get_port])
+        .invoke_handler(tauri::generate_handler![start_gateway, stop_gateway, get_port, get_metrics])
         .system_tray(SystemTray::new().with_menu(tray_menu))
         .on_system_tray_event(|app, event| match event {
             SystemTrayEvent::LeftClick { .. } => {

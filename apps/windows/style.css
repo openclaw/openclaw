@@ -37,33 +37,106 @@ body {
 .dashboard {
   display: grid;
   grid-template-columns: 1fr 2fr;
-  gap: 2rem;
+  gap: 1.5rem;
   flex: 1;
   min-height: 0;
+}
+
+.left-col {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
 }
 
 .card {
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
-  backdrop-filter: blur(10px);
-  border-radius: 8px;
-  padding: 1.5rem;
+  backdrop-filter: blur(12px);
+  border-radius: 12px;
+  padding: 1.25rem;
   display: flex;
   flex-direction: column;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
 }
 
 .card h2 {
   margin-top: 0;
-  font-size: 1.2rem;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
   color: #88ccee;
   border-bottom: 1px solid var(--glass-border);
-  padding-bottom: 0.5rem;
+  padding-bottom: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+/* Metrics Styles */
+.metric-item {
+  margin-bottom: 1.25rem;
+}
+
+.metric-item span {
+  display: block;
+  font-size: 0.8rem;
+  color: #aaa;
+  margin-bottom: 0.5rem;
+}
+
+.progress-bg {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 0.25rem;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--neon-blue);
+  box-shadow: 0 0 10px var(--neon-blue);
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  width: 0%;
+}
+
+.metric-val {
+  display: block;
+  text-align: right;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.9rem;
+  color: var(--neon-blue);
+}
+
+.metric-footer {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: auto;
+  padding-top: 1rem;
+  border-top: 1px solid var(--glass-border);
+}
+
+.sub-metric {
+  display: flex;
+  flex-direction: column;
+}
+
+.sub-metric label {
+  font-size: 0.7rem;
+  color: #666;
+  text-transform: uppercase;
+}
+
+.sub-metric span {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 1rem;
+  color: #fff;
 }
 
 .indicator {
   font-size: 2.2rem;
   font-weight: bold;
-  margin: 1.5rem 0;
+  margin: 1rem 0;
   text-align: center;
   text-shadow: 0 0 10px currentColor;
   letter-spacing: 2px;
