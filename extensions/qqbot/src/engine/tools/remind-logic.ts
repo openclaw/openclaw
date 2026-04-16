@@ -1,4 +1,5 @@
 /**
+ * QQBot reminder tool core logic.
  * QQBot 提醒工具核心逻辑。
  *
  * Pure functions for time parsing, cron detection, job building,
@@ -6,7 +7,10 @@
  * (old tools/remind.ts) delegates all business logic here.
  */
 
-/** 提醒工具的输入参数。 */
+/**
+ * Reminder tool input parameters.
+ * 提醒工具的输入参数。
+ */
 export interface RemindParams {
   action: "add" | "list" | "remove";
   content?: string;
@@ -17,7 +21,10 @@ export interface RemindParams {
   jobId?: string;
 }
 
-/** AI Tool 参数的 JSON Schema 定义（供框架注册使用）。 */
+/**
+ * JSON Schema for AI tool parameters (used by framework registration).
+ * AI Tool 参数的 JSON Schema 定义（供框架注册使用）。
+ */
 export const RemindSchema = {
   type: "object",
   properties: {
@@ -64,6 +71,7 @@ export const RemindSchema = {
 } as const;
 
 /**
+ * Parse a relative time string into milliseconds.
  * 解析相对时间字符串为毫秒数。
  *
  * Supports: "5m", "1h", "1h30m", "2d", "45s", plain number (as minutes).
@@ -102,7 +110,10 @@ export function parseRelativeTime(timeStr: string): number | null {
   return matched ? Math.round(totalMs) : null;
 }
 
-/** 判断时间字符串是否为 cron 表达式（3~6 个空格分隔的字段）。 */
+/**
+ * Check whether a time string is a cron expression (3–6 space-separated fields).
+ * 判断时间字符串是否为 cron 表达式。
+ */
 export function isCronExpression(timeStr: string): boolean {
   const parts = timeStr.trim().split(/\s+/);
   if (parts.length < 3 || parts.length > 6) {
@@ -111,14 +122,17 @@ export function isCronExpression(timeStr: string): boolean {
   return parts.every((p) => /^[0-9*?/,LW#-]/.test(p));
 }
 
-/** 根据提醒内容生成 cron job 名称（截取前 20 字符）。 */
+/**
+ * Generate a cron job name from reminder content (first 20 chars).
+ * 根据提醒内容生成 cron job 名称。
+ */
 export function generateJobName(content: string): string {
   const trimmed = content.trim();
   const short = trimmed.length > 20 ? `${trimmed.slice(0, 20)}…` : trimmed;
   return `Reminder: ${short}`;
 }
 
-/** 构建发送给 AI 的提醒 system prompt。 */
+/** Build the reminder system prompt sent to the AI. */
 export function buildReminderPrompt(content: string): string {
   return (
     `You are a warm reminder assistant. Please remind the user about: ${content}. ` +
@@ -128,7 +142,7 @@ export function buildReminderPrompt(content: string): string {
   );
 }
 
-/** 构建一次性定时提醒的 cron job 参数。 */
+/** Build cron job params for a one-shot delayed reminder. */
 export function buildOnceJob(params: RemindParams, delayMs: number) {
   const atMs = Date.now() + delayMs;
   const to = params.to!;
@@ -153,7 +167,7 @@ export function buildOnceJob(params: RemindParams, delayMs: number) {
   };
 }
 
-/** 构建周期性 cron 提醒的 job 参数。 */
+/** Build cron job params for a recurring cron reminder. */
 export function buildCronJob(params: RemindParams) {
   const to = params.to!;
   const content = params.content!;
@@ -177,7 +191,7 @@ export function buildCronJob(params: RemindParams) {
   };
 }
 
-/** 将延迟毫秒数格式化为简短字符串（如 "5m"、"1h30m"）。 */
+/** Format a delay in milliseconds as a short string (e.g. "5m", "1h30m"). */
 export function formatDelay(ms: number): string {
   const totalSeconds = Math.round(ms / 1000);
   if (totalSeconds < 60) {
@@ -203,6 +217,7 @@ function json(data: unknown) {
 }
 
 /**
+ * Execute the reminder tool logic.
  * 执行提醒工具逻辑。
  *
  * Validates params, parses time, and returns a structured result

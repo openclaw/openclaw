@@ -48,6 +48,7 @@ function waitForFile(p: string, ms?: number): Promise<number> {
 }
 import {
   getAccessToken,
+  initApiConfig,
   sendC2CFileMessage,
   sendC2CImageMessage,
   sendC2CMessage,
@@ -929,6 +930,8 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   let { text, replyToId } = ctx;
   let fallbackToProactive = false;
 
+  initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
+
   debugLog(
     "[qqbot] sendText ctx:",
     JSON.stringify(
@@ -1385,6 +1388,8 @@ export async function sendProactiveMessage(
 /** Send rich media, auto-routing by media type and source. */
 export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResult> {
   const { to, text, replyToId, account, mimeType } = ctx;
+
+  initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
 
   if (!account.appId || !account.clientSecret) {
     return { channel: "qqbot", error: "QQBot not configured (missing appId or clientSecret)" };

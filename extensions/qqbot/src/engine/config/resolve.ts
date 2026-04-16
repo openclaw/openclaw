@@ -1,4 +1,5 @@
 /**
+ * QQBot config resolution (pure logic layer).
  * QQBot 配置解析（纯逻辑层）。
  *
  * Resolves account IDs, default account selection, and base account
@@ -7,16 +8,24 @@
  * this module stays framework-agnostic and self-contained.
  */
 
+import { getPlatformAdapter } from "../adapter/index.js";
 import {
   asOptionalObjectRecord as asRecord,
   normalizeOptionalLowercaseString,
+  normalizeStringifiedOptionalString,
   readStringField as readString,
 } from "../utils/string-normalize.js";
 
-/** 默认账号 ID，用于顶层配置中未命名的账号。 */
+/**
+ * Default account ID, used for the unnamed top-level account.
+ * 默认账号 ID，用于顶层配置中未命名的账号。
+ */
 export const DEFAULT_ACCOUNT_ID = "default";
 
-/** channels.qqbot 配置节的内部结构。 */
+/**
+ * Internal shape of the channels.qqbot config section.
+ * channels.qqbot 配置节的内部结构。
+ */
 interface QQBotChannelConfig {
   appId?: unknown;
   clientSecret?: unknown;
@@ -27,6 +36,7 @@ interface QQBotChannelConfig {
 }
 
 /**
+ * Base account resolution result (without credentials).
  * 账号基础解析结果（不含凭证信息）。
  *
  * The outer config.ts layer extends this with clientSecret / secretSource.
@@ -69,7 +79,10 @@ function readQQBotSection(cfg: Record<string, unknown>): QQBotChannelConfig | un
   return asRecord(channels?.qqbot) as QQBotChannelConfig | undefined;
 }
 
-/** 列出所有已配置的 QQBot 账号 ID。 */
+/**
+ * List all configured QQBot account IDs.
+ * 列出所有已配置的 QQBot 账号 ID。
+ */
 export function listAccountIds(cfg: Record<string, unknown>): string[] {
   const ids = new Set<string>();
   const qqbot = readQQBotSection(cfg);
@@ -89,7 +102,10 @@ export function listAccountIds(cfg: Record<string, unknown>): string[] {
   return Array.from(ids);
 }
 
-/** 解析默认 QQBot 账号 ID（优先级：defaultAccount 配置 > 顶层 appId > 第一个命名账号）。 */
+/**
+ * Resolve the default QQBot account ID.
+ * 解析默认 QQBot 账号 ID（优先级：defaultAccount > 顶层 appId > 第一个命名账号）。
+ */
 export function resolveDefaultAccountId(cfg: Record<string, unknown>): string {
   const qqbot = readQQBotSection(cfg);
   const configuredDefaultAccountId = normalizeOptionalLowercaseString(qqbot?.defaultAccount);
@@ -113,6 +129,7 @@ export function resolveDefaultAccountId(cfg: Record<string, unknown>): string {
 }
 
 /**
+ * Resolve base account info (without credentials).
  * 解析账号基础信息（不含凭证）。
  *
  * Resolves everything except Secret/credential fields. The outer
@@ -150,4 +167,117 @@ export function resolveAccountBase(
     markdownSupport: accountConfig.markdownSupport !== false,
     config: accountConfig,
   };
+}
+
+// ---- Account config apply ----
+
+export interface ApplyAccountInput {
+  appId?: string;
+  clientSecret?: string;
+  clientSecretFile?: string;
+  name?: string;
+}
+
+/** Apply account config updates into a raw config object. */
+export function applyAccountConfig(
+  cfg: Record<string, unknown>,
+  accountId: string,
+  input: ApplyAccountInput,
+): Record<string, unknown> {
+  const next = { ...cfg };
+  const channels = asRecord(cfg.channels) ?? {};
+  const existingQQBot = asRecord(channels.qqbot) ?? {};
+
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    const allowFrom = (existingQQBot.allowFrom as unknown[]) ?? ["*"];
+    next.channels = {
+      ...channels,
+      qqbot: {
+        ...existingQQBot,
+        enabled: true,
+        allowFrom,
+        ...(input.appId ? { appId: input.appId } : {}),
+        ...(input.clientSecret
+          ? { clientSecret: input.clientSecret, clientSecretFile: undefined }
+          : input.clientSecretFile
+            ? { clientSecretFile: input.clientSecretFile, clientSecret: undefined }
+            : {}),
+        ...(input.name ? { name: input.name } : {}),
+      },
+    };
+  } else {
+    const accounts = (existingQQBot.accounts ?? {}) as Record<string, Record<string, unknown>>;
+    const existingAccount = accounts[accountId] ?? {};
+    const allowFrom = (existingAccount.allowFrom as unknown[]) ?? ["*"];
+    next.channels = {
+      ...channels,
+      qqbot: {
+        ...existingQQBot,
+        enabled: true,
+        accounts: {
+          ...accounts,
+          [accountId]: {
+            ...existingAccount,
+            enabled: true,
+            allowFrom,
+            ...(input.appId ? { appId: input.appId } : {}),
+            ...(input.clientSecret
+              ? { clientSecret: input.clientSecret, clientSecretFile: undefined }
+              : input.clientSecretFile
+                ? { clientSecretFile: input.clientSecretFile, clientSecret: undefined }
+                : {}),
+            ...(input.name ? { name: input.name } : {}),
+          },
+        },
+      },
+    };
+  }
+
+  return next;
+}
+
+// ---- Account status helpers ----
+
+/** Resolved account shape expected by isAccountConfigured / describeAccount. */
+export interface AccountSnapshot {
+  accountId: string;
+  name?: string;
+  enabled: boolean;
+  appId: string;
+  clientSecret?: string;
+  secretSource?: string;
+  config: Record<string, unknown> & {
+    clientSecret?: unknown;
+    clientSecretFile?: string;
+  };
+}
+
+/** Check whether a QQBot account has been fully configured. */
+export function isAccountConfigured(account: AccountSnapshot | undefined): boolean {
+  return Boolean(
+    account?.appId &&
+    (Boolean(account?.clientSecret) ||
+      getPlatformAdapter().hasConfiguredSecret(account?.config?.clientSecret) ||
+      Boolean(account?.config?.clientSecretFile?.trim())),
+  );
+}
+
+/** Build a summary description of an account. */
+export function describeAccount(account: AccountSnapshot | undefined) {
+  return {
+    accountId: account?.accountId ?? DEFAULT_ACCOUNT_ID,
+    name: account?.name,
+    enabled: account?.enabled ?? false,
+    configured: isAccountConfigured(account),
+    tokenSource: account?.secretSource,
+  };
+}
+
+/** Normalize allowFrom entries into uppercase strings without the qqbot: prefix. */
+export function formatAllowFrom(allowFrom: Array<string | number> | undefined | null): string[] {
+  return (allowFrom ?? [])
+    .map((entry) => normalizeStringifiedOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry))
+    .map((entry) => entry.replace(/^qqbot:/i, ""))
+    .map((entry) => entry.toUpperCase());
 }

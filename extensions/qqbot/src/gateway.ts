@@ -14,8 +14,9 @@ import {
   type CoreGatewayContext,
 } from "./engine/gateway/gateway.js";
 import { registerVersionResolver } from "./engine/gateway/slash-commands-impl.js";
-import type { GatewayAccount, GatewayPluginRuntime } from "./engine/gateway/types.js";
-import { getQQBotRuntime } from "./runtime.js";
+import type { GatewayAccount } from "./engine/gateway/types.js";
+import { registerTextChunker } from "./engine/utils/text-chunk.js";
+import { getQQBotRuntimeForEngine } from "./runtime.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
 // Register framework SDK version resolver for core/ slash commands.
@@ -41,7 +42,9 @@ export interface GatewayContext {
  * All other dependencies are imported directly by the core module.
  */
 export async function startGateway(ctx: GatewayContext): Promise<void> {
-  const runtime = getQQBotRuntime() as unknown as GatewayPluginRuntime;
+  const runtime = getQQBotRuntimeForEngine();
+
+  registerTextChunker((text, limit) => runtime.channel.text.chunkMarkdownText(text, limit));
 
   const coreCtx: CoreGatewayContext = {
     account: ctx.account as unknown as GatewayAccount,

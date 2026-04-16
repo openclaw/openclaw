@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { getPlatformAdapter } from "./engine/adapter/index.js";
 import {
   DEFAULT_ACCOUNT_ID as ENGINE_DEFAULT_ACCOUNT_ID,
+  applyAccountConfig,
   listAccountIds,
   resolveAccountBase,
   resolveDefaultAccountId,
@@ -95,55 +96,9 @@ export function applyQQBotAccountConfig(
     name?: string;
   },
 ): OpenClawConfig {
-  const next = { ...cfg };
-
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    const existingConfig = (next.channels?.qqbot as QQBotChannelConfig) || {};
-    const allowFrom = existingConfig.allowFrom ?? ["*"];
-
-    next.channels = {
-      ...next.channels,
-      qqbot: {
-        ...(next.channels?.qqbot as Record<string, unknown> | undefined),
-        enabled: true,
-        allowFrom,
-        ...(input.appId ? { appId: input.appId } : {}),
-        ...(input.clientSecret
-          ? { clientSecret: input.clientSecret, clientSecretFile: undefined }
-          : input.clientSecretFile
-            ? { clientSecretFile: input.clientSecretFile, clientSecret: undefined }
-            : {}),
-        ...(input.name ? { name: input.name } : {}),
-      },
-    };
-  } else {
-    const existingAccountConfig =
-      (next.channels?.qqbot as QQBotChannelConfig)?.accounts?.[accountId] || {};
-    const allowFrom = existingAccountConfig.allowFrom ?? ["*"];
-
-    next.channels = {
-      ...next.channels,
-      qqbot: {
-        ...(next.channels?.qqbot as Record<string, unknown> | undefined),
-        enabled: true,
-        accounts: {
-          ...(next.channels?.qqbot as QQBotChannelConfig)?.accounts,
-          [accountId]: {
-            ...(next.channels?.qqbot as QQBotChannelConfig)?.accounts?.[accountId],
-            enabled: true,
-            allowFrom,
-            ...(input.appId ? { appId: input.appId } : {}),
-            ...(input.clientSecret
-              ? { clientSecret: input.clientSecret, clientSecretFile: undefined }
-              : input.clientSecretFile
-                ? { clientSecretFile: input.clientSecretFile, clientSecret: undefined }
-                : {}),
-            ...(input.name ? { name: input.name } : {}),
-          },
-        },
-      },
-    };
-  }
-
-  return next;
+  return applyAccountConfig(
+    cfg as unknown as Record<string, unknown>,
+    accountId,
+    input,
+  ) as OpenClawConfig;
 }

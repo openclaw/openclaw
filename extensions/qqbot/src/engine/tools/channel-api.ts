@@ -1,4 +1,5 @@
 /**
+ * QQ Channel API proxy tool core logic.
  * QQ 频道 API 代理工具核心逻辑。
  *
  * Provides an authenticated HTTP proxy for the QQ Open Platform channel
@@ -13,7 +14,10 @@ import { debugLog, debugError } from "../utils/log.js";
 const API_BASE = "https://api.sgroup.qq.com";
 const DEFAULT_TIMEOUT_MS = 30000;
 
-/** 频道 API 调用参数。 */
+/**
+ * Channel API call parameters.
+ * 频道 API 调用参数。
+ */
 export interface ChannelApiParams {
   method: string;
   path: string;
@@ -21,7 +25,10 @@ export interface ChannelApiParams {
   query?: Record<string, string>;
 }
 
-/** AI Tool 参数的 JSON Schema 定义（供框架注册使用）。 */
+/**
+ * JSON Schema for AI tool parameters (used by framework registration).
+ * AI Tool 参数的 JSON Schema 定义（供框架注册使用）。
+ */
 export const ChannelApiSchema = {
   type: "object",
   properties: {
@@ -52,7 +59,10 @@ export const ChannelApiSchema = {
   required: ["method", "path"],
 } as const;
 
-/** 拼接 API 基地址 + 路径 + 查询参数。 */
+/**
+ * Build the full API URL from base + path + query params.
+ * 拼接 API 基地址 + 路径 + 查询参数。
+ */
 export function buildUrl(path: string, query?: Record<string, string>): string {
   let url = `${API_BASE}${path}`;
   if (query && Object.keys(query).length > 0) {
@@ -70,7 +80,10 @@ export function buildUrl(path: string, query?: Record<string, string>): string {
   return url;
 }
 
-/** 校验 API 路径格式，返回错误描述或 null（合法）。 */
+/**
+ * Validate API path format; returns an error string or null if valid.
+ * 校验 API 路径格式，返回错误描述或 null（合法）。
+ */
 export function validatePath(path: string): string | null {
   if (!path.startsWith("/")) {
     return "path must start with /";
@@ -91,12 +104,16 @@ function json(data: unknown) {
   };
 }
 
-/** 执行频道 API 请求时由调用方提供的选项。 */
+/**
+ * Options provided by the caller when executing a channel API request.
+ * 执行频道 API 请求时由调用方提供的选项。
+ */
 export interface ChannelApiExecuteOptions {
   accessToken: string;
 }
 
 /**
+ * Execute a channel API proxy request.
  * 执行频道 API 代理请求。
  *
  * The caller provides the access token; this function handles

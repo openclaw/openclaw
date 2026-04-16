@@ -1,4 +1,5 @@
 /**
+ * Audio format conversion utilities.
  * 音频格式转换工具。
  *
  * Handles SILK ↔ PCM ↔ WAV ↔ MP3 conversions for QQ Bot voice messaging.
@@ -19,7 +20,7 @@ import { normalizeLowercaseStringOrEmpty as normalizeLowercase } from "./string-
 type SilkWasm = typeof import("silk-wasm");
 let _silkWasmPromise: Promise<SilkWasm | null> | null = null;
 
-/** 延迟加载 silk-wasm 模块（单例缓存，加载失败返回 null）。 */
+/** Lazy-load the silk-wasm module (singleton cache; returns null on failure). */
 export function loadSilkWasm(): Promise<SilkWasm | null> {
   if (_silkWasmPromise) {
     return _silkWasmPromise;
@@ -33,7 +34,7 @@ export function loadSilkWasm(): Promise<SilkWasm | null> {
   return _silkWasmPromise;
 }
 
-/** 将 PCM s16le 裸数据包装为标准 WAV 文件。 */
+/** Wrap raw PCM s16le data into a standard WAV file. */
 export function pcmToWav(
   pcmData: Uint8Array,
   sampleRate: number,
@@ -68,7 +69,7 @@ export function pcmToWav(
   return buffer;
 }
 
-/** 剥离 QQ 语音负载中可能存在的 AMR 文件头。 */
+/** Strip the AMR header that may be present in QQ voice payloads. */
 export function stripAmrHeader(buf: Buffer): Buffer {
   const AMR_HEADER = Buffer.from("#!AMR\n");
   if (buf.length > 6 && buf.subarray(0, 6).equals(AMR_HEADER)) {
@@ -77,7 +78,7 @@ export function stripAmrHeader(buf: Buffer): Buffer {
   return buf;
 }
 
-/** 将 SILK 或 AMR 语音文件转换为 WAV 格式。 */
+/** Convert a SILK or AMR voice file to WAV format. */
 export async function convertSilkToWav(
   inputPath: string,
   outputDir?: string,
@@ -114,7 +115,7 @@ export async function convertSilkToWav(
   return { wavPath, duration: result.duration };
 }
 
-/** 判断附件是否为语音文件（基于 MIME 类型或扩展名）。 */
+/** Check whether an attachment is a voice file (by MIME type or extension). */
 export function isVoiceAttachment(att: { content_type?: string; filename?: string }): boolean {
   if (att.content_type === "voice" || att.content_type?.startsWith("audio/")) {
     return true;
@@ -123,7 +124,7 @@ export function isVoiceAttachment(att: { content_type?: string; filename?: strin
   return [".amr", ".silk", ".slk", ".slac"].includes(ext);
 }
 
-/** 判断文件路径是否为已知音频格式。 */
+/** Check whether a file path is a known audio format. */
 export function isAudioFile(filePath: string, mimeType?: string): boolean {
   if (mimeType) {
     if (mimeType === "voice" || mimeType.startsWith("audio/")) {
@@ -159,7 +160,7 @@ const QQ_NATIVE_VOICE_MIMES = new Set([
 
 const QQ_NATIVE_VOICE_EXTS = new Set([".silk", ".slk", ".amr", ".wav", ".mp3"]);
 
-/** 判断语音文件是否需要转码才能上传（QQ 原生支持的格式无需转码）。 */
+/** Check whether a voice file needs transcoding for upload (QQ-native formats skip it). */
 export function shouldTranscodeVoice(filePath: string, mimeType?: string): boolean {
   if (mimeType && QQ_NATIVE_VOICE_MIMES.has(normalizeLowercase(mimeType))) {
     return false;
@@ -181,7 +182,7 @@ function normalizeFormats(formats: string[]): string[] {
 }
 
 /**
- * 将本地音频文件转换为 Base64 编码的 SILK 格式（供 QQ API 上传）。
+ * Convert a local audio file to Base64-encoded SILK for QQ API upload.
  *
  * Attempts conversion via ffmpeg → WASM decoders → null fallback chain.
  */
@@ -287,7 +288,7 @@ export async function audioFileToSilkBase64(
 }
 
 /**
- * 等待文件出现且大小稳定后返回最终文件大小。
+ * Wait for a file to appear and stabilize, then return its final size.
  *
  * Polls at `pollMs` intervals; returns 0 on timeout or persistent empty file.
  */
@@ -368,7 +369,7 @@ export async function waitForFile(
   return 0;
 }
 
-/** 将 PCM s16le 数据编码为 SILK 格式。 */
+/** Encode PCM s16le data into SILK format. */
 export async function pcmToSilk(
   pcmBuffer: Buffer,
   sampleRate: number,
@@ -385,7 +386,7 @@ export async function pcmToSilk(
   };
 }
 
-/** 使用 ffmpeg 将任意音频转换为单声道 24kHz PCM s16le。 */
+/** Use ffmpeg to convert any audio to mono 24 kHz PCM s16le. */
 export function ffmpegToPCM(
   ffmpegCmd: string,
   inputPath: string,
@@ -426,7 +427,7 @@ export function ffmpegToPCM(
   });
 }
 
-/** 使用 mpg123-decoder WASM 将 MP3 解码为 PCM（ffmpeg 不可用时的回退方案）。 */
+/** Decode MP3 to PCM via mpg123-decoder WASM (fallback when ffmpeg is unavailable). */
 export async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buffer | null> {
   try {
     const { MPEGDecoder } = await import("mpg123-decoder");
@@ -501,7 +502,7 @@ export async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promi
   }
 }
 
-/** 解析标准 PCM WAV 并提取单声道 24kHz PCM 数据（无 ffmpeg 时的回退方案）。 */
+/** Parse a standard PCM WAV and extract mono 24 kHz PCM data (fallback without ffmpeg). */
 export function parseWavFallback(buf: Buffer): Buffer | null {
   if (buf.length < 44) {
     return null;

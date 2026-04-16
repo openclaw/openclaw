@@ -1,4 +1,5 @@
 /**
+ * General formatting and string utilities.
  * 通用格式化与字符串工具。
  *
  * Pure utility functions with zero external dependencies.
@@ -11,6 +12,7 @@
  */
 
 /**
+ * Format any error object into a readable string.
  * 将任意错误对象格式化为可读字符串。
  *
  * Traverses the `.cause` chain for nested Error objects to include
@@ -50,7 +52,7 @@ export function formatErrorMessage(err: unknown): string {
   }
 }
 
-/** 将毫秒时长格式化为人类可读字符串（如 "5m 30s"）。 */
+/** Format a millisecond duration into a human-readable string (e.g. "5m 30s"). */
 export function formatDuration(durationMs: number): string {
   const seconds = Math.round(durationMs / 1000);
   if (seconds < 60) {

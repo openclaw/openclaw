@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { qqbotBasePluginFields } from "./channel-base.js";
 import { DEFAULT_ACCOUNT_ID, resolveQQBotAccount } from "./config.js";
-import { initApiConfig } from "./engine/api/facade.js";
+import { clearAccountCredentials } from "./engine/config/credentials.js";
 import {
   normalizeTarget as coreNormalizeTarget,
   looksLikeQQBotTarget,
@@ -10,11 +10,7 @@ import {
 import { getQQBotRuntime } from "./runtime.js";
 // Re-export text helpers from engine/.
 export { chunkText, TEXT_CHUNK_LIMIT } from "./engine/utils/text-chunk.js";
-import { registerTextChunker } from "./engine/utils/text-chunk.js";
 import type { ResolvedQQBotAccount } from "./types.js";
-
-// Register the text chunker — delegates to runtime, which is available after startup.
-registerTextChunker((text, limit) => getQQBotRuntime().channel.text.chunkMarkdownText(text, limit));
 
 // Shared promise so concurrent multi-account startups serialize the dynamic
 // import of the gateway module, avoiding an ESM circular-dependency race.
@@ -44,7 +40,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     sendText: async ({ to, text, accountId, replyToId, cfg }) => {
       const account = resolveQQBotAccount(cfg, accountId);
       const { sendText } = await import("./engine/messaging/outbound.js");
-      initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
       const result = await sendText({ to, text, accountId, replyToId, account: account as never });
       return {
         channel: "qqbot" as const,
@@ -55,7 +50,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, cfg }) => {
       const account = resolveQQBotAccount(cfg, accountId);
       const { sendMedia } = await import("./engine/messaging/outbound.js");
-      initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
       const result = await sendMedia({
         to,
         text: text ?? "",
@@ -108,55 +102,20 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       });
     },
     logoutAccount: async ({ accountId, cfg }) => {
-      const nextCfg = { ...cfg } as OpenClawConfig;
-      const nextQQBot = cfg.channels?.qqbot ? { ...cfg.channels.qqbot } : undefined;
-      let cleared = false;
-      let changed = false;
+      const { nextCfg, cleared, changed } = clearAccountCredentials(
+        cfg as unknown as Record<string, unknown>,
+        accountId,
+      );
 
-      if (nextQQBot) {
-        const qqbot = nextQQBot as Record<string, unknown>;
-        if (accountId === DEFAULT_ACCOUNT_ID) {
-          if (qqbot.clientSecret) {
-            delete qqbot.clientSecret;
-            cleared = true;
-            changed = true;
-          }
-          if (qqbot.clientSecretFile) {
-            delete qqbot.clientSecretFile;
-            cleared = true;
-            changed = true;
-          }
-        }
-        const accounts = qqbot.accounts as Record<string, Record<string, unknown>> | undefined;
-        if (accounts && accountId in accounts) {
-          const entry = accounts[accountId] as Record<string, unknown> | undefined;
-          if (entry && "clientSecret" in entry) {
-            delete entry.clientSecret;
-            cleared = true;
-            changed = true;
-          }
-          if (entry && "clientSecretFile" in entry) {
-            delete entry.clientSecretFile;
-            cleared = true;
-            changed = true;
-          }
-          if (entry && Object.keys(entry).length === 0) {
-            delete accounts[accountId];
-            changed = true;
-          }
-        }
-      }
-
-      if (changed && nextQQBot) {
-        nextCfg.channels = { ...nextCfg.channels, qqbot: nextQQBot };
+      if (changed) {
         const runtime = getQQBotRuntime();
         const configApi = runtime.config as {
           writeConfigFile: (cfg: OpenClawConfig) => Promise<void>;
         };
-        await configApi.writeConfigFile(nextCfg);
+        await configApi.writeConfigFile(nextCfg as OpenClawConfig);
       }
 
-      const resolved = resolveQQBotAccount(changed ? nextCfg : cfg, accountId);
+      const resolved = resolveQQBotAccount((changed ? nextCfg : cfg) as OpenClawConfig, accountId);
       const loggedOut = resolved.secretSource === "none";
       const envToken = Boolean(process.env.QQBOT_CLIENT_SECRET);
 
