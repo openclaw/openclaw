@@ -19,7 +19,7 @@ const { countActiveDescendantRunsMock } = vi.hoisted(() => ({
   countActiveDescendantRunsMock: vi.fn().mockReturnValue(0),
 }));
 
-vi.mock("../../config/sessions.js", () => ({
+vi.mock("../../config/sessions/main-session.js", () => ({
   resolveAgentMainSessionKey: vi.fn(({ agentId }: { agentId: string }) => `agent:${agentId}:main`),
   resolveMainSessionKey: vi.fn(() => "global"),
 }));
