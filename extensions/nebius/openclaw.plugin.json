@@ -1,0 +1,28 @@
+{
+  "id": "nebius",
+  "enabledByDefault": true,
+  "providers": ["nebius"],
+  "providerAuthEnvVars": {
+    "nebius": ["NEBIUS_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "nebius",
+      "method": "api-key",
+      "choiceId": "nebius-api-key",
+      "choiceLabel": "Nebius Token Factory API key",
+      "groupId": "nebius",
+      "groupLabel": "Nebius Token Factory",
+      "groupHint": "40+ open-source models · studio.nebius.ai",
+      "optionKey": "nebiusApiKey",
+      "cliFlag": "--nebius-api-key",
+      "cliOption": "--nebius-api-key <key>",
+      "cliDescription": "Nebius Token Factory API key (get one at studio.nebius.ai)"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
