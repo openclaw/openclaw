@@ -336,15 +336,6 @@ export function renderMessageGroup(
   });
 
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
-  console.log('=== GROUP MESSAGES ===', group.messages.map((item, i) => ({
-    index: i,
-    role: (item.message as any).role,
-    contentTypes: Array.isArray((item.message as any).content) 
-      ? (item.message as any).content.map((c: any) => c.type)
-      : 'not array',
-    hasAudio: JSON.stringify(item.message).includes('audio'),
-    key: item.key
-  })));
 
   return html`
     <div class="chat-group ${roleClass}">
@@ -1016,25 +1007,12 @@ function isLocalAttachmentPreviewAllowed(
   source: string,
   localMediaPreviewRoots: readonly string[],
 ): boolean {
-  // Decode the source if it's percent-encoded, with error handling
-  let decodedSource = source;
-  if (source.startsWith('%2F')) {
-    try {
-      decodedSource = decodeURIComponent(source);
-    } catch {
-      // If decoding fails, fall back to the original source
-      decodedSource = source;
-    }
-  }
-  
-  const sourceToCheck = decodedSource !== source ? decodedSource : source;
-  
-  const normalizedSource = normalizeLocalAttachmentPath(sourceToCheck);
+  const normalizedSource = normalizeLocalAttachmentPath(source);
   const comparableSources = normalizedSource
     ? [canonicalizeLocalPathForComparison(normalizedSource)]
-    : sourceToCheck.trim().startsWith("~")
+    : source.trim().startsWith("~")
       ? resolveHomeCandidatesFromRoots(localMediaPreviewRoots).map((home) =>
-          canonicalizeLocalPathForComparison(sourceToCheck.trim().replace(/^~(?=$|[\\/])/, home)),
+          canonicalizeLocalPathForComparison(source.trim().replace(/^~(?=$|[\\/])/, home)),
         )
       : [];
   if (comparableSources.length === 0) {
@@ -1056,41 +1034,26 @@ function buildAssistantAttachmentUrl(
   source: string,
   basePath?: string,
   authToken?: string | null,
-  localMediaPreviewRoots?: readonly string[],
 ): string {
-  // First, check if this is a local file source (including encoded paths)
-  const isLocalSource = isLocalAssistantAttachmentSource(source) || 
-    source.startsWith('%2F') || // Encoded absolute path
-    /^%2F/i.test(source);
-  
-  // For local files that should go through assistant-media
-  if (isLocalSource && (!localMediaPreviewRoots || isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots))) {
-    const normalizedBasePath =
-      basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
-    const params = new URLSearchParams({ source });
-    const normalizedToken = authToken?.trim();
-    if (normalizedToken) {
-      params.set("token", normalizedToken);
-    }
-    return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
-  }
-  
-  // Decode only for non-local sources that are safe
   const decoded = source.startsWith('%2F') ? decodeURIComponent(source) : source;
-  
-  // For paths that are absolute but explicitly allowed (e.g., media server paths)
-  if (decoded.startsWith('/') && !decoded.startsWith('//') && 
-      (decoded.startsWith('/__openclaw__/') || decoded.startsWith('/media/'))) {
+  if (decoded.startsWith('/') && !decoded.startsWith('//')) {
     return `http://localhost:18791${decoded}`;
   }
   
-  // For other sources (HTTP URLs, data URLs, etc.), return as-is
-  if (!isLocalSource) {
+  // For other sources that aren't local files, return as-is
+  if (!isLocalAssistantAttachmentSource(source)) {
     return source;
   }
   
-  // Fallback: return source as-is for local files that aren't allowed
-  return source;
+  // Only use assistant-media for file://, ~, and Windows paths
+  const normalizedBasePath =
+    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
+  const params = new URLSearchParams({ source });
+  const normalizedToken = authToken?.trim();
+  if (normalizedToken) {
+    params.set("token", normalizedToken);
+  }
+  return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
 }
 
 function buildAssistantAttachmentMetaUrl(
@@ -1109,19 +1072,12 @@ function resolveAssistantAttachmentAvailability(
   authToken: string | null | undefined,
   onRequestUpdate: (() => void) | undefined,
 ): AssistantAttachmentAvailability {
-  // Check if this is a local file (including encoded absolute paths)
-  const isLocalFile = isLocalAssistantAttachmentSource(source) || 
-    source.startsWith('%2F') || 
-    /^%2F/i.test(source);
-  
-  if (!isLocalFile) {
+  if (!isLocalAssistantAttachmentSource(source)) {
     return { status: "available" };
   }
-  
   if (!isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)) {
     return { status: "unavailable", reason: "Outside allowed folders", checkedAt: Date.now() };
   }
-  
   const normalizedAuthToken = authToken?.trim() ?? "";
   const cacheKey = `${basePath ?? ""}::${normalizedAuthToken}::${source}`;
   const cached = assistantAttachmentAvailabilityCache.get(cacheKey);

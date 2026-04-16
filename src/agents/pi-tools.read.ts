@@ -1,9 +1,7 @@
 // src/agents/pi-tools.read.ts
 // No top-level import needed - using dynamic import above to avoid circular deps
 import fs from "node:fs/promises";
-import { createReadStream } from "node:fs";
 import path from "node:path";
-import readline from "node:readline";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import {
   appendFileWithinRoot,
@@ -113,24 +111,15 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
 
 function createHostEditOperations(root: string, _options?: { workspaceOnly?: boolean }) {
   return {
-    readFile: (absolutePath: string) => {
-      // Convert absolute path to relative path from root
-      const relativePath = path.relative(root, absolutePath);
-      return readFileWithinRoot({ rootDir: root, relativePath }).then(res => res.buffer);
-    },
-    writeFile: (absolutePath: string, data: string) => {
-      // Convert absolute path to relative path from root
-      const relativePath = path.relative(root, absolutePath);
-      return writeFileWithinRoot({
+    readFile: (relativePath: string) => 
+      readFileWithinRoot({ rootDir: root, relativePath }).then(res => res.buffer), 
+    writeFile: (relativePath: string, data: string) =>
+      writeFileWithinRoot({
         rootDir: root,
         relativePath,
         data,
-      });
-    },
-    access: (absolutePath: string) => {
-      // For access, we can use the absolute path directly since it's not going through fs-safe
-      return fs.access(absolutePath);
-    }
+      }),
+    access: (relativePath: string) => fs.access(path.join(root, relativePath))
   };
 }
 
@@ -466,117 +455,6 @@ const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi", "mkv"]);
 const MAX_DIR_ENTRIES = 200;
 
-// Helper function to read text file with streaming for offset/limit
-async function readTextFileWithStreaming(
-  filePath: string,
-  offset: number,
-  limit: number | undefined,
-  signal?: AbortSignal
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const lines: string[] = [];
-    // offset is 1-indexed from user perspective
-    const startLine = offset;  // First line to include (1-indexed)
-    const endLine = limit !== undefined ? startLine + limit - 1 : Infinity;  // Last line to include
-    let lineCount = 0;
-    
-    const readStream = createReadStream(filePath, { encoding: 'utf-8' });
-    const rl = readline.createInterface({
-      input: readStream,
-      crlfDelay: Infinity
-    });
-    
-    const abortHandler = () => {
-      rl.close();
-      readStream.destroy();
-      reject(new Error("Read operation aborted"));
-    };
-    
-    if (signal) {
-      signal.addEventListener('abort', abortHandler, { once: true });
-    }
-    
-    rl.on('line', (line) => {
-      lineCount++;
-      
-      // Check abort signal periodically
-      if (signal?.aborted) {
-        rl.close();
-        readStream.destroy();
-        reject(new Error("Read operation aborted"));
-        return;
-      }
-      
-      // Stop reading once we've passed the last line we need
-      if (lineCount > endLine) {
-        rl.close();
-        readStream.destroy();
-        return;
-      }
-      
-      // Include lines from startLine through endLine
-      if (lineCount >= startLine) {
-        lines.push(line);
-      }
-    });
-    
-    rl.on('close', () => {
-      if (signal) {
-        signal.removeEventListener('abort', abortHandler);
-      }
-      resolve(lines.join('\n'));
-    });
-    
-    rl.on('error', (error) => {
-      if (signal) {
-        signal.removeEventListener('abort', abortHandler);
-      }
-      reject(error);
-    });
-    
-    readStream.on('error', (error) => {
-      if (signal) {
-        signal.removeEventListener('abort', abortHandler);
-      }
-      reject(error);
-    });
-  });
-}
-
-// Helper function to read text file from sandbox bridge with streaming-like behavior
-async function readTextFileFromSandbox(
-  bridge: SandboxFsBridge,
-  filePath: string,
-  cwd: string,
-  offset: number,
-  limit: number | undefined,
-  signal?: AbortSignal
-): Promise<string> {
-  // For sandbox bridge, we have to read the entire file since the bridge API doesn't support streaming
-  // But we can still optimize by reading once and then slicing
-  const buffer = await bridge.readFile({ 
-    filePath, 
-    cwd,
-    signal 
-  });
-  
-  if (signal?.aborted) {
-    throw new Error("Read operation aborted");
-  }
-  
-  const text = Buffer.isBuffer(buffer) ? buffer.toString("utf-8") : String(buffer);
-  
-  if (offset > 1 || limit !== undefined) {
-    const lines = text.split('\n');
-    // offset is 1-indexed, convert to 0-indexed for array slicing
-    const startIndex = Math.max(0, offset - 1);
-    const endIndex = limit !== undefined ? Math.min(startIndex + limit, lines.length) : lines.length;
-    return lines.slice(startIndex, endIndex).join('\n');
-  }
-  
-  return text;
-}
-
 export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
@@ -774,29 +652,26 @@ export function createOpenClawReadTool(
 
         if (signal?.aborted) { throw new Error("Read operation aborted"); }
         
-        // Handle text files with streaming for host mode, fallback for sandbox mode
+        // Use bridge for text file reading if available
         let text: string;
         if (useBridge) {
-          // Sandbox bridge doesn't support streaming, but we still optimize by reading once
-          text = await readTextFileFromSandbox(
-            options.bridge!,
-            inputPath,
-            rootDirResolved,
-            offset,
-            limit,
-            signal
-          );
+          const buffer = await options.bridge!.readFile({ 
+            filePath: inputPath, 
+            cwd: rootDirResolved,
+            signal 
+          });
+          text = Buffer.isBuffer(buffer) ? buffer.toString("utf-8") : String(buffer);
         } else {
-          // Host mode - use streaming for efficient memory usage
-          if (offset > 0 || limit !== undefined) {
-            text = await readTextFileWithStreaming(inputPath, offset, limit, signal);
-          } else {
-            // No offset/limit, read entire file (but still check for abort)
-            text = await fs.readFile(inputPath, "utf-8");
-          }
+          text = await fs.readFile(inputPath, "utf-8");
         }
 
-        // Apply character limit truncation if needed
+        if (offset > 0 || limit !== undefined) {
+          const lines = text.split('\n');
+          const start = Math.max(0, Math.min(offset - 1, lines.length));
+          const end = limit !== undefined ? Math.min(start + limit, lines.length) : lines.length;
+          text = lines.slice(start, end).join('\n');
+        }
+
         const maxChars = options?.modelContextWindowTokens ? options.modelContextWindowTokens * 3 : 32000;
         if (text.length > maxChars) {
           text = text.slice(0, maxChars) + `\n\n... [Content truncated to ${maxChars} chars]`;

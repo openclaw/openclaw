@@ -1767,6 +1767,71 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       continue;
     }
 
+    // Skip toolResult messages that duplicate media already present in the preceding assistant message
+    if (normalized.role.toLowerCase() === "toolresult") {
+      // Find the previous message (should be the assistant message that triggered this tool)
+      const prevMsg = i > 0 ? history[i - 1] as Record<string, unknown> : null;
+      const prevRole = prevMsg && typeof prevMsg.role === "string" ? prevMsg.role.toLowerCase() : "";
+      
+      if (prevRole === "assistant") {
+        const prevContent = Array.isArray(prevMsg.content) ? prevMsg.content : [];
+        const currentContent = Array.isArray(raw.content) ? raw.content : [];
+        
+        // Collect media URLs from the assistant message
+        const assistantMediaUrls = new Set<string>();
+        for (const block of prevContent) {
+          const b = block as Record<string, unknown>;
+          if (b.type === "audio" || b.type === "video" || b.type === "image") {
+            const url = typeof b.url === "string" ? b.url : undefined;
+            if (url) assistantMediaUrls.add(url);
+          }
+        }
+        
+        // Check if toolResult contains any unique content not already in the assistant message
+        let hasUniqueContent = false;
+        for (const block of currentContent) {
+          const b = block as Record<string, unknown>;
+          
+          if (b.type === "text" && typeof b.text === "string") {
+            const text = b.text.trim();
+            if (!text) continue;
+            
+            // Check if this text is just a markdown link to a media URL we already have
+            const linkMatch = text.match(/^[🎵🎬📷]?\s*\[([^\]]*)\]\(([^)]+)\)$/);
+            if (linkMatch) {
+              const url = linkMatch[2];
+              // If the URL isn't in the assistant message, this is unique content
+              if (!assistantMediaUrls.has(url)) {
+                hasUniqueContent = true;
+                break;
+              }
+              // Otherwise it's just a duplicate link - ignore it and keep checking
+            } else {
+              // Non-link text content - this is unique
+              hasUniqueContent = true;
+              break;
+            }
+          } else if (b.type === "audio" || b.type === "video" || b.type === "image") {
+            const url = typeof b.url === "string" ? b.url : undefined;
+            // If this media URL isn't already in the assistant message, it's unique
+            if (url && !assistantMediaUrls.has(url)) {
+              hasUniqueContent = true;
+              break;
+            }
+          } else if (b.type !== "text") {
+            // Any other content type is considered unique
+            hasUniqueContent = true;
+            break;
+          }
+        }
+        
+        // If the toolResult adds nothing new, skip it entirely
+        if (!hasUniqueContent) {
+          continue;
+        }
+      }
+    }
+
     // Apply search filter if active
     if (vs.searchOpen && vs.searchQuery.trim() && !messageMatchesSearchQuery(msg, vs.searchQuery)) {
       continue;
