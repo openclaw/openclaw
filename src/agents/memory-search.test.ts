@@ -225,7 +225,7 @@ describe("memory search config", () => {
       watch: false,
       watchDebounceMs: 25,
       intervalMinutes: 3,
-      embeddingBatchTimeoutSeconds: 120,
+      embeddingBatchTimeoutSeconds: undefined,
       sessions: {
         deltaBytes: 321,
         deltaMessages: 7,
@@ -251,7 +251,7 @@ describe("memory search config", () => {
     expect(result?.embeddingBatchTimeoutSeconds).toBe(600);
   });
 
-  it("defaults embeddingBatchTimeoutSeconds to 120", () => {
+  it("leaves embeddingBatchTimeoutSeconds undefined when not configured", () => {
     const cfg = asConfig({
       agents: {
         defaults: {
@@ -262,7 +262,7 @@ describe("memory search config", () => {
       },
     });
     const result = resolveMemorySearchSyncConfig(cfg, "main");
-    expect(result?.embeddingBatchTimeoutSeconds).toBe(120);
+    expect(result?.embeddingBatchTimeoutSeconds).toBeUndefined();
   });
 
   it("merges defaults and overrides", () => {
