@@ -22,7 +22,7 @@ const FINGERPRINT_SALT = "59cf53e54c78";
  * Claude Code version to report in the attribution header.
  * Should match the user-agent version sent by the Anthropic provider.
  */
-const CLAUDE_CODE_VERSION = "2.1.111";
+const CLAUDE_CODE_VERSION = "2.1.2";
 
 /**
  * Computes a 3-character fingerprint for attribution.
@@ -84,8 +84,11 @@ export function wrapStreamFnWithAttribution(streamFn: StreamFn): StreamFn {
         // Prepend as Block 0
         system.unshift({ type: "text", text: header });
         console.error(
-          `[attribution] injected billing header as Block 0 (${system.length} system blocks, fp=${header.slice(-4, -1)})`,
+          `[attribution] injected billing header as Block 0 (${system.length} system blocks)`,
         );
+        for (let i = 0; i < Math.min(system.length, 3); i++) {
+          console.error(`[attribution] Block ${i}: ${(system[i]?.text ?? "").substring(0, 80)}`);
+        }
       } else {
         console.error("[attribution] WARNING: no system blocks found in params");
       }
