@@ -252,7 +252,7 @@ export async function handleBlueBubblesWebhookRequest(
       // BlueBubbles fires `updated-message` when attachments are indexed after the
       // initial `new-message` (which may arrive with attachments: []). Let those
       // through so the agent can ingest the image. (#65430)
-      const dataRecord = asRecord(asRecord(payload)?.data);
+      const dataRecord = asRecord(payload.data);
       const dataAttachments = dataRecord?.attachments;
       const isAttachmentUpdate =
         eventType === "updated-message" &&

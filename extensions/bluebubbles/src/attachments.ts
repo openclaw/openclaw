@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
+import { extractAttachments } from "./monitor-normalize.js";
 import { assertMultipartActionOk, postMultipartFormData } from "./multipart.js";
 import {
   fetchBlueBubblesServerInfo,
@@ -117,7 +118,12 @@ export async function fetchBlueBubblesMessageAttachments(
     path: `/api/v1/message/${encodeURIComponent(messageGuid)}`,
     password: opts.password,
   });
-  const policy = opts.allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
+  // Pass undefined (not {}) when private network is not opted-in so the
+  // non-SSRF fallback path is used — an empty {} triggers the SSRF-guarded
+  // path which blocks localhost BB servers by default. (#64105)
+  const policy: SsrFPolicy | undefined = opts.allowPrivateNetwork
+    ? { allowPrivateNetwork: true }
+    : undefined;
   const response = await blueBubblesFetchWithTimeout(
     url,
     { method: "GET" },
@@ -129,43 +135,10 @@ export async function fetchBlueBubblesMessageAttachments(
   }
   const json = (await response.json()) as Record<string, unknown>;
   const data = json.data as Record<string, unknown> | undefined;
-  const rawAttachments = data?.attachments;
-  if (!Array.isArray(rawAttachments)) {
+  if (!data) {
     return [];
   }
-  const out: BlueBubblesAttachment[] = [];
-  for (const entry of rawAttachments) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-    const record = entry as Record<string, unknown>;
-    const guid = typeof record.guid === "string" ? record.guid.trim() : undefined;
-    if (!guid) {
-      continue;
-    }
-    out.push({
-      guid,
-      mimeType:
-        typeof record.mimeType === "string"
-          ? record.mimeType
-          : typeof record.mime_type === "string"
-            ? record.mime_type
-            : undefined,
-      transferName:
-        typeof record.transferName === "string"
-          ? record.transferName
-          : typeof record.transfer_name === "string"
-            ? record.transfer_name
-            : undefined,
-      totalBytes:
-        typeof record.totalBytes === "number"
-          ? record.totalBytes
-          : typeof record.total_bytes === "number"
-            ? record.total_bytes
-            : undefined,
-    });
-  }
-  return out;
+  return extractAttachments(data);
 }
 
 export async function downloadBlueBubblesAttachment(

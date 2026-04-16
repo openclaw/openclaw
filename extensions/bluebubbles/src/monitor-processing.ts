@@ -1074,16 +1074,17 @@ async function processMessageAfterDedupe(
   // `updated-message` event, wait briefly and re-fetch from the BB API as a
   // fallback for cases where BB doesn't send a follow-up webhook. (#65430, #67437)
   let resolvedAttachments = attachments;
+  const retryMessageId = message.messageId?.trim();
   const shouldRetryAttachments =
     resolvedAttachments.length === 0 &&
-    message.messageId &&
+    retryMessageId &&
     baseUrl &&
     password &&
     (text.length === 0 || message.eventType === "updated-message");
   if (shouldRetryAttachments) {
     try {
       await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
-      const fetched = await fetchBlueBubblesMessageAttachments(message.messageId!, {
+      const fetched = await fetchBlueBubblesMessageAttachments(retryMessageId, {
         baseUrl,
         password,
         timeoutMs: 10_000,
