@@ -1,12 +1,44 @@
+import path from "node:path";
+import { getMediaDir } from "../media/store.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { MsgContext } from "./templating.js";
+
+function stripDarwinPrivatePrefix(value: string): string {
+  return process.platform === "darwin" && value.startsWith("/private/") ? value.slice(8) : value;
+}
+
+function normalizeManagedInboundMediaRef(value: string): string {
+  if (!path.isAbsolute(value)) {
+    return value;
+  }
+  const mediaInboundRoot = path.join(getMediaDir(), "inbound");
+  const normalizedValue = path.resolve(value);
+  const normalizedRoot = path.resolve(mediaInboundRoot);
+  const normalizedValueSansPrivate = stripDarwinPrivatePrefix(normalizedValue);
+  const normalizedRootSansPrivate = stripDarwinPrivatePrefix(normalizedRoot);
+  const rootWithSep = normalizedRoot.endsWith(path.sep)
+    ? normalizedRoot
+    : `${normalizedRoot}${path.sep}`;
+  const rootSansPrivateWithSep = normalizedRootSansPrivate.endsWith(path.sep)
+    ? normalizedRootSansPrivate
+    : `${normalizedRootSansPrivate}${path.sep}`;
+  const isManagedInboundPath =
+    normalizedValue === normalizedRoot ||
+    normalizedValue.startsWith(rootWithSep) ||
+    normalizedValueSansPrivate === normalizedRootSansPrivate ||
+    normalizedValueSansPrivate.startsWith(rootSansPrivateWithSep);
+  if (!isManagedInboundPath) {
+    return value;
+  }
+  return `media://inbound/${path.basename(normalizedValue)}`;
+}
 
 function sanitizeInlineMediaNoteValue(value: string | undefined): string {
   const trimmed = value?.trim();
   if (!trimmed) {
     return "";
   }
-  return trimmed
+  return normalizeManagedInboundMediaRef(trimmed)
     .replace(/[\p{Cc}\]]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();

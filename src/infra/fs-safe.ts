@@ -417,7 +417,21 @@ export async function resolveOpenedFileRealPathForHandle(
   handle: FileHandle,
   ioPath: string,
 ): Promise<string> {
-  const handleStat = await handle.stat();
+  const openedStat = await handle.stat();
+  const resolveCandidate = async (candidatePath: string): Promise<string | null> => {
+    try {
+      const candidateStat = await fs.stat(candidatePath);
+      if (sameFileIdentity(openedStat, candidateStat)) {
+        return candidatePath;
+      }
+      return null;
+    } catch (err) {
+      if (isNotFoundPathError(err)) {
+        return null;
+      }
+      throw err;
+    }
+  };
   const fdCandidates =
     process.platform === "linux"
       ? [`/proc/self/fd/${handle.fd}`, `/dev/fd/${handle.fd}`]
@@ -426,10 +440,10 @@ export async function resolveOpenedFileRealPathForHandle(
         : [`/dev/fd/${handle.fd}`];
   for (const fdPath of fdCandidates) {
     try {
-      const fdRealPath = await fs.realpath(fdPath);
-      const fdRealStat = await fs.stat(fdRealPath);
-      if (sameFileIdentity(handleStat, fdRealStat)) {
-        return fdRealPath;
+      const resolved = await fs.realpath(fdPath);
+      const accepted = await resolveCandidate(resolved);
+      if (accepted) {
+        return accepted;
       }
     } catch {
       // try next fd path
@@ -437,17 +451,17 @@ export async function resolveOpenedFileRealPathForHandle(
   }
 
   try {
-    const ioRealPath = await fs.realpath(ioPath);
-    const ioRealStat = await fs.stat(ioRealPath);
-    if (sameFileIdentity(handleStat, ioRealStat)) {
-      return ioRealPath;
+    const resolved = await fs.realpath(ioPath);
+    const accepted = await resolveCandidate(resolved);
+    if (accepted) {
+      return accepted;
     }
   } catch (err) {
     if (!isNotFoundPathError(err)) {
       throw err;
     }
   }
-  const parentResolved = await resolveOpenedFileRealPathFromParent(handleStat, ioPath);
+  const parentResolved = await resolveOpenedFileRealPathFromParent(openedStat, ioPath);
   if (parentResolved) {
     return parentResolved;
   }
