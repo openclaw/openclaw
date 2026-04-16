@@ -144,6 +144,98 @@ describe("PlanStore", () => {
     });
   });
 
+  describe("read() — full schema validation pre-parse (Codex P2 r3094816890)", () => {
+    async function writeRawPlanFile(namespace: string, contents: unknown): Promise<void> {
+      const dir = path.join(tmpDir, namespace);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, "plan.json"), JSON.stringify(contents), { mode: 0o600 });
+    }
+
+    it("rejects steps: [null] (was: silent pass, then TypeError downstream)", async () => {
+      await writeRawPlanFile("ns-bad-step", {
+        namespace: "ns-bad-step",
+        steps: [null],
+        createdAt: 1,
+        updatedAt: 2,
+      });
+      await expect(store.read("ns-bad-step")).rejects.toThrow(/invalid step at index 0/);
+    });
+
+    it("rejects step with non-string `step` text", async () => {
+      await writeRawPlanFile("ns-bad-step-type", {
+        namespace: "ns-bad-step-type",
+        steps: [{ step: 42, status: "pending" }],
+        createdAt: 1,
+        updatedAt: 2,
+      });
+      await expect(store.read("ns-bad-step-type")).rejects.toThrow(/non-empty string/);
+    });
+
+    it("rejects step with empty `step` text", async () => {
+      await writeRawPlanFile("ns-empty-step", {
+        namespace: "ns-empty-step",
+        steps: [{ step: "", status: "pending" }],
+        createdAt: 1,
+        updatedAt: 2,
+      });
+      await expect(store.read("ns-empty-step")).rejects.toThrow(/non-empty string/);
+    });
+
+    it("rejects step with invalid `status` value", async () => {
+      await writeRawPlanFile("ns-bad-status", {
+        namespace: "ns-bad-status",
+        steps: [{ step: "x", status: "weirdo" }],
+        createdAt: 1,
+        updatedAt: 2,
+      });
+      await expect(store.read("ns-bad-status")).rejects.toThrow(/status.*must be one of/);
+    });
+
+    it("rejects step with non-string `activeForm` when present", async () => {
+      await writeRawPlanFile("ns-bad-active", {
+        namespace: "ns-bad-active",
+        steps: [{ step: "x", status: "pending", activeForm: 42 }],
+        createdAt: 1,
+        updatedAt: 2,
+      });
+      await expect(store.read("ns-bad-active")).rejects.toThrow(/activeForm.*must be a string/);
+    });
+
+    it("rejects file missing `createdAt`", async () => {
+      await writeRawPlanFile("ns-no-created", {
+        namespace: "ns-no-created",
+        steps: [{ step: "x", status: "pending" }],
+        updatedAt: 2,
+      });
+      await expect(store.read("ns-no-created")).rejects.toThrow(/createdAt/);
+    });
+
+    it("rejects file missing `updatedAt`", async () => {
+      await writeRawPlanFile("ns-no-updated", {
+        namespace: "ns-no-updated",
+        steps: [{ step: "x", status: "pending" }],
+        createdAt: 1,
+      });
+      await expect(store.read("ns-no-updated")).rejects.toThrow(/updatedAt/);
+    });
+
+    it("accepts a valid plan with all 4 status values", async () => {
+      await writeRawPlanFile("ns-valid", {
+        namespace: "ns-valid",
+        steps: [
+          { step: "a", status: "pending" },
+          { step: "b", status: "in_progress", activeForm: "B-ing" },
+          { step: "c", status: "completed" },
+          { step: "d", status: "cancelled" },
+        ],
+        createdAt: 1,
+        updatedAt: 2,
+      });
+      const result = await store.read("ns-valid");
+      expect(result?.steps).toHaveLength(4);
+    });
+  });
+
   describe("confine() — parent-symlink redirection (Codex P1 r3095586226)", () => {
     it("rejects a namespace directory that is a symlink pointing outside baseDir", async () => {
       // Create an attacker-controlled directory outside baseDir.
