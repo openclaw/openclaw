@@ -269,11 +269,6 @@ describe("memory plugin e2e", () => {
       expect(ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0]).toBeLessThan(
         embeddingsCreate.mock.invocationCallOrder[0],
       );
-      expect(embeddingsCreate).toHaveBeenCalledWith({
-        model: "text-embedding-3-small",
-        input: "hello dimensions",
-        dimensions: 1024,
-      });
       expect(embeddingsCreate).toHaveBeenCalledWith(
         {
           model: "text-embedding-3-small",
