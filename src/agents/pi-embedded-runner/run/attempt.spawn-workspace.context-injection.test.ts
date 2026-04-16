@@ -27,7 +27,7 @@ async function resolveBootstrapContext(params: {
     }));
 
   const result = await resolveAttemptBootstrapContext({
-    contextInjectionMode: params.contextInjectionMode ?? "always",
+    contextInjectionMode: params.contextInjectionMode ?? "continuation-skip",
     bootstrapContextMode: params.bootstrapContextMode ?? "full",
     bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
     sessionFile: "/tmp/session.jsonl",
