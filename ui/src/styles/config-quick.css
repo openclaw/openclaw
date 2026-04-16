@@ -38,7 +38,7 @@
 .qs-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
-  align-items: start;
+  align-items: stretch;
   gap: 14px;
 }
 
@@ -46,6 +46,7 @@
 
 .qs-card {
   min-width: 0;
+  height: 100%;
   background: var(--card);
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: var(--radius-lg);
@@ -85,8 +86,8 @@
   width: 26px;
   height: 26px;
   border-radius: var(--radius-sm);
-  background: var(--accent-subtle);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--bg-elevated) 78%, var(--border) 22%);
+  color: var(--text-strong);
 }
 
 .qs-card__icon svg {
@@ -190,8 +191,7 @@
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  transition:
-    all var(--duration-normal) var(--ease-out);
+  transition: all var(--duration-normal) var(--ease-out);
   white-space: nowrap;
   position: relative;
 }
