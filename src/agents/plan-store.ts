@@ -127,13 +127,52 @@ export class PlanStore {
   }
 
   /**
-   * Confines a resolved path to baseDir. Throws if the resolved target
-   * escapes the realpathed base (defense against symlink redirection).
+   * Confines a resolved path to baseDir. Throws if the lexical OR
+   * realpath-resolved target escapes the realpathed base.
+   *
+   * Codex P1 (PR #67542 r3095586226): the lexical-only check let a
+   * symlinked namespace dir bypass confinement. e.g.
+   *   `<baseDir>/ns -> /tmp/attacker`
+   * lexically resolves to `<baseDir>/ns/plan.json` (which IS under
+   * baseDir on paper), but every subsequent open() follows the symlink
+   * to `/tmp/attacker/plan.json`. The leaf `O_NOFOLLOW` we already
+   * apply only blocks the FINAL hop, not parent-directory symlinks.
+   *
+   * This walks the longest existing ancestor of `target`, realpath()s
+   * it, and rejects if the realpath escapes baseDir.
    */
   private confine(target: string): string {
     const rel = path.relative(this.baseDir, target);
     if (rel.startsWith("..") || path.isAbsolute(rel)) {
       throw new Error(`Plan path escapes base directory: ${target}`);
+    }
+    // Realpath the deepest existing ancestor (start from the parent and
+    // walk up). If it resolves outside baseDir, reject — a parent
+    // symlink would redirect us elsewhere.
+    let probe = path.dirname(target);
+    while (probe.startsWith(this.baseDir)) {
+      try {
+        const resolved = realpathSync(probe);
+        const ancestorRel = path.relative(this.baseDir, resolved);
+        if (ancestorRel.startsWith("..") || path.isAbsolute(ancestorRel)) {
+          throw new Error(
+            `Plan path escapes base directory via parent symlink: ${target} (resolves to ${resolved})`,
+          );
+        }
+        return target;
+      } catch (err: unknown) {
+        // ENOENT — this ancestor doesn't exist yet; walk up and try again.
+        if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+          const next = path.dirname(probe);
+          if (next === probe) {
+            break; // hit filesystem root
+          }
+          probe = next;
+          continue;
+        }
+        // Anything else (loop detection, permission denied) is hostile.
+        throw err;
+      }
     }
     return target;
   }
