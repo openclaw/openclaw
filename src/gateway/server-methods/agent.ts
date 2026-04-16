@@ -209,8 +209,7 @@ function dispatchAgentRunFromGateway(params: {
   idempotencyKey: string;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
-  client: GatewayRequestHandlerOptions["client"];
-  timeoutMs: number;
+  abortController: AbortController;
 }) {
   const inputProvenance = normalizeInputProvenance(params.ingressOpts.inputProvenance);
   const shouldTrackTask =
@@ -238,22 +237,8 @@ function dispatchAgentRunFromGateway(params: {
       // Best-effort only: background task tracking must not block agent runs.
     }
   }
-  const now = Date.now();
-  const abortController = new AbortController();
-  const sessionKey = params.ingressOpts.sessionKey ?? "";
-  const abortEntry: ChatAbortControllerEntry = {
-    controller: abortController,
-    sessionId: params.ingressOpts.sessionId ?? params.runId,
-    sessionKey,
-    startedAtMs: now,
-    expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs: params.timeoutMs }),
-    ownerConnId: normalizeOptionalString(params.client?.connId),
-    ownerDeviceId: normalizeOptionalString(params.client?.connect?.device?.id),
-  };
-  params.context.chatAbortControllers.set(params.runId, abortEntry);
-
   void agentCommandFromIngress(
-    { ...params.ingressOpts, abortSignal: abortController.signal },
+    { ...params.ingressOpts, abortSignal: params.abortController.signal },
     defaultRuntime,
     params.context.deps,
   )
@@ -831,6 +816,29 @@ export const agentHandlers: GatewayRequestHandlers = {
         payload: accepted,
       },
     });
+
+    // Register the run in chatAbortControllers BEFORE responding, so that any
+    // follow-up `chat.abort` or `agent.wait` call sees the in-flight run. If
+    // we registered later (e.g. just before dispatchAgentRunFromGateway), the
+    // client could race the async setup between respond() and the dispatch
+    // call and observe an empty controller map.
+    const now = Date.now();
+    const abortController = new AbortController();
+    const runTimeoutMs = resolveAgentTimeoutMs({
+      cfg: cfgForAgent ?? cfg,
+      overrideSeconds: request.timeout,
+    });
+    const abortEntry: ChatAbortControllerEntry = {
+      controller: abortController,
+      sessionId: resolvedSessionId ?? runId,
+      sessionKey: resolvedSessionKey ?? "",
+      startedAtMs: now,
+      expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs: runTimeoutMs }),
+      ownerConnId: normalizeOptionalString(client?.connId),
+      ownerDeviceId: normalizeOptionalString(client?.connect?.device?.id),
+    };
+    context.chatAbortControllers.set(runId, abortEntry);
+
     respond(true, accepted, undefined, { runId });
 
     if (resolvedSessionKey) {
@@ -921,11 +929,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       idempotencyKey: idem,
       respond,
       context,
-      client,
-      timeoutMs: resolveAgentTimeoutMs({
-        cfg: cfgForAgent ?? cfg,
-        overrideSeconds: request.timeout,
-      }),
+      abortController,
     });
   },
   "agent.identity.get": ({ params, respond }) => {
