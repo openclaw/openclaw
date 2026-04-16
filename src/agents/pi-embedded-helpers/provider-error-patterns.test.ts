@@ -238,4 +238,13 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
       "auth_html_403",
     );
   });
+
+  it("formats Cloudflare challenge error with TLS fingerprint guidance", () => {
+    const cfChallenge403 =
+      '403 <!doctype html><html><body><div id="cf-browser-verification"></div></body></html>';
+
+    expect(classifyProviderRuntimeFailureKind({ status: 403, message: cfChallenge403 })).toBe(
+      "cloudflare_challenge",
+    );
+  });
 });
