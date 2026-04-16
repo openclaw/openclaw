@@ -54,7 +54,7 @@ const PLAN_MODE_ALLOWED_TOOLS = new Set([
 const READ_ONLY_EXEC_PREFIXES = [
   "ls", "cat", "pwd", "git status", "git log", "git diff", "git show",
   "which", "find", "grep", "rg", "head", "tail", "wc", "file", "stat",
-  "du", "df", "echo", "printenv", "env", "whoami", "hostname", "uname",
+  "du", "df", "echo", "printenv", "whoami", "hostname", "uname",
 ];
 
 export interface MutationGateResult {
