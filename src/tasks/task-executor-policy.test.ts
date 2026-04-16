@@ -3,6 +3,7 @@ import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
   formatTaskTerminalMessage,
+  formatThreadBoundCompletion,
   isTerminalTaskStatus,
   shouldAutoDeliverTaskStateChange,
   shouldAutoDeliverTaskTerminalUpdate,
@@ -183,5 +184,165 @@ describe("task-executor-policy", () => {
         preferredTaskId: undefined,
       }),
     ).toBe(false);
+  });
+
+  describe("formatThreadBoundCompletion", () => {
+    it("returns null for plain succeeded tasks with no summary", () => {
+      // The parent stream relay already delivered the final reply into the
+      // thread; no additional banner is useful.
+      expect(
+        formatThreadBoundCompletion(createTask({ status: "succeeded", runId: "run-xxxxxxxx" })),
+      ).toBeNull();
+    });
+
+    it("preserves meaningful summaries without the Background task done prefix", () => {
+      const summary = "Merged branch feat/x and pushed origin/main.";
+      expect(
+        formatThreadBoundCompletion(
+          createTask({
+            status: "succeeded",
+            terminalSummary: summary,
+            runId: "run-aaaaaaaa",
+          }),
+        ),
+      ).toBe(summary);
+    });
+
+    it("routes blocked outcomes through the full terminal formatter", () => {
+      // Blocked MUST surface visibly — the compact formatter delegates to the
+      // verbose one so the operator sees the blocked-banner unchanged.
+      const task = createTask({
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        terminalSummary: "Needs login.",
+        runId: "run-1234567890",
+        label: "ACP import",
+      });
+      expect(formatThreadBoundCompletion(task)).toBe(
+        "Background task blocked: ACP import (run run-1234). Needs login.",
+      );
+    });
+
+    it("routes failures through the full terminal formatter", () => {
+      const task = createTask({
+        status: "failed",
+        error: "Permission denied.",
+        runId: "run-bbbbbbbb",
+        label: "ACP import",
+      });
+      expect(formatThreadBoundCompletion(task)).toBe(
+        "Background task failed: ACP import (run run-bbbb). Permission denied.",
+      );
+    });
+
+    it("routes timed_out through the full terminal formatter", () => {
+      const task = createTask({
+        status: "timed_out",
+        runId: "run-cccccccc",
+        label: "ACP import",
+      });
+      expect(formatThreadBoundCompletion(task)).toBe(
+        "Background task timed out: ACP import (run run-cccc).",
+      );
+    });
+
+    it("routes cancelled through the full terminal formatter", () => {
+      const task = createTask({
+        status: "cancelled",
+        runId: "run-dddddddd",
+        label: "ACP import",
+      });
+      expect(formatThreadBoundCompletion(task)).toBe(
+        "Background task cancelled: ACP import (run run-dddd).",
+      );
+    });
+
+    it("routes lost through the full terminal formatter", () => {
+      const task = createTask({
+        status: "lost",
+        error: "Gateway unreachable.",
+        runId: "run-eeeeeeee",
+        label: "ACP import",
+      });
+      expect(formatThreadBoundCompletion(task)).toBe(
+        "Background task lost: ACP import (run run-eeee). Gateway unreachable.",
+      );
+    });
+
+    it("returns null for non-terminal statuses defensively", () => {
+      expect(formatThreadBoundCompletion(createTask({ status: "running" }))).toBeNull();
+      expect(formatThreadBoundCompletion(createTask({ status: "queued" }))).toBeNull();
+    });
+  });
+
+  describe("shouldAutoDeliverTaskTerminalUpdate silent + thread-bound", () => {
+    it("suppresses silent succeeded tasks with no summary", () => {
+      expect(
+        shouldAutoDeliverTaskTerminalUpdate(
+          createTask({
+            runtime: "acp",
+            status: "succeeded",
+            deliveryStatus: "pending",
+            notifyPolicy: "silent",
+          }),
+        ),
+      ).toBe(false);
+    });
+
+    it("allows silent failures so the operator still sees the failure banner", () => {
+      expect(
+        shouldAutoDeliverTaskTerminalUpdate(
+          createTask({
+            runtime: "acp",
+            status: "failed",
+            error: "Disk full.",
+            deliveryStatus: "pending",
+            notifyPolicy: "silent",
+          }),
+        ),
+      ).toBe(true);
+    });
+
+    it("allows silent blocked outcomes", () => {
+      expect(
+        shouldAutoDeliverTaskTerminalUpdate(
+          createTask({
+            runtime: "acp",
+            status: "succeeded",
+            terminalOutcome: "blocked",
+            terminalSummary: "Needs login.",
+            deliveryStatus: "pending",
+            notifyPolicy: "silent",
+          }),
+        ),
+      ).toBe(true);
+    });
+
+    it("allows silent succeeded with meaningful summary", () => {
+      expect(
+        shouldAutoDeliverTaskTerminalUpdate(
+          createTask({
+            runtime: "acp",
+            status: "succeeded",
+            terminalSummary: "Shipped to prod.",
+            deliveryStatus: "pending",
+            notifyPolicy: "silent",
+          }),
+        ),
+      ).toBe(true);
+    });
+
+    it("still suppresses silent subagent tasks", () => {
+      expect(
+        shouldAutoDeliverTaskTerminalUpdate(
+          createTask({
+            runtime: "subagent",
+            status: "succeeded",
+            deliveryStatus: "pending",
+            notifyPolicy: "silent",
+          }),
+        ),
+      ).toBe(false);
+    });
   });
 });

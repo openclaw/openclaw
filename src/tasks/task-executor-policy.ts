@@ -62,6 +62,50 @@ export function formatTaskTerminalMessage(task: TaskRecord): string {
       : `Background task failed: ${title}${runLabel}.`;
 }
 
+// Phase 3 Discord Surface Overhaul: thread-bound completion formatter.
+//
+// For thread-bound ACP sessions, the parent stream relay already delivered
+// progress / final_reply into the thread, so the verbose
+// "Background task done: ACP background task (run xxxxxx)." banner adds
+// noise without information. This formatter returns either a compact
+// thread-appropriate message OR null to indicate the caller should suppress
+// delivery entirely.
+//
+// Returns null when:
+//   - task succeeded with no terminal summary (the relay already said what
+//     there was to say)
+//   - task is in a non-surface state that the surface-policy short-circuits
+//
+// Returns a short string when:
+//   - task failed/timed-out/cancelled/lost (operator needs to know)
+//   - task is blocked (Blocked-Child Protocol invariant: always surface)
+//   - task has a non-empty terminalSummary worth preserving
+export function formatThreadBoundCompletion(task: TaskRecord): string | null {
+  // Blocked and hard-failure paths MUST surface — route through the existing
+  // formatter so the operator still sees the signal.
+  if (task.status === "failed" || task.status === "timed_out" || task.status === "lost") {
+    return formatTaskTerminalMessage(task);
+  }
+  if (task.status === "cancelled") {
+    return formatTaskTerminalMessage(task);
+  }
+  if (task.status === "succeeded" && task.terminalOutcome === "blocked") {
+    return formatTaskTerminalMessage(task);
+  }
+  if (task.status === "succeeded") {
+    const summary = sanitizeTaskStatusText(task.terminalSummary);
+    if (summary) {
+      // Preserve meaningful summaries without the "Background task done: ..."
+      // prefix that reads as boilerplate in a live thread.
+      return summary;
+    }
+    // The relay already delivered the terminal assistant reply; no banner.
+    return null;
+  }
+  // Non-terminal statuses should not reach this path, but be safe: suppress.
+  return null;
+}
+
 export function formatTaskBlockedFollowupMessage(task: TaskRecord): string | null {
   if (task.status !== "succeeded" || task.terminalOutcome !== "blocked") {
     return null;
@@ -91,7 +135,22 @@ export function formatTaskStateChangeMessage(
 
 export function shouldAutoDeliverTaskTerminalUpdate(task: TaskRecord): boolean {
   if (task.notifyPolicy === "silent") {
-    return false;
+    // Phase 3 Discord Surface Overhaul: silent tasks that originate from
+    // thread-bound ACP spawns still surface a COMPACT terminal banner for
+    // failure/blocked/timeout/lost states so the operator is not left in the
+    // dark. For plain "succeeded with no summary" runs the formatter returns
+    // null and we stay silent. The delivery formatter at the call site
+    // consults formatThreadBoundCompletion for the substituted message text.
+    if (task.runtime === "subagent" && task.status !== "cancelled") {
+      return false;
+    }
+    if (!isTerminalTaskStatus(task.status)) {
+      return false;
+    }
+    if (task.deliveryStatus !== "pending") {
+      return false;
+    }
+    return formatThreadBoundCompletion(task) !== null;
   }
   if (task.runtime === "subagent" && task.status !== "cancelled") {
     return false;

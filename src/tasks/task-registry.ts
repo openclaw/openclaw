@@ -14,6 +14,7 @@ import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
   formatTaskTerminalMessage,
+  formatThreadBoundCompletion,
   isTerminalTaskStatus,
   shouldAutoDeliverTaskStateChange,
   shouldAutoDeliverTaskTerminalUpdate,
@@ -1138,7 +1139,13 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         lastEventAt: Date.now(),
       });
     }
-    const eventText = formatTaskTerminalMessage(latest);
+    // Phase 3 Discord Surface Overhaul: thread-bound silent tasks use the
+    // compact formatter so the thread does not get the "Background task done:
+    // ACP background task (run xxxxxxxx)." banner when the relay already
+    // delivered the final reply. Non-silent tasks use the existing format.
+    const threadBoundText =
+      latest.notifyPolicy === "silent" ? formatThreadBoundCompletion(latest) : null;
+    const eventText = threadBoundText ?? formatTaskTerminalMessage(latest);
     if (!canDeliverTaskToRequesterOrigin(latest)) {
       try {
         queueTaskSystemEvent(latest, eventText);
@@ -1202,7 +1209,14 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       }
       const requesterAgentId = parseAgentSessionKey(ownerSessionKeyAfterLoad)?.agentId;
       const idempotencyKey = resolveTaskTerminalIdempotencyKey(latestAfterLoad);
-      const eventTextAfterLoad = formatTaskTerminalMessage(latestAfterLoad);
+      // Phase 3 Discord Surface Overhaul: thread-bound silent tasks use the
+      // compact formatter. See twin formatter selection block above.
+      const threadBoundTextAfterLoad =
+        latestAfterLoad.notifyPolicy === "silent"
+          ? formatThreadBoundCompletion(latestAfterLoad)
+          : null;
+      const eventTextAfterLoad =
+        threadBoundTextAfterLoad ?? formatTaskTerminalMessage(latestAfterLoad);
       await sendMessage({
         channel: ownerAfterLoad.requesterOrigin?.channel,
         to: ownerAfterLoad.requesterOrigin?.to ?? "",

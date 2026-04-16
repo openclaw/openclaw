@@ -4,12 +4,30 @@ import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import type { MessageClass } from "../infra/outbound/message-class.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { normalizeAssistantPhase } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistant-visible-text.js";
 import { recordTaskRunProgressByRunId } from "../tasks/task-executor.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+
+// Phase 3 Discord Surface Overhaul: sanitizer profile selection for outbound
+// emissions. `final_reply` uses the canonical delivery profile; `progress`
+// uses the stricter leak-scrub profile that also strips absolute paths,
+// redacts sk-*/Bearer tokens, and removes stack-trace frames. Non-prose
+// classes (completion, internal_narration, etc.) do not pass through the
+// sanitizer because they are either system-generated strings or suppressed.
+function sanitizeEmissionText(text: string, messageClass: MessageClass): string {
+  if (messageClass === "final_reply") {
+    return sanitizeAssistantVisibleTextWithProfile(text, "delivery");
+  }
+  if (messageClass === "progress") {
+    return sanitizeAssistantVisibleTextWithProfile(text, "progress");
+  }
+  return text;
+}
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
 const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;
@@ -17,6 +35,42 @@ const DEFAULT_NO_OUTPUT_POLL_MS = 15_000;
 const DEFAULT_MAX_RELAY_LIFETIME_MS = 6 * 60 * 60 * 1000;
 const STREAM_BUFFER_MAX_CHARS = 4_000;
 const STREAM_SNIPPET_MAX_CHARS = 220;
+
+// Phase 2 Discord Surface Overhaul: provider-agnostic allowlists describing
+// which streams the relay is allowed to surface to the parent session. Events
+// from streams NOT in either allowlist are treated as internal_narration (the
+// safe default) and short-circuited before `enqueueSystemEvent` allocates.
+const KNOWN_ASSISTANT_STREAMS = new Set<string>(["assistant", "output"]);
+const KNOWN_LIFECYCLE_STREAMS = new Set<string>(["lifecycle"]);
+
+// Classify an agent-event stream emission into a MessageClass using ONLY
+// stream-name + lifecycle phase + assistant phase. Provider-specific quirks
+// (e.g. Codex's multi-agentMessage turns) are delegated to extension-owned
+// classifiers at the call site; this helper defines the provider-agnostic
+// safety net.
+export function classifyRelayStreamEmission(params: {
+  stream: string;
+  assistantPhase?: "commentary" | "final_answer";
+  lifecyclePhase?: "start" | "running" | "resumed" | "end" | "error" | "timeout" | (string & {});
+}): MessageClass {
+  if (KNOWN_ASSISTANT_STREAMS.has(params.stream)) {
+    // Assistant deltas for an intermediate/commentary phase are progress; a
+    // terminal final_answer phase is final_reply. When the upstream phase is
+    // not set we assume a mid-turn delta, i.e. progress.
+    if (params.assistantPhase === "final_answer") {
+      return "final_reply";
+    }
+    return "progress";
+  }
+  if (KNOWN_LIFECYCLE_STREAMS.has(params.stream)) {
+    if (params.lifecyclePhase === "end" || params.lifecyclePhase === "error") {
+      return "completion";
+    }
+    return "progress";
+  }
+  // Unknown stream: never surface to a user channel.
+  return "internal_narration";
+}
 
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -187,25 +241,41 @@ export function startAcpSpawnParentStreamRelay(params: {
       }),
     );
   };
-  const emit = (text: string, contextKey: string) => {
+  // Whether the parent session is bound to a thread/topic surface (e.g. a
+  // Discord thread). Thread-bound surfaces are the main leak vector for
+  // internal narration; short-circuit there to skip the enqueue allocation
+  // entirely. Outside thread-bound surfaces the classifier still suppresses
+  // internal_narration via the surface-policy predicate, but we let it flow
+  // through so the legacy session-queue behavior is preserved on main surfaces.
+  const threadBound = Boolean(params.deliveryContext?.threadId);
+  const emit = (text: string, contextKey: string, messageClass: MessageClass) => {
     const cleaned = text.trim();
     if (!cleaned) {
       return;
     }
-    logEvent("system_event", { contextKey, text: cleaned });
+    logEvent("system_event", { contextKey, text: cleaned, messageClass });
     if (!shouldSurfaceUpdates) {
       return;
     }
-    enqueueSystemEvent(cleaned, {
+    // Short-circuit for thread-bound surfaces: internal narration must never
+    // reach the thread, and skipping the enqueue avoids hot-path allocation
+    // that would only be suppressed by the surface-policy predicate later.
+    if (threadBound && messageClass === "internal_narration") {
+      return;
+    }
+    // Phase 3 Discord Surface Overhaul: sanitize text bound for user-facing
+    // surfaces. `progress` uses the stricter leak-scrub profile; `final_reply`
+    // uses the delivery profile; other classes fall through unchanged because
+    // they are either system-generated (completion banners, boot strings) or
+    // will be suppressed by the surface-policy predicate downstream.
+    const sanitized = sanitizeEmissionText(cleaned, messageClass);
+    const payload = sanitized.trim() || cleaned; // never deliver empty text
+    enqueueSystemEvent(payload, {
       sessionKey: parentSessionKey,
       contextKey,
       deliveryContext: params.deliveryContext,
       trusted: false,
-      // Phase 1 Discord Surface Overhaul: until Phase 2 wires actual per-stream
-      // classification, every stream emission defaults to internal_narration
-      // (the safe default). The classifier will promote user-visible streams
-      // to progress/final_reply in a subsequent phase.
-      messageClass: "internal_narration",
+      messageClass,
     });
     wake();
   };
@@ -217,9 +287,11 @@ export function startAcpSpawnParentStreamRelay(params: {
       lastEventAt: Date.now(),
       eventSummary: "Started.",
     });
+    // "Started ..." is a lifecycle-start progress notice, not a user reply.
     emit(
       `Started ${relayLabel} session ${params.childSessionKey}. Streaming progress updates to parent session.`,
       `${contextPrefix}:start`,
+      classifyRelayStreamEmission({ stream: "lifecycle", lifecyclePhase: "start" }),
     );
   };
 
@@ -245,17 +317,28 @@ export function startAcpSpawnParentStreamRelay(params: {
     relayLifetimeTimer = undefined;
   };
 
+  // The most-recent assistant-phase seen for the active delta buffer. When
+  // flushPending runs, we use this to distinguish intermediate progress from a
+  // final_reply snippet. Reset after each flush so a subsequent commentary
+  // pass doesn't accidentally carry over a stale `final_answer` class.
+  let pendingAssistantPhase: "commentary" | "final_answer" | undefined;
   const flushPending = () => {
     clearFlushTimer();
     if (!pendingText) {
       return;
     }
     const snippet = truncate(compactWhitespace(pendingText), STREAM_SNIPPET_MAX_CHARS);
+    const phase = pendingAssistantPhase;
     pendingText = "";
+    pendingAssistantPhase = undefined;
     if (!snippet) {
       return;
     }
-    emit(`${relayLabel}: ${snippet}`, `${contextPrefix}:progress`);
+    emit(
+      `${relayLabel}: ${snippet}`,
+      `${contextPrefix}:progress`,
+      classifyRelayStreamEmission({ stream: "assistant", assistantPhase: phase }),
+    );
   };
 
   const scheduleFlush = () => {
@@ -286,9 +369,13 @@ export function startAcpSpawnParentStreamRelay(params: {
       lastEventAt: Date.now(),
       eventSummary: `No output for ${Math.round(noOutputNoticeMs / 1000)}s. It may be waiting for input.`,
     });
+    // Stall notices are lifecycle-progress class — the child is still running,
+    // just quiet. Classify explicitly so the surface-policy predicate can
+    // route it per notifyPolicy.
     emit(
       `${relayLabel} has produced no output for ${Math.round(noOutputNoticeMs / 1000)}s. It may be waiting for interactive input.`,
       `${contextPrefix}:stall`,
+      classifyRelayStreamEmission({ stream: "lifecycle", lifecyclePhase: "running" }),
     );
   }, noOutputPollMs);
   noOutputWatcherTimer.unref?.();
@@ -297,9 +384,12 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (disposed) {
       return;
     }
+    // Relay lifetime timeout is terminal — classify as completion so the
+    // surface-policy predicate treats it like a lifecycle end.
     emit(
       `${relayLabel} stream relay timed out after ${Math.max(1, Math.round(maxRelayLifetimeMs / 1000))}s without completion.`,
       `${contextPrefix}:timeout`,
+      classifyRelayStreamEmission({ stream: "lifecycle", lifecyclePhase: "end" }),
     );
     dispose();
   }, maxRelayLifetimeMs);
@@ -345,11 +435,25 @@ export function startAcpSpawnParentStreamRelay(params: {
           lastEventAt: Date.now(),
           eventSummary: "Resumed output.",
         });
-        emit(`${relayLabel} resumed output.`, `${contextPrefix}:resumed`);
+        // Resumed notice is a running-phase progress signal.
+        emit(
+          `${relayLabel} resumed output.`,
+          `${contextPrefix}:resumed`,
+          classifyRelayStreamEmission({ stream: "lifecycle", lifecyclePhase: "resumed" }),
+        );
       }
 
       lastProgressAt = Date.now();
       pendingText += delta;
+      // Promote the pending-phase to final_answer if ANY delta in the buffer
+      // is a final_answer frame; otherwise leave it as commentary/undefined.
+      // This matches upstream behavior where codex_app_server emits a final
+      // agentMessage that carries the terminal reply.
+      if (assistantPhase === "final_answer") {
+        pendingAssistantPhase = "final_answer";
+      } else if (!pendingAssistantPhase && assistantPhase) {
+        pendingAssistantPhase = assistantPhase;
+      }
       if (pendingText.length > STREAM_BUFFER_MAX_CHARS) {
         pendingText = pendingText.slice(-STREAM_BUFFER_MAX_CHARS);
       }
@@ -377,13 +481,18 @@ export function startAcpSpawnParentStreamRelay(params: {
         startedAt != null && endedAt != null && endedAt >= startedAt
           ? endedAt - startedAt
           : undefined;
+      const completionClass = classifyRelayStreamEmission({
+        stream: "lifecycle",
+        lifecyclePhase: "end",
+      });
       if (durationMs != null) {
         emit(
           `${relayLabel} run completed in ${Math.max(1, Math.round(durationMs / 1000))}s.`,
           `${contextPrefix}:done`,
+          completionClass,
         );
       } else {
-        emit(`${relayLabel} run completed.`, `${contextPrefix}:done`);
+        emit(`${relayLabel} run completed.`, `${contextPrefix}:done`, completionClass);
       }
       dispose();
       return;
@@ -394,10 +503,14 @@ export function startAcpSpawnParentStreamRelay(params: {
       const errorText = normalizeOptionalString(
         (event.data as { error?: unknown } | undefined)?.error,
       );
+      const errorClass = classifyRelayStreamEmission({
+        stream: "lifecycle",
+        lifecyclePhase: "error",
+      });
       if (errorText) {
-        emit(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error`);
+        emit(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error`, errorClass);
       } else {
-        emit(`${relayLabel} run failed.`, `${contextPrefix}:error`);
+        emit(`${relayLabel} run failed.`, `${contextPrefix}:error`, errorClass);
       }
       dispose();
     }

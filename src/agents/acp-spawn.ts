@@ -61,6 +61,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { createRunningTaskRun } from "../tasks/task-executor.js";
+import type { TaskNotifyPolicy } from "../tasks/task-registry.types.js";
 import {
   deliveryContextFromSession,
   formatConversationTarget,
@@ -1205,6 +1206,17 @@ export async function spawnAcpDirect(
       });
     }
     parentRelay?.notifyStarted();
+    // Phase 3 Discord Surface Overhaul: thread-bound ACP spawns default to
+    // notifyPolicy="silent". Rationale: the parent stream relay is already
+    // delivering progress/final_reply into the same thread; the task-registry
+    // terminal banner ("Background task done: ...") would duplicate that into
+    // the thread. Silent notify suppresses the generic banner so the thread
+    // stays clean. Blocked outcomes escape this via the blocked-class invariant
+    // in surface-policy.ts. Threads are identified by requesterState.origin.threadId.
+    const isThreadBoundSpawn = Boolean(requesterState.origin?.threadId);
+    const threadBoundNotifyPolicy: TaskNotifyPolicy | undefined = isThreadBoundSpawn
+      ? "silent"
+      : undefined;
     const managedFlow =
       requesterInternalKey && requesterState.origin
         ? ensureAcpManagedFlow({
@@ -1220,6 +1232,7 @@ export async function spawnAcpDirect(
               mode: spawnMode,
               streamTo: "parent",
               ...(runtimeCwd ? { cwd: runtimeCwd } : {}),
+              ...(threadBoundNotifyPolicy ? { notifyPolicy: threadBoundNotifyPolicy } : {}),
             },
           })
         : undefined;
@@ -1237,6 +1250,7 @@ export async function spawnAcpDirect(
         task: params.task,
         preferMetadata: true,
         deliveryStatus: requesterInternalKey ? "pending" : "parent_missing",
+        ...(threadBoundNotifyPolicy ? { notifyPolicy: threadBoundNotifyPolicy } : {}),
         startedAt: Date.now(),
       });
     } catch (error) {

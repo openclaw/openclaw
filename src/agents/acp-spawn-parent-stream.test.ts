@@ -129,12 +129,94 @@ describe("startAcpSpawnParentStreamRelay", () => {
         trusted: false,
       }),
     );
+    // Phase 2 Discord Surface Overhaul: every relayed emission carries an
+    // explicit MessageClass. Start notice → progress, assistant delta →
+    // progress, lifecycle end → completion.
+    const classes = enqueueSystemEventMock.mock.calls.map(
+      (call) => (call[1] as { messageClass?: string } | undefined)?.messageClass,
+    );
+    expect(classes).toContain("progress");
+    expect(classes).toContain("completion");
+    expect(classes.every((cls) => cls !== "internal_narration")).toBe(true);
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
       expect.objectContaining({
         reason: "acp:spawn:stream",
         sessionKey: "agent:main:main",
       }),
     );
+    relay.dispose();
+  });
+
+  it("classifies final_answer-phase assistant deltas as final_reply", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-final-class",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-final-class",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    // Commentary deltas are suppressed upstream (covered elsewhere); emit a
+    // final_answer phase delta. The flushed snippet MUST carry MessageClass
+    // "final_reply" so the surface-policy predicate treats it as the user-
+    // visible reply rather than mid-turn progress.
+    emitAgentEvent({
+      runId: "run-final-class",
+      stream: "assistant",
+      data: { delta: "This is the final answer.", phase: "final_answer" },
+    });
+    vi.advanceTimersByTime(15);
+
+    const finalCalls = enqueueSystemEventMock.mock.calls.filter(
+      (call) => (call[1] as { messageClass?: string } | undefined)?.messageClass === "final_reply",
+    );
+    expect(finalCalls.length).toBeGreaterThan(0);
+    expect(String(finalCalls[0][0])).toContain("codex: This is the final answer.");
+    relay.dispose();
+  });
+
+  it("sanitizes leaky content on progress emissions before enqueueing", () => {
+    // Phase 3 Discord Surface Overhaul: progress-class text passes through
+    // the stricter leak-scrub profile. Absolute home paths, sk-* tokens, and
+    // Bearer secrets are redacted BEFORE the text reaches enqueueSystemEvent.
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-leak",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-leak",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    // Emit a delta that contains three leak vectors.
+    emitAgentEvent({
+      runId: "run-leak",
+      stream: "assistant",
+      data: {
+        delta:
+          "Loading /home/alice/project/secret.env with Bearer abcd1234efgh5678 and sk-live-XYZABC123456789012.",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    const emissions = enqueueSystemEventMock.mock.calls
+      .map((call) => String(call[0] ?? ""))
+      .filter((text) => text.startsWith("codex:"));
+    expect(emissions.length).toBeGreaterThan(0);
+    const leaked = emissions[0];
+    // Absolute path stripped to ~/...
+    expect(leaked).not.toContain("/home/alice/");
+    expect(leaked).toContain("~/project/secret.env");
+    // Bearer secret redacted (the word Bearer may remain, but the token must
+    // not).
+    expect(leaked).not.toMatch(/Bearer\s+abcd1234/);
+    expect(leaked).toContain("Bearer [redacted]");
+    // sk-* API key redacted.
+    expect(leaked).not.toContain("sk-live-XYZABC123456789012");
+    expect(leaked).toContain("[redacted-api-key]");
     relay.dispose();
   });
 

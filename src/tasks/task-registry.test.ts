@@ -881,6 +881,92 @@ describe("task-registry", () => {
     });
   });
 
+  it("suppresses the Background task done banner for silent thread-bound succeeded tasks", async () => {
+    // Phase 3 Discord Surface Overhaul: silent + terminal + no-summary = the
+    // parent stream relay already delivered the final reply into the thread.
+    // Adding "Background task done: ACP background task (run xxxxxxxx)." on
+    // top would duplicate noise. Verify no banner goes out to the channel
+    // AND no session event is queued as fallback.
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "discord",
+          to: "discord:channel:456",
+          threadId: "789",
+        },
+        childSessionKey: "agent:main:acp:thread-child",
+        runId: "run-thread-bound-ok",
+        task: "Investigate thread issue",
+        status: "succeeded",
+        deliveryStatus: "pending",
+        notifyPolicy: "silent",
+      });
+
+      // Let any async delivery ticks flush.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+    });
+  });
+
+  it("still surfaces a compact failure banner for silent thread-bound failures", async () => {
+    // Phase 3: failures MUST still reach the operator even when thread-bound
+    // silent is the default, so they don't get silently swallowed.
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "discord",
+        to: "discord:channel:456",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "discord",
+          to: "discord:channel:456",
+          threadId: "789",
+        },
+        childSessionKey: "agent:main:acp:thread-child-fail",
+        runId: "run-thread-bound-fail",
+        task: "Investigate thread issue",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "silent",
+      });
+
+      emitAgentEvent({
+        runId: "run-thread-bound-fail",
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          endedAt: 250,
+          error: "Permission denied.",
+        },
+      });
+
+      await waitForAssertion(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: "discord",
+            threadId: "789",
+            content: expect.stringContaining("Background task failed"),
+          }),
+        ),
+      );
+    });
+  });
+
   it("keeps distinct task records when different producers share a runId", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

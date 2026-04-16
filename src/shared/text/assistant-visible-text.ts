@@ -519,7 +519,11 @@ function stripRelevantMemoriesTags(text: string): string {
   return result;
 }
 
-export type AssistantVisibleTextSanitizerProfile = "delivery" | "history" | "internal-scaffolding";
+export type AssistantVisibleTextSanitizerProfile =
+  | "delivery"
+  | "history"
+  | "internal-scaffolding"
+  | "progress";
 
 type AssistantVisibleTextPipelineOptions = {
   finalTrim: ReasoningTagTrim;
@@ -528,6 +532,15 @@ type AssistantVisibleTextPipelineOptions = {
   reasoningMode: ReasoningTagMode;
   reasoningTrim: ReasoningTagTrim;
   stageOrder: "reasoning-first" | "reasoning-last";
+  // Phase 3 Discord Surface Overhaul: extra leak-scrub passes for
+  // progress-class surfaces. These strip absolute filesystem paths, redact
+  // common secret patterns (sk-* API keys, Bearer tokens, OpenClaw-shaped
+  // secret refs), and trim stack-trace frames that otherwise reveal user
+  // home directories and internal module layouts. Kept OFF by default to
+  // preserve delivery/history fidelity for final replies.
+  stripAbsolutePaths?: boolean;
+  redactSecrets?: boolean;
+  stripStackTraces?: boolean;
 };
 
 const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
@@ -554,7 +567,68 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
     reasoningTrim: "start",
     stageOrder: "reasoning-first",
   },
+  // Stricter profile for progress-class surfaces (in-thread interim updates,
+  // lifecycle notices). Everything `delivery` does, PLUS leak scrubbing.
+  progress: {
+    finalTrim: "both",
+    reasoningMode: "strict",
+    reasoningTrim: "both",
+    stageOrder: "reasoning-last",
+    stripAbsolutePaths: true,
+    redactSecrets: true,
+    stripStackTraces: true,
+  },
 };
+
+// Strip absolute filesystem paths that reveal user-home layouts. Both POSIX
+// (`/home/user/...`, `/Users/user/...`) and Windows (`C:\Users\user\...`)
+// paths are normalized to `~/...`. `/root` is treated as a home directory
+// itself since it is the root account's home; its suffix is preserved. Kept
+// conservative so paths inside quoted code blocks are still recognizable.
+const ABS_PATH_POSIX_USER_RE = /\/(?:home|Users)\/[^/\s"'`<>]+(\/[^\s"'`<>]*)?/g;
+const ABS_PATH_POSIX_ROOT_RE = /\/root(\/[^\s"'`<>]*)?/g;
+const ABS_PATH_WIN_RE =
+  /[a-zA-Z]:\\(?:Users|Documents and Settings)\\[^\\/\s"'`<>]+(\\[^\s"'`<>]*)?/g;
+
+function stripAbsolutePathsFromText(text: string): string {
+  let cleaned = text.replace(ABS_PATH_POSIX_USER_RE, (_match, tail: string | undefined) => {
+    return tail ? `~${tail}` : "~";
+  });
+  cleaned = cleaned.replace(ABS_PATH_POSIX_ROOT_RE, (_match, tail: string | undefined) => {
+    return tail ? `~${tail}` : "~";
+  });
+  cleaned = cleaned.replace(ABS_PATH_WIN_RE, (_match, tail: string | undefined) => {
+    return tail ? `~${tail.replace(/\\/g, "/")}` : "~";
+  });
+  return cleaned;
+}
+
+// Redact common secret-shaped strings. The patterns are intentionally narrow
+// to avoid false positives eating real prose (e.g., "bearer" appears in legal
+// text). Each pattern requires a plausible secret-shaped suffix.
+const SK_API_KEY_RE = /\bsk-(?:live|test|proj|ant-api\w+-)?[A-Za-z0-9_-]{16,}\b/g;
+const BEARER_TOKEN_RE = /\b(Bearer)\s+[A-Za-z0-9_.\-~+/=]{12,}\b/g;
+const OPENAI_TOKEN_RE = /\bOPENAI_API_KEY\s*=\s*\S+/g;
+const ANTHROPIC_TOKEN_RE = /\bANTHROPIC_API_KEY\s*=\s*\S+/g;
+const GITHUB_PAT_RE = /\bghp_[A-Za-z0-9]{20,}\b/g;
+
+function redactSecretsFromText(text: string): string {
+  let cleaned = text.replace(SK_API_KEY_RE, "[redacted-api-key]");
+  cleaned = cleaned.replace(BEARER_TOKEN_RE, "$1 [redacted]");
+  cleaned = cleaned.replace(OPENAI_TOKEN_RE, "OPENAI_API_KEY=[redacted]");
+  cleaned = cleaned.replace(ANTHROPIC_TOKEN_RE, "ANTHROPIC_API_KEY=[redacted]");
+  cleaned = cleaned.replace(GITHUB_PAT_RE, "[redacted-github-pat]");
+  return cleaned;
+}
+
+// Strip stack-trace frames (lines beginning with "    at ..." plus an adjacent
+// parenthesized path). Only target the common Node.js format; preserve user
+// prose mentioning "at the top" or similar.
+const STACK_FRAME_RE = /^\s{2,}at\s+[^\n]*?(?:\([^\n)]*\)|:\d+(?::\d+)?)\s*$/gm;
+
+function stripStackTracesFromText(text: string): string {
+  return text.replace(STACK_FRAME_RE, "");
+}
 
 function applyAssistantVisibleTextStagePipeline(
   text: string,
@@ -591,12 +665,29 @@ function applyAssistantVisibleTextStagePipeline(
     }
     return cleaned;
   };
+  // Phase 3 leak-scrub pass. Runs AFTER the XML / tool-call / memory stripping
+  // so redaction operates on prose-only text and won't paste "[redacted]"
+  // markers back into a preserved tool-call envelope.
+  const applyLeakScrub = (value: string) => {
+    let cleaned = value;
+    if (options.stripStackTraces) {
+      cleaned = stripStackTracesFromText(cleaned);
+    }
+    if (options.redactSecrets) {
+      cleaned = redactSecretsFromText(cleaned);
+    }
+    if (options.stripAbsolutePaths) {
+      cleaned = stripAbsolutePathsFromText(cleaned);
+    }
+    return cleaned;
+  };
 
-  if (options.stageOrder === "reasoning-first") {
-    return applyFinalTrim(stripNonReasoningStages(stripReasoning(text)));
-  }
+  const core =
+    options.stageOrder === "reasoning-first"
+      ? stripNonReasoningStages(stripReasoning(text))
+      : stripReasoning(stripNonReasoningStages(text));
 
-  return applyFinalTrim(stripReasoning(stripNonReasoningStages(text)));
+  return applyFinalTrim(applyLeakScrub(core));
 }
 
 export function sanitizeAssistantVisibleTextWithProfile(

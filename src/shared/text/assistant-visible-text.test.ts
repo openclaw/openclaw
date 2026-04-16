@@ -522,4 +522,91 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
       "[Tool Call: read (ID: toolu_1)]",
     );
   });
+
+  describe("progress profile (Phase 3 Discord Surface Overhaul)", () => {
+    it("strips POSIX absolute home paths to ~/...", () => {
+      const input = "Wrote /home/alice/project/src/file.ts and /Users/bob/Documents/log.txt.";
+      const cleaned = sanitizeAssistantVisibleTextWithProfile(input, "progress");
+      expect(cleaned).not.toContain("/home/alice/");
+      expect(cleaned).not.toContain("/Users/bob/");
+      expect(cleaned).toContain("~/project/src/file.ts");
+      expect(cleaned).toContain("~/Documents/log.txt");
+    });
+
+    it("strips /root/ and /tmp/ style absolute paths", () => {
+      expect(sanitizeAssistantVisibleTextWithProfile("Error at /root/x/y.log", "progress")).toBe(
+        "Error at ~/x/y.log",
+      );
+    });
+
+    it("strips Windows user profile paths", () => {
+      const input = "Opened C:\\Users\\alice\\Downloads\\secret.pdf";
+      const cleaned = sanitizeAssistantVisibleTextWithProfile(input, "progress");
+      expect(cleaned).not.toContain("C:\\Users\\alice");
+      expect(cleaned).toContain("~/Downloads/secret.pdf");
+    });
+
+    it("redacts sk-* API keys", () => {
+      expect(
+        sanitizeAssistantVisibleTextWithProfile(
+          "key=sk-live-XYZABC123456789012 still active",
+          "progress",
+        ),
+      ).toContain("[redacted-api-key]");
+    });
+
+    it("redacts Bearer tokens while preserving the Bearer keyword", () => {
+      expect(
+        sanitizeAssistantVisibleTextWithProfile("header: Bearer abcd1234efgh5678ijkl", "progress"),
+      ).toContain("Bearer [redacted]");
+    });
+
+    it("redacts OPENAI_API_KEY / ANTHROPIC_API_KEY assignments", () => {
+      expect(
+        sanitizeAssistantVisibleTextWithProfile(
+          "OPENAI_API_KEY=sk-proj-abcdefghij1234567890",
+          "progress",
+        ),
+      ).toContain("OPENAI_API_KEY=[redacted]");
+      expect(
+        sanitizeAssistantVisibleTextWithProfile("ANTHROPIC_API_KEY=sk-ant-api-foo-bar", "progress"),
+      ).toContain("ANTHROPIC_API_KEY=[redacted]");
+    });
+
+    it("redacts GitHub personal access tokens", () => {
+      expect(
+        sanitizeAssistantVisibleTextWithProfile("pat=ghp_abcdefghij1234567890ABC", "progress"),
+      ).toContain("[redacted-github-pat]");
+    });
+
+    it("strips Node.js stack-trace frames", () => {
+      const input = [
+        "TypeError: cannot read property 'foo' of undefined",
+        "    at doWork (/home/alice/src/app.js:42:10)",
+        "    at processTicksAndRejections (node:internal/process/task_queues:96:5)",
+        "Next step: retry.",
+      ].join("\n");
+      const cleaned = sanitizeAssistantVisibleTextWithProfile(input, "progress");
+      expect(cleaned).not.toContain("at doWork");
+      expect(cleaned).not.toContain("at processTicksAndRejections");
+      expect(cleaned).toContain("TypeError: cannot read property");
+      expect(cleaned).toContain("Next step: retry.");
+    });
+
+    it("leaves normal prose untouched", () => {
+      const input = "Merged branch feat/x into main.";
+      expect(sanitizeAssistantVisibleTextWithProfile(input, "progress")).toBe(input);
+    });
+
+    it("delivery profile does NOT strip absolute paths (regression guard)", () => {
+      // Final replies preserve explicit file paths users asked about — only
+      // progress-class emissions scrub them.
+      expect(
+        sanitizeAssistantVisibleTextWithProfile(
+          "Wrote /home/alice/report.txt successfully.",
+          "delivery",
+        ),
+      ).toContain("/home/alice/report.txt");
+    });
+  });
 });
