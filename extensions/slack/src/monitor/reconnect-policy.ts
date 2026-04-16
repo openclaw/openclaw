@@ -16,7 +16,7 @@ type EmitterLike = {
   off: (event: string, listener: (...args: unknown[]) => void) => unknown;
 };
 
-export function getSocketEmitter(app: unknown): EmitterLike | null {
+function getSocketModeClient(app: unknown): Record<string, unknown> | null {
   const receiver = (app as { receiver?: unknown }).receiver;
   const client =
     receiver && typeof receiver === "object"
@@ -25,8 +25,16 @@ export function getSocketEmitter(app: unknown): EmitterLike | null {
   if (!client || typeof client !== "object") {
     return null;
   }
-  const on = (client as { on?: unknown }).on;
-  const off = (client as { off?: unknown }).off;
+  return client as Record<string, unknown>;
+}
+
+export function getSocketEmitter(app: unknown): EmitterLike | null {
+  const client = getSocketModeClient(app);
+  if (!client) {
+    return null;
+  }
+  const on = client.on;
+  const off = client.off;
   if (typeof on !== "function" || typeof off !== "function") {
     return null;
   }
@@ -40,6 +48,22 @@ export function getSocketEmitter(app: unknown): EmitterLike | null {
         off as (this: unknown, event: string, listener: (...args: unknown[]) => void) => unknown
       ).call(client, event, listener),
   };
+}
+
+/**
+ * Explicitly disconnect the underlying SocketModeClient WebSocket connection.
+ * This ensures the WebSocket is torn down even when `app.stop()` does not fully
+ * clean up — preventing leaked connections from accumulating across restart cycles.
+ */
+export async function disconnectSocketModeClient(app: unknown): Promise<void> {
+  const client = getSocketModeClient(app);
+  if (!client) {
+    return;
+  }
+  const disconnect = client.disconnect;
+  if (typeof disconnect === "function") {
+    await (disconnect as () => Promise<void>).call(client);
+  }
 }
 
 export function waitForSlackSocketDisconnect(
