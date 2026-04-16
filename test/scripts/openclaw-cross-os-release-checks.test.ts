@@ -10,6 +10,7 @@ import {
   canConnectToLoopbackPort,
   buildDiscordSmokeGuildsConfig,
   buildRealUpdateEnv,
+  isPackagedDistPath,
   isImmutableReleaseRef,
   looksLikeReleaseVersionRef,
   normalizeRequestedRef,
@@ -211,6 +212,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolvePublishedInstallerUrl("darwin")).toBe("https://openclaw.ai/install.sh");
     expect(resolvePublishedInstallerUrl("linux")).toBe("https://openclaw.ai/install.sh");
     expect(resolvePublishedInstallerUrl("win32")).toBe("https://openclaw.ai/install.ps1");
+  });
+
+  it("keeps private QA lab sidecars out of generated install inventory", () => {
+    expect(isPackagedDistPath("dist/extensions/qa-channel/runtime-api.js")).toBe(true);
+    expect(isPackagedDistPath("dist/extensions/qa-lab/runtime-api.js")).toBe(false);
+    expect(isPackagedDistPath("dist/extensions/qa-lab/openclaw.plugin.json")).toBe(false);
+    expect(isPackagedDistPath("dist/extensions/slack/runtime-api.js")).toBe(true);
   });
 
   it("uses managed gateway services only on native Windows runners", () => {
