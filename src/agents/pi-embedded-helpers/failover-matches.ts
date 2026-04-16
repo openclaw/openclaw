@@ -42,6 +42,7 @@ const COMMON_AUTH_ERROR_PATTERNS = [
 
 const ZAI_BILLING_CODE_1311_RE = /"code"\s*:\s*1311\b/;
 const ZAI_AUTH_CODE_1113_RE = /"code"\s*:\s*1113\b/;
+const STATUS_INTERNAL_SERVER_ERROR_RE = /\bstatus:\s*internal server error\b/i;
 
 const ZAI_AUTH_ERROR_PATTERNS = [
   // Z.ai: error 1113 = wrong endpoint or invalid credentials (#48988)
@@ -235,5 +236,8 @@ export function isOverloadedErrorMessage(raw: string): boolean {
 }
 
 export function isServerErrorMessage(raw: string): boolean {
+  if (STATUS_INTERNAL_SERVER_ERROR_RE.test(raw)) {
+    return false;
+  }
   return matchesErrorPatterns(raw, ERROR_PATTERNS.serverError);
 }
