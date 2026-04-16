@@ -467,7 +467,8 @@ export async function runEmbeddedPiAgent(
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
       let planningOnlyRetryAttempts = 0;
-      let autoContinueTurns = 0;
+      let autoContinueCycles = 0;
+      let autoContinueAccumulatedMutation = false;
       const autoContinueConfig = resolveAgentAutoContinue(params.config, params.agentId);
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
@@ -657,13 +658,17 @@ export async function runEmbeddedPiAgent(
           const basePrompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
           const promptAdditions = [
-            ackExecutionFastPathInstruction,
-            planningOnlyRetryInstruction,
-            reasoningOnlyRetryInstruction,
-            emptyResponseRetryInstruction,
-          ].filter(
-            (value): value is string => typeof value === "string" && value.trim().length > 0,
-          );
+            ...new Set(
+              [
+                ackExecutionFastPathInstruction,
+                planningOnlyRetryInstruction,
+                reasoningOnlyRetryInstruction,
+                emptyResponseRetryInstruction,
+              ].filter(
+                (value): value is string => typeof value === "string" && value.trim().length > 0,
+              ),
+            ),
+          ];
           const prompt =
             promptAdditions.length > 0
               ? `${basePrompt}\n\n${promptAdditions.join("\n\n")}`
@@ -1799,21 +1804,43 @@ export async function runEmbeddedPiAgent(
             );
           }
           if (!incompleteTurnText && nextPlanningOnlyRetryInstruction && strictAgenticActive) {
+            // Track mutations across the entire run, not just the current
+            // attempt, so stopOnMutation cannot be bypassed by a plan-only
+            // turn following a mutating turn.
+            if (attempt.replayMetadata.hadPotentialSideEffects) {
+              autoContinueAccumulatedMutation = true;
+            }
             // Auto-continue: when enabled and budget remains, inject ACK
             // fast-path instead of blocking. This keeps the agent working
             // on planning-heavy tasks without requiring manual "continue".
+            // Each "cycle" = 1 ACK injection + up to 3 planning retries = ~4 API calls.
             if (
               autoContinueConfig.enabled &&
-              autoContinueTurns < autoContinueConfig.maxTurns &&
-              (!autoContinueConfig.stopOnMutation ||
-                !attempt.replayMetadata.hadPotentialSideEffects)
+              autoContinueCycles < autoContinueConfig.maxCycles &&
+              (!autoContinueConfig.stopOnMutation || !autoContinueAccumulatedMutation)
             ) {
-              autoContinueTurns += 1;
+              autoContinueCycles += 1;
               planningOnlyRetryAttempts = 0;
               planningOnlyRetryInstruction = ACK_EXECUTION_FAST_PATH_INSTRUCTION;
+              // Emit plan event so UI observers track the auto-continue transition.
+              const planningOnlyText = attempt.assistantTexts.join("\n\n").trim();
+              const planDetails = extractPlanningOnlyPlanDetails(planningOnlyText);
+              if (planDetails) {
+                emitAgentPlanEvent({
+                  runId: params.runId,
+                  ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+                  data: {
+                    phase: "update",
+                    title: "Auto-continuing — agent proposed a plan",
+                    explanation: planDetails.explanation,
+                    steps: planDetails.steps,
+                    source: "auto_continue",
+                  },
+                });
+              }
               log.info(
                 `auto-continue active: runId=${params.runId} sessionId=${params.sessionId} ` +
-                  `turn=${autoContinueTurns}/${autoContinueConfig.maxTurns} — injecting ACK fast-path`,
+                  `cycle=${autoContinueCycles}/${autoContinueConfig.maxCycles} — injecting ACK fast-path`,
               );
               continue;
             }
