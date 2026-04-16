@@ -3,6 +3,13 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status"]);
+
+/**
+ * EX_CONFIG (78) from sysexits.h — tells supervisors (systemd, launchd) to
+ * stop restarting instead of entering a crash loop that can render hosts
+ * unresponsive.  Matches the convention already used in gateway run.ts.
+ */
+const EXIT_CONFIG_ERROR = 78;
 const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "status",
   "probe",
@@ -120,7 +127,7 @@ export async function ensureConfigReady(params: {
     `${muted("Run:")} ${commandText(formatCliCommand("openclaw doctor --fix"))}`,
   );
   if (!allowInvalid) {
-    params.runtime.exit(1);
+    params.runtime.exit(EXIT_CONFIG_ERROR);
   }
 }
 

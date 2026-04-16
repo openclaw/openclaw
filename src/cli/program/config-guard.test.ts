@@ -111,7 +111,7 @@ describe("ensureConfigReady", () => {
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Config invalid"));
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("doctor --fix"));
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.exit).toHaveBeenCalledWith(78);
   });
 
   it("does not exit for invalid config on allowlisted commands", async () => {
