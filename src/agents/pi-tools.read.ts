@@ -686,7 +686,7 @@ function toolAcceptsCanonicalEditParams(tool: AnyAgentTool): boolean {
   const schema = readToolParameterSchema(tool);
   const properties = readToolSchemaProperties(schema);
   const required = Array.isArray(schema?.required) ? schema.required : [];
-  return Boolean(
+  return (
     (properties && Object.prototype.hasOwnProperty.call(properties, "edits")) ||
       required.includes("edits"),
   );
@@ -696,7 +696,7 @@ function toolAcceptsLegacySingleEditParams(tool: AnyAgentTool): boolean {
   const schema = readToolParameterSchema(tool);
   const properties = readToolSchemaProperties(schema);
   const required = new Set(Array.isArray(schema?.required) ? schema.required : []);
-  return Boolean(
+  return (
     (properties &&
       Object.prototype.hasOwnProperty.call(properties, "oldText") &&
       Object.prototype.hasOwnProperty.call(properties, "newText")) ||
