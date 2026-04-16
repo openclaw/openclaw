@@ -308,6 +308,12 @@ const KIND_PREFIX_TO_CHAT_TYPE: Readonly<Record<string, ChatType>> = {
   "pm:": "direct",
 };
 
+// Matches any `<alpha-token>:` prefix. Real-world peer ids (Matrix `!`/`@`,
+// IRC `#`, Slack/Discord/LINE alphanumerics, numeric Telegram/WhatsApp, or
+// email-style `user@server`) never start with a lowercase-alpha token followed
+// by `:`, so this cleanly peels namespace and kind prefixes without risking
+// the raw id itself. When a peeled token maps to a known ChatType, we also
+// record it as an inferred peerKind.
 const GENERIC_PREFIX_PATTERN = /^[a-z][a-z0-9_-]*:/i;
 
 function extractRequesterPeer(

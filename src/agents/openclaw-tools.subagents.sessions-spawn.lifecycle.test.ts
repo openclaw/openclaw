@@ -754,6 +754,51 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(spawnAccountId).toBe("bot-alpha-line");
   });
 
+  it("sessions_spawn strips conversation: prefix for Teams-style targets", async () => {
+    let spawnAccountId: string | undefined;
+    const rawConversationId = "19:example-conversation@thread.v2";
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      messages: { queue: { debounceMs: 0 } },
+      agents: { defaults: { subagents: { allowAgents: ["bot-alpha"] } } },
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "msteams",
+            peer: { kind: "channel", id: rawConversationId },
+            accountId: "bot-alpha-teams",
+          },
+        },
+      ],
+    });
+    setupSessionsSpawnGatewayMock({
+      onAgentSubagentSpawn: (params) => {
+        const rec = params as { accountId?: string } | undefined;
+        spawnAccountId = rec?.accountId;
+      },
+    });
+
+    // Teams inbound context sets OriginatingTo to `conversation:<id>`. With the
+    // generic prefix peeler in extractRequesterPeer, the bound-account lookup
+    // should still find the binding keyed on the raw conversation id.
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "msteams",
+      agentAccountId: "bot-beta",
+      agentTo: `conversation:${rawConversationId}`,
+    });
+
+    const result = await tool.execute("call-teams-conversation", {
+      task: "do thing",
+      agentId: "bot-alpha",
+      cleanup: "keep",
+    });
+    expect(result.details).toMatchObject({ status: "accepted", runId: expect.any(String) });
+    expect(spawnAccountId).toBe("bot-alpha-teams");
+  });
+
   it("sessions_spawn preserves the caller's account for same-agent subagent spawns", async () => {
     let spawnAccountId: string | undefined;
     const room = "!someRoom:example.org";
