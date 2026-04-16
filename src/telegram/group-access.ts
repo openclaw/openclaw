@@ -5,6 +5,7 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "../config/types.js";
+import { resolveAccessMode } from "../security/access-mode.js";
 import { isSenderAllowed, type NormalizedAllowFrom } from "./bot-access.js";
 import { firstDefined } from "./bot-access.js";
 
@@ -95,13 +96,23 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
     params.telegramCfg.groupEnabled === false ||
     (params.telegramCfg.groupEnabled == null &&
       params.cfg.channels?.defaults?.groupEnabled === false);
+  // When accessMode is "subscribed", default group policy to "allowlist" so
+  // only paired members can talk in groups (mirrors DM pairing requirement).
+  const accessModeDefault =
+    resolveAccessMode({
+      accessMode: params.telegramCfg.accessMode,
+      dmPolicy: params.telegramCfg.dmPolicy,
+    }) === "subscribed"
+      ? "allowlist"
+      : "open";
+
   const fallbackPolicy = groupDisabledByToggle
     ? "disabled"
     : (firstDefined(
         params.telegramCfg.groupPolicy,
         params.cfg.channels?.defaults?.groupPolicy,
-        "open",
-      ) ?? "open");
+        accessModeDefault,
+      ) ?? accessModeDefault);
   const groupPolicy = groupDisabledByToggle
     ? "disabled"
     : params.useTopicAndGroupOverrides
@@ -110,8 +121,8 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
           params.groupConfig?.groupPolicy,
           params.telegramCfg.groupPolicy,
           params.cfg.channels?.defaults?.groupPolicy,
-          "open",
-        ) ?? "open")
+          accessModeDefault,
+        ) ?? accessModeDefault)
       : fallbackPolicy;
 
   if (!params.isGroup || !params.enforcePolicy) {

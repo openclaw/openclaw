@@ -400,8 +400,14 @@ export const registerTelegramHandlers = ({
     });
     if (!baseAccess.allowed) {
       if (baseAccess.reason === "group-disabled") {
-        logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
-        return true;
+        // When groupEnabled:false, owner (allowFrom) can still message the bot in groups
+        const ownerIds = (telegramCfg.allowFrom ?? []).map((id) => String(id));
+        if (ownerIds.length > 0 && senderId && ownerIds.includes(senderId)) {
+          // fall through — owner bypasses group-disabled
+        } else {
+          logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
+          return true;
+        }
       }
       if (baseAccess.reason === "topic-disabled") {
         logVerbose(
