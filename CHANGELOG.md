@@ -121,8 +121,6 @@ Docs: https://docs.openclaw.ai
 - Dreaming/memory-core: use the ingestion day, not the source file day, for daily recall dedupe so repeat sweeps of the same daily note can increment `dailyCount` across days instead of stalling at `1`. (#67091) Thanks @Bartok9.
 - Node-host/tools.exec: let approval binding distinguish known native binaries from mutable shell payload files, while still fail-closing unknown or racy file probes so absolute-path node-host commands like `/usr/bin/whoami` no longer get rejected as unsafe interpreter/runtime commands. (#66731) Thanks @tmimmanuel.
 
-||||||| parent of 6258bfaee8 (memory: document session corpus envelope stripping)
-
 ## 2026.4.15-beta.1
 
 ### Changes
@@ -136,6 +134,7 @@ Docs: https://docs.openclaw.ai
 - Docs/showcase: add a scannable hero, complete section jump links, and a responsive video grid for community examples. (#48493) Thanks @jchopard69.
 
 ### Fixes
+
 - Security/approvals: redact secrets in exec approval prompts so inline approval review can no longer leak credential material in rendered prompt content. (#61077, #64790)
 - CLI/configure: re-read the persisted config hash after writes so config updates stop failing with stale-hash races. (#64188, #66528)
 - CLI/update: prune stale packaged `dist` chunks after npm upgrades and keep downgrade/verify inventory checks compat-safe so global upgrades stop failing on stale chunk imports. (#66959) Thanks @obviyus.
@@ -179,6 +178,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/chat: keep optimistic user message cards visible during active sends by deferring same-session history reloads until the active run ends, including aborted and errored runs. (#66997) Thanks @scotthuang and @vincentkoc.
 - Media/Slack: allow host-local CSV and Markdown uploads only when the fallback buffer actually decodes as text, so real plain-text files work without letting opaque non-text blobs renamed to `.csv` or `.md` slip past the host-read guard. (#67047) Thanks @Unayung.
 - Ollama/onboarding: split setup into `Cloud + Local`, `Cloud only`, and `Local only`, support direct `OLLAMA_API_KEY` cloud setup without a local daemon, and keep Ollama web search on the local-host path. (#67005) Thanks @obviyus.
+
 ## 2026.4.14
 
 ### Changes
