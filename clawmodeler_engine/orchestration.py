@@ -126,7 +126,7 @@ def write_run(workspace: Path, run_id: str, scenarios: list[str]) -> tuple[Path,
     stack_result = run_full_stack(workspace, run_id, receipt, scenarios, paths)
     manifest = stamp_contract(
         {
-            "manifest_version": "1.0.0",
+            "manifest_version": CURRENT_MANIFEST_VERSION,
             "run_id": run_id,
             "created_at": utc_now(),
             "app": {"name": "ClawModeler", "engine_version": ENGINE_VERSION},
