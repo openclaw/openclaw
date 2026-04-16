@@ -10,11 +10,19 @@ import { readJsonBody } from "./hooks.js";
  */
 export function setDefaultSecurityHeaders(
   res: ServerResponse,
-  opts?: { strictTransportSecurity?: string },
+  opts?: { strictTransportSecurity?: string; permissionsPolicy?: string | false },
 ) {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  const permissionsPolicy =
+    opts?.permissionsPolicy === false
+      ? undefined
+      : typeof opts?.permissionsPolicy === "string" && opts.permissionsPolicy.length > 0
+        ? opts.permissionsPolicy
+        : "camera=(), geolocation=()";
+  if (permissionsPolicy) {
+    res.setHeader("Permissions-Policy", permissionsPolicy);
+  }
   const strictTransportSecurity = opts?.strictTransportSecurity;
   if (typeof strictTransportSecurity === "string" && strictTransportSecurity.length > 0) {
     res.setHeader("Strict-Transport-Security", strictTransportSecurity);

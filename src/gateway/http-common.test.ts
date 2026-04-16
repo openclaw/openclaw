@@ -18,10 +18,24 @@ describe("setDefaultSecurityHeaders", () => {
   it("sets Permissions-Policy", () => {
     const { res, setHeader } = makeMockHttpResponse();
     setDefaultSecurityHeaders(res);
+    expect(setHeader).toHaveBeenCalledWith("Permissions-Policy", "camera=(), geolocation=()");
+  });
+
+  it("allows overriding Permissions-Policy", () => {
+    const { res, setHeader } = makeMockHttpResponse();
+    setDefaultSecurityHeaders(res, {
+      permissionsPolicy: "camera=(), microphone=(self), geolocation=()",
+    });
     expect(setHeader).toHaveBeenCalledWith(
       "Permissions-Policy",
-      "camera=(), microphone=(), geolocation=()",
+      "camera=(), microphone=(self), geolocation=()",
     );
+  });
+
+  it("does not set Permissions-Policy when explicitly disabled", () => {
+    const { res, setHeader } = makeMockHttpResponse();
+    setDefaultSecurityHeaders(res, { permissionsPolicy: false });
+    expect(setHeader).not.toHaveBeenCalledWith("Permissions-Policy", expect.anything());
   });
 
   it("sets Strict-Transport-Security when provided", () => {

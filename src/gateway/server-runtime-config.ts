@@ -27,6 +27,7 @@ export type GatewayRuntimeConfig = {
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
+  permissionsPolicyHeader?: string | false;
   controlUiBasePath: string;
   controlUiRoot?: string;
   resolvedAuth: ResolvedGatewayAuth;
@@ -95,6 +96,13 @@ export async function resolveGatewayRuntimeConfig(params: {
       : typeof strictTransportSecurityConfig === "string" &&
           strictTransportSecurityConfig.trim().length > 0
         ? strictTransportSecurityConfig.trim()
+        : undefined;
+  const permissionsPolicyConfig = params.cfg.gateway?.http?.securityHeaders?.permissionsPolicy;
+  const permissionsPolicyHeader =
+    permissionsPolicyConfig === false
+      ? false
+      : typeof permissionsPolicyConfig === "string" && permissionsPolicyConfig.trim().length > 0
+        ? permissionsPolicyConfig.trim()
         : undefined;
   const controlUiBasePath = normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath);
   const controlUiRootRaw = params.cfg.gateway?.controlUi?.root;
@@ -174,6 +182,7 @@ export async function resolveGatewayRuntimeConfig(params: {
       ? { ...openResponsesConfig, enabled: openResponsesEnabled }
       : undefined,
     strictTransportSecurityHeader,
+    permissionsPolicyHeader,
     controlUiBasePath,
     controlUiRoot,
     resolvedAuth,

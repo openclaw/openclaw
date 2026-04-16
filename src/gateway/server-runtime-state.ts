@@ -60,6 +60,7 @@ export async function createGatewayRuntimeState(params: {
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
+  permissionsPolicyHeader?: string | false;
   resolvedAuth: ResolvedGatewayAuth;
   getResolvedAuth: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
@@ -182,6 +183,7 @@ export async function createGatewayRuntimeState(params: {
         openResponsesEnabled: params.openResponsesEnabled,
         openResponsesConfig: params.openResponsesConfig,
         strictTransportSecurityHeader: params.strictTransportSecurityHeader,
+        permissionsPolicyHeader: params.permissionsPolicyHeader,
         handleHooksRequest,
         handlePluginRequest,
         shouldEnforcePluginGatewayAuth,
