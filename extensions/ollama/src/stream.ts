@@ -227,8 +227,12 @@ export function buildOllamaChatRequest(params: {
   options?: Record<string, unknown>;
   stream?: boolean;
 }): OllamaChatRequest {
+  // Strip ollama/ prefix if present - Ollama API expects bare model ID
+  const normalizedModelId = params.modelId.startsWith("ollama/")
+    ? params.modelId.slice(7)
+    : params.modelId;
   return {
-    model: params.modelId,
+    model: normalizedModelId,
     messages: params.messages,
     stream: params.stream ?? true,
     ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildAssistantMessage, createOllamaStreamFn } from "./stream.js";
+import { buildAssistantMessage, buildOllamaChatRequest, createOllamaStreamFn } from "./stream.js";
 
 function makeOllamaResponse(params: {
   content?: string;
@@ -224,5 +224,31 @@ describe("createOllamaStreamFn thinking events", () => {
     // Text content index should be 0 (no thinking block)
     const textStart = events.find((e) => e.type === "text_start") as { contentIndex?: number };
     expect(textStart?.contentIndex).toBe(0);
+  });
+});
+
+describe("buildOllamaChatRequest", () => {
+  it("strips ollama/ prefix from modelId", () => {
+    const request = buildOllamaChatRequest({
+      modelId: "ollama/qwen3:14b-q8_0",
+      messages: [{ role: "user", content: "hello" }],
+    });
+    expect(request.model).toBe("qwen3:14b-q8_0");
+  });
+
+  it("preserves modelId without ollama/ prefix", () => {
+    const request = buildOllamaChatRequest({
+      modelId: "qwen3:14b-q8_0",
+      messages: [{ role: "user", content: "hello" }],
+    });
+    expect(request.model).toBe("qwen3:14b-q8_0");
+  });
+
+  it("handles modelId with only ollama/ prefix", () => {
+    const request = buildOllamaChatRequest({
+      modelId: "ollama/llama3.1",
+      messages: [{ role: "user", content: "hello" }],
+    });
+    expect(request.model).toBe("llama3.1");
   });
 });
