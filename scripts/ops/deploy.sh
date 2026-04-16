@@ -116,9 +116,16 @@ deploy_server() {
   for agent in $agents; do
     local env_file="${AGENTS_DIR}/${agent}/docker.env"
 
-    # Save current image for rollback
+    # Save current image for rollback and overwrite detection
     local prev_image
     prev_image=$(ssh "$server" "grep '^OPENCLAW_IMAGE=' '${env_file}' 2>/dev/null | cut -d= -f2" || echo "")
+
+    # Warn if we're overwriting a different image than what we're deploying
+    if [[ -n "$prev_image" && "$prev_image" != "$IMAGE" ]]; then
+      echo "  ⚠️  WARNING: ${agent} is currently running a different image"
+      echo "       Running: ${prev_image}"
+      echo "       New:     ${IMAGE}"
+    fi
 
     # Update image
     ssh "$server" "sed -i 's|^OPENCLAW_IMAGE=.*|OPENCLAW_IMAGE=${IMAGE}|' '${env_file}'"

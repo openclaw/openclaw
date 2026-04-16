@@ -54,6 +54,7 @@ jobs:
           tags=()
           if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
             tags+=("${IMAGE}:main-amd64")
+            tags+=("${IMAGE}:latest-amd64")
           fi
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
@@ -113,6 +114,7 @@ jobs:
           tags=()
           if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
             tags+=("${IMAGE}:main-arm64")
+            tags+=("${IMAGE}:latest-arm64")
           fi
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
@@ -168,6 +170,7 @@ jobs:
           tags=()
           if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
             tags+=("${IMAGE}:main")
+            tags+=("${IMAGE}:latest")
           fi
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
