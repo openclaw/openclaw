@@ -45,6 +45,30 @@ interface AssistantContentBlock {
   arguments?: unknown;
 }
 
+/**
+ * Flatten content to a plain text string for Databricks/OpenAI wire format.
+ * Handles plain strings, block arrays (filtering for text-type blocks), and
+ * unknown shapes by falling back to empty string.
+ */
+function extractTextContent(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return (content as Array<{ type?: string; text?: string }>)
+    .filter(
+      (part): part is { type: string; text: string } =>
+        typeof part === "object" &&
+        part !== null &&
+        part.type === "text" &&
+        typeof part.text === "string",
+    )
+    .map((part) => part.text)
+    .join("");
+}
+
 function mapDatabricksMessages(context: {
   messages: unknown[];
   systemPrompt?: string;
@@ -188,9 +212,18 @@ function mapDatabricksMessages(context: {
       continue;
     }
 
+    // For tool-result messages, flatten content block arrays to a text string
+    // so the outbound payload matches the OpenAI/Databricks text-only expectation.
+    let content: string | null;
+    if (role === "tool") {
+      content = extractTextContent(msg.content);
+    } else {
+      content = typeof msg.content === "string" ? msg.content : null;
+    }
+
     result.push({
       role,
-      content: msg.content as string | unknown[],
+      content,
       ...(msg.toolCallId ? { tool_call_id: msg.toolCallId } : {}),
       ...(msg.name ? { name: msg.name } : {}),
     });
@@ -307,9 +340,20 @@ export default definePluginEntry({
     const originalRunNonInteractive = defaultAuth.runNonInteractive;
     defaultAuth.runNonInteractive = async (ctx) => {
       const opts = ctx.opts as Record<string, unknown> | undefined;
-      const baseUrl = normalizeDatabricksBaseUrl(
-        typeof opts?.databricksBaseUrl === "string" ? opts.databricksBaseUrl : undefined,
-      );
+      const configProviders = (
+        ctx.config as Record<string, unknown> & {
+          models?: { providers?: Record<string, { baseUrl?: string }> };
+        }
+      ).models?.providers;
+      const savedBaseUrl = configProviders?.[PROVIDER_ID]?.baseUrl;
+
+      const baseUrl =
+        normalizeDatabricksBaseUrl(
+          typeof opts?.databricksBaseUrl === "string" ? opts.databricksBaseUrl : undefined,
+        ) ??
+        // Fallback to an already-configured base URL so key-rotation/automation flows
+        // that omit --databricks-base-url still succeed when the URL is persisted.
+        normalizeDatabricksBaseUrl(typeof savedBaseUrl === "string" ? savedBaseUrl : undefined);
 
       // Reject incomplete non-interactive setup: baseUrl is required for Databricks to work.
       // Failing early here prevents an invalid config from being saved and deferring the
@@ -511,16 +555,12 @@ export default definePluginEntry({
 
                 const decoder = new TextDecoder();
                 let buffer = "";
-                let doneSent = false;
 
                 const toolCallIndexMap = new Map<number, number>();
 
-                while (true) {
+                outerLoop: while (true) {
                   const { done, value } = await reader.read();
-                  if (done || doneSent) {
-                    if (doneSent) {
-                      await reader.cancel().catch(() => {});
-                    }
+                  if (done) {
                     break;
                   }
 
@@ -535,16 +575,24 @@ export default definePluginEntry({
                     }
                     const data = trimmed.slice(6);
                     if (data === "[DONE]") {
-                      doneSent = true;
-                      break;
+                      await reader.cancel().catch(() => {});
+                      break outerLoop;
                     }
 
-                    const json = JSON.parse(data);
-                    const choice = json.choices?.[0];
-                    const delta = choice?.delta;
+                    let json: Record<string, unknown>;
+                    try {
+                      json = JSON.parse(data);
+                    } catch {
+                      continue;
+                    }
+                    const choice = (
+                      json.choices as Array<Record<string, unknown>> | undefined
+                    )?.[0];
+                    const delta = choice?.delta as Record<string, unknown> | undefined;
                     const blockIndex = () => (output.content as Array<unknown>).length - 1;
 
                     if (delta?.content) {
+                      const deltaContent = delta.content as string;
                       const contentList = output.content as Array<{ type: string; text: string }>;
                       if (
                         contentList.length === 0 ||
@@ -558,17 +606,21 @@ export default definePluginEntry({
                         });
                       }
                       const textBlock = contentList[contentList.length - 1] as { text: string };
-                      textBlock.text += delta.content;
+                      textBlock.text += deltaContent;
                       stream.push({
                         type: "text_delta",
                         contentIndex: blockIndex(),
-                        delta: delta.content,
+                        delta: deltaContent,
                         partial: output,
                       });
                     }
 
                     if (delta?.tool_calls) {
-                      for (const toolCall of delta.tool_calls) {
+                      for (const toolCall of delta.tool_calls as Array<{
+                        index?: number;
+                        id?: string;
+                        function?: { name?: string; arguments?: string };
+                      }>) {
                         const contentList = output.content as Array<Record<string, unknown>>;
                         const sseIndex = typeof toolCall.index === "number" ? toolCall.index : 0;
 
@@ -609,14 +661,15 @@ export default definePluginEntry({
                     }
 
                     if (json.usage) {
+                      const jsonUsage = json.usage as Record<string, number>;
                       const usage = output.usage as Record<string, number>;
-                      usage.input = json.usage.prompt_tokens;
-                      usage.output = json.usage.completion_tokens;
-                      usage.totalTokens = json.usage.total_tokens;
+                      usage.input = jsonUsage.prompt_tokens;
+                      usage.output = jsonUsage.completion_tokens;
+                      usage.totalTokens = jsonUsage.total_tokens;
                     }
 
                     if (choice?.finish_reason) {
-                      output.stopReason = mapDatabricksStopReason(choice.finish_reason);
+                      output.stopReason = mapDatabricksStopReason(choice.finish_reason as string);
                     }
                   }
                 }
