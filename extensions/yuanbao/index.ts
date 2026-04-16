@@ -1,14 +1,11 @@
 import {
   defineBundledChannelEntry,
   loadBundledEntryExportSync,
-  type OpenClawPluginApi,
 } from "openclaw/plugin-sdk/channel-entry-contract";
-import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 
-/**
- * 通过 loadBundledEntryExportSync 懒加载注册工具
- */
-function registerTools(api: OpenClawPluginApi): void {
+/** 懒加载注册工具 */
+function registerTools(api: OpenClawPluginApi) {
   const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
     specifier: "./api.js",
     exportName: "registerTools",
@@ -16,19 +13,17 @@ function registerTools(api: OpenClawPluginApi): void {
   register(api);
 }
 
-/**
- * 通过 loadBundledEntryExportSync 懒加载注册升级命令
- */
-function registerUpgradeCommands(api: OpenClawPluginApi): void {
-  const yuanbaoUpgradeCommand = loadBundledEntryExportSync<OpenClawPluginCommandDefinition>(
+/** 懒加载注册升级命令 */
+function registerUpgradeCommands(api: OpenClawPluginApi) {
+  const yuanbaoUpgradeCommand = loadBundledEntryExportSync<Parameters<OpenClawPluginApi["registerCommand"]>[0]>(
     import.meta.url,
     { specifier: "./api.js", exportName: "yuanbaoUpgradeCommand" },
   );
-  const yuanbaobotUpgradeCommand = loadBundledEntryExportSync<OpenClawPluginCommandDefinition>(
+  const yuanbaobotUpgradeCommand = loadBundledEntryExportSync<Parameters<OpenClawPluginApi["registerCommand"]>[0]>(
     import.meta.url,
     { specifier: "./api.js", exportName: "yuanbaobotUpgradeCommand" },
   );
-  const logUploadCommandDefinition = loadBundledEntryExportSync<OpenClawPluginCommandDefinition>(
+  const logUploadCommandDefinition = loadBundledEntryExportSync<Parameters<OpenClawPluginApi["registerCommand"]>[0]>(
     import.meta.url,
     { specifier: "./api.js", exportName: "logUploadCommandDefinition" },
   );
@@ -38,10 +33,8 @@ function registerUpgradeCommands(api: OpenClawPluginApi): void {
   api.registerCommand(logUploadCommandDefinition);
 }
 
-/**
- * 通过 loadBundledEntryExportSync 懒加载初始化内置表情缓存
- */
-function initBuiltinStickers(): void {
+/** 懒加载初始化内置表情缓存 */
+function initBuiltinStickers() {
   const init = loadBundledEntryExportSync<() => void>(import.meta.url, {
     specifier: "./api.js",
     exportName: "initBuiltinStickers",
@@ -49,10 +42,8 @@ function initBuiltinStickers(): void {
   init();
 }
 
-/**
- * 通过 loadBundledEntryExportSync 懒加载初始化Environment variables
- */
-function initEnv(api: OpenClawPluginApi): void {
+/** 懒加载初始化环境变量 */
+function initEnv(api: OpenClawPluginApi) {
   const init = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
     specifier: "./api.js",
     exportName: "initEnv",
@@ -60,10 +51,8 @@ function initEnv(api: OpenClawPluginApi): void {
   init(api);
 }
 
-/**
- * 通过 loadBundledEntryExportSync 懒加载初始化日志
- */
-function initLogger(api: OpenClawPluginApi): void {
+/** 懒加载初始化日志 */
+function initLogger(api: OpenClawPluginApi) {
   const init = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
     specifier: "./api.js",
     exportName: "initLogger",
@@ -71,10 +60,8 @@ function initLogger(api: OpenClawPluginApi): void {
   init(api);
 }
 
-/**
- * 通过 loadBundledEntryExportSync 懒加载注册生命周期 hook
- */
-function registerHooks(api: OpenClawPluginApi): void {
+/** 懒加载注册生命周期 hook */
+function registerHooks(api: OpenClawPluginApi) {
   const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
     specifier: "./api.js",
     exportName: "registerYuanbaoHooks",
@@ -95,7 +82,7 @@ export default defineBundledChannelEntry({
     specifier: "./runtime-api.js",
     exportName: "setYuanbaoRuntime",
   },
-  registerFull(api: OpenClawPluginApi) {
+  registerFull(api) {
     initEnv(api);
     initLogger(api);
 

@@ -12,7 +12,9 @@ import type {
   YuanbaoInboundMessage,
   YuanbaoLogInfoExt,
   YuanbaoMsgBodyElement,
+  ImMsgSeq,
 } from "../../types.js";
+import { EnumCLawMsgType } from "../../types.js";
 import bizDescriptor from "./proto/biz.json" with { type: "json" };
 import type {
   WsSendC2CMessageData,
@@ -30,6 +32,62 @@ import type {
 } from "./types.js";
 
 // 模块级Logger instance
+
+// ============ Protobuf 解码结果内部类型 ============
+
+/** InboundMessagePush 解码结果（camelCase 字段） */
+type PBInboundMessage = {
+  callbackCommand?: string;
+  fromAccount?: string;
+  toAccount?: string;
+  senderNickname?: string;
+  groupId?: string;
+  groupCode?: string;
+  groupName?: string;
+  msgSeq?: number;
+  msgRandom?: number;
+  msgTime?: number;
+  msgKey?: string;
+  msgId?: string;
+  msgBody?: Array<Record<string, unknown>>;
+  cloudCustomData?: string;
+  eventTime?: number;
+  botOwnerId?: string;
+  recallMsgSeqList?: ImMsgSeq[];
+  clawMsgType?: EnumCLawMsgType;
+  privateFromGroupCode?: string;
+  logExt?: { traceId?: string };
+};
+
+/** 通用响应解码结果（code + message） */
+type PBCodeMessageRsp = {
+  code?: number;
+  message?: string;
+};
+
+/** 通用响应解码结果（code + msg） */
+type PBCodeMsgRsp = {
+  code?: number;
+  msg?: string;
+};
+
+/** QueryGroupInfoRsp 解码结果 */
+type PBQueryGroupInfoRsp = PBCodeMsgRsp & {
+  groupInfo?: {
+    groupName?: string;
+    groupOwnerUserId?: string;
+    groupOwnerNickname?: string;
+    groupSize?: number;
+  };
+};
+
+/** GetGroupMemberListRsp 解码结果 */
+type PBGetGroupMemberListRsp = PBCodeMessageRsp & {
+  memberList?: Array<{ userId?: string; nickName?: string; userType?: number }>;
+};
+
+/** SyncInformationRsp 解码结果 */
+type PBSyncInformationRsp = PBCodeMsgRsp;
 
 // ============ Root 缓存 ============
 
@@ -90,12 +148,11 @@ export function encodeBizPB(key: string, value: Record<string, unknown>): Uint8A
  * @param data - 二进制数据
  * @returns 解码后的对象，失败返回 null
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- protobuf 解码返回动态类型
-export function decodeBizPB(key: string, data: Uint8Array | ArrayBuffer): any {
+export function decodeBizPB<T = Record<string, unknown>>(key: string, data: Uint8Array | ArrayBuffer): T | null {
   try {
     const buf = data instanceof Uint8Array ? data : new Uint8Array(data);
     const type = getRoot().lookupType(key);
-    return type.decode(buf);
+    return type.decode(buf) as unknown as T;
   } catch {
     // protobuf decode failure is expected (data may not match the message type), silently return null
     return null;
@@ -110,8 +167,7 @@ export function decodeBizPB(key: string, data: Uint8Array | ArrayBuffer): any {
  * @param elements - TS 格式的Message body元素数组
  * @returns protobuf 格式的Message body数组
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- protobuf 编码需要动态类型
-export function toProtoMsgBody(elements: YuanbaoMsgBodyElement[]): any[] {
+export function toProtoMsgBody(elements: YuanbaoMsgBodyElement[]): Record<string, unknown>[] {
   return elements.map((el) => {
     const c = el.msg_content;
     return {
@@ -140,13 +196,12 @@ export function toProtoMsgBody(elements: YuanbaoMsgBodyElement[]): any[] {
  * @param elements - protobuf 格式的Message body数组
  * @returns TS 格式的Message body元素数组
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- protobuf 解码返回动态类型
-export function fromProtoMsgBody(elements: any[]): YuanbaoMsgBodyElement[] {
+export function fromProtoMsgBody(elements: Array<Record<string, unknown>>): YuanbaoMsgBodyElement[] {
   if (!elements || !Array.isArray(elements)) {
     return [];
   }
   return elements.map((el) => {
-    const mc = el.msgContent;
+    const mc = el.msgContent as Record<string, unknown> | undefined;
     const content: Record<string, unknown> = {};
 
     if (mc?.text) {
@@ -170,7 +225,7 @@ export function fromProtoMsgBody(elements: any[]): YuanbaoMsgBodyElement[] {
     if (mc?.sound) {
       content.sound = mc.sound;
     }
-    if (mc?.imageInfoArray && mc.imageInfoArray.length > 0) {
+    if (mc?.imageInfoArray && (mc.imageInfoArray as unknown[]).length > 0) {
       content.image_info_array = mc.imageInfoArray;
     }
     if (mc?.index) {
@@ -187,7 +242,7 @@ export function fromProtoMsgBody(elements: any[]): YuanbaoMsgBodyElement[] {
     }
 
     return {
-      msg_type: el.msgType || "",
+      msg_type: (el.msgType as string) || "",
       msg_content: content,
     };
   });
@@ -292,7 +347,7 @@ export function encodeSendGroupHeartbeatReq(data: WsSendGroupHeartbeatData): Uin
  * @returns 解码后的入站消息对象，失败返回 null
  */
 export function decodeInboundMessage(data: Uint8Array | ArrayBuffer): YuanbaoInboundMessage | null {
-  const decoded = decodeBizPB(BIZ_MSG_TYPES.InboundMessagePush, data);
+  const decoded = decodeBizPB<PBInboundMessage>(BIZ_MSG_TYPES.InboundMessagePush, data);
   if (!decoded) {
     return null;
   }
@@ -345,7 +400,7 @@ export function decodeSendC2CMessageRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
 ): WsSendMessageResponse | null {
-  const decoded = decodeBizPB(BIZ_MSG_TYPES.SendC2CMessageRsp, data);
+  const decoded = decodeBizPB<PBCodeMessageRsp>(BIZ_MSG_TYPES.SendC2CMessageRsp, data);
   if (!decoded) {
     return null;
   }
@@ -367,7 +422,7 @@ export function decodeSendGroupMessageRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
 ): WsSendMessageResponse | null {
-  const decoded = decodeBizPB(BIZ_MSG_TYPES.SendGroupMessageRsp, data);
+  const decoded = decodeBizPB<PBCodeMessageRsp>(BIZ_MSG_TYPES.SendGroupMessageRsp, data);
   if (!decoded) {
     return null;
   }
@@ -416,7 +471,7 @@ export function decodeQueryGroupInfoRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
 ): WsQueryGroupInfoResponse | null {
-  const decoded = decodeBizPB(BIZ_MSG_TYPES.QueryGroupInfoRsp, data);
+  const decoded = decodeBizPB<PBQueryGroupInfoRsp>(BIZ_MSG_TYPES.QueryGroupInfoRsp, data);
   if (!decoded) {
     return null;
   }
@@ -461,14 +516,13 @@ export function decodeGetGroupMemberListRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
 ): WsGetGroupMemberListResponse | null {
-  const decoded = decodeBizPB(BIZ_MSG_TYPES.GetGroupMemberListRsp, data);
+  const decoded = decodeBizPB<PBGetGroupMemberListRsp>(BIZ_MSG_TYPES.GetGroupMemberListRsp, data);
   if (!decoded) {
     return null;
   }
 
   const memberList = Array.isArray(decoded.memberList)
-    ? // eslint-disable-next-line @typescript-eslint/no-explicit-any -- protobuf 解码返回动态类型
-      decoded.memberList.map((m: any) => ({
+    ? decoded.memberList.map((m) => ({
         user_id: m.userId || "",
         nick_name: m.nickName || "",
         user_type: m.userType || 0,
@@ -506,7 +560,7 @@ export function decodeSendPrivateHeartbeatRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
 ): WsHeartbeatResponse | null {
-  const decoded = decodeBizPB(BIZ_MSG_TYPES.SendPrivateHeartbeatRsp, data);
+  const decoded = decodeBizPB<PBCodeMsgRsp>(BIZ_MSG_TYPES.SendPrivateHeartbeatRsp, data);
   if (!decoded) {
     return null;
   }
@@ -541,7 +595,7 @@ export function decodeSendGroupHeartbeatRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
 ): WsHeartbeatResponse | null {
-  const decoded = decodeBizPB(BIZ_MSG_TYPES.SendGroupHeartbeatRsp, data);
+  const decoded = decodeBizPB<PBCodeMsgRsp>(BIZ_MSG_TYPES.SendGroupHeartbeatRsp, data);
   if (!decoded) {
     return null;
   }
@@ -581,7 +635,7 @@ export function decodeSyncInformationRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
 ): WsSyncInformationResponse | null {
-  const decoded = decodeBizPB(BIZ_MSG_TYPES.SyncInformationRsp, data);
+  const decoded = decodeBizPB<PBSyncInformationRsp>(BIZ_MSG_TYPES.SyncInformationRsp, data);
   if (!decoded) {
     return null;
   }

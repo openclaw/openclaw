@@ -46,11 +46,10 @@ export function encodePB(key: string, value: Record<string, unknown>): Uint8Arra
  * @param data - 二进制数据
  * @returns 解码后的对象，失败返回 null
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- protobuf 解码返回动态类型
-export function decodePB(key: string, data: Uint8Array | ArrayBuffer): any {
+export function decodePB<T = Record<string, unknown>>(key: string, data: Uint8Array | ArrayBuffer): T | null {
   try {
     const type = getRoot().lookupType(key);
-    return type.decode(data instanceof Uint8Array ? data : new Uint8Array(data));
+    return type.decode(data instanceof Uint8Array ? data : new Uint8Array(data)) as unknown as T;
   } catch {
     // 解码失败是可预期的（数据可能不匹配该Message type），静默返回 null 走兜底逻辑
     return null;

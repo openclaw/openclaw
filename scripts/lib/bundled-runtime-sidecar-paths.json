@@ -33,6 +33,7 @@
   "dist/extensions/webhooks/runtime-api.js",
   "dist/extensions/whatsapp/light-runtime-api.js",
   "dist/extensions/whatsapp/runtime-api.js",
+  "dist/extensions/yuanbao/runtime-api.js",
   "dist/extensions/zai/runtime-api.js",
   "dist/extensions/zalo/runtime-api.js",
   "dist/extensions/zalouser/runtime-api.js"

@@ -13,8 +13,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 type RegisterToolParam = Parameters<OpenClawPluginApi["registerTool"]>[0];
 
 /** 从 registerTool 接受的联合类型中Extract 函数（即 OpenClawPluginToolFactory） */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Extract 需要 any 进行条件类型匹配
-type ToolFactory = Extract<RegisterToolParam, (...args: any[]) => any>;
+type ToolFactory = Extract<RegisterToolParam, (...args: never[]) => unknown>;
 
 /** 工具工厂函数接收的会话上下文（从 OpenClawPluginToolFactory 参数推导） */
 export type OpenClawPluginToolContext = Parameters<ToolFactory>[0];

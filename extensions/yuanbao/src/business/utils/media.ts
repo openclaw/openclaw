@@ -471,13 +471,12 @@ async function uploadBufferToCos(params: {
 
   // 动态 import，避免在未安装 SDK 时报错
   // cos-nodejs-sdk-v5 使用 CommonJS export = 语法，需兼容处理
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- COS SDK 动态加载
-  let COS: any;
+  let COS: unknown;
   try {
     // 优先用 require（Node.js CJS 兼容路径）
     COS = require("cos-nodejs-sdk-v5");
-    if (COS?.default) {
-      COS = COS.default;
+    if ((COS as Record<string, unknown>)?.default) {
+      COS = (COS as Record<string, unknown>).default;
     }
   } catch {
     // CJS require 失败，尝试 ESM import
@@ -490,7 +489,8 @@ async function uploadBufferToCos(params: {
     }
   }
 
-  const cos = new COS({
+  const COSConstructor = COS as new (opts: Record<string, unknown>) => { putObject: (params: Record<string, unknown>) => Promise<unknown> };
+  const cos = new COSConstructor({
     FileParallelLimit: 10,
     getAuthorization(_: unknown, callback: (cred: object) => void) {
       callback({

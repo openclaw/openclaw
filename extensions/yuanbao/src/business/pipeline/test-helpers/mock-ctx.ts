@@ -116,13 +116,11 @@ export function createMockNext() {
 }
 
 /** 创建一个可追踪调用参数的 spy 函数 */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- spy 需要泛型约束
-export function createSpy<T extends (...args: any[]) => any>(impl?: T) {
+export function createSpy<T extends (...args: never[]) => unknown>(impl?: T) {
   const calls: Parameters<T>[] = [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spy 需要泛型约束
-  const spy = ((...args: any[]) => {
+  const spy = ((...args: unknown[]) => {
     calls.push(args as Parameters<T>);
-    return impl?.(...args);
-  }) as T;
+    return impl?.(...(args as Parameters<T>));
+  }) as unknown as T;
   return { spy, calls, callCount: () => calls.length };
 }

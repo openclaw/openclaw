@@ -60,6 +60,43 @@ import type {
 
 // ============ Default值 ============
 
+// ---- decodePB 解码结果内部类型 ----
+
+/** AuthBindRsp 解码结果 */
+type PBAuthBindRsp = {
+  code?: number;
+  message?: string;
+  connectId?: string;
+  timestamp?: number | string;
+  clientIp?: string;
+};
+
+/** PingRsp 解码结果 */
+type PBPingRsp = {
+  heartInterval?: number;
+};
+
+/** KickoutMsg 解码结果 */
+type PBKickoutMsg = {
+  status?: number;
+  reason?: string;
+  otherDeviceName?: string;
+};
+
+/** PushMsg 解码结果 */
+type PBPushMsg = {
+  cmd?: string;
+  module?: string;
+  msgId?: string;
+  data?: Uint8Array;
+};
+
+/** DirectedPush 解码结果 */
+type PBDirectedPush = {
+  type?: number;
+  content?: string;
+};
+
 const DEFAULT_RECONNECT_DELAYS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000];
 
 /** 收到这些 close code 时不触发自动重连 */
@@ -160,12 +197,10 @@ export class YuanbaoWsClient {
   private pendingRequests = new Map<
     string,
     {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- WS 响应动态类型
-      resolve: (resp: any) => void;
+      resolve: (resp: unknown) => void;
       timer: ReturnType<typeof setTimeout>;
       /** 自定义解码器，为空时使用Default的 decodeSendMessageRsp */
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 解码器返回动态类型
-      decoder?: (data: Uint8Array | ArrayBuffer, msgId: string) => any;
+      decoder?: (data: Uint8Array | ArrayBuffer, msgId: string) => unknown;
     }
   >();
 
@@ -263,7 +298,7 @@ export class YuanbaoWsClient {
         reject(new Error(`WS request timeout (${timeoutMs}ms) for msgId=${msgId}`));
       }, timeoutMs);
 
-      this.pendingRequests.set(msgId, { resolve, timer });
+      this.pendingRequests.set(msgId, { resolve: resolve as (resp: unknown) => void, timer });
 
       const sent = this.sendBinary(binary);
       if (!sent) {
@@ -335,8 +370,11 @@ export class YuanbaoWsClient {
         reject(new Error(`WS request timeout (${timeoutMs}ms) for msgId=${msgId}`));
       }, timeoutMs);
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 类型擦除用于统一 pending 请求存储
-      this.pendingRequests.set(msgId, { resolve, timer, decoder: decoder as any });
+      this.pendingRequests.set(msgId, {
+        resolve: resolve as (resp: unknown) => void,
+        timer,
+        decoder: decoder as (data: Uint8Array | ArrayBuffer, msgId: string) => unknown,
+      });
 
       const sent = this.sendBinary(binary);
       if (!sent) {
@@ -730,7 +768,7 @@ export class YuanbaoWsClient {
    * @param data - 鉴权响应的二进制数据
    */
   private onAuthBindResponse(head: PBConnMsg["head"], data: Uint8Array): void {
-    const rsp = decodePB(PB_MSG_TYPES.AuthBindRsp, data);
+    const rsp = decodePB<PBAuthBindRsp>(PB_MSG_TYPES.AuthBindRsp, data);
 
     // 检查 head.status 非 0（Transport layer失败）
     if (head.status && head.status !== 0) {
@@ -877,7 +915,7 @@ export class YuanbaoWsClient {
     this.heartbeatTimeoutCount = 0;
     const latency = Date.now() - this.lastHeartbeatAt;
 
-    const rsp = decodePB(PB_MSG_TYPES.PingRsp, data);
+    const rsp = decodePB<PBPingRsp>(PB_MSG_TYPES.PingRsp, data);
     if (rsp?.heartInterval && rsp.heartInterval > 1) {
       this.heartbeatIntervalS = rsp.heartInterval;
       this.log.debug(`heartbeat ACK: latency=${latency}ms, next interval=${rsp.heartInterval}s`);
@@ -913,7 +951,7 @@ export class YuanbaoWsClient {
 
     // 踢下线处理
     if (head.cmd === CMD.Kickout) {
-      const kickout = decodePB(PB_MSG_TYPES.KickoutMsg, data);
+      const kickout = decodePB<PBKickoutMsg>(PB_MSG_TYPES.KickoutMsg, data);
       this.log.warn("kicked out", { kickout });
       this.callbacks.onKickout?.({
         status: kickout?.status || 0,
@@ -924,7 +962,7 @@ export class YuanbaoWsClient {
     }
 
     // 先尝试解码为 PushMsg（结构更精确，不易误匹配）
-    const pushMsg = decodePB(PB_MSG_TYPES.PushMsg, data);
+    const pushMsg = decodePB<PBPushMsg>(PB_MSG_TYPES.PushMsg, data);
     if (pushMsg && (pushMsg.cmd || pushMsg.module)) {
       const rawData = pushMsg.data;
       // this.log.debug?.(prefixed(`PushMsg decoded: cmd=${pushMsg.cmd}, module=${pushMsg.module}, msgId=${pushMsg.msgId}, rawData.length=${rawData?.length ?? 0}, data.length=${data.length}`));
@@ -940,7 +978,7 @@ export class YuanbaoWsClient {
     }
 
     // 再尝试解码为 DirectedPush
-    const directed = decodePB(PB_MSG_TYPES.DirectedPush, data);
+    const directed = decodePB<PBDirectedPush>(PB_MSG_TYPES.DirectedPush, data);
     if (directed && (directed.type || directed.content)) {
       const pushEvent: WsPushEvent = {
         type: directed.type,
@@ -990,17 +1028,17 @@ export class YuanbaoWsClient {
     if (data && data.length > 0) {
       // 优先使用自定义解码器（QueryGroupInfo / GetGroupMemberList 等）
       const decoder = pending.decoder ?? decodeSendMessageRsp;
-      const rsp = decoder(data, msgId);
+      const rsp = decoder(data, msgId) as Record<string, unknown> | null;
       this.log.debug("business response decoded", { rsp });
       if (rsp) {
         // 如果 head.status 非 0，覆盖 code
         if (head.status && head.status !== 0) {
           rsp.code = head.status;
           if ("message" in rsp) {
-            rsp.message = rsp.message || "FAIL";
+            (rsp as Record<string, unknown>).message = (rsp as Record<string, unknown>).message || "FAIL";
           }
           if ("msg" in rsp) {
-            rsp.msg = rsp.msg || "FAIL";
+            (rsp as Record<string, unknown>).msg = (rsp as Record<string, unknown>).msg || "FAIL";
           }
         }
         pending.resolve(rsp);

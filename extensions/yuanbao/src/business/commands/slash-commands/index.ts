@@ -13,7 +13,7 @@
  *   await client.syncInformation(payload);
  */
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { getPluginVersion, getOpenclawVersion } from "../../../infra/env.js";
 import { createLog } from "../../../logger.js";
 
@@ -26,10 +26,8 @@ import { createLog } from "../../../logger.js";
  *
  * 注意：项目是 ESM（"type": "module"），必须用 import() 而非 require()。
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _listChatCommands: ((options?: any) => any[]) | null = null;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _listChatCommandsForConfig: ((cfg: any, options?: any) => any[]) | null = null;
+let _listChatCommands: ((options?: Record<string, unknown>) => ChatCommandDef[]) | null = null;
+let _listChatCommandsForConfig: ((cfg: Record<string, unknown>, options?: Record<string, unknown>) => ChatCommandDef[]) | null = null;
 let _commandAuthLoadPromise: Promise<void> | null = null;
 
 function loadCommandAuth(): Promise<void> {
@@ -59,9 +57,13 @@ export type CommandItem = {
   description: string;
 };
 
-/** openclaw/plugin-sdk/command-auth 返回的命令定义（使用 any 避免与 SDK 内部类型冲突） */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type ChatCommandDef = any;
+/** openclaw/plugin-sdk/command-auth 返回的命令定义 */
+type ChatCommandDef = {
+  name?: string;
+  description?: string;
+  textAliases?: string[];
+  [key: string]: unknown;
+};
 
 // ============ SyncInformation 协议常量 ============
 
@@ -103,8 +105,7 @@ async function fetchBotCommands(config?: OpenClawConfig): Promise<ChatCommandDef
     log.info(
       `command-auth 模块不可用（旧版 OpenClaw），使用兜底命令列表: ${FALLBACK_BOT_COMMANDS.length} 个命令`,
     );
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return FALLBACK_BOT_COMMANDS as any[];
+    return FALLBACK_BOT_COMMANDS as ChatCommandDef[];
   }
 
   try {
@@ -112,15 +113,14 @@ async function fetchBotCommands(config?: OpenClawConfig): Promise<ChatCommandDef
       const commands = _listChatCommandsForConfig(config);
       log.debug(`使用配置感知版本获取命令列表: ${commands.length} 个命令`);
       if (commands.length > 0) {
-        log.debug("命令原始结构示例:", {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          sample: commands.slice(0, 3).map((c: any) => ({
-            name: c.name,
-            description: c.description,
-            textAliases: c.textAliases,
-            keys: Object.keys(c),
-          })),
-        });
+      log.debug("命令原始结构示例:", {
+        sample: commands.slice(0, 3).map((c) => ({
+          name: c.name,
+          description: c.description,
+          textAliases: c.textAliases,
+          keys: Object.keys(c),
+        })),
+      });
       }
       return commands;
     }
