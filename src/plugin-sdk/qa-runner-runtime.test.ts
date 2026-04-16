@@ -72,6 +72,34 @@ describe("plugin-sdk qa-runner-runtime", () => {
     });
   });
 
+  it("uses the source bundled tree for qa-lab runtime loading in private qa mode", async () => {
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-runtime-root-"));
+    tempDirs.push(sourceRoot);
+    fs.mkdirSync(path.join(sourceRoot, "src"), { recursive: true });
+    fs.mkdirSync(path.join(sourceRoot, "extensions"), { recursive: true });
+    fs.writeFileSync(path.join(sourceRoot, ".git"), "gitdir: /tmp/mock\n", "utf8");
+    process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
+    resolveOpenClawPackageRootSync.mockReturnValue(sourceRoot);
+
+    const runtimeSurface = {
+      defaultQaRuntimeModelForMode: vi.fn(),
+      startQaLiveLaneGateway: vi.fn(),
+    };
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue(runtimeSurface);
+
+    const module = await import("./qa-runner-runtime.js");
+
+    expect(module.loadQaRuntimeModule()).toBe(runtimeSurface);
+    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+      dirName: "qa-lab",
+      artifactBasename: "runtime-api.js",
+      env: expect.objectContaining({
+        OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(sourceRoot, "extensions"),
+      }),
+    });
+  });
+
   it("reports the qa runtime as unavailable when the qa-lab surface is missing", async () => {
     loadBundledPluginPublicSurfaceModuleSync.mockImplementation(() => {
       throw new Error("Unable to resolve bundled plugin public surface qa-lab/runtime-api.js");
@@ -189,6 +217,14 @@ describe("plugin-sdk qa-runner-runtime", () => {
     ]);
     expect(loadPluginManifestRegistry).toHaveBeenCalledWith({
       cache: true,
+      env: expect.objectContaining({
+        OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(sourceRoot, "extensions"),
+      }),
+    });
+    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+      dirName: "qa-matrix",
+      artifactBasename: "runtime-api.js",
       env: expect.objectContaining({
         OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
         OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(sourceRoot, "extensions"),

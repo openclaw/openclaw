@@ -56,9 +56,11 @@ function isMissingQaRuntimeError(error: unknown) {
 }
 
 export function loadQaRuntimeModule(): QaRuntimeSurface {
+  const env = resolvePrivateQaRunnerEnv();
   return loadBundledPluginPublicSurfaceModuleSync<QaRuntimeSurface>({
     dirName: ["qa", "lab"].join("-"),
     artifactBasename: ["runtime-api", "js"].join("."),
+    ...(env ? { env } : {}),
   });
 }
 
@@ -74,7 +76,7 @@ export function isQaRuntimeAvailable(): boolean {
   }
 }
 
-function resolvePrivateQaRunnerManifestEnv(
+function resolvePrivateQaRunnerEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv | undefined {
   if (env.OPENCLAW_ENABLE_PRIVATE_QA_CLI !== "1") {
@@ -102,12 +104,13 @@ function resolvePrivateQaRunnerManifestEnv(
   };
 }
 
-function listDeclaredQaRunnerPlugins(): Array<
+function listDeclaredQaRunnerPlugins(
+  env: NodeJS.ProcessEnv | undefined = resolvePrivateQaRunnerEnv(),
+): Array<
   PluginManifestRecord & {
     qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
   }
 > {
-  const env = resolvePrivateQaRunnerManifestEnv();
   return loadPluginManifestRegistry({ cache: true, ...(env ? { env } : {}) })
     .plugins.filter(
       (
@@ -145,24 +148,30 @@ function indexRuntimeRegistrations(
   return registrationByCommandName;
 }
 
-function loadQaRunnerRuntimeSurface(plugin: PluginManifestRecord): QaRunnerRuntimeSurface | null {
+function loadQaRunnerRuntimeSurface(
+  plugin: PluginManifestRecord,
+  env?: NodeJS.ProcessEnv,
+): QaRunnerRuntimeSurface | null {
   if (plugin.origin === "bundled") {
     return loadBundledPluginPublicSurfaceModuleSync<QaRunnerRuntimeSurface>({
       dirName: plugin.id,
       artifactBasename: "runtime-api.js",
+      ...(env ? { env } : {}),
     });
   }
   return tryLoadActivatedBundledPluginPublicSurfaceModuleSync<QaRunnerRuntimeSurface>({
     dirName: plugin.id,
     artifactBasename: "runtime-api.js",
+    ...(env ? { env } : {}),
   });
 }
 
 export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution[] {
+  const env = resolvePrivateQaRunnerEnv();
   const contributions = new Map<string, QaRunnerCliContribution>();
 
-  for (const plugin of listDeclaredQaRunnerPlugins()) {
-    const runtimeSurface = loadQaRunnerRuntimeSurface(plugin);
+  for (const plugin of listDeclaredQaRunnerPlugins(env)) {
+    const runtimeSurface = loadQaRunnerRuntimeSurface(plugin, env);
     const runtimeRegistrationByCommandName = runtimeSurface
       ? indexRuntimeRegistrations(plugin.id, runtimeSurface)
       : null;
