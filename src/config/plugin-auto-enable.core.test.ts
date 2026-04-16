@@ -247,6 +247,27 @@ describe("applyPluginAutoEnable core", () => {
     );
   });
 
+  it("auto-enables an opt-in plugin when an agent harness runtime is forced by env", () => {
+    const result = applyPluginAutoEnable({
+      config: {},
+      env: makeIsolatedEnv({ OPENCLAW_AGENT_RUNTIME: "codex" }),
+      manifestRegistry: makeRegistry([
+        {
+          id: "codex",
+          channels: [],
+          activation: {
+            onAgentHarnesses: ["codex"],
+          },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.changes).toContain(
+      "codex agent harness runtime configured, enabled automatically.",
+    );
+  });
+
   it("skips auto-enable work for configs without channel or plugin-owned surfaces", () => {
     const result = applyPluginAutoEnable({
       config: {

@@ -144,6 +144,7 @@ function createManifestRegistryFixture() {
 function expectStartupPluginIds(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   expected: readonly string[];
 }) {
   expect(
@@ -153,7 +154,7 @@ function expectStartupPluginIds(params: {
         ? { activationSourceConfig: params.activationSourceConfig }
         : {}),
       workspaceDir: "/tmp",
-      env: process.env,
+      env: params.env ?? process.env,
     }),
   ).toEqual(params.expected);
   expect(loadPluginManifestRegistry).toHaveBeenCalled();
@@ -162,6 +163,7 @@ function expectStartupPluginIds(params: {
 function expectStartupPluginIdsCase(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   expected: readonly string[];
 }) {
   expectStartupPluginIds(params);
@@ -278,7 +280,7 @@ function createStartupConfig(params: {
                 : {}),
             },
           }
-      : {}),
+        : {}),
   } as OpenClawConfig;
 }
 
@@ -417,6 +419,16 @@ describe("resolveGatewayStartupPluginIds", () => {
         agentEmbeddedHarnessRuntimes: ["codex"],
         enabledPluginIds: ["codex"],
       }),
+      expected: ["demo-channel", "browser", "codex"],
+    });
+  });
+
+  it("includes required agent harness owner plugins when env forces the runtime", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["codex"],
+      }),
+      env: { OPENCLAW_AGENT_RUNTIME: "codex" },
       expected: ["demo-channel", "browser", "codex"],
     });
   });
