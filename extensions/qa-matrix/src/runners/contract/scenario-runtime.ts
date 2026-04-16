@@ -11,7 +11,9 @@ import {
 } from "./scenario-runtime-dm.js";
 import {
   runBlockStreamingScenario,
+  runGeneratedImageDeliveryScenario,
   runHomeserverRestartResumeScenario,
+  runImageUnderstandingAttachmentScenario,
   runMatrixQaCanary,
   runMembershipLossScenario,
   runObserverAllowlistOverrideScenario,
@@ -119,6 +121,10 @@ export async function runMatrixQaScenario(
       return await runQuietStreamingPreviewScenario(context);
     case "matrix-room-block-streaming":
       return await runBlockStreamingScenario(context);
+    case "matrix-room-image-understanding-attachment":
+      return await runImageUnderstandingAttachmentScenario(context);
+    case "matrix-room-generated-image-delivery":
+      return await runGeneratedImageDeliveryScenario(context);
     case "matrix-dm-reply-shape":
       return await runDriverTopologyScopedScenario({
         context,
