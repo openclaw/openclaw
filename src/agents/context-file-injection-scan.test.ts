@@ -65,6 +65,12 @@ describe("scanForInjection", () => {
     expect(result.findings).toContain("html_comment_injection");
   });
 
+  it("detects HTML comment injection even with > before keyword", () => {
+    const result = scanForInjection("<!-- width=100> hidden instructions -->");
+    expect(result.detected).toBe(true);
+    expect(result.findings).toContain("html_comment_injection");
+  });
+
   it("detects hidden div with display:none", () => {
     const result = scanForInjection(
       '<div style="display: none">hidden instructions here</div>',
