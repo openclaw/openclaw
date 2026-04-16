@@ -613,7 +613,8 @@ if you want a shorter or longer retry window.
 Startup also performs a conservative crypto bootstrap pass automatically.
 That pass tries to reuse the current secret storage and cross-signing identity first, and avoids resetting cross-signing unless you run an explicit bootstrap repair flow.
 
-If startup finds broken bootstrap state and `channels.matrix.password` is configured, OpenClaw can attempt a stricter repair path.
+If startup still finds broken bootstrap state, OpenClaw can attempt a guarded repair path even when `channels.matrix.password` is not configured.
+If the homeserver requires password-based UIA for that repair, OpenClaw logs a warning and keeps startup non-fatal instead of aborting the bot.
 If the current device is already owner-signed, OpenClaw preserves that identity instead of resetting it automatically.
 
 See [Matrix migration](/install/migrating-matrix) for the full upgrade flow, limits, recovery commands, and common migration messages.
@@ -919,6 +920,7 @@ Entries without `account` stay shared across all Matrix accounts, and entries wi
 Partial shared auth defaults do not create a separate implicit default account by themselves. OpenClaw only synthesizes the top-level `default` account when that default has fresh auth (`homeserver` plus `accessToken`, or `homeserver` plus `userId` and `password`); named accounts can still stay discoverable from `homeserver` plus `userId` when cached credentials satisfy auth later.
 If Matrix already has exactly one named account, or `defaultAccount` points at an existing named account key, single-account-to-multi-account repair/setup promotion preserves that account instead of creating a fresh `accounts.default` entry. Only Matrix auth/bootstrap keys move into that promoted account; shared delivery-policy keys stay at the top level.
 Set `defaultAccount` when you want OpenClaw to prefer one named Matrix account for implicit routing, probing, and CLI operations.
+If multiple Matrix accounts are configured and one account id is `default`, OpenClaw uses that account implicitly even when `defaultAccount` is unset.
 If you configure multiple named accounts, set `defaultAccount` or pass `--account <id>` for CLI commands that rely on implicit account selection.
 Pass `--account <id>` to `openclaw matrix verify ...` and `openclaw matrix devices ...` when you want to override that implicit selection for one command.
 

@@ -335,7 +335,7 @@ describe("runMessageAction media behavior", () => {
       const call = vi.mocked(loadWebMedia).mock.calls[0];
       expect(call?.[1]).toEqual(
         expect.objectContaining({
-          localRoots: "any",
+          localRoots: expect.any(Array),
           readFile: expect.any(Function),
           hostReadCapability: true,
         }),
@@ -648,6 +648,9 @@ describe("runMessageAction media behavior", () => {
         });
 
         expect(result.kind).toBe("send");
+        if (result.kind !== "send") {
+          throw new Error("expected send result");
+        }
         expect(result.sendResult).toMatchObject({
           channel: "profile-demo",
         });

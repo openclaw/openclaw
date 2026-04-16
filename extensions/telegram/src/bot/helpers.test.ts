@@ -325,7 +325,6 @@ describe("describeReplyTarget", () => {
         from: { id: 42, first_name: "Alice", is_bot: false },
       },
     } as any);
-    // Should not throw when reply text is malformed; return null instead.
     expect(result).toBeNull();
   });
 
@@ -344,6 +343,65 @@ describe("describeReplyTarget", () => {
       },
     } as any);
     expect(result?.body).toBe("Caption body");
+    expect(result?.kind).toBe("reply");
+  });
+
+  it("drops binary reply captions with no safe fallback", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        caption: "PK\x00\x03\x04binary",
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+    } as any);
+    expect(result?.id).toBe("1");
+    expect(result?.sender).toBe("Alice");
+    expect(result?.body).toBeUndefined();
+  });
+
+  it("falls back to reply text when quote text is binary", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      quote: {
+        text: "\x00\x01\x02binary quote",
+      },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        text: "Original message",
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+    } as any);
+    expect(result?.body).toBe("Original message");
+    expect(result?.kind).toBe("reply");
+  });
+
+  it("falls back to external reply text when external quote text is binary", () => {
+    const result = describeReplyTarget({
+      message_id: 5,
+      date: 1300,
+      chat: { id: 1, type: "private" },
+      text: "Comment on forwarded message",
+      external_reply: {
+        message_id: 4,
+        date: 1200,
+        chat: { id: 1, type: "private" },
+        text: "Forwarded from elsewhere",
+        quote: {
+          text: "PK\x00\x03\x04binary quote",
+        },
+        from: { id: 123, first_name: "Eve", is_bot: false },
+      },
+    } as any);
+    expect(result?.body).toBe("Forwarded from elsewhere");
     expect(result?.kind).toBe("reply");
   });
 
