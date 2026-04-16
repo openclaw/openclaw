@@ -852,6 +852,34 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
+  it("cleans up the direct cron session after threaded direct delivery when deleteAfterRun is enabled", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "Final weather summary" });
+    params.resolvedDelivery = {
+      ...makeResolvedDelivery(),
+      mode: "implicit",
+      threadId: 42,
+    };
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  });
+
   it("delivers structured heartbeat/media payloads once through the outbound adapter", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
@@ -881,6 +909,33 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         payloads: [{ text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" }],
       }),
     );
+  });
+
+  it("cleans up the direct cron session after structured direct delivery when deleteAfterRun is enabled", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "HEARTBEAT_OK" });
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      { text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" },
+    ] as never;
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
   });
 
   it("suppresses NO_REPLY payload with surrounding whitespace", async () => {
@@ -965,6 +1020,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       },
       timeoutMs: 10_000,
     });
+    expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses trailing NO_REPLY after summary text in direct delivery (#64976)", async () => {

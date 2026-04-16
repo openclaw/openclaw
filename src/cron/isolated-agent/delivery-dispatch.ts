@@ -441,6 +441,7 @@ export async function dispatchCronDelivery(
   // remains the only source of delivered state.
   let delivered = skipMessagingToolDelivery;
   let deliveryAttempted = skipMessagingToolDelivery;
+  let directCronSessionDeleted = false;
   const failDeliveryTarget = (error: string) =>
     params.withRunSession({
       status: "error",
@@ -452,7 +453,7 @@ export async function dispatchCronDelivery(
       ...params.telemetry,
     });
   const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
-    if (!params.job.deleteAfterRun) {
+    if (!params.job.deleteAfterRun || directCronSessionDeleted) {
       return;
     }
     try {
@@ -466,6 +467,7 @@ export async function dispatchCronDelivery(
         },
         timeoutMs: 10_000,
       });
+      directCronSessionDeleted = true;
     } catch {
       // Best-effort; direct delivery result should still be returned.
     }
@@ -648,6 +650,17 @@ export async function dispatchCronDelivery(
     }
   };
 
+  const deliverViaDirectAndCleanup = async (
+    delivery: SuccessfulDeliveryTarget,
+    options?: { retryTransient?: boolean },
+  ): Promise<RunCronAgentTurnResult | null> => {
+    try {
+      return await deliverViaDirect(delivery, options);
+    } finally {
+      await cleanupDirectCronSessionIfNeeded();
+    }
+  };
+
   const finalizeTextDelivery = async (
     delivery: SuccessfulDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
@@ -758,11 +771,7 @@ export async function dispatchCronDelivery(
         ...params.telemetry,
       });
     }
-    try {
-      return await deliverViaDirect(delivery, { retryTransient: true });
-    } finally {
-      await cleanupDirectCronSessionIfNeeded();
-    }
+    return await deliverViaDirectAndCleanup(delivery, { retryTransient: true });
   };
 
   if (params.deliveryRequested && !params.skipHeartbeatDelivery && !skipMessagingToolDelivery) {
@@ -802,7 +811,7 @@ export async function dispatchCronDelivery(
     const useDirectDelivery =
       params.deliveryPayloadHasStructuredContent || params.resolvedDelivery.threadId != null;
     if (useDirectDelivery) {
-      const directResult = await deliverViaDirect(params.resolvedDelivery);
+      const directResult = await deliverViaDirectAndCleanup(params.resolvedDelivery);
       if (directResult) {
         return {
           result: directResult,
