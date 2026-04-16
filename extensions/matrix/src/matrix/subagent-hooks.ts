@@ -1,3 +1,4 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -97,7 +98,10 @@ export async function handleMatrixSubagentSpawning(
     return undefined;
   }
 
-  const accountId = normalizeOptionalString(event.requester?.accountId) || undefined;
+  // Normalize early so per-account config and manager lookup use the same id.
+  // Falls back to DEFAULT_ACCOUNT_ID so accounts.default.threadBindings.* is
+  // respected even when the requester omits accountId.
+  const accountId = normalizeOptionalString(event.requester?.accountId) || DEFAULT_ACCOUNT_ID;
   const flags = resolveThreadBindingFlags(api, accountId);
 
   if (!flags.enabled) {
@@ -129,16 +133,14 @@ export async function handleMatrixSubagentSpawning(
     };
   }
 
-  const resolvedAccountId = accountId || "default";
-
   // Verify the thread binding manager is running for this account. The manager
   // holds the captured Matrix client the SessionBindingAdapter needs to send
   // the intro message that bootstraps the thread.
-  const manager = getMatrixThreadBindingManager(resolvedAccountId);
+  const manager = getMatrixThreadBindingManager(accountId);
   if (!manager) {
     return {
       status: "error",
-      error: `No Matrix thread binding manager available for account "${resolvedAccountId}". Is the Matrix channel running?`,
+      error: `No Matrix thread binding manager available for account "${accountId}". Is the Matrix channel running?`,
     };
   }
 
@@ -155,7 +157,7 @@ export async function handleMatrixSubagentSpawning(
       targetKind: "subagent",
       conversation: {
         channel: "matrix",
-        accountId: resolvedAccountId,
+        accountId,
         conversationId: roomId,
       },
       placement: "child",

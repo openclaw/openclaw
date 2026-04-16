@@ -93,14 +93,13 @@ describe("handleMatrixSubagentSpawning", () => {
     expect(bindMock).not.toHaveBeenCalled();
   });
 
-  it("returns undefined when channel has mixed casing but is still matrix", async () => {
-    // channel.trim().toLowerCase() must equal "matrix"
+  it("proceeds past channel check when channel is 'matrix' with mixed casing", async () => {
+    // channel.trim().toLowerCase() must equal "matrix" — mixed case is accepted
     const result = await handleMatrixSubagentSpawning(
       fakeApi,
       makeSpawnEvent({ channel: " Matrix " }),
     );
     expect(result).not.toBeUndefined();
-    // It proceeds (no early-return for non-matrix)
   });
 
   it("returns error when thread bindings are disabled", async () => {
