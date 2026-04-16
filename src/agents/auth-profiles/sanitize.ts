@@ -33,8 +33,8 @@ export function sanitizeProfileIdForDisplay(id: string): string {
   );
 }
 
-/** Safe character set for profile IDs: letters, digits, `.`, `_`, `:`, `-`. */
-const PROFILE_ID_PATTERN = /^[a-zA-Z0-9._:\-]{1,64}$/;
+/** Safe character set for profile IDs: letters, digits, `.`, `_`, `:`, `-`, `@`. */
+const PROFILE_ID_PATTERN = /^[a-zA-Z0-9._:\-@]{1,64}$/;
 
 /**
  * Validate a profile ID string against a safe character set at the CLI input
@@ -51,7 +51,7 @@ export function validateProfileId(id: string): string | null {
     return `Profile ID must be at most 64 characters (got ${id.length}).`;
   }
   if (!PROFILE_ID_PATTERN.test(id)) {
-    return "Profile ID may only contain letters, digits, '.', '_', ':', and '-'.";
+    return "Profile ID may only contain letters, digits, '.', '_', ':', '-', and '@'.";
   }
   return null;
 }
