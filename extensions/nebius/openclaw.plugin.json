@@ -1,6 +1,6 @@
 {
   "id": "nebius",
-  "enabledByDefault": true,
+  "enabledByDefault": false,
   "providers": ["nebius"],
   "providerAuthEnvVars": {
     "nebius": ["NEBIUS_API_KEY"]
