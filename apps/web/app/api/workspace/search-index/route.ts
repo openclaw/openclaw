@@ -42,6 +42,7 @@ export type SearchIndexItem = {
   // File/object-specific
   path?: string;
   nodeType?: "document" | "folder" | "file" | "report" | "database";
+  defaultView?: "table" | "kanban";
 };
 
 // --- DB types ---

@@ -99,7 +99,7 @@ function renderTree(onSelect = vi.fn()) {
 
 describe("FileManagerTree object expansion", () => {
   beforeEach(() => {
-    window.localStorage.clear();
+    try { window.localStorage.clear(); } catch { /* noop */ }
   });
 
   it("clicking object rows selects and expands them", async () => {
