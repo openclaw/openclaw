@@ -65,15 +65,17 @@ describe("scripts/bundle-a2ui.mjs", () => {
     const repoRoot = process.cwd();
     const dependencyPaths = getResolvedBundleDependencyPackageJsonPaths(repoRoot);
 
-    expect(dependencyPaths).toContain(path.join(repoRoot, "node_modules", "lit", "package.json"));
     expect(dependencyPaths).toContain(
-      path.join(repoRoot, "node_modules", "@lit/context", "package.json"),
+      path.join(repoRoot, "ui", "node_modules", "lit", "package.json"),
     );
     expect(dependencyPaths).toContain(
-      path.join(repoRoot, "node_modules", "@lit-labs/signals", "package.json"),
+      path.join(repoRoot, "ui", "node_modules", "@lit/context", "package.json"),
     );
     expect(dependencyPaths).toContain(
-      path.join(repoRoot, "node_modules", "signal-utils", "package.json"),
+      path.join(repoRoot, "ui", "node_modules", "@lit-labs/signals", "package.json"),
+    );
+    expect(dependencyPaths).toContain(
+      path.join(repoRoot, "ui", "node_modules", "signal-utils", "package.json"),
     );
     expect(getBundleHashInputPaths(repoRoot)).not.toContain(path.join(repoRoot, "package.json"));
     expect(getBundleHashInputPaths(repoRoot)).not.toContain(path.join(repoRoot, "pnpm-lock.yaml"));
