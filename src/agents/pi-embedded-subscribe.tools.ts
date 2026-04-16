@@ -346,10 +346,28 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
 
 export function isToolResultError(result: unknown): boolean {
   const normalized = readToolResultStatus(result);
-  if (!normalized) {
-    return false;
+  if (normalized) {
+    return normalized === "error" || normalized === "timeout";
   }
-  return normalized === "error" || normalized === "timeout";
+  // MCP content-level error: some servers return isError=false with no
+  // details.status but prefix the content text with "Error:" to signal failure.
+  // Scoped to external (MCP) tool results only, and restricted to a single
+  // text block with a single-line message — multi-line or multi-block output
+  // starting with "Error:" is likely data (logs, file contents) rather than
+  // an error diagnostic.  Only inspects the first content block to avoid
+  // allocating a full joined string on the normal success path.
+  if (isExternalToolResult(result)) {
+    const record = result as Record<string, unknown>;
+    const content = Array.isArray(record.content) ? record.content : undefined;
+    if (content?.length === 1) {
+      const block = content[0] as Record<string, unknown> | undefined;
+      if (block?.type === "text" && typeof block.text === "string") {
+        const text = block.text.trim();
+        return text.startsWith("Error:") && !text.includes("\n");
+      }
+    }
+  }
+  return false;
 }
 
 export function isToolResultTimedOut(result: unknown): boolean {
