@@ -183,13 +183,53 @@ export interface KeyboardButton {
     type: number;
     permission: { type: number };
     data: string;
+    click_limit?: number;
+  };
+  group_id?: string;
+}
+
+/**
+ * Inline keyboard structure attached to messages.
+ * Sent as the `keyboard` field in the message body:
+ * `{ "keyboard": { "content": { "rows": [...] } } }`
+ */
+export interface InlineKeyboard {
+  content: {
+    rows: Array<{ buttons: KeyboardButton[] }>;
   };
 }
 
-/** Inline keyboard structure attached to messages. */
-export interface InlineKeyboard {
-  keyboard: {
-    rows: Array<{ buttons: KeyboardButton[] }>;
+// ============ Interaction Event Types ============
+
+/** Button interaction event (INTERACTION_CREATE). */
+export interface InteractionEvent {
+  /** Event ID — used to acknowledge the interaction (PUT /interactions/{id}). */
+  id: string;
+  /** Event sub-type: 11=message button, 12=c2c quick menu. */
+  type: number;
+  /** Scene identifier: c2c / group / guild. */
+  scene?: string;
+  /** Chat type: 0=guild, 1=group, 2=c2c. */
+  chat_type?: number;
+  timestamp?: string;
+  guild_id?: string;
+  channel_id?: string;
+  /** C2C user openid (c2c scene only). */
+  user_openid?: string;
+  /** Group openid (group scene only). */
+  group_openid?: string;
+  /** Group member openid (group scene only). */
+  group_member_openid?: string;
+  version: number;
+  data: {
+    type: number;
+    resolved: {
+      button_data?: string;
+      button_id?: string;
+      user_id?: string;
+      feature_id?: string;
+      message_id?: string;
+    };
   };
 }
 

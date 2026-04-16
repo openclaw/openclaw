@@ -7,6 +7,7 @@
  * The adapter bridges plugin-sdk platform capabilities into the core/ interface.
  */
 
+import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import {
   hasConfiguredSecretInput,
@@ -68,6 +69,23 @@ const builtinAdapter: PlatformAdapter = {
 
   resolveSecretInputString(params: { value: unknown; path: string }): string | undefined {
     return normalizeResolvedSecretInputString(params) ?? undefined;
+  },
+
+  async resolveApproval(approvalId: string, decision: string): Promise<boolean> {
+    try {
+      const { loadConfig } = await import("openclaw/plugin-sdk/config-runtime");
+      const cfg = loadConfig();
+      await resolveApprovalOverGateway({
+        cfg,
+        approvalId,
+        decision: decision as "allow-once" | "allow-always" | "deny",
+        clientDisplayName: "QQBot Approval Handler",
+      });
+      return true;
+    } catch (err) {
+      console.error(`[qqbot] resolveApproval failed: ${String(err)}`);
+      return false;
+    }
   },
 };
 

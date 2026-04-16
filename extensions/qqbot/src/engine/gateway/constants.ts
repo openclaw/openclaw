@@ -57,3 +57,42 @@ export const GatewayOp = {
   /** Server → Client: Heartbeat ACK. */
   HEARTBEAT_ACK: 11,
 } as const;
+
+// ============ Close Codes ============
+
+/** WebSocket close codes used by the QQ Gateway. */
+export const GatewayCloseCode = {
+  /** Normal closure — do not reconnect. */
+  NORMAL: 1000,
+  /** Authentication failed — refresh token then reconnect. */
+  AUTH_FAILED: 4004,
+  /** Session invalid — clear session, refresh token, reconnect. */
+  INVALID_SESSION: 4006,
+  /** Sequence number out of range — clear session, refresh token, reconnect. */
+  SEQ_OUT_OF_RANGE: 4007,
+  /** Rate limited — wait before reconnecting. */
+  RATE_LIMITED: 4008,
+  /** Session timed out — clear session, refresh token, reconnect. */
+  SESSION_TIMEOUT: 4009,
+  /** Server internal error (range start) — clear session, refresh token, reconnect. */
+  SERVER_ERROR_START: 4900,
+  /** Server internal error (range end). */
+  SERVER_ERROR_END: 4913,
+  /** Insufficient intents — fatal, do not reconnect. */
+  INSUFFICIENT_INTENTS: 4914,
+  /** Disallowed intents — fatal, do not reconnect. */
+  DISALLOWED_INTENTS: 4915,
+} as const;
+
+// ============ Dispatch Event Types ============
+
+/** Event type strings dispatched under opcode 0 (DISPATCH). */
+export const GatewayEvent = {
+  READY: "READY",
+  RESUMED: "RESUMED",
+  C2C_MESSAGE_CREATE: "C2C_MESSAGE_CREATE",
+  AT_MESSAGE_CREATE: "AT_MESSAGE_CREATE",
+  DIRECT_MESSAGE_CREATE: "DIRECT_MESSAGE_CREATE",
+  GROUP_AT_MESSAGE_CREATE: "GROUP_AT_MESSAGE_CREATE",
+  INTERACTION_CREATE: "INTERACTION_CREATE",
+} as const;

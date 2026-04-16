@@ -10,6 +10,8 @@
 import { createRequire } from "node:module";
 import { resolveRuntimeServiceVersion } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { getPlatformAdapter } from "./engine/adapter/index.js";
+import { parseApprovalButtonData } from "./engine/approval/index.js";
 import {
   registerVersionResolver,
   registerPluginVersion,
@@ -20,6 +22,7 @@ import {
 } from "./engine/gateway/gateway.js";
 import type { GatewayAccount } from "./engine/gateway/types.js";
 import { initSender } from "./engine/messaging/sender.js";
+import type { InteractionEvent } from "./engine/types.js";
 import { registerTextChunker } from "./engine/utils/text-chunk.js";
 import { getQQBotRuntimeForEngine } from "./runtime.js";
 import type { ResolvedQQBotAccount } from "./types.js";
@@ -52,6 +55,17 @@ export interface GatewayContext {
     error: (msg: string) => void;
     debug?: (msg: string) => void;
   };
+  channelRuntime?: {
+    runtimeContexts: {
+      register: (params: {
+        channelId: string;
+        accountId: string;
+        capability: string;
+        context: unknown;
+        abortSignal?: AbortSignal;
+      }) => { dispose: () => void };
+    };
+  };
 }
 
 /**
@@ -65,12 +79,59 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
   registerTextChunker((text, limit) => runtime.channel.text.chunkMarkdownText(text, limit));
 
+  if (ctx.channelRuntime) {
+    ctx.log?.info?.(`[qqbot:${ctx.account.accountId}] Registering approval.native runtime context`);
+    const lease = ctx.channelRuntime.runtimeContexts.register({
+      channelId: "qqbot",
+      accountId: ctx.account.accountId,
+      capability: "approval.native",
+      context: { account: ctx.account },
+      abortSignal: ctx.abortSignal,
+    });
+    ctx.log?.info?.(
+      `[qqbot:${ctx.account.accountId}] approval.native context registered (lease=${!!lease})`,
+    );
+  } else {
+    ctx.log?.info?.(
+      `[qqbot:${ctx.account.accountId}] No channelRuntime — skipping approval.native registration`,
+    );
+  }
+
+  const onInteraction = (event: InteractionEvent) => {
+    const buttonData = event.data?.resolved?.button_data ?? "";
+    const parsed = parseApprovalButtonData(buttonData);
+    if (!parsed) {
+      return;
+    }
+
+    const adapter = getPlatformAdapter();
+    if (!adapter.resolveApproval) {
+      ctx.log?.error?.(
+        `[qqbot:${ctx.account.accountId}] resolveApproval not available on PlatformAdapter`,
+      );
+      return;
+    }
+
+    void adapter.resolveApproval(parsed.approvalId, parsed.decision).then((ok) => {
+      if (ok) {
+        ctx.log?.info?.(
+          `[qqbot:${ctx.account.accountId}] Approval resolved: id=${parsed.approvalId}, decision=${parsed.decision}`,
+        );
+      } else {
+        ctx.log?.error?.(
+          `[qqbot:${ctx.account.accountId}] Approval resolve failed: id=${parsed.approvalId}`,
+        );
+      }
+    });
+  };
+
   const coreCtx: CoreGatewayContext = {
     account: ctx.account as unknown as GatewayAccount,
     abortSignal: ctx.abortSignal,
     cfg: ctx.cfg,
     onReady: ctx.onReady,
     onError: ctx.onError,
+    onInteraction,
     log: ctx.log,
     runtime,
   };

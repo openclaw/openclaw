@@ -26,6 +26,7 @@ import { FULL_INTENTS, RATE_LIMIT_DELAY, GatewayOp } from "./constants.js";
 import { dispatchEvent } from "./event-dispatcher.js";
 import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
 import { ReconnectState } from "./reconnect.js";
+import type { InteractionEvent } from "../types.js";
 import type { GatewayAccount, GatewayLogger, GatewayPluginRuntime, WSPayload } from "./types.js";
 
 // ============ Connection context ============
@@ -40,6 +41,8 @@ export interface GatewayConnectionContext {
   onError?: (error: Error) => void;
   /** Process a queued message (inbound pipeline → outbound dispatch). */
   handleMessage: (event: QueuedMessage) => Promise<void>;
+  /** Called when an INTERACTION_CREATE event is received (e.g. approval button clicks). */
+  onInteraction?: (event: InteractionEvent) => void;
 }
 
 // ============ GatewayConnection ============
@@ -246,6 +249,8 @@ export class GatewayConnection {
               } else if (result.action === "resumed") {
                 this.ctx.onReady?.(result.data);
                 this.saveCurrentSession();
+              } else if (result.action === "interaction") {
+                this.ctx.onInteraction?.(result.event);
               } else if (result.action === "message") {
                 void trySlashCommandOrEnqueue(result.msg);
               }

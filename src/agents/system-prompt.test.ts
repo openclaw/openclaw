@@ -682,6 +682,8 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("rely on native approval card/buttons when they appear");
     expect(prompt).toContain("do not also send plain chat /approve instructions");
+    expect(prompt).toContain("do not quote or reuse any earlier /approve id");
+    expect(prompt).toContain("call exec again so the runtime can issue a fresh approval request");
   });
 
   it("includes runtime provider capabilities when present", () => {

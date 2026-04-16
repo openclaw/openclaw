@@ -33,6 +33,7 @@ import type {
   OutboundMeta,
   ApiLogger,
 } from "../types.js";
+import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "../utils/upload-cache.js";
@@ -260,6 +261,18 @@ export async function getGatewayUrl(accessToken: string): Promise<string> {
   return data.url;
 }
 
+// ============ Interaction ============
+
+/** Acknowledge an INTERACTION_CREATE event via PUT /interactions/{id}. */
+export async function acknowledgeInteraction(
+  creds: AccountCreds,
+  interactionId: string,
+  code: 0 | 1 | 2 | 3 | 4 | 5 = 0,
+): Promise<void> {
+  const token = await tokenMgr().getAccessToken(creds.appId, creds.clientSecret);
+  await client().request(token, "PUT", `/interactions/${interactionId}`, { code });
+}
+
 // ============ Types ============
 
 /** Delivery target resolved from event context. */
@@ -292,7 +305,7 @@ export async function withTokenRetry<T>(
     const token = await getAccessToken(creds.appId, creds.clientSecret);
     return await sendFn(token);
   } catch (err) {
-    const errMsg = String(err);
+    const errMsg = formatErrorMessage(err);
     if (errMsg.includes("401") || errMsg.includes("token") || errMsg.includes("access_token")) {
       log?.info?.(`[sender:${accountId ?? creds.appId}] Token may be expired, refreshing...`);
       clearTokenCache(creds.appId);

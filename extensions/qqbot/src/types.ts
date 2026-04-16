@@ -22,6 +22,15 @@ export interface ResolvedQQBotAccount {
   config: QQBotAccountConfig;
 }
 
+/** QQBot-native exec approval delivery + approver authorization. */
+export interface QQBotExecApprovalConfig {
+  enabled?: boolean | "auto";
+  approvers?: string[];
+  agentFilter?: string[];
+  sessionFilter?: string[];
+  target?: "dm" | "channel" | "both";
+}
+
 /** QQ Bot account config from user settings. */
 export interface QQBotAccountConfig {
   enabled?: boolean;
@@ -34,6 +43,8 @@ export interface QQBotAccountConfig {
   systemPrompt?: string;
   /** Whether markdown output is enabled. Defaults to true. */
   markdownSupport?: boolean;
+  /** QQBot-native exec approval delivery + approver authorization. */
+  execApprovals?: QQBotExecApprovalConfig;
   /**
    * @deprecated Use audioFormatPolicy.uploadDirectFormats instead.
    * Legacy list of formats that can upload directly without SILK conversion.

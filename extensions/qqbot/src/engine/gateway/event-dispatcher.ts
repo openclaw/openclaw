@@ -9,6 +9,7 @@ import { recordKnownUser } from "../session/known-users.js";
 import { parseRefIndices } from "../utils/text-parsing.js";
 import { readOptionalMessageSceneExt } from "./codec.js";
 import type { QueuedMessage } from "./message-queue.js";
+import type { InteractionEvent } from "../types.js";
 import type {
   C2CMessageEvent,
   GuildMessageEvent,
@@ -22,6 +23,7 @@ export type DispatchResult =
   | { action: "ready"; data: unknown; sessionId: string }
   | { action: "resumed"; data: unknown }
   | { action: "message"; msg: QueuedMessage }
+  | { action: "interaction"; event: InteractionEvent }
   | { action: "ignore" };
 
 // ============ dispatchEvent ============
@@ -142,6 +144,10 @@ export function dispatchEvent(
         msgElements: ev.msg_elements,
       },
     };
+  }
+
+  if (eventType === "INTERACTION_CREATE") {
+    return { action: "interaction", event: data as InteractionEvent };
   }
 
   return { action: "ignore" };

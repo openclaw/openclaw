@@ -1,6 +1,8 @@
+import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { qqbotBasePluginFields } from "./channel-base.js";
+import { getQQBotApprovalCapability } from "./approval-native.js";
 import { DEFAULT_ACCOUNT_ID, resolveQQBotAccount } from "./config.js";
 import { clearAccountCredentials } from "./engine/config/credentials.js";
 import {
@@ -21,8 +23,32 @@ function loadGatewayModule(): Promise<typeof import("./gateway.js")> {
   return _gatewayModulePromise;
 }
 
+const EXEC_APPROVAL_COMMAND_RE =
+  /\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+(?:allow-once|allow-always|always|deny)\b/i;
+
+function shouldSuppressLocalQQBotApprovalPrompt(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  payload: { text?: string; channelData?: unknown };
+  hint?: { kind: "approval-pending" | "approval-resolved"; approvalKind: "exec" | "plugin" };
+}): boolean {
+  if (params.hint?.kind !== "approval-pending" || params.hint.approvalKind !== "exec") {
+    return false;
+  }
+  const account = resolveQQBotAccount(params.cfg, params.accountId);
+  if (!account.enabled || account.secretSource === "none") {
+    return false;
+  }
+  if (getExecApprovalReplyMetadata(params.payload as never)) {
+    return true;
+  }
+  const text = typeof params.payload.text === "string" ? params.payload.text : "";
+  return EXEC_APPROVAL_COMMAND_RE.test(text);
+}
+
 export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   ...qqbotBasePluginFields,
+  approvalCapability: getQQBotApprovalCapability(),
   messaging: {
     /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */
     normalizeTarget: coreNormalizeTarget,
@@ -37,6 +63,13 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     chunker: (text, limit) => getQQBotRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 5000,
+    shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
+      shouldSuppressLocalQQBotApprovalPrompt({
+        cfg,
+        accountId,
+        payload,
+        hint,
+      }),
     sendText: async ({ to, text, accountId, replyToId, cfg }) => {
       const account = resolveQQBotAccount(cfg, accountId);
       const { sendText } = await import("./engine/messaging/outbound.js");
@@ -83,6 +116,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         abortSignal,
         cfg,
         log,
+        channelRuntime: ctx.channelRuntime as never,
         onReady: () => {
           log?.info(`[qqbot:${account.accountId}] Gateway ready`);
           ctx.setStatus({

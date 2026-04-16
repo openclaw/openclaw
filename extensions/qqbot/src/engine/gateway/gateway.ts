@@ -155,6 +155,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     runtime,
     onReady: ctx.onReady,
     onError: ctx.onError,
+    onInteraction: ctx.onInteraction,
     handleMessage,
   });
 

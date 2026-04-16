@@ -44,6 +44,13 @@ export interface PlatformAdapter {
    * For secret references, resolves them to actual values via the platform's secret store.
    */
   resolveSecretInputString(params: { value: unknown; path: string }): string | undefined;
+
+  /**
+   * Submit an approval decision to the framework's approval gateway.
+   * Optional — only available when the framework supports approvals.
+   * Returns true if the decision was submitted successfully.
+   */
+  resolveApproval?(approvalId: string, decision: string): Promise<boolean>;
 }
 
 let _adapter: PlatformAdapter | null = null;

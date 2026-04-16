@@ -36,6 +36,17 @@ const QQBotStreamingSchema = z
   ])
   .optional();
 
+const QQBotExecApprovalsSchema = z
+  .object({
+    enabled: z.union([z.boolean(), z.literal("auto")]).optional(),
+    approvers: z.array(z.string()).optional(),
+    agentFilter: z.array(z.string()).optional(),
+    sessionFilter: z.array(z.string()).optional(),
+    target: z.enum(["dm", "channel", "both"]).optional(),
+  })
+  .strict()
+  .optional();
+
 const QQBotAccountSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -52,6 +63,7 @@ const QQBotAccountSchema = z
     upgradeUrl: z.string().optional(),
     upgradeMode: z.enum(["doc", "hot-reload"]).optional(),
     streaming: QQBotStreamingSchema,
+    execApprovals: QQBotExecApprovalsSchema,
   })
   .passthrough();
 
