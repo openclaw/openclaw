@@ -36,6 +36,13 @@ describe("resolvePlanApproval", () => {
     expect(result.approval).toBe("timed_out");
   });
 
+  it("ignores stale timeout after approval is already resolved", () => {
+    const approved = { ...BASE_STATE, approval: "approved" as const, mode: "normal" as const };
+    const result = resolvePlanApproval(approved, "timeout");
+    expect(result.mode).toBe("normal");
+    expect(result.approval).toBe("approved"); // NOT timed_out
+  });
+
   it("preserves enteredAt across all transitions", () => {
     for (const action of ["approve", "edit", "reject", "timeout"] as const) {
       const result = resolvePlanApproval(BASE_STATE, action);
