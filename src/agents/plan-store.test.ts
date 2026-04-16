@@ -44,6 +44,15 @@ describe("PlanStore", () => {
       const result = await store.read("deep/nested/ns");
       expect(result).not.toBeNull();
     });
+
+    it("rejects namespace with path traversal", async () => {
+      await expect(store.read("../../etc")).rejects.toThrow("Invalid plan namespace");
+      await expect(store.write("../escape", SAMPLE_PLAN)).rejects.toThrow("Invalid plan namespace");
+    });
+
+    it("rejects namespace mismatch in write", async () => {
+      await expect(store.write("wrong-ns", SAMPLE_PLAN)).rejects.toThrow("namespace mismatch");
+    });
   });
 
   describe("lock", () => {
