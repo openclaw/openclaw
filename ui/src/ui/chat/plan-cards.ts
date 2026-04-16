@@ -99,13 +99,15 @@ function renderPlanStep(step: PlanCardStep): TemplateResult {
  * Formats a plan as markdown for sidebar/detail view.
  */
 export function formatPlanAsMarkdown(plan: PlanCardData): string {
-  const lines = [`## ${plan.title}`];
+  const clean = (s: string) => s.replace(/[\n\r]+/g, " ").trim();
+  const lines = [`## ${clean(plan.title)}`];
   if (plan.explanation) {
-    lines.push("", `_${plan.explanation}_`);
+    lines.push("", `_${clean(plan.explanation)}_`);
   }
   lines.push("");
   for (const step of plan.steps) {
-    const label = step.status === "in_progress" && step.activeForm ? step.activeForm : step.text;
+    const rawLabel = step.status === "in_progress" && step.activeForm ? step.activeForm : step.text;
+    const label = clean(rawLabel);
     if (step.status === "completed") {
       lines.push(`- [x] ${label}`);
     } else if (step.status === "cancelled") {
