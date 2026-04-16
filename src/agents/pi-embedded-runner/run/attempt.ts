@@ -151,7 +151,7 @@ import {
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
-import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
+import { applySkillPlanTemplateSeed, resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
   describeEmbeddedAgentStreamStrategy,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
@@ -415,6 +415,19 @@ export async function runEmbeddedAttempt(
           skills: skillEntries ?? [],
           config: params.config,
         });
+
+    // Seed the agent's plan from any loaded skill's `planTemplate` (if
+    // present) BEFORE the first LLM turn (#67541). The seed is a no-op
+    // when no skill carries a template, when more than one skill is
+    // tied (use alpha-first as a deterministic winner), or when an
+    // existing plan would be clobbered. Idempotency against
+    // `AgentRunContext.lastPlanSteps` lands in #67514's follow-up.
+    applySkillPlanTemplateSeed({
+      entries: skillEntries ?? [],
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      config: params.config,
+    });
 
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
