@@ -211,7 +211,7 @@ export async function resolveSubagentCompletionOrigin(params: {
     eventKind: "task_completion",
     targetSessionKey: params.childSessionKey,
     requester: requesterConversation,
-    failClosed: false,
+    failClosed: true,
   });
   if (route.mode === "bound" && route.binding) {
     const boundTarget = resolveConversationDeliveryTarget({
@@ -430,17 +430,23 @@ async function sendSubagentAnnounceDirectly(params: {
     const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
     const requesterSessionOrigin = normalizeDeliveryContext(params.requesterSessionOrigin);
-    // Merge completionDirectOrigin with directOrigin so that missing fields
-    // (channel, to, accountId) fall back to the originating session's
-    // lastChannel / lastTo. Without this, a completion origin that carries a
-    // channel but not a `to` would prevent external delivery.
-    const effectiveDirectOrigin =
-      params.expectsCompletionMessage && completionDirectOrigin
+    const hasCompletionConversationTarget = Boolean(
+      completionDirectOrigin?.to || completionDirectOrigin?.threadId,
+    );
+    // Completion delivery must fail closed when no completion source
+    // conversation exists. Once the completion origin identifies a real
+    // conversation, it may borrow missing paired fields from the originating
+    // session context.
+    const effectiveDirectOrigin = params.expectsCompletionMessage
+      ? completionDirectOrigin && hasCompletionConversationTarget
         ? mergeDeliveryContext(completionDirectOrigin, directOrigin)
-        : directOrigin;
-    const sessionOnlyOrigin = effectiveDirectOrigin?.channel
+        : undefined
+      : directOrigin;
+    const sessionOnlyOrigin = params.expectsCompletionMessage
       ? effectiveDirectOrigin
-      : requesterSessionOrigin;
+      : effectiveDirectOrigin?.channel
+        ? effectiveDirectOrigin
+        : requesterSessionOrigin;
     const deliveryTarget = !params.requesterIsSubagent
       ? resolveExternalBestEffortDeliveryTarget({
           channel: effectiveDirectOrigin?.channel,

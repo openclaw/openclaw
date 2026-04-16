@@ -18,6 +18,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import * as piEmbedded from "./pi-embedded-runner/runs.js";
 import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
+import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import * as agentStep from "./tools/agent-step.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
@@ -215,6 +216,7 @@ describe("subagent announce formatting", () => {
   beforeEach(() => {
     // OPENCLAW_TEST_FAST is set in beforeAll before module import
     // to ensure the module-level constant picks it up.
+    resetAnnounceQueuesForTests();
     agentSpy
       .mockClear()
       .mockImplementation(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
@@ -787,6 +789,67 @@ describe("subagent announce formatting", () => {
     expect(didAnnounce).toBe(false);
     expect(agentSpy).toHaveBeenCalledTimes(1);
     expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to a bound child thread when completion source conversation is missing", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-bound",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-bound",
+        lastChannel: "discord",
+        lastTo: "channel:stale-parent-thread",
+      },
+    };
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "acct-1",
+      listBySession: (targetSessionKey: string) =>
+        targetSessionKey === "agent:main:subagent:test"
+          ? [
+              {
+                bindingId: "discord:acct-1:thread-bound-1",
+                targetSessionKey,
+                targetKind: "subagent",
+                conversation: {
+                  channel: "discord",
+                  accountId: "acct-1",
+                  conversationId: "thread-bound-1",
+                  parentConversationId: "parent-main",
+                },
+                status: "active",
+                boundAt: Date.now(),
+              },
+            ]
+          : [],
+      resolveByConversation: () => null,
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-session-bound-missing-source",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
+      method: "agent",
+      params: {
+        sessionKey: "agent:main:main",
+        deliver: false,
+      },
+    });
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBeUndefined();
+    expect(call?.params?.to).toBeUndefined();
   });
 
   it("retries direct agent announce on transient channel-unavailable errors", async () => {
@@ -1708,8 +1771,6 @@ describe("subagent announce formatting", () => {
     sessionStore = {
       "agent:main:main": {
         sessionId: "session-collect",
-        lastChannel: "whatsapp",
-        lastTo: "+1555",
         queueMode: "collect",
         queueDebounceMs: 0,
       },
@@ -1723,6 +1784,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-completion-direct-fallback",
       requesterSessionKey: "main",
       requesterDisplayKey: "main",
+      requesterOrigin: { channel: "whatsapp", to: "+1555" },
       expectsCompletionMessage: true,
       ...defaultOutcomeAnnounce,
     });
@@ -2029,7 +2091,7 @@ describe("subagent announce formatting", () => {
         childRunId: "run-a",
         requesterSessionKey: "main",
         requesterDisplayKey: "main",
-        requesterOrigin: { accountId: "acct-a" },
+        requesterOrigin: { channel: "whatsapp", accountId: "acct-a" },
         ...defaultOutcomeAnnounce,
       }),
       runSubagentAnnounceFlow({
@@ -2037,7 +2099,7 @@ describe("subagent announce formatting", () => {
         childRunId: "run-b",
         requesterSessionKey: "main",
         requesterDisplayKey: "main",
-        requesterOrigin: { accountId: "acct-b" },
+        requesterOrigin: { channel: "whatsapp", accountId: "acct-b" },
         ...defaultOutcomeAnnounce,
       }),
     ]);

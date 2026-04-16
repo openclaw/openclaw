@@ -478,7 +478,7 @@ export async function runSubagentAnnounceFlow(params: {
         ? await resolveSubagentCompletionOrigin({
             childSessionKey: params.childSessionKey,
             requesterSessionKey: targetRequesterSessionKey,
-            requesterOrigin: directOrigin,
+            requesterOrigin: targetRequesterOrigin,
             childRunId: params.childRunId,
             spawnMode: params.spawnMode,
             expectsCompletionMessage,
