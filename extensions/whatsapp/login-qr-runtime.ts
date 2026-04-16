@@ -5,6 +5,13 @@ type WaitForWebLogin = typeof import("./src/login-qr.js").waitForWebLogin;
 
 const loadLoginQrModule = createLazyRuntimeModule(() => import("./src/login-qr.js"));
 
+export async function preflightWebLoginWithQrStart(
+  ...args: Parameters<PreflightWebLoginWithQrStart>
+): ReturnType<PreflightWebLoginWithQrStart> {
+  const { preflightWebLoginWithQrStart } = await loadLoginQrModule();
+  return await preflightWebLoginWithQrStart(...args);
+}
+
 export async function startWebLoginWithQr(
   ...args: Parameters<StartWebLoginWithQr>
 ): ReturnType<StartWebLoginWithQr> {
