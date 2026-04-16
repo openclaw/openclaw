@@ -31,7 +31,6 @@ const CHECKSUMS_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download
 
 /**
  * Downloads text content from URL with redirect following
- * FIX: Proper abort handling with AbortController
  */
 async function downloadTextContent(url: string, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -158,7 +157,6 @@ async function getExpectedChecksum(signal?: AbortSignal): Promise<string> {
 
 /**
  * Verifies file integrity using SHA256
- * FIX: Removed unused catch parameter
  */
 async function verifyFileChecksum(filePath: string, expectedHash: string): Promise<boolean> {
   try {
@@ -174,7 +172,6 @@ async function verifyFileChecksum(filePath: string, expectedHash: string): Promi
 
 /**
  * Downloads binary file with redirect following and checksum verification
- * FIX: Robust abort handling that properly terminates all resources
  */
 async function downloadFileWithVerification(
   url: string, 
@@ -357,7 +354,7 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
   }
   
   try {
-    // FIX: Check if binary exists first
+    // Check if binary exists first
     let exists = false;
     try {
       await fs.access(ytDlpPath, fs.constants.X_OK);
@@ -367,7 +364,7 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
     }
     
     if (exists) {
-      // FIX: Verify integrity BEFORE executing!
+      // Verify integrity BEFORE executing
       let integrityCheckPassed = false;
       try {
         const expectedHash = await getExpectedChecksum(signal);
@@ -380,7 +377,7 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
         }
       } catch (checksumError) {
         console.warn('Could not verify existing yt-dlp binary (network/parsing issue):', checksumError);
-        // FIX: Fail closed - don't trust unverified binary
+        // Fail closed - don't trust unverified binary
         integrityCheckPassed = false;
       }
       
@@ -446,7 +443,7 @@ async function ensureFfmpeg(): Promise<void> {
 }
 
 async function findWorkspaceFolder(): Promise<string> {
-  // FIX: Use session workspace when saving downloaded videos
+  // Use session workspace when saving downloaded videos
   // First check if we're already in a workspace directory
   let currentPath = path.resolve(process.cwd());
   const root = path.parse(currentPath).root;
@@ -505,7 +502,6 @@ async function findWorkspaceFolder(): Promise<string> {
 
 /**
  * Sanitizes filename by removing problematic characters
- * FIX: Replace control characters with hex escapes
  */
 function sanitizeFilename(title: string): string {
   let sanitized = title.trim()
@@ -525,6 +521,25 @@ function sanitizeFilename(title: string): string {
   }
   
   return sanitized;
+}
+
+/**
+ * Builds a media URL from gateway origin or falls back to localhost
+ */
+function buildMediaUrl(workspaceRoot: string, filePath: string, gatewayOrigin?: string): string {
+  const relativePath = path.relative(workspaceRoot, filePath);
+  const posixPath = relativePath.split(path.sep).join('/');
+  const encodedPath = posixPath.split('/').map(encodeURIComponent).join('/');
+  
+  // If gateway origin is provided (e.g., from environment or request context), use it
+  if (gatewayOrigin) {
+    // Remove trailing slash if present
+    const baseOrigin = gatewayOrigin.replace(/\/$/, '');
+    return `${baseOrigin}/api/media/${encodedPath}`;
+  }
+  
+  // Fallback to localhost for development/local deployments
+  return `http://localhost:${MEDIA_SERVER_PORT}/${encodedPath}`;
 }
 
 export const downloadVideoTool = {
@@ -581,7 +596,6 @@ export const downloadVideoTool = {
         { signal: abortController.signal }
       );
       
-      // FIX: Use the extracted sanitize function
       const sanitized = sanitizeFilename(rawTitle);
       
       const outputTemplate = `${sanitized}.%(ext)s`;
@@ -619,7 +633,7 @@ export const downloadVideoTool = {
       if (!downloadedFile || !downloadedFile.includes(sanitized)) {
         const files = await fs.readdir(workspaceRoot);
         
-        // FIX: Replace control characters with hex escapes \x00-\x7F
+        // Replace control characters with hex escapes \x00-\x7F
         const asciiNormalizedTitle = sanitized.normalize('NFKD')
           .replace(/[\u0300-\u036f]/g, '')
           .replace(/[^\p{ASCII}]/gu, '');
@@ -664,11 +678,10 @@ export const downloadVideoTool = {
           throw new Error("Downloaded file is empty");
         }
         
-        // FIX #3: Properly encode path for URL
-        const relativePath = path.relative(workspaceRoot, finalPath);
-        const posixPath = relativePath.split(path.sep).join('/');
-        const encodedPath = posixPath.split('/').map(encodeURIComponent).join('/');
-        const fileUrl = `http://localhost:${MEDIA_SERVER_PORT}/${encodedPath}`;
+        // Build media URL using gateway origin if available
+        // The gateway origin can come from environment variable or request context
+        const gatewayOrigin = process.env.GATEWAY_ORIGIN || process.env.ASSISTANT_API_BASE;
+        const fileUrl = buildMediaUrl(workspaceRoot, finalPath, gatewayOrigin);
 
         return {
           content: [{
