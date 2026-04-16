@@ -248,10 +248,10 @@ export function registerDefaultAuthTokenSuite(): void {
       }
     });
 
-    test("hello-ok reports granted scopes for shared token auth", async () => {
+    test("hello-ok reports granted auth metadata for device-less shared token auth", async () => {
       const ws = await openWs(port);
       try {
-        const res = await connectReq(ws, { scopes: ["operator.read"] });
+        const res = await connectReq(ws, { scopes: ["operator.read"], device: null });
         expect(res.ok).toBe(true);
         const helloOk = res.payload as
           | {
@@ -263,7 +263,7 @@ export function registerDefaultAuthTokenSuite(): void {
             }
           | undefined;
         expect(helloOk?.auth?.role).toBe("operator");
-        expect(helloOk?.auth?.scopes).toEqual(["operator.read"]);
+        expect(helloOk?.auth?.scopes).toEqual([]);
         expect(helloOk?.auth?.deviceToken).toBeUndefined();
       } finally {
         ws.close();
