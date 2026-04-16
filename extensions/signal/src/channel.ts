@@ -27,7 +27,7 @@ import { signalMessageActions } from "./message-actions.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
-import { resolveSignalQuoteParams } from "./send.js";
+import { resolveSignalQuoteParams } from "./send-quote.js";
 import { signalSetupAdapter } from "./setup-core.js";
 import {
   createSignalPluginBase,
