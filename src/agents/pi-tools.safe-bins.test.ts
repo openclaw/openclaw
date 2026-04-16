@@ -1,27 +1,28 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
-const bundledPluginsDirSnapshot = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR"]);
+let createOpenClawCodingTools: typeof import("./pi-tools.js").createOpenClawCodingTools;
 
-beforeAll(() => {
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(
-    os.tmpdir(),
-    "openclaw-test-no-bundled-extensions",
+beforeAll(async () => {
+  await withEnvAsync(
+    {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(os.tmpdir(), "openclaw-test-no-bundled-extensions"),
+    },
+    async () => {
+      ({ createOpenClawCodingTools } = await import("./pi-tools.js"));
+    },
   );
 });
 
-afterAll(() => {
-  bundledPluginsDirSnapshot.restore();
-});
-
-vi.mock("../infra/shell-env.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
+vi.mock("../infra/shell-env.js", async () => {
+  const mod =
+    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
   return {
     ...mod,
     getShellPathFromLoginShell: vi.fn(() => null),
@@ -30,12 +31,15 @@ vi.mock("../infra/shell-env.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/tools.js", () => ({
+  copyPluginToolMeta: vi.fn((_from, to) => to),
   resolvePluginTools: () => [],
   getPluginToolMeta: () => undefined,
 }));
 
-vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
+vi.mock("../infra/exec-approvals.js", async () => {
+  const mod = await vi.importActual<typeof import("../infra/exec-approvals.js")>(
+    "../infra/exec-approvals.js",
+  );
   const approvals: ExecApprovalsResolved = {
     path: "/tmp/exec-approvals.json",
     socketPath: "/tmp/exec-approvals.sock",
@@ -52,6 +56,11 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
       askFallback: "deny",
       autoAllowSkills: false,
     },
+    agentSources: {
+      security: "defaults.security",
+      ask: "defaults.ask",
+      askFallback: "defaults.askFallback",
+    },
     allowlist: [],
     file: {
       version: 1,
@@ -67,8 +76,6 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   };
   return { ...mod, resolveExecApprovals: () => approvals };
 });
-
-const { createOpenClawCodingTools } = await import("./pi-tools.js");
 
 type ExecToolResult = {
   content: Array<{ type: string; text?: string }>;

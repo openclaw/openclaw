@@ -10,6 +10,43 @@ function asMessages(messages: unknown[]): AgentMessage[] {
   return messages as AgentMessage[];
 }
 
+function makeDualToolUseAssistantContent() {
+  return [
+    { type: "toolUse", id: "tool-1", name: "test1", arguments: {} },
+    { type: "toolUse", id: "tool-2", name: "test2", arguments: {} },
+    { type: "text", text: "Done" },
+  ];
+}
+
+function makeDualToolAnthropicTurns(nextUserContent: unknown[]) {
+  return asMessages([
+    { role: "user", content: [{ type: "text", text: "Use tools" }] },
+    {
+      role: "assistant",
+      content: makeDualToolUseAssistantContent(),
+    },
+    {
+      role: "user",
+      content: nextUserContent,
+    },
+  ]);
+}
+
+function makeSignedThinkingGatewayToolCall(toolId: string) {
+  return [
+    { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+    { type: "toolCall", id: toolId, name: "gateway", arguments: {} },
+  ];
+}
+
+function expectAssistantToolCallsOmitted(result: AgentMessage[], expectedLength: number) {
+  expect(result).toHaveLength(expectedLength);
+  expect((result[1] as { role?: unknown }).role).toBe("assistant");
+  expect((result[1] as { content?: unknown[] }).content).toEqual([
+    { type: "text", text: "[tool calls omitted]" },
+  ]);
+}
+
 describe("validate turn edge cases", () => {
   it("returns empty array unchanged", () => {
     expect(validateGeminiTurns([])).toEqual([]);
@@ -346,7 +383,7 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
       {
         role: "assistant",
         content: [
-          { type: "toolUse", id: "tool-1", name: "test", input: {} },
+          { type: "toolUse", id: "tool-1", name: "test", arguments: {} },
           { type: "text", text: "I'll check that" },
         ],
       },
@@ -367,7 +404,7 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
       {
         role: "assistant",
         content: [
-          { type: "toolUse", id: "tool-1", name: "test", input: {} },
+          { type: "toolUse", id: "tool-1", name: "test", arguments: {} },
           { type: "text", text: "Here's result" },
         ],
       },
@@ -386,7 +423,7 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     // tool_use should be preserved because matching tool_result exists
     const assistantContent = (result[1] as { content?: unknown[] }).content;
     expect(assistantContent).toEqual([
-      { type: "toolUse", id: "tool-1", name: "test", input: {} },
+      { type: "toolUse", id: "tool-1", name: "test", arguments: {} },
       { type: "text", text: "Here's result" },
     ]);
   });
@@ -396,7 +433,7 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
       { role: "user", content: [{ type: "text", text: "Use tool" }] },
       {
         role: "assistant",
-        content: [{ type: "toolUse", id: "tool-1", name: "test", input: {} }],
+        content: [{ type: "toolUse", id: "tool-1", name: "test", arguments: {} }],
       },
       { role: "user", content: [{ type: "text", text: "Hello" }] },
     ]);
@@ -409,19 +446,25 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     expect(assistantContent).toEqual([{ type: "text", text: "[tool calls omitted]" }]);
   });
 
-  it("should handle multiple dangling tool_use blocks", () => {
+  it("leaves aborted tool-only assistant turns empty instead of synthesizing fallback text", () => {
     const msgs = asMessages([
-      { role: "user", content: [{ type: "text", text: "Use tools" }] },
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
       {
         role: "assistant",
-        content: [
-          { type: "toolUse", id: "tool-1", name: "test1", input: {} },
-          { type: "toolUse", id: "tool-2", name: "test2", input: {} },
-          { type: "text", text: "Done" },
-        ],
+        stopReason: "aborted",
+        content: [{ type: "toolCall", id: "tool-1", name: "test", arguments: {} }],
       },
-      { role: "user", content: [{ type: "text", text: "OK" }] },
+      { role: "user", content: [{ type: "text", text: "Hello" }] },
     ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(3);
+    expect((result[1] as { content?: unknown[] }).content).toEqual([]);
+  });
+
+  it("should handle multiple dangling tool_use blocks", () => {
+    const msgs = makeDualToolAnthropicTurns([{ type: "text", text: "OK" }]);
 
     const result = validateAnthropicTurns(msgs);
 
@@ -432,27 +475,13 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
   });
 
   it("should handle mixed tool_use with some having matching tool_result", () => {
-    const msgs = asMessages([
-      { role: "user", content: [{ type: "text", text: "Use tools" }] },
+    const msgs = makeDualToolAnthropicTurns([
       {
-        role: "assistant",
-        content: [
-          { type: "toolUse", id: "tool-1", name: "test1", input: {} },
-          { type: "toolUse", id: "tool-2", name: "test2", input: {} },
-          { type: "text", text: "Done" },
-        ],
+        type: "toolResult",
+        toolUseId: "tool-1",
+        content: [{ type: "text", text: "Result 1" }],
       },
-      {
-        role: "user",
-        content: [
-          {
-            type: "toolResult",
-            toolUseId: "tool-1",
-            content: [{ type: "text", text: "Result 1" }],
-          },
-          { type: "text", text: "Thanks" },
-        ],
-      },
+      { type: "text", text: "Thanks" },
     ]);
 
     const result = validateAnthropicTurns(msgs);
@@ -461,50 +490,193 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     // tool-1 should be preserved (has matching tool_result), tool-2 stripped, text preserved
     const assistantContent = (result[1] as { content?: unknown[] }).content;
     expect(assistantContent).toEqual([
-      { type: "toolUse", id: "tool-1", name: "test1", input: {} },
+      { type: "toolUse", id: "tool-1", name: "test1", arguments: {} },
       { type: "text", text: "Done" },
     ]);
   });
 
-  it("should not modify messages when next is not user", () => {
+  it("matches standalone toolResult messages before the next assistant turn", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Use tool" }] },
       {
         role: "assistant",
-        content: [{ type: "toolUse", id: "tool-1", name: "test", input: {} }],
+        content: [{ type: "toolCall", id: "tool-1", name: "test", arguments: {} }],
       },
-      // Next is assistant, not user - should not strip
-      { role: "assistant", content: [{ type: "text", text: "Continue" }] },
+      { role: "toolResult", toolCallId: "tool-1", content: [{ type: "text", text: "data" }] },
+      { role: "user", content: [{ type: "text", text: "Continue" }] },
     ]);
 
     const result = validateAnthropicTurns(msgs);
 
-    expect(result).toHaveLength(3);
-    // Original tool_use should be preserved
+    expect(result).toHaveLength(4);
     const assistantContent = (result[1] as { content?: unknown[] }).content;
-    expect(assistantContent).toEqual([{ type: "toolUse", id: "tool-1", name: "test", input: {} }]);
+    expect(assistantContent).toEqual([
+      { type: "toolCall", id: "tool-1", name: "test", arguments: {} },
+    ]);
   });
 
-  it("is replay-safe across repeated validation passes", () => {
+  it("matches tool result blocks across intermediate non-assistant messages", () => {
     const msgs = asMessages([
-      { role: "user", content: [{ type: "text", text: "Use tools" }] },
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
       {
         role: "assistant",
         content: [
-          { type: "toolUse", id: "tool-1", name: "test1", input: {} },
-          { type: "toolUse", id: "tool-2", name: "test2", input: {} },
-          { type: "text", text: "Done" },
+          { type: "functionCall", id: "tool-1", name: "test", arguments: {} },
+          { type: "text", text: "Checking" },
+        ],
+      },
+      { role: "user", content: [{ type: "text", text: "still waiting" }] },
+      { role: "tool", toolCallId: "tool-1", content: [{ type: "text", text: "data" }] },
+      { role: "user", content: [{ type: "text", text: "Continue" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(5);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual([
+      { type: "functionCall", id: "tool-1", name: "test", arguments: {} },
+      { type: "text", text: "Checking" },
+    ]);
+  });
+
+  it("preserves signed-thinking turns whose sibling tool calls still resolve", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: makeSignedThinkingGatewayToolCall("tool-1"),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "gateway",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+      { role: "user", content: [{ type: "text", text: "Continue" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(4);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual(makeSignedThinkingGatewayToolCall("tool-1"));
+  });
+
+  it("drops signed-thinking turns when the only matching tool result is embedded in user content", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [
+          makeSignedThinkingGatewayToolCall("tool-1")[0],
+          { type: "toolUse", id: "tool-1", name: "gateway", arguments: {} },
         ],
       },
       {
         role: "user",
         content: [
-          {
-            type: "toolResult",
-            toolUseId: "tool-1",
-            content: [{ type: "text", text: "Result 1" }],
-          },
+          { type: "toolResult", toolUseId: "tool-1", content: [{ type: "text", text: "ok" }] },
+          { type: "text", text: "Continue" },
         ],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expectAssistantToolCallsOmitted(result, 3);
+  });
+
+  it("preserves signed-thinking turns when a trusted tool result carries both stale and current id aliases", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: makeSignedThinkingGatewayToolCall("tool-current"),
+      },
+      {
+        role: "toolResult",
+        toolUseId: "tool-stale",
+        toolCallId: "tool-current",
+        toolName: "gateway",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+      { role: "user", content: [{ type: "text", text: "Continue" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(4);
+    expect((result[1] as { content?: unknown[] }).content).toEqual(
+      makeSignedThinkingGatewayToolCall("tool-current"),
+    );
+  });
+
+  it("drops signed-thinking turns whose sibling tool calls are dangling", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: makeSignedThinkingGatewayToolCall("tool-1"),
+      },
+      { role: "user", content: [{ type: "text", text: "Continue" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expectAssistantToolCallsOmitted(result, 3);
+  });
+
+  it("does not trust future tool results with the right id but the wrong tool name", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: makeSignedThinkingGatewayToolCall("tool-1"),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "exec",
+        content: [{ type: "text", text: "wrong tool" }],
+        isError: false,
+      },
+      { role: "user", content: [{ type: "text", text: "Continue" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expectAssistantToolCallsOmitted(result, 4);
+  });
+
+  it("drops redacted-thinking turns whose sibling tool calls are dangling", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "redacted_thinking", data: "blob", thinkingSignature: "sig_1" },
+          { type: "toolUse", id: "tool-1", name: "gateway", arguments: {} },
+        ],
+      },
+      { role: "user", content: [{ type: "text", text: "Continue" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(3);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual([{ type: "text", text: "[tool calls omitted]" }]);
+  });
+
+  it("is replay-safe across repeated validation passes", () => {
+    const msgs = makeDualToolAnthropicTurns([
+      {
+        type: "toolResult",
+        toolUseId: "tool-1",
+        content: [{ type: "text", text: "Result 1" }],
       },
     ]);
 

@@ -1,14 +1,18 @@
+import type { ChannelId } from "../channels/plugins/types.public.js";
+
 export type ChannelHealthSnapshot = {
   running?: boolean;
   connected?: boolean;
   enabled?: boolean;
   configured?: boolean;
+  restartPending?: boolean;
   busy?: boolean;
   activeRuns?: number;
   lastRunActivityAt?: number | null;
   lastEventAt?: number | null;
   lastStartAt?: number | null;
   reconnectAttempts?: number;
+  mode?: string;
 };
 
 export type ChannelHealthEvaluationReason =
@@ -27,18 +31,29 @@ export type ChannelHealthEvaluation = {
 };
 
 export type ChannelHealthPolicy = {
+  channelId: ChannelId;
   now: number;
   staleEventThresholdMs: number;
   channelConnectGraceMs: number;
+  skipStaleSocketCheck?: boolean;
 };
 
-export type ChannelRestartReason = "gave-up" | "stopped" | "stale-socket" | "stuck";
+export type ChannelRestartReason =
+  | "gave-up"
+  | "stopped"
+  | "stale-socket"
+  | "stuck"
+  | "disconnected";
 
 function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
   return snapshot.enabled !== false && snapshot.configured !== false;
 }
 
 const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
+// Keep these shared between the background health monitor and on-demand readiness
+// probes so both surfaces evaluate channel lifecycle windows consistently.
+export const DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
+export const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
 
 export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
@@ -92,15 +107,26 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  if (snapshot.lastEventAt != null || snapshot.lastStartAt != null) {
-    const upSince = snapshot.lastStartAt ?? 0;
-    const upDuration = policy.now - upSince;
-    if (upDuration > policy.staleEventThresholdMs) {
-      const lastEvent = snapshot.lastEventAt ?? 0;
-      const eventAge = policy.now - lastEvent;
-      if (eventAge > policy.staleEventThresholdMs) {
-        return { healthy: false, reason: "stale-socket" };
+  // Skip stale-socket checks for channels that declare this health policy and
+  // any channel explicitly operating in webhook mode. In these cases, there is
+  // no persistent outgoing socket that can go half-dead, so the lack of
+  // incoming events does not necessarily indicate a connection failure.
+  if (
+    policy.skipStaleSocketCheck !== true &&
+    snapshot.mode !== "webhook" &&
+    snapshot.connected === true &&
+    snapshot.lastEventAt != null
+  ) {
+    if (lastStartAt != null && snapshot.lastEventAt < lastStartAt) {
+      const lifecycleEventGap = Math.max(0, policy.now - lastStartAt);
+      if (lifecycleEventGap <= policy.staleEventThresholdMs) {
+        return { healthy: true, reason: "healthy" };
       }
+      return { healthy: false, reason: "stale-socket" };
+    }
+    const eventAge = policy.now - snapshot.lastEventAt;
+    if (eventAge > policy.staleEventThresholdMs) {
+      return { healthy: false, reason: "stale-socket" };
     }
   }
   return { healthy: true, reason: "healthy" };
@@ -115,6 +141,9 @@ export function resolveChannelRestartReason(
   }
   if (evaluation.reason === "not-running") {
     return snapshot.reconnectAttempts && snapshot.reconnectAttempts >= 10 ? "gave-up" : "stopped";
+  }
+  if (evaluation.reason === "disconnected") {
+    return "disconnected";
   }
   return "stuck";
 }

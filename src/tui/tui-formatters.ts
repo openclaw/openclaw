@@ -1,5 +1,6 @@
-import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
+import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
@@ -11,6 +12,8 @@ const BINARY_LINE_REPLACEMENT_THRESHOLD = 12;
 const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
+const EDGE_PUNCTUATION_RE = /^[`"'([{<]+|[`"')\]}>.,:;!?]+$/g;
+const TOKENISH_MIN_LENGTH = 24;
 const RTL_SCRIPT_RE = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
 const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
 const RTL_ISOLATE_START = "\u2067";
@@ -56,6 +59,9 @@ function chunkToken(token: string, maxChars: number): string[] {
 }
 
 function isCopySensitiveToken(token: string): boolean {
+  const coreToken = token.replace(EDGE_PUNCTUATION_RE, "");
+  const candidate = coreToken || token;
+
   if (URL_PREFIX_RE.test(token)) {
     return true;
   }
@@ -73,7 +79,16 @@ function isCopySensitiveToken(token: string): boolean {
   if (token.includes("/") || token.includes("\\")) {
     return true;
   }
-  return token.includes("_") && FILE_LIKE_RE.test(token);
+  if (token.includes("_") && FILE_LIKE_RE.test(token)) {
+    return true;
+  }
+
+  // Preserve long credential-like tokens (hex/base62/etc.) to avoid introducing
+  // visible spaces that users may copy back into secrets.
+  if (candidate.length >= TOKENISH_MIN_LENGTH && /[a-z]/i.test(candidate) && /\d/.test(candidate)) {
+    return true;
+  }
+  return false;
 }
 
 function normalizeLongTokenForDisplay(token: string): string {
@@ -142,6 +157,7 @@ export function sanitizeRenderableText(text: string): string {
 export function resolveFinalAssistantText(params: {
   finalText?: string | null;
   streamedText?: string | null;
+  errorMessage?: string | null;
 }) {
   const finalText = params.finalText ?? "";
   if (finalText.trim()) {
@@ -150,6 +166,10 @@ export function resolveFinalAssistantText(params: {
   const streamedText = params.streamedText ?? "";
   if (streamedText.trim()) {
     return streamedText;
+  }
+  const errorMessage = params.errorMessage ?? "";
+  if (errorMessage.trim()) {
+    return formatRawAssistantErrorForUi(errorMessage);
   }
   return "(no output)";
 }
@@ -252,6 +272,15 @@ export function extractContentFromMessage(message: unknown): string {
   }
   const { record, content } = resolved;
 
+  if (record.role === "assistant") {
+    if (typeof content === "string") {
+      return sanitizeRenderableText(content).trim();
+    }
+    if (Array.isArray(content)) {
+      return extractAssistantRenderableContent(record);
+    }
+  }
+
   if (typeof content === "string") {
     return sanitizeRenderableText(content).trim();
   }
@@ -263,6 +292,14 @@ export function extractContentFromMessage(message: unknown): string {
   });
   if (parts.length > 0) {
     return parts.join("\n").trim();
+  }
+  return formatAssistantErrorFromRecord(record);
+}
+
+function extractAssistantRenderableContent(record: Record<string, unknown>): string {
+  const visible = sanitizeRenderableText(extractAssistantVisibleText(record) ?? "").trim();
+  if (visible) {
+    return visible;
   }
   return formatAssistantErrorFromRecord(record);
 }
@@ -304,9 +341,16 @@ export function extractTextFromMessage(
   if (!record) {
     return "";
   }
+  if (record.role === "assistant") {
+    return composeThinkingAndContent({
+      thinkingText: extractThinkingFromMessage(record),
+      contentText: extractAssistantRenderableContent(record),
+      showThinking: opts?.includeThinking ?? false,
+    });
+  }
   const text = extractTextBlocks(record.content, opts);
   if (text) {
-    if (record.role === "user") {
+    if (record.role === "user" || record.command === true) {
       return stripLeadingInboundMetadata(text);
     }
     return text;

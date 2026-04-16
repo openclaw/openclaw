@@ -9,15 +9,21 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "openclaw/plugin-sdk/text-runtime";
+import { z } from "openclaw/plugin-sdk/zod";
+import {
   createFixedWindowRateLimiter,
-  isBlockedHostnameOrIp,
+  getPluginRuntimeGatewayRequestScope,
   readJsonBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk/nostr";
-import { z } from "zod";
+} from "../runtime-api.js";
 import { publishNostrProfile, getNostrProfileState } from "./channel.js";
 import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
 import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
+import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
 // ============================================================================
 // Types
@@ -98,30 +104,6 @@ async function withPublishLock<T>(accountId: string, fn: () => Promise<T>): Prom
   }
 }
 
-// ============================================================================
-// SSRF Protection
-// ============================================================================
-
-function validateUrlSafety(urlStr: string): { ok: true } | { ok: false; error: string } {
-  try {
-    const url = new URL(urlStr);
-
-    if (url.protocol !== "https:") {
-      return { ok: false, error: "URL must use https:// protocol" };
-    }
-
-    const hostname = url.hostname.toLowerCase();
-
-    if (isBlockedHostnameOrIp(hostname)) {
-      return { ok: false, error: "URL must not point to private/internal addresses" };
-    }
-
-    return { ok: true };
-  } catch {
-    return { ok: false, error: "Invalid URL format" };
-  }
-}
-
 // Export for use in import validation
 export { validateUrlSafety };
 
@@ -146,6 +128,8 @@ const ProfileUpdateSchema = NostrProfileSchema.extend({
   nip05: nip05FormatSchema,
   lud16: lud16FormatSchema,
 });
+
+const PROFILE_MUTATION_SCOPE = "operator.admin";
 
 // ============================================================================
 // Request Helpers
@@ -193,7 +177,7 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
     return false;
   }
 
-  const ipLower = remoteAddress.toLowerCase().replace(/^\[|\]$/g, "");
+  const ipLower = normalizeLowercaseStringOrEmpty(remoteAddress).replace(/^\[|\]$/g, "");
 
   // IPv6 loopback
   if (ipLower === "::1") {
@@ -217,11 +201,56 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
 function isLoopbackOriginLike(value: string): boolean {
   try {
     const url = new URL(value);
-    const hostname = url.hostname.toLowerCase();
+    const hostname = normalizeLowercaseStringOrEmpty(url.hostname);
     return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
   } catch {
     return false;
   }
+}
+
+function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return readStringValue(value);
+}
+
+function normalizeIpCandidate(raw: string): string {
+  const unquoted = raw.trim().replace(/^"|"$/g, "");
+  const bracketedWithOptionalPort = unquoted.match(/^\[([^[\]]+)\](?::\d+)?$/);
+  if (bracketedWithOptionalPort) {
+    return bracketedWithOptionalPort[1] ?? "";
+  }
+  const ipv4WithPort = unquoted.match(/^(\d+\.\d+\.\d+\.\d+):\d+$/);
+  if (ipv4WithPort) {
+    return ipv4WithPort[1] ?? "";
+  }
+  return unquoted;
+}
+
+function hasNonLoopbackForwardedClient(req: IncomingMessage): boolean {
+  const forwardedFor = firstHeaderValue(req.headers["x-forwarded-for"]);
+  if (forwardedFor) {
+    for (const hop of forwardedFor.split(",")) {
+      const candidate = normalizeIpCandidate(hop);
+      if (!candidate) {
+        continue;
+      }
+      if (!isLoopbackRemoteAddress(candidate)) {
+        return true;
+      }
+    }
+  }
+
+  const realIp = firstHeaderValue(req.headers["x-real-ip"]);
+  if (realIp) {
+    const candidate = normalizeIpCandidate(realIp);
+    if (candidate && !isLoopbackRemoteAddress(candidate)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function enforceLoopbackMutationGuards(
@@ -237,15 +266,32 @@ function enforceLoopbackMutationGuards(
     return false;
   }
 
+  // If a proxy exposes client-origin headers showing a non-loopback client,
+  // treat this as a remote request and deny mutation.
+  if (hasNonLoopbackForwardedClient(req)) {
+    ctx.log?.warn?.("Rejected mutation with non-loopback forwarded client headers");
+    sendJson(res, 403, { ok: false, error: "Forbidden" });
+    return false;
+  }
+
+  const secFetchSite = normalizeOptionalLowercaseString(
+    firstHeaderValue(req.headers["sec-fetch-site"]),
+  );
+  if (secFetchSite === "cross-site") {
+    ctx.log?.warn?.("Rejected mutation with cross-site sec-fetch-site header");
+    sendJson(res, 403, { ok: false, error: "Forbidden" });
+    return false;
+  }
+
   // CSRF guard: browsers send Origin/Referer on cross-site requests.
-  const origin = req.headers.origin;
+  const origin = firstHeaderValue(req.headers.origin);
   if (typeof origin === "string" && !isLoopbackOriginLike(origin)) {
     ctx.log?.warn?.(`Rejected mutation with non-loopback origin=${origin}`);
     sendJson(res, 403, { ok: false, error: "Forbidden" });
     return false;
   }
 
-  const referer = req.headers.referer ?? req.headers.referrer;
+  const referer = firstHeaderValue(req.headers.referer ?? req.headers.referrer);
   if (typeof referer === "string" && !isLoopbackOriginLike(referer)) {
     ctx.log?.warn?.(`Rejected mutation with non-loopback referer=${referer}`);
     sendJson(res, 403, { ok: false, error: "Forbidden" });
@@ -253,6 +299,21 @@ function enforceLoopbackMutationGuards(
   }
 
   return true;
+}
+
+function enforceGatewayMutationScope(
+  ctx: NostrProfileHttpContext,
+  accountId: string,
+  res: ServerResponse,
+): boolean {
+  const runtimeScopes = getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes;
+  const scopes = Array.isArray(runtimeScopes) ? runtimeScopes : [];
+  if (scopes.includes(PROFILE_MUTATION_SCOPE)) {
+    return true;
+  }
+  ctx.log?.warn?.(`[${accountId}] Rejected profile mutation missing ${PROFILE_MUTATION_SCOPE}`);
+  sendJson(res, 403, { ok: false, error: `missing scope: ${PROFILE_MUTATION_SCOPE}` });
+  return false;
 }
 
 // ============================================================================
@@ -337,6 +398,9 @@ async function handleUpdateProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
+  if (!enforceGatewayMutationScope(ctx, accountId, res)) {
+    return true;
+  }
   if (!enforceLoopbackMutationGuards(ctx, req, res)) {
     return true;
   }
@@ -440,6 +504,9 @@ async function handleImportProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
+  if (!enforceGatewayMutationScope(ctx, accountId, res)) {
+    return true;
+  }
   if (!enforceLoopbackMutationGuards(ctx, req, res)) {
     return true;
   }

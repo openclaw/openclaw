@@ -4,6 +4,7 @@ import type {
   GroupPolicy,
   ReplyToMode,
 } from "./types.base.js";
+import type { ChannelHealthMonitorConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
 import type { SecretRef } from "./types.secrets.js";
 
@@ -17,10 +18,8 @@ export type GoogleChatDmConfig = {
 };
 
 export type GoogleChatGroupConfig = {
-  /** If false, disable the bot in this space. (Alias for allow: false.) */
+  /** If false, disable the bot in this space. */
   enabled?: boolean;
-  /** Legacy allow toggle; prefer enabled. */
-  allow?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
   /** Allowlist of users that can invoke the bot in this space. */
@@ -74,6 +73,8 @@ export type GoogleChatAccountConfig = {
   audienceType?: "app-url" | "project-number";
   /** Audience value (app URL or project number). */
   audience?: string;
+  /** Exact add-on principal to accept when app-url delivery uses add-on tokens. */
+  appPrincipal?: string;
   /** Google Chat webhook path (default: /googlechat). */
   webhookPath?: string;
   /** Google Chat webhook URL (used to derive the path). */
@@ -94,11 +95,13 @@ export type GoogleChatAccountConfig = {
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   mediaMaxMb?: number;
-  /** Control reply threading when reply tags are present (off|first|all). */
+  /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
   /** Per-action tool gating (default: true for all). */
   actions?: GoogleChatActionConfig;
   dm?: GoogleChatDmConfig;
+  /** Channel health monitor overrides for this channel/account. */
+  healthMonitor?: ChannelHealthMonitorConfig;
   /**
    * Typing indicator mode (default: "message").
    * - "none": No indicator
@@ -118,3 +121,9 @@ export type GoogleChatConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & GoogleChatAccountConfig;
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    googlechat?: GoogleChatConfig;
+  }
+}

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveSandboxedMediaSource } from "./sandbox-paths.js";
 
@@ -130,6 +130,16 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
+  it("preserves remote mxc:// media sources", async () => {
+    await withSandboxRoot(async (sandboxDir) => {
+      const result = await resolveSandboxedMediaSource({
+        media: "mxc://matrix.org/abc123def456",
+        sandboxRoot: sandboxDir,
+      });
+      expect(result).toBe("mxc://matrix.org/abc123def456");
+    });
+  });
+
   // Group 3: Rejections (security)
   it.each([
     {
@@ -163,9 +173,29 @@ describe("resolveSandboxedMediaSource", () => {
       expected: /sandbox/i,
     },
     {
+      name: "file:// URLs with remote hosts",
+      media: "file://attacker/share/photo.png",
+      expected: /remote hosts are not allowed/i,
+    },
+    {
+      name: "file:// container URLs with remote hosts",
+      media: "file://attacker/workspace/photo.png",
+      expected: /remote hosts are not allowed/i,
+    },
+    {
       name: "invalid file:// URLs",
       media: "file://not a valid url\x00",
       expected: /Invalid file:\/\/ URL/,
+    },
+    {
+      name: "file:// URLs with malformed container pathname encoding",
+      media: "file:///workspace/%E0%A4%A",
+      expected: /Invalid file:\/\/ URL/,
+    },
+    {
+      name: "file:// URLs with encoded separators in the pathname",
+      media: "file:///workspace/%2FREADME.md",
+      expected: /cannot encode path separators/i,
     },
   ])("rejects $name", async ({ media, expected }) => {
     await withSandboxRoot(async (sandboxDir) => {
@@ -276,5 +306,20 @@ describe("resolveSandboxedMediaSource", () => {
       sandboxRoot: "/any/path",
     });
     expect(result).toBe("");
+  });
+
+  it("rejects Windows network paths before sandbox resolution", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      await expect(
+        resolveSandboxedMediaSource({
+          media: "\\\\attacker\\share\\photo.png",
+          sandboxRoot: "/any/path",
+        }),
+      ).rejects.toThrow(/network paths/i);
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 });

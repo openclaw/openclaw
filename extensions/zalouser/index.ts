@@ -1,29 +1,34 @@
-import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/zalouser";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/zalouser";
-import { zalouserDock, zalouserPlugin } from "./src/channel.js";
-import { setZalouserRuntime } from "./src/runtime.js";
-import { ZalouserToolSchema, executeZalouserTool } from "./src/tool.js";
+import {
+  type AnyAgentTool,
+  defineBundledChannelEntry,
+  loadBundledEntryExportSync,
+} from "openclaw/plugin-sdk/channel-entry-contract";
 
-const plugin = {
+function createZalouserTool(context?: unknown): AnyAgentTool {
+  const createTool = loadBundledEntryExportSync<(context?: unknown) => AnyAgentTool>(
+    import.meta.url,
+    {
+      specifier: "./api.js",
+      exportName: "createZalouserTool",
+    },
+  );
+  return createTool(context);
+}
+
+export default defineBundledChannelEntry({
   id: "zalouser",
   name: "Zalo Personal",
   description: "Zalo personal account messaging via native zca-js integration",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setZalouserRuntime(api.runtime);
-    api.registerChannel({ plugin: zalouserPlugin, dock: zalouserDock });
-
-    api.registerTool({
-      name: "zalouser",
-      label: "Zalo Personal",
-      description:
-        "Send messages and access data via Zalo personal account. " +
-        "Actions: send (text message), image (send image URL), link (send link), " +
-        "friends (list/search friends), groups (list groups), me (profile info), status (auth check).",
-      parameters: ZalouserToolSchema,
-      execute: executeZalouserTool,
-    } as AnyAgentTool);
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "zalouserPlugin",
   },
-};
-
-export default plugin;
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setZalouserRuntime",
+  },
+  registerFull(api) {
+    api.registerTool((ctx) => createZalouserTool(ctx), { name: "zalouser" });
+  },
+});

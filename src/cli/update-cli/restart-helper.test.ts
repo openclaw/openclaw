@@ -3,9 +3,15 @@ import fs from "node:fs/promises";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 
-vi.mock("node:child_process", () => ({
-  spawn: vi.fn(),
-}));
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("../../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      spawn: vi.fn(),
+    },
+  );
+});
 
 describe("restart-helper", () => {
   const originalPlatform = process.platform;
@@ -98,7 +104,8 @@ describe("restart-helper", () => {
       expect(scriptPath.endsWith(".sh")).toBe(true);
       expect(content).toContain("#!/bin/sh");
       expect(content).toContain("launchctl kickstart -k 'gui/501/ai.openclaw.gateway'");
-      // Should fall back to bootstrap when kickstart fails (service deregistered after bootout)
+      // Should clear disabled state and fall back to bootstrap when kickstart fails.
+      expect(content).toContain("launchctl enable 'gui/501/ai.openclaw.gateway'");
       expect(content).toContain("launchctl bootstrap 'gui/501'");
       expect(content).toContain('rm -f "$0"');
       await cleanupScript(scriptPath);
@@ -286,6 +293,7 @@ describe("restart-helper", () => {
       expect(spawn).toHaveBeenCalledWith("/bin/sh", [scriptPath], {
         detached: true,
         stdio: "ignore",
+        windowsHide: true,
       });
       expect(mockChild.unref).toHaveBeenCalled();
     });
@@ -298,11 +306,27 @@ describe("restart-helper", () => {
 
       await runRestartScript(scriptPath);
 
-      expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/c", scriptPath], {
+      expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/d", "/s", "/c", scriptPath], {
         detached: true,
         stdio: "ignore",
+        windowsHide: true,
       });
       expect(mockChild.unref).toHaveBeenCalled();
+    });
+
+    it("quotes cmd.exe /c paths with metacharacters on Windows", async () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const scriptPath = "C:\\Temp\\me&(ow)\\fake-script.bat";
+      const mockChild = { unref: vi.fn() };
+      vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
+
+      await runRestartScript(scriptPath);
+
+      expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/d", "/s", "/c", `"${scriptPath}"`], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
     });
   });
 });

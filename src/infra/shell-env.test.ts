@@ -2,10 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import {
+  getShellEnvAppliedKeys,
   getShellPathFromLoginShell,
   loadShellEnvFallback,
   resetShellPathCacheForTests,
   resolveShellEnvFallbackTimeoutMs,
+  shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "./shell-env.js";
 
@@ -119,6 +121,12 @@ describe("shell env fallback", () => {
     expect(shouldEnableShellEnvFallback({ OPENCLAW_LOAD_SHELL_ENV: "1" })).toBe(true);
   });
 
+  it("uses the same truthy env parsing for deferred fallback", () => {
+    expect(shouldDeferShellEnvFallback({} as NodeJS.ProcessEnv)).toBe(false);
+    expect(shouldDeferShellEnvFallback({ OPENCLAW_DEFER_SHELL_ENV_FALLBACK: "false" })).toBe(false);
+    expect(shouldDeferShellEnvFallback({ OPENCLAW_DEFER_SHELL_ENV_FALLBACK: "yes" })).toBe(true);
+  });
+
   it("resolves timeout from env with default fallback", () => {
     expect(resolveShellEnvFallbackTimeoutMs({} as NodeJS.ProcessEnv)).toBe(15000);
     expect(resolveShellEnvFallbackTimeoutMs({ OPENCLAW_SHELL_ENV_TIMEOUT_MS: "42" })).toBe(42);
@@ -143,6 +151,24 @@ describe("shell env fallback", () => {
     expect(res.ok).toBe(true);
     expect(res.applied).toEqual([]);
     expect(res.ok && res.skippedReason).toBe("already-has-keys");
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("treats explicitly empty env vars as intentional overrides", () => {
+    const env: NodeJS.ProcessEnv = { OPENAI_API_KEY: "" };
+    const exec = vi.fn(() => Buffer.from("OPENAI_API_KEY=from-shell\0"));
+
+    const res = runShellEnvFallback({
+      enabled: true,
+      env,
+      expectedKeys: ["OPENAI_API_KEY"],
+      exec,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.applied).toEqual([]);
+    expect(res.ok && res.skippedReason).toBe("already-has-keys");
+    expect(env.OPENAI_API_KEY).toBe("");
     expect(exec).not.toHaveBeenCalled();
   });
 
@@ -179,6 +205,91 @@ describe("shell env fallback", () => {
     expect(exec2).not.toHaveBeenCalled();
   });
 
+  it("reuses the cached login-shell env probe across repeated fallback reads", () => {
+    resetShellPathCacheForTests();
+    const env: NodeJS.ProcessEnv = {};
+    const exec = vi.fn(() =>
+      Buffer.from("OPENAI_API_KEY=from-shell\0ANTHROPIC_API_KEY=from-shell-anthropic\0"),
+    );
+
+    expect(
+      loadShellEnvFallback({
+        enabled: true,
+        env,
+        expectedKeys: ["OPENAI_API_KEY"],
+        exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+      }),
+    ).toEqual({
+      ok: true,
+      applied: ["OPENAI_API_KEY"],
+    });
+
+    expect(
+      loadShellEnvFallback({
+        enabled: true,
+        env,
+        expectedKeys: ["ANTHROPIC_API_KEY"],
+        exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+      }),
+    ).toEqual({
+      ok: true,
+      applied: ["ANTHROPIC_API_KEY"],
+    });
+
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it("tracks last applied keys across success, skip, and failure paths", () => {
+    const successEnv: NodeJS.ProcessEnv = {};
+    const successExec = vi.fn(() =>
+      Buffer.from("OPENAI_API_KEY=from-shell\0DISCORD_BOT_TOKEN=\0EXTRA=ignored\0"),
+    );
+    expect(
+      loadShellEnvFallback({
+        enabled: true,
+        env: successEnv,
+        expectedKeys: ["OPENAI_API_KEY", "DISCORD_BOT_TOKEN"],
+        exec: successExec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+      }),
+    ).toEqual({
+      ok: true,
+      applied: ["OPENAI_API_KEY"],
+    });
+    expect(getShellEnvAppliedKeys()).toEqual(["OPENAI_API_KEY"]);
+
+    expect(
+      loadShellEnvFallback({
+        enabled: false,
+        env: {},
+        expectedKeys: ["OPENAI_API_KEY"],
+        exec: successExec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+      }),
+    ).toEqual({
+      ok: true,
+      applied: [],
+      skippedReason: "disabled",
+    });
+    expect(getShellEnvAppliedKeys()).toEqual([]);
+
+    const failureExec = vi.fn(() => {
+      throw new Error("boom");
+    });
+    expect(
+      loadShellEnvFallback({
+        enabled: true,
+        env: {},
+        expectedKeys: ["OPENAI_API_KEY"],
+        exec: failureExec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+        logger: { warn: vi.fn() },
+      }),
+    ).toMatchObject({
+      ok: false,
+      applied: [],
+      error: "boom",
+    });
+    expect(getShellEnvAppliedKeys()).toEqual([]);
+  });
+
   it("resolves PATH via login shell and caches it", () => {
     const exec = vi.fn(() => Buffer.from("PATH=/usr/local/bin:/usr/bin\0HOME=/tmp\0"));
 
@@ -196,6 +307,19 @@ describe("shell env fallback", () => {
     const exec = vi.fn(() => {
       throw new Error("exec failed");
     });
+
+    const { first, second } = probeShellPathWithFreshCache({
+      exec,
+      platform: "linux",
+    });
+
+    expect(first).toBeNull();
+    expect(second).toBeNull();
+    expect(exec).toHaveBeenCalledOnce();
+  });
+
+  it("returns null when login shell PATH is blank", () => {
+    const exec = vi.fn(() => Buffer.from("PATH=   \0HOME=/tmp\0"));
 
     const { first, second } = probeShellPathWithFreshCache({
       exec,
