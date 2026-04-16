@@ -100,7 +100,8 @@ export function resolveAgentAutoContinue(
   agentId?: string | null,
 ): ResolvedAutoContinueConfig {
   const defaultAc = cfg?.agents?.defaults?.embeddedPi?.autoContinue;
-  const agentAc = agentId ? resolveAgentConfig(cfg, agentId)?.embeddedPi?.autoContinue : undefined;
+  const agentAc =
+    agentId && cfg ? resolveAgentConfig(cfg, agentId)?.embeddedPi?.autoContinue : undefined;
   const merged = agentAc ?? defaultAc;
   if (!merged) {
     return DEFAULT_AUTO_CONTINUE;
