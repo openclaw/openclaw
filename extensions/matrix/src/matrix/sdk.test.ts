@@ -1484,6 +1484,38 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(status.verified).toBe(false);
   });
 
+  it("reports peer device trust from the current client", async () => {
+    const getDeviceVerificationStatus = vi.fn(async () => ({
+      isVerified: () => true,
+      localVerified: true,
+      crossSigningVerified: false,
+      signedByOwner: false,
+    }));
+    matrixJsClient.getCrypto = vi.fn(() => ({
+      on: vi.fn(),
+      bootstrapCrossSigning: vi.fn(async () => {}),
+      bootstrapSecretStorage: vi.fn(async () => {}),
+      requestOwnUserVerification: vi.fn(async () => null),
+      getDeviceVerificationStatus,
+    }));
+
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      encryption: true,
+    });
+    await client.start();
+
+    const status = await client.getDeviceVerificationStatus("@peer:example.org", "PEERDEVICE");
+    expect(getDeviceVerificationStatus).toHaveBeenCalledWith("@peer:example.org", "PEERDEVICE");
+    expect(status).toMatchObject({
+      deviceId: "PEERDEVICE",
+      encryptionEnabled: true,
+      localVerified: true,
+      signedByOwner: false,
+      userId: "@peer:example.org",
+      verified: true,
+    });
+  });
+
   it("verifies with a provided recovery key and reports success", async () => {
     const encoded = encodeRecoveryKey(new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1)));
     expect(encoded).toBeTypeOf("string");
@@ -1882,6 +1914,38 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(matrixJsClient.startClient).toHaveBeenCalledTimes(1);
     expect(loadSessionBackupPrivateKeyFromSecretStorage).toHaveBeenCalledTimes(1);
     expect(checkKeyBackupAndEnable).toHaveBeenCalledTimes(1);
+    expect(restoreKeyBackup).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores backup keys when the matching decryption key is cached but signature trust is stale", async () => {
+    const restoreKeyBackup = vi.fn(async () => ({ imported: 3, total: 3 }));
+    matrixJsClient.getCrypto = vi.fn(() => ({
+      on: vi.fn(),
+      getActiveSessionBackupVersion: vi.fn(async () => "42"),
+      getSessionBackupPrivateKey: vi.fn(async () => new Uint8Array([1])),
+      getKeyBackupInfo: vi.fn(async () => ({
+        algorithm: "m.megolm_backup.v1.curve25519-aes-sha2",
+        auth_data: {},
+        version: "42",
+      })),
+      isKeyBackupTrusted: vi.fn(async () => ({
+        trusted: false,
+        matchesDecryptionKey: true,
+      })),
+      restoreKeyBackup,
+    }));
+
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      encryption: true,
+    });
+    vi.spyOn(client, "doRequest").mockResolvedValue({ version: "42" });
+
+    const result = await client.restoreRoomKeyBackup();
+    expect(result.success).toBe(true);
+    expect(result.imported).toBe(3);
+    expect(result.total).toBe(3);
+    expect(result.backup.trusted).toBe(false);
+    expect(result.backup.matchesDecryptionKey).toBe(true);
     expect(restoreKeyBackup).toHaveBeenCalledTimes(1);
   });
 

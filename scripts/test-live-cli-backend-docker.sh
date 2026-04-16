@@ -293,8 +293,7 @@ EOF
 if [[ "${OPENCLAW_SKIP_DOCKER_BUILD:-}" == "1" ]]; then
   echo "==> Reuse live-test image: $LIVE_IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"
 else
-  echo "==> Build live-test image: $LIVE_IMAGE_NAME (target=build)"
-  docker build --target build -t "$LIVE_IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"
+  "$ROOT_DIR/scripts/test-live-build-docker.sh"
 fi
 
 echo "==> Run CLI backend live test in Docker"
