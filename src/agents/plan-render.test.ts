@@ -65,7 +65,7 @@ describe("renderPlanChecklist", () => {
     ];
     for (const format of ["html", "markdown", "plaintext", "slack-mrkdwn"] as const) {
       const result = renderPlanChecklist(steps, format);
-      expect(result).not.toContain("\n" + " ");
+      expect(result).not.toContain("\n ");
       expect(result).not.toContain("\r");
       expect(result).toContain("Run tests then check results");
       expect(result).toContain("Building artifacts");
