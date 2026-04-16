@@ -35,17 +35,20 @@ export function renderPlanChecklist(
       s.status === "in_progress" && s.activeForm ? s.activeForm : s.step;
 
     switch (format) {
-      case "html":
-        if (s.status === "completed") return `✅ ${escapeHtml(label)}`;
-        if (s.status === "in_progress") return `⏳ <b>${escapeHtml(label)}</b>`;
-        if (s.status === "cancelled") return `❌ <s>${escapeHtml(label)}</s>`;
-        return `⬚ ${escapeHtml(label)}`;
+      case "html": {
+        const esc = escapeHtml(label);
+        if (s.status === "completed") { return `✅ ${esc}`; }
+        if (s.status === "in_progress") { return `⏳ <b>${esc}</b>`; }
+        if (s.status === "cancelled") { return `❌ <s>${esc}</s>`; }
+        return `⬚ ${esc}`;
+      }
 
-      case "markdown":
-        if (s.status === "completed") return `- [x] ${label}`;
-        if (s.status === "in_progress") return `- [>] **${label}**`;
-        if (s.status === "cancelled") return `- [~] ~~${label}~~`;
+      case "markdown": {
+        if (s.status === "completed") { return `- [x] ${label}`; }
+        if (s.status === "in_progress") { return `- [>] **${label}**`; }
+        if (s.status === "cancelled") { return `- [~] ~~${label}~~`; }
         return `- [ ] ${label}`;
+      }
 
       case "plaintext": {
         const markers: Record<string, string> = {
@@ -59,10 +62,15 @@ export function renderPlanChecklist(
 
       case "slack-mrkdwn": {
         const escaped = escapeSlackMrkdwn(label);
-        if (s.status === "completed") return `✅ ${escaped}`;
-        if (s.status === "in_progress") return `⏳ *${escaped}*`;
-        if (s.status === "cancelled") return `❌ ~${escaped}~`;
+        if (s.status === "completed") { return `✅ ${escaped}`; }
+        if (s.status === "in_progress") { return `⏳ *${escaped}*`; }
+        if (s.status === "cancelled") { return `❌ ~${escaped}~`; }
         return `⬚ ${escaped}`;
+      }
+
+      default: {
+        const _exhaustive: never = format;
+        return `[ ] ${label}`;
       }
     }
   });
@@ -92,6 +100,10 @@ export function renderPlanWithHeader(
       return `${title}\n${checklist}`;
     case "slack-mrkdwn":
       return `*${escapeSlackMrkdwn(title)}*\n${checklist}`;
+    default: {
+      const _exhaustive: never = format;
+      return `${title}\n${checklist}`;
+    }
   }
 }
 
