@@ -110,6 +110,21 @@ describe("openai codex provider", () => {
     });
   });
 
+  it("exposes grouped model/auth picker labels for Codex auth methods", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const oauth = provider.auth?.find((method) => method.id === "oauth");
+    const deviceCode = provider.auth?.find((method) => method.id === "device-code");
+
+    expect(oauth?.wizard).toMatchObject({
+      choiceLabel: "OpenAI Codex Browser Login",
+      groupHint: "API key + Codex auth",
+    });
+    expect(deviceCode?.wizard).toMatchObject({
+      choiceLabel: "OpenAI Codex Device Pairing",
+      groupHint: "API key + Codex auth",
+    });
+  });
+
   it("returns deprecated-profile doctor guidance for legacy Codex CLI ids", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
