@@ -363,6 +363,27 @@ describe("promptResolvedAllowFrom", () => {
     );
     expect(resolveEntries).toHaveBeenCalledTimes(2);
   });
+
+  it("throws WizardCancelledError when prompter.text returns undefined (#67649)", async () => {
+    const prompter = {
+      text: vi.fn(async () => undefined as unknown as string),
+      note: vi.fn(async () => undefined),
+    };
+    await expect(
+      promptResolvedAllowFrom({
+        prompter: prompter as any,
+        existing: [],
+        token: "",
+        message: "msg",
+        placeholder: "placeholder",
+        label: "allowlist",
+        parseInputs: parseCsvInputs,
+        parseId: () => null,
+        invalidWithoutTokenNote: "ids only",
+        resolveEntries: vi.fn() as any,
+      }),
+    ).rejects.toThrow("wizard cancelled");
+  });
 });
 
 describe("promptLegacyChannelAllowFrom", () => {
@@ -791,6 +812,25 @@ describe("promptParsedAllowFromForAccount", () => {
     });
 
     expect(next.channels?.nostr?.allowFrom).toEqual(["old", "new"]);
+  });
+
+  it("throws WizardCancelledError when prompter.text returns undefined (#67649)", async () => {
+    const prompter = {
+      text: vi.fn(async () => undefined as unknown as string),
+      note: vi.fn(async () => undefined),
+    };
+    await expect(
+      promptParsedAllowFromForAccount({
+        cfg: {} as OpenClawConfig,
+        defaultAccountId: DEFAULT_ACCOUNT_ID,
+        prompter: prompter as any,
+        message: "msg",
+        placeholder: "placeholder",
+        parseEntries: (raw) => ({ entries: [raw] }),
+        getExistingAllowFrom: () => [],
+        applyAllowFrom: ({ cfg }) => cfg,
+      }),
+    ).rejects.toThrow("wizard cancelled");
   });
 });
 
