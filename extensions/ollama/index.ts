@@ -18,7 +18,7 @@ import {
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
 } from "./api.js";
-import { OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
+import { OLLAMA_DEFAULT_BASE_URL, OLLAMA_DEFAULT_MODEL } from "./src/defaults.js";
 import {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
   createOllamaEmbeddingProvider,
@@ -248,6 +248,16 @@ export default definePluginEntry({
         });
       },
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+      augmentModelCatalog: () => [
+        {
+          provider: PROVIDER_ID,
+          id: OLLAMA_DEFAULT_MODEL,
+          name: `Ollama (${OLLAMA_DEFAULT_MODEL})`,
+          reasoning: false,
+          input: ["text"],
+          contextWindow: undefined,
+        },
+      ],
       resolveReasoningOutputMode: () => "native",
       wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
       createEmbeddingProvider: async ({ config, model, remote }) => {
