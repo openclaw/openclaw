@@ -25,7 +25,8 @@ function buildConfig(overrides?: Partial<ClawdbotConfig>): ClawdbotConfig {
       feishu: {
         enabled: true,
         comments: {
-          policy: "open",
+          policy: "allowlist",
+          allowFrom: ["ou_sender"],
         },
       },
     },
@@ -340,7 +341,8 @@ describe("handleFeishuCommentEvent", () => {
           feishu: {
             enabled: true,
             comments: {
-              policy: "open",
+              policy: "allowlist",
+              allowFrom: ["ou_sender"],
               documents: {
                 "docx:doc_token_1": {
                   policy: "allowlist",

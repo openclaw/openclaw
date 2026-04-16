@@ -1,4 +1,6 @@
-const COMMENT_DELIVERY_GUARD_DEFAULT_ACCOUNT_ID = "default";
+const COMMENT_DELIVERY_GUARD_TTL_MS = 10 * 60 * 1000;
+const COMMENT_DELIVERY_GUARD_MAX_ENTRIES = 1000;
+const COMMENT_DELIVERY_GUARD_TRIM_TO_ENTRIES = 900;
 
 function normalizeCommentDeliveryGuardValue(value: string | number | undefined | null): string {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -12,18 +14,39 @@ function buildCommentDeliveryGuardKey(params: {
   to?: string | null;
   threadId?: string | number | null;
 }): string | null {
-  const accountId =
-    normalizeCommentDeliveryGuardValue(params.accountId) ||
-    COMMENT_DELIVERY_GUARD_DEFAULT_ACCOUNT_ID;
+  const accountId = normalizeCommentDeliveryGuardValue(params.accountId);
   const to = normalizeCommentDeliveryGuardValue(params.to);
   const threadId = normalizeCommentDeliveryGuardValue(params.threadId) || "_";
-  if (!to) {
+  if (!accountId || !to) {
     return null;
   }
   return `${accountId}::${to}::${threadId}`;
 }
 
-const completedCommentConversationDeliveries = new Set<string>();
+const completedCommentConversationDeliveries = new Map<string, number>();
+
+function pruneExpiredCommentConversationDeliveries(now: number): void {
+  for (const [key, expiresAt] of completedCommentConversationDeliveries) {
+    if (expiresAt > now) {
+      continue;
+    }
+    completedCommentConversationDeliveries.delete(key);
+  }
+}
+
+function enforceCommentConversationDeliveryCap(): void {
+  if (completedCommentConversationDeliveries.size <= COMMENT_DELIVERY_GUARD_MAX_ENTRIES) {
+    return;
+  }
+  const keys = completedCommentConversationDeliveries.keys();
+  while (completedCommentConversationDeliveries.size > COMMENT_DELIVERY_GUARD_TRIM_TO_ENTRIES) {
+    const next = keys.next();
+    if (next.done) {
+      break;
+    }
+    completedCommentConversationDeliveries.delete(next.value);
+  }
+}
 
 export function recordFeishuCommentConversationDelivery(params: {
   accountId?: string | null;
@@ -34,7 +57,11 @@ export function recordFeishuCommentConversationDelivery(params: {
   if (!key) {
     return;
   }
-  completedCommentConversationDeliveries.add(key);
+  const now = Date.now();
+  pruneExpiredCommentConversationDeliveries(now);
+  completedCommentConversationDeliveries.delete(key);
+  completedCommentConversationDeliveries.set(key, now + COMMENT_DELIVERY_GUARD_TTL_MS);
+  enforceCommentConversationDeliveryCap();
 }
 
 export function hasFeishuCommentConversationDelivery(params: {
@@ -43,7 +70,20 @@ export function hasFeishuCommentConversationDelivery(params: {
   threadId?: string | number | null;
 }): boolean {
   const key = buildCommentDeliveryGuardKey(params);
-  return key ? completedCommentConversationDeliveries.has(key) : false;
+  if (!key) {
+    return false;
+  }
+  const now = Date.now();
+  pruneExpiredCommentConversationDeliveries(now);
+  const expiresAt = completedCommentConversationDeliveries.get(key);
+  if (!expiresAt) {
+    return false;
+  }
+  if (expiresAt <= now) {
+    completedCommentConversationDeliveries.delete(key);
+    return false;
+  }
+  return true;
 }
 
 export function clearFeishuCommentConversationDelivery(params: {

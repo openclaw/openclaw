@@ -242,6 +242,30 @@ describe("FeishuConfigSchema comments", () => {
     expect(result.success).toBe(true);
   });
 
+  it("rejects open comment policy values", () => {
+    const result = FeishuConfigSchema.safeParse({
+      comments: {
+        policy: "open",
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects open document-level comment policy values", () => {
+    const result = FeishuConfigSchema.safeParse({
+      comments: {
+        documents: {
+          "docx:token_123": {
+            policy: "open",
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("rejects invalid comment policy values", () => {
     const result = FeishuConfigSchema.safeParse({
       comments: {

@@ -14,6 +14,8 @@ import {
   readString,
 } from "./comment-shared.js";
 import { normalizeCommentFileType, type CommentFileType } from "./comment-target.js";
+import { applyBotIdentityState } from "./monitor.bot-identity.js";
+import { fetchBotIdentityForMonitor, type FeishuMonitorBotIdentity } from "./monitor.startup.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_COMMENT_VERIFY_TIMEOUT_MS = 3_000;
@@ -55,6 +57,14 @@ type ResolveDriveCommentEventParams = {
   event: FeishuDriveCommentNoticeEvent;
   botOpenId?: string;
   createClient?: (account: ResolvedFeishuAccount) => FeishuRequestClient;
+  fetchBotIdentity?: (
+    account: ResolvedFeishuAccount,
+    options: { timeoutMs: number; forceFresh: boolean },
+  ) => Promise<FeishuMonitorBotIdentity>;
+  updateBotIdentityState?: (
+    accountId: string,
+    identity: FeishuMonitorBotIdentity,
+  ) => { botOpenId?: string; botName?: string };
   verificationTimeoutMs?: number;
   logger?: (message: string) => void;
   waitMs?: (ms: number) => Promise<void>;
@@ -1226,6 +1236,9 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     event,
     botOpenId,
     createClient = (account) => createFeishuClient(account) as FeishuRequestClient,
+    fetchBotIdentity = (account, options) => fetchBotIdentityForMonitor(account, options),
+    updateBotIdentityState = (resolvedAccountId, identity) =>
+      applyBotIdentityState(resolvedAccountId, identity),
     verificationTimeoutMs = FEISHU_COMMENT_VERIFY_TIMEOUT_MS,
     logger,
     waitMs = delayMs,
@@ -1249,13 +1262,6 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     logger?.(`feishu[${accountId}]: unsupported drive comment notice type ${noticeType}`);
     return null;
   }
-  if (!botOpenId) {
-    logger?.(
-      `feishu[${accountId}]: skipping drive comment notice because bot open_id is unavailable ` +
-        `event=${eventId}`,
-    );
-    return null;
-  }
   if (!recipientId) {
     logger?.(
       `feishu[${accountId}]: skipping drive comment notice because to_user_id.open_id is missing ` +
@@ -1263,21 +1269,47 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     );
     return null;
   }
-  if (recipientId !== botOpenId) {
+  const account = resolveFeishuAccount({ cfg, accountId });
+  let effectiveBotOpenId = normalizeString(botOpenId);
+
+  async function refreshBotIdentityIfNeeded() {
+    const refreshedIdentity = await fetchBotIdentity(account, {
+      timeoutMs: verificationTimeoutMs,
+      forceFresh: true,
+    });
+    const refreshedBotOpenId = normalizeString(
+      updateBotIdentityState(accountId, refreshedIdentity).botOpenId,
+    );
+    if (refreshedBotOpenId) {
+      effectiveBotOpenId = refreshedBotOpenId;
+    }
+    return refreshedBotOpenId;
+  }
+
+  if (!effectiveBotOpenId) {
+    await refreshBotIdentityIfNeeded();
+    if (!effectiveBotOpenId) {
+      logger?.(
+        `feishu[${accountId}]: skipping drive comment notice because bot open_id is unavailable ` +
+          `event=${eventId}`,
+      );
+      return null;
+    }
+  }
+  if (recipientId !== effectiveBotOpenId) {
     logger?.(
       `feishu[${accountId}]: skipping drive comment notice not addressed to bot ` +
-        `event=${eventId} comment=${commentId} to=${recipientId} bot=${botOpenId}`,
+        `event=${eventId} comment=${commentId} to=${recipientId} bot=${effectiveBotOpenId}`,
     );
     return null;
   }
-  if (senderId === botOpenId) {
+  if (senderId === effectiveBotOpenId) {
     logger?.(
       `feishu[${accountId}]: ignoring self-authored drive comment notice event=${eventId} sender=${senderId}`,
     );
     return null;
   }
 
-  const account = resolveFeishuAccount({ cfg, accountId });
   const client = createClient(account);
   const context = await fetchDriveCommentContext({
     client,
@@ -1285,7 +1317,7 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     fileType,
     commentId,
     replyId,
-    botOpenIds: [botOpenId, event.notice_meta?.to_user_id?.open_id],
+    botOpenIds: [effectiveBotOpenId, event.notice_meta?.to_user_id?.open_id],
     timeoutMs: verificationTimeoutMs,
     logger,
     accountId,

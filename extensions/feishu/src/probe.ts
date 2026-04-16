@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import { createFeishuClient, type FeishuClientCredentials } from "./client.js";
@@ -16,6 +17,7 @@ export const FEISHU_PROBE_REQUEST_TIMEOUT_MS = 10_000;
 export type ProbeFeishuOptions = {
   timeoutMs?: number;
   abortSignal?: AbortSignal;
+  forceFresh?: boolean;
 };
 
 type FeishuPingResponse = {
@@ -48,6 +50,19 @@ function setCachedProbeResult(
   return result;
 }
 
+function buildProbeCacheKey(creds: FeishuClientCredentials): string {
+  const fingerprint = crypto
+    .createHash("sha256")
+    .update(JSON.stringify([creds.domain ?? "feishu", creds.appId, creds.appSecret]))
+    .digest("hex")
+    .slice(0, 16);
+
+  // Keep accountId in the key so same-credential aliases do not cross-pollute,
+  // but also include a credential fingerprint so hot-reloaded account updates
+  // trigger a fresh probe instead of reusing stale bot identity.
+  return creds.accountId ? `${creds.accountId}:${fingerprint}` : `${creds.appId}:${fingerprint}`;
+}
+
 export async function probeFeishu(
   creds?: FeishuClientCredentials,
   options: ProbeFeishuOptions = {},
@@ -69,10 +84,13 @@ export async function probeFeishu(
   const timeoutMs = options.timeoutMs ?? FEISHU_PROBE_REQUEST_TIMEOUT_MS;
 
   // Return cached result if still valid.
-  // Use accountId when available; otherwise include appSecret prefix so two
-  // accounts sharing the same appId (e.g. after secret rotation) don't
-  // pollute each other's cache entry.
-  const cacheKey = creds.accountId ?? `${creds.appId}:${creds.appSecret.slice(0, 8)}`;
+  // Include both logical account identity and a credential fingerprint so a
+  // renamed or hot-reloaded account keeps its own cache bucket while a
+  // credential change forces a fresh bot-identity probe.
+  const cacheKey = buildProbeCacheKey(creds);
+  if (options.forceFresh) {
+    probeCache.delete(cacheKey);
+  }
   const cached = probeCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.result;

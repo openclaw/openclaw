@@ -164,14 +164,11 @@ export async function handleFeishuCommentEvent(
     storeAllowFrom = await pairing.readAllowFromStore().catch(() => []);
   }
   const effectiveAllowFrom = [...commentAccess.allowFrom, ...storeAllowFrom];
-  const senderAllowed =
-    commentAccess.policy === "open"
-      ? true
-      : resolveFeishuAllowlistMatch({
-          allowFrom: effectiveAllowFrom,
-          senderId: turn.senderId,
-          senderIds: [turn.senderUserId],
-        }).allowed;
+  const senderAllowed = resolveFeishuAllowlistMatch({
+    allowFrom: effectiveAllowFrom,
+    senderId: turn.senderId,
+    senderIds: [turn.senderUserId],
+  }).allowed;
   if (!senderAllowed) {
     log(
       `feishu[${account.accountId}]: blocked unauthorized comment sender ${turn.senderId} ` +

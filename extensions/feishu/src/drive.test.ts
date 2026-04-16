@@ -611,6 +611,7 @@ describe("registerFeishuDriveTools", () => {
       deliveryContext: {
         channel: "feishu",
         to: "comment:docx:doc_1:c1",
+        accountId: "default",
         threadId: "reply_ambient_1",
       },
     });
@@ -680,6 +681,7 @@ describe("registerFeishuDriveTools", () => {
       deliveryContext: {
         channel: "feishu",
         to: "comment:docx:doc_1:c1",
+        accountId: "default",
         threadId: "reply_ambient_1",
       },
     });
@@ -725,6 +727,7 @@ describe("registerFeishuDriveTools", () => {
       deliveryContext: {
         channel: "feishu",
         to: "comment:docx:doc_1:c1",
+        accountId: "default",
         threadId: "reply_ambient_1",
       },
     });
@@ -794,6 +797,7 @@ describe("registerFeishuDriveTools", () => {
       deliveryContext: {
         channel: "feishu",
         to: "comment:docx:doc_1:c1",
+        accountId: "default",
         threadId: "reply_ambient_1",
       },
     });
@@ -840,6 +844,7 @@ describe("registerFeishuDriveTools", () => {
       deliveryContext: {
         channel: "feishu",
         to: "comment:docx:doc_1:c1",
+        accountId: "default",
         threadId: "reply_ambient_1",
       },
     });
@@ -916,6 +921,7 @@ describe("registerFeishuDriveTools", () => {
       deliveryContext: {
         channel: "feishu",
         to: "comment:docx:doc_1:c1",
+        accountId: "default",
         threadId: "reply_ambient_1",
       },
     });

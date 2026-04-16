@@ -25,11 +25,16 @@ type FeishuCommentReactionClient = ReturnType<typeof createFeishuClient> & {
 };
 
 function buildCommentTypingReactionKey(params: {
+  accountId?: string;
   fileToken: string;
   fileType: CommentFileType;
   replyId: string;
-}): string {
-  return `${params.fileType}:${params.fileToken}:${params.replyId}`;
+}): string | null {
+  const accountId = params.accountId?.trim();
+  if (!accountId) {
+    return null;
+  }
+  return `${accountId}:${params.fileType}:${params.fileToken}:${params.replyId}`;
 }
 
 function ensureCommentTypingReactionState(key: string) {
@@ -185,6 +190,7 @@ export async function cleanupAmbientCommentTypingReaction(params: {
   deliveryContext?: {
     channel?: string;
     to?: string;
+    accountId?: string;
     threadId?: string | number;
   };
   runtime?: RuntimeEnv;
@@ -206,10 +212,14 @@ export async function cleanupAmbientCommentTypingReaction(params: {
     return false;
   }
   const key = buildCommentTypingReactionKey({
+    accountId: deliveryContext?.accountId,
     fileToken: target.fileToken,
     fileType: target.fileType,
     replyId,
   });
+  if (!key) {
+    return false;
+  }
   return cleanupCommentTypingReactionByKey({
     key,
     performDelete: () =>
@@ -233,19 +243,35 @@ export function createCommentTypingReactionLifecycle(params: {
   accountId?: string;
   runtime?: RuntimeEnv;
 }) {
-  const key = params.replyId?.trim()
+  const replyId = params.replyId?.trim();
+  const key = replyId
     ? buildCommentTypingReactionKey({
+        accountId: params.accountId,
         fileToken: params.fileToken,
         fileType: params.fileType,
-        replyId: params.replyId.trim(),
+        replyId,
       })
-    : undefined;
+    : null;
   const state = key ? ensureCommentTypingReactionState(key) : undefined;
 
   return {
     start: async (): Promise<void> => {
-      const replyId = params.replyId?.trim();
-      if (!state || state.cleaned || state.active || !replyId) {
+      if (!replyId) {
+        return;
+      }
+      if (!state) {
+        await requestCommentTypingReaction({
+          cfg: params.cfg,
+          fileToken: params.fileToken,
+          fileType: params.fileType,
+          replyId,
+          action: "add",
+          accountId: params.accountId,
+          runtime: params.runtime,
+        });
+        return;
+      }
+      if (state.cleaned || state.active) {
         return;
       }
       state.active = await requestCommentTypingReaction({
@@ -259,8 +285,19 @@ export function createCommentTypingReactionLifecycle(params: {
       });
     },
     cleanup: async (): Promise<void> => {
-      const replyId = params.replyId?.trim();
-      if (!key || !replyId) {
+      if (!replyId) {
+        return;
+      }
+      if (!key) {
+        await requestCommentTypingReaction({
+          cfg: params.cfg,
+          fileToken: params.fileToken,
+          fileType: params.fileType,
+          replyId,
+          action: "delete",
+          accountId: params.accountId,
+          runtime: params.runtime,
+        });
         return;
       }
       await cleanupCommentTypingReactionByKey({

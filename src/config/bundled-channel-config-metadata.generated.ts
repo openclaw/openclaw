@@ -3478,7 +3478,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
             policy: {
               type: "string",
-              enum: ["open", "pairing", "allowlist"],
+              enum: ["pairing", "allowlist"],
             },
             allowFrom: {
               type: "array",
@@ -3506,7 +3506,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                   policy: {
                     type: "string",
-                    enum: ["open", "pairing", "allowlist"],
+                    enum: ["pairing", "allowlist"],
                   },
                   allowFrom: {
                     type: "array",
@@ -4093,7 +4093,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                   policy: {
                     type: "string",
-                    enum: ["open", "pairing", "allowlist"],
+                    enum: ["pairing", "allowlist"],
                   },
                   allowFrom: {
                     type: "array",
@@ -4121,7 +4121,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         },
                         policy: {
                           type: "string",
-                          enum: ["open", "pairing", "allowlist"],
+                          enum: ["pairing", "allowlist"],
                         },
                         allowFrom: {
                           type: "array",

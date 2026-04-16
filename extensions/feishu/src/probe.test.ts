@@ -252,6 +252,29 @@ describe("probeFeishu", () => {
     expect(requestFn).toHaveBeenCalledTimes(2);
   });
 
+  it("does not reuse a cached result when the same accountId changes credentials", async () => {
+    const requestFn = setupClient(BOT1_RESPONSE);
+
+    await probeFeishu({ accountId: "acct-1", appId: "cli_123", appSecret: "secret_a" }); // pragma: allowlist secret
+    expect(requestFn).toHaveBeenCalledTimes(1);
+
+    await probeFeishu({ accountId: "acct-1", appId: "cli_456", appSecret: "secret_b" }); // pragma: allowlist secret
+    expect(requestFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("bypasses a warm cache when forceFresh is enabled", async () => {
+    const requestFn = setupClient(BOT1_RESPONSE);
+
+    await probeFeishu({ accountId: "acct-1", appId: "cli_123", appSecret: "secret" }); // pragma: allowlist secret
+    expect(requestFn).toHaveBeenCalledTimes(1);
+
+    await probeFeishu(
+      { accountId: "acct-1", appId: "cli_123", appSecret: "secret" }, // pragma: allowlist secret
+      { forceFresh: true },
+    );
+    expect(requestFn).toHaveBeenCalledTimes(2);
+  });
+
   it("clearProbeCache forces fresh API call", async () => {
     const requestFn = setupSuccessClient();
 

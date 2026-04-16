@@ -26,6 +26,7 @@ type FetchBotOpenIdOptions = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  forceFresh?: boolean;
 };
 
 export type FeishuMonitorBotIdentity = {
@@ -54,6 +55,7 @@ export async function fetchBotIdentityForMonitor(
   const result = await probeFeishu(account, {
     timeoutMs,
     abortSignal: options.abortSignal,
+    forceFresh: options.forceFresh,
   });
   if (result.ok) {
     return { botOpenId: result.botOpenId, botName: result.botName };

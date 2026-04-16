@@ -11,7 +11,7 @@ const ChannelActionsSchema = z
   .optional();
 
 const DmPolicySchema = z.enum(["open", "pairing", "allowlist"]);
-export const FeishuCommentPolicySchema = z.enum(["open", "pairing", "allowlist"]);
+export const FeishuCommentPolicySchema = z.enum(["pairing", "allowlist"]);
 const GroupPolicySchema = z.union([
   z.enum(["open", "allowlist", "disabled"]),
   z.literal("allowall").transform(() => "open" as const),

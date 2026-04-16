@@ -39,7 +39,7 @@ describe("resolveFeishuCommentAccess", () => {
     expect(
       resolveFeishuCommentAccess({
         comments: {
-          policy: "open",
+          policy: "allowlist",
           allowFrom: ["ou_global"],
           documents: {
             "*": {
@@ -112,7 +112,7 @@ describe("resolveFeishuCommentAccess", () => {
         comments: {
           documents: {
             "wiki:node_123": {
-              policy: "open",
+              policy: "allowlist",
             },
           },
         },
@@ -125,7 +125,7 @@ describe("resolveFeishuCommentAccess", () => {
       }),
     ).toEqual({
       enabled: true,
-      policy: "open",
+      policy: "allowlist",
       allowFrom: [],
       documentKey: "docx:obj_123",
       matchedRuleKey: "wiki:node_123",
@@ -148,7 +148,7 @@ describe("comment document rule helpers", () => {
         comments: {
           documents: {
             "docx:token_123": {
-              policy: "open",
+              policy: "allowlist",
             },
           },
         },
@@ -163,7 +163,7 @@ describe("comment document rule helpers", () => {
       hasFeishuCommentWikiDocumentRule({
         documents: {
           "wiki:node_123": {
-            policy: "open",
+            policy: "allowlist",
           },
         },
       }),
@@ -190,7 +190,7 @@ describe("comment document rule helpers", () => {
         comments: {
           documents: {
             "wiki:node_123": {
-              policy: "open",
+              policy: "allowlist",
             },
           },
         },
@@ -220,7 +220,7 @@ describe("comment document rule helpers", () => {
         comments: {
           documents: {
             "wiki:node_123": {
-              policy: "open",
+              policy: "allowlist",
             },
           },
         },
@@ -245,7 +245,7 @@ describe("comment document rule helpers", () => {
         comments: {
           documents: {
             "wiki:node_123": {
-              policy: "open",
+              policy: "allowlist",
             },
           },
         },

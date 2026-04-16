@@ -79,6 +79,10 @@ describe("Feishu monitor startup preflight", () => {
 
       expect(started).toEqual(["alpha"]);
       expect(maxInFlight).toBe(1);
+      expect(probeFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({ accountId: "alpha" }),
+        expect.objectContaining({ forceFresh: true }),
+      );
     } finally {
       releaseProbes();
       abortController.abort();

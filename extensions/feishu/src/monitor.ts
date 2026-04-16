@@ -72,6 +72,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     const { botOpenId, botName } = await fetchBotIdentityForMonitor(account, {
       runtime: opts.runtime,
       abortSignal: opts.abortSignal,
+      forceFresh: true,
     });
 
     if (opts.abortSignal?.aborted) {

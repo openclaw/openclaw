@@ -100,6 +100,7 @@ describe("createCommentTypingReactionLifecycle", () => {
       fileToken: "doc_token_1",
       fileType: "docx",
       replyId: "reply_1",
+      accountId: "default",
       runtime: {
         log: vi.fn(),
       } as never,
@@ -111,6 +112,7 @@ describe("createCommentTypingReactionLifecycle", () => {
       deliveryContext: {
         channel: "feishu",
         to: "comment:docx:doc_token_1:comment_1",
+        accountId: "default",
         threadId: "reply_1",
       },
     });
@@ -149,6 +151,7 @@ describe("createCommentTypingReactionLifecycle", () => {
       fileToken: "doc_token_1",
       fileType: "docx",
       replyId: "reply_1",
+      accountId: "default",
       runtime: {
         log: vi.fn(),
       } as never,
@@ -160,6 +163,7 @@ describe("createCommentTypingReactionLifecycle", () => {
       deliveryContext: {
         channel: "feishu",
         to: "comment:docx:doc_token_1:comment_1",
+        accountId: "default",
         threadId: "reply_1",
       },
     });
@@ -178,6 +182,143 @@ describe("createCommentTypingReactionLifecycle", () => {
     );
     expect(request).toHaveBeenNthCalledWith(
       3,
+      expect.objectContaining({
+        data: {
+          action: "delete",
+          reply_id: "reply_1",
+          reaction_type: "Typing",
+        },
+      }),
+    );
+  });
+
+  it("isolates typing cleanup state per account for the same reply", async () => {
+    resolveFeishuRuntimeAccountMock
+      .mockReturnValueOnce({
+        accountId: "backup",
+        configured: true,
+        config: {
+          typingIndicator: true,
+        },
+      })
+      .mockReturnValueOnce({
+        accountId: "default",
+        configured: true,
+        config: {
+          typingIndicator: true,
+        },
+      })
+      .mockReturnValueOnce({
+        accountId: "default",
+        configured: true,
+        config: {
+          typingIndicator: true,
+        },
+      })
+      .mockReturnValueOnce({
+        accountId: "backup",
+        configured: true,
+        config: {
+          typingIndicator: true,
+        },
+      });
+
+    const backupLifecycle = createCommentTypingReactionLifecycle({
+      cfg: {} as ClawdbotConfig,
+      fileToken: "doc_token_1",
+      fileType: "docx",
+      replyId: "reply_1",
+      accountId: "backup",
+      runtime: {
+        log: vi.fn(),
+      } as never,
+    });
+    const defaultLifecycle = createCommentTypingReactionLifecycle({
+      cfg: {} as ClawdbotConfig,
+      fileToken: "doc_token_1",
+      fileType: "docx",
+      replyId: "reply_1",
+      accountId: "default",
+      runtime: {
+        log: vi.fn(),
+      } as never,
+    });
+
+    await backupLifecycle.start();
+    await defaultLifecycle.start();
+    await cleanupAmbientCommentTypingReaction({
+      client: { request } as never,
+      deliveryContext: {
+        channel: "feishu",
+        to: "comment:docx:doc_token_1:comment_1",
+        accountId: "default",
+        threadId: "reply_1",
+      },
+    });
+    await backupLifecycle.cleanup();
+
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        data: {
+          action: "delete",
+          reply_id: "reply_1",
+          reaction_type: "Typing",
+        },
+      }),
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      4,
+      expect.objectContaining({
+        data: {
+          action: "delete",
+          reply_id: "reply_1",
+          reaction_type: "Typing",
+        },
+      }),
+    );
+    expect(resolveFeishuRuntimeAccountMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ accountId: "backup" }),
+    );
+    expect(resolveFeishuRuntimeAccountMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ accountId: "default" }),
+    );
+    expect(resolveFeishuRuntimeAccountMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ accountId: "backup" }),
+    );
+  });
+
+  it("skips ambient shared-state cleanup when accountId is missing", async () => {
+    const lifecycle = createCommentTypingReactionLifecycle({
+      cfg: {} as ClawdbotConfig,
+      fileToken: "doc_token_1",
+      fileType: "docx",
+      replyId: "reply_1",
+      runtime: {
+        log: vi.fn(),
+      } as never,
+    });
+
+    await lifecycle.start();
+    await expect(
+      cleanupAmbientCommentTypingReaction({
+        client: { request } as never,
+        deliveryContext: {
+          channel: "feishu",
+          to: "comment:docx:doc_token_1:comment_1",
+          threadId: "reply_1",
+        },
+      }),
+    ).resolves.toBe(false);
+    await lifecycle.cleanup();
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         data: {
           action: "delete",
