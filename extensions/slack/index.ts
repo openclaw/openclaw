@@ -4,6 +4,12 @@ import {
 } from "openclaw/plugin-sdk/channel-entry-contract";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 
+let slackSubagentHooksPromise: Promise<typeof import("./src/subagent-hooks.js")> | null = null;
+function loadSlackSubagentHooksModule(): Promise<typeof import("./src/subagent-hooks.js")> {
+  slackSubagentHooksPromise ??= import("./src/subagent-hooks.js");
+  return slackSubagentHooksPromise;
+}
+
 function registerSlackPluginHttpRoutes(api: OpenClawPluginApi): void {
   const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
     specifier: "./runtime-api.js",
@@ -29,5 +35,11 @@ export default defineBundledChannelEntry({
     specifier: "./runtime-api.js",
     exportName: "setSlackRuntime",
   },
-  registerFull: registerSlackPluginHttpRoutes,
+  registerFull(api: OpenClawPluginApi) {
+    registerSlackPluginHttpRoutes(api);
+    api.on("subagent_delivery_target", async (event) => {
+      const { handleSlackSubagentDeliveryTarget } = await loadSlackSubagentHooksModule();
+      return handleSlackSubagentDeliveryTarget(event);
+    });
+  },
 });

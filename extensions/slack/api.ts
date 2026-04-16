@@ -1,5 +1,6 @@
 export { slackPlugin } from "./src/channel.js";
 export { slackSetupPlugin } from "./src/channel.setup.js";
+export { handleSlackSubagentDeliveryTarget } from "./src/subagent-hooks.js";
 export * from "./src/account-inspect.js";
 export * from "./src/accounts.js";
 export * from "./src/action-threading.js";
