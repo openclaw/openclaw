@@ -73,9 +73,11 @@ function extractZenmuxCost(pricings: ZenmuxModel["pricings"]): {
     output: getPrice(pricings.completion),
     cacheRead: getPrice(pricings.input_cache_read),
     cacheWrite: getPrice(
-      pricings.input_cache_write ??
-        pricings.input_cache_write_5_min ??
+      [
+        pricings.input_cache_write,
+        pricings.input_cache_write_5_min,
         pricings.input_cache_write_1_h,
+      ].find((t) => t != null && t.length > 0),
     ),
   };
 }
