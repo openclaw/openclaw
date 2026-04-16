@@ -1,13 +1,44 @@
 import { spawn } from "node:child_process";
+import { closeSync, openSync, readSync } from "node:fs";
 import path from "node:path";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 function isPnpmExecPath(value) {
-  const base = path.basename(value).toLowerCase();
-  // Only treat as a Node-runnable pnpm script if it has a JS/CJS extension.
-  // Standalone ELF/native pnpm binaries (no extension or .exe) must NOT be
-  // passed to node — use the fallback `pnpm` shell command instead.
-  return /^pnpm(?:-cli)?\.c?js$/.test(base);
+  return /^pnpm(?:-cli)?(?:\.(?:[cm]?js|cmd|exe))?$/.test(path.basename(value).toLowerCase());
+}
+
+function hasScriptShebang(value) {
+  let fd;
+  try {
+    fd = openSync(value, "r");
+    const header = Buffer.alloc(2);
+    return (
+      readSync(fd, header, 0, header.length, 0) === header.length &&
+      header[0] === 0x23 &&
+      header[1] === 0x21
+    );
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) {
+      closeSync(fd);
+    }
+  }
+}
+
+function isNodeRunnablePnpmExecPath(value) {
+  if (!isPnpmExecPath(value)) {
+    return false;
+  }
+  const extension = path.extname(value).toLowerCase();
+  if (extension === ".js" || extension === ".cjs" || extension === ".mjs") {
+    return true;
+  }
+  if (extension.length > 0) {
+    return false;
+  }
+  return hasScriptShebang(value);
+
 }
 
 export function resolvePnpmRunner(params = {}) {
@@ -18,7 +49,11 @@ export function resolvePnpmRunner(params = {}) {
   const platform = params.platform ?? process.platform;
   const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
 
-  if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isPnpmExecPath(npmExecPath)) {
+  if (
+    typeof npmExecPath === "string" &&
+    npmExecPath.length > 0 &&
+    isNodeRunnablePnpmExecPath(npmExecPath)
+  ) {
     return {
       command: nodeExecPath,
       args: [...nodeArgs, npmExecPath, ...pnpmArgs],

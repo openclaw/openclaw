@@ -13,6 +13,7 @@ import {
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
+import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
@@ -114,19 +115,6 @@ function pickUpdateQuip(): string {
 function isPackageManagerUpdateMode(mode: UpdateRunResult["mode"]): mode is "npm" | "pnpm" | "bun" {
   return mode === "npm" || mode === "pnpm" || mode === "bun";
 }
-
-function resolveGatewayInstallEntrypointCandidates(root?: string): string[] {
-  if (!root) {
-    return [];
-  }
-  return [
-    path.join(root, "dist", "entry.js"),
-    path.join(root, "dist", "entry.mjs"),
-    path.join(root, "dist", "index.js"),
-    path.join(root, "dist", "index.mjs"),
-  ];
-}
-
 function formatCommandFailure(stdout: string, stderr: string): string {
   const detail = (stderr || stdout).trim();
   if (!detail) {
@@ -267,11 +255,9 @@ async function refreshGatewayServiceEnv(params: {
     args.push("--json");
   }
 
-  for (const candidate of resolveGatewayInstallEntrypointCandidates(params.result.root)) {
-    if (!(await pathExists(candidate))) {
-      continue;
-    }
-    const res = await runCommandWithTimeout([resolveNodeRunner(), candidate, ...args], {
+  const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
+  if (entrypoint) {
+    const res = await runCommandWithTimeout([resolveNodeRunner(), entrypoint, ...args], {
       cwd: params.result.root,
       env: resolveServiceRefreshEnv(process.env, params.invocationCwd),
       timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
@@ -280,7 +266,7 @@ async function refreshGatewayServiceEnv(params: {
       return;
     }
     throw new Error(
-      `updated install refresh failed (${candidate}): ${formatCommandFailure(res.stdout, res.stderr)}`,
+      `updated install refresh failed (${entrypoint}): ${formatCommandFailure(res.stdout, res.stderr)}`,
     );
   }
 
@@ -418,8 +404,8 @@ async function runPackageInstallUpdate(params: {
         stdoutTail: null,
       });
     }
-    const entryPath = path.join(verifiedPackageRoot, "dist", "entry.js");
-    if (await pathExists(entryPath)) {
+    const entryPath = await resolveGatewayInstallEntrypoint(verifiedPackageRoot);
+    if (entryPath) {
       const doctorStep = await runUpdateStep({
         name: `${CLI_NAME} doctor`,
         argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive"],
@@ -455,6 +441,7 @@ async function runGitUpdate(params: {
   showProgress: boolean;
   opts: UpdateCommandOptions;
   stop: () => void;
+  devTargetRef?: string;
 }): Promise<UpdateRunResult> {
   const updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
   const effectiveTimeout = params.timeoutMs ?? 20 * 60_000;
@@ -491,6 +478,7 @@ async function runGitUpdate(params: {
     progress: params.progress,
     channel: params.channel,
     tag: params.tag,
+    devTargetRef: params.devTargetRef,
   });
   const steps = [...(cloneStep ? [cloneStep] : []), ...updateResult.steps];
 
@@ -828,6 +816,13 @@ async function continuePostCoreUpdateInFreshProcess(params: {
   return true;
 }
 
+function shouldResumePostCoreUpdateInFreshProcess(params: {
+  result: UpdateRunResult;
+  downgradeRisk: boolean;
+}): boolean {
+  return isPackageManagerUpdateMode(params.result.mode) && !params.downgradeRisk;
+}
+
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   suppressDeprecations();
   const invocationCwd = tryResolveInvocationCwd();
@@ -894,6 +889,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const defaultChannel =
     updateInstallKind === "git" ? DEFAULT_GIT_CHANNEL : DEFAULT_PACKAGE_CHANNEL;
   const channel = requestedChannel ?? storedChannel ?? defaultChannel;
+  const devTargetRef =
+    channel === "dev" ? process.env.OPENCLAW_UPDATE_DEV_TARGET_REF?.trim() || undefined : undefined;
 
   const explicitTag = normalizeTag(opts.tag);
   let tag = explicitTag ?? channelToNpmTag(channel);
@@ -1073,6 +1070,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
           showProgress,
           opts,
           stop,
+          devTargetRef,
         });
 
   stop();
@@ -1163,7 +1161,12 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const postUpdateRoot = result.root ?? root;
 
   let pluginsUpdatedInFreshProcess = false;
-  if (isPackageManagerUpdateMode(result.mode)) {
+  if (
+    shouldResumePostCoreUpdateInFreshProcess({
+      result,
+      downgradeRisk,
+    })
+  ) {
     pluginsUpdatedInFreshProcess = await continuePostCoreUpdateInFreshProcess({
       root: postUpdateRoot,
       channel,

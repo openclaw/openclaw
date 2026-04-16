@@ -241,6 +241,35 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           },
           additionalProperties: false,
         },
+        catchup: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+            },
+            maxAgeMinutes: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
+            perRunLimit: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
+            firstRunLookbackMinutes: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
+            maxFailureRetries: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
+          },
+          additionalProperties: false,
+        },
         blockStreaming: {
           type: "boolean",
         },
@@ -514,6 +543,35 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   dangerouslyAllowPrivateNetwork: {
                     type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              catchup: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  maxAgeMinutes: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  perRunLimit: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  firstRunLookbackMinutes: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxFailureRetries: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
                   },
                 },
                 additionalProperties: false,
@@ -3129,6 +3187,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         sensitive: true,
       },
     },
+    unsupportedSecretRefSurfacePatterns: [
+      "channels.discord.accounts.*.threadBindings.webhookToken",
+      "channels.discord.threadBindings.webhookToken",
+    ],
   },
   {
     pluginId: "feishu",
@@ -15432,6 +15494,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
       },
     },
+    unsupportedSecretRefSurfacePatterns: [
+      "channels.whatsapp.accounts.*.creds.json",
+      "channels.whatsapp.creds.json",
+    ],
   },
   {
     pluginId: "zalo",

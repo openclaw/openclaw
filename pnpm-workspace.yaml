@@ -17,6 +17,7 @@ minimumReleaseAgeExclude:
   - "jscpd"
   - "jscpd-*"
   - "@jscpd/*"
+  - "protobufjs"
   - "@buape/carbon"
   - "vite"
   - "@cloudflare/workers-types"

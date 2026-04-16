@@ -280,8 +280,9 @@ function resolveQaLiveCliAuthEnv(baseEnv: NodeJS.ProcessEnv) {
     const codexHome = resolveUserPath(configuredCodexHome, baseEnv);
     return fs.existsSync(codexHome) ? { CODEX_HOME: codexHome } : {};
   }
-  const hostHome = baseEnv.HOME?.trim() || os.homedir();
-  const codexHome = path.join(hostHome, ".codex");
+  const hostHome = baseEnv.HOME?.trim();
+  const effectiveHome = hostHome || os.homedir();
+  const codexHome = path.join(effectiveHome, ".codex");
   return fs.existsSync(codexHome) ? { CODEX_HOME: codexHome } : {};
 }
 
@@ -345,7 +346,7 @@ export function createQaMultipassPlan(params: {
   const outputDir = params.outputDir ?? createQaMultipassOutputDir(params.repoRoot);
   const scenarioIds = [...new Set(params.scenarioIds ?? [])];
   const transportId = params.transportId?.trim() || "qa-channel";
-  const providerMode = params.providerMode ?? "mock-openai";
+  const providerMode = params.providerMode ?? "live-frontier";
   const forwardedEnv = providerMode === "live-frontier" ? resolveForwardedLiveEnv() : {};
   const hostCodexHomePath = forwardedEnv.CODEX_HOME;
   const liveProviderConfig =

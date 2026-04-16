@@ -62,7 +62,10 @@ That lane provisions a disposable Tuwunel homeserver in Docker, registers
 temporary driver, SUT, and observer users, creates one private room, then runs
 the real Matrix plugin inside a QA gateway child. The live transport lane keeps
 the child config scoped to the transport under test, so Matrix runs without
-`qa-channel` in the child config.
+`qa-channel` in the child config. It writes the structured report artifacts and
+a combined stdout/stderr log into the selected Matrix QA output directory. To
+capture the outer `scripts/run-node.mjs` build/launcher output too, set
+`OPENCLAW_RUN_NODE_OUTPUT_LOG=<path>` to a repo-local log file.
 
 For a transport-real Telegram smoke lane, run:
 
@@ -120,7 +123,23 @@ Seed assets live in `qa/`:
 - `qa/scenarios/*.md`
 
 These are intentionally in git so the QA plan is visible to both humans and the
-agent. The baseline list should stay broad enough to cover:
+agent.
+
+`qa-lab` should stay a generic markdown runner. Each scenario markdown file is
+the source of truth for one test run and should define:
+
+- scenario metadata
+- docs and code refs
+- optional plugin requirements
+- optional gateway config patch
+- the executable `qa-flow`
+
+The reusable runtime surface that backs `qa-flow` is allowed to stay generic
+and cross-cutting. For example, markdown scenarios can combine transport-side
+helpers with browser-side helpers that drive the embedded Control UI through the
+Gateway `browser.request` seam without adding a special-case runner.
+
+The baseline list should stay broad enough to cover:
 
 - DM and channel chat
 - thread behavior
@@ -141,9 +160,9 @@ instead of adding a transport-specific QA runner.
 
 At the architecture level, the split is:
 
-- `qa-lab` owns scenario execution, worker concurrency, artifact writing, and reporting.
+- `qa-lab` owns generic scenario execution, worker concurrency, artifact writing, and reporting.
 - the transport adapter owns gateway config, readiness, inbound and outbound observation, transport actions, and normalized transport state.
-- scenarios stay markdown-first under `qa/scenarios/`.
+- markdown scenario files under `qa/scenarios/` define the test run; `qa-lab` provides the reusable runtime surface that executes them.
 
 Maintainer-facing adoption guidance for new channel adapters lives in
 [Testing](/help/testing#adding-a-channel-to-qa).

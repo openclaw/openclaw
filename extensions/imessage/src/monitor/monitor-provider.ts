@@ -548,6 +548,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
 
+  const requireWatchClient = (
+    watchClient: IMessageRpcClient | null | undefined,
+  ): IMessageRpcClient => {
+    if (!watchClient) {
+      throw new Error("imessage monitor client not initialized");
+    }
+    return watchClient;
+  };
+
   for (let attempt = 1; attempt <= WATCH_SUBSCRIBE_MAX_ATTEMPTS; attempt++) {
     if (abort?.aborted) {
       return;
@@ -556,7 +565,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     let attemptDetachAbortHandler = () => {};
     let keepAttemptClient = false;
     try {
-      attemptClient = await createWatchClient();
+      attemptClient = requireWatchClient(await createWatchClient());
       let attemptSubscriptionId: number | null = null;
       attemptDetachAbortHandler = attachIMessageMonitorAbortHandler({
         abortSignal: abort,
@@ -590,6 +599,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           `imessage: watch.subscribe startup failed (attempt ${attempt}/${WATCH_SUBSCRIBE_MAX_ATTEMPTS}): ${String(err)}; retrying`,
         ),
       );
+      // Tear down the failed client before waiting so a slow subscribe attempt
+      // cannot keep emitting notifications into the next retry window.
+      attemptDetachAbortHandler();
+      attemptDetachAbortHandler = () => {};
+      await attemptClient?.stop();
+      attemptClient = undefined;
       await waitForWatchSubscribeRetryDelay({
         ms: WATCH_SUBSCRIBE_RETRY_DELAY_MS,
         abortSignal: abort,
@@ -605,12 +620,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
   }
 
-  if (!client) {
+  const activeClient = client;
+  if (!activeClient) {
     return;
   }
 
   try {
-    await client.waitForClose();
+    await activeClient.waitForClose();
   } catch (err) {
     if (abort?.aborted) {
       return;
@@ -619,7 +635,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     throw err;
   } finally {
     detachAbortHandler();
-    await client.stop();
+    await activeClient.stop();
   }
 }
 

@@ -45,6 +45,10 @@ export function normalizeQaThinkingLevel(input: unknown): QaThinkingLevel | unde
   return undefined;
 }
 
+function trimTrailingApiV1(baseUrl: string) {
+  return baseUrl.replace(/\/v1\/?$/i, "");
+}
+
 export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   const normalizedExtra = (extraOrigins ?? [])
     .map((origin) => origin.trim())
@@ -74,10 +78,14 @@ export function buildQaGatewayConfig(params: {
   thinkingDefault?: QaThinkingLevel;
 }): OpenClawConfig {
   const mockProviderBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
+  const mockAnthropicBaseUrl = trimTrailingApiV1(mockProviderBaseUrl);
   const mockOpenAiProvider: ModelProviderConfig = {
     baseUrl: mockProviderBaseUrl,
     apiKey: "test",
     api: "openai-responses",
+    request: {
+      allowPrivateNetwork: true,
+    },
     models: [
       {
         id: "gpt-5.4",
@@ -126,6 +134,50 @@ export function buildQaGatewayConfig(params: {
       },
     ],
   };
+  const mockNamedOpenAiProvider: ModelProviderConfig = {
+    ...mockOpenAiProvider,
+    models: mockOpenAiProvider.models.map((model) => ({ ...model })),
+  };
+  const mockAnthropicProvider: ModelProviderConfig = {
+    baseUrl: mockAnthropicBaseUrl,
+    apiKey: "test",
+    api: "anthropic-messages",
+    request: {
+      allowPrivateNetwork: true,
+    },
+    models: [
+      {
+        id: "claude-opus-4-6",
+        name: "claude-opus-4-6",
+        api: "anthropic-messages",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        contextWindow: 200_000,
+        maxTokens: 4096,
+      },
+      {
+        id: "claude-sonnet-4-6",
+        name: "claude-sonnet-4-6",
+        api: "anthropic-messages",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        contextWindow: 200_000,
+        maxTokens: 4096,
+      },
+    ],
+  };
   const providerMode = normalizeQaProviderMode(params.providerMode ?? "mock-openai");
   const primaryModel = params.primaryModel ?? defaultQaModelForMode(providerMode);
   const alternateModel =
@@ -162,24 +214,23 @@ export function buildQaGatewayConfig(params: {
               : selectedProviderIds,
           ),
         ]
-      : [];
+      : [
+          ...new Set(
+            (params.enabledPluginIds ?? [])
+              .map((pluginId) => pluginId.trim())
+              .filter((pluginId) => pluginId.length > 0),
+          ),
+        ];
   const transportPluginIds = [...new Set(params.transportPluginIds ?? [])]
     .map((pluginId) => pluginId.trim())
     .filter((pluginId) => pluginId.length > 0);
-  const pluginEntries =
-    providerMode === "live-frontier"
-      ? Object.fromEntries(selectedPluginIds.map((pluginId) => [pluginId, { enabled: true }]))
-      : {};
+  const pluginEntries = Object.fromEntries(
+    selectedPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
+  );
   const transportPluginEntries = Object.fromEntries(
     transportPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
   );
-  const allowedPlugins = [
-    ...new Set(
-      providerMode === "live-frontier"
-        ? ["memory-core", ...selectedPluginIds, ...transportPluginIds]
-        : ["memory-core", ...transportPluginIds],
-    ),
-  ];
+  const allowedPlugins = [...new Set(["memory-core", ...selectedPluginIds, ...transportPluginIds])];
   const liveModelParams =
     providerMode === "live-frontier"
       ? (modelRef: string) => ({
@@ -274,6 +325,8 @@ export function buildQaGatewayConfig(params: {
             mode: "replace",
             providers: {
               "mock-openai": mockOpenAiProvider,
+              openai: mockNamedOpenAiProvider,
+              anthropic: mockAnthropicProvider,
             },
           },
         }

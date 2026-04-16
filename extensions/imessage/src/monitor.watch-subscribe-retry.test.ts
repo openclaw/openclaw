@@ -1,25 +1,27 @@
+import type { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { createIMessageRpcClient, IMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
+import type { attachIMessageMonitorAbortHandler } from "./monitor/abort-handler.js";
 
 const waitForTransportReadyMock = vi.hoisted(() =>
-  vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
+  vi.fn<typeof waitForTransportReady>(async () => {}),
 );
-const createIMessageRpcClientMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => unknown>());
+const createIMessageRpcClientMock = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
 const attachIMessageMonitorAbortHandlerMock = vi.hoisted(() =>
-  vi.fn<(...args: unknown[]) => () => void>(() => () => {}),
+  vi.fn<typeof attachIMessageMonitorAbortHandler>(() => () => {}),
 );
 
 vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
-  waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
+  waitForTransportReady: waitForTransportReadyMock,
 }));
 
 vi.mock("./client.js", () => ({
-  createIMessageRpcClient: (...args: unknown[]) => createIMessageRpcClientMock(...args),
+  createIMessageRpcClient: createIMessageRpcClientMock,
 }));
 
 vi.mock("./monitor/abort-handler.js", () => ({
-  attachIMessageMonitorAbortHandler: (...args: unknown[]) =>
-    attachIMessageMonitorAbortHandlerMock(...args),
+  attachIMessageMonitorAbortHandler: attachIMessageMonitorAbortHandlerMock,
 }));
 
 function createRuntime() {
@@ -29,11 +31,17 @@ function createRuntime() {
   };
 }
 
+type MockIMessageRpcClient = IMessageRpcClient & {
+  request: ReturnType<typeof vi.fn<(method: string) => Promise<unknown>>>;
+  waitForClose: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  stop: ReturnType<typeof vi.fn<() => Promise<void>>>;
+};
+
 function createRpcClient(overrides?: {
   request?: (method: string) => Promise<unknown>;
   waitForClose?: () => Promise<void>;
-}) {
-  return {
+}): MockIMessageRpcClient {
+  const client = {
     request: vi.fn(
       overrides?.request ??
         (async () => {
@@ -48,6 +56,7 @@ function createRpcClient(overrides?: {
     ),
     stop: vi.fn(async () => {}),
   };
+  return client as unknown as MockIMessageRpcClient;
 }
 
 describe("monitorIMessageProvider watch.subscribe startup retry", () => {

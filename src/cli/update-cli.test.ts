@@ -6,6 +6,7 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
+import { writePackageDistInventory } from "../infra/package-dist-inventory.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
@@ -327,10 +328,11 @@ describe("update-cli", () => {
 
   const setupUpdatedRootRefresh = (params?: {
     gatewayUpdateImpl?: () => Promise<UpdateRunResult>;
+    entrypoints?: string[];
   }) => {
     const root = createCaseDir("openclaw-updated-root");
-    const entryPath = path.join(root, "dist", "entry.js");
-    pathExists.mockImplementation(async (candidate: string) => candidate === entryPath);
+    const entrypoints = params?.entrypoints ?? [path.join(root, "dist", "entry.js")];
+    pathExists.mockImplementation(async (candidate: string) => entrypoints.includes(candidate));
     if (params?.gatewayUpdateImpl) {
       vi.mocked(runGatewayUpdate).mockImplementation(params.gatewayUpdateImpl);
     } else {
@@ -343,7 +345,7 @@ describe("update-cli", () => {
       });
     }
     serviceLoaded.mockResolvedValue(true);
-    return { root, entryPath };
+    return { root, entrypoints };
   };
 
   beforeEach(() => {
@@ -457,13 +459,13 @@ describe("update-cli", () => {
   });
 
   it("respawns into the updated package root before running post-update tasks", async () => {
-    const { entryPath } = setupUpdatedRootRefresh();
+    const { entrypoints } = setupUpdatedRootRefresh();
 
     await updateCommand({ yes: true });
 
     expect(spawn).toHaveBeenCalledWith(
       expect.stringMatching(/node/),
-      [entryPath, "update", "--yes"],
+      [entrypoints[0], "update", "--yes"],
       expect.objectContaining({
         stdio: "inherit",
         env: expect.objectContaining({
@@ -475,6 +477,31 @@ describe("update-cli", () => {
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
+  });
+
+  it("keeps downgrade post-update work in the current process", async () => {
+    setupUpdatedRootRefresh({
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: createCaseDir("openclaw-downgraded-root"),
+          before: { version: "2026.4.14" },
+          after: { version: "2026.4.10" },
+        }),
+    });
+    readPackageVersion.mockResolvedValue("2026.4.14");
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2026.4.10",
+    });
+
+    await updateCommand({ yes: true, tag: "2026.4.10" });
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(syncPluginsForUpdateChannel).toHaveBeenCalled();
+    expect(updateNpmInstalledPlugins).toHaveBeenCalled();
+    expect(runDaemonInstall).toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
   it("fails the update when the fresh process exits non-zero", async () => {
@@ -784,12 +811,8 @@ describe("update-cli", () => {
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       await fs.writeFile(absolutePath, "export {};\n", "utf-8");
     }
+    await writePackageDistInventory(pkgRoot);
     readPackageVersion.mockResolvedValue("2026.3.23");
-    pathExists.mockImplementation(async (candidate: string) =>
-      TEST_BUNDLED_RUNTIME_SIDECAR_PATHS.some(
-        (relativePath) => candidate === path.join(pkgRoot, relativePath),
-      ),
-    );
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return {
@@ -1321,7 +1344,7 @@ describe("update-cli", () => {
       mock: { calls: Array<[unknown, { cwd?: string }?]> };
     };
     const root = setup?.root ?? runCommandWithTimeoutMock.mock.calls[0]?.[1]?.cwd;
-    const entryPath = setup?.entryPath ?? path.join(String(root), "dist", "entry.js");
+    const entryPath = setup?.entrypoints?.[0] ?? path.join(String(root), "dist", "entry.js");
 
     expect(runCommandWithTimeout).toHaveBeenCalledWith(
       [expect.stringMatching(/node/), entryPath, "gateway", "install", "--force"],

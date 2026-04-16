@@ -56,7 +56,10 @@ import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-handlers.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
-import { startGatewayRuntimeServices } from "./server-runtime-services.js";
+import {
+  activateGatewayScheduledServices,
+  startGatewayRuntimeServices,
+} from "./server-runtime-services.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
@@ -71,6 +74,7 @@ import {
   prepareGatewayStartupConfig,
 } from "./server-startup-config.js";
 import { prepareGatewayPluginBootstrap } from "./server-startup-plugins.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import { startGatewayEarlyRuntime, startGatewayPostAttachRuntime } from "./server-startup.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
@@ -280,7 +284,14 @@ export async function startGatewayServer(
         log,
       });
   cfgAtStart = controlUiSeed.config;
-  if (authBootstrap.persistedGeneratedToken || controlUiSeed.persistedAllowedOriginsSeed) {
+  // Always capture the final config hash after all startup writes (plugin
+  // auto-enable, auth token generation, control-UI origin seeding) so the
+  // config reloader can recognize its own startup writes and suppress the
+  // spurious hot-reload that would otherwise trigger a SIGUSR1 restart loop.
+  // Previously the hash was only captured when auth or control-UI persisted
+  // changes, missing the plugin auto-enable write performed earlier inside
+  // loadGatewayStartupConfigSnapshot().  See #67436.
+  {
     const startupSnapshot = await readConfigFileSnapshot();
     startupInternalWriteHash = startupSnapshot.hash ?? null;
   }
@@ -446,6 +457,7 @@ export async function startGatewayServer(
     resolvedAuth,
     rateLimiter: authRateLimiter,
     gatewayTls,
+    getResolvedAuth,
     hooksConfig: () => runtimeState?.hooksConfig ?? initialHooksConfig,
     getHookClientIpConfig: () => runtimeState?.hookClientIpConfig ?? initialHookClientIpConfig,
     pluginRegistry,
@@ -608,8 +620,6 @@ export async function startGatewayServer(
         minimalTestGateway,
         cfgAtStart,
         channelManager,
-        cron: runtimeState.cronState.cron,
-        logCron,
         log,
       }),
     );
@@ -624,7 +634,9 @@ export async function startGatewayServer(
 
     const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
 
-    const unavailableGatewayMethods = new Set<string>(minimalTestGateway ? [] : ["chat.history"]);
+    const unavailableGatewayMethods = new Set<string>(
+      minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
+    );
     const gatewayRequestContext = createGatewayRequestContext({
       deps,
       runtimeState,
@@ -754,6 +766,16 @@ export async function startGatewayServer(
       logChannels,
       unavailableGatewayMethods,
     }));
+
+    // Keep scheduled work inert until post-attach sidecars finish.
+    const activated = activateGatewayScheduledServices({
+      minimalTestGateway,
+      cfgAtStart,
+      cron: runtimeState.cronState.cron,
+      logCron,
+      log,
+    });
+    runtimeState.heartbeatRunner = activated.heartbeatRunner;
 
     runtimeState.configReloader = startManagedGatewayConfigReloader({
       minimalTestGateway,

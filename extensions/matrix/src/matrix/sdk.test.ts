@@ -1283,16 +1283,24 @@ describe("MatrixClient crypto bootstrapping", () => {
     });
   });
 
-  it("does not force-reset bootstrap when password is unavailable", async () => {
+  it("attempts repair bootstrap even when no password is configured", async () => {
     matrixJsClient.getCrypto = vi.fn(() => ({ on: vi.fn() }));
     const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
+      // no password — passwordless token-auth bot
     });
-    const bootstrapSpy = vi.fn().mockResolvedValue({
-      crossSigningReady: false,
-      crossSigningPublished: false,
-      ownDeviceVerified: false,
-    });
+    const bootstrapSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        crossSigningReady: false,
+        crossSigningPublished: false,
+        ownDeviceVerified: false,
+      })
+      .mockResolvedValueOnce({
+        crossSigningReady: true,
+        crossSigningPublished: true,
+        ownDeviceVerified: true,
+      });
     await (
       client as unknown as {
         ensureCryptoSupportInitialized: () => Promise<void>;
@@ -1306,7 +1314,45 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     await client.start();
 
-    expect(bootstrapSpy).toHaveBeenCalledTimes(1);
+    expect(bootstrapSpy).toHaveBeenCalledTimes(2);
+    expect((bootstrapSpy.mock.calls as unknown[][])[1]?.[1] ?? {}).toEqual({
+      forceResetCrossSigning: true,
+      allowSecretStorageRecreateWithoutRecoveryKey: true,
+      strict: true,
+    });
+  });
+
+  it("catches and logs repair bootstrap failure when UIA is unavailable without password", async () => {
+    matrixJsClient.getCrypto = vi.fn(() => ({ on: vi.fn() }));
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      encryption: true,
+      // no password
+    });
+    const uiaError = new Error("Interactive auth required");
+    const bootstrapSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        crossSigningReady: false,
+        crossSigningPublished: false,
+        ownDeviceVerified: false,
+      })
+      .mockRejectedValueOnce(uiaError);
+    await (
+      client as unknown as {
+        ensureCryptoSupportInitialized: () => Promise<void>;
+      }
+    ).ensureCryptoSupportInitialized();
+    (
+      client as unknown as {
+        cryptoBootstrapper: { bootstrap: typeof bootstrapSpy };
+      }
+    ).cryptoBootstrapper.bootstrap = bootstrapSpy;
+
+    // start() must NOT throw even when the repair bootstrap fails
+    await expect(client.start()).resolves.not.toThrow();
+
+    // repair was attempted
+    expect(bootstrapSpy).toHaveBeenCalledTimes(2);
   });
 
   it("provides secret storage callbacks and resolves stored recovery key", async () => {
@@ -1436,6 +1482,38 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(status.crossSigningVerified).toBe(false);
     expect(status.signedByOwner).toBe(false);
     expect(status.verified).toBe(false);
+  });
+
+  it("reports peer device trust from the current client", async () => {
+    const getDeviceVerificationStatus = vi.fn(async () => ({
+      isVerified: () => true,
+      localVerified: true,
+      crossSigningVerified: false,
+      signedByOwner: false,
+    }));
+    matrixJsClient.getCrypto = vi.fn(() => ({
+      on: vi.fn(),
+      bootstrapCrossSigning: vi.fn(async () => {}),
+      bootstrapSecretStorage: vi.fn(async () => {}),
+      requestOwnUserVerification: vi.fn(async () => null),
+      getDeviceVerificationStatus,
+    }));
+
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      encryption: true,
+    });
+    await client.start();
+
+    const status = await client.getDeviceVerificationStatus("@peer:example.org", "PEERDEVICE");
+    expect(getDeviceVerificationStatus).toHaveBeenCalledWith("@peer:example.org", "PEERDEVICE");
+    expect(status).toMatchObject({
+      deviceId: "PEERDEVICE",
+      encryptionEnabled: true,
+      localVerified: true,
+      signedByOwner: false,
+      userId: "@peer:example.org",
+      verified: true,
+    });
   });
 
   it("verifies with a provided recovery key and reports success", async () => {
@@ -1836,6 +1914,38 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(matrixJsClient.startClient).toHaveBeenCalledTimes(1);
     expect(loadSessionBackupPrivateKeyFromSecretStorage).toHaveBeenCalledTimes(1);
     expect(checkKeyBackupAndEnable).toHaveBeenCalledTimes(1);
+    expect(restoreKeyBackup).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores backup keys when the matching decryption key is cached but signature trust is stale", async () => {
+    const restoreKeyBackup = vi.fn(async () => ({ imported: 3, total: 3 }));
+    matrixJsClient.getCrypto = vi.fn(() => ({
+      on: vi.fn(),
+      getActiveSessionBackupVersion: vi.fn(async () => "42"),
+      getSessionBackupPrivateKey: vi.fn(async () => new Uint8Array([1])),
+      getKeyBackupInfo: vi.fn(async () => ({
+        algorithm: "m.megolm_backup.v1.curve25519-aes-sha2",
+        auth_data: {},
+        version: "42",
+      })),
+      isKeyBackupTrusted: vi.fn(async () => ({
+        trusted: false,
+        matchesDecryptionKey: true,
+      })),
+      restoreKeyBackup,
+    }));
+
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      encryption: true,
+    });
+    vi.spyOn(client, "doRequest").mockResolvedValue({ version: "42" });
+
+    const result = await client.restoreRoomKeyBackup();
+    expect(result.success).toBe(true);
+    expect(result.imported).toBe(3);
+    expect(result.total).toBe(3);
+    expect(result.backup.trusted).toBe(false);
+    expect(result.backup.matchesDecryptionKey).toBe(true);
     expect(restoreKeyBackup).toHaveBeenCalledTimes(1);
   });
 
