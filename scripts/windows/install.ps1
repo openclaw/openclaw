@@ -31,7 +31,7 @@ if ($Uninstall) {
         $officialScript = Join-Path $InstallPath "uninstall.ps1"
         if (Test-Path $officialScript) {
             Write-Host "Delegating uninstallation to the official script..." -ForegroundColor Cyan
-            & $officialScript -Uninstall
+            & $officialScript -Uninstall -InstallPath $InstallPath
             exit
         }
     }
