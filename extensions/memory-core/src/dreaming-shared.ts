@@ -18,5 +18,7 @@ export function includesSystemEventToken(cleanedBody: string, eventText: string)
   if (normalizedBody === normalizedEventText) {
     return true;
   }
-  return normalizedBody.split(/\r?\n/).some((line) => line.trim() === normalizedEventText);
+  return normalizedBody
+    .split(/\r?\n/)
+    .some((line) => line.trim() === normalizedEventText || line.includes(normalizedEventText));
 }

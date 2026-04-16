@@ -1699,6 +1699,51 @@ describe("short-term dreaming trigger", () => {
     expect(memoryText).toContain("Move backups to S3 Glacier.");
   });
 
+  it("applies promotions when the managed dreaming token is wrapped by the cron label", async () => {
+    const logger = createLogger();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-cron-wrapper-");
+    await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Move backups to S3 Glacier."]);
+
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "backup policy",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: [
+        "[cron:e795558c-a273-4124-ba88-d4916688d977 Memory Dreaming Promotion] __openclaw_memory_core_short_term_promotion_dream__",
+        "Current time: Thursday, April 16th, 2026 - 3:10 PM (America/Los_Angeles) / 2026-04-16 22:10 UTC",
+      ].join("\n"),
+      trigger: "cron",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result?.handled).toBe(true);
+    const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    expect(memoryText).toContain("Move backups to S3 Glacier.");
+  });
+
   it("keeps one-off recalls out of long-term memory under default thresholds", async () => {
     const logger = createLogger();
     const workspaceDir = await createTempWorkspace("memory-dreaming-strict-");
