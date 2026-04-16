@@ -284,8 +284,20 @@ export class OpenClawApp extends LitElement {
   @state() whatsappLoginQrDataUrl: string | null = null;
   @state() whatsappLoginConnected: boolean | null = null;
   @state() whatsappBusy = false;
+  @state() whatsappDropdownOpen = false;
+  @state() whatsappDropdownView: "status" | "qr" | "settings" = "status";
   @state() nostrProfileFormState: NostrProfileFormState | null = null;
   @state() nostrProfileAccountId: string | null = null;
+
+  @state() apiKeyPopoverOpen = false;
+  @state() apiKeyProvider = "openai";
+  @state() apiKeyValue = "";
+  @state() apiKeySaving = false;
+  @state() apiKeyError: string | null = null;
+  @state() apiKeySuccess: string | null = null;
+  @state() apiKeyFetchedModels: import("./controllers/provider-registry.js").ProviderModel[] = [];
+  @state() apiKeySelectedModel: string | null = null;
+  @state() apiKeyView: "providers" | "configure" = "providers";
 
   @state() presenceLoading = false;
   @state() presenceEntries: PresenceEntry[] = [];
