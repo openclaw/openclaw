@@ -980,6 +980,87 @@ describe("runGatewayUpdate", () => {
     expect(calls).not.toContain(`git -C ${tempDir} rebase ${targetSha}`);
   });
 
+  it("resolves symbolic dev target refs from the fetched remote branch", async () => {
+    await setupGitPackageManagerFixture();
+    const calls: string[] = [];
+    const targetSha = "2222222222222222222222222222222222222222";
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+
+    const runCommand = async (
+      argv: string[],
+      _options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
+    ) => {
+      const key = argv.join(" ");
+      calls.push(key);
+
+      if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
+        return { stdout: tempDir, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse HEAD`) {
+        return {
+          stdout: `${calls.includes(`git -C ${tempDir} checkout --detach ${targetSha}`) ? targetSha : "abc123"}\n`,
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
+        return { stdout: "main", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse refs/remotes/origin/main`) {
+        return { stdout: `${targetSha}\n`, stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.endsWith(` ${targetSha}`) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        return { stdout: `HEAD is now at ${targetSha}`, stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith("git -C /tmp/") &&
+        key.includes(` checkout --detach ${targetSha}`) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm install" || key === "pnpm build" || key === "pnpm lint") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm ui:build") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === doctorCommand) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} checkout --detach ${targetSha}`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runWithCommand(runCommand, { channel: "dev", devTargetRef: "main" });
+
+    expect(result.status).toBe("ok");
+    expect(calls).toContain(`git -C ${tempDir} rev-parse refs/remotes/origin/main`);
+    expect(calls).not.toContain(`git -C ${tempDir} rev-parse main`);
+    expect(calls).toContain(`git -C ${tempDir} checkout --detach ${targetSha}`);
+    expect(calls).not.toContain(`git -C ${tempDir} rev-parse @{upstream}`);
+    expect(calls).not.toContain(`git -C ${tempDir} rebase ${targetSha}`);
+  });
+
   it("does not fall back to npm scripts when a pnpm repo cannot bootstrap pnpm", async () => {
     await setupGitPackageManagerFixture();
     const calls: string[] = [];

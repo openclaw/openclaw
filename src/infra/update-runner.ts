@@ -361,6 +361,54 @@ function normalizeDevTargetRef(value?: string | null): string | null {
   return trimmed ? trimmed : null;
 }
 
+function looksLikeFullCommitSha(value: string): boolean {
+  return /^[0-9a-f]{40}$/i.test(value.trim());
+}
+
+function buildDevTargetRefResolutionCandidates(devTargetRef: string): string[] {
+  const trimmed = devTargetRef.trim();
+  const candidates: string[] = [];
+  const addCandidate = (candidate?: string | null) => {
+    if (!candidate || candidates.includes(candidate)) {
+      return;
+    }
+    candidates.push(candidate);
+  };
+
+  if (looksLikeFullCommitSha(trimmed)) {
+    addCandidate(trimmed);
+    return candidates;
+  }
+
+  if (trimmed.startsWith("refs/remotes/")) {
+    addCandidate(trimmed);
+    return candidates;
+  }
+
+  if (trimmed.startsWith("refs/heads/")) {
+    addCandidate(`refs/remotes/origin/${trimmed.slice("refs/heads/".length)}`);
+    return candidates;
+  }
+
+  if (trimmed.startsWith("origin/")) {
+    addCandidate(`refs/remotes/${trimmed}`);
+    return candidates;
+  }
+
+  if (trimmed.startsWith("refs/tags/")) {
+    addCandidate(`${trimmed}^{}`);
+    addCandidate(trimmed);
+    return candidates;
+  }
+
+  // Resolve plain branch names from the freshly fetched remote ref instead of
+  // a possibly stale local branch checkout.
+  addCandidate(`refs/remotes/origin/${trimmed}`);
+  addCandidate(`refs/tags/${trimmed}^{}`);
+  addCandidate(`refs/tags/${trimmed}`);
+  return candidates;
+}
+
 async function resolveComparablePath(target: string): Promise<string> {
   return await fs.realpath(target).catch(() => path.resolve(target));
 }
@@ -579,16 +627,23 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       let preflightBaseSha: string | null = null;
       let candidates: string[] = [];
       if (devTargetRef) {
-        const targetShaStep = await runStep(
-          step(
-            `git rev-parse ${devTargetRef}`,
-            ["git", "-C", gitRoot, "rev-parse", devTargetRef],
-            gitRoot,
-          ),
-        );
-        steps.push(targetShaStep);
-        const targetSha = targetShaStep.stdoutTail?.trim();
-        if (!targetShaStep.stdoutTail || !targetSha) {
+        let targetSha: string | null = null;
+        for (const targetRefCandidate of buildDevTargetRefResolutionCandidates(devTargetRef)) {
+          const targetShaStep = await runStep(
+            step(
+              `git rev-parse ${targetRefCandidate}`,
+              ["git", "-C", gitRoot, "rev-parse", targetRefCandidate],
+              gitRoot,
+            ),
+          );
+          steps.push(targetShaStep);
+          const resolvedTargetSha = targetShaStep.stdoutTail?.trim();
+          if (targetShaStep.exitCode === 0 && resolvedTargetSha) {
+            targetSha = resolvedTargetSha;
+            break;
+          }
+        }
+        if (!targetSha) {
           return {
             status: "error",
             mode: "git",
