@@ -478,7 +478,11 @@ function extractMcpServerCount(state: AppViewState): number {
   if (!mcp || typeof mcp !== "object") {
     return 0;
   }
-  return Object.keys(mcp).length;
+  const servers =
+    "servers" in mcp && mcp.servers && typeof mcp.servers === "object"
+      ? (mcp.servers as Record<string, unknown>)
+      : {};
+  return Object.keys(servers).length;
 }
 
 function extractQuickSettingsSecurity(state: AppViewState): {
