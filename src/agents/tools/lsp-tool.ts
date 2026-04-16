@@ -43,7 +43,14 @@ function readNumberParam(params: Record<string, unknown>, key: string): number {
 }
 
 function resolveDynamicLspToolName(params: {
-  action: "hover" | "definition" | "references" | "diagnostics" | "symbols";
+  action:
+    | "hover"
+    | "definition"
+    | "references"
+    | "diagnostics"
+    | "symbols"
+    | "completion"
+    | "format";
   server?: string;
   runtimeToolNames: string[];
 }): string | null {
@@ -56,7 +63,11 @@ function resolveDynamicLspToolName(params: {
           ? "lsp_references_"
           : params.action === "diagnostics"
             ? "lsp_diagnostics_"
-            : "lsp_symbols_";
+            : params.action === "symbols"
+              ? "lsp_symbols_"
+              : params.action === "completion"
+                ? "lsp_completion_"
+                : "lsp_format_";
   const candidates = params.runtimeToolNames.filter((name) => name.startsWith(prefix));
   if (candidates.length === 0) {
     return null;
@@ -107,7 +118,11 @@ export function createLspTool(options: LspToolOptions): AnyAgentTool {
         reservedToolNames: [],
       });
       try {
-        if (!["hover", "definition", "references", "diagnostics", "symbols"].includes(action)) {
+        if (
+          !["hover", "definition", "references", "diagnostics", "symbols", "completion", "format"].includes(
+            action,
+          )
+        ) {
           return jsonResult({
             status: "failed",
             action,
@@ -139,10 +154,17 @@ export function createLspTool(options: LspToolOptions): AnyAgentTool {
         const toolInput: Record<string, unknown> = {};
         if (action === "symbols") {
           toolInput.query = readStringParam(params, "query") ?? "";
+        } else if (action === "format") {
+          toolInput.uri = resolveLspUri(params, options.workspaceDir);
         } else {
           toolInput.uri = resolveLspUri(params, options.workspaceDir);
         }
-        if (action === "hover" || action === "definition" || action === "references") {
+        if (
+          action === "hover" ||
+          action === "definition" ||
+          action === "references" ||
+          action === "completion"
+        ) {
           toolInput.line = readNumberParam(params, "line");
           toolInput.character = readNumberParam(params, "character");
         }

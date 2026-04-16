@@ -28,6 +28,7 @@ type LspServerCapabilities = {
   definitionProvider?: boolean;
   referencesProvider?: boolean;
   diagnosticProvider?: boolean;
+  documentFormattingProvider?: boolean;
   workspaceSymbolProvider?: boolean;
   [key: string]: unknown;
 };
@@ -314,6 +315,60 @@ function buildLspTools(session: LspSession): AnyAgentTool[] {
           textDocument: { uri: params.uri },
         });
         return formatLspResult(serverLabel, "diagnostics", result);
+      },
+    });
+  }
+
+  if (caps.completionProvider) {
+    tools.push({
+      name: `lsp_completion_${serverLabel}`,
+      label: `LSP Completion (${serverLabel})`,
+      description: `Fetch completion items at a position via the ${serverLabel} language server.`,
+      parameters: {
+        type: "object",
+        properties: {
+          uri: { type: "string", description: "File URI (file:///path/to/file)" },
+          line: { type: "number", description: "Zero-based line number" },
+          character: { type: "number", description: "Zero-based character offset" },
+        },
+        required: ["uri", "line", "character"],
+      },
+      execute: async (_toolCallId, input) => {
+        const params = input as { uri: string; line: number; character: number };
+        const result = await sendRequest(session, "textDocument/completion", {
+          textDocument: { uri: params.uri },
+          position: { line: params.line, character: params.character },
+        });
+        return formatLspResult(serverLabel, "completion", result);
+      },
+    });
+  }
+
+  if (caps.documentFormattingProvider) {
+    tools.push({
+      name: `lsp_format_${serverLabel}`,
+      label: `LSP Format (${serverLabel})`,
+      description: `Format a file via the ${serverLabel} language server.`,
+      parameters: {
+        type: "object",
+        properties: {
+          uri: { type: "string", description: "File URI (file:///path/to/file)" },
+        },
+        required: ["uri"],
+      },
+      execute: async (_toolCallId, input) => {
+        const params = input as { uri: string };
+        const result = await sendRequest(session, "textDocument/formatting", {
+          textDocument: { uri: params.uri },
+          options: {
+            tabSize: 2,
+            insertSpaces: true,
+            trimTrailingWhitespace: true,
+            insertFinalNewline: true,
+            trimFinalNewlines: true,
+          },
+        });
+        return formatLspResult(serverLabel, "format", result);
       },
     });
   }

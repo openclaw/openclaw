@@ -172,4 +172,79 @@ describe("createLspTool", () => {
       details: { lspServer: "ts", lspMethod: "diagnostics" },
     });
   });
+
+  it("dispatches completion action with position", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text", text: "completion-ok" }],
+      details: { lspServer: "ts", lspMethod: "completion" },
+    }));
+    lspRuntimeMock.createBundleLspToolRuntime.mockResolvedValueOnce({
+      tools: [
+        {
+          name: "lsp_completion_ts",
+          label: "completion",
+          description: "completion",
+          parameters: { type: "object", properties: {} },
+          execute,
+        },
+      ],
+      sessions: [{ serverName: "ts", capabilities: {} }],
+      dispose: vi.fn(async () => {}),
+    });
+
+    const { createLspTool } = await import("./lsp-tool.js");
+    const tool = createLspTool({ workspaceDir: "/tmp/workspace" });
+    const result = await tool.execute("tool-6", {
+      action: "completion",
+      uri: "file:///tmp/a.ts",
+      line: 3,
+      character: 7,
+    });
+
+    expect(execute).toHaveBeenCalledWith("lsp-dispatch", {
+      uri: "file:///tmp/a.ts",
+      line: 3,
+      character: 7,
+    });
+    expect(result).toMatchObject({
+      details: { lspServer: "ts", lspMethod: "completion" },
+    });
+  });
+
+  it("dispatches format action with uri only", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text", text: "format-ok" }],
+      details: { lspServer: "ts", lspMethod: "format" },
+    }));
+    lspRuntimeMock.createBundleLspToolRuntime.mockResolvedValueOnce({
+      tools: [
+        {
+          name: "lsp_format_ts",
+          label: "format",
+          description: "format",
+          parameters: { type: "object", properties: {} },
+          execute,
+        },
+      ],
+      sessions: [{ serverName: "ts", capabilities: {} }],
+      dispose: vi.fn(async () => {}),
+    });
+
+    const { createLspTool } = await import("./lsp-tool.js");
+    const tool = createLspTool({ workspaceDir: "/tmp/workspace" });
+    const result = await tool.execute("tool-7", {
+      action: "format",
+      path: "src/a.ts",
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      "lsp-dispatch",
+      expect.objectContaining({
+        uri: expect.stringMatching(/^file:\/\//),
+      }),
+    );
+    expect(result).toMatchObject({
+      details: { lspServer: "ts", lspMethod: "format" },
+    });
+  });
 });
