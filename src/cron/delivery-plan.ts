@@ -86,7 +86,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
 }
 
 export type CronFailureDeliveryPlan = {
-  mode: "announce" | "webhook";
+  mode: "announce" | "webhook" | "agent-turn";
   channel?: CronMessageChannel;
   to?: string;
   accountId?: string;
@@ -96,12 +96,12 @@ export type CronFailureDestinationInput = {
   channel?: CronMessageChannel;
   to?: string;
   accountId?: string;
-  mode?: "announce" | "webhook";
+  mode?: "announce" | "webhook" | "agent-turn";
 };
 
-function normalizeFailureMode(value: unknown): "announce" | "webhook" | undefined {
+function normalizeFailureMode(value: unknown): "announce" | "webhook" | "agent-turn" | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
-  if (trimmed === "announce" || trimmed === "webhook") {
+  if (trimmed === "announce" || trimmed === "webhook" || trimmed === "agent-turn") {
     return trimmed;
   }
   return undefined;
@@ -118,7 +118,7 @@ export function resolveFailureDestination(
   let channel: CronMessageChannel | undefined;
   let to: string | undefined;
   let accountId: string | undefined;
-  let mode: "announce" | "webhook" | undefined;
+  let mode: "announce" | "webhook" | "agent-turn" | undefined;
 
   if (globalConfig) {
     channel = normalizeChannel(globalConfig.channel);
@@ -161,6 +161,12 @@ export function resolveFailureDestination(
   }
 
   const resolvedMode = mode ?? "announce";
+
+  // agent-turn mode is handled directly by timer.ts via enqueueSystemEvent
+  if (resolvedMode === "agent-turn") {
+    return null;
+  }
+
   if (resolvedMode === "webhook" && !to) {
     return null;
   }

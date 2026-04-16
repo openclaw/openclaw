@@ -81,7 +81,7 @@ export function registerCronEditCommand(cron: Command) {
       )
       .option("--failure-alert-to <dest>", "Failure alert destination")
       .option("--failure-alert-cooldown <duration>", "Minimum time between alerts (e.g. 1h, 30m)")
-      .option("--failure-alert-mode <mode>", "Failure alert delivery mode (announce or webhook)")
+      .option("--failure-alert-mode <mode>", "Failure alert delivery mode (announce, webhook, or agent-turn)")
       .option(
         "--failure-alert-account-id <id>",
         "Account ID for failure alert channel (multi-account setups)",
