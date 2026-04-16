@@ -764,6 +764,31 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.arguments).toMatchObject({ ms: 250 });
   });
 
+  it("converts claw-code CronCreate shape to cron job payload", async () => {
+    const finalToolCall = {
+      type: "toolCall",
+      name: "CronCreate",
+      arguments: { schedule: "*/5 * * * *", prompt: "check build status" },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["cron"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("cron");
+    expect(finalToolCall.arguments).toMatchObject({
+      action: "add",
+      schedule: { kind: "cron", expr: "*/5 * * * *" },
+      payload: { kind: "agentTurn", message: "check build status" },
+    });
+  });
+
   it("maps provider-prefixed tool names to allowed canonical tools", async () => {
     const partialToolCall = { type: "toolCall", name: " functions.read " };
     const messageToolCall = { type: "toolCall", name: " functions.write " };

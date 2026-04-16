@@ -38,6 +38,25 @@ describe("team tool", () => {
     expect(listedDetails.teams.map((entry) => entry.teamId)).toEqual(["ops"]);
   });
 
+  it("accepts claw-code TeamCreate task list payload and surfaces compatibility fields", async () => {
+    const tool = createTeamTool();
+    const created = await tool.execute("call-create", {
+      action: "create",
+      name: "Release Team",
+      tasks: [{ task_id: "task_1" }, { taskId: "task_2" }, { task_id: "task_1" }],
+    });
+    const details = created.details as {
+      team?: { taskIds?: string[] };
+      team_id?: string;
+      task_count?: number;
+      task_ids?: string[];
+    };
+    expect(details.team?.taskIds).toEqual(["task_1", "task_2"]);
+    expect(details.task_count).toBe(2);
+    expect(details.task_ids).toEqual(["task_1", "task_2"]);
+    expect(typeof details.team_id).toBe("string");
+  });
+
   it("updates and deletes teams", async () => {
     const tool = createTeamTool();
     await tool.execute("call-create", {

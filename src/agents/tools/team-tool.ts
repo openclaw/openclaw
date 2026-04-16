@@ -25,9 +25,45 @@ export const TeamToolSchema = Type.Object(
     description: Type.Optional(Type.String()),
     members: Type.Optional(Type.Array(Type.String())),
     labels: Type.Optional(Type.Array(Type.String())),
+    tasks: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            taskId: Type.Optional(Type.String()),
+            task_id: Type.Optional(Type.String()),
+          },
+          { additionalProperties: true },
+        ),
+      ),
+    ),
   },
   { additionalProperties: true },
 );
+
+function readTaskIdsParam(params: Record<string, unknown>): string[] | undefined {
+  const tasks = params.tasks;
+  if (!Array.isArray(tasks)) {
+    return undefined;
+  }
+  const taskIds = tasks
+    .map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return null;
+      }
+      const record = entry as Record<string, unknown>;
+      const taskId = typeof record.taskId === "string" ? record.taskId.trim() : "";
+      if (taskId) {
+        return taskId;
+      }
+      const taskIdSnake = typeof record.task_id === "string" ? record.task_id.trim() : "";
+      return taskIdSnake || null;
+    })
+    .filter((entry): entry is string => Boolean(entry));
+  if (taskIds.length === 0) {
+    return undefined;
+  }
+  return Array.from(new Set(taskIds));
+}
 
 export function createTeamTool(): AnyAgentTool {
   return {
@@ -64,11 +100,17 @@ export function createTeamTool(): AnyAgentTool {
             description: readStringParam(params, "description"),
             members: readStringArrayParam(params, "members"),
             labels: readStringArrayParam(params, "labels"),
+            taskIds: readTaskIdsParam(params),
           });
           return jsonResult({
             status: "ok",
             action,
             team,
+            team_id: team.teamId,
+            task_count: team.taskIds.length,
+            task_ids: team.taskIds,
+            name: team.name,
+            created_at: team.createdAt,
           });
         }
         case "get": {
@@ -90,6 +132,7 @@ export function createTeamTool(): AnyAgentTool {
             description: readStringParam(params, "description", { allowEmpty: true }),
             members: readStringArrayParam(params, "members"),
             labels: readStringArrayParam(params, "labels"),
+            taskIds: readTaskIdsParam(params),
           });
           return jsonResult({
             status: "ok",
@@ -99,16 +142,20 @@ export function createTeamTool(): AnyAgentTool {
         }
         case "delete": {
           const teamId = readStringParam(params, "teamId", { required: true, label: "teamId" });
+          const existing = getTeam(teamId);
           const deleted = deleteTeam(teamId);
           return jsonResult({
             status: "ok",
             action,
             teamId,
             deleted,
+            team_id: teamId,
+            name: existing?.name ?? null,
+            message: deleted ? "Team deleted" : "Team not found",
           });
         }
         default:
-          throw new ToolInputError(`unsupported action: ${action}`);
+          throw new ToolInputError(`unsupported action: ${String(action)}`);
       }
     },
   };

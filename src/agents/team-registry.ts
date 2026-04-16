@@ -3,9 +3,11 @@ import crypto from "node:crypto";
 export type TeamRecord = {
   teamId: string;
   name: string;
+  status: "active" | "deleted";
   description?: string;
   members: string[];
   labels: string[];
+  taskIds: string[];
   createdAt: number;
   updatedAt: number;
 };
@@ -16,6 +18,7 @@ export type TeamCreateInput = {
   description?: string;
   members?: string[];
   labels?: string[];
+  taskIds?: string[];
 };
 
 export type TeamUpdateInput = {
@@ -23,6 +26,7 @@ export type TeamUpdateInput = {
   description?: string;
   members?: string[];
   labels?: string[];
+  taskIds?: string[];
 };
 
 const teams = new Map<string, TeamRecord>();
@@ -60,9 +64,11 @@ export function createTeam(input: TeamCreateInput): TeamRecord {
   const team: TeamRecord = {
     teamId,
     name,
+    status: "active",
     ...(input.description?.trim() ? { description: input.description.trim() } : {}),
     members: normalizeList(input.members),
     labels: normalizeList(input.labels),
+    taskIds: normalizeList(input.taskIds),
     createdAt: now,
     updatedAt: now,
   };
@@ -78,7 +84,7 @@ export function getTeam(teamId: string): TeamRecord | null {
 export function listTeams(): TeamRecord[] {
   return [...teams.values()]
     .map((entry) => ({ ...entry }))
-    .sort((left, right) => left.createdAt - right.createdAt);
+    .toSorted((left, right) => left.createdAt - right.createdAt);
 }
 
 export function updateTeam(teamId: string, patch: TeamUpdateInput): TeamRecord {
@@ -97,6 +103,7 @@ export function updateTeam(teamId: string, patch: TeamUpdateInput): TeamRecord {
       : {}),
     ...(patch.members ? { members: normalizeList(patch.members) } : {}),
     ...(patch.labels ? { labels: normalizeList(patch.labels) } : {}),
+    ...(patch.taskIds ? { taskIds: normalizeList(patch.taskIds) } : {}),
     updatedAt: Date.now(),
   };
   teams.set(normalizedId, next);
@@ -104,7 +111,17 @@ export function updateTeam(teamId: string, patch: TeamUpdateInput): TeamRecord {
 }
 
 export function deleteTeam(teamId: string): boolean {
-  return teams.delete(teamId.trim().toLowerCase());
+  const normalizedId = teamId.trim().toLowerCase();
+  const current = teams.get(normalizedId);
+  if (!current) {
+    return false;
+  }
+  teams.set(normalizedId, {
+    ...current,
+    status: "deleted",
+    updatedAt: Date.now(),
+  });
+  return teams.delete(normalizedId);
 }
 
 export function resetTeamRegistryForTests(): void {
