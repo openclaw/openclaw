@@ -37,12 +37,22 @@ const LOCK_STALE_MS = 10_000;
  * Validates that a namespace cannot escape the base directory via
  * path traversal (e.g. "../../etc").
  */
+function hasControlOrForbiddenChars(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    // Block ASCII control chars (0x00-0x1F) and Windows-forbidden chars.
+    if (code <= 0x1f) { return true; }
+    if ("<>:\"|?*".includes(s[i])) { return true; }
+  }
+  return false;
+}
+
 function validateNamespace(namespace: string): void {
   if (
     !namespace ||
     namespace.includes("..") ||
     path.isAbsolute(namespace) ||
-    /[<>:"|?*\u0000-\u001F]/.test(namespace)
+    hasControlOrForbiddenChars(namespace)
   ) {
     throw new Error(`Invalid plan namespace: "${namespace}"`);
   }
