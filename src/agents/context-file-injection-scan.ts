@@ -21,7 +21,7 @@ interface ThreatPattern {
 // Ported from Hermes _CONTEXT_THREAT_PATTERNS (prompt_builder.py:36-47).
 // All patterns are case-insensitive matches on the raw file content.
 const THREAT_PATTERNS: ThreatPattern[] = [
-  { re: /ignore\s+(previous|all|above|prior)\s+instructions/i, id: "prompt_injection" },
+  { re: /ignore\s+(?:(?:previous|all|above|prior)\s+)*instructions/i, id: "prompt_injection" },
   { re: /do\s+not\s+tell\s+the\s+user/i, id: "deception_hide" },
   { re: /system\s+prompt\s+override/i, id: "sys_prompt_override" },
   { re: /disregard\s+(your|all|any)\s+(instructions|rules|guidelines)/i, id: "disregard_rules" },
@@ -29,7 +29,10 @@ const THREAT_PATTERNS: ThreatPattern[] = [
     re: /act\s+as\s+(if|though)\s+you\s+(have\s+no|don['\u2019]t\s+have)\s+(restrictions|limits|rules)/i,
     id: "bypass_restrictions",
   },
-  { re: /<!--[\s\S]*?(?:ignore|override|system|secret|hidden)[\s\S]*?-->/i, id: "html_comment_injection" },
+  {
+    re: /<!--[\s\S]*?(?:ignore|override|system|secret|hidden)[\s\S]*?-->/i,
+    id: "html_comment_injection",
+  },
   { re: /<\s*div\s+style\s*=\s*["'][\s\S]*?display\s*:\s*none/i, id: "hidden_div" },
   { re: /translate\s+.*\s+into\s+.*\s+and\s+(execute|run|eval)/i, id: "translate_execute" },
   {
@@ -99,6 +102,6 @@ export function sanitizeContextFileForInjection(
     return content;
   }
   // Sanitize filename to prevent injection via crafted file paths.
-  const safeFilename = filename.replace(/[\[\]\n\r]/g, "_");
+  const safeFilename = filename.replace(/[[\]\n\r]/g, "_");
   return `[BLOCKED: ${safeFilename} contained potential prompt injection (${findings.join(", ")}). Content not loaded.]`;
 }
