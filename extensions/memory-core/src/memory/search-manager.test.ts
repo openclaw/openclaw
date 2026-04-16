@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { checkQmdBinaryAvailability as checkQmdBinaryAvailabilityFn } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
 
@@ -196,6 +196,49 @@ beforeEach(async () => {
   checkQmdBinaryAvailability.mockClear();
   checkQmdBinaryAvailability.mockResolvedValue({ available: true });
   createQmdManagerMock.mockClear();
+});
+
+describe("stale singleton cache guard", () => {
+  const CACHE_KEY = Symbol.for("openclaw.memorySearchManagerCache");
+
+  function poisonGlobalCacheStore(staleValue: unknown) {
+    (globalThis as Record<PropertyKey, unknown>)[CACHE_KEY] = staleValue;
+  }
+
+  afterEach(() => {
+    // Restore a valid shape so other tests are not affected.
+    (globalThis as Record<PropertyKey, unknown>)[CACHE_KEY] = {
+      qmdManagerCache: new Map(),
+    };
+  });
+
+  it("does not crash getMemorySearchManager when qmdManagerCache is undefined", async () => {
+    poisonGlobalCacheStore({ qmdManagerCache: undefined });
+    const cfg = createQmdCfg("stale-agent");
+
+    const result = await getMemorySearchManager({ cfg, agentId: "stale-agent" });
+
+    expect(result).toBeDefined();
+    expect(result.manager).toBeDefined();
+  });
+
+  it("repairs a stale singleton missing qmdManagerCache to an empty Map", async () => {
+    poisonGlobalCacheStore({});
+    const cfg = createQmdCfg("repair-agent");
+
+    const result = await getMemorySearchManager({ cfg, agentId: "repair-agent" });
+
+    expect(result).toBeDefined();
+    // Verify the repaired cache is functional by fetching a second time (exercises .get())
+    const second = await getMemorySearchManager({ cfg, agentId: "repair-agent" });
+    expect(second.manager).toBe(result.manager);
+  });
+
+  it("closeAllMemorySearchManagers does not throw with stale qmdManagerCache", async () => {
+    poisonGlobalCacheStore({ qmdManagerCache: undefined });
+
+    await expect(closeAllMemorySearchManagers()).resolves.toBeUndefined();
+  });
 });
 
 describe("getMemorySearchManager caching", () => {

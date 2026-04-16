@@ -23,16 +23,27 @@ type MemorySearchManagerCacheStore = {
 
 function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
   // Keep caches reachable across `vi.resetModules()` so later cleanup can close older instances.
-  return resolveGlobalSingleton<MemorySearchManagerCacheStore>(
+  const store = resolveGlobalSingleton<MemorySearchManagerCacheStore>(
     MEMORY_SEARCH_MANAGER_CACHE_KEY,
     () => ({
       qmdManagerCache: new Map<string, MemorySearchManager>(),
     }),
   );
+  // Guard against stale singleton from an older runtime that stored a different shape
+  // at the same Symbol key (e.g. missing `qmdManagerCache`). Repair in-place so all
+  // callers sharing this globalThis slot see the healed value.
+  if (!(store.qmdManagerCache instanceof Map)) {
+    store.qmdManagerCache = new Map<string, MemorySearchManager>();
+  }
+  return store;
 }
 
 const log = createSubsystemLogger("memory");
-const { qmdManagerCache: QMD_MANAGER_CACHE } = getMemorySearchManagerCacheStore();
+
+function getQmdManagerCache(): Map<string, MemorySearchManager> {
+  return getMemorySearchManagerCacheStore().qmdManagerCache;
+}
+
 let managerRuntimePromise: Promise<typeof import("../../manager-runtime.js")> | null = null;
 
 function loadManagerRuntime() {
@@ -55,12 +66,12 @@ export async function getMemorySearchManager(params: {
     const statusOnly = params.purpose === "status";
     const baseCacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
     const cacheKey = `${baseCacheKey}:${statusOnly ? "status" : "full"}`;
-    const cached = QMD_MANAGER_CACHE.get(cacheKey);
+    const cached = getQmdManagerCache().get(cacheKey);
     if (cached) {
       return { manager: cached };
     }
     if (statusOnly) {
-      const fullCached = QMD_MANAGER_CACHE.get(`${baseCacheKey}:full`);
+      const fullCached = getQmdManagerCache().get(`${baseCacheKey}:full`);
       if (fullCached) {
         // Status callers often close the manager they receive. Wrap the live
         // full manager with a no-op close so health/status probes do not tear
@@ -110,10 +121,10 @@ export async function getMemorySearchManager(params: {
               },
             },
             () => {
-              QMD_MANAGER_CACHE.delete(cacheKey);
+              getQmdManagerCache().delete(cacheKey);
             },
           );
-          QMD_MANAGER_CACHE.set(cacheKey, wrapper);
+          getQmdManagerCache().set(cacheKey, wrapper);
           return { manager: wrapper };
         }
       } catch (err) {
@@ -186,8 +197,9 @@ class BorrowedMemoryManager implements MemorySearchManager {
 }
 
 export async function closeAllMemorySearchManagers(): Promise<void> {
-  const managers = Array.from(QMD_MANAGER_CACHE.values());
-  QMD_MANAGER_CACHE.clear();
+  const cache = getQmdManagerCache();
+  const managers = Array.from(cache.values());
+  cache.clear();
   for (const manager of managers) {
     try {
       await manager.close?.();
