@@ -394,6 +394,22 @@ export function startAcpSpawnParentStreamRelay(params: {
   // final_reply snippet. Reset after each flush so a subsequent commentary
   // pass doesn't accidentally carry over a stale `final_answer` class.
   let pendingAssistantPhase: "commentary" | "final_answer" | undefined;
+  // G5a (R2 fix, Phase 10 Discord Surface Overhaul): Claude ACP deltas omit
+  // the assistant `phase` field entirely. When the scheduleFlush timer
+  // (DEFAULT_STREAM_FLUSH_MS = 2500ms) fires before lifecycle-end arrives
+  // (which can be 14+ seconds later), the buffered assistant text ships as
+  // `progress` and the subsequent terminal flushPending({ terminal: true })
+  // has nothing left to promote to final_reply. Result: Claude's final reply
+  // reaches the thread but is classified as progress and loses webhook-
+  // identity routing.
+  //
+  // Fix: track whether ANY delta in the current stream has carried an
+  // explicit phase. If not, treat the stream as "phase-less" (Claude-style)
+  // and defer timer-initiated flushes — let lifecycle-end be the terminal
+  // trigger. The existing STREAM_BUFFER_MAX_CHARS truncation bounds memory
+  // growth while we wait. If a phase is observed later, the flag flips and
+  // normal timer flushing resumes.
+  let observedExplicitPhase = false;
   // F4 (Phase 2.5 Discord Surface Overhaul): when lifecycle `phase="end"`
   // fires with buffered assistant text AND no explicit assistant phase was
   // observed (Claude ACP deltas omit `phase`), promote the terminal flush to
@@ -429,6 +445,16 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     flushTimer = setTimeout(() => {
+      flushTimer = undefined;
+      // G5a: if no assistant delta has ever carried an explicit phase, this
+      // stream is Claude-style — defer to lifecycle-end for terminal framing
+      // so the buffer gets promoted to final_reply instead of shipping as
+      // intermediate progress. Rescheduling keeps the timer alive in case a
+      // phase arrives later and we return to normal flushing behavior.
+      if (!observedExplicitPhase && pendingText) {
+        scheduleFlush();
+        return;
+      }
       flushPending();
     }, streamFlushMs);
     flushTimer.unref?.();
@@ -536,6 +562,12 @@ export function startAcpSpawnParentStreamRelay(params: {
         pendingAssistantPhase = "final_answer";
       } else if (!pendingAssistantPhase && assistantPhase) {
         pendingAssistantPhase = assistantPhase;
+      }
+      // G5a: track whether ANY delta in this stream has carried an explicit
+      // phase. Used by scheduleFlush to defer timer-initiated flushes for
+      // phase-less (Claude-style) streams so lifecycle-end can promote them.
+      if (assistantPhase) {
+        observedExplicitPhase = true;
       }
       if (pendingText.length > STREAM_BUFFER_MAX_CHARS) {
         pendingText = pendingText.slice(-STREAM_BUFFER_MAX_CHARS);

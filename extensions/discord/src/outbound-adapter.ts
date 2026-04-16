@@ -143,7 +143,12 @@ function resolveDiscordWebhookIdentity(params: {
   return { username, avatarUrl };
 }
 
-async function maybeSendDiscordWebhookText(params: {
+// G5c (R2 fix, Phase 10 Discord Surface Overhaul): also consumed by the
+// production `createChatChannelPlugin` outbound in `channel.ts`. Keep this
+// export stable — channel.ts threads webhook-first delivery through this
+// helper so bot-path fallback and webhook identity stay in lockstep across
+// both the test-only `discordOutbound` adapter and the live plugin outbound.
+export async function maybeSendDiscordWebhookText(params: {
   cfg?: OpenClawConfig;
   text: string;
   threadId?: string | number | null;

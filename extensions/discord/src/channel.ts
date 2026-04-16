@@ -12,6 +12,7 @@ import type {
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
@@ -62,6 +63,7 @@ import {
   normalizeDiscordMessagingTarget,
   normalizeDiscordOutboundTarget,
 } from "./normalize.js";
+import { maybeSendDiscordWebhookText } from "./outbound-adapter.js";
 import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
 import type { DiscordProbe } from "./probe.js";
 import { getDiscordRuntime } from "./runtime.js";
@@ -134,6 +136,12 @@ function loadDiscordCarbonModule() {
 
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
+
+// G5c (R2 fix, Phase 10 Discord Surface Overhaul): production outbound lives
+// here (not in outbound-adapter.ts — that module is only wired into the
+// test-only `discordOutbound` adapter). Structured logger so operators can
+// observe webhook-path failures/misses and fallback behavior.
+const channelOutboundLog = createSubsystemLogger("discord/channel-outbound");
 function resolveDiscordAttachedOutboundTarget(params: {
   to: string;
   threadId?: string | number | null;
@@ -853,7 +861,62 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
       attachedResults: {
         channel: "discord",
-        sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, silent }) => {
+        sendText: async ({
+          cfg,
+          to,
+          text,
+          accountId,
+          deps,
+          replyToId,
+          threadId,
+          identity,
+          silent,
+        }) => {
+          // G5c (R2 fix, Phase 10 Discord Surface Overhaul): webhook-first
+          // delivery for thread-bound replies. Keeps final_reply identity
+          // aligned with the intro banner ("⚙ claude" / "⚙ codex") instead of
+          // regressing to the raw bot identity. Falls back to bot send on
+          // webhook miss (no binding / no webhook creds) or webhook failure.
+          //
+          // Note: this used to live only in the test-only `discordOutbound`
+          // adapter (outbound-adapter.ts). `createChatChannelPlugin` wires
+          // THIS inline adapter into production, so the webhook fix MUST be
+          // duplicated here for identity parity at runtime.
+          if (!silent && threadId != null) {
+            try {
+              const webhookResult = await maybeSendDiscordWebhookText({
+                cfg,
+                text,
+                threadId,
+                accountId,
+                identity,
+                replyToId,
+              });
+              if (webhookResult) {
+                return webhookResult;
+              }
+              // Webhook-null-return: either no binding for this thread, or
+              // the binding lacks webhookId/webhookToken. Proceed to bot path
+              // — this is expected for non-bound threads. Log at debug so
+              // operators can distinguish misses from errors.
+              channelOutboundLog.debug(
+                "discord sendText webhook path returned null, falling back to bot",
+                {
+                  threadId,
+                  accountId: accountId ?? undefined,
+                  reason: "webhook_null_return",
+                  fallbackUsed: true,
+                },
+              );
+            } catch (err) {
+              channelOutboundLog.warn("discord sendText webhook path threw, falling back to bot", {
+                threadId,
+                accountId: accountId ?? undefined,
+                fallbackUsed: true,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
           const send = await resolveDiscordSend(deps);
           return await send(resolveDiscordAttachedOutboundTarget({ to, threadId }), text, {
             verbose: false,

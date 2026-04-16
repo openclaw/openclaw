@@ -86,27 +86,27 @@ describe("startAcpSpawnParentStreamRelay", () => {
   });
 
   it("relays assistant progress and completion to the parent session", () => {
-    const deliveryContext = {
-      channel: "telegram",
-      to: "-1001234567890",
-      accountId: "default",
-      threadId: 1122,
-    };
+    // No deliveryContext here: without threadBound the final_reply flush goes
+    // through enqueueSystemEvent (not the F3 direct-post path), so we can
+    // keep asserting on collectedTexts().
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-1",
       parentSessionKey: "agent:main:main",
       childSessionKey: "agent:codex:acp:child-1",
       agentId: "codex",
-      deliveryContext,
       streamFlushMs: 10,
       noOutputNoticeMs: 120_000,
     });
 
+    // G5a: phase-less deltas DEFER timer flushes until lifecycle-end. Tag
+    // this codex-style delta with phase=final_answer to match real codex
+    // behavior and to exercise the immediate flush + final_reply emission.
     emitAgentEvent({
       runId: "run-1",
       stream: "assistant",
       data: {
         delta: "hello from child",
+        phase: "final_answer",
       },
     });
     vi.advanceTimersByTime(15);
@@ -134,17 +134,17 @@ describe("startAcpSpawnParentStreamRelay", () => {
       expect.any(String),
       expect.objectContaining({
         sessionKey: "agent:main:main",
-        deliveryContext,
         trusted: false,
       }),
     );
     // Phase 2 Discord Surface Overhaul: every relayed emission carries an
-    // explicit MessageClass. Start notice → progress, assistant delta →
-    // progress, lifecycle end → completion.
+    // explicit MessageClass. Start notice → progress, final_answer delta →
+    // final_reply, lifecycle end → completion.
     const classes = enqueueSystemEventMock.mock.calls.map(
       (call) => (call[1] as { messageClass?: string } | undefined)?.messageClass,
     );
     expect(classes).toContain("progress");
+    expect(classes).toContain("final_reply");
     expect(classes).toContain("completion");
     expect(classes.every((cls) => cls !== "internal_narration")).toBe(true);
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
@@ -200,13 +200,16 @@ describe("startAcpSpawnParentStreamRelay", () => {
       emitStartNotice: false,
     });
 
-    // Emit a delta that contains three leak vectors.
+    // G5a: phase-less deltas defer timer flushes. Use a trailing paragraph
+    // break ("\n\n") to trigger the immediate flush path (delta boundary),
+    // which still emits as `progress` for phase-less streams. This preserves
+    // the exact sanitization-profile test intent.
     emitAgentEvent({
       runId: "run-leak",
       stream: "assistant",
       data: {
         delta:
-          "Loading /home/alice/project/secret.env with Bearer abcd1234efgh5678 and sk-live-XYZABC123456789012.",
+          "Loading /home/alice/project/secret.env with Bearer abcd1234efgh5678 and sk-live-XYZABC123456789012.\n\n",
       },
     });
     vi.advanceTimersByTime(15);
@@ -249,7 +252,12 @@ describe("startAcpSpawnParentStreamRelay", () => {
       runId: "run-2",
       stream: "assistant",
       data: {
+        // G5a: phase-less deltas defer timer-flush; tag as final_answer so
+        // the resumed-output delta flushes as a final_reply emission. The
+        // test asserts both the "resumed output." lifecycle notice AND the
+        // relayed delta text reach the parent session.
         delta: "resumed output",
+        phase: "final_answer",
       },
     });
     vi.advanceTimersByTime(5);
@@ -360,11 +368,16 @@ describe("startAcpSpawnParentStreamRelay", () => {
       noOutputNoticeMs: 120_000,
     });
 
+    // G5a: phase-less deltas defer timer-flush. Tag with phase=final_answer
+    // so the timer flush fires as expected; we're only testing that the
+    // delta concatenation preserves interior whitespace across buffer
+    // accumulation.
     emitAgentEvent({
       runId: "run-5",
       stream: "assistant",
       data: {
         delta: "hello",
+        phase: "final_answer",
       },
     });
     emitAgentEvent({
@@ -372,6 +385,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
       stream: "assistant",
       data: {
         delta: " world",
+        phase: "final_answer",
       },
     });
     vi.advanceTimersByTime(15);
@@ -598,6 +612,68 @@ describe("startAcpSpawnParentStreamRelay", () => {
       | undefined;
     expect(postArgs?.threadId).toBe("thread-f4");
     expect(postArgs?.content).toContain("Claude's terminal answer");
+    relay.dispose();
+  });
+
+  it("G5a: defers timer-initiated flush for phase-less (Claude-style) streams until lifecycle-end", () => {
+    // G5a (R2 fix, Phase 10 Discord Surface Overhaul): Claude ACP deltas omit
+    // the `phase` field. When the scheduleFlush timer fires BEFORE
+    // lifecycle-end (real production race — lifecycle-end can arrive 14+s
+    // after the first delta), F4's terminal promotion had nothing buffered to
+    // promote. The deferral must keep the buffer alive across timer ticks so
+    // the terminal flush can classify as final_reply.
+    const deliveryContext = {
+      channel: "discord",
+      to: "channel:parent-channel",
+      accountId: "default",
+      threadId: "thread-g5a",
+    };
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-g5a",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:g5a",
+      agentId: "claude",
+      deliveryContext,
+      streamFlushMs: 100, // short timer so we can race it below
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    // Claude-style delta: no phase field.
+    emitAgentEvent({
+      runId: "run-g5a",
+      stream: "assistant",
+      data: { delta: "Claude's in-progress answer fragment" },
+    });
+    // Advance PAST the flush timer multiple times. Pre-G5a this would drain
+    // the buffer as `progress` and the later lifecycle-end would find nothing
+    // to promote.
+    vi.advanceTimersByTime(350);
+
+    // Crucially: no final_reply should have been enqueued yet, because the
+    // timer-initiated flush must be deferred for phase-less streams.
+    const midStreamFinalReplies = enqueueSystemEventMock.mock.calls.filter(
+      (call) => (call[1] as { messageClass?: string } | undefined)?.messageClass === "final_reply",
+    );
+    expect(midStreamFinalReplies.length).toBe(0);
+    // The direct-post seam also must not have fired yet.
+    expect(sendMessageMock).not.toHaveBeenCalled();
+
+    // Lifecycle-end arrives. The buffered text MUST now promote to
+    // final_reply — exactly F4's behavior, but now also surviving the
+    // intervening timer ticks that would otherwise have drained the buffer.
+    emitAgentEvent({
+      runId: "run-g5a",
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1_000, endedAt: 15_000 },
+    });
+
+    expect(sendMessageMock).toHaveBeenCalled();
+    const postArgs = sendMessageMock.mock.calls.at(-1)?.[0] as
+      | { threadId?: string | number; content?: string }
+      | undefined;
+    expect(postArgs?.threadId).toBe("thread-g5a");
+    expect(postArgs?.content).toContain("Claude's in-progress answer fragment");
     relay.dispose();
   });
 });
