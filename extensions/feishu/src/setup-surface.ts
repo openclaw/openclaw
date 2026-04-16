@@ -25,6 +25,7 @@ import { probeFeishu } from "./probe.js";
 import type { FeishuConfig, FeishuDomain } from "./types.js";
 
 const channel = "feishu" as const;
+const FEISHU_STATUS_PROBE_TIMEOUT_MS = 3_000;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -528,7 +529,9 @@ export const feishuSetupWizard: ChannelSetupWizard = {
       let probeResult = null;
       if (configured && resolvedCredentials) {
         try {
-          probeResult = await probeFeishu(resolvedCredentials);
+          probeResult = await probeFeishu(resolvedCredentials, {
+            timeoutMs: FEISHU_STATUS_PROBE_TIMEOUT_MS,
+          });
         } catch {}
       }
       if (!configured) {

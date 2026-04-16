@@ -7,8 +7,10 @@ import {
   runSetupWizardConfigure,
 } from "../../../test/helpers/plugins/setup-wizard.js";
 
+const probeFeishuMock = vi.hoisted(() => vi.fn(async () => ({ ok: false, error: "mocked" })));
+
 vi.mock("./probe.js", () => ({
-  probeFeishu: vi.fn(async () => ({ ok: false, error: "mocked" })),
+  probeFeishu: probeFeishuMock,
 }));
 
 vi.mock("./app-registration.js", () => ({
@@ -102,6 +104,25 @@ describe("feishu setup wizard", () => {
 });
 
 describe("feishu setup wizard status", () => {
+  it("caps startup status probe timeout at 3000ms", async () => {
+    await feishuGetStatus({
+      cfg: {
+        channels: {
+          feishu: {
+            appId: "cli_a123456",
+            appSecret: "sample-app-credential", // pragma: allowlist secret
+          },
+        },
+      } as never,
+      accountOverrides: {},
+    });
+
+    expect(probeFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ appId: "cli_a123456" }),
+      expect.objectContaining({ timeoutMs: 3000 }),
+    );
+  });
+
   it("treats SecretRef appSecret as configured when appId is present", async () => {
     const status = await feishuGetStatus({
       cfg: {
