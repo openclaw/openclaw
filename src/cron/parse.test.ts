@@ -18,7 +18,7 @@ describe("parseAbsoluteTimeMs", () => {
     expect(parseAbsoluteTimeMs("1713024000000")).toBe(1713024000000);
   });
 
-  it("floors non-integer-looking numeric input to integer epoch ms", () => {
+  it("handles a second all-digits epoch-ms value via the integer path", () => {
     // All-digits path only — decimals fall through to Date.parse
     expect(parseAbsoluteTimeMs("1713024000001")).toBe(1713024000001);
   });
