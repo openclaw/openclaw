@@ -79,6 +79,12 @@ export type CreateFeishuReplyDispatcherParams = {
   chatId: string;
   allowReasoningPreview?: boolean;
   replyToMessageId?: string;
+  /** Message id the user just sent. Target for the `Typing` reaction so the
+   *  emoji lands on the actual inbound message rather than the thread root
+   *  (which `replyToMessageId` may point at in topic/replyInThread modes).
+   *  Falls back to `replyToMessageId` when omitted (e.g. non-group flows
+   *  where the two are the same). */
+  inboundMessageId?: string;
   /** When true, preserve typing indicator on reply target but send messages without reply metadata */
   skipReplyToInMessages?: boolean;
   replyInThread?: boolean;
@@ -126,7 +132,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (!(account.config.typingIndicator ?? true)) {
           return;
         }
-        if (!replyToMessageId) {
+        // Target the user's inbound message for the reaction. In topic/
+        // replyInThread modes `replyToMessageId` is the thread root, but the
+        // Typing emoji should land on the message the user just sent.
+        const typingTargetMessageId = params.inboundMessageId ?? replyToMessageId;
+        if (!typingTargetMessageId) {
           return;
         }
         // Skip typing indicator for old messages — likely replays after context
@@ -146,7 +156,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
         typingState = await addTypingIndicator({
           cfg,
-          messageId: replyToMessageId,
+          messageId: typingTargetMessageId,
           accountId,
           runtime: params.runtime,
         });

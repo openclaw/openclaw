@@ -2250,6 +2250,9 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyToMessageId: "om_root_topic",
+        // Typing reaction must target the user's actual message, not the thread
+        // root — otherwise the Typing emoji lands on the thread's root message.
+        inboundMessageId: "om_child_message",
         rootId: "om_root_topic",
       }),
     );
@@ -2326,6 +2329,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyToMessageId: "om_topic_root",
+        inboundMessageId: "om_topic_reply",
         rootId: "om_topic_root",
       }),
     );

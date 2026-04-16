@@ -256,6 +256,31 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("targets typing indicator at inboundMessageId, not replyToMessageId, in thread mode", async () => {
+    // In topic-mode groups, replyToMessageId is the thread root so replies
+    // stay visibly inside the thread, but the Typing emoji must land on the
+    // user's actual inbound message. Previously the reaction landed on the
+    // thread root because replyToMessageId was reused for both concerns.
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_root_topic",
+      inboundMessageId: "om_child_message",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.();
+
+    expect(addTypingIndicatorMock).toHaveBeenCalledTimes(1);
+    expect(addTypingIndicatorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "om_child_message",
+      }),
+    );
+  });
+
   it("keeps auto mode plain text on non-streaming send path", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "plain text" }, { kind: "final" });
