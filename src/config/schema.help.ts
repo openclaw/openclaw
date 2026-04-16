@@ -1030,10 +1030,36 @@ export const FIELD_HELP: Record<string, string> = {
     "Enables the sqlite-vec extension used for vector similarity queries in memory search (default: true). Keep this enabled for normal semantic recall; disable only for debugging or fallback-only operation.",
   "agents.defaults.memorySearch.store.vector.extensionPath":
     "Overrides the auto-discovered sqlite-vec extension library path (`.dylib`, `.so`, or `.dll`). Use this when your runtime cannot find sqlite-vec automatically or you pin a known-good build.",
+  "agents.defaults.memorySearch.chunking.strategy":
+    "Chunking strategy used when splitting memory sources before embedding/indexing. Options: 'fixed-size' (default, token-based with overlap), 'markdown-heading' (split at heading boundaries), 'sentence' (split at sentence boundaries), 'semantic' (model-assisted semantic boundaries), 'lumber' (LLM-assisted paragraph-level content-shift detection), 'hichunk' (hierarchical multi-level LLM semantic segmentation).",
   "agents.defaults.memorySearch.chunking.tokens":
-    "Chunk size in tokens used when splitting memory sources before embedding/indexing. Increase for broader context per chunk, or lower to improve precision on pinpoint lookups.",
+    "Chunk size in tokens used when splitting memory sources before embedding/indexing. Applies to the fixed-size strategy. Increase for broader context per chunk, or lower to improve precision on pinpoint lookups.",
   "agents.defaults.memorySearch.chunking.overlap":
-    "Token overlap between adjacent memory chunks to preserve context continuity near split boundaries. Use modest overlap to reduce boundary misses without inflating index size too aggressively.",
+    "Token overlap between adjacent memory chunks to preserve context continuity near split boundaries. Applies to the fixed-size strategy. Use modest overlap to reduce boundary misses without inflating index size too aggressively.",
+  "agents.defaults.memorySearch.chunking.maxDepth":
+    "Maximum heading depth (1-6) to treat as chunk boundaries in the markdown-heading strategy. For example, maxDepth=2 splits at # and ## headings only.",
+  "agents.defaults.memorySearch.chunking.maxTokens":
+    "Maximum tokens per chunk before fallback sub-chunking. Used by markdown-heading and semantic strategies to handle oversized sections.",
+  "agents.defaults.memorySearch.chunking.targetTokens":
+    "Target token count per chunk in the sentence strategy. Sentences are accumulated until this budget is reached.",
+  "agents.defaults.memorySearch.chunking.overlapSentences":
+    "Number of overlap sentences carried from the end of one chunk to the beginning of the next in the sentence strategy.",
+  "agents.defaults.memorySearch.chunking.bufferSize":
+    "Buffer size in tokens used for semantic chunking. Larger buffers can capture more context but may require more compute.",
+  "agents.defaults.memorySearch.chunking.breakpointPercentileThreshold":
+    "Percentile threshold for semantic chunking breakpoints. Higher values yield more breakpoints, potentially improving recall but increasing index size.",
+  "agents.defaults.memorySearch.chunking.theta":
+    "Token threshold per paragraph group for the lumber chunking strategy (default: 550). Paragraphs are accumulated until their combined tokens exceed this threshold, then an LLM identifies the content shift point within the group.",
+  "agents.defaults.memorySearch.chunking.completionModel":
+    "Model used for lumber chunking strategy (default: 'gpt-3.5-turbo').",
+  "agents.defaults.memorySearch.chunking.windowSize":
+    "Window size in estimated tokens for each LLM inference round in the hichunk strategy (default: 16384). Controls how many sentences are sent per LLM call.",
+  "agents.defaults.memorySearch.chunking.lineMaxLen":
+    "Maximum character length per sentence in the LLM input for the hichunk strategy (default: 100). Longer sentences are truncated to fit within the inference window.",
+  "agents.defaults.memorySearch.chunking.maxLevel":
+    "Maximum number of hierarchical segmentation levels for the hichunk strategy (default: 10). Higher values allow finer-grained multi-level semantic boundaries.",
+  "agents.defaults.memorySearch.chunking.recurrentType":
+    "Recurrent mode for the hichunk strategy (default: 1). 0 = no residual context, 1 = discard last Level One segment and restart, 2 = include residual context lines from previous segments.",
   "agents.defaults.memorySearch.query.maxResults":
     "Maximum number of memory hits returned from search before downstream reranking and prompt injection. Raise for broader recall, or lower for tighter prompts and faster responses.",
   "agents.defaults.memorySearch.query.minScore":

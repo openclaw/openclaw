@@ -42,3 +42,9 @@ export { ensureMemoryIndexSchema } from "./host/memory-schema.js";
 export { loadSqliteVecExtension } from "./host/sqlite-vec.js";
 export { requireNodeSqlite } from "./host/sqlite.js";
 export { isFileMissingError, statRegularFile } from "./host/fs-utils.js";
+
+// Chunking strategies
+export {
+  type LlmCompletionFn,
+  resolveChunkingStrategy
+} from "./host/chunking/index.js";
