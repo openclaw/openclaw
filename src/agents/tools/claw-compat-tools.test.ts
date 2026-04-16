@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const configMock = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({ feature: { verbose: false } })),
@@ -11,6 +14,10 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 describe("claw compat tools", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("supports sleep duration_ms and enforces max duration", async () => {
     const { createSleepCompatTool } = await import("./claw-compat-tools.js");
     const tool = createSleepCompatTool();
@@ -94,5 +101,40 @@ describe("claw compat tools", () => {
         permitted: true,
       },
     });
+  });
+
+  it("persists todo_write payload and returns old/new todo sets", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "todo-compat-"));
+    const storePath = path.join(tempDir, "todos.json");
+    vi.stubEnv("CLAWD_TODO_STORE", storePath);
+
+    const { createTodoWriteCompatTool } = await import("./claw-compat-tools.js");
+    const tool = createTodoWriteCompatTool();
+    const first = await tool.execute("tool-8", {
+      todos: [{ content: "Task A", activeForm: "Doing Task A", status: "in_progress" }],
+    });
+    expect(first).toMatchObject({
+      details: {
+        old_todos: [],
+        new_todos: [{ content: "Task A", activeForm: "Doing Task A", status: "in_progress" }],
+      },
+    });
+
+    const second = await tool.execute("tool-9", {
+      todos: [{ content: "Task B", activeForm: "Done Task B", status: "completed" }],
+    });
+    expect(second).toMatchObject({
+      details: {
+        old_todos: [{ content: "Task A", activeForm: "Doing Task A", status: "in_progress", priority: null }],
+      },
+    });
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as unknown[];
+    expect(persisted).toEqual([]);
+  });
+
+  it("rejects empty structured_output payload", async () => {
+    const { createStructuredOutputCompatTool } = await import("./claw-compat-tools.js");
+    const tool = createStructuredOutputCompatTool();
+    await expect(tool.execute("tool-10", {})).rejects.toThrow("structured output payload must not be empty");
   });
 });
