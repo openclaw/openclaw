@@ -237,6 +237,11 @@ export async function resolveChannelIdForBinding(params: {
   if (explicit) {
     return explicit;
   }
+  const normalizedThreadId =
+    normalizeOptionalString(params.threadId)?.replace(/^(?:channel:|user:)/i, "") ?? "";
+  if (!normalizedThreadId) {
+    return null;
+  }
   try {
     const rest = createDiscordRestClient(
       {
@@ -245,7 +250,7 @@ export async function resolveChannelIdForBinding(params: {
       },
       params.cfg,
     ).rest;
-    const channel = (await rest.get(Routes.channel(params.threadId))) as {
+    const channel = (await rest.get(Routes.channel(normalizedThreadId))) as {
       id?: string;
       type?: number;
       parent_id?: string;

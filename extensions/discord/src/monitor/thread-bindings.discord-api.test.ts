@@ -85,6 +85,40 @@ describe("resolveChannelIdForBinding", () => {
     expect(resolved).toBe("channel-parent");
   });
 
+  it("strips channel prefix before resolving route", async () => {
+    restGet.mockResolvedValueOnce({
+      id: "123456789",
+      type: ChannelType.GuildText,
+    });
+
+    const resolved = await resolveChannelIdForBinding({
+      accountId: "default",
+      threadId: "channel:123456789",
+    });
+
+    expect(resolved).toBe("123456789");
+    const route = JSON.stringify(restGet.mock.calls[0]?.[0] ?? null);
+    expect(route).toContain("123456789");
+    expect(route).not.toContain("channel:");
+  });
+
+  it("strips user prefix before resolving route", async () => {
+    restGet.mockResolvedValueOnce({
+      id: "987654321",
+      type: ChannelType.DM,
+    });
+
+    const resolved = await resolveChannelIdForBinding({
+      accountId: "default",
+      threadId: "user:987654321",
+    });
+
+    expect(resolved).toBe("987654321");
+    const route = JSON.stringify(restGet.mock.calls[0]?.[0] ?? null);
+    expect(route).toContain("987654321");
+    expect(route).not.toContain("user:");
+  });
+
   it("forwards cfg when resolving channel id through Discord client", async () => {
     const cfg = {
       channels: { discord: { token: "tok" } },

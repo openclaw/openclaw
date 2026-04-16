@@ -15,6 +15,7 @@ import {
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { createDiscordRestClient } from "../client.js";
+import { normalizeDiscordMessagingTarget } from "../normalize.js";
 import {
   createThreadForBinding,
   createWebhookForChannel,
@@ -630,11 +631,17 @@ export function createThreadBindingManager(
           ? normalizeOptionalString(metadata.agentId)
           : undefined;
       let threadId: string | undefined;
-      let channelId = normalizeOptionalString(input.conversation.parentConversationId);
+      let channelId =
+        normalizeDiscordMessagingTarget(
+          normalizeOptionalString(input.conversation.parentConversationId) ?? "",
+        ) ?? undefined;
       let createThread = false;
 
       if (placement === "child") {
         createThread = true;
+        if (channelId) {
+          channelId = normalizeOptionalString(channelId)?.replace(/^channel:/i, "") ?? undefined;
+        }
         if (!channelId && conversationId) {
           const cfg = resolveCurrentCfg();
           channelId =
