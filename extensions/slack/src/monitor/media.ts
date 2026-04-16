@@ -77,11 +77,18 @@ function createSlackMediaFetch(): FetchLike {
       throw new Error("Unsupported fetch input: expected string, URL, or Request");
     }
     const parsed = assertSlackFileUrl(url);
-    const fetchImpl =
-      "dispatcher" in (init ?? {}) && !isMockedFetch(globalThis.fetch)
-        ? fetchWithRuntimeDispatcher
-        : globalThis.fetch;
-    return fetchImpl(parsed.href, { ...init, redirect: "manual" });
+    // When fetchWithSsrFGuard delegates to this fetchImpl it injects a pinned
+    // dispatcher into `init`.  Use that as a signal to route through the runtime
+    // fetch path, but strip the dispatcher itself — fetchWithRuntimeDispatcher
+    // creates its own and undici throws "invalid onRequestStart method" when two
+    // dispatchers from different undici versions collide (bundled 8.x vs built-in 7.x).
+    const hasUpstreamDispatcher = "dispatcher" in (init ?? {});
+    const useRuntimeFetch = hasUpstreamDispatcher && !isMockedFetch(globalThis.fetch);
+    const { dispatcher: _stripped, ...cleanInit } = (init ?? {}) as RequestInit & {
+      dispatcher?: unknown;
+    };
+    const fetchImpl = useRuntimeFetch ? fetchWithRuntimeDispatcher : globalThis.fetch;
+    return fetchImpl(parsed.href, { ...cleanInit, redirect: "manual" });
   };
 }
 

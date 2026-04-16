@@ -554,9 +554,12 @@ describe("resolveSlackMedia", () => {
     expect(result).not.toBeNull();
     expect(runtimeFetchSpy).toHaveBeenCalled();
     expect(runtimeFetchSpy.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
+    // The upstream SSRF guard's dispatcher must be stripped before delegating to
+    // fetchWithRuntimeDispatcher — it creates its own dispatcher and undici throws
+    // "invalid onRequestStart method" when two dispatchers from different versions collide.
     expect(
       runtimeFetchSpy.mock.calls[0]?.[1] && "dispatcher" in runtimeFetchSpy.mock.calls[0][1],
-    ).toBe(true);
+    ).toBe(false);
     expect(new Headers(runtimeFetchSpy.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
       "Bearer xoxb-test-token",
     );
