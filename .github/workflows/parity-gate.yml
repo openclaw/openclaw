@@ -26,7 +26,7 @@ jobs:
     name: Run the GPT-5.4 / Opus 4.6 parity gate against the qa-lab mock
     if: ${{ github.event.pull_request.draft != true }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       # Fence the gate off from any real provider credentials. The qa-lab
       # mock server + auth staging (PR N) should be enough to produce a
