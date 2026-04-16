@@ -347,6 +347,8 @@ export class WhatsAppConnectionController {
     let sock: WaSocket | null = null;
     let connection: WhatsAppLiveConnection | null = null;
     try {
+      // Avoid reading creds.json while a queued save is still flushing.
+      await waitForCredsSaveQueueWithTimeout(this.authDir);
       sock = await createWaSocket(false, this.verbose, {
         authDir: this.authDir,
       });

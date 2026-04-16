@@ -1,18 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import { WhatsAppConnectionController } from "./connection-controller.js";
-import { createWaSocket, waitForWaConnection } from "./session.js";
+import {
+  createWaSocket,
+  waitForCredsSaveQueueWithTimeout,
+  waitForWaConnection,
+} from "./session.js";
 
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
   return {
     ...actual,
     createWaSocket: vi.fn(),
+    waitForCredsSaveQueueWithTimeout: vi.fn(async () => {}),
     waitForWaConnection: vi.fn(),
   };
 });
 
 const createWaSocketMock = vi.mocked(createWaSocket);
+const waitForCredsSaveQueueWithTimeoutMock = vi.mocked(waitForCredsSaveQueueWithTimeout);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 
 describe("WhatsAppConnectionController", () => {
@@ -64,6 +70,32 @@ describe("WhatsAppConnectionController", () => {
     expect(sock.ws.close).toHaveBeenCalledOnce();
     expect(controller.socketRef.current).toBeNull();
     expect(controller.getActiveListener()).toBeNull();
+  });
+
+  it("flushes pending creds saves before opening a socket", async () => {
+    const callOrder: string[] = [];
+    waitForCredsSaveQueueWithTimeoutMock.mockImplementationOnce(async () => {
+      callOrder.push("wait");
+    });
+    createWaSocketMock.mockImplementationOnce(async () => {
+      callOrder.push("create");
+      return { ws: { close: vi.fn() } } as never;
+    });
+    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+
+    await controller.openConnection({
+      connectionId: "conn-flush-first",
+      createListener: async () =>
+        ({
+          sendMessage: vi.fn(async () => ({ messageId: "ok" })),
+          sendPoll: vi.fn(async () => ({ messageId: "ok" })),
+          sendReaction: vi.fn(async () => {}),
+          sendComposingTo: vi.fn(async () => {}),
+        }) as never,
+    });
+
+    expect(waitForCredsSaveQueueWithTimeoutMock).toHaveBeenCalledWith("/tmp/wa-auth");
+    expect(callOrder).toEqual(["wait", "create"]);
   });
 
   it("keeps the previous registered controller until a replacement listener is ready", async () => {
