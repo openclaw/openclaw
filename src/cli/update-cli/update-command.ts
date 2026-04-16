@@ -892,6 +892,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   let tag = explicitTag ?? channelToNpmTag(channel);
   let currentVersion: string | null = null;
   let targetVersion: string | null = null;
+  let cmp: number | null = null;
   let downgradeRisk = false;
   let fallbackToLatest = false;
   let packageInstallSpec: string | null = null;
@@ -907,8 +908,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         return resolved.version;
       });
     }
-    const cmp =
-      currentVersion && targetVersion ? compareSemverStrings(currentVersion, targetVersion) : null;
+    cmp = currentVersion && targetVersion ? compareSemverStrings(currentVersion, targetVersion) : null;
     downgradeRisk =
       canResolveRegistryVersionForPackageTarget(tag) &&
       !fallbackToLatest &&
@@ -991,11 +991,14 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 
   if (downgradeRisk && !opts.yes) {
+    const verbGerund = cmp != null ? (cmp > 0 ? "Downgrading" : cmp < 0 ? "Upgrading" : "Downgrading") : "Downgrading";
+    const verbNoun = cmp != null ? (cmp > 0 ? "Downgrade" : cmp < 0 ? "Upgrade" : "Downgrade") : "Downgrade";
+
     if (!process.stdin.isTTY || opts.json) {
       defaultRuntime.error(
         [
-          "Downgrade confirmation required.",
-          "Downgrading can break configuration. Re-run in a TTY to confirm.",
+          `${verbNoun} confirmation required.`,
+          `${verbGerund} can break configuration. Re-run in a TTY to confirm.`,
         ].join("\n"),
       );
       defaultRuntime.exit(1);
@@ -1003,7 +1006,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
 
     const targetLabel = targetVersion ?? `${tag} (unknown)`;
-    const message = `Downgrading from ${currentVersion} to ${targetLabel} can break configuration. Continue?`;
+    const message = `${verbGerund} from ${currentVersion} to ${targetLabel} can break configuration. Continue?`;
     const ok = await confirm({
       message: stylePromptMessage(message),
       initialValue: false,
