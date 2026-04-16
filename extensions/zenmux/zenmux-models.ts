@@ -1,4 +1,5 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const ZENMUX_BASE_URL = "https://zenmux.ai/api/v1";
 const ZENMUX_MODELS_URL = "https://zenmux.ai/api/v1/models";
@@ -87,36 +88,45 @@ export async function discoverZenmuxModels(): Promise<ModelDefinitionConfig[]> {
     return staticZenmuxModelDefinitions();
   }
   try {
-    const response = await fetch(ZENMUX_MODELS_URL, {
-      headers: { Accept: "application/json" },
+    const { response, release } = await fetchWithSsrFGuard({
+      url: ZENMUX_MODELS_URL,
       signal: AbortSignal.timeout(10000),
+      init: {
+        headers: { Accept: "application/json" },
+      },
+      policy: { allowedHostnames: ["zenmux.ai"] },
+      auditContext: "zenmux-model-discovery",
     });
-    if (!response.ok) {
-      console.warn(
-        `Failed to discover ZenMux models: HTTP ${response.status}, using static catalog`,
-      );
-      return staticZenmuxModelDefinitions();
+    try {
+      if (!response.ok) {
+        console.warn(
+          `Failed to discover ZenMux models: HTTP ${response.status}, using static catalog`,
+        );
+        return staticZenmuxModelDefinitions();
+      }
+      const data = (await response.json()) as ZenmuxModelsResponse;
+      if (!data.data || data.data.length === 0) {
+        console.warn("No ZenMux models found, using static catalog");
+        return staticZenmuxModelDefinitions();
+      }
+      return data.data.map((model) => {
+        const inputModalities = model.input_modalities ?? ["text"];
+        const hasImage = inputModalities.includes("image");
+        const input: Array<"text" | "image"> = hasImage ? ["text", "image"] : ["text"];
+        const cost = model.pricings ? extractZenmuxCost(model.pricings) : ZENMUX_DEFAULT_COST;
+        return {
+          id: model.id,
+          name: model.display_name || model.id,
+          reasoning: model.capabilities?.reasoning ?? false,
+          input,
+          cost,
+          contextWindow: model.context_length ?? ZENMUX_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: ZENMUX_DEFAULT_MAX_TOKENS,
+        };
+      });
+    } finally {
+      await release();
     }
-    const data = (await response.json()) as ZenmuxModelsResponse;
-    if (!data.data || data.data.length === 0) {
-      console.warn("No ZenMux models found, using static catalog");
-      return staticZenmuxModelDefinitions();
-    }
-    return data.data.map((model) => {
-      const inputModalities = model.input_modalities ?? ["text"];
-      const hasImage = inputModalities.includes("image");
-      const input: Array<"text" | "image"> = hasImage ? ["text", "image"] : ["text"];
-      const cost = model.pricings ? extractZenmuxCost(model.pricings) : ZENMUX_DEFAULT_COST;
-      return {
-        id: model.id,
-        name: model.display_name || model.id,
-        reasoning: model.capabilities?.reasoning ?? false,
-        input,
-        cost,
-        contextWindow: model.context_length ?? ZENMUX_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: ZENMUX_DEFAULT_MAX_TOKENS,
-      };
-    });
   } catch (error) {
     console.warn(`Discovery failed: ${String(error)}, using static catalog`);
     return staticZenmuxModelDefinitions();
