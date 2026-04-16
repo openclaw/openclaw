@@ -221,10 +221,11 @@ export async function startGatewayServer(
     description: "raw stream log path override",
   });
 
-  const configSnapshot = await loadGatewayStartupConfigSnapshot({
-    minimalTestGateway,
-    log,
-  });
+  const { snapshot: configSnapshot, persistedStartupWriteHash } =
+    await loadGatewayStartupConfigSnapshot({
+      minimalTestGateway,
+      log,
+    });
 
   const emitSecretsStateEvent = (
     code: "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOADER_RECOVERED",
@@ -242,7 +243,7 @@ export async function startGatewayServer(
   });
 
   let cfgAtStart: OpenClawConfig;
-  let startupInternalWriteHash: string | null = null;
+  let startupInternalWriteHash: string | null = persistedStartupWriteHash;
   const startupRuntimeConfig = applyConfigOverrides(configSnapshot.config);
   const authBootstrap = await prepareGatewayStartupConfig({
     configSnapshot,

@@ -577,7 +577,7 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
-  it("dedupes the first watcher reread for startup internal writes", async () => {
+  it("dedupes the first watcher reread for startup internal writes (#67436 plugin auto-enable uses the same hash seam)", async () => {
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()
       .mockResolvedValueOnce(

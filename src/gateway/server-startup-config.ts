@@ -47,10 +47,20 @@ type GatewayStartupConfigOverrides = {
   tailscale?: GatewayTailscaleConfig;
 };
 
+export type LoadGatewayStartupConfigSnapshotResult = {
+  snapshot: ConfigFileSnapshot;
+  /**
+   * When plugin auto-enable persists changes, this matches the on-disk config hash so the
+   * gateway config reloader can treat the subsequent filesystem notification as a no-op
+   * (avoids self-induced hot-reload / SIGUSR1 loops; see #67436).
+   */
+  persistedStartupWriteHash: string | null;
+};
+
 export async function loadGatewayStartupConfigSnapshot(params: {
   minimalTestGateway: boolean;
   log: GatewayStartupLog;
-}): Promise<ConfigFileSnapshot> {
+}): Promise<LoadGatewayStartupConfigSnapshotResult> {
   let configSnapshot = await readConfigFileSnapshot();
   if (configSnapshot.legacyIssues.length > 0 && isNixMode) {
     throw new Error(
@@ -65,7 +75,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     ? { config: configSnapshot.config, changes: [] as string[] }
     : applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
   if (autoEnable.changes.length === 0) {
-    return configSnapshot;
+    return { snapshot: configSnapshot, persistedStartupWriteHash: null };
   }
 
   try {
@@ -75,11 +85,14 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     params.log.info(
       `gateway: auto-enabled plugins:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
     );
+    return {
+      snapshot: configSnapshot,
+      persistedStartupWriteHash: configSnapshot.hash ?? null,
+    };
   } catch (err) {
     params.log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
+    return { snapshot: configSnapshot, persistedStartupWriteHash: null };
   }
-
-  return configSnapshot;
 }
 
 export function createRuntimeSecretsActivator(params: {
