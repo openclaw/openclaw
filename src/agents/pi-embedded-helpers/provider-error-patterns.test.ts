@@ -228,4 +228,14 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
       "cloudflare_challenge",
     );
   });
+
+  it("classifies non-Cloudflare 403 HTML as auth_html_403 (regression guard)", () => {
+    const genericHtml403 =
+      "403 <!doctype html><html><head><title>403 Forbidden</title></head>" +
+      "<body><h1>Access Denied</h1><p>You do not have permission.</p></body></html>";
+
+    expect(classifyProviderRuntimeFailureKind({ status: 403, message: genericHtml403 })).toBe(
+      "auth_html_403",
+    );
+  });
 });
