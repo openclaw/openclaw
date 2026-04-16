@@ -31,11 +31,16 @@ const setMSTeamsGroupPolicy = createTopLevelChannelGroupPolicySetter({
 
 export function openDelegatedOAuthUrl(url: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const cmd = process.platform === "darwin" ? "open" : "xdg-open";
+    const cmd =
+      process.platform === "darwin"
+        ? "open"
+        : process.platform === "win32"
+          ? "explorer.exe"
+          : "xdg-open";
     const child = spawn(cmd, [url], { stdio: "ignore", shell: false });
     child.once("error", reject);
     child.once("exit", (code, signal) => {
-      if (code === 0) {
+      if (code === 0 || (process.platform === "win32" && signal == null)) {
         resolve();
         return;
       }

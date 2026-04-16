@@ -67,10 +67,51 @@ describe("msteams setup surface", () => {
     child.emit("exit", 0, null);
 
     await expect(result).resolves.toBeUndefined();
-    expect(spawn).toHaveBeenCalledWith(process.platform === "darwin" ? "open" : "xdg-open", [url], {
-      stdio: "ignore",
-      shell: false,
-    });
+    const expectedCommand =
+      process.platform === "darwin"
+        ? "open"
+        : process.platform === "win32"
+          ? "explorer.exe"
+          : "xdg-open";
+    expect(spawn).toHaveBeenCalledWith(expectedCommand, [url], { stdio: "ignore", shell: false });
+  });
+
+  it("uses explorer.exe for delegated OAuth on Windows", async () => {
+    const url = "https://login.microsoftonline.com/auth";
+    const child = new EventEmitter();
+    spawn.mockReturnValue(child);
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      const result = openDelegatedOAuthUrl(url);
+      child.emit("exit", 0, null);
+      await expect(result).resolves.toBeUndefined();
+      expect(spawn).toHaveBeenCalledWith("explorer.exe", [url], {
+        stdio: "ignore",
+        shell: false,
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("treats explorer.exe exit code 1 as success on Windows", async () => {
+    const url = "https://login.microsoftonline.com/auth";
+    const child = new EventEmitter();
+    spawn.mockReturnValue(child);
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      const result = openDelegatedOAuthUrl(url);
+      child.emit("exit", 1, null);
+      await expect(result).resolves.toBeUndefined();
+      expect(spawn).toHaveBeenCalledWith("explorer.exe", [url], {
+        stdio: "ignore",
+        shell: false,
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 
   it("enables the msteams channel without dropping existing config", () => {
