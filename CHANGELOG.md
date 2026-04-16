@@ -440,6 +440,7 @@ Docs: https://docs.openclaw.ai
 - iMessage: retry transient `watch.subscribe` startup failures before tearing down the monitor, so brief local transport stalls do not immediately bounce the channel. (#65393) Thanks @vincentkoc.
 - Status/session_status: move shared session status text into a neutral internal status module and keep the tool importing a local runtime shim, so built `session_status` no longer depends on reply command internals or a bundler-opaque runtime import. (#65807) Thanks @dutifulbob.
 - QQBot/security: replace raw `fetch()` in the image-size probe with SSRF-guarded `fetchRemoteMedia`, fix `resolveRepoRoot()` to walk up to `.git` instead of hardcoding two parent levels, and refresh the raw-fetch allowlist to match the corrected scan. (#63495) Thanks @dims.
+- WhatsApp/web: rewrite queued `creds.json` updates atomically so interrupted saves do not leave truncated login state behind. (#63577) thanks @OwenYWT
 
 ## 2026.4.9
 
