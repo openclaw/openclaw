@@ -239,6 +239,42 @@ describe("stale singleton cache guard", () => {
 
     await expect(closeAllMemorySearchManagers()).resolves.toBeUndefined();
   });
+
+  it("does not crash when global slot holds a primitive (string)", async () => {
+    poisonGlobalCacheStore("poisoned");
+    const cfg = createQmdCfg("primitive-agent");
+
+    const result = await getMemorySearchManager({ cfg, agentId: "primitive-agent" });
+
+    expect(result).toBeDefined();
+    expect(result.manager).toBeDefined();
+  });
+
+  it("does not crash when global slot holds null", async () => {
+    poisonGlobalCacheStore(null);
+    const cfg = createQmdCfg("null-agent");
+
+    const result = await getMemorySearchManager({ cfg, agentId: "null-agent" });
+
+    expect(result).toBeDefined();
+    expect(result.manager).toBeDefined();
+  });
+
+  it("does not crash when global slot holds a frozen object with non-Map qmdManagerCache", async () => {
+    poisonGlobalCacheStore(Object.freeze({ qmdManagerCache: "not-a-map" }));
+    const cfg = createQmdCfg("frozen-agent");
+
+    const result = await getMemorySearchManager({ cfg, agentId: "frozen-agent" });
+
+    expect(result).toBeDefined();
+    expect(result.manager).toBeDefined();
+  });
+
+  it("closeAllMemorySearchManagers does not throw when global slot is a primitive", async () => {
+    poisonGlobalCacheStore(42);
+
+    await expect(closeAllMemorySearchManagers()).resolves.toBeUndefined();
+  });
 });
 
 describe("getMemorySearchManager caching", () => {

@@ -21,21 +21,51 @@ type MemorySearchManagerCacheStore = {
   qmdManagerCache: Map<string, MemorySearchManager>;
 };
 
+function isPlainObject(x: unknown): x is Record<PropertyKey, unknown> {
+  return typeof x === "object" && x !== null;
+}
+
 function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
   // Keep caches reachable across `vi.resetModules()` so later cleanup can close older instances.
-  const store = resolveGlobalSingleton<MemorySearchManagerCacheStore>(
-    MEMORY_SEARCH_MANAGER_CACHE_KEY,
-    () => ({
-      qmdManagerCache: new Map<string, MemorySearchManager>(),
-    }),
-  );
-  // Guard against stale singleton from an older runtime that stored a different shape
-  // at the same Symbol key (e.g. missing `qmdManagerCache`). Repair in-place so all
-  // callers sharing this globalThis slot see the healed value.
-  if (!(store.qmdManagerCache instanceof Map)) {
-    store.qmdManagerCache = new Map<string, MemorySearchManager>();
+  // Use the global slot directly so we can replace the whole value if the stored shape is
+  // a primitive, a frozen object, or a Proxy with throwing accessors.
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const key = MEMORY_SEARCH_MANAGER_CACHE_KEY;
+  const existing = Object.prototype.hasOwnProperty.call(globalStore, key)
+    ? globalStore[key]
+    : undefined;
+
+  const freshStore = (): MemorySearchManagerCacheStore => ({
+    qmdManagerCache: new Map<string, MemorySearchManager>(),
+  });
+
+  // If the stored value is not a plain object (primitive, null, etc.) replace the whole slot.
+  if (!isPlainObject(existing)) {
+    const created = freshStore();
+    globalStore[key] = created;
+    return created;
   }
-  return store;
+
+  // The slot holds an object — attempt a safe read and in-place repair of qmdManagerCache.
+  let cache: unknown;
+  try {
+    cache = existing.qmdManagerCache;
+  } catch {
+    cache = undefined;
+  }
+
+  if (!(cache instanceof Map)) {
+    try {
+      existing.qmdManagerCache = new Map<string, MemorySearchManager>();
+    } catch {
+      // Frozen, sealed, or accessor-based object — replace the whole slot.
+      const created = freshStore();
+      globalStore[key] = created;
+      return created;
+    }
+  }
+
+  return existing as MemorySearchManagerCacheStore;
 }
 
 const log = createSubsystemLogger("memory");
