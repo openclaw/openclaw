@@ -498,7 +498,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
       const effectiveProvider = providerOverride || baseProvider;
       const effectiveModel = modelOverride || baseModel;
-      const supportsImages = await resolveGatewayModelSupportsImages({
+      const supportsInlineImages = await resolveGatewayModelSupportsImages({
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
         provider: effectiveProvider,
         model: effectiveModel,
@@ -508,7 +508,11 @@ export const agentHandlers: GatewayRequestHandlers = {
         const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
           maxBytes: 5_000_000,
           log: context.logGateway,
-          supportsImages,
+          supportsInlineImages,
+          // agent.run does not yet wire a ctx.MediaPaths stage path, so reject
+          // non-image attachments explicitly (UnsupportedAttachmentError)
+          // instead of saving them where the agent cannot reach them.
+          acceptNonImage: false,
         });
         message = parsed.message.trim();
         images = parsed.images;

@@ -923,7 +923,7 @@ describe("agent request events", () => {
     expect(opts.runId).toBe(opts.sessionId);
   });
 
-  it("passes supportsImages false for text-only node-session models", async () => {
+  it("passes supportsInlineImages false for text-only node-session models", async () => {
     const ctx = buildCtx();
     ctx.loadGatewayModelCatalog = async () => [
       {
@@ -960,7 +960,41 @@ describe("agent request events", () => {
     expect(parseMessageWithAttachmentsMock).toHaveBeenCalledWith(
       "describe",
       expect.any(Array),
-      expect.objectContaining({ supportsImages: false }),
+      expect.objectContaining({ supportsInlineImages: false }),
     );
+  });
+
+  it("declines non-image attachments cleanly when parse throws UnsupportedAttachmentError", async () => {
+    const warn = vi.fn();
+    const ctx = buildCtx();
+    ctx.logGateway = { warn };
+
+    parseMessageWithAttachmentsMock.mockRejectedValueOnce(
+      Object.assign(new Error("attachment a.pdf: non-image attachments not supported"), {
+        name: "UnsupportedAttachmentError",
+        reason: "unsupported-non-image",
+      }),
+    );
+
+    await handleNodeEvent(ctx, "node-non-image-refusal", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "read this",
+        sessionKey: "agent:main:main",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "a.pdf",
+            content: "JVBERi0=",
+          },
+        ],
+      }),
+    });
+
+    // server-node-events must log-and-return on parse failure — no agent
+    // dispatch, no crash, and the refusal reason bubbles up via logGateway.
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/attachment parse failed.*non-image/i));
   });
 });
