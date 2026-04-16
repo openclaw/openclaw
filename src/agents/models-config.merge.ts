@@ -2,6 +2,9 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
+const OPENROUTER_CANONICAL_BASE_URL = "https://openrouter.ai/api/v1";
+const OPENROUTER_LEGACY_BASE_URL = "https://openrouter.ai/v1";
+
 export type ExistingProviderConfig = ProviderConfig & {
   apiKey?: string;
   baseUrl?: string;
@@ -176,6 +179,32 @@ function resolveProviderApiSurface(
   return resolveProviderApi(entry) ?? resolveModelApiSurface(entry);
 }
 
+function normalizeComparableBaseUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    return new URL(trimmed).toString().replace(/\/+$/, "");
+  } catch {
+    return normalizeOptionalString(trimmed)?.replace(/\/+$/, "");
+  }
+}
+
+function isKnownLegacyProviderBaseUrl(params: {
+  existingBaseUrl: unknown;
+  nextBaseUrl: unknown;
+}): boolean {
+  const existingBaseUrl = normalizeComparableBaseUrl(params.existingBaseUrl);
+  const nextBaseUrl = normalizeComparableBaseUrl(params.nextBaseUrl);
+  return (
+    existingBaseUrl === OPENROUTER_LEGACY_BASE_URL && nextBaseUrl === OPENROUTER_CANONICAL_BASE_URL
+  );
+}
+
 function shouldPreserveExistingApiKey(params: {
   providerKey: string;
   existing: ExistingProviderConfig;
@@ -201,6 +230,14 @@ function shouldPreserveExistingBaseUrl(params: {
 }): boolean {
   const { existing, nextEntry } = params;
   if (typeof existing.baseUrl !== "string" || existing.baseUrl.length === 0) {
+    return false;
+  }
+  if (
+    isKnownLegacyProviderBaseUrl({
+      existingBaseUrl: existing.baseUrl,
+      nextBaseUrl: nextEntry.baseUrl,
+    })
+  ) {
     return false;
   }
 

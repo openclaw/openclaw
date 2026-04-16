@@ -46,6 +46,14 @@ describe("qa docker harness", () => {
     const compose = await readFile(path.join(outputDir, "docker-compose.qa.yml"), "utf8");
     expect(compose).toContain("image: openclaw:qa-local-prebaked");
     expect(compose).toContain("qa-mock-openai:");
+    expect(compose).toContain("HOME: /tmp/openclaw-qa-home");
+    expect(compose).toContain("TMPDIR: /tmp/openclaw-qa-tmp");
+    expect(compose).toContain("./runtime-state/qa-home:/tmp/openclaw-qa-home");
+    expect(compose).toContain("./runtime-state/qa-tmp:/tmp/openclaw-qa-tmp");
+    expect(compose).toContain("mkdir -p /tmp/openclaw-qa-home /tmp/openclaw-qa-tmp");
+    expect(compose).toContain("chmod 700 /tmp/openclaw-qa-home /tmp/openclaw-qa-tmp");
+    expect(compose).toContain("ln -snf /app /app/node_modules/openclaw");
+    expect(compose).toContain("node --import tsx -e");
     expect(compose).toContain("18889:18789");
     expect(compose).toContain('      - "43124:43123"');
     expect(compose).toContain(":/opt/openclaw-qa-lab-ui:ro");
@@ -54,18 +62,19 @@ describe("qa docker harness", () => {
     expect(compose).toContain(
       '        - fetch("http://127.0.0.1:18789/healthz").then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))',
     );
-    expect(compose).toContain("      - --control-ui-proxy-target");
-    expect(compose).toContain('      - "http://openclaw-qa-gateway:18789/"');
-    expect(compose).toContain("      - --send-kickoff-on-start");
-    expect(compose).toContain("      - --ui-dist-dir");
-    expect(compose).toContain('      - "/opt/openclaw-qa-lab-ui"');
+    expect(compose).toContain("controlUiProxyTarget: 'http://openclaw-qa-gateway:18789/'");
+    expect(compose).toContain("sendKickoffOnStart: true");
+    expect(compose).toContain("uiDistDir: '/opt/openclaw-qa-lab-ui'");
     expect(compose).toContain(":/opt/openclaw-repo:ro");
     expect(compose).toContain("./state:/opt/openclaw-scaffold:ro");
     expect(compose).toContain(
       "cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/",
     );
+    expect(compose).toContain("HOME: /tmp/openclaw-qa-home");
+    expect(compose).toContain("OPENCLAW_BUNDLED_PLUGINS_DIR: /app/extensions");
     expect(compose).toContain("OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json");
     expect(compose).toContain("OPENCLAW_STATE_DIR: /tmp/openclaw/state");
+    expect(compose).toContain("TMPDIR: /tmp/openclaw-qa-tmp");
     expect(compose).toContain('OPENCLAW_NO_RESPAWN: "1"');
 
     const envExample = await readFile(path.join(outputDir, ".env.example"), "utf8");

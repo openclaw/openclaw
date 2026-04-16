@@ -49,6 +49,12 @@ function renderCompose(params: {
   return `services:
   qa-mock-openai:
 ${imageBlock}    pull_policy: never
+    environment:
+      HOME: /tmp/openclaw-qa-home
+      TMPDIR: /tmp/openclaw-qa-tmp
+    volumes:
+      - ./runtime-state/qa-home:/tmp/openclaw-qa-home
+      - ./runtime-state/qa-tmp:/tmp/openclaw-qa-tmp
     healthcheck:
       test:
         - CMD
@@ -60,21 +66,23 @@ ${imageBlock}    pull_policy: never
       retries: 6
       start_period: 3s
     command:
-      - node
-      - dist/index.js
-      - qa
-      - mock-openai
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "44080"
+      - sh
+      - -lc
+      - >-
+        mkdir -p /tmp/openclaw-qa-home /tmp/openclaw-qa-tmp &&
+        chmod 700 /tmp/openclaw-qa-home /tmp/openclaw-qa-tmp &&
+        ln -snf /app /app/node_modules/openclaw && exec node --import tsx -e
+        "import('/app/extensions/qa-lab/src/cli.runtime.ts').then((m)=>m.runQaMockOpenAiCommand({ host: '0.0.0.0', port: 44080 }))"
 ${
   params.includeQaLabUi
     ? `  qa-lab:
 ${imageBlock}    pull_policy: never
     ports:
       - "${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
-${params.bindUiDist ? `    volumes:\n      - ${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro\n` : ""}    healthcheck:
+    volumes:
+      - ./runtime-state/qa-home:/tmp/openclaw-qa-home
+      - ./runtime-state/qa-tmp:/tmp/openclaw-qa-tmp
+${params.bindUiDist ? `      - ${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro\n` : ""}    healthcheck:
       test:
         - CMD
         - node
@@ -85,34 +93,20 @@ ${params.bindUiDist ? `    volumes:\n      - ${qaLabUiMount}:${QA_LAB_UI_OVERLAY
       retries: 6
       start_period: 5s
     environment:
+      HOME: /tmp/openclaw-qa-home
+      TMPDIR: /tmp/openclaw-qa-tmp
       OPENCLAW_SKIP_GMAIL_WATCHER: "1"
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1"
       OPENCLAW_SKIP_CANVAS_HOST: "1"
       OPENCLAW_PROFILE: ""
     command:
-      - node
-      - dist/index.js
-      - qa
-      - ui
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "${QA_LAB_INTERNAL_PORT}"
-      - --advertise-host
-      - "127.0.0.1"
-      - --advertise-port
-      - "${params.qaLabPort}"
-      - --control-ui-url
-      - "http://127.0.0.1:${params.gatewayPort}/"
-      - --control-ui-proxy-target
-      - "http://openclaw-qa-gateway:18789/"
-      - --control-ui-token
-      - "${params.gatewayToken}"
-${params.bindUiDist ? `      - --ui-dist-dir\n      - "${QA_LAB_UI_OVERLAY_DIR}"\n` : ""}      - --auto-kickoff-target
-      - direct
-      - --send-kickoff-on-start
-      - --embedded-gateway
-      - disabled
+      - sh
+      - -lc
+      - >-
+        mkdir -p /tmp/openclaw-qa-home /tmp/openclaw-qa-tmp &&
+        chmod 700 /tmp/openclaw-qa-home /tmp/openclaw-qa-tmp &&
+        ln -snf /app /app/node_modules/openclaw && exec node --import tsx -e
+        "import('/app/extensions/qa-lab/src/cli.runtime.ts').then((m)=>m.runQaLabUiCommand({ host: '0.0.0.0', port: ${QA_LAB_INTERNAL_PORT}, advertiseHost: '127.0.0.1', advertisePort: ${params.qaLabPort}, controlUiUrl: 'http://127.0.0.1:${params.gatewayPort}/', controlUiProxyTarget: 'http://openclaw-qa-gateway:18789/', controlUiToken: '${params.gatewayToken}'${params.bindUiDist ? `, uiDistDir: '${QA_LAB_UI_OVERLAY_DIR}'` : ""}, autoKickoffTarget: 'direct', sendKickoffOnStart: true, embeddedGateway: 'disabled' }))"
     depends_on:
       qa-mock-openai:
         condition: service_healthy
@@ -127,13 +121,18 @@ ${imageBlock}    pull_policy: never
     environment:
       OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json
       OPENCLAW_STATE_DIR: /tmp/openclaw/state
+      OPENCLAW_BUNDLED_PLUGINS_DIR: /app/extensions
+      HOME: /tmp/openclaw-qa-home
       OPENCLAW_NO_RESPAWN: "1"
       OPENCLAW_SKIP_GMAIL_WATCHER: "1"
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1"
       OPENCLAW_SKIP_CANVAS_HOST: "1"
       OPENCLAW_PROFILE: ""
+      TMPDIR: /tmp/openclaw-qa-tmp
     volumes:
       - ./state:/opt/openclaw-scaffold:ro
+      - ./runtime-state/qa-home:/tmp/openclaw-qa-home
+      - ./runtime-state/qa-tmp:/tmp/openclaw-qa-tmp
       - ${repoMount}:/opt/openclaw-repo:ro
     healthcheck:
       test:
@@ -157,7 +156,7 @@ ${
     command:
       - sh
       - -lc
-      - mkdir -p /tmp/openclaw/workspace /tmp/openclaw/state && cp /opt/openclaw-scaffold/openclaw.json /tmp/openclaw/openclaw.json && cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/ && ln -snf /opt/openclaw-repo /tmp/openclaw/workspace/repo && exec node dist/index.js gateway run --port 18789 --bind lan --allow-unconfigured
+      - mkdir -p /tmp/openclaw-qa-home /tmp/openclaw-qa-tmp /tmp/openclaw/workspace /tmp/openclaw/state && chmod 700 /tmp/openclaw-qa-home /tmp/openclaw-qa-tmp && cp /opt/openclaw-scaffold/openclaw.json /tmp/openclaw/openclaw.json && cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/ && ln -snf /opt/openclaw-repo /tmp/openclaw/workspace/repo && exec node dist/index.js gateway run --port 18789 --bind lan --allow-unconfigured
 `;
 }
 

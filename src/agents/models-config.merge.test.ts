@@ -257,6 +257,31 @@ describe("models-config merge helpers", () => {
     expect(merged.custom?.baseUrl).toBe("https://config.example/v1");
   });
 
+  it("replaces legacy OpenRouter /v1 baseUrl with the canonical /api/v1 endpoint", async () => {
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: {
+        openrouter: {
+          baseUrl: "https://openrouter.ai/api/v1",
+          api: "openai-completions",
+          models: [createModel({ id: "openai/gpt-4.1-mini", api: "openai-completions" })],
+        } as ProviderConfig,
+      },
+      existingProviders: {
+        openrouter: {
+          baseUrl: "https://openrouter.ai/v1",
+          apiKey: preservedApiKey,
+          api: "openai-completions",
+          models: [createModel({ id: "openai/gpt-4.1-mini", api: "openai-completions" })],
+        } as ExistingProviderConfig,
+      },
+      secretRefManagedProviders: new Set<string>(),
+      explicitBaseUrlProviders: new Set<string>(),
+    });
+
+    expect(merged.openrouter?.apiKey).toBe(preservedApiKey);
+    expect(merged.openrouter?.baseUrl).toBe("https://openrouter.ai/api/v1");
+  });
+
   it("does not preserve stale plaintext apiKey when next entry is a marker", async () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
