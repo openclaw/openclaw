@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { applyMergePatch } from "../../../src/config/merge-patch.ts";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
@@ -45,6 +46,7 @@ import {
   updateConfigFormValue,
   removeConfigFormValue,
 } from "./controllers/config.ts";
+import { cloneConfigObject, serializeConfigForm } from "./controllers/config/form-utils.ts";
 import {
   loadCronJobsPage,
   loadCronRuns,
@@ -129,7 +131,7 @@ import {
 } from "./views/agents-utils.ts";
 import { renderChat } from "./views/chat.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
-import { getPresetById } from "./views/config-presets.ts";
+import { getPresetById, type ConfigPresetId } from "./views/config-presets.ts";
 import {
   renderQuickSettings,
   type QuickSettingsChannel,
@@ -434,9 +436,13 @@ function extractQuickSettingsChannels(state: AppViewState): QuickSettingsChannel
   if (!config || typeof config !== "object") {
     return [];
   }
+  const channelsConfig =
+    "channels" in config && config.channels && typeof config.channels === "object"
+      ? (config.channels as Record<string, unknown>)
+      : {};
   const channels: QuickSettingsChannel[] = [];
   for (const { id, label } of KNOWN_CHANNEL_IDS) {
-    const channelConfig = config[id];
+    const channelConfig = channelsConfig[id];
     const hasConfig =
       channelConfig != null &&
       typeof channelConfig === "object" &&
@@ -448,8 +454,7 @@ function extractQuickSettingsChannels(state: AppViewState): QuickSettingsChannel
       detail: hasConfig ? "Configured" : undefined,
     });
   }
-  // Only show channels that are configured or are well-known
-  return channels.filter((c) => c.connected || KNOWN_CHANNEL_IDS.some((k) => k.id === c.id));
+  return channels;
 }
 
 function extractQuickSettingsApiKeys(state: AppViewState): QuickSettingsApiKey[] {
@@ -486,20 +491,29 @@ function extractQuickSettingsSecurity(state: AppViewState): {
     return { gatewayAuth: "unknown", execPolicy: "unknown", deviceAuth: false };
   }
   const cfg = config;
-  // Gateway auth
-  const auth = cfg.auth;
+  const gateway =
+    "gateway" in cfg && cfg.gateway && typeof cfg.gateway === "object"
+      ? (cfg.gateway as Record<string, unknown>)
+      : null;
+  const auth =
+    gateway && "auth" in gateway && gateway.auth && typeof gateway.auth === "object"
+      ? (gateway.auth as Record<string, unknown>)
+      : null;
   let gatewayAuth = "unknown";
-  if (auth && typeof auth === "object") {
-    const authObj = auth as Record<string, unknown>;
-    if (authObj.password || authObj.gatewayPassword) {
+  if (auth) {
+    const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
+    if (mode) {
+      gatewayAuth = mode;
+    } else if (auth.password) {
       gatewayAuth = "password";
-    } else if (authObj.jwt) {
-      gatewayAuth = "jwt";
+    } else if (auth.token) {
+      gatewayAuth = "token";
+    } else if (auth.trustedProxy) {
+      gatewayAuth = "trusted-proxy";
     } else {
       gatewayAuth = "none";
     }
   }
-  // Exec policy
   const agents = cfg.agents;
   let execPolicy = "allowlist";
   if (agents && typeof agents === "object") {
@@ -514,16 +528,50 @@ function extractQuickSettingsSecurity(state: AppViewState): {
       }
     }
   }
-  // Device auth
-  const gateway = cfg.gateway;
   let deviceAuth = true;
-  if (gateway && typeof gateway === "object") {
-    const gw = gateway as Record<string, unknown>;
-    if (gw.dangerouslyDisableDeviceAuth === true) {
+  if (gateway) {
+    const controlUi =
+      "controlUi" in gateway && gateway.controlUi && typeof gateway.controlUi === "object"
+        ? (gateway.controlUi as Record<string, unknown>)
+        : null;
+    if (controlUi?.dangerouslyDisableDeviceAuth === true) {
       deviceAuth = false;
     }
   }
   return { gatewayAuth, execPolicy, deviceAuth };
+}
+
+function resolveQuickSettingsSessionRow(state: AppViewState) {
+  return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+}
+
+async function applyQuickSettingsPreset(state: AppViewState, presetId: ConfigPresetId) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const preset = getPresetById(presetId);
+  if (!preset) {
+    return;
+  }
+  state.configApplying = true;
+  state.lastError = null;
+  try {
+    if (!state.configSnapshot?.hash) {
+      await loadConfig(state);
+    }
+    const baseHash = state.configSnapshot?.hash?.trim();
+    if (!baseHash) {
+      throw new Error("Config base hash unavailable. Reload config and retry.");
+    }
+    const baseConfig = cloneConfigObject(state.configForm ?? state.configSnapshot?.config ?? {});
+    const merged = applyMergePatch(baseConfig, preset.patch) as Record<string, unknown>;
+    await state.client.request("config.patch", { raw: serializeConfigForm(merged), baseHash });
+    await loadConfig(state);
+  } catch (err) {
+    state.lastError = `Failed to apply preset: ${String(err)}`;
+  } finally {
+    state.configApplying = false;
+  }
 }
 
 function renderCronQuickCreateForTab(
@@ -548,12 +596,19 @@ function renderCronQuickCreateForTab(
     onCreate: () => {
       const draft = state.cronQuickCreateDraft ?? createDefaultDraft();
       const formPatch = draftToCronFormPatch(draft);
-      // Apply the draft to the cron form and trigger add
       state.cronForm = { ...state.cronForm, ...formPatch } as typeof state.cronForm;
-      state.cronQuickCreateOpen = false;
-      state.cronQuickCreateStep = "what";
-      state.cronQuickCreateDraft = null;
       requestHostUpdate?.();
+      void (async () => {
+        await addCronJob(state);
+        if (state.cronError || hasCronFormErrors(state.cronFieldErrors)) {
+          requestHostUpdate?.();
+          return;
+        }
+        state.cronQuickCreateOpen = false;
+        state.cronQuickCreateStep = "what";
+        state.cronQuickCreateDraft = null;
+        requestHostUpdate?.();
+      })();
     },
     onCancel: () => {
       state.cronQuickCreateOpen = false;
@@ -843,11 +898,23 @@ export function renderApp(state: AppViewState) {
           const configObj = state.configForm ?? state.configSnapshot?.config ?? {};
           const agentsDefaults = ((configObj.agents as Record<string, unknown> | undefined)
             ?.defaults ?? {}) as Record<string, unknown>;
+          const activeSession = resolveQuickSettingsSessionRow(state);
           const currentModel =
-            typeof agentsDefaults.model === "string" ? agentsDefaults.model : "default";
+            typeof activeSession?.model === "string"
+              ? activeSession.model
+              : typeof agentsDefaults.model === "string"
+                ? agentsDefaults.model
+                : "default";
           const thinkingLevel =
-            typeof agentsDefaults.thinkingLevel === "string" ? agentsDefaults.thinkingLevel : "off";
-          const fastMode = agentsDefaults.fastMode === true;
+            typeof activeSession?.thinkingLevel === "string"
+              ? activeSession.thinkingLevel
+              : typeof agentsDefaults.thinkingLevel === "string"
+                ? agentsDefaults.thinkingLevel
+                : "off";
+          const fastMode =
+            typeof activeSession?.fastMode === "boolean"
+              ? activeSession.fastMode
+              : agentsDefaults.fastMode === true;
           return renderQuickSettings({
             currentModel,
             thinkingLevel,
@@ -859,22 +926,14 @@ export function renderApp(state: AppViewState) {
               requestHostUpdate?.();
             },
             onThinkingChange: (level) => {
-              if (state.client) {
-                void state.client.request("sessions.patch", {
-                  key: state.sessionKey,
-                  thinkingLevel: level,
-                });
-              }
-              requestHostUpdate?.();
+              void patchSession(state, state.sessionKey, { thinkingLevel: level }).then(() =>
+                requestHostUpdate?.(),
+              );
             },
             onFastModeToggle: () => {
-              if (state.client) {
-                void state.client.request("sessions.patch", {
-                  key: state.sessionKey,
-                  fastMode: !fastMode,
-                });
-              }
-              requestHostUpdate?.();
+              void patchSession(state, state.sessionKey, { fastMode: !fastMode }).then(() =>
+                requestHostUpdate?.(),
+              );
             },
             channels: extractQuickSettingsChannels(state),
             onChannelConfigure: () => {
@@ -920,12 +979,7 @@ export function renderApp(state: AppViewState) {
             setBorderRadius: (value) => state.setBorderRadius(value),
             configObject: configObj,
             onApplyPreset: (presetId) => {
-              const preset = getPresetById(presetId);
-              if (preset && state.client) {
-                void state.client.request("config.patch", {
-                  patch: preset.patch,
-                });
-              }
+              void applyQuickSettingsPreset(state, presetId).then(() => requestHostUpdate?.());
             },
             onAdvancedSettings: () => {
               state.configSettingsMode = "advanced";
