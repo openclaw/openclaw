@@ -754,6 +754,62 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(spawnAccountId).toBe("bot-alpha-line");
   });
 
+  it("sessions_spawn classifies Matrix room:@user targets as direct, not channel", async () => {
+    let spawnAccountId: string | undefined;
+    const rawUserId = "@other-user:example.org";
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      messages: { queue: { debounceMs: 0 } },
+      agents: { defaults: { subagents: { allowAgents: ["bot-alpha"] } } },
+      bindings: [
+        // A conflicting channel-kinded binding on the same peer id — must
+        // not match a room:@user target because the embedded `@` marker
+        // identifies this as a direct peer.
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: rawUserId },
+            accountId: "bot-alpha-wrong-kind",
+          },
+        },
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: { kind: "direct", id: rawUserId },
+            accountId: "bot-alpha-dm",
+          },
+        },
+      ],
+    });
+    setupSessionsSpawnGatewayMock({
+      onAgentSubagentSpawn: (params) => {
+        const rec = params as { accountId?: string } | undefined;
+        spawnAccountId = rec?.accountId;
+      },
+    });
+
+    // Matrix thread delivery encodes per-user DM targets as `room:@user:server`.
+    // The `room:` prefix must not override the embedded `@` direct-peer marker.
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "matrix",
+      agentAccountId: "bot-beta",
+      agentTo: `room:${rawUserId}`,
+    });
+
+    const result = await tool.execute("call-room-at-user", {
+      task: "do thing",
+      agentId: "bot-alpha",
+      cleanup: "keep",
+    });
+    expect(result.details).toMatchObject({ status: "accepted", runId: expect.any(String) });
+    expect(spawnAccountId).toBe("bot-alpha-dm");
+  });
+
   it("sessions_spawn strips conversation: prefix for Teams-style targets", async () => {
     let spawnAccountId: string | undefined;
     const rawConversationId = "19:example-conversation@thread.v2";

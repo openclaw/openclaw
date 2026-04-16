@@ -345,6 +345,11 @@ function extractRequesterPeer(
     value = value.slice(prefix.length).trim();
   }
   if (value) {
+    // Id-embedded kind markers (Matrix `!`/`@`, IRC `#`) win over prefix-derived
+    // inference — channel-side wrappers can wrap either a room or a user id
+    // (e.g. Matrix thread delivery encodes per-user DM targets as
+    // `room:@user:server`), and the id itself is the authoritative signal for
+    // what the peer actually is.
     if (value.startsWith("@")) {
       inferredKind = "direct";
     } else if (value.startsWith("!") || value.startsWith("#")) {
