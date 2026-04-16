@@ -25,6 +25,7 @@ overrides:
   tar: 7.5.13
   tough-cookie: 4.1.3
   yauzl: 3.2.1
+  protobufjs: 7.5.5
 
 packageExtensionsChecksum: sha256-n+P/SQo4Pf+dHYpYn1Y6wL4cJEVoVzZ835N0OEp4TM8=
 
@@ -4153,9 +4154,6 @@ packages:
   '@types/linkify-it@5.0.0':
     resolution: {integrity: sha512-sVDA58zAw4eWAffKOaQH5/5j3XeayukzDk+ewSsnv3p4yJEZHCCzMDiZM8e0OUrRvmpGZ85jf4yDHkHsgBNr9Q==}
 
-  '@types/long@4.0.2':
-    resolution: {integrity: sha512-MqTGEo5bj5t157U6fA/BiDynNkn0YknVdh48CMPkTSpFTVmvao5UQmm7uEF6xBEo7qIMAlY/JSleYaE6VOdpaA==}
-
   '@types/markdown-it@14.1.2':
     resolution: {integrity: sha512-promo4eFwuiW+TfGxhi+0x3czqTYJkG8qB17ZUJiVF10Xm7NLVRSLUsfRTU/6h1e24VvRnXCx+hG7li58lkzog==}
 
@@ -4170,9 +4168,6 @@ packages:
 
   '@types/ms@2.1.0':
     resolution: {integrity: sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA==}
-
-  '@types/node@10.17.60':
-    resolution: {integrity: sha512-F0KIgDJfy2nA3zMLmWGKxcH2ZVEtCZXHHdOQs2gSaQ27+lNeEfGxzkIw90aXswATX7AZ33tahPbzy6KAfUreVw==}
 
   '@types/node@16.9.1':
     resolution: {integrity: sha512-QpLcX9ZSsq3YYUUnD3nFDY8H7wctAhQj/TFKL8Ya8v5fMm3CFXxo8zStsLAl780ltoYoo1WvKUVGBQK+1ifr7g==}
@@ -6035,9 +6030,6 @@ packages:
     resolution: {integrity: sha512-HgMmCqIJSAKqo68l0rS2AanEWfkxaZ5wNiEFb5ggm08lDs9Xl2KxBlX3PTcaD2chBM1gXAYf491/M2Rv8Jwayg==}
     engines: {node: '>= 0.6.0'}
 
-  long@4.0.0:
-    resolution: {integrity: sha512-XsP+KhQif4bjX1kbuSiySJFNAehNxgLb6hPRGJ9QsUr8ajHkuXGdrHmFUTUUXhDwVX2R5bY4JNZEwbUiMhV+MA==}
-
   long@5.3.2:
     resolution: {integrity: sha512-mNAgZ1GmyNhD7AuqnTG3/VQ26o760+ZYBPKjPvugO8+nLbYfX6TVpJPseBvopbdY+qpZ/lKUnmEc1LeZYS3QAA==}
 
@@ -6706,12 +6698,8 @@ packages:
   property-information@7.1.0:
     resolution: {integrity: sha512-TwEZ+X+yCJmYfL7TPUOcvBZ4QfoT5YenQiJuX//0th53DE6w0xxLEtfK3iyryQFddXuvkIk51EEgrJQ0WJkOmQ==}
 
-  protobufjs@6.8.8:
-    resolution: {integrity: sha512-AAmHtD5pXgZfi7GMpllpO3q1Xw1OYldr+dMUlAnffGTAhqkg72WdmSY71uKBF/JuyiKs8psYbtKrhi0ASCD8qw==}
-    hasBin: true
-
-  protobufjs@7.5.4:
-    resolution: {integrity: sha512-CvexbZtbov6jW2eXAvLukXjXUW1TzFaivC46BpWc/3BpcCysb5Vffu+B3XHMm8lVEuy2Mm4XGex8hBSg1yapPg==}
+  protobufjs@7.5.5:
+    resolution: {integrity: sha512-3wY1AxV+VBNW8Yypfd1yQY9pXnqTAN+KwQxL8iYm3/BjKYMNg4i0owhEe26PWDOMaIrzeeF98Lqd5NGz4omiIg==}
     engines: {node: '>=12.0.0'}
 
   proxy-addr@2.0.7:
@@ -8990,7 +8978,7 @@ snapshots:
     dependencies:
       google-auth-library: 10.6.2
       p-retry: 4.6.2
-      protobufjs: 7.5.4
+      protobufjs: 7.5.5
       ws: 8.20.0
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.3.6)
@@ -9020,7 +9008,7 @@ snapshots:
     dependencies:
       lodash.camelcase: 4.3.0
       long: 5.3.2
-      protobufjs: 7.5.4
+      protobufjs: 7.5.5
       yargs: 17.7.2
 
   '@hapi/boom@9.1.4':
@@ -9474,7 +9462,7 @@ snapshots:
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
-      protobufjs: 7.5.4
+      protobufjs: 7.5.5
       qs: 6.14.2
       ws: 8.20.0
     transitivePeerDependencies:
@@ -10062,7 +10050,7 @@ snapshots:
       '@opentelemetry/sdk-logs': 0.214.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-metrics': 2.6.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-trace-base': 2.6.1(@opentelemetry/api@1.9.1)
-      protobufjs: 7.5.4
+      protobufjs: 7.5.5
 
   '@opentelemetry/propagator-b3@2.6.1(@opentelemetry/api@1.9.1)':
     dependencies:
@@ -11158,8 +11146,6 @@ snapshots:
 
   '@types/linkify-it@5.0.0': {}
 
-  '@types/long@4.0.2': {}
-
   '@types/markdown-it@14.1.2':
     dependencies:
       '@types/linkify-it': 5.0.0
@@ -11174,8 +11160,6 @@ snapshots:
   '@types/mime-types@2.1.4': {}
 
   '@types/ms@2.1.0': {}
-
-  '@types/node@10.17.60': {}
 
   '@types/node@16.9.1': {}
 
@@ -11452,7 +11436,7 @@ snapshots:
       music-metadata: 11.12.3
       p-queue: 9.1.2
       pino: 9.14.0
-      protobufjs: 7.5.4
+      protobufjs: 7.5.5
       sharp: 0.34.5
       ws: 8.20.0
     optionalDependencies:
@@ -11466,7 +11450,7 @@ snapshots:
   '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
     dependencies:
       curve25519-js: 0.0.4
-      protobufjs: 6.8.8
+      protobufjs: 7.5.5
 
   abbrev@1.1.1:
     optional: true
@@ -13240,8 +13224,6 @@ snapshots:
 
   loglevel@1.9.2: {}
 
-  long@4.0.0: {}
-
   long@5.3.2: {}
 
   lowdb@7.0.1:
@@ -14005,23 +13987,7 @@ snapshots:
 
   property-information@7.1.0: {}
 
-  protobufjs@6.8.8:
-    dependencies:
-      '@protobufjs/aspromise': 1.1.2
-      '@protobufjs/base64': 1.1.2
-      '@protobufjs/codegen': 2.0.4
-      '@protobufjs/eventemitter': 1.1.0
-      '@protobufjs/fetch': 1.1.0
-      '@protobufjs/float': 1.0.2
-      '@protobufjs/inquire': 1.1.0
-      '@protobufjs/path': 1.1.2
-      '@protobufjs/pool': 1.1.0
-      '@protobufjs/utf8': 1.1.0
-      '@types/long': 4.0.2
-      '@types/node': 10.17.60
-      long: 4.0.0
-
-  protobufjs@7.5.4:
+  protobufjs@7.5.5:
     dependencies:
       '@protobufjs/aspromise': 1.1.2
       '@protobufjs/base64': 1.1.2
