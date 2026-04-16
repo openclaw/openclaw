@@ -62,8 +62,6 @@ type GoogleTtsProviderOverrides = {
   voiceName?: string;
 };
 
-// Keeps type-aware single-file lint from treating unresolved plugin-sdk imports
-// as redundant union constituents when staged extension files are linted.
 type Maybe<T> = T | undefined;
 
 type GoogleInlineDataPart = {
@@ -119,6 +117,15 @@ function resolveGoogleTtsApiKey(params: {
     readGoogleTtsProviderConfig(params.providerConfig).apiKey ??
     resolveGoogleTtsModelProviderApiKey(params.cfg) ??
     resolveGoogleTtsEnvApiKey()
+  );
+}
+
+function resolveGoogleTtsBaseUrl(params: {
+  cfg?: OpenClawConfig;
+  providerConfig: GoogleTtsProviderConfig;
+}): string | undefined {
+  return (
+    params.providerConfig.baseUrl ?? trimToUndefined(params.cfg?.models?.providers?.google?.baseUrl)
   );
 }
 
@@ -339,7 +346,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
       const pcm = await synthesizeGoogleTtsPcm({
         text: req.text,
         apiKey,
-        baseUrl: config.baseUrl ?? trimToUndefined(req.cfg.models?.providers?.google?.baseUrl),
+        baseUrl: resolveGoogleTtsBaseUrl({ cfg: req.cfg, providerConfig: config }),
         model: normalizeGoogleTtsModel(overrides.model ?? config.model),
         voiceName: normalizeGoogleTtsVoiceName(overrides.voiceName ?? config.voiceName),
         timeoutMs: req.timeoutMs,
@@ -363,7 +370,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
       const pcm = await synthesizeGoogleTtsPcm({
         text: req.text,
         apiKey,
-        baseUrl: config.baseUrl ?? trimToUndefined(req.cfg.models?.providers?.google?.baseUrl),
+        baseUrl: resolveGoogleTtsBaseUrl({ cfg: req.cfg, providerConfig: config }),
         model: config.model,
         voiceName: config.voiceName,
         timeoutMs: req.timeoutMs,

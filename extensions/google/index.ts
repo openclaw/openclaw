@@ -12,14 +12,12 @@ import { buildGoogleVideoGenerationProvider } from "./video-generation-provider.
 let googleImageGenerationProviderPromise: Promise<ImageGenerationProvider> | null = null;
 let googleMediaUnderstandingProviderPromise: Promise<MediaUnderstandingProvider> | null = null;
 
-// Avoid intersecting with MediaUnderstandingProvider here: type-aware oxlint treats
-// the SDK import as an error type in this file and flags the intersection as redundant.
-type GoogleMediaUnderstandingProvider = {
-  describeImage: NonNullable<MediaUnderstandingProvider["describeImage"]>;
-  describeImages: NonNullable<MediaUnderstandingProvider["describeImages"]>;
-  transcribeAudio: NonNullable<MediaUnderstandingProvider["transcribeAudio"]>;
-  describeVideo: NonNullable<MediaUnderstandingProvider["describeVideo"]>;
-};
+type GoogleMediaUnderstandingProvider = Required<
+  Pick<
+    MediaUnderstandingProvider,
+    "describeImage" | "describeImages" | "transcribeAudio" | "describeVideo"
+  >
+>;
 
 async function loadGoogleImageGenerationProvider(): Promise<ImageGenerationProvider> {
   if (!googleImageGenerationProviderPromise) {
