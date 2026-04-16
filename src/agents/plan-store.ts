@@ -14,7 +14,6 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
 import crypto from "node:crypto";
 
 export interface StoredPlanStep {
@@ -43,7 +42,7 @@ function validateNamespace(namespace: string): void {
     !namespace ||
     namespace.includes("..") ||
     path.isAbsolute(namespace) ||
-    /[<>:"|?*\x00-\x1f]/.test(namespace)
+    /[<>:"|?*\u0000-\u001F]/.test(namespace)
   ) {
     throw new Error(`Invalid plan namespace: "${namespace}"`);
   }
