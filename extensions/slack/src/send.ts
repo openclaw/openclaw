@@ -1,4 +1,9 @@
-import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
+import {
+  type Block,
+  type ChatPostMessageArguments,
+  type KnownBlock,
+  type WebClient,
+} from "@slack/web-api";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
@@ -63,6 +68,7 @@ type SlackSendOpts = {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   client?: WebClient;
   threadTs?: string;
+  replyBroadcast?: boolean;
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
 };
@@ -102,15 +108,19 @@ async function postSlackMessageBestEffort(params: {
   channelId: string;
   text: string;
   threadTs?: string;
+  replyBroadcast?: boolean;
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
 }) {
-  const basePayload = {
+  const basePayload: ChatPostMessageArguments = {
     channel: params.channelId,
     text: params.text,
-    thread_ts: params.threadTs,
-    ...(params.blocks?.length ? { blocks: params.blocks } : {}),
+    ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
+    ...(params.threadTs && params.replyBroadcast === true ? { reply_broadcast: true } : {}),
   };
+  if (params.blocks?.length) {
+    basePayload.blocks = params.blocks;
+  }
   const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
   try {
     // Slack Web API types model icon_url and icon_emoji as mutually exclusive.
@@ -348,6 +358,7 @@ export async function sendMessageSlack(
       channelId,
       text: fallbackText,
       threadTs: opts.threadTs,
+      replyBroadcast: opts.replyBroadcast,
       identity: opts.identity,
       blocks,
     });
@@ -406,12 +417,14 @@ export async function sendMessageSlack(
       lastMessageId = response.ts ?? lastMessageId;
     }
   } else {
-    for (const chunk of resolvedChunks.length ? resolvedChunks : [""]) {
+    for (let i = 0; i < (resolvedChunks.length || 1); i++) {
+      const chunk = resolvedChunks[i] ?? "";
       const response = await postSlackMessageBestEffort({
         client,
         channelId,
         text: chunk,
         threadTs: opts.threadTs,
+        replyBroadcast: opts.replyBroadcast && i === 0,
         identity: opts.identity,
       });
       lastMessageId = response.ts ?? lastMessageId;

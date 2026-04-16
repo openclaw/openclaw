@@ -244,12 +244,14 @@ export async function handleSlackAction(
           to,
           context,
         );
+        const replyBroadcast = params.replyBroadcast === true;
         const result = await slackActionRuntime.sendSlackMessage(to, content ?? "", {
           ...writeOpts,
           mediaUrl: mediaUrl ?? undefined,
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
+          replyBroadcast,
           blocks,
         });
 
@@ -289,12 +291,14 @@ export async function handleSlackAction(
           to,
           context,
         );
+        const replyBroadcast = params.replyBroadcast === true;
         const result = await slackActionRuntime.sendSlackMessage(to, initialComment ?? "", {
           ...writeOpts,
           mediaUrl: filePath,
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
+          replyBroadcast,
           ...(filename ? { uploadFileName: filename } : {}),
           ...(title ? { uploadTitle: title } : {}),
         });
