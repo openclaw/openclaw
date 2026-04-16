@@ -1287,6 +1287,7 @@ jobs:
         run: |
           set -euo pipefail
           swift package resolve --package-path apps/macos >/dev/null
+          chmod u+w apps/macos/.build/checkouts/mlx-audio-swift/Package.swift
           python <<'PY'
           from pathlib import Path
 
@@ -1356,6 +1357,7 @@ jobs:
         run: |
           set -euo pipefail
           swift package resolve --package-path apps/macos >/dev/null
+          chmod u+w apps/macos/.build/checkouts/mlx-audio-swift/Package.swift
           python <<'PY'
           from pathlib import Path
 
