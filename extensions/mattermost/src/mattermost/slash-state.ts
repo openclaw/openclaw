@@ -21,6 +21,8 @@ import { createSlashCommandHttpHandler } from "./slash-http.js";
 export type SlashCommandAccountState = {
   /** Tokens from registered commands, used for validation. */
   commandTokens: Set<string>;
+  /** Exact trigger expected for each registered token. */
+  commandTokenTriggers: Map<string, string>;
   /** Registered command IDs for cleanup on shutdown. */
   registeredCommands: MattermostRegisteredCommand[];
   /** Current HTTP handler for this account. */
@@ -96,18 +98,25 @@ export function activateSlashCommands(params: {
   const accountId = account.accountId;
 
   const tokenSet = new Set(commandTokens);
+  const commandTokenTriggers = new Map(
+    registeredCommands
+      .filter((command) => command.token)
+      .map((command) => [command.token, command.trigger] as const),
+  );
 
   const handler = createSlashCommandHttpHandler({
     account,
     cfg: api.cfg,
     runtime: api.runtime,
     commandTokens: tokenSet,
+    commandTokenTriggers,
     triggerMap,
     log,
   });
 
   accountStates.set(accountId, {
     commandTokens: tokenSet,
+    commandTokenTriggers,
     registeredCommands,
     handler,
     account,
@@ -127,6 +136,7 @@ export function deactivateSlashCommands(accountId?: string) {
     const state = accountStates.get(accountId);
     if (state) {
       state.commandTokens.clear();
+      state.commandTokenTriggers.clear();
       state.registeredCommands = [];
       state.handler = null;
       accountStates.delete(accountId);
@@ -135,6 +145,7 @@ export function deactivateSlashCommands(accountId?: string) {
     // Deactivate all accounts (full shutdown)
     for (const [, state] of accountStates) {
       state.commandTokens.clear();
+      state.commandTokenTriggers.clear();
       state.registeredCommands = [];
       state.handler = null;
     }

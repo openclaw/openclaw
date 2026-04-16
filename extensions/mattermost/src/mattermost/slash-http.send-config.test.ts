@@ -126,14 +126,13 @@ vi.mock("./slash-commands.js", () => ({
 let createSlashCommandHttpHandler: typeof import("./slash-http.js").createSlashCommandHttpHandler;
 
 function createRequest(body = "token=valid-token"): IncomingMessage {
-  const req = new PassThrough();
-  const incoming = req as PassThrough & IncomingMessage;
+  const incoming = new PassThrough() as IncomingMessage;
   incoming.method = "POST";
   incoming.headers = {
     "content-type": "application/x-www-form-urlencoded",
   };
   process.nextTick(() => {
-    req.end(body);
+    incoming.end(body);
   });
   return incoming;
 }
@@ -150,15 +149,11 @@ function createResponse(): {
 
     override end(): this;
     override end(cb: () => void): this;
-    override end(chunk: string | Buffer | Uint8Array, cb?: () => void): this;
+    override end(chunk: string | Uint8Array, cb?: () => void): this;
+    override end(chunk: string | Uint8Array, encoding: string, cb?: () => void): this;
     override end(
-      chunk: string | Buffer | Uint8Array,
-      encoding: BufferEncoding,
-      cb?: () => void,
-    ): this;
-    override end(
-      chunkOrCb?: string | Buffer | Uint8Array | (() => void),
-      encodingOrCb?: BufferEncoding | (() => void),
+      chunkOrCb?: string | Uint8Array | (() => void),
+      encodingOrCb?: string | (() => void),
       cb?: () => void,
     ): this {
       const chunk = typeof chunkOrCb === "function" ? undefined : chunkOrCb;
@@ -220,6 +215,7 @@ describe("slash-http cfg threading", () => {
       cfg,
       runtime: {} as RuntimeEnv,
       commandTokens: new Set(["valid-token"]),
+      commandTokenTriggers: new Map([["valid-token", "oc_models"]]),
     });
     const response = createResponse();
 
@@ -252,6 +248,7 @@ describe("slash-http cfg threading", () => {
       cfg: {} as OpenClawConfig,
       runtime: {} as RuntimeEnv,
       commandTokens,
+      commandTokenTriggers: new Map([["valid-token", "oc_models"]]),
     });
     const response = createResponse();
 
