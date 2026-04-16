@@ -142,7 +142,7 @@ describe("createOpenClawCodingTools", () => {
       | undefined;
     expect(snapshotFormat?.type).toBe("string");
     expect(snapshotFormat?.anyOf).toBeUndefined();
-    expect(snapshotFormat?.enum).toEqual(["aria", "ai"]);
+    expect(snapshotFormat?.enum).toEqual(["aria", "ai", "enhanced", "hybrid"]);
   });
   it("inlines local $ref before removing unsupported keywords", () => {
     const cleaned = __testing.cleanToolSchemaForGemini({

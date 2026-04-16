@@ -429,9 +429,38 @@ OpenClaw supports two “snapshot” styles:
   - Internally, the ref is resolved via `getByRole(...)` (plus `nth()` for duplicates).
   - Add `--labels` to include a viewport screenshot with overlayed `e12` labels.
 
+- **Enhanced snapshot (script-based)**: agent/browser tool `snapshotFormat: "enhanced"`, or HTTP `GET /snapshot-enhanced` on the browser control service.
+  - Injects `page-script-enhanced.js`: standard selectors, ARIA roles, **cursor-based** detection for custom controls, topmost hit-testing, and precomputed rects.
+  - Response includes role-style `refs`, `viewport`, **visible viewport text**, and **page metadata** (JSON-LD blocks, microdata, meta tags).
+
+- **Hybrid snapshot (recommended)**: `snapshotFormat: "hybrid"`, or `GET /snapshot-hybrid`.
+  - Uses Playwright `ariaSnapshot()` as the primary tree, then merges interactive elements found only by the enhanced script.
+  - Same extras as enhanced: `viewport`, visible text, and page metadata.
+
 Ref behavior:
 - Refs are **not stable across navigations**; if something fails, re-run `snapshot` and use a fresh ref.
 - If the role snapshot was taken with `--frame`, role refs are scoped to that iframe until the next role snapshot.
+
+### Agent tool
+
+```ts
+// Enhanced detection only
+browser({ action: "snapshot", snapshotFormat: "enhanced" });
+
+// Hybrid (Playwright + enhanced merge)
+browser({ action: "snapshot", snapshotFormat: "hybrid" });
+```
+
+For enhanced and hybrid, the text shown to the model includes the snapshot, then optional **Visible text** and **Page metadata** sections (subject to the same `maxChars` budget as AI snapshots when set).
+
+### HTTP API (browser control service)
+
+Query params match other snapshot routes (`targetId`, `profile`, `interactive`, `compact`, `depth`, `selector`, `frame`).
+
+```http
+GET /snapshot-enhanced?targetId=<tab-target-id>
+GET /snapshot-hybrid?targetId=<tab-target-id>
+```
 
 ## Wait power-ups
 
