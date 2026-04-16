@@ -990,10 +990,10 @@ export async function promptSingleChannelToken(params: {
       message: params.inputPrompt,
       validate: (value) => (value?.trim() ? undefined : "Required"),
     });
-    if (value === undefined) {
-      return;
+    if (value === undefined || value === null || typeof value !== "string") {
+      throw new Error("Prompt input was cancelled or invalid");
     }
-    return typeof value === "string" ? value.trim() : "";
+    return value.trim();
   };
 
   if (params.canUseEnv) {
