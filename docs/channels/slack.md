@@ -138,6 +138,15 @@ openclaw gateway
       "messages_tab_enabled": true,
       "messages_tab_read_only_enabled": false
     },
+    "assistant_view": {
+      "assistant_description": "this is a string description of the app assistant. What does your assistant do?",
+      "suggested_prompts": [
+        {
+          "title": "User help",
+          "message": "How do I use this awesome app?"
+        }
+      ]
+    },
     "slash_commands": [
       {
         "command": "/openclaw",
@@ -214,6 +223,15 @@ openclaw gateway
     "app_home": {
       "messages_tab_enabled": true,
       "messages_tab_read_only_enabled": false
+    },
+    "assistant_view": {
+      "assistant_description": "this is a string description of the app assistant. What does your assistant do?",
+      "suggested_prompts": [
+        {
+          "title": "User help",
+          "message": "How do I use this awesome app?"
+        }
+      ]
     },
     "slash_commands": [
       {
