@@ -511,6 +511,50 @@ function resolveChatSendTranscriptMediaFields(savedImages: SavedMedia[]) {
   };
 }
 
+/**
+ * Convert MediaPath/MediaPaths fields on a user transcript message into
+ * inline image content blocks so the Control UI can render them.
+ * Returns null when there are no image media paths to promote.
+ */
+function promoteMediaPathsToImageBlocks(
+  entry: Record<string, unknown>,
+): { content: unknown[] } | null {
+  const mediaPaths = Array.isArray(entry.MediaPaths)
+    ? (entry.MediaPaths as unknown[]).filter((p): p is string => typeof p === "string")
+    : typeof entry.MediaPath === "string"
+      ? [entry.MediaPath]
+      : [];
+  if (mediaPaths.length === 0) {
+    return null;
+  }
+  const mediaTypes = Array.isArray(entry.MediaTypes)
+    ? (entry.MediaTypes as unknown[]).map((t) => (typeof t === "string" ? t : ""))
+    : typeof entry.MediaType === "string"
+      ? [entry.MediaType]
+      : [];
+
+  const imageBlocks: Array<{ type: "image"; url: string }> = [];
+  for (let i = 0; i < mediaPaths.length; i++) {
+    const mime = (mediaTypes[i] ?? "").toLowerCase();
+    if (!mime.startsWith("image/")) {
+      continue;
+    }
+    imageBlocks.push({ type: "image", url: mediaPaths[i] });
+  }
+  if (imageBlocks.length === 0) {
+    return null;
+  }
+
+  const textContent =
+    typeof entry.content === "string" && entry.content.trim()
+      ? [{ type: "text" as const, text: entry.content }]
+      : Array.isArray(entry.content)
+        ? (entry.content as unknown[])
+        : [];
+
+  return { content: [...textContent, ...imageBlocks] };
+}
+
 function extractTranscriptUserText(content: unknown): string | undefined {
   if (typeof content === "string") {
     return content;
@@ -887,6 +931,20 @@ function sanitizeChatHistoryMessage(
       const res = truncateChatHistoryText(stripped.text, maxChars);
       entry.text = res.text;
       changed ||= stripped.changed || res.truncated;
+    }
+  }
+
+  // Promote MediaPath/MediaPaths into image content blocks so the Control UI
+  // can render uploaded images in the chat history after a history reload.
+  if (role === "user") {
+    const promoted = promoteMediaPathsToImageBlocks(entry);
+    if (promoted) {
+      entry.content = promoted.content;
+      delete entry.MediaPath;
+      delete entry.MediaPaths;
+      delete entry.MediaType;
+      delete entry.MediaTypes;
+      changed = true;
     }
   }
 

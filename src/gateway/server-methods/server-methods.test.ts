@@ -301,6 +301,86 @@ describe("sanitizeChatHistoryMessages", () => {
       },
     ]);
   });
+
+  it("promotes MediaPaths with image types into content blocks on user messages", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "user",
+        content: "hi",
+        timestamp: 1,
+        MediaPath: "/tmp/openclaw/media/inbound/photo.png",
+        MediaPaths: ["/tmp/openclaw/media/inbound/photo.png"],
+        MediaType: "image/png",
+        MediaTypes: ["image/png"],
+      },
+    ]);
+    expect(result).toHaveLength(1);
+    const msg = result[0] as Record<string, unknown>;
+    expect(msg.role).toBe("user");
+    expect(Array.isArray(msg.content)).toBe(true);
+    const content = msg.content as Array<{ type: string; text?: string; url?: string }>;
+    expect(content).toEqual([
+      { type: "text", text: "hi" },
+      { type: "image", url: "/tmp/openclaw/media/inbound/photo.png" },
+    ]);
+    // MediaPath fields should be removed
+    expect(msg).not.toHaveProperty("MediaPath");
+    expect(msg).not.toHaveProperty("MediaPaths");
+    expect(msg).not.toHaveProperty("MediaType");
+    expect(msg).not.toHaveProperty("MediaTypes");
+  });
+
+  it("skips non-image MediaPaths", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "user",
+        content: "see attached",
+        timestamp: 1,
+        MediaPath: "/tmp/openclaw/media/inbound/doc.pdf",
+        MediaPaths: ["/tmp/openclaw/media/inbound/doc.pdf"],
+        MediaType: "application/pdf",
+        MediaTypes: ["application/pdf"],
+      },
+    ]);
+    const msg = result[0] as Record<string, unknown>;
+    // Non-image media should not be promoted
+    expect(typeof msg.content).toBe("string");
+  });
+
+  it("does not promote MediaPaths on assistant messages", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: "here is the image",
+        timestamp: 1,
+        MediaPath: "/tmp/openclaw/media/inbound/photo.png",
+        MediaPaths: ["/tmp/openclaw/media/inbound/photo.png"],
+        MediaType: "image/png",
+        MediaTypes: ["image/png"],
+      },
+    ]);
+    const msg = result[0] as Record<string, unknown>;
+    expect(typeof msg.content).toBe("string");
+  });
+
+  it("promotes multiple image MediaPaths", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "user",
+        content: "two images",
+        timestamp: 1,
+        MediaPaths: ["/tmp/a.png", "/tmp/b.jpg"],
+        MediaTypes: ["image/png", "image/jpeg"],
+      },
+    ]);
+    const msg = result[0] as Record<string, unknown>;
+    const content = msg.content as Array<{ type: string; text?: string; url?: string }>;
+    expect(content).toEqual([
+      { type: "text", text: "two images" },
+      { type: "image", url: "/tmp/a.png" },
+      { type: "image", url: "/tmp/b.jpg" },
+    ]);
+  });
 });
 
 describe("resolveEffectiveChatHistoryMaxChars", () => {
