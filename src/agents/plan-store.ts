@@ -14,6 +14,8 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
+import crypto from "node:crypto";
 
 export interface StoredPlanStep {
   step: string;
@@ -32,42 +34,71 @@ export interface StoredPlan {
 
 const LOCK_STALE_MS = 10_000;
 
+/**
+ * Validates that a namespace cannot escape the base directory via
+ * path traversal (e.g. "../../etc").
+ */
+function validateNamespace(namespace: string): void {
+  if (
+    !namespace ||
+    namespace.includes("..") ||
+    path.isAbsolute(namespace) ||
+    /[<>:"|?*\x00-\x1f]/.test(namespace)
+  ) {
+    throw new Error(`Invalid plan namespace: "${namespace}"`);
+  }
+}
+
 export class PlanStore {
   constructor(private readonly baseDir: string) {}
 
   private planPath(namespace: string): string {
+    validateNamespace(namespace);
     return path.join(this.baseDir, namespace, "plan.json");
   }
 
   private lockPath(namespace: string): string {
+    validateNamespace(namespace);
     return path.join(this.baseDir, namespace, ".lock");
   }
 
   /**
    * Reads the current plan for a namespace.
-   * Returns null if no plan exists.
+   * Returns null if no plan exists. Throws on parse/permission errors
+   * so corruption is not silently ignored.
    */
   async read(namespace: string): Promise<StoredPlan | null> {
     try {
       const content = await fs.readFile(this.planPath(namespace), "utf-8");
       return JSON.parse(content) as StoredPlan;
-    } catch {
-      return null;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+      throw err;
     }
   }
 
   /**
-   * Writes a plan for a namespace. Creates the directory if needed.
+   * Writes a plan for a namespace atomically (write to temp, then rename).
+   * Creates the directory if needed.
    * Callers should acquire a lock first for concurrent safety.
    */
   async write(namespace: string, plan: StoredPlan): Promise<void> {
-    const dir = path.dirname(this.planPath(namespace));
+    const planFile = this.planPath(namespace);
+    const dir = path.dirname(planFile);
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(
-      this.planPath(namespace),
-      JSON.stringify(plan, null, 2),
-      "utf-8",
-    );
+
+    // Atomic write: write to a temp file in the same directory, then rename.
+    const tmpFile = path.join(dir, `.plan-${crypto.randomBytes(4).toString("hex")}.tmp`);
+    try {
+      await fs.writeFile(tmpFile, JSON.stringify(plan, null, 2), "utf-8");
+      await fs.rename(tmpFile, planFile);
+    } catch (err) {
+      // Clean up temp file on failure.
+      try { await fs.unlink(tmpFile); } catch { /* ignore */ }
+      throw err;
+    }
   }
 
   /**
@@ -80,24 +111,37 @@ export class PlanStore {
     const dir = path.dirname(lockFile);
     await fs.mkdir(dir, { recursive: true });
 
+    // Generate a unique lock token so release can verify ownership.
+    const lockToken = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+
     // Try to acquire lock with O_EXCL (fails if file exists).
     // If lock exists but is stale (>10s), remove and retry.
     const maxRetries = 5;
     for (let i = 0; i < maxRetries; i++) {
+      let handle: fs.FileHandle | undefined;
       try {
-        const handle = await fs.open(lockFile, "wx");
-        await handle.write(String(Date.now()));
+        handle = await fs.open(lockFile, "wx");
+        await handle.write(lockToken);
         await handle.close();
+        handle = undefined; // closed successfully
 
-        // Lock acquired. Return release function.
+        // Lock acquired. Return release function that verifies ownership.
         return async () => {
           try {
-            await fs.unlink(lockFile);
+            const content = await fs.readFile(lockFile, "utf-8");
+            if (content === lockToken) {
+              await fs.unlink(lockFile);
+            }
+            // If token doesn't match, another process owns the lock — don't unlink.
           } catch {
             // Lock file may have been cleaned up already.
           }
         };
       } catch (err: unknown) {
+        // Ensure handle is closed on any error path.
+        if (handle) {
+          try { await handle.close(); } catch { /* ignore */ }
+        }
         if ((err as NodeJS.ErrnoException).code === "EEXIST") {
           // Lock exists. Check if stale.
           try {
