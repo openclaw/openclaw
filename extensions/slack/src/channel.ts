@@ -444,8 +444,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         return await (await loadSlackProbeModule()).probeSlack(token, timeoutMs);
       },
       formatCapabilitiesProbe: ({ probe }) => {
-        // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
-        const slackProbe = probe as SlackProbe | undefined;
+        const slackProbe = probe;
         const lines = [];
         if (slackProbe?.bot?.name) {
           lines.push({ text: `Bot: @${slackProbe.bot.name}` });
@@ -515,9 +514,6 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           setStatus: ctx.setStatus as (next: Record<string, unknown>) => void,
           getStatus: ctx.getStatus as () => Record<string, unknown>,
         });
-      },
-      stopAccount: async (ctx) => {
-        ctx.log?.info(`[${ctx.accountId}] stopping provider`);
       },
     },
     mentions: {
