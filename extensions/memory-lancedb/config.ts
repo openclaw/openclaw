@@ -160,6 +160,28 @@ export const memoryConfigSchema = {
       }
     }
 
+    // Clamp timeoutMs to [1000, 60000]; fall back to undefined (uses SDK default) if invalid
+    const rawTimeoutMs = typeof embedding.timeoutMs === "number" ? embedding.timeoutMs : undefined;
+    const timeoutMs =
+      rawTimeoutMs !== undefined &&
+      Number.isFinite(rawTimeoutMs) &&
+      rawTimeoutMs >= 1000 &&
+      rawTimeoutMs <= 60_000
+        ? rawTimeoutMs
+        : undefined;
+
+    // Clamp maxRetries to integer in [0, 5]; fall back to undefined (uses SDK default) if invalid
+    const rawMaxRetries =
+      typeof embedding.maxRetries === "number" ? embedding.maxRetries : undefined;
+    const maxRetries =
+      rawMaxRetries !== undefined &&
+      Number.isFinite(rawMaxRetries) &&
+      Number.isInteger(rawMaxRetries) &&
+      rawMaxRetries >= 0 &&
+      rawMaxRetries <= 5
+        ? rawMaxRetries
+        : undefined;
+
     return {
       embedding: {
         provider: "openai",
@@ -168,8 +190,8 @@ export const memoryConfigSchema = {
         baseUrl:
           typeof embedding.baseUrl === "string" ? resolveEnvVars(embedding.baseUrl) : undefined,
         dimensions: typeof embedding.dimensions === "number" ? embedding.dimensions : undefined,
-        timeoutMs: typeof embedding.timeoutMs === "number" ? embedding.timeoutMs : undefined,
-        maxRetries: typeof embedding.maxRetries === "number" ? embedding.maxRetries : undefined,
+        timeoutMs,
+        maxRetries,
       },
       dreaming,
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,

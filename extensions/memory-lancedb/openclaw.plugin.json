@@ -25,6 +25,18 @@
       "help": "Vector dimensions for custom models (required for non-standard models)",
       "advanced": true
     },
+    "embedding.timeoutMs": {
+      "label": "Timeout (ms)",
+      "placeholder": "10000",
+      "help": "Timeout for embedding API requests in milliseconds",
+      "advanced": true
+    },
+    "embedding.maxRetries": {
+      "label": "Max Retries",
+      "placeholder": "1",
+      "help": "Maximum number of retries for failed embedding requests",
+      "advanced": true
+    },
     "dbPath": {
       "label": "Database Path",
       "placeholder": "~/.openclaw/memory/lancedb",
@@ -73,6 +85,16 @@
           },
           "dimensions": {
             "type": "number"
+          },
+          "timeoutMs": {
+            "type": "number",
+            "minimum": 1000,
+            "maximum": 60000
+          },
+          "maxRetries": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 5
           }
         },
         "required": ["apiKey"]
