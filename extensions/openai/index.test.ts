@@ -19,10 +19,9 @@ import {
 } from "./prompt-overlay.js";
 
 /** Shared stablePrefix expectation — update this ONE constant when overlay blocks change. */
-const EXPECTED_GPT5_STABLE_PREFIX = [
-  OPENAI_GPT5_OUTPUT_CONTRACT,
-  OPENAI_GPT5_TOOL_CALL_STYLE,
-].join("\n\n");
+const EXPECTED_GPT5_STABLE_PREFIX = [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join(
+  "\n\n",
+);
 
 const runtimeMocks = vi.hoisted(() => ({
   ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
@@ -495,6 +494,14 @@ describe("openai plugin", () => {
     expect(OPENAI_GPT5_OUTPUT_CONTRACT).toContain(
       "Do not use em dashes unless the user explicitly asks for them or they are required in quoted text.",
     );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("you ARE the persona");
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Anti-sycophancy");
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Voice Calibration");
+    expect(OPENAI_GPT5_OUTPUT_CONTRACT).toContain("target under 200 words");
+    expect(OPENAI_GPT5_OUTPUT_CONTRACT).toContain("write it to a file");
+    expect(OPENAI_GPT5_EXECUTION_BIAS).toContain("Investigation Discipline");
+    expect(OPENAI_GPT5_EXECUTION_BIAS).toContain("Plan Confidence Gate");
+    expect(OPENAI_GPT5_EXECUTION_BIAS).toContain("95%+ confident");
   });
 
   it("defaults to the friendly OpenAI interaction-style overlay", async () => {
