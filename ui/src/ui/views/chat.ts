@@ -1799,9 +1799,14 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
         if (assistantMediaUrls.size === 0 && !hasDetails) {
           // No media to dedupe against - keep the message
         } else {
-          let hasUniqueContent = hasDetails; // Details field always counts as unique content
+          // Start with false - we need to prove this content is unique
+          let hasUniqueContent = false;
           
-          if (!hasUniqueContent) {
+          // Check if details field provides unique data
+          if (hasDetails) {
+            hasUniqueContent = true;
+          } else {
+            // Check content blocks for unique content
             for (const block of currentContent) {
               const b = block as Record<string, unknown>;
               

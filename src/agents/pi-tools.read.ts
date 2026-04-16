@@ -7,12 +7,8 @@ import {
   writeFileWithinRoot,
   mkdirPathWithinRoot,
 } from "../infra/fs-safe.js";
-import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
+import { trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
-import { detectMime } from "../media/mime.js";
-import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
-import type { ImageSanitizationLimits } from "./image-sanitization.js";
-import { toRelativeWorkspacePath } from "./path-policy.js";
 import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
 import {
   REQUIRED_PARAM_GROUPS,
