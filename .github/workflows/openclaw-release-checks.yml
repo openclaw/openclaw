@@ -120,7 +120,8 @@ jobs:
 
   cross_os_release_checks:
     needs: [resolve_target]
-    permissions: read-all
+    permissions:
+      contents: read
     uses: ./.github/workflows/openclaw-cross-os-release-checks-reusable.yml
     with:
       ref: ${{ needs.resolve_target.outputs.ref }}
