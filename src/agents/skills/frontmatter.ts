@@ -192,9 +192,10 @@ function parsePlanTemplate(raw: unknown): SkillPlanTemplateStep[] {
   return raw
     .filter((item: any) => item && typeof item === "object" && item.step)
     .map((item: any) => ({
-      step: String(item.step || ""),
-      ...(item.activeForm ? { activeForm: String(item.activeForm) } : {}),
-    }));
+      step: String(item.step).trim(),
+      ...(item.activeForm ? { activeForm: String(item.activeForm).trim() } : {}),
+    }))
+    .filter((item) => item.step.length > 0);
 }
 
 export function resolveOpenClawMetadata(
