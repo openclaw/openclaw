@@ -244,19 +244,49 @@ export function renderModeSwitcher(params: {
  * shortcut from interfering with users typing in the chat composer or
  * any other text field.
  */
+/**
+ * Walks the active-element chain across Shadow DOM roots to find the
+ * deepest focused element. `document.activeElement` only returns the
+ * first host along the path; for Lit / Web Component composer surfaces
+ * with internal `<input>` / `<textarea>` / `[contenteditable]`, the
+ * naive read returns the host (e.g. `<openclaw-chat-composer>`) and
+ * misses the real focus target — so the focus guard would NOT bail and
+ * Ctrl+1-4 would steal keystrokes the user meant for the input.
+ *
+ * Returns `null` when no element is focused.
+ */
+function getDeepActiveElement(): Element | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+  let active: Element | null = document.activeElement;
+  // Cap the traversal to avoid runaway loops on pathological component trees.
+  for (let depth = 0; depth < 32 && active; depth += 1) {
+    const root = (active as Element & { shadowRoot?: ShadowRoot | null }).shadowRoot;
+    if (!root || !root.activeElement) {
+      return active;
+    }
+    if (root.activeElement === active) {
+      // Stable fixed point — done.
+      return active;
+    }
+    active = root.activeElement;
+  }
+  return active;
+}
+
 export function handleModeShortcut(e: KeyboardEvent): ModeDefinition | null {
   // Only bare Ctrl+digit — exclude Cmd (macOS tab switch), Shift, and Alt modifiers.
   if (!e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) {
     return null;
   }
-  // Focus guard: skip when user is typing.
-  if (typeof document !== "undefined") {
-    const active = document.activeElement;
-    if (active) {
-      const tag = active.tagName?.toLowerCase();
-      if (tag === "input" || tag === "textarea" || (active as HTMLElement).isContentEditable) {
-        return null;
-      }
+  // Focus guard: skip when user is typing. Use a Shadow-DOM-aware traversal
+  // so focus inside a Web Component's internal input also bails the shortcut.
+  const active = getDeepActiveElement();
+  if (active) {
+    const tag = active.tagName?.toLowerCase();
+    if (tag === "input" || tag === "textarea" || (active as HTMLElement).isContentEditable) {
+      return null;
     }
   }
   const mode = MODE_DEFINITIONS.find((m) => m.shortcut === e.key);

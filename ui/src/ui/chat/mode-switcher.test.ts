@@ -188,4 +188,47 @@ describe("focus guard (input/textarea/contenteditable)", () => {
     const result = handleModeShortcut(makeKeyEvent("1"));
     expect(result?.id).toBe("ask");
   });
+
+  it("returns null when focus is inside a Shadow DOM root (input nested in a Web Component)", () => {
+    // Adversarial regression: prior implementation only checked
+    // document.activeElement, which returns the Shadow host (the custom
+    // element) — not the inner <input>. So Ctrl+1-4 would steal
+    // keystrokes the user meant for a Lit composer's internal input.
+    // The Shadow-DOM-aware traversal walks .shadowRoot.activeElement
+    // until it bottoms out at the real focus target.
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const shadow = host.attachShadow({ mode: "open" });
+    const input = document.createElement("input");
+    shadow.appendChild(input);
+    // jsdom needs both the focus call AND a manual activeElement set on
+    // the shadow root for the property to reflect; setting via focus()
+    // is sufficient in real browsers.
+    input.focus();
+    try {
+      expect(handleModeShortcut(makeKeyEvent("1"))).toBeNull();
+    } finally {
+      host.remove();
+    }
+  });
+
+  it("returns null when focus is inside nested Shadow DOM roots (depth 2)", () => {
+    // Defense-in-depth: a Web Component containing another Web Component
+    // (e.g. <chat-composer> hosting <token-counter-input>) should still
+    // bail. Verify the traversal handles depth > 1.
+    const outerHost = document.createElement("div");
+    document.body.appendChild(outerHost);
+    const outerShadow = outerHost.attachShadow({ mode: "open" });
+    const innerHost = document.createElement("div");
+    outerShadow.appendChild(innerHost);
+    const innerShadow = innerHost.attachShadow({ mode: "open" });
+    const ta = document.createElement("textarea");
+    innerShadow.appendChild(ta);
+    ta.focus();
+    try {
+      expect(handleModeShortcut(makeKeyEvent("1"))).toBeNull();
+    } finally {
+      outerHost.remove();
+    }
+  });
 });
