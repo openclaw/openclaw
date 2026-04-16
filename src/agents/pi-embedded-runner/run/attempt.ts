@@ -630,6 +630,11 @@ export async function runEmbeddedAttempt(
       runId: params.runId,
       sessionKey: params.sessionKey,
       config: params.config,
+      // Forward the run-scoped event callback so callback-only consumers
+      // (e.g. the auto-reply pipeline) see the seeded plan event the same
+      // way they see subsequent update_plan events. Codex P2 #67541
+      // r3096399082/r3096435183.
+      ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
     });
 
     const skillsPrompt = resolveSkillsPromptForRun({

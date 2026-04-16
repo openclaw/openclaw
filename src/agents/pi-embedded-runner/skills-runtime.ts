@@ -1,7 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { emitAgentPlanEvent } from "../../infra/agent-events.js";
+import { type AgentPlanEventData, emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { logWarn } from "../../logger.js";
 import { loadWorkspaceSkillEntries, type SkillEntry, type SkillSnapshot } from "../skills.js";
+import { shouldIncludeSkill } from "../skills/config.js";
 import { resolveSkillRuntimeConfig } from "../skills/runtime-config.js";
 import {
   buildPlanTemplatePayload,
@@ -62,7 +63,14 @@ export function resolveSkillPlanTemplate(
   entries: SkillEntry[],
   config?: OpenClawConfig,
 ): SkillPlanTemplateResolution | null {
-  const candidates = entries
+  // Codex P2 (PR #67541 r3096399074): apply eligibility filtering BEFORE
+  // collision resolution. `loadWorkspaceSkillEntries` returns every loaded
+  // skill (including disabled / missing-env / wrong-OS ones) when no
+  // explicit `skillFilter` is set; without this guard a disabled skill
+  // could win the alpha-first collision and seed an unrelated plan that
+  // never appears in the runtime prompt.
+  const eligibleEntries = entries.filter((entry) => shouldIncludeSkill({ entry, config }));
+  const candidates = eligibleEntries
     .filter((e) => hasSkillPlanTemplate(e.metadata) && e.metadata?.planTemplate)
     .toSorted((a, b) => a.skill.name.localeCompare(b.skill.name));
 
@@ -140,6 +148,15 @@ export interface ApplySkillPlanTemplateSeedParams {
   /** Resolved config — used for `skills.limits.maxPlanTemplateSteps`. */
   config?: OpenClawConfig;
   /**
+   * Run-scoped event callback used by some consumers (e.g. the auto-reply
+   * pipeline at `src/auto-reply/reply/agent-runner-execution.ts`) to
+   * receive plan updates. Codex P2 (PR #67541 r3096399082/r3096435183) —
+   * other plan-update sites call BOTH `emitAgentPlanEvent` and this
+   * callback; the seeder must too, or callback-only consumers miss the
+   * initial seed event.
+   */
+  onAgentEvent?: (evt: { stream: "plan"; data: AgentPlanEventData }) => void;
+  /**
    * When provided and non-empty, seeding is skipped. Treats an existing
    * plan as user intent and avoids clobbering it with a stock template.
    * Wired to `AgentRunContext.lastPlanSteps` once #67514 lands.
@@ -216,16 +233,31 @@ export function applySkillPlanTemplateSeed(
     );
   }
 
+  const planEventData: AgentPlanEventData = {
+    phase: "update",
+    title: `Plan seeded from skill "${skillName}"`,
+    explanation: payload.explanation,
+    steps: payload.plan.map((s) => s.step),
+    source: "skill_plan_template",
+  };
+
+  // Forward to the run-scoped callback FIRST so callback-only consumers
+  // (e.g. the auto-reply pipeline) don't miss the seed. Other plan-update
+  // sites in run.ts call BOTH paths — the seed must too.
+  // (Codex P2 #67541 r3096399082 / r3096435183)
+  try {
+    params.onAgentEvent?.({ stream: "plan", data: planEventData });
+  } catch (err) {
+    // Don't let a callback throw block the global emit.
+    logWarn(
+      `onAgentEvent callback threw during skill plan seed: ${(err as Error)?.message ?? err}`,
+    );
+  }
+
   emitAgentPlanEvent({
     runId: params.runId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    data: {
-      phase: "update",
-      title: `Plan seeded from skill "${skillName}"`,
-      explanation: payload.explanation,
-      steps: payload.plan.map((s) => s.step),
-      source: "skill_plan_template",
-    },
+    data: planEventData,
   });
 
   return {

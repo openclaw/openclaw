@@ -223,6 +223,66 @@ describe("applySkillPlanTemplateSeed", () => {
     expect(result).toBeNull();
   });
 
+  it("forwards seed event to onAgentEvent callback (Codex P2 r3096399082/r3096435183)", () => {
+    // Adversarial regression: callback-only consumers (e.g. auto-reply
+    // pipeline) need to see the seed event the same way they see other
+    // plan updates. Prior implementation only called global emitAgentPlanEvent.
+    resetAgentEventsForTest();
+    const callbackEvents: Array<{ stream: string; data: Record<string, unknown> }> = [];
+    const result = applySkillPlanTemplateSeed({
+      runId: "run-cb",
+      sessionKey: "session-cb",
+      entries: [
+        {
+          skill: { name: "release" },
+          metadata: { planTemplate: [{ step: "Tag" }] },
+        },
+      ] as Parameters<typeof applySkillPlanTemplateSeed>[0]["entries"],
+      onAgentEvent: (evt) => {
+        callbackEvents.push({ stream: evt.stream, data: evt.data as Record<string, unknown> });
+      },
+    });
+    expect(result).not.toBeNull();
+    expect(callbackEvents).toHaveLength(1);
+    expect(callbackEvents[0].stream).toBe("plan");
+    expect(callbackEvents[0].data).toMatchObject({
+      title: 'Plan seeded from skill "release"',
+      source: "skill_plan_template",
+    });
+  });
+
+  it("filters out ineligible skills before collision resolution (Codex P2 r3096399074)", () => {
+    // Adversarial regression: a disabled skill with a planTemplate would
+    // win the alpha-first collision and seed an unrelated plan even though
+    // the skill itself is excluded from the runtime prompt. The seeder now
+    // applies shouldIncludeSkill() filtering before resolving the winner.
+    resetAgentEventsForTest();
+    const result = applySkillPlanTemplateSeed({
+      runId: "run-filter",
+      entries: [
+        {
+          // Alphabetically first BUT disabled in config.
+          skill: { name: "alpha-disabled" },
+          metadata: { planTemplate: [{ step: "WrongPlan" }] },
+        },
+        {
+          skill: { name: "beta-active" },
+          metadata: { planTemplate: [{ step: "RightPlan" }] },
+        },
+      ] as Parameters<typeof applySkillPlanTemplateSeed>[0]["entries"],
+      config: {
+        skills: {
+          entries: {
+            "alpha-disabled": { enabled: false },
+          },
+        },
+      },
+    });
+    // beta-active should win because alpha-disabled was filtered out first.
+    expect(result).not.toBeNull();
+    expect(result!.skillName).toBe("beta-active");
+  });
+
   it("emits agent_plan_event and returns summary on successful seed", async () => {
     resetAgentEventsForTest();
     const { onAgentEvent, registerAgentRunContext } = await import("../../infra/agent-events.js");
