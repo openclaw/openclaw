@@ -1174,6 +1174,11 @@ export function classifyFailoverReason(
 ): FailoverReason | null {
   const trimmed = raw.trim();
   const leadingStatus = extractLeadingHttpStatus(trimmed);
+  const reasonFrom402Text =
+    leadingStatus?.code === 402 ? classifyFailoverReasonFrom402Text(trimmed) : null;
+  if (leadingStatus?.code === 402 && !reasonFrom402Text) {
+    return null;
+  }
   return failoverReasonFromClassification(
     classifyFailoverSignal({
       status: leadingStatus?.code,
