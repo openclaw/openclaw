@@ -1,3 +1,4 @@
+import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.agents.js";
@@ -19,6 +20,7 @@ function resolveNormalizedBindingMatch(binding: AgentRouteBinding): {
   accountId: string;
   channelId: string;
   peerId?: string;
+  peerKind?: ChatType;
 } | null {
   if (!binding || typeof binding !== "object") {
     return null;
@@ -36,11 +38,13 @@ function resolveNormalizedBindingMatch(binding: AgentRouteBinding): {
     return null;
   }
   const peerId = match.peer && typeof match.peer.id === "string" ? match.peer.id.trim() : undefined;
+  const peerKind = match.peer ? normalizeChatType(match.peer.kind) : undefined;
   return {
     agentId: normalizeAgentId(binding.agentId),
     accountId: normalizeAccountId(accountId),
     channelId,
     peerId: peerId || undefined,
+    peerKind: peerKind ?? undefined,
   };
 }
 
@@ -49,6 +53,7 @@ export function resolveFirstBoundAccountId(params: {
   channelId: string;
   agentId: string;
   peerId?: string;
+  peerKind?: ChatType;
 }): string | undefined {
   const normalizedChannel = normalizeBindingChannelId(params.channelId);
   if (!normalizedChannel) {
@@ -56,6 +61,7 @@ export function resolveFirstBoundAccountId(params: {
   }
   const normalizedAgentId = normalizeAgentId(params.agentId);
   const normalizedPeerId = params.peerId?.trim() || undefined;
+  const normalizedPeerKind = normalizeChatType(params.peerKind) ?? undefined;
   let wildcardPeerMatch: string | undefined;
   let channelOnlyFallback: string | undefined;
   let peerlessPeerSpecificFallback: string | undefined;
@@ -66,6 +72,13 @@ export function resolveFirstBoundAccountId(params: {
       resolved.channelId !== normalizedChannel ||
       resolved.agentId !== normalizedAgentId
     ) {
+      continue;
+    }
+    // When the caller knows the peer kind and the binding declares a peer kind,
+    // they must match — a direct/* binding must not win for a channel caller,
+    // and vice versa. If either side omits the kind, we do not filter on it
+    // (preserves backward-compat for peerless cron callers).
+    if (resolved.peerKind && normalizedPeerKind && resolved.peerKind !== normalizedPeerKind) {
       continue;
     }
     if (resolved.peerId === "*") {

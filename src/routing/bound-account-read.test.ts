@@ -147,4 +147,75 @@ describe("resolveFirstBoundAccountId", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("filters bindings by peer kind when caller supplies peerKind", () => {
+    const cfg = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "matrix",
+          peer: { kind: "direct", id: "*" },
+          accountId: "bot-alpha-dm",
+        },
+      },
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "matrix",
+          peer: { kind: "channel", id: "*" },
+          accountId: "bot-alpha-room",
+        },
+      },
+    ]);
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "matrix",
+        agentId: "bot-alpha",
+        peerId: "!room:example.org",
+        peerKind: "channel",
+      }),
+    ).toBe("bot-alpha-room");
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "matrix",
+        agentId: "bot-alpha",
+        peerId: "@user:example.org",
+        peerKind: "direct",
+      }),
+    ).toBe("bot-alpha-dm");
+  });
+
+  it("skips peer-specific bindings whose kind does not match the caller's peerKind", () => {
+    const cfg = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "matrix",
+          peer: { kind: "direct", id: "!room:example.org" },
+          accountId: "bot-alpha-wrong-kind",
+        },
+      },
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: { channel: "matrix", accountId: "bot-alpha-default" },
+      },
+    ]);
+    // Caller peerKind=channel: the direct-kind binding is ineligible even though
+    // its peerId would match — falls through to the channel-only binding.
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "matrix",
+        agentId: "bot-alpha",
+        peerId: "!room:example.org",
+        peerKind: "channel",
+      }),
+    ).toBe("bot-alpha-default");
+  });
 });
