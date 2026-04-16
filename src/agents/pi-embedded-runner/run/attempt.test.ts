@@ -789,6 +789,77 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     });
   });
 
+  it("replays representative claw-code tool-call samples through normalization", async () => {
+    const toolCalls = [
+      { type: "toolCall", name: "bash", arguments: { command: "pwd" } },
+      { type: "toolCall", name: "ReadFile", arguments: { path: "README.md" } },
+      { type: "toolCall", name: "ToolSearch", arguments: { query: "cron", max_results: 3 } },
+      { type: "toolCall", name: "TaskCreate", arguments: { prompt: "triage alerts" } },
+      { type: "toolCall", name: "TeamCreate", arguments: { name: "ops", tasks: [{ task_id: "task_1" }] } },
+      { type: "toolCall", name: "CronCreate", arguments: { schedule: "*/10 * * * *", prompt: "poll queue" } },
+      { type: "toolCall", name: "ListMcpResources", arguments: { server: "demo" } },
+      { type: "toolCall", name: "MCP", arguments: { server: "demo", tool: "echo", arguments: { text: "ok" } } },
+      { type: "toolCall", name: "LSP", arguments: { action: "symbols", query: "SessionStore" } },
+      { type: "toolCall", name: "LSP", arguments: { action: "diagnostics", path: "src/main.ts" } },
+      { type: "toolCall", name: "LSP", arguments: { action: "completion", path: "src/main.ts", line: 2, character: 5 } },
+      { type: "toolCall", name: "LSP", arguments: { action: "format", path: "src/main.ts" } },
+      { type: "toolCall", name: "Sleep", arguments: { duration_ms: 120 } },
+      { type: "toolCall", name: "SendUserMessage", arguments: { text: "done" } },
+    ];
+    const finalMessage = { role: "assistant", content: toolCalls };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const allowed = new Set([
+      "exec",
+      "read",
+      "tool_search",
+      "task",
+      "team",
+      "cron",
+      "mcp",
+      "lsp",
+      "sleep",
+      "send_user_message",
+    ]);
+    const stream = await invokeWrappedStream(baseFn, allowed);
+    await stream.result();
+
+    expect(toolCalls[0]).toMatchObject({ name: "exec" });
+    expect(toolCalls[1]).toMatchObject({ name: "read" });
+    expect(toolCalls[2]).toMatchObject({
+      name: "tool_search",
+      arguments: { query: "cron", max_results: 3 },
+    });
+    expect(toolCalls[3]).toMatchObject({
+      name: "task",
+      arguments: { action: "create", task: "triage alerts" },
+    });
+    expect(toolCalls[4]).toMatchObject({ name: "team" });
+    expect(toolCalls[5]).toMatchObject({
+      name: "cron",
+      arguments: {
+        action: "add",
+        schedule: { kind: "cron", expr: "*/10 * * * *" },
+      },
+    });
+    expect(toolCalls[6]).toMatchObject({ name: "mcp", arguments: { action: "list_resources" } });
+    expect(toolCalls[7]).toMatchObject({ name: "mcp" });
+    expect(toolCalls[8]).toMatchObject({ name: "lsp", arguments: { action: "symbols", query: "SessionStore" } });
+    expect(toolCalls[9]).toMatchObject({ name: "lsp", arguments: { action: "diagnostics", uri: "src/main.ts" } });
+    expect(toolCalls[10]).toMatchObject({
+      name: "lsp",
+      arguments: { action: "completion", uri: "src/main.ts", line: 2, character: 5 },
+    });
+    expect(toolCalls[11]).toMatchObject({ name: "lsp", arguments: { action: "format", uri: "src/main.ts" } });
+    expect(toolCalls[12]).toMatchObject({ name: "sleep", arguments: { ms: 120 } });
+    expect(toolCalls[13]).toMatchObject({ name: "send_user_message", arguments: { message: "done" } });
+  });
+
   it("maps provider-prefixed tool names to allowed canonical tools", async () => {
     const partialToolCall = { type: "toolCall", name: " functions.read " };
     const messageToolCall = { type: "toolCall", name: " functions.write " };
