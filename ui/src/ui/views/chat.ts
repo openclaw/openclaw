@@ -1813,8 +1813,9 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
             }
           } else if (b.type === "audio" || b.type === "video" || b.type === "image") {
             const url = typeof b.url === "string" ? b.url : undefined;
-            // If this media URL isn't already in the assistant message, it's unique
-            if (url && !assistantMediaUrls.has(url)) {
+            const hasInlinePayload = b.data !== undefined || b.payload !== undefined || b.base64 !== undefined;
+            // If this media URL isn't already in the assistant message, or it has inline payload, it's unique
+            if ((url && !assistantMediaUrls.has(url)) || hasInlinePayload) {
               hasUniqueContent = true;
               break;
             }
