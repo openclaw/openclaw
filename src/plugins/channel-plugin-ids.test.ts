@@ -260,16 +260,14 @@ function createStartupConfig(params: {
       : params.embeddedHarnessRuntime || params.agentEmbeddedHarnessRuntimes?.length
         ? {
             agents: {
-              defaults: {
-                ...(params.embeddedHarnessRuntime
-                  ? {
-                      embeddedHarness: {
-                        runtime: params.embeddedHarnessRuntime,
-                        fallback: "none",
-                      },
-                    }
-                  : {}),
-              },
+              defaults: params.embeddedHarnessRuntime
+                ? {
+                    embeddedHarness: {
+                      runtime: params.embeddedHarnessRuntime,
+                      fallback: "none",
+                    },
+                  }
+                : {},
               ...(params.agentEmbeddedHarnessRuntimes?.length
                 ? {
                     list: params.agentEmbeddedHarnessRuntimes.map((runtime, index) => ({
