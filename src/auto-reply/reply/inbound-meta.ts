@@ -46,7 +46,7 @@ function truncateUntrustedJsonString(value: string): string {
 
 function sanitizeUntrustedJsonValue(value: unknown): unknown {
   if (typeof value === "string") {
-    return neutralizeMarkdownFences(truncateUntrustedJsonString(value));
+    return neutralizeMarkdownFences(truncateUntrustedJsonString(stripNullBytes(value)));
   }
   if (Array.isArray(value)) {
     return value.map((entry) => sanitizeUntrustedJsonValue(entry));
