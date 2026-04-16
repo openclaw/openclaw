@@ -187,27 +187,34 @@ describe("buildReplyPayloads media filter integration", () => {
     await expectSameTargetRepliesSuppressed({ provider: "lark", to: "ou_abc123" });
   });
 
-  it("drops all final payloads when block pipeline streamed successfully", async () => {
+  it("drops only streamed payloads when block pipeline streamed successfully", async () => {
+    const streamedText = "already streamed";
+    const newText = "response";
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,
       isAborted: () => false,
-      hasSentPayload: () => false,
+      hasSentPayload: (payload) => payload.text === streamedText,
       enqueue: () => {},
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
     };
-    // shouldDropFinalPayloads short-circuits to [] when the pipeline streamed
-    // without aborting, so hasSentPayload is never reached.
+    // When the pipeline streamed successfully, only payloads that were
+    // actually sent via hasSentPayload are filtered out. New content
+    // generated after tool calls (never streamed) is preserved.
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       blockStreamingEnabled: true,
       blockReplyPipeline: pipeline,
       replyToMode: "all",
-      payloads: [{ text: "response", replyToId: "post-123" }],
+      payloads: [
+        { text: streamedText, replyToId: "post-123" },
+        { text: newText, replyToId: "post-456" },
+      ],
     });
 
-    expect(replyPayloads).toHaveLength(0);
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0].text).toBe(newText);
   });
 
   it("drops all final payloads during silent turns, including media-only payloads", async () => {
