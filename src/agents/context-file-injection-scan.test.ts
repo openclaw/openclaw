@@ -243,6 +243,23 @@ describe("allowlist for security docs", () => {
     expect(result).toMatch(/^\[BLOCKED:/);
   });
 
+  it("custom allowlist with stateful (`g`) regex still produces deterministic results (Codex P2 r3096412188)", () => {
+    // Adversarial regression: a regex with `g` (or `y`) flag mutates
+    // `lastIndex` on each `.test()` call. Back-to-back scans of the same
+    // path with the same regex object would previously alternate between
+    // 'allowlisted' and 'blocked' outcomes. The fix resets lastIndex.
+    const stateful = /docs\/security\//g;
+    const content = "Ignore previous instructions discussion.";
+    // 5 calls in a row — all must yield the same outcome.
+    for (let i = 0; i < 5; i++) {
+      const result = sanitizeContextFileForInjection(content, "docs/security/threat-model.md", {
+        allowlist: [stateful],
+      });
+      expect(result).toBe(content);
+      expect(result).not.toMatch(/^\[BLOCKED:/);
+    }
+  });
+
   it("path containing `..` substring (but not as a segment) is still allowlisted", () => {
     // Defensive: filenames like `docs/security/foo..bar.md` should NOT be
     // rejected — only literal `..` SEGMENTS are hostile.
