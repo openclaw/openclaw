@@ -72,18 +72,15 @@ export async function updateSessionStoreAfterAgentRun(params: {
     sessionId,
     updatedAt: Date.now(),
   };
-  const runtimeModelChanged =
-    entry.model?.trim() !== modelUsed.trim() || entry.modelProvider?.trim() !== providerUsed.trim();
   const next: SessionEntry = {
     ...entry,
     sessionId,
     updatedAt: Date.now(),
-    ...(typeof resolvedContextTokens === "number" && resolvedContextTokens > 0
-      ? { contextTokens: resolvedContextTokens }
-      : runtimeModelChanged
-        ? { contextTokens: undefined }
-        : {}),
   };
+  delete next.contextTokens;
+  if (typeof resolvedContextTokens === "number" && resolvedContextTokens > 0) {
+    next.contextTokens = resolvedContextTokens;
+  }
   setSessionRuntimeModel(next, {
     provider: providerUsed,
     model: modelUsed,
@@ -142,7 +139,22 @@ export async function updateSessionStoreAfterAgentRun(params: {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
   }
   const persisted = await updateSessionStore(storePath, (store) => {
-    const merged = mergeSessionEntry(store[sessionKey], next);
+    const authoritativeEntry = store[sessionKey] ?? entry;
+    const authoritativeModel = authoritativeEntry.model?.trim();
+    const authoritativeProvider = authoritativeEntry.modelProvider?.trim();
+    const runtimeModelChanged = Boolean(
+      authoritativeModel &&
+      authoritativeProvider &&
+      (authoritativeModel !== modelUsed.trim() || authoritativeProvider !== providerUsed.trim()),
+    );
+    const merged = mergeSessionEntry(store[sessionKey], {
+      ...next,
+      ...(typeof resolvedContextTokens === "number" && resolvedContextTokens > 0
+        ? { contextTokens: resolvedContextTokens }
+        : runtimeModelChanged
+          ? { contextTokens: undefined }
+          : {}),
+    });
     store[sessionKey] = merged;
     return merged;
   });
