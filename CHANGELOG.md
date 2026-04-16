@@ -23,8 +23,8 @@ Docs: https://docs.openclaw.ai
 - Agents/local models: clarify low-context preflight hints for self-hosted models, point config-backed caps at the relevant OpenClaw setting, and stop suggesting larger models when `agents.defaults.contextTokens` is the real limit. (#66236) Thanks @ImLukeF.
 - Dreaming/memory-core: change the default `dreaming.storage.mode` from `inline` to `separate` so Dreaming phase blocks (`## Light Sleep`, `## REM Sleep`) land in `memory/dreaming/{phase}/YYYY-MM-DD.md` instead of being injected into `memory/YYYY-MM-DD.md`. Daily memory files no longer get dominated by structured candidate output, and the daily-ingestion scanner that already strips dream marker blocks no longer has to compete with hundreds of phase-block lines on every run. Operators who want the previous behavior can opt in by setting `plugins.entries.memory-core.config.dreaming.storage.mode: "inline"`. (#66412) Thanks @mjamiv.
 - Control UI/Overview: fix false-positive "missing" alerts on the Model Auth status card for aliased providers, env-backed OAuth with auth.profiles, and unresolvable env SecretRefs. (#67253) Thanks @omarshahine.
-- Agents/CLI transcripts: persist successful CLI-backed turns into the OpenClaw session transcript so google-gemini-cli replies appear in session history and the Control UI again. (#67490) Thanks @obviyus.
 - Dashboard: constrain exec approval modal overflow on desktop so long command content no longer pushes action buttons out of view. (#67082) Thanks @Ziy1-Tan.
+- Agents/CLI transcripts: persist successful CLI-backed turns into the OpenClaw session transcript so google-gemini-cli replies appear in session history and the Control UI again. (#67490) Thanks @obviyus.
 
 ## 2026.4.15-beta.1
 
