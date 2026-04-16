@@ -1,3 +1,6 @@
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
@@ -123,6 +126,134 @@ function resolveCallbackTarget(event: FeishuCardActionEvent): string {
     return `chat:${chatId}`;
   }
   return `user:${event.operator.open_id}`;
+}
+
+function readTrimmedClarificationString(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return "";
+}
+
+function parseVincentClarificationActionValue(text: string): Record<string, unknown> | null {
+  if (!text.trim()) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed.kind === "vincent-clarification" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveVincentClarificationWritebackPaths(batchPathRaw: unknown): {
+  repoRoot: string;
+  writerScriptPath: string;
+  applyScriptPath: string;
+  batchPath: string;
+} | null {
+  const batchPath = readTrimmedClarificationString(batchPathRaw);
+  if (!batchPath) {
+    return null;
+  }
+
+  let probeDir = path.dirname(path.resolve(batchPath));
+  while (true) {
+    const writerScriptPath = path.join(
+      probeDir,
+      "AI-Org-OS",
+      "scripts",
+      "write_vincent_clarification_return.py",
+    );
+    const applyScriptPath = path.join(
+      probeDir,
+      "AI-Org-OS",
+      "scripts",
+      "apply_vincent_decision_writeback.py",
+    );
+    if (fs.existsSync(writerScriptPath) && fs.existsSync(applyScriptPath)) {
+      return {
+        repoRoot: probeDir,
+        writerScriptPath,
+        applyScriptPath,
+        batchPath,
+      };
+    }
+    const parent = path.dirname(probeDir);
+    if (parent === probeDir) {
+      return null;
+    }
+    probeDir = parent;
+  }
+}
+
+function applyVincentClarificationAction(actionValue: Record<string, unknown>): {
+  selectedOption: string;
+  reviewRef: string;
+  detail: string;
+  paths: {
+    repoRoot: string;
+    writerScriptPath: string;
+    applyScriptPath: string;
+    batchPath: string;
+  };
+} {
+  const selectedOption = readTrimmedClarificationString(actionValue.selected_option).toUpperCase();
+  const reviewRef = readTrimmedClarificationString(actionValue.review_ref);
+  const itemIndex = readTrimmedClarificationString(actionValue.item_index);
+  if (!selectedOption || !reviewRef) {
+    throw new Error("missing clarification callback payload");
+  }
+
+  const paths = resolveVincentClarificationWritebackPaths(actionValue.batch_path);
+  if (!paths) {
+    throw new Error("unable to resolve Vincent clarification writeback paths");
+  }
+
+  const args = [
+    paths.writerScriptPath,
+    "--repo-root",
+    paths.repoRoot,
+    "--batch-path",
+    paths.batchPath,
+    ...(itemIndex ? ["--item-index", itemIndex] : []),
+    "--review-ref",
+    reviewRef,
+    "--selected-option",
+    selectedOption,
+    "--resolved-at",
+    new Date().toISOString(),
+    "--response-channel",
+    "feishu:mira",
+    "--write",
+    "--apply",
+  ];
+  const result = spawnSync("python3", args, {
+    encoding: "utf-8",
+  });
+  if (result.error) {
+    throw new Error(`failed to execute clarification writer: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    const detail = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+    throw new Error(
+      detail || `clarification writeback failed with status ${String(result.status)}`,
+    );
+  }
+
+  return {
+    selectedOption,
+    reviewRef,
+    detail: result.stdout.trim(),
+    paths,
+  };
 }
 
 async function dispatchSyntheticCommand(params: {
@@ -293,6 +424,26 @@ export async function handleFeishuCardAction(params: {
     log(
       `feishu[${account.accountId}]: handling card action from ${event.operator.open_id}: ${content}`,
     );
+
+    const vincentClarificationAction = parseVincentClarificationActionValue(content);
+    if (vincentClarificationAction) {
+      try {
+        const writeback = applyVincentClarificationAction(vincentClarificationAction);
+        log(
+          `feishu[${account.accountId}]: applied vincent clarification option ${writeback.selectedOption} for ${writeback.reviewRef}`,
+        );
+        completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+        return;
+      } catch (err) {
+        await sendMessageFeishu({
+          cfg,
+          to: resolveCallbackTarget(event),
+          text: "Confirmation received, but writeback failed. Please contact the maintainer.",
+          accountId,
+        });
+        throw err;
+      }
+    }
 
     await dispatchSyntheticCommand({
       cfg,

@@ -1,6 +1,32 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+
+const { existsSyncMock, spawnSyncMock } = vi.hoisted(() => ({
+  existsSyncMock: vi.fn(),
+  spawnSyncMock: vi.fn(),
+}));
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      existsSync: existsSyncMock,
+    },
+    existsSync: existsSyncMock,
+  };
+});
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    spawnSync: spawnSyncMock,
+  };
+});
+
 import {
   handleFeishuCardAction,
   resetProcessedFeishuCardActionTokensForTests,
@@ -89,6 +115,8 @@ describe("Feishu Card Action Handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetProcessedFeishuCardActionTokensForTests();
+    existsSyncMock.mockReturnValue(false);
+    spawnSyncMock.mockReset();
   });
 
   it("handles card action with text payload", async () => {
@@ -133,6 +161,102 @@ describe("Feishu Card Action Handler", () => {
         }),
       }),
     );
+  });
+
+  it("applies Vincent clarification callbacks directly without routing through chat fallback", async () => {
+    const repoRoot = "/tmp/vincent-os";
+    existsSyncMock.mockImplementation(
+      (candidate: unknown) =>
+        typeof candidate === "string" &&
+        (candidate === `${repoRoot}/AI-Org-OS/scripts/write_vincent_clarification_return.py` ||
+          candidate === `${repoRoot}/AI-Org-OS/scripts/apply_vincent_decision_writeback.py`),
+    );
+    spawnSyncMock.mockReturnValue({
+      status: 0,
+      stdout: "writeback ok\n",
+      stderr: "",
+    });
+    const runtime = createRuntimeEnv();
+    const batchPath =
+      "/tmp/vincent-os/AI-Org-OS/tasks/escalations/vincent-decisions/VINCENT-CLARIFICATION-BATCH.md";
+    const reviewRef =
+      "/tmp/vincent-os/AI-Org-OS/tasks/escalations/vincent-decisions/test-artifacts/AMBIGUITY-REVIEW.md";
+    const event = createCardActionEvent({
+      token: "tok-vc-1",
+      actionValue: {
+        kind: "vincent-clarification",
+        batch_path: batchPath,
+        review_ref: reviewRef,
+        selected_option: "A",
+      },
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      "python3",
+      expect.arrayContaining([
+        "/tmp/vincent-os/AI-Org-OS/scripts/write_vincent_clarification_return.py",
+        "--repo-root",
+        repoRoot,
+        "--batch-path",
+        batchPath,
+        "--review-ref",
+        reviewRef,
+        "--selected-option",
+        "A",
+        "--response-channel",
+        "feishu:mira",
+        "--write",
+        "--apply",
+      ]),
+      { encoding: "utf-8" },
+    );
+    const args = (spawnSyncMock.mock.calls as unknown[][]).at(0)?.[1] as string[] | undefined;
+    expect(args).toBeDefined();
+    expect(args).not.toContain("--item-index");
+    expect(handleFeishuMessage).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("applied vincent clarification option A"),
+    );
+  });
+
+  it("notifies the callback target when Vincent clarification writeback fails", async () => {
+    const repoRoot = "/tmp/vincent-os";
+    existsSyncMock.mockImplementation(
+      (candidate: unknown) =>
+        typeof candidate === "string" &&
+        (candidate === `${repoRoot}/AI-Org-OS/scripts/write_vincent_clarification_return.py` ||
+          candidate === `${repoRoot}/AI-Org-OS/scripts/apply_vincent_decision_writeback.py`),
+    );
+    spawnSyncMock.mockReturnValue({
+      status: 1,
+      stdout: "",
+      stderr: "boom",
+    });
+    const runtime = createRuntimeEnv();
+    const event = createCardActionEvent({
+      token: "tok-vc-2",
+      actionValue: {
+        kind: "vincent-clarification",
+        batch_path:
+          "/tmp/vincent-os/AI-Org-OS/tasks/escalations/vincent-decisions/VINCENT-CLARIFICATION-BATCH.md",
+        review_ref:
+          "/tmp/vincent-os/AI-Org-OS/tasks/escalations/vincent-decisions/test-artifacts/AMBIGUITY-REVIEW.md",
+        selected_option: "B",
+      },
+    });
+
+    await expect(handleFeishuCardAction({ cfg, event, runtime })).rejects.toThrow("boom");
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat:chat1",
+        text: "Confirmation received, but writeback failed. Please contact the maintainer.",
+      }),
+    );
+    expect(handleFeishuMessage).not.toHaveBeenCalled();
   });
 
   it("routes quick command actions with operator and conversation context", async () => {
