@@ -244,7 +244,7 @@ beforeEach(() => {
           "workspace-write",
           "--skip-git-repo-check",
         ],
-        resumeArgs: ["exec", "resume", "{sessionId}", "--dangerously-bypass-approvals-and-sandbox"],
+        resumeArgs: ["exec", "resume", "{sessionId}", "--skip-git-repo-check"],
         systemPromptFileConfigArg: "-c",
         systemPromptFileConfigKey: "model_instructions_file",
         systemPromptWhen: "first",
@@ -309,7 +309,7 @@ beforeEach(() => {
 });
 
 describe("resolveCliBackendConfig reliability merge", () => {
-  it("defaults codex-cli to workspace-write for fresh and resume runs", () => {
+  it("defaults codex-cli fresh sandboxing and resume trust bypass for non-git runs", () => {
     const resolved = resolveCliBackendConfig("codex-cli");
 
     expect(resolved).not.toBeNull();
@@ -326,7 +326,7 @@ describe("resolveCliBackendConfig reliability merge", () => {
       "exec",
       "resume",
       "{sessionId}",
-      "--dangerously-bypass-approvals-and-sandbox",
+      "--skip-git-repo-check",
     ]);
   });
 
