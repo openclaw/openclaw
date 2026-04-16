@@ -143,4 +143,25 @@ describe("PlanStore", () => {
       expect(merged.map((s) => s.step)).toEqual(["A", "B", "C"]);
     });
   });
+
+  describe("confine() — parent-symlink redirection (Codex P1 r3095586226)", () => {
+    it("rejects a namespace directory that is a symlink pointing outside baseDir", async () => {
+      // Create an attacker-controlled directory outside baseDir.
+      const attackerDir = await fs.mkdtemp(path.join(os.tmpdir(), "plan-store-attacker-"));
+      try {
+        // Symlink <baseDir>/hostile -> <attackerDir>
+        const symlinkTarget = path.join(tmpDir, "hostile");
+        await fs.symlink(attackerDir, symlinkTarget);
+        // read() / write() must throw with a 'parent symlink' confinement error.
+        await expect(
+          store.write("hostile", { steps: [{ step: "x", status: "pending" }] }),
+        ).rejects.toThrow(/escapes base directory/);
+        // Also verify nothing was written into the attacker directory.
+        const filesInAttacker = await fs.readdir(attackerDir);
+        expect(filesInAttacker).toHaveLength(0);
+      } finally {
+        await fs.rm(attackerDir, { recursive: true, force: true });
+      }
+    });
+  });
 });
