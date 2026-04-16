@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveInboundDebounceMs } from "./inbound-debounce.js";
+import type { InboundDebounceConfig } from "../config/types.messages.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveInboundDebounceMs } from "./inbound-debounce.js";
 
-const cfg = (inbound: OpenClawConfig["messages"] = undefined): OpenClawConfig =>
+const cfg = (inbound?: InboundDebounceConfig): OpenClawConfig =>
   ({ messages: { inbound } } as unknown as OpenClawConfig);
 
 describe("resolveInboundDebounceMs", () => {
