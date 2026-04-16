@@ -1,9 +1,5 @@
-export type {
-  PlanMode,
-  PlanApprovalState,
-  PlanModeSessionState,
-} from "./types.js";
-export { DEFAULT_PLAN_MODE_STATE, buildPlanDecisionInjection } from "./types.js";
+export type { PlanMode, PlanApprovalState, PlanModeSessionState } from "./types.js";
+export { DEFAULT_PLAN_MODE_STATE, buildPlanDecisionInjection, newPlanApprovalId } from "./types.js";
 export { checkMutationGate, type MutationGateResult } from "./mutation-gate.js";
 export {
   resolvePlanApproval,

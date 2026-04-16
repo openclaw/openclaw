@@ -150,7 +150,7 @@ export const PLANNING_ONLY_RETRY_INSTRUCTION =
 export const PLANNING_ONLY_RETRY_INSTRUCTION_FIRM =
   "CRITICAL: You have described the plan multiple times without acting. You MUST call a tool in this turn. No more planning or narration. If a real blocker prevents action, state the exact blocker in one sentence. Otherwise, call the first tool NOW.";
 export const PLANNING_ONLY_RETRY_INSTRUCTION_FINAL =
-  "FINAL WARNING: You have described the plan without executing it. Call a tool immediately or this task will be cancelled. No planning. No restating. Execute the first step right now.";
+  "Final reminder: this is the third planning-only turn. Please call a tool now to make progress. If a real blocker prevents action, state the exact blocker in one sentence so the user can unblock you.";
 export const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 export const EMPTY_RESPONSE_RETRY_INSTRUCTION =
@@ -357,6 +357,8 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
+  /** When true, planning-only is the desired state — skip retry pressure. */
+  planModeActive?: boolean;
 }): string | null {
   if (shouldSkipPlanningOnlyRetry(params)) {
     return null;
@@ -367,6 +369,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
       provider: params.provider,
       modelId: params.modelId,
       executionContract: params.executionContract,
+      planModeActive: params.planModeActive,
     })
   ) {
     return null;
@@ -394,6 +397,8 @@ export function resolveEmptyResponseRetryInstruction(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
+  /** When true, planning-only is the desired state — skip retry pressure. */
+  planModeActive?: boolean;
 }): string | null {
   if (shouldSkipPlanningOnlyRetry(params)) {
     return null;
@@ -404,6 +409,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
       provider: params.provider,
       modelId: params.modelId,
       executionContract: params.executionContract,
+      planModeActive: params.planModeActive,
     })
   ) {
     return null;
@@ -425,7 +431,16 @@ function shouldApplyPlanningOnlyRetryGuard(params: {
   provider?: string;
   modelId?: string;
   executionContract?: string;
+  /**
+   * When plan mode is active, planning-only IS the correct state — the agent
+   * is supposed to produce a plan and call exit_plan_mode for review. Do not
+   * apply the act-now retry pressure in that case.
+   */
+  planModeActive?: boolean;
 }): boolean {
+  if (params.planModeActive) {
+    return false;
+  }
   if (params.executionContract === "strict-agentic") {
     return true;
   }
@@ -488,11 +503,14 @@ export function resolveAckExecutionFastPathInstruction(params: {
   provider?: string;
   modelId?: string;
   prompt: string;
+  /** Plan mode disables ack fast-path: a "do it" reply is the approval signal, not a planning skip. */
+  planModeActive?: boolean;
 }): string | null {
   if (
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      planModeActive: params.planModeActive,
     }) ||
     !isLikelyExecutionAckPrompt(params.prompt)
   ) {
@@ -624,6 +642,12 @@ export function resolvePlanningOnlyRetryInstruction(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: PlanningOnlyAttempt;
+  /**
+   * When plan mode is active, planning IS the desired state — return null
+   * to skip the act-now retry pressure. The agent should produce a thorough
+   * plan and call exit_plan_mode for approval.
+   */
+  planModeActive?: boolean;
 }): string | null {
   const planOnlyToolMetaCount = countPlanOnlyToolMetas(params.attempt.toolMetas);
   const singleActionNarrative = isSingleActionThenNarrativePattern({
@@ -637,6 +661,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
       provider: params.provider,
       modelId: params.modelId,
       executionContract: params.executionContract,
+      planModeActive: params.planModeActive,
     }) ||
     (typeof params.prompt === "string" && !isLikelyActionableUserPrompt(params.prompt)) ||
     params.aborted ||

@@ -143,3 +143,58 @@ describe("buildPlanDecisionInjection", () => {
     expect(result).toContain("re-propose");
   });
 });
+
+describe("approvalId stale-event guard (#67538b)", () => {
+  const stateWithToken: PlanModeSessionState = {
+    ...BASE_STATE,
+    approvalId: "plan-current-token",
+  };
+
+  it("approve with matching approvalId proceeds", () => {
+    const result = resolvePlanApproval(stateWithToken, "approve", undefined, "plan-current-token");
+    expect(result.approval).toBe("approved");
+  });
+
+  it("approve with mismatched approvalId is no-op (stale event)", () => {
+    const result = resolvePlanApproval(stateWithToken, "approve", undefined, "plan-stale-token");
+    expect(result.approval).toBe("pending"); // unchanged
+  });
+
+  it("reject with mismatched approvalId is no-op", () => {
+    const result = resolvePlanApproval(stateWithToken, "reject", "feedback", "plan-stale-token");
+    expect(result.approval).toBe("pending"); // unchanged
+    expect(result.rejectionCount).toBe(0); // not incremented
+  });
+
+  it("approve with no expectedApprovalId skips stale guard (backwards compat)", () => {
+    const result = resolvePlanApproval(stateWithToken, "approve");
+    expect(result.approval).toBe("approved");
+  });
+});
+
+describe("rejectionCount reset on approve/edit (#67538b)", () => {
+  const stateWithRejections: PlanModeSessionState = {
+    ...BASE_STATE,
+    rejectionCount: 3,
+  };
+
+  it("approve resets rejectionCount to 0", () => {
+    const result = resolvePlanApproval(stateWithRejections, "approve");
+    expect(result.rejectionCount).toBe(0);
+  });
+
+  it("edit resets rejectionCount to 0", () => {
+    const result = resolvePlanApproval(stateWithRejections, "edit");
+    expect(result.rejectionCount).toBe(0);
+  });
+
+  it("reject does NOT reset (continues counting)", () => {
+    const result = resolvePlanApproval(stateWithRejections, "reject", "again");
+    expect(result.rejectionCount).toBe(4);
+  });
+
+  it("timeout does NOT reset (separate concern)", () => {
+    const result = resolvePlanApproval(stateWithRejections, "timeout");
+    expect(result.rejectionCount).toBe(3);
+  });
+});

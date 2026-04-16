@@ -48,6 +48,14 @@ export interface PlanModeSessionState {
   feedback?: string;
   /** Number of times the plan has been rejected in this session. */
   rejectionCount: number;
+  /**
+   * Version token regenerated on every exit_plan_mode call. Approval reply
+   * dispatchers compare incoming approvalId against current state — stale
+   * approvals (e.g. user clicks Approve on a plan that was already rejected
+   * and revised in a different surface) are ignored, preventing
+   * rejected → approved flips on a stale event.
+   */
+  approvalId?: string;
 }
 
 export const DEFAULT_PLAN_MODE_STATE: PlanModeSessionState = {
@@ -55,6 +63,14 @@ export const DEFAULT_PLAN_MODE_STATE: PlanModeSessionState = {
   approval: "none",
   rejectionCount: 0,
 };
+
+/**
+ * Generates a fresh approvalId. Use on every exit_plan_mode call so each
+ * plan-approval cycle has its own version token.
+ */
+export function newPlanApprovalId(): string {
+  return `plan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 /**
  * Builds the structured context injection for a plan decision.
@@ -66,10 +82,7 @@ export function buildPlanDecisionInjection(
   feedback?: string,
   rejectionCount?: number,
 ): string {
-  const lines = [
-    "[PLAN_DECISION]",
-    `decision: ${decision}`,
-  ];
+  const lines = ["[PLAN_DECISION]", `decision: ${decision}`];
   if (feedback) {
     lines.push(`feedback: ${JSON.stringify(feedback)}`);
   }
