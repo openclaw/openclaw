@@ -1,3 +1,5 @@
+import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+
 /**
  * Scans context file content for prompt injection patterns.
  *
@@ -102,6 +104,8 @@ export function sanitizeContextFileForInjection(
     return content;
   }
   // Sanitize filename to prevent injection via crafted file paths.
-  const safeFilename = filename.replace(/[[\]\n\r]/g, "_");
+  // Use sanitizeForPromptLiteral to strip all Cc/Cf/Zl/Zp chars (bidi overrides,
+  // zero-width chars, etc.), not just brackets/newlines.
+  const safeFilename = sanitizeForPromptLiteral(filename).replace(/[[\]]/g, "_");
   return `[BLOCKED: ${safeFilename} contained potential prompt injection (${findings.join(", ")}). Content not loaded.]`;
 }
