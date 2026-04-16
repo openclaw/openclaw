@@ -1,5 +1,11 @@
+import { render } from "lit";
 import { describe, expect, it } from "vitest";
-import { resolveCurrentMode, handleModeShortcut, MODE_DEFINITIONS } from "./mode-switcher.js";
+import {
+  handleModeShortcut,
+  MODE_DEFINITIONS,
+  renderModeSwitcher,
+  resolveCurrentMode,
+} from "./mode-switcher.js";
 
 describe("resolveCurrentMode", () => {
   it("returns Ask permissions for allowlist + on-miss", () => {
@@ -245,5 +251,95 @@ describe("focus guard (input/textarea/contenteditable)", () => {
     } finally {
       outerHost.remove();
     }
+  });
+});
+
+describe("renderModeSwitcher (jsdom render — Copilot r3095798778)", () => {
+  function renderToHost(params: Parameters<typeof renderModeSwitcher>[0]): HTMLElement {
+    const host = document.createElement("div");
+    render(renderModeSwitcher(params), host);
+    return host;
+  }
+
+  it("renders a chip button with the current mode's short label", () => {
+    const ask = MODE_DEFINITIONS.find((m) => m.id === "ask")!;
+    const host = renderToHost({
+      currentMode: ask,
+      menuOpen: false,
+      onToggleMenu: () => {},
+      onSelectMode: () => {},
+    });
+    const chip = host.querySelector("button.agent-chat__mode-chip");
+    expect(chip).not.toBeNull();
+    expect(chip?.textContent).toContain("Ask");
+    expect(chip?.getAttribute("aria-haspopup")).toBe("menu");
+    expect(chip?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("toggles aria-expanded when menuOpen=true", () => {
+    const ask = MODE_DEFINITIONS.find((m) => m.id === "ask")!;
+    const host = renderToHost({
+      currentMode: ask,
+      menuOpen: true,
+      onToggleMenu: () => {},
+      onSelectMode: () => {},
+    });
+    expect(host.querySelector("button.agent-chat__mode-chip")?.getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+    // Menu container is rendered when open.
+    const menu = host.querySelector(".agent-chat__mode-menu");
+    expect(menu).not.toBeNull();
+    expect(menu?.getAttribute("role")).toBe("menu");
+  });
+
+  it("renders one menuitem per MODE_DEFINITIONS entry when menu is open", () => {
+    const ask = MODE_DEFINITIONS.find((m) => m.id === "ask")!;
+    const host = renderToHost({
+      currentMode: ask,
+      menuOpen: true,
+      onToggleMenu: () => {},
+      onSelectMode: () => {},
+    });
+    const items = host.querySelectorAll(".agent-chat__mode-menu__item");
+    expect(items).toHaveLength(MODE_DEFINITIONS.length);
+    // Active item gets the active class.
+    const labels = Array.from(items).map(
+      (el) => el.querySelector(".agent-chat__mode-menu__label")?.textContent,
+    );
+    expect(labels).toContain("Ask permissions");
+    const activeItems = host.querySelectorAll(".agent-chat__mode-menu__item--active");
+    expect(activeItems).toHaveLength(1);
+    expect(activeItems[0].textContent).toContain("Ask permissions");
+  });
+
+  it("does NOT render the menu container when menuOpen=false", () => {
+    const ask = MODE_DEFINITIONS.find((m) => m.id === "ask")!;
+    const host = renderToHost({
+      currentMode: ask,
+      menuOpen: false,
+      onToggleMenu: () => {},
+      onSelectMode: () => {},
+    });
+    expect(host.querySelector(".agent-chat__mode-menu")).toBeNull();
+  });
+
+  it("invokes onSelectMode with the chosen mode definition", () => {
+    const ask = MODE_DEFINITIONS.find((m) => m.id === "ask")!;
+    let chosen: { id: string } | null = null;
+    const host = renderToHost({
+      currentMode: ask,
+      menuOpen: true,
+      onToggleMenu: () => {},
+      onSelectMode: (m) => {
+        chosen = { id: m.id };
+      },
+    });
+    const items = host.querySelectorAll<HTMLButtonElement>(".agent-chat__mode-menu__item");
+    const planItem = Array.from(items).find((el) => el.textContent?.includes("Plan mode"));
+    expect(planItem).toBeDefined();
+    planItem!.click();
+    expect(chosen).not.toBeNull();
+    expect(chosen!.id).toBe("plan");
   });
 });

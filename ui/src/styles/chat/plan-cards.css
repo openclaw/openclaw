@@ -25,6 +25,12 @@
 .chat-plan-card summary::-webkit-details-marker {
   display: none;
 }
+/* Firefox uses ::marker (not ::-webkit-details-marker). Without this,
+   Firefox renders the native disclosure triangle ALONGSIDE the custom
+   chevron we draw in the markup. Codex P2 #67721 r3095798696. */
+.chat-plan-card summary::marker {
+  content: "";
+}
 
 .chat-plan-card summary:hover {
   background: var(--bg-hover, rgba(255, 255, 255, 0.04));
