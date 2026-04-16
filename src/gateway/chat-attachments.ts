@@ -257,6 +257,11 @@ export async function parseMessageWithAttachments(
       const providedMime = normalizeMime(mime);
       const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
       const labelMime = normalizeMime(mimeTypeFromFilePath(label));
+
+      // Prefer specific MIME signals over generic container types. OOXML
+      // documents (docx/xlsx/pptx) sniff as application/zip; without this
+      // priority the agent would receive a `.zip` instead of the specific
+      // Office document the caller declared.
       const finalMime =
         (sniffedMime && !isGenericContainerMime(sniffedMime) && sniffedMime) ||
         (providedMime && !isGenericContainerMime(providedMime) && providedMime) ||

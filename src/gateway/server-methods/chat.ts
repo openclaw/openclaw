@@ -15,6 +15,7 @@ import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -51,18 +52,18 @@ import {
 } from "../chat-abort.js";
 import {
   type ChatImageContent,
+  MediaOffloadError,
   type OffloadedRef,
   parseMessageWithAttachments,
   resolveChatAttachmentMaxBytes,
 } from "../chat-attachments.js";
-import { MediaOffloadError } from "../chat-attachments.js";
 import {
   isToolHistoryBlockType,
   projectChatDisplayMessage,
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
-import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
+import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
@@ -771,10 +772,19 @@ function buildChatSendTranscriptMessage(params: {
 }
 
 // Stages non-image offloads into the agent sandbox synchronously so chat.send
-// can surface 5xx before respond(). Throws MediaOffloadError on partial-stage
-// instead of silently losing files (channel path is best-effort; chat.send is
-// strong-delivery RPC). Callers MUST set ctx.MediaStaged=true when this runs
-// so the dispatch pipeline skips its own stageSandboxMedia pass.
+// can surface 5xx before respond(). Throws MediaOffloadError on any staging
+// failure (ENOSPC / EPERM / partial-stage) so the outer chat.send handler can
+// map it to UNAVAILABLE (5xx); plain Error would be misclassified as 4xx. All
+// offloaded refs are cleaned up from the media store before rethrow.
+// Callers MUST set ctx.MediaStaged=true when this runs so the dispatch
+// pipeline skips its own stageSandboxMedia pass.
+//
+// Returned paths are ABSOLUTE (pointing into the sandbox workspace when sandbox
+// is enabled, or the media-store origin when it is not). applyMediaUnderstanding
+// runs before any further staging in get-reply.ts and uses
+// `path.isAbsolute(raw) ? raw : path.resolve(raw)` against the gateway CWD, so
+// any relative path here would make media-understanding target the wrong host
+// path and silently skip file analysis.
 async function prestageNonImageOffloads(params: {
   offloadedRefs: OffloadedRef[];
   cfg: OpenClawConfig;
@@ -786,46 +796,58 @@ async function prestageNonImageOffloads(params: {
     return { paths: [], types: [] };
   }
 
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  const sandbox = await ensureSandboxWorkspaceForSession({
-    config: params.cfg,
-    sessionKey: params.sessionKey,
-    workspaceDir,
-  });
-  if (!sandbox) {
-    return {
-      paths: nonImage.map((ref) => ref.path),
-      types: nonImage.map((ref) => ref.mimeType),
+  try {
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    const sandbox = await ensureSandboxWorkspaceForSession({
+      config: params.cfg,
+      sessionKey: params.sessionKey,
+      workspaceDir,
+    });
+    if (!sandbox) {
+      return {
+        paths: nonImage.map((ref) => ref.path),
+        types: nonImage.map((ref) => ref.mimeType),
+      };
+    }
+
+    const stagingCtx: MsgContext = {
+      MediaPath: nonImage[0].path,
+      MediaPaths: nonImage.map((ref) => ref.path),
+      MediaType: nonImage[0].mimeType,
+      MediaTypes: nonImage.map((ref) => ref.mimeType),
     };
-  }
+    await stageSandboxMedia({
+      ctx: stagingCtx,
+      sessionCtx: stagingCtx as TemplateContext,
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      workspaceDir,
+    });
 
-  const stagingCtx: MsgContext = {
-    MediaPath: nonImage[0].path,
-    MediaPaths: nonImage.map((ref) => ref.path),
-    MediaType: nonImage[0].mimeType,
-    MediaTypes: nonImage.map((ref) => ref.mimeType),
-  };
-  await stageSandboxMedia({
-    ctx: stagingCtx,
-    sessionCtx: stagingCtx as TemplateContext,
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    workspaceDir,
-  });
+    const stagedPaths = stagingCtx.MediaPaths ?? [];
+    const stagedTypes = stagingCtx.MediaTypes ?? nonImage.map((ref) => ref.mimeType);
+    if (stagedPaths.length !== nonImage.length) {
+      throw new Error(
+        `non-image attachment staging incomplete: ${stagedPaths.length}/${nonImage.length} paths staged into sandbox workspace`,
+      );
+    }
 
-  const stagedPaths = stagingCtx.MediaPaths ?? [];
-  const stagedTypes = stagingCtx.MediaTypes ?? nonImage.map((ref) => ref.mimeType);
-  const allRewritten =
-    stagedPaths.length === nonImage.length && stagedPaths.every((p) => !path.isAbsolute(p));
-  if (!allRewritten) {
+    const absolutePaths = stagedPaths.map((p) =>
+      path.isAbsolute(p) ? p : path.join(sandbox.workspaceDir, p),
+    );
+    return { paths: absolutePaths, types: stagedTypes, workspaceDir: sandbox.workspaceDir };
+  } catch (err) {
     await Promise.allSettled(
       params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
     );
+    if (err instanceof MediaOffloadError) {
+      throw err;
+    }
     throw new MediaOffloadError(
-      `non-image attachment staging incomplete: ${stagedPaths.length}/${nonImage.length} paths rewritten into sandbox workspace`,
+      `[Gateway Error] Failed to stage non-image attachments into agent workspace: ${formatErrorMessage(err)}`,
+      { cause: err },
     );
   }
-  return { paths: stagedPaths, types: stagedTypes, workspaceDir: sandbox.workspaceDir };
 }
 
 function resolveChatSendTranscriptMediaFields(savedImages: SavedMedia[]) {

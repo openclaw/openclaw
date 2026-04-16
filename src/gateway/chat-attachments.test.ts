@@ -18,10 +18,14 @@ vi.mock("../media/store.js", async (importOriginal) => {
     deleteMediaBuffer: deleteMediaBufferMock,
   };
 });
+
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildMessageWithAttachments,
   type ChatAttachment,
+  DEFAULT_CHAT_ATTACHMENT_MAX_MB,
   parseMessageWithAttachments,
+  resolveChatAttachmentMaxBytes,
   UnsupportedAttachmentError,
 } from "./chat-attachments.js";
 
@@ -407,6 +411,32 @@ describe("parseMessageWithAttachments validation errors", () => {
       expect(logs.some((line) => /offload limit 10/i.test(line))).toBe(true);
     } finally {
       await cleanupOffloadedRefs(parsed.offloadedRefs);
+    }
+  });
+});
+
+describe("resolveChatAttachmentMaxBytes", () => {
+  const MB = 1024 * 1024;
+  const DEFAULT_BYTES = DEFAULT_CHAT_ATTACHMENT_MAX_MB * MB;
+
+  const cfgWithMediaMaxMb = (value: unknown): OpenClawConfig =>
+    ({ agents: { defaults: { mediaMaxMb: value } } }) as unknown as OpenClawConfig;
+
+  it("honours a configured agents.defaults.mediaMaxMb", () => {
+    expect(resolveChatAttachmentMaxBytes(cfgWithMediaMaxMb(10))).toBe(10 * MB);
+    expect(resolveChatAttachmentMaxBytes(cfgWithMediaMaxMb(50))).toBe(50 * MB);
+  });
+
+  it("falls back to DEFAULT_CHAT_ATTACHMENT_MAX_MB when unset", () => {
+    expect(resolveChatAttachmentMaxBytes({} as OpenClawConfig)).toBe(DEFAULT_BYTES);
+    expect(resolveChatAttachmentMaxBytes({ agents: {} } as unknown as OpenClawConfig)).toBe(
+      DEFAULT_BYTES,
+    );
+  });
+
+  it("rejects non-positive, non-finite, or non-number values", () => {
+    for (const bad of [0, -5, Number.NaN, Number.POSITIVE_INFINITY, "50", null, undefined]) {
+      expect(resolveChatAttachmentMaxBytes(cfgWithMediaMaxMb(bad))).toBe(DEFAULT_BYTES);
     }
   });
 });
