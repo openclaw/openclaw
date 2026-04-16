@@ -498,6 +498,22 @@ async function runBlueBubblesCatchupInner(
       continue;
     }
 
+    // Skip balloon/tapback/reaction events: they carry an
+    // `associatedMessageGuid` pointing at the parent text message and
+    // have a different `guid` of their own. The live webhook path handles
+    // them via the debouncer, which coalesces balloons with their parent.
+    // Without debouncing here, replaying a balloon would dispatch it as a
+    // standalone message — producing a duplicate reply to the parent.
+    const assocGuid =
+      typeof rec.associatedMessageGuid === "string"
+        ? rec.associatedMessageGuid.trim()
+        : typeof rec.associated_message_guid === "string"
+          ? rec.associated_message_guid.trim()
+          : "";
+    if (assocGuid) {
+      continue;
+    }
+
     const normalized = normalizeWebhookMessage({ type: "new-message", data: rec });
     if (!normalized) {
       summary.failed++;
