@@ -61,22 +61,22 @@ fn get_openclaw_command() -> (String, Vec<String>) {
         "i686"
     };
 
-    let target_triple = format!("{}-pc-windows-msvc", arch);
-    let sidecar_name = format!("openclaw-{}.exe", target_triple);
+    let target_triples = vec![
+        format!("{}-pc-windows-msvc", arch),
+        format!("{}-pc-windows-gnu", arch),
+    ];
     let legacy_sidecar = "openclaw.exe";
     let fallback_name = "openclaw.cmd";
 
     if let Ok(exe_path) = env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            // Priority list:
-            // 1. Tauri-suffixed sidecar in binaries/ folder
-            // 2. Tauri-suffixed sidecar in the same folder
-            // 3. Legacy openclaw.exe (for manual developer builds)
-            let candidates = vec![
-                exe_dir.join("binaries").join(&sidecar_name),
-                exe_dir.join(&sidecar_name),
-                exe_dir.join(legacy_sidecar),
-            ];
+            let mut candidates = Vec::new();
+            for triple in &target_triples {
+                let sidecar_name = format!("openclaw-{}.exe", triple);
+                candidates.push(exe_dir.join("binaries").join(&sidecar_name));
+                candidates.push(exe_dir.join(&sidecar_name));
+            }
+            candidates.push(exe_dir.join(legacy_sidecar));
 
             for sidecar in candidates {
                 if sidecar.exists() {

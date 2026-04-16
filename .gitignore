@@ -153,4 +153,3 @@ extensions/qa-lab/web/dist/
 # Rust build artifacts (scoped to windows app)
 apps/windows/src-tauri/target/
 apps/windows/src-tauri/binaries/
-apps/windows/src-tauri/icons/
