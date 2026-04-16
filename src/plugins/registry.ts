@@ -1041,7 +1041,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     let effectiveHandler = handler;
     if (policy?.allowPromptInjection === false && isPromptInjectionHookName(hookName)) {
-      if (hookName === "before_prompt_build") {
+      if (hookName === "before_prompt_build" || hookName === "tool_result_before_model") {
         pushDiagnostic({
           level: "warn",
           pluginId: record.id,

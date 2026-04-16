@@ -197,6 +197,10 @@ export function installSessionToolResultGuard(
       if (id) {
         pendingState.delete(id);
       }
+      // `nextMessage` already reflects any earlier content canonicalization
+      // performed by tool_result_before_model before the final tool-result
+      // message was emitted. Runtime details stay raw here unless some later
+      // persistence hook rewrites them.
       const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.

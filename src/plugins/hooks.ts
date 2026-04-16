@@ -4,7 +4,6 @@
  * Provides utilities for executing plugin lifecycle hooks with proper
  * error handling, priority ordering, and async support.
  */
-
 import { formatErrorMessage } from "../infra/errors.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
@@ -57,6 +56,9 @@ import type {
   PluginHookSubagentEndedEvent,
   PluginHookSubagentSpawnedEvent,
   PluginHookToolContext,
+  PluginHookToolResultBeforeModelContext,
+  PluginHookToolResultBeforeModelEvent,
+  PluginHookToolResultBeforeModelResult,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
@@ -102,6 +104,9 @@ export type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookAfterToolCallEvent,
+  PluginHookToolResultBeforeModelContext,
+  PluginHookToolResultBeforeModelEvent,
+  PluginHookToolResultBeforeModelResult,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
@@ -174,7 +179,7 @@ export type PluginTargetedInboundClaimOutcome =
       error: string;
     };
 
-type SyncHookName = "tool_result_persist" | "before_message_write";
+type SyncHookName = "tool_result_persist" | "tool_result_before_model" | "before_message_write";
 type SyncHookHandler<K extends SyncHookName> = NonNullable<PluginHookRegistration<K>["handler"]>;
 type SyncHookEvent<K extends SyncHookName> = Parameters<SyncHookHandler<K>>[0];
 type SyncHookContext<K extends SyncHookName> = Parameters<SyncHookHandler<K>>[1];
@@ -307,8 +312,26 @@ export function createHookRunner(
     event: SyncHookEvent<K>,
     ctx: SyncHookContext<K>,
   ): SyncHookResult<K> | PromiseLike<unknown> => {
-    const handler = hook.handler as SyncHookHandler<K>;
-    return handler(event, ctx) as SyncHookResult<K> | PromiseLike<unknown>;
+    const handler = hook.handler as (
+      event: SyncHookEvent<K>,
+      ctx: SyncHookContext<K>,
+    ) => SyncHookResult<K> | PromiseLike<unknown>;
+    return handler(event, ctx);
+  };
+
+  const observeIgnoredSyncHookPromise = (
+    hookName: SyncHookName,
+    pluginId: string,
+    promise: PromiseLike<unknown>,
+  ): void => {
+    void promise.then(
+      () => undefined,
+      (err) => {
+        logger?.warn?.(
+          `[hooks] ${hookName} handler from ${pluginId} returned a Promise and later rejected: ${String(err)}`,
+        );
+      },
+    );
   };
 
   /**
@@ -875,6 +898,63 @@ export function createHookRunner(
     return { message: current };
   }
 
+  /**
+   * Run tool_result_before_model hook.
+   *
+   * This hook is intentionally synchronous: it runs immediately after a
+   * successful raw tool result exists and before same-turn continuation plus
+   * default transcript persistence.
+   *
+   * Handlers are executed sequentially in priority order (higher first). Each
+   * handler may return `{ text }` to replace the text passed to the next
+   * handler. This seam is intentionally text-only: it never clones or composes
+   * the full toolResult message and leaves runtime details untouched.
+   */
+  function runToolResultBeforeModel(
+    event: PluginHookToolResultBeforeModelEvent,
+    ctx: PluginHookToolResultBeforeModelContext,
+  ): PluginHookToolResultBeforeModelResult | undefined {
+    const hooks = getHooksForName(registry, "tool_result_before_model");
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    let current = event.text;
+
+    for (const hook of hooks) {
+      try {
+        const out = runSyncHookHandler(hook, { ...event, text: current }, { ...ctx });
+
+        // Guard against accidental async handlers (this hook is sync-only).
+        if (isPromiseLike(out)) {
+          observeIgnoredSyncHookPromise("tool_result_before_model", hook.pluginId, out);
+          const msg =
+            `[hooks] tool_result_before_model handler from ${hook.pluginId} returned a Promise; ` +
+            `this hook is synchronous and the result was ignored.`;
+          if (shouldCatchHookErrors("tool_result_before_model")) {
+            logger?.warn?.(msg);
+            continue;
+          }
+          throw new Error(msg);
+        }
+
+        const next = (out as PluginHookToolResultBeforeModelResult | undefined)?.text;
+        if (typeof next === "string") {
+          current = next;
+        }
+      } catch (err) {
+        const msg = `[hooks] tool_result_before_model handler from ${hook.pluginId} failed: ${String(err)}`;
+        if (shouldCatchHookErrors("tool_result_before_model")) {
+          logger?.error(msg);
+        } else {
+          throw new Error(msg, { cause: err });
+        }
+      }
+    }
+
+    return { text: current };
+  }
+
   // =========================================================================
   // Message Write Hooks
   // =========================================================================
@@ -1131,6 +1211,7 @@ export function createHookRunner(
     runBeforeToolCall,
     runAfterToolCall,
     runToolResultPersist,
+    runToolResultBeforeModel,
     // Message write hooks
     runBeforeMessageWrite,
     // Session hooks

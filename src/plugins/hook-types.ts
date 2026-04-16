@@ -70,6 +70,7 @@ export type PluginHookName =
   | "before_tool_call"
   | "after_tool_call"
   | "tool_result_persist"
+  | "tool_result_before_model"
   | "before_message_write"
   | "session_start"
   | "session_end"
@@ -101,6 +102,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_tool_call",
   "after_tool_call",
   "tool_result_persist",
+  "tool_result_before_model",
   "before_message_write",
   "session_start",
   "session_end",
@@ -128,6 +130,7 @@ export const isPluginHookName = (hookName: unknown): hookName is PluginHookName 
 export const PROMPT_INJECTION_HOOK_NAMES = [
   "before_prompt_build",
   "before_agent_start",
+  "tool_result_before_model",
 ] as const satisfies readonly PluginHookName[];
 
 export type PromptInjectionHookName = (typeof PROMPT_INJECTION_HOOK_NAMES)[number];
@@ -341,12 +344,49 @@ export type PluginHookToolResultPersistContext = {
 export type PluginHookToolResultPersistEvent = {
   toolName?: string;
   toolCallId?: string;
+  /**
+   * The toolResult message about to be written to the session transcript.
+   * By default this already reflects any earlier content canonicalization from
+   * tool_result_before_model. Raw details stay untouched unless some other
+   * hook rewrites them.
+   * Handlers may return a modified message (e.g. drop non-essential fields).
+   */
   message: AgentMessage;
   isSynthetic?: boolean;
 };
 
 export type PluginHookToolResultPersistResult = {
   message?: AgentMessage;
+};
+
+export type PluginHookToolResultBeforeModelContext = PluginHookToolResultPersistContext & {
+  sessionId?: string;
+  runId?: string;
+};
+
+export type PluginHookToolResultBeforeModelEvent = {
+  toolName?: string;
+  toolCallId?: string;
+  /**
+   * The single model-facing text payload extracted from a successful tool
+   * result before same-turn continuation and before the default transcript
+   * persistence path.
+   *
+   * v0 only runs when the tool result content is exactly one text block.
+   * Legacy plain-string content is skipped. The hook is content-only: it never
+   * reads or writes runtime details metadata. If a handler returns `{ text }`,
+   * later same-turn tool_result handlers run on that canonicalized event, and
+   * default transcript persistence follows the final emitted tool result
+   * content. Plugin errors fail open and leave the original tool result
+   * unchanged. Plugins should use explicit returned patches for downstream
+   * rewrites; mutation-only side effects continue to follow the underlying
+   * tool_result runner semantics.
+   */
+  text: string;
+};
+
+export type PluginHookToolResultBeforeModelResult = {
+  text?: string;
 };
 
 export type PluginHookBeforeMessageWriteEvent = {
@@ -639,6 +679,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,
   ) => PluginHookToolResultPersistResult | void;
+  tool_result_before_model: (
+    event: PluginHookToolResultBeforeModelEvent,
+    ctx: PluginHookToolResultBeforeModelContext,
+  ) => PluginHookToolResultBeforeModelResult | void;
   before_message_write: (
     event: PluginHookBeforeMessageWriteEvent,
     ctx: { agentId?: string; sessionKey?: string },

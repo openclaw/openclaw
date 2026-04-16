@@ -29,6 +29,7 @@ export const hookRunner = {
   hasHooks: vi.fn<(hookName?: string) => boolean>(),
   runBeforeCompaction: vi.fn(async () => undefined),
   runAfterCompaction: vi.fn(async () => undefined),
+  runToolResultBeforeModel: vi.fn(() => undefined),
 };
 
 export const ensureRuntimePluginsLoaded: Mock<(params?: unknown) => void> = vi.fn();
@@ -151,6 +152,8 @@ export function resetCompactHooksHarnessMocks(): void {
   hookRunner.runBeforeCompaction.mockResolvedValue(undefined);
   hookRunner.runAfterCompaction.mockReset();
   hookRunner.runAfterCompaction.mockResolvedValue(undefined);
+  hookRunner.runToolResultBeforeModel.mockReset();
+  hookRunner.runToolResultBeforeModel.mockReturnValue(undefined);
 
   ensureRuntimePluginsLoaded.mockReset();
 
@@ -453,10 +456,6 @@ export async function loadCompactHooksHarness(): Promise<{
       validateGeminiTurns: false,
       validateAnthropicTurns: false,
     })),
-  }));
-
-  vi.doMock("./extensions.js", () => ({
-    buildEmbeddedExtensionFactories: vi.fn(() => []),
   }));
 
   vi.doMock("./history.js", () => ({

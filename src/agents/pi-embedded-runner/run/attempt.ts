@@ -127,7 +127,7 @@ import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
-import { buildEmbeddedExtensionFactories } from "../extensions.js";
+import { buildEmbeddedExtensionFactories, buildEmbeddedExtensionsOverride } from "../extensions.js";
 import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "../extra-params.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
@@ -930,15 +930,25 @@ export async function runEmbeddedAttempt(
         settingsManager,
         contextEngineInfo: params.contextEngine?.info,
       });
+      const hookRunner = getGlobalHookRunner();
 
       // Sets compaction/pruning runtime state and returns extension factories
-      // that must be passed to the resource loader for the safeguard to be active.
+      // that must be passed to the resource loader for embedded hooks and the
+      // safeguard to be active.
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        hookRunner: hookRunner ?? undefined,
+        agentId: sessionAgentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        runId: params.runId,
+      });
+      const extensionsOverride = buildEmbeddedExtensionsOverride({
+        hasToolResultBeforeModelBridge: !!hookRunner?.hasHooks("tool_result_before_model"),
       });
       // Only create an explicit resource loader when there are extension factories
       // to register; otherwise let createAgentSession use its built-in default.
@@ -949,12 +959,10 @@ export async function runEmbeddedAttempt(
           agentDir,
           settingsManager,
           extensionFactories,
+          extensionsOverride,
         });
         await resourceLoader.reload();
       }
-
-      // Get hook runner early so it's available when creating tools
-      const hookRunner = getGlobalHookRunner();
 
       const { builtInTools, customTools } = splitSdkTools({
         tools: effectiveTools,

@@ -90,6 +90,7 @@ These run inside the agent loop or gateway pipeline:
 - **`before_tool_call` / `after_tool_call`**: intercept tool params/results.
 - **`before_install`**: inspect built-in scan findings and optionally block skill or plugin installs.
 - **`tool_result_persist`**: synchronously transform tool results before they are written to the session transcript.
+- **`tool_result_before_model`**: synchronously canonicalize a single eligible tool-result text payload before same-turn continuation and default transcript persistence; `details` stay raw unless another hook rewrites them.
 - **`message_received` / `message_sending` / `message_sent`**: inbound + outbound message hooks.
 - **`session_start` / `session_end`**: session lifecycle boundaries.
 - **`gateway_start` / `gateway_stop`**: gateway lifecycle events.

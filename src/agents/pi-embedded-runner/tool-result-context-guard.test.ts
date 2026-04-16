@@ -240,6 +240,23 @@ describe("installToolResultContextGuard", () => {
 
     expectPiStyleTruncation(getToolResultText(transformed[0]));
   });
+
+  it("keeps under-budget tool results byte-stable across repeated guarded passes", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [makeToolResult("call_ok", "stable output")];
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    const signal = new AbortController().signal;
+    const first = (await agent.transformContext?.(contextForNextCall, signal)) as AgentMessage[];
+    const second = (await agent.transformContext?.(contextForNextCall, signal)) as AgentMessage[];
+
+    expect(first).toBe(contextForNextCall);
+    expect(second).toBe(contextForNextCall);
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+  });
 });
 
 type MockedEngine = ContextEngine & {
