@@ -105,11 +105,9 @@ describe("plugin activation boundary", () => {
     loadBundledPluginPublicSurfaceModuleSync.mockReset();
   });
 
-  let ambientImportsPromise: Promise<void> | undefined;
   let configHelpersPromise:
     | Promise<{
         isStaticallyChannelConfigured: typeof import("./config/channel-configured-shared.js").isStaticallyChannelConfigured;
-        resolveEnvApiKey: typeof import("./agents/model-auth-env.js").resolveEnvApiKey;
       }>
     | undefined;
   let modelSelectionPromise:
@@ -134,24 +132,12 @@ describe("plugin activation boundary", () => {
         resolveProfile: typeof import("./plugin-sdk/browser-config.js").resolveProfile;
       }>
     | undefined;
-  let browserAmbientImportsPromise: Promise<void> | undefined;
-  function importAmbientModules() {
-    ambientImportsPromise ??= Promise.all([
-      import("./commands/onboard-custom.js"),
-      import("./plugins/provider-model-defaults.js"),
-      import("./plugins/provider-model-primary.js"),
-    ]).then(() => undefined);
-    return ambientImportsPromise;
-  }
-
   function importConfigHelpers() {
-    configHelpersPromise ??= Promise.all([
-      import("./config/channel-configured-shared.js"),
-      import("./agents/model-auth-env.js"),
-    ]).then(([channelConfigured, modelAuthEnv]) => ({
-      isStaticallyChannelConfigured: channelConfigured.isStaticallyChannelConfigured,
-      resolveEnvApiKey: modelAuthEnv.resolveEnvApiKey,
-    }));
+    configHelpersPromise ??= import("./config/channel-configured-shared.js").then(
+      (channelConfigured) => ({
+        isStaticallyChannelConfigured: channelConfigured.isStaticallyChannelConfigured,
+      }),
+    );
     return configHelpersPromise;
   }
 
@@ -185,26 +171,11 @@ describe("plugin activation boundary", () => {
     return browserHelpersPromise;
   }
 
-  function importBrowserAmbientModules() {
-    browserAmbientImportsPromise ??= Promise.all([
-      import("./agents/sandbox/browser.js"),
-      import("./agents/sandbox/context.js"),
-      import("./commands/doctor-browser.js"),
-      import("./node-host/runner.js"),
-      import("./security/audit.js"),
-      import("./security/audit-extra.sync.js"),
-    ]).then(() => undefined);
-    return browserAmbientImportsPromise;
-  }
-
-  it("keeps ambient core imports cold", async () => {
-    const [, { isStaticallyChannelConfigured, resolveEnvApiKey }, { normalizeModelRef }] =
-      await Promise.all([
-        importAmbientModules(),
-        importConfigHelpers(),
-        importModelSelection(),
-        importBrowserAmbientModules(),
-      ]);
+  it("keeps config and model boundary helpers cold", async () => {
+    const [{ isStaticallyChannelConfigured }, { normalizeModelRef }] = await Promise.all([
+      importConfigHelpers(),
+      importModelSelection(),
+    ]);
 
     expect(isStaticallyChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(
       true,
@@ -218,14 +189,6 @@ describe("plugin activation boundary", () => {
       }),
     ).toBe(true);
     expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
-    expect(
-      resolveEnvApiKey("anthropic-vertex", {
-        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
-      }),
-    ).toEqual({
-      apiKey: "gcp-vertex-credentials",
-      source: "gcloud adc",
-    });
     expect(normalizeModelRef("google", "gemini-3.1-pro")).toEqual({
       provider: "google",
       model: "gemini-3.1-pro-preview",

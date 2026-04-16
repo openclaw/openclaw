@@ -27,6 +27,11 @@ const {
   resolveCredentialsMock: vi.fn(),
 }));
 
+vi.mock("../../agents/model-auth.js", async () => {
+  const { createModelAuthMockModule } = await import("../../test-utils/model-auth-mock.js");
+  return createModelAuthMockModule();
+});
+
 vi.mock("./embeddings-ollama.js", () => ({
   createOllamaEmbeddingProvider: createOllamaEmbeddingProviderMock,
 }));
