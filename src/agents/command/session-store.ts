@@ -134,6 +134,16 @@ export async function updateSessionStoreAfterAgentRun(params: {
       next.estimatedCostUsd =
         (resolveNonNegativeNumber(entry.estimatedCostUsd) ?? 0) + runEstimatedCostUsd;
     }
+  } else if (
+    typeof entry.totalTokens === "number" &&
+    Number.isFinite(entry.totalTokens) &&
+    entry.totalTokens > 0
+  ) {
+    // Provider did not return usage data for this run. Preserve the last
+    // known totalTokens (from a prior run or compaction) so /status doesn't
+    // reset to 0%. Mark as stale so display layers know it's not from this turn.
+    next.totalTokens = entry.totalTokens;
+    next.totalTokensFresh = false;
   }
   if (compactionsThisRun > 0) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;

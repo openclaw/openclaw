@@ -270,4 +270,53 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
     });
   });
+
+  it("preserves previous totalTokens when provider returns no usage data (#67667)", async () => {
+    const cfg = {} as OpenClawConfig;
+    const sessionKey = "agent:main:explicit:test-no-usage";
+    const sessionId = "test-session";
+
+    // Session already has totalTokens from a prior run or compaction.
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: 1,
+        totalTokens: 21225,
+        totalTokensFresh: true,
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+    // Provider returns no usage data (e.g., MiniMax Anthropic endpoint).
+    const result: EmbeddedPiRunResult = {
+      meta: {
+        durationMs: 500,
+        agentMeta: {
+          sessionId,
+          provider: "minimax",
+          model: "MiniMax-M2.7",
+        },
+      },
+    };
+
+    await updateSessionStoreAfterAgentRun({
+      cfg,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore,
+      defaultProvider: "minimax",
+      defaultModel: "MiniMax-M2.7",
+      result,
+    });
+
+    // totalTokens should be preserved (not reset to undefined).
+    expect(sessionStore[sessionKey]?.totalTokens).toBe(21225);
+    // Marked stale since it's from a prior run, not this one.
+    expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
+
+    const persisted = loadSessionStore(storePath);
+    expect(persisted[sessionKey]?.totalTokens).toBe(21225);
+    expect(persisted[sessionKey]?.totalTokensFresh).toBe(false);
+  });
 });
