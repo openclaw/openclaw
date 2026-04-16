@@ -244,7 +244,7 @@ beforeEach(() => {
           "workspace-write",
           "--skip-git-repo-check",
         ],
-        resumeArgs: ["exec", "resume", "{sessionId}"],
+        resumeArgs: ["exec", "resume", "{sessionId}", "--skip-git-repo-check"],
         systemPromptFileConfigArg: "-c",
         systemPromptFileConfigKey: "model_instructions_file",
         systemPromptWhen: "first",
@@ -309,7 +309,7 @@ beforeEach(() => {
 });
 
 describe("resolveCliBackendConfig reliability merge", () => {
-  it("defaults codex-cli to workspace-write for fresh and resume runs", () => {
+  it("defaults codex-cli fresh sandboxing and resume trust bypass for non-git runs", () => {
     const resolved = resolveCliBackendConfig("codex-cli");
 
     expect(resolved).not.toBeNull();
@@ -322,7 +322,12 @@ describe("resolveCliBackendConfig reliability merge", () => {
       "workspace-write",
       "--skip-git-repo-check",
     ]);
-    expect(resolved?.config.resumeArgs).toEqual(["exec", "resume", "{sessionId}"]);
+    expect(resolved?.config.resumeArgs).toEqual([
+      "exec",
+      "resume",
+      "{sessionId}",
+      "--skip-git-repo-check",
+    ]);
   });
 
   it("deep-merges reliability watchdog overrides for codex", () => {
