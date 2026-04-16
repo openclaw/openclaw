@@ -263,9 +263,17 @@ const INBOUND_META_SENTINELS = [
   "Chat history since last reply (untrusted, for context):",
 ] as const;
 
-const UNTRUSTED_CONTEXT_HEADER_PREFIX = "Untrusted context (metadata";
 const ACTIVE_TURN_RECOVERY_RE = /active-turn-recovery/i;
-const ENVELOPE_JSON_LINE_RE = /^\s*\{"(?:conversation|sender|channel)/m;
+
+/**
+ * Matches JSON lines that look like OpenClaw transport envelope metadata.
+ * Narrowed to require specific compound key patterns (e.g. "conversation_info",
+ * "sender_name", "channel_id") that appear in actual envelope objects, rather
+ * than bare prefixes like "conversation" or "sender" which could appear in
+ * legitimate user JSON.
+ */
+const ENVELOPE_JSON_LINE_RE =
+  /^\s*\{"(?:conversation_info|sender_name|channel_id|channel_type)"\s*:/m;
 
 /**
  * Returns true if `text` looks like it contains OpenClaw-injected envelope or
@@ -283,8 +291,9 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
     }
   }
 
-  // Check for "Untrusted context (metadata..." header
-  if (text.includes(UNTRUSTED_CONTEXT_HEADER_PREFIX)) {
+  // Check for "Untrusted context (metadata..." header at the start of a line
+  // to avoid false-positives on user messages that quote the phrase mid-line.
+  if (/^Untrusted context \(metadata/m.test(text)) {
     return true;
   }
 

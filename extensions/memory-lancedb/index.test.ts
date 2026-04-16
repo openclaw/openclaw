@@ -513,10 +513,26 @@ describe("memory plugin e2e", () => {
     ).toBe(true);
   });
 
-  test("looksLikeEnvelopeSludge detects envelope JSON blobs", () => {
-    expect(looksLikeEnvelopeSludge('{"conversation": "test"}')).toBe(true);
-    expect(looksLikeEnvelopeSludge('  {"sender": "alex"}')).toBe(true);
-    expect(looksLikeEnvelopeSludge('{"channel": "telegram"}')).toBe(true);
+  test("looksLikeEnvelopeSludge detects envelope JSON blobs with compound keys", () => {
+    expect(looksLikeEnvelopeSludge('{"conversation_info": "test"}')).toBe(true);
+    expect(looksLikeEnvelopeSludge('  {"sender_name": "alex"}')).toBe(true);
+    expect(looksLikeEnvelopeSludge('{"channel_id": "telegram"}')).toBe(true);
+    expect(looksLikeEnvelopeSludge('{"channel_type": "discord"}')).toBe(true);
+  });
+
+  test("looksLikeEnvelopeSludge does not false-positive on user JSON with bare keys", () => {
+    expect(looksLikeEnvelopeSludge('I always prefer {"conversation": "test"}')).toBe(false);
+    expect(looksLikeEnvelopeSludge('{"sender": "alex"}')).toBe(false);
+    expect(looksLikeEnvelopeSludge('{"channel": "telegram"}')).toBe(false);
+    expect(looksLikeEnvelopeSludge('The {"conversation": "data"} was important')).toBe(false);
+  });
+
+  test("looksLikeEnvelopeSludge does not false-positive on mid-line untrusted context phrase", () => {
+    expect(
+      looksLikeEnvelopeSludge(
+        "The user mentioned Untrusted context (metadata) in their question about security",
+      ),
+    ).toBe(false);
   });
 
   test("looksLikeEnvelopeSludge returns false for clean text", () => {
