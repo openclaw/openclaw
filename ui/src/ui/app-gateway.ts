@@ -422,6 +422,11 @@ function handleSessionMessageGatewayEvent(
   if (!sessionKey || sessionKey !== host.sessionKey) {
     return;
   }
+  // Skip history reload while a run is in progress — reloading would clear
+  // chatStream and erase the loading indicator before the first assistant delta.
+  if (host.chatRunId) {
+    return;
+  }
   void loadChatHistory(host as unknown as ChatState);
 }
 

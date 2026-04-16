@@ -745,6 +745,30 @@ describe("connectGateway", () => {
 
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
   });
+
+  it("does not reload chat history on session.message while a run is active", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "run-active";
+
+    client.emitEvent({
+      event: "session.message",
+      payload: { sessionKey: "main" },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("reloads chat history on session.message when no run is active", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = null;
+
+    client.emitEvent({
+      event: "session.message",
+      payload: { sessionKey: "main" },
+    });
+
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("resolveControlUiClientVersion", () => {
