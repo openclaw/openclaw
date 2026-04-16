@@ -4,18 +4,37 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __testing, buildQaRuntimeEnv, resolveQaControlUiRoot } from "./gateway-child.js";
+import {
+  __testing,
+  buildQaRuntimeEnv,
+  resolveQaControlUiRoot,
+  startQaGatewayChild,
+} from "./gateway-child.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const resolveQaNodeExecPathMock = vi.hoisted(() => vi.fn(async () => process.execPath));
+const qaTempPathState = vi.hoisted(() => ({
+  preferredTmpDir: process.env.TMPDIR || "/tmp",
+}));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/temp-path", () => ({
+  resolvePreferredOpenClawTmpDir: () => qaTempPathState.preferredTmpDir,
+}));
+
+vi.mock("./node-exec.js", () => ({
+  resolveQaNodeExecPath: resolveQaNodeExecPathMock,
 }));
 
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
   fetchWithSsrFGuardMock.mockReset();
+  resolveQaNodeExecPathMock.mockReset();
+  qaTempPathState.preferredTmpDir = process.env.TMPDIR || "/tmp";
   while (cleanups.length > 0) {
     await cleanups.pop()?.();
   }
@@ -37,6 +56,28 @@ function createParams(baseEnv?: NodeJS.ProcessEnv) {
 }
 
 describe("buildQaRuntimeEnv", () => {
+  it("cleans up temp QA gateway roots when node path resolution fails before startup", async () => {
+    const tempParent = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-node-exec-fail-"));
+    cleanups.push(async () => {
+      await rm(tempParent, { recursive: true, force: true });
+    });
+    qaTempPathState.preferredTmpDir = tempParent;
+    resolveQaNodeExecPathMock.mockRejectedValueOnce(new Error("node missing"));
+
+    await expect(
+      startQaGatewayChild({
+        repoRoot: process.cwd(),
+        transport: {
+          requiredPluginIds: [],
+          createGatewayConfig: () => ({}),
+        },
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow("node missing");
+
+    await expect(readdir(tempParent)).resolves.toEqual([]);
+  });
+
   it("keeps the slow-reply QA opt-out enabled under fast mode", () => {
     const env = buildQaRuntimeEnv({
       ...createParams(),

@@ -820,9 +820,9 @@ export async function startQaGatewayChild(params: {
   let rpcClient: Awaited<ReturnType<typeof startQaGatewayRpcClient>> | null = null;
   let stagedBundledPluginsRoot: string | null = null;
   let env: NodeJS.ProcessEnv | null = null;
-  const nodeExecPath = await resolveQaNodeExecPath();
 
   try {
+    const nodeExecPath = await resolveQaNodeExecPath();
     for (let attempt = 1; attempt <= QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS; attempt += 1) {
       gatewayPort = await getFreePort();
       baseUrl = `http://127.0.0.1:${gatewayPort}`;
