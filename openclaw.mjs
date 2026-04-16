@@ -166,6 +166,10 @@ const tryOutputBareRootHelp = async () => {
   return false;
 };
 
+if (process.argv.length > 4 && process.argv.slice(2).includes("--help")) {
+  process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS ??= "1";
+}
+
 if (await tryOutputBareRootHelp()) {
   // OK
 } else {

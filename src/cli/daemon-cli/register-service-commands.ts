@@ -56,7 +56,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--timeout <ms>", "Timeout in ms", "10000")
     .option("--no-probe", "Skip RPC probe")
     .option("--require-rpc", "Exit non-zero when the RPC probe fails", false)
-    .option("--deep", "Scan system-level services", false)
+    .option("--deep", "Scan system-level services and include config/auth diagnostics", false)
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
       const { runDaemonStatus } = await loadDaemonStatusModule();

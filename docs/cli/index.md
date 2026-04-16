@@ -10,6 +10,10 @@ title: "CLI Reference"
 
 This page describes the current CLI behavior. If commands change, update this doc.
 
+Tip: root help should expand command groups that have subcommands. For example,
+`openclaw models --help` should list `auth`, `list`, `set`, `status`, and other
+models subcommands directly instead of only showing the top-level command stub.
+
 ## Command pages
 
 - [`setup`](/cli/setup)

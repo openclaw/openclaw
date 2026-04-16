@@ -3,6 +3,7 @@ import { writeRuntimeJson } from "../../runtime.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { serializeGatewayDiscoveryBeacon } from "./discovery.js";
 import {
+  type GatewayConfigSummary,
   isProbeReachable,
   isScopeLimitedProbeFailure,
   renderProbeSummaryLine,
@@ -15,6 +16,25 @@ export type GatewayStatusWarning = {
   message: string;
   targetIds?: string[];
 };
+
+function formatGatewayAuthConfigLine(configSummary: GatewayConfigSummary): string {
+  const authConfig = configSummary.gateway;
+  const local = authConfig.authTokenConfigured
+    ? "token"
+    : authConfig.authPasswordConfigured
+      ? "password"
+      : "none-detected";
+  const remote = authConfig.remoteUrl
+    ? authConfig.remoteTokenConfigured
+      ? "token"
+      : authConfig.remotePasswordConfigured
+        ? "password"
+        : "none-detected"
+    : null;
+  return remote
+    ? `mode=${authConfig.authMode ?? "unknown"} · local=${local} · remote=${remote}`
+    : `mode=${authConfig.authMode ?? "unknown"} · local=${local}`;
+}
 
 export function pickPrimaryProbedTarget(probed: GatewayStatusProbedTarget[]) {
   const reachable = probed.filter((entry) => isProbeReachable(entry.probe));
@@ -205,6 +225,12 @@ export function writeGatewayStatusText(params: {
       );
     }
     if (result.configSummary) {
+      params.runtime.log(
+        `  ${colorize(params.rich, theme.info, "Gateway config")}: mode=${result.configSummary.gateway.mode ?? "unknown"} · bind=${result.configSummary.gateway.bind ?? "unknown"}`,
+      );
+      params.runtime.log(
+        `  ${colorize(params.rich, theme.info, "Gateway auth")}: ${formatGatewayAuthConfigLine(result.configSummary)}`,
+      );
       const wideArea =
         result.configSummary.discovery.wideAreaEnabled === true
           ? "enabled"
@@ -213,6 +239,11 @@ export function writeGatewayStatusText(params: {
             : "unknown";
       params.runtime.log(
         `  ${colorize(params.rich, theme.info, "Wide-area discovery")}: ${wideArea}`,
+      );
+    }
+    if (result.authDiagnostics.length > 0) {
+      params.runtime.log(
+        `  ${colorize(params.rich, theme.warn, "Auth hint")}: ${result.authDiagnostics[0]}`,
       );
     }
     params.runtime.log("");

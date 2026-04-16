@@ -115,7 +115,12 @@ Examples:
 
 ```bash
 openclaw models auth login --provider openai-codex --set-default
+openclaw gateway restart
+openclaw models status --probe --probe-provider openai-codex
 ```
+
+If you just reauthenticated a provider used by a supervised gateway, restart the
+gateway so long-lived sessions reload the refreshed credentials.
 
 Notes:
 
