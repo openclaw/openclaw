@@ -129,8 +129,7 @@ export OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="${OPENCLAW_LIVE_ACP_BIND_AGENT_COMM
 pnpm test:live src/gateway/gateway-acp-bind.live.test.ts
 EOF
 
-echo "==> Build live-test image: $LIVE_IMAGE_NAME (target=build)"
-docker build --target build -t "$LIVE_IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"
+"$ROOT_DIR/scripts/test-live-build-docker.sh"
 
 IFS=',' read -r -a ACP_AGENT_TOKENS <<<"$ACP_AGENT_LIST_RAW"
 ACP_AGENTS=()
