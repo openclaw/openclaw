@@ -32,7 +32,7 @@ async function loadCreatePdfTool() {
   return createPdfTool;
 }
 
-const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-6";
+const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-7";
 const OPENAI_PDF_MODEL = "openai/gpt-5.4-mini";
 const FAKE_PDF_MEDIA = {
   kind: "document",
