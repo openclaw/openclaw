@@ -18,6 +18,7 @@ function resolveNormalizedBindingMatch(binding: AgentRouteBinding): {
   agentId: string;
   accountId: string;
   channelId: string;
+  peerId?: string;
 } | null {
   if (!binding || typeof binding !== "object") {
     return null;
@@ -34,10 +35,12 @@ function resolveNormalizedBindingMatch(binding: AgentRouteBinding): {
   if (!accountId || accountId === "*") {
     return null;
   }
+  const peerId = match.peer && typeof match.peer.id === "string" ? match.peer.id.trim() : undefined;
   return {
     agentId: normalizeAgentId(binding.agentId),
     accountId: normalizeAccountId(accountId),
     channelId,
+    peerId: peerId || undefined,
   };
 }
 
@@ -45,21 +48,34 @@ export function resolveFirstBoundAccountId(params: {
   cfg: OpenClawConfig;
   channelId: string;
   agentId: string;
+  peerId?: string;
 }): string | undefined {
   const normalizedChannel = normalizeBindingChannelId(params.channelId);
   if (!normalizedChannel) {
     return undefined;
   }
   const normalizedAgentId = normalizeAgentId(params.agentId);
+  const normalizedPeerId = params.peerId?.trim() || undefined;
+  let wildcardPeerMatch: string | undefined;
+  let channelOnlyFallback: string | undefined;
   for (const binding of listRouteBindings(params.cfg)) {
     const resolved = resolveNormalizedBindingMatch(binding);
     if (
-      resolved &&
-      resolved.channelId === normalizedChannel &&
-      resolved.agentId === normalizedAgentId
+      !resolved ||
+      resolved.channelId !== normalizedChannel ||
+      resolved.agentId !== normalizedAgentId
     ) {
-      return resolved.accountId;
+      continue;
+    }
+    if (resolved.peerId === "*") {
+      wildcardPeerMatch ??= resolved.accountId;
+    } else if (resolved.peerId) {
+      if (normalizedPeerId && resolved.peerId === normalizedPeerId) {
+        return resolved.accountId;
+      }
+    } else {
+      channelOnlyFallback ??= resolved.accountId;
     }
   }
-  return undefined;
+  return wildcardPeerMatch ?? channelOnlyFallback;
 }

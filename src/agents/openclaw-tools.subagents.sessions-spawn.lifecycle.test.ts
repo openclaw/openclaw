@@ -399,6 +399,259 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(getLatestSubagentRunByChildSessionKey(childSessionKey)?.outcome?.status).toBe("timeout");
   });
 
+  it("sessions_spawn uses the target agent's bound account for a Matrix room-bound route", async () => {
+    let spawnAccountId: string | undefined;
+    const boundRoom = "!exampleRoomId:example.org";
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      messages: {
+        queue: {
+          debounceMs: 0,
+        },
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["bot-alpha"],
+          },
+        },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: {
+              kind: "channel",
+              id: boundRoom,
+            },
+            accountId: "bot-alpha",
+          },
+        },
+      ],
+    });
+    setupSessionsSpawnGatewayMock({
+      onAgentSubagentSpawn: (params) => {
+        const rec = params as { accountId?: string } | undefined;
+        spawnAccountId = rec?.accountId;
+      },
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "matrix",
+      agentAccountId: "bot-beta",
+      agentTo: boundRoom,
+    });
+
+    const result = await tool.execute("call-bound-account", {
+      task: "do thing",
+      agentId: "bot-alpha",
+      cleanup: "keep",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: expect.any(String),
+    });
+    expect(spawnAccountId).toBe("bot-alpha");
+  });
+
+  it("sessions_spawn prefers peer-specific binding over channel-only binding", async () => {
+    let spawnAccountId: string | undefined;
+    const targetRoom = "!roomA:example.org";
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      messages: { queue: { debounceMs: 0 } },
+      agents: { defaults: { subagents: { allowAgents: ["bot-alpha"] } } },
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: { channel: "matrix", accountId: "bot-alpha-default" },
+        },
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: targetRoom },
+            accountId: "bot-alpha-room-a",
+          },
+        },
+      ],
+    });
+    setupSessionsSpawnGatewayMock({
+      onAgentSubagentSpawn: (params) => {
+        const rec = params as { accountId?: string } | undefined;
+        spawnAccountId = rec?.accountId;
+      },
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "matrix",
+      agentAccountId: "bot-beta",
+      agentTo: targetRoom,
+    });
+
+    const result = await tool.execute("call-peer-specific", {
+      task: "do thing",
+      agentId: "bot-alpha",
+      cleanup: "keep",
+    });
+    expect(result.details).toMatchObject({ status: "accepted", runId: expect.any(String) });
+    expect(spawnAccountId).toBe("bot-alpha-room-a");
+  });
+
+  it("sessions_spawn falls back to channel-only binding when peer does not match", async () => {
+    let spawnAccountId: string | undefined;
+    const otherRoom = "!roomB:example.org";
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      messages: { queue: { debounceMs: 0 } },
+      agents: { defaults: { subagents: { allowAgents: ["bot-alpha"] } } },
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: { channel: "matrix", accountId: "bot-alpha-default" },
+        },
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: "!roomA:example.org" },
+            accountId: "bot-alpha-room-a",
+          },
+        },
+      ],
+    });
+    setupSessionsSpawnGatewayMock({
+      onAgentSubagentSpawn: (params) => {
+        const rec = params as { accountId?: string } | undefined;
+        spawnAccountId = rec?.accountId;
+      },
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "matrix",
+      agentAccountId: "bot-beta",
+      agentTo: otherRoom,
+    });
+
+    const result = await tool.execute("call-fallback", {
+      task: "do thing",
+      agentId: "bot-alpha",
+      cleanup: "keep",
+    });
+    expect(result.details).toMatchObject({ status: "accepted", runId: expect.any(String) });
+    expect(spawnAccountId).toBe("bot-alpha-default");
+  });
+
+  it("sessions_spawn treats a wildcard peer binding as match-any and beats channel-only", async () => {
+    let spawnAccountId: string | undefined;
+    const callerRoom = "!anyRoom:example.org";
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      messages: { queue: { debounceMs: 0 } },
+      agents: { defaults: { subagents: { allowAgents: ["bot-alpha"] } } },
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: { channel: "matrix", accountId: "bot-alpha-default" },
+        },
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: "*" },
+            accountId: "bot-alpha-wildcard",
+          },
+        },
+      ],
+    });
+    setupSessionsSpawnGatewayMock({
+      onAgentSubagentSpawn: (params) => {
+        const rec = params as { accountId?: string } | undefined;
+        spawnAccountId = rec?.accountId;
+      },
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "matrix",
+      agentAccountId: "bot-beta",
+      agentTo: callerRoom,
+    });
+
+    const result = await tool.execute("call-wildcard-peer", {
+      task: "do thing",
+      agentId: "bot-alpha",
+      cleanup: "keep",
+    });
+    expect(result.details).toMatchObject({ status: "accepted", runId: expect.any(String) });
+    expect(spawnAccountId).toBe("bot-alpha-wildcard");
+  });
+
+  it("sessions_spawn prefers exact peer binding over wildcard peer binding", async () => {
+    let spawnAccountId: string | undefined;
+    const exactRoom = "!roomA:example.org";
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      messages: { queue: { debounceMs: 0 } },
+      agents: { defaults: { subagents: { allowAgents: ["bot-alpha"] } } },
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: "*" },
+            accountId: "bot-alpha-wildcard",
+          },
+        },
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: exactRoom },
+            accountId: "bot-alpha-room-a",
+          },
+        },
+      ],
+    });
+    setupSessionsSpawnGatewayMock({
+      onAgentSubagentSpawn: (params) => {
+        const rec = params as { accountId?: string } | undefined;
+        spawnAccountId = rec?.accountId;
+      },
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "matrix",
+      agentAccountId: "bot-beta",
+      agentTo: exactRoom,
+    });
+
+    const result = await tool.execute("call-exact-over-wildcard", {
+      task: "do thing",
+      agentId: "bot-alpha",
+      cleanup: "keep",
+    });
+    expect(result.details).toMatchObject({ status: "accepted", runId: expect.any(String) });
+    expect(spawnAccountId).toBe("bot-alpha-room-a");
+  });
+
   it("sessions_spawn announces with requester accountId", async () => {
     const ctx = setupSessionsSpawnGatewayMock({});
 

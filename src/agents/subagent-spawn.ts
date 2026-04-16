@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
+import type { ChatType } from "../channels/chat-type.js";
+import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
+import { resolveFirstBoundAccountId } from "../routing/bound-account-read.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -284,6 +287,91 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+const KIND_PREFIX_TO_CHAT_TYPE: Readonly<Record<string, ChatType>> = {
+  "room:": "channel",
+  "channel:": "channel",
+  "conversation:": "channel",
+  "chat:": "channel",
+  "thread:": "channel",
+  "topic:": "channel",
+  "group:": "group",
+  "team:": "group",
+  "user:": "direct",
+  "dm:": "direct",
+  "pm:": "direct",
+};
+
+const GENERIC_PREFIX_PATTERN = /^[a-z][a-z0-9_-]*:/i;
+
+function extractRequesterPeer(
+  channelId: string | undefined,
+  requesterTo: string | undefined,
+): { peerId?: string; peerKind?: ChatType } {
+  if (!requesterTo) {
+    return {};
+  }
+  const raw = requesterTo.trim();
+  if (!raw) {
+    return {};
+  }
+  let inferredKind: ChatType | undefined;
+  if (channelId) {
+    const plugin = getChannelPlugin(channelId);
+    inferredKind = plugin?.messaging?.inferTargetChatType?.({ to: raw }) ?? undefined;
+  }
+  let value = raw;
+  while (true) {
+    const match = GENERIC_PREFIX_PATTERN.exec(value);
+    if (!match) {
+      break;
+    }
+    const prefix = match[0].toLowerCase();
+    if (prefix in KIND_PREFIX_TO_CHAT_TYPE) {
+      inferredKind ??= KIND_PREFIX_TO_CHAT_TYPE[prefix];
+    }
+    value = value.slice(prefix.length).trim();
+  }
+  if (value) {
+    if (value.startsWith("@")) {
+      inferredKind = "direct";
+    } else if (value.startsWith("!") || value.startsWith("#")) {
+      inferredKind = "channel";
+    }
+  }
+  return { peerId: value || undefined, peerKind: inferredKind };
+}
+
+function resolveRequesterOriginForChild(params: {
+  cfg: OpenClawConfig;
+  targetAgentId: string;
+  requesterAgentId: string;
+  requesterChannel?: string;
+  requesterAccountId?: string;
+  requesterTo?: string;
+  requesterThreadId?: string | number;
+}) {
+  const { peerId: normalizedPeerId, peerKind: inferredPeerKind } = extractRequesterPeer(
+    params.requesterChannel,
+    params.requesterTo,
+  );
+  const boundAccountId =
+    params.requesterChannel && params.targetAgentId !== params.requesterAgentId
+      ? resolveFirstBoundAccountId({
+          cfg: params.cfg,
+          channelId: params.requesterChannel,
+          agentId: params.targetAgentId,
+          peerId: normalizedPeerId,
+          peerKind: inferredPeerKind,
+        })
+      : undefined;
+  return normalizeDeliveryContext({
+    channel: params.requesterChannel,
+    accountId: boundAccountId ?? params.requesterAccountId,
+    to: params.requesterTo,
+    threadId: params.requesterThreadId,
+  });
+}
+
 async function ensureThreadBindingForSubagentSpawn(params: {
   hookRunner: SubagentLifecycleHookRunner | null;
   childSessionKey: string;
@@ -396,13 +484,6 @@ export async function spawnSubagentDirect(
         ? params.cleanup
         : "keep";
   const expectsCompletionMessage = params.expectsCompletionMessage !== false;
-  const requesterOrigin = normalizeDeliveryContext({
-    channel: ctx.agentChannel,
-    accountId: ctx.agentAccountId,
-    to: ctx.agentTo,
-    threadId: ctx.agentThreadId,
-  });
-  let childSessionOrigin = requesterOrigin;
   const hookRunner = subagentSpawnDeps.getGlobalHookRunner();
   const cfg = loadSubagentConfig();
 
@@ -465,6 +546,16 @@ export async function spawnSubagentDirect(
     };
   }
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
+  const requesterOrigin = resolveRequesterOriginForChild({
+    cfg,
+    targetAgentId,
+    requesterAgentId,
+    requesterChannel: ctx.agentChannel,
+    requesterAccountId: ctx.agentAccountId,
+    requesterTo: ctx.agentTo,
+    requesterThreadId: ctx.agentThreadId,
+  });
+  let childSessionOrigin = requesterOrigin;
   if (targetAgentId !== requesterAgentId) {
     const allowAgents =
       resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
