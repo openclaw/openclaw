@@ -12,14 +12,14 @@ describe("resolveCurrentMode", () => {
     expect(mode.id).toBe("accept");
   });
 
-  it("returns Plan mode for deny + off", () => {
-    const mode = resolveCurrentMode("deny", "off");
-    expect(mode.id).toBe("plan");
-  });
-
   it("returns Bypass permissions for full + off", () => {
     const mode = resolveCurrentMode("full", "off");
     expect(mode.id).toBe("bypass");
+  });
+
+  it("falls back to Ask for deny + off (plan mode is owned by #67538 runtime, not this UI)", () => {
+    const mode = resolveCurrentMode("deny", "off");
+    expect(mode.id).toBe("ask");
   });
 
   it("falls back to Ask permissions for unknown combos", () => {
@@ -51,12 +51,16 @@ describe("handleModeShortcut", () => {
     } as unknown as KeyboardEvent;
   }
 
-  it("returns correct mode for Ctrl+1 through Ctrl+4", () => {
+  it("returns correct mode for Ctrl+1 through Ctrl+3", () => {
     for (const mode of MODE_DEFINITIONS) {
       const result = handleModeShortcut(makeKeyEvent(mode.shortcut, true, false));
       expect(result).not.toBeNull();
       expect(result!.id).toBe(mode.id);
     }
+  });
+
+  it("returns null for Ctrl+4 (Plan mode toggle is not in this PR)", () => {
+    expect(handleModeShortcut(makeKeyEvent("4", true, false))).toBeNull();
   });
 
   it("returns null for Ctrl+5 (no matching mode)", () => {
