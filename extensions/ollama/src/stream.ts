@@ -220,6 +220,14 @@ export function createConfiguredOllamaCompatStreamWrapper(
 // Ollama compat wrapper now owns more than num_ctx injection.
 export const createConfiguredOllamaCompatNumCtxWrapper = createConfiguredOllamaCompatStreamWrapper;
 
+function stripOllamaPrefix(modelId: string): string {
+  const prefix = "ollama/";
+  if (modelId.toLowerCase().startsWith(prefix)) {
+    return modelId.slice(prefix.length);
+  }
+  return modelId;
+}
+
 export function buildOllamaChatRequest(params: {
   modelId: string;
   messages: OllamaChatMessage[];
@@ -228,7 +236,7 @@ export function buildOllamaChatRequest(params: {
   stream?: boolean;
 }): OllamaChatRequest {
   return {
-    model: params.modelId,
+    model: stripOllamaPrefix(params.modelId),
     messages: params.messages,
     stream: params.stream ?? true,
     ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),
