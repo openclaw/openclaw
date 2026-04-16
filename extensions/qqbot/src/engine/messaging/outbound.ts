@@ -1211,9 +1211,7 @@ async function sendTextAfterMedia(ctx: MediaTargetContext, text: string): Promis
     const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
     await senderSendText(target, text, creds, { msgId: ctx.replyToId });
   } catch (err) {
-    debugError(
-      `[qqbot] sendTextAfterMedia failed: ${err instanceof Error ? err.message : JSON.stringify(err)}`,
-    );
+    debugError(`[qqbot] sendTextAfterMedia failed: ${formatErrorMessage(err)}`);
   }
 }
 

@@ -7,6 +7,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
 import { getQQBotDataDir } from "../utils/platform.js";
 import type { RefIndexEntry } from "./types.js";
@@ -71,7 +72,7 @@ function loadFromFile(): Map<string, RefIndexEntry & { _createdAt: number }> {
       compactFile();
     }
   } catch (err) {
-    debugError(`[ref-index-store] Failed to load: ${String(err)}`);
+    debugError(`[ref-index-store] Failed to load: ${formatErrorMessage(err)}`);
     cache = new Map();
   }
   return cache;
@@ -89,7 +90,7 @@ function appendLine(line: RefIndexLine): void {
     fs.appendFileSync(REF_INDEX_FILE, JSON.stringify(line) + "\n", "utf-8");
     totalLinesOnDisk++;
   } catch (err) {
-    debugError(`[ref-index-store] Failed to append: ${String(err)}`);
+    debugError(`[ref-index-store] Failed to append: ${formatErrorMessage(err)}`);
   }
 }
 
@@ -129,9 +130,7 @@ function compactFile(): void {
     totalLinesOnDisk = cache.size;
     debugLog(`[ref-index-store] Compacted: ${before} lines → ${totalLinesOnDisk} lines`);
   } catch (err) {
-    debugError(
-      `[ref-index-store] Compact failed: ${err instanceof Error ? err.message : JSON.stringify(err)}`,
-    );
+    debugError(`[ref-index-store] Compact failed: ${formatErrorMessage(err)}`);
   }
 }
 

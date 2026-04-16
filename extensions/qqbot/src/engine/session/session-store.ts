@@ -7,6 +7,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
 import { getQQBotDataDir } from "../utils/platform.js";
 
@@ -118,7 +119,9 @@ export function loadSession(accountId: string, expectedAppId?: string): SessionS
     );
     return state;
   } catch (err) {
-    debugError(`[session-store] Failed to load session for ${accountId}: ${String(err)}`);
+    debugError(
+      `[session-store] Failed to load session for ${accountId}: ${formatErrorMessage(err)}`,
+    );
     return null;
   }
 }
@@ -176,7 +179,9 @@ function doSaveSession(state: SessionState): void {
       `[session-store] Saved session for ${state.accountId}: sessionId=${state.sessionId}, lastSeq=${state.lastSeq}`,
     );
   } catch (err) {
-    debugError(`[session-store] Failed to save session for ${state.accountId}: ${String(err)}`);
+    debugError(
+      `[session-store] Failed to save session for ${state.accountId}: ${formatErrorMessage(err)}`,
+    );
   }
 }
 
@@ -201,7 +206,9 @@ export function clearSession(accountId: string): void {
       debugLog(`[session-store] Cleared session for ${accountId}`);
     }
   } catch (err) {
-    debugError(`[session-store] Failed to clear session for ${accountId}: ${String(err)}`);
+    debugError(
+      `[session-store] Failed to clear session for ${accountId}: ${formatErrorMessage(err)}`,
+    );
   }
 }
 

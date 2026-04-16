@@ -10,6 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { GatewayAccount } from "../types.js";
 import { MAX_UPLOAD_SIZE, formatFileSize } from "../utils/file-utils.js";
+import { formatErrorMessage } from "../utils/format.js";
 import {
   parseQQBotPayload,
   encodePayloadForCron,
@@ -167,9 +168,7 @@ export async function handleStructuredPayload(
       );
     } catch (err) {
       log?.error(
-        `[qqbot:${account.accountId}] Failed to send cron confirmation: ${
-          err instanceof Error ? err.message : JSON.stringify(err)
-        }`,
+        `[qqbot:${account.accountId}] Failed to send cron confirmation: ${formatErrorMessage(err)}`,
       );
     }
     recordActivity();
@@ -400,11 +399,7 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
       await sendTextToTarget(ctx, payload.caption);
     }
   } catch (err) {
-    log?.error(
-      `[qqbot:${account.accountId}] Failed to send image: ${
-        err instanceof Error ? err.message : JSON.stringify(err)
-      }`,
-    );
+    log?.error(`[qqbot:${account.accountId}] Failed to send image: ${formatErrorMessage(err)}`);
   }
 }
 
@@ -475,11 +470,7 @@ async function handleAudioPayload(
     );
     log?.info(`[qqbot:${account.accountId}] Voice message sent`);
   } catch (err) {
-    log?.error(
-      `[qqbot:${account.accountId}] TTS/voice send failed: ${
-        err instanceof Error ? err.message : JSON.stringify(err)
-      }`,
-    );
+    log?.error(`[qqbot:${account.accountId}] TTS/voice send failed: ${formatErrorMessage(err)}`);
   }
 }
 
@@ -535,9 +526,7 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
       await sendTextToTarget(ctx, payload.caption);
     }
   } catch (err) {
-    const errMsg =
-      err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err);
-    log?.error(`[qqbot:${account.accountId}] Video send failed: ${errMsg}`);
+    log?.error(`[qqbot:${account.accountId}] Video send failed: ${formatErrorMessage(err)}`);
   }
 }
 
@@ -589,8 +578,6 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
     );
     log?.info(`[qqbot:${account.accountId}] File message sent`);
   } catch (err) {
-    const errMsg =
-      err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err);
-    log?.error(`[qqbot:${account.accountId}] File send failed: ${errMsg}`);
+    log?.error(`[qqbot:${account.accountId}] File send failed: ${formatErrorMessage(err)}`);
   }
 }

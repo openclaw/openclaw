@@ -5,6 +5,8 @@
  * module has zero external dependencies and can run in both plugin versions.
  */
 
+import { formatErrorMessage } from "../utils/format.js";
+
 /** Function that sends a typing indicator to one user. */
 export type SendInputNotifyFn = (
   token: string,
@@ -70,7 +72,7 @@ export class TypingKeepAlive {
         await this.sendInputNotify(token, this.openid, this.msgId, TYPING_INPUT_SECOND);
       } catch {
         this.log?.debug?.(
-          `${this.logPrefix} Typing keep-alive failed for ${this.openid}: ${String(err)}`,
+          `${this.logPrefix} Typing keep-alive failed for ${this.openid}: ${formatErrorMessage(err)}`,
         );
       }
     }

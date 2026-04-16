@@ -14,6 +14,7 @@ import type {
   ApiLogger,
   InlineKeyboard,
 } from "../types.js";
+import { formatErrorMessage } from "../utils/format.js";
 import { ApiClient } from "./client.js";
 import {
   messagePath,
@@ -201,9 +202,7 @@ export class MessageApi {
       try {
         this.messageSentHook(result.ext_info.ref_idx, meta);
       } catch (err) {
-        this.logger?.error?.(
-          `[messages] onMessageSent hook error: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        this.logger?.error?.(`[messages] onMessageSent hook error: ${formatErrorMessage(err)}`);
       }
     }
     return result;

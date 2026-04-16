@@ -11,6 +11,7 @@
  */
 
 import type { ApiLogger } from "../types.js";
+import { formatErrorMessage } from "../utils/format.js";
 
 /** Standard retry policy with exponential or fixed backoff. */
 export interface RetryPolicy {
@@ -65,7 +66,7 @@ export async function withRetry<T>(
     try {
       return await fn();
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
+      lastError = err instanceof Error ? err : new Error(formatErrorMessage(err));
 
       // Check for persistent-retry trigger before standard retry logic.
       if (persistentPolicy?.shouldPersistRetry(lastError)) {
@@ -119,7 +120,7 @@ async function persistentRetryLoop<T>(
       logger?.info?.(`[retry] Persistent retry succeeded after ${attempt} retries`);
       return result;
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
+      lastError = err instanceof Error ? err : new Error(formatErrorMessage(err));
 
       // If the error is no longer retryable, abort immediately.
       if (!policy.shouldPersistRetry(lastError)) {

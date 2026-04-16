@@ -8,6 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ChatScope } from "../types.js";
+import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
 import { getQQBotDataDir } from "../utils/platform.js";
 
@@ -57,7 +58,7 @@ function loadUsersFromFile(): Map<string, KnownUser> {
       debugLog(`[known-users] Loaded ${usersCache.size} users`);
     }
   } catch (err) {
-    debugError(`[known-users] Failed to load users: ${String(err)}`);
+    debugError(`[known-users] Failed to load users: ${formatErrorMessage(err)}`);
     usersCache = new Map();
   }
   return usersCache;
@@ -86,7 +87,7 @@ function doSaveUsersToFile(): void {
     );
     isDirty = false;
   } catch (err) {
-    debugError(`[known-users] Failed to save users: ${String(err)}`);
+    debugError(`[known-users] Failed to save users: ${formatErrorMessage(err)}`);
   }
 }
 

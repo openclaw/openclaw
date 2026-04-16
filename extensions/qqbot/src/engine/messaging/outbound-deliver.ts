@@ -7,6 +7,7 @@
  */
 
 import type { GatewayAccount } from "../types.js";
+import { formatErrorMessage } from "../utils/format.js";
 import { getImageSize, formatQQBotMarkdownImage, hasQQBotImageSize } from "../utils/image-size.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
 import { isLocalPath as isLocalFilePath } from "../utils/platform.js";
@@ -161,7 +162,7 @@ async function autoMediaBatch(params: {
         params.log?.info(successMessage);
       }
     } catch (err) {
-      params.log?.error(params.onThrownError(mediaUrl, String(err)));
+      params.log?.error(params.onThrownError(mediaUrl, formatErrorMessage(err)));
     }
   }
 }
@@ -210,7 +211,7 @@ async function sendTextChunks(
     log,
     onSuccess: (chunk) =>
       `${prefix} Sent text chunk (${chunk.length}/${text.length} chars): ${chunk.slice(0, 50)}...`,
-    onError: (err) => `${prefix} Failed to send text chunk: ${String(err)}`,
+    onError: (err) => `${prefix} Failed to send text chunk: ${formatErrorMessage(err)}`,
   });
 }
 
@@ -264,7 +265,7 @@ async function sendWithResultLogging(params: {
       params.log?.info(successMessage);
     }
   } catch (err) {
-    params.log?.error(params.onError(String(err)));
+    params.log?.error(params.onError(formatErrorMessage(err)));
   }
 }
 
@@ -322,7 +323,7 @@ async function sendVoiceWithTimeout(
       log?.error(`${prefix} sendVoice error: ${result.error}`);
     }
   } catch (err) {
-    log?.error(`${prefix} sendVoice unexpected error: ${String(err)}`);
+    log?.error(`${prefix} sendVoice unexpected error: ${formatErrorMessage(err)}`);
   }
 }
 
@@ -699,7 +700,7 @@ async function sendMarkdownReply(
           `${prefix} Formatted HTTP image: ${size ? `${size.width}x${size.height}` : "default size"} - ${url.slice(0, 60)}...`,
         );
       } catch (err) {
-        log?.info(`${prefix} Failed to get image size, using default: ${String(err)}`);
+        log?.info(`${prefix} Failed to get image size, using default: ${formatErrorMessage(err)}`);
         imagesToAppend.push(formatQQBotMarkdownImage(url, null));
       }
     }
@@ -720,7 +721,7 @@ async function sendMarkdownReply(
         );
       } catch (err) {
         log?.info(
-          `${prefix} Failed to get image size for existing md, using default: ${String(err)}`,
+          `${prefix} Failed to get image size for existing md, using default: ${formatErrorMessage(err)}`,
         );
         result = result.replace(fullMatch, formatQQBotMarkdownImage(imgUrl, null));
       }
@@ -751,7 +752,8 @@ async function sendMarkdownReply(
       log,
       onSuccess: (chunk) =>
         `${prefix} Sent markdown chunk (${chunk.length}/${result.length} chars) with ${httpImageUrls.length} HTTP images (${event.type})`,
-      onError: (err) => `${prefix} Failed to send markdown message chunk: ${String(err)}`,
+      onError: (err) =>
+        `${prefix} Failed to send markdown message chunk: ${formatErrorMessage(err)}`,
     });
   }
 }
@@ -812,10 +814,10 @@ async function sendPlainTextReply(
         log,
         onSuccess: (chunk) =>
           `${prefix} Sent text chunk (${chunk.length}/${result.length} chars) (${event.type})`,
-        onError: (err) => `${prefix} Send failed: ${String(err)}`,
+        onError: (err) => `${prefix} Send failed: ${formatErrorMessage(err)}`,
       });
     }
   } catch (err) {
-    log?.error(`${prefix} Send failed: ${String(err)}`);
+    log?.error(`${prefix} Send failed: ${formatErrorMessage(err)}`);
   }
 }

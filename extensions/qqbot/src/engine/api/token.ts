@@ -7,6 +7,7 @@
  */
 
 import type { ApiLogger } from "../types.js";
+import { formatErrorMessage } from "../utils/format.js";
 
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
 
@@ -160,7 +161,7 @@ export class TokenManager {
             break;
           }
           this.logger?.error?.(
-            `[token:${appId}] Background refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+            `[token:${appId}] Background refresh failed: ${formatErrorMessage(err)}`,
           );
           await this.abortableSleep(retryDelayMs, signal);
         }
@@ -216,13 +217,10 @@ export class TokenManager {
         body: JSON.stringify({ appId, clientSecret }),
       });
     } catch (err) {
-      this.logger?.error?.(
-        `[token:${appId}] Network error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      throw new Error(
-        `Network error getting access_token: ${err instanceof Error ? err.message : String(err)}`,
-        { cause: err },
-      );
+      this.logger?.error?.(`[token:${appId}] Network error: ${formatErrorMessage(err)}`);
+      throw new Error(`Network error getting access_token: ${formatErrorMessage(err)}`, {
+        cause: err,
+      });
     }
 
     const traceId = response.headers.get("x-tps-trace-id") ?? "";
@@ -237,10 +235,9 @@ export class TokenManager {
       this.logger?.debug?.(`[token:${appId}] <<< Body: ${logBody}`);
       data = JSON.parse(rawBody);
     } catch (err) {
-      throw new Error(
-        `Failed to parse access_token response: ${err instanceof Error ? err.message : String(err)}`,
-        { cause: err },
-      );
+      throw new Error(`Failed to parse access_token response: ${formatErrorMessage(err)}`, {
+        cause: err,
+      });
     }
 
     if (!data.access_token) {

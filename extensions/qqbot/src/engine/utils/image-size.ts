@@ -7,6 +7,7 @@
 import { Buffer } from "buffer";
 import { getPlatformAdapter } from "../adapter/index.js";
 import type { SsrfPolicyConfig } from "../adapter/types.js";
+import { formatErrorMessage } from "./format.js";
 import { debugLog } from "./log.js";
 
 export interface ImageSize {
@@ -192,7 +193,7 @@ export async function getImageSizeFromUrl(
       clearTimeout(timeoutId);
     }
   } catch (err) {
-    debugLog(`[image-size] Error fetching ${url.slice(0, 60)}...: ${String(err)}`);
+    debugLog(`[image-size] Error fetching ${url.slice(0, 60)}...: ${formatErrorMessage(err)}`);
     return null;
   }
 }
@@ -216,7 +217,7 @@ export function getImageSizeFromDataUrl(dataUrl: string): ImageSize | null {
 
     return size;
   } catch (err) {
-    debugLog(`[image-size] Error parsing Base64: ${String(err)}`);
+    debugLog(`[image-size] Error parsing Base64: ${formatErrorMessage(err)}`);
     return null;
   }
 }

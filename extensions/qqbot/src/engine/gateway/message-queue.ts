@@ -8,6 +8,8 @@
  * and an abort-state probe supplied via {@link MessageQueueContext}.
  */
 
+import { formatErrorMessage } from "../utils/format.js";
+
 // Message queue limits.
 const MESSAGE_QUEUE_SIZE = 1000;
 const PER_USER_QUEUE_SIZE = 20;
@@ -138,7 +140,9 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
             messagesProcessed++;
           }
         } catch (err) {
-          log?.error(`[qqbot:${accountId}] Message processor error for ${peerId}: ${String(err)}`);
+          log?.error(
+            `[qqbot:${accountId}] Message processor error for ${peerId}: ${formatErrorMessage(err)}`,
+          );
         }
       }
     } finally {

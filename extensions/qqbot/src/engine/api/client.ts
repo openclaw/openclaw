@@ -10,6 +10,7 @@
  */
 
 import { ApiError, type ApiClientConfig, type ApiLogger } from "../types.js";
+import { formatErrorMessage } from "../utils/format.js";
 
 const DEFAULT_BASE_URL = "https://api.sgroup.qq.com";
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -112,14 +113,8 @@ export class ApiClient {
         this.logger?.error?.(`[core-api][${reqTs}] <<< Timeout after ${timeout}ms`);
         throw new ApiError(`Request timeout [${path}]: exceeded ${timeout}ms`, 0, path);
       }
-      this.logger?.error?.(
-        `[core-api][${reqTs}] <<< Network error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      throw new ApiError(
-        `Network error [${path}]: ${err instanceof Error ? err.message : String(err)}`,
-        0,
-        path,
-      );
+      this.logger?.error?.(`[core-api][${reqTs}] <<< Network error: ${formatErrorMessage(err)}`);
+      throw new ApiError(`Network error [${path}]: ${formatErrorMessage(err)}`, 0, path);
     } finally {
       clearTimeout(timeoutId);
     }
@@ -135,7 +130,7 @@ export class ApiClient {
       rawBody = await res.text();
     } catch (err) {
       throw new ApiError(
-        `Failed to read response [${path}]: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to read response [${path}]: ${formatErrorMessage(err)}`,
         res.status,
         path,
       );
