@@ -8,8 +8,9 @@ LIVE_IMAGE_NAME="${OPENCLAW_LIVE_IMAGE:-${IMAGE_NAME}-live}"
 CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
-CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-$HOME/.cache/openclaw/docker-cli-tools}"
 ACP_AGENT_LIST_RAW="${OPENCLAW_LIVE_ACP_BIND_AGENTS:-${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude,codex,gemini}}"
+TEMP_DIRS=()
+DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
 
 openclaw_live_acp_bind_resolve_auth_provider() {
   case "${1:-}" in
@@ -32,17 +33,42 @@ openclaw_live_acp_bind_resolve_agent_command() {
   esac
 }
 
+cleanup_temp_dirs() {
+  if ((${#TEMP_DIRS[@]} > 0)); then
+    rm -rf "${TEMP_DIRS[@]}"
+  fi
+}
+trap cleanup_temp_dirs EXIT
+
+if [[ -n "${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-}" ]]; then
+  CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR}"
+elif [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  CLI_TOOLS_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cli-tools.XXXXXX")"
+  TEMP_DIRS+=("$CLI_TOOLS_DIR")
+else
+  CLI_TOOLS_DIR="$HOME/.cache/openclaw/docker-cli-tools"
+fi
+
 mkdir -p "$CLI_TOOLS_DIR"
+if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  DOCKER_USER="$(id -u):$(id -g)"
+fi
 
 PROFILE_MOUNT=()
-if [[ -f "$PROFILE_FILE" ]]; then
+if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
 fi
 
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
-[ -f "$HOME/.profile" ] && source "$HOME/.profile" || true
-export PATH="$HOME/.npm-global/bin:$PATH"
+[ -f "$HOME/.profile" ] && [ -r "$HOME/.profile" ] && source "$HOME/.profile" || true
+export NPM_CONFIG_PREFIX="${NPM_CONFIG_PREFIX:-$HOME/.npm-global}"
+export npm_config_prefix="$NPM_CONFIG_PREFIX"
+export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$HOME/.npm-cache}"
+export npm_config_cache="$NPM_CONFIG_CACHE"
+mkdir -p "$NPM_CONFIG_PREFIX" "$NPM_CONFIG_CACHE"
+chmod 700 "$NPM_CONFIG_CACHE" || true
+export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 IFS=',' read -r -a auth_dirs <<<"${OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED:-}"
 IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
 if ((${#auth_dirs[@]} > 0)); then
@@ -68,15 +94,15 @@ fi
 agent="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
 case "$agent" in
   claude)
-    if [ ! -x "$HOME/.npm-global/bin/claude" ]; then
-      npm_config_prefix="$HOME/.npm-global" npm install -g @anthropic-ai/claude-code
+    if [ ! -x "$NPM_CONFIG_PREFIX/bin/claude" ]; then
+      npm install -g @anthropic-ai/claude-code
     fi
-    real_claude="$HOME/.npm-global/bin/claude-real"
-    if [ ! -x "$real_claude" ] && [ -x "$HOME/.npm-global/bin/claude" ]; then
-      mv "$HOME/.npm-global/bin/claude" "$real_claude"
+    real_claude="$NPM_CONFIG_PREFIX/bin/claude-real"
+    if [ ! -x "$real_claude" ] && [ -x "$NPM_CONFIG_PREFIX/bin/claude" ]; then
+      mv "$NPM_CONFIG_PREFIX/bin/claude" "$real_claude"
     fi
     if [ -x "$real_claude" ]; then
-      cat > "$HOME/.npm-global/bin/claude" <<WRAP
+      cat > "$NPM_CONFIG_PREFIX/bin/claude" <<WRAP
 #!/usr/bin/env bash
 script_dir="\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)"
 if [ -n "\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY:-}" ]; then
@@ -87,19 +113,19 @@ if [ -n "\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD:-}" ]; then
 fi
 exec "\$script_dir/claude-real" "\$@"
 WRAP
-      chmod +x "$HOME/.npm-global/bin/claude"
+      chmod +x "$NPM_CONFIG_PREFIX/bin/claude"
     fi
     claude auth status || true
     ;;
   codex)
-    if [ ! -x "$HOME/.npm-global/bin/codex" ]; then
-      npm_config_prefix="$HOME/.npm-global" npm install -g @openai/codex
+    if [ ! -x "$NPM_CONFIG_PREFIX/bin/codex" ]; then
+      npm install -g @openai/codex
     fi
     ;;
   gemini)
     mkdir -p "$HOME/.gemini"
-    if [ ! -x "$HOME/.npm-global/bin/gemini" ]; then
-      npm_config_prefix="$HOME/.npm-global" npm install -g @google/gemini-cli
+    if [ ! -x "$NPM_CONFIG_PREFIX/bin/gemini" ]; then
+      npm install -g @google/gemini-cli
     fi
     ;;
   *)
@@ -203,7 +229,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
   echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
   echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
   docker run --rm -t \
-    -u node \
+    -u "$DOCKER_USER" \
     --entrypoint bash \
     -e ANTHROPIC_API_KEY \
     -e ANTHROPIC_API_KEY_OLD \
