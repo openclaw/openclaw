@@ -210,8 +210,8 @@ export const resolveBuildRequirement = (deps) => {
   }
   if (
     deps.env.OPENCLAW_BUILD_PRIVATE_QA === "1" &&
-    deps.privateQaDistEntry &&
-    statMtime(deps.privateQaDistEntry, deps.fs) == null
+    ((deps.privateQaDistEntry && statMtime(deps.privateQaDistEntry, deps.fs) == null) ||
+      (deps.privateQaBundledCliEntry && statMtime(deps.privateQaBundledCliEntry, deps.fs) == null))
   ) {
     return { shouldBuild: true, reason: "missing_private_qa_dist" };
   }
@@ -397,7 +397,8 @@ export async function runNodeMain(params = {}) {
     path: path.join(deps.cwd, sourceRoot),
   }));
   deps.configFiles = runNodeConfigFiles.map((filePath) => path.join(deps.cwd, filePath));
-  deps.privateQaDistEntry = path.join(deps.distRoot, "extensions", "qa-lab", "cli.js");
+  deps.privateQaDistEntry = path.join(deps.distRoot, "plugin-sdk", "qa-lab.js");
+  deps.privateQaBundledCliEntry = path.join(deps.distRoot, "extensions", "qa-lab", "cli.js");
   if (deps.args[0] === "qa") {
     deps.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
     deps.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
