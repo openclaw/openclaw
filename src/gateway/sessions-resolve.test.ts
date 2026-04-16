@@ -8,6 +8,7 @@ const hoisted = vi.hoisted(() => ({
   listSessionsFromStoreMock: vi.fn(),
   migrateAndPruneGatewaySessionStoreKeyMock: vi.fn(),
   resolveGatewaySessionStoreTargetMock: vi.fn(),
+  loadCombinedSessionStoreForGatewayMock: vi.fn(),
   listAgentIdsMock: vi.fn(),
 }));
 
@@ -38,6 +39,7 @@ vi.mock("./session-utils.js", async () => {
     listSessionsFromStore: hoisted.listSessionsFromStoreMock,
     migrateAndPruneGatewaySessionStoreKey: hoisted.migrateAndPruneGatewaySessionStoreKeyMock,
     resolveGatewaySessionStoreTarget: hoisted.resolveGatewaySessionStoreTargetMock,
+    loadCombinedSessionStoreForGateway: hoisted.loadCombinedSessionStoreForGatewayMock,
   };
 });
 
@@ -54,6 +56,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
     hoisted.listSessionsFromStoreMock.mockReset();
     hoisted.migrateAndPruneGatewaySessionStoreKeyMock.mockReset();
     hoisted.resolveGatewaySessionStoreTargetMock.mockReset();
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReset();
     hoisted.listAgentIdsMock.mockReset();
     // Default: all agents are known (main is always present).
     hoisted.listAgentIdsMock.mockReturnValue(["main"]);
@@ -144,6 +147,56 @@ describe("resolveSessionKeyFromResolveParams", () => {
     const result = await resolveSessionKeyFromResolveParams({
       cfg: {},
       p: { key: deletedAgentKey },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: 'Agent "deleted-agent" no longer exists in configuration',
+      },
+    });
+  });
+
+  it("rejects sessions belonging to a deleted agent (sessionId-based lookup)", async () => {
+    const deletedAgentKey = "agent:deleted-agent:main";
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store: { [deletedAgentKey]: { sessionId: "sess-orphan", updatedAt: 1 } },
+    });
+    hoisted.listSessionsFromStoreMock.mockReturnValue({
+      sessions: [{ key: deletedAgentKey, sessionId: "sess-orphan" }],
+    });
+    hoisted.listAgentIdsMock.mockReturnValue(["main"]);
+
+    const result = await resolveSessionKeyFromResolveParams({
+      cfg: {},
+      p: { sessionId: "sess-orphan" },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: 'Agent "deleted-agent" no longer exists in configuration',
+      },
+    });
+  });
+
+  it("rejects sessions belonging to a deleted agent (label-based lookup)", async () => {
+    const deletedAgentKey = "agent:deleted-agent:main";
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store: { [deletedAgentKey]: { sessionId: "sess-orphan", updatedAt: 1, label: "my-label" } },
+    });
+    hoisted.listSessionsFromStoreMock.mockReturnValue({
+      sessions: [{ key: deletedAgentKey, sessionId: "sess-orphan", label: "my-label" }],
+    });
+    hoisted.listAgentIdsMock.mockReturnValue(["main"]);
+
+    const result = await resolveSessionKeyFromResolveParams({
+      cfg: {},
+      p: { label: "my-label" },
     });
 
     expect(result).toEqual({
