@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { applyA2ATaskEvent, createA2ATaskRecord } from "./store.js";
 import type { A2ATaskEvent, A2ATaskEventSink, A2ATaskRecord } from "./types.js";
 
 const A2A_DIRNAME = "a2a";
 const A2A_EVENT_LOG_SUFFIX = ".events.jsonl";
+const log = createSubsystemLogger("agents/a2a");
 
 function sanitizeA2ATaskFileToken(value: string): string {
   const trimmed = value.trim();
@@ -45,17 +47,30 @@ export function createA2ATaskEventLogSink(params: {
   return {
     async append(event) {
       if (!ready) {
-        ready = true;
         try {
-          fs.mkdirSync(path.dirname(eventLogPath), { recursive: true });
-        } catch {
-          // ignore best-effort mkdir failures
+          await fs.promises.mkdir(path.dirname(eventLogPath), { recursive: true });
+          ready = true;
+        } catch (error) {
+          log.warn("a2a event log mkdir failed", {
+            sessionKey: params.sessionKey,
+            taskId: params.taskId,
+            eventLogPath,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
         }
       }
       try {
         await fs.promises.appendFile(eventLogPath, `${JSON.stringify(event)}\n`, "utf8");
-      } catch {
-        // ignore best-effort logging failures
+      } catch (error) {
+        log.warn("a2a event log append failed", {
+          sessionKey: params.sessionKey,
+          taskId: params.taskId,
+          eventLogPath,
+          eventType: event.type,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
       }
     },
   };
@@ -89,6 +104,27 @@ export async function readA2ATaskEvents(params: {
         return [];
       }
     });
+}
+
+export async function listA2ATaskEventLogTaskTokens(params: {
+  sessionKey: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string[]> {
+  const tasksDir = resolveA2ATasksDir(params);
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = await fs.promises.readdir(tasksDir, { withFileTypes: true });
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? (error.code as string) : undefined;
+    if (code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(A2A_EVENT_LOG_SUFFIX))
+    .map((entry) => entry.name.slice(0, -A2A_EVENT_LOG_SUFFIX.length));
 }
 
 export async function loadA2ATaskRecordFromEventLog(params: {

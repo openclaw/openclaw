@@ -69,4 +69,86 @@ describe("A2A event log", () => {
       await fs.readFile(resolveA2ATaskEventLogPath({ sessionKey, taskId, env }), "utf8"),
     ).toContain('"type":"task.created"');
   });
+
+  it("propagates append failures so callers can stop the task flow", async () => {
+    const stateFile = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-a2a-log-file-"));
+    tempDirs.push(stateFile);
+    const blockingPath = path.join(stateFile, "not-a-directory");
+    await fs.writeFile(blockingPath, "busy", "utf8");
+
+    const env = { OPENCLAW_STATE_DIR: blockingPath } as NodeJS.ProcessEnv;
+    const sessionKey = "agent:worker:main";
+    const taskId = "task-append-failure-1";
+    const sink = createA2ATaskEventLogSink({ sessionKey, taskId, env });
+    const envelope = buildA2ATaskEnvelopeFromExchange({
+      request: {
+        target: { sessionKey, displayKey: sessionKey },
+        originalMessage: "Stop on log append failure",
+        announceTimeoutMs: 10_000,
+        maxPingPongTurns: 0,
+        waitRunId: taskId,
+      },
+      taskId,
+    });
+
+    await expect(sink.append(createA2ATaskCreatedEvent({ envelope, at: 10 }))).rejects.toThrow();
+  });
+
+  it("ignores malformed jsonl lines while replaying the event log", async () => {
+    const env = await makeEnv();
+    const sessionKey = "agent:worker:main";
+    const taskId = "task-malformed-1";
+    const envelope = buildA2ATaskEnvelopeFromExchange({
+      request: {
+        target: { sessionKey, displayKey: sessionKey },
+        originalMessage: "Inspect malformed logs",
+        announceTimeoutMs: 10_000,
+        maxPingPongTurns: 0,
+        waitRunId: taskId,
+      },
+      taskId,
+    });
+
+    await fs.mkdir(path.dirname(resolveA2ATaskEventLogPath({ sessionKey, taskId, env })), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      resolveA2ATaskEventLogPath({ sessionKey, taskId, env }),
+      [
+        JSON.stringify(createA2ATaskCreatedEvent({ envelope, at: 10 })),
+        "{not json}",
+        JSON.stringify(createA2ATaskAcceptedEvent({ taskId, at: 11 })),
+        JSON.stringify(createA2ATaskCompletedEvent({ taskId, at: 12, summary: "done" })),
+      ].join("\n"),
+      "utf8",
+    );
+
+    const record = await loadA2ATaskRecordFromEventLog({ sessionKey, taskId, env });
+
+    expect(record).toMatchObject({
+      taskId,
+      execution: { status: "completed", acceptedAt: 11, completedAt: 12 },
+      result: { summary: "done" },
+    });
+  });
+
+  it("ignores broken logs that never emitted task.created", async () => {
+    const env = await makeEnv();
+    const sessionKey = "agent:worker:main";
+    const taskId = "task-missing-created-1";
+
+    await fs.mkdir(path.dirname(resolveA2ATaskEventLogPath({ sessionKey, taskId, env })), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      resolveA2ATaskEventLogPath({ sessionKey, taskId, env }),
+      [JSON.stringify(createA2ATaskAcceptedEvent({ taskId, at: 11 }))].join("\n"),
+      "utf8",
+    );
+
+    expect(await readA2ATaskEvents({ sessionKey, taskId, env })).toHaveLength(1);
+    await expect(
+      loadA2ATaskRecordFromEventLog({ sessionKey, taskId, env }),
+    ).resolves.toBeUndefined();
+  });
 });

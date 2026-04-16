@@ -215,6 +215,17 @@ export class A2ABrokerClientError extends Error {
   }
 }
 
+export class A2ABrokerMalformedResponseError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly bodyText: string,
+  ) {
+    super(message);
+    this.name = "A2ABrokerMalformedResponseError";
+  }
+}
+
 function normalizeOptionalString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -232,15 +243,27 @@ function buildEndpointUrl(baseUrl: string, path: string): string {
   return new URL(path.replace(/^\//, ""), `${baseUrl}/`).toString();
 }
 
-async function readBrokerBody(response: Response): Promise<unknown> {
+async function readBrokerText(response: Response): Promise<string | undefined> {
   const text = await response.text();
+  if (!text) {
+    return undefined;
+  }
+  return text;
+}
+
+async function readBrokerJson(response: Response): Promise<unknown> {
+  const text = await readBrokerText(response);
   if (!text) {
     return undefined;
   }
   try {
     return JSON.parse(text) as unknown;
   } catch {
-    return text;
+    throw new A2ABrokerMalformedResponseError(
+      `Broker returned malformed JSON (${response.status})`,
+      response.status,
+      text,
+    );
   }
 }
 
@@ -273,7 +296,7 @@ function buildClientError(response: Response, body: unknown): A2ABrokerClientErr
 }
 
 async function parseBrokerJson<T>(response: Response, schema: z.ZodType<T>): Promise<T> {
-  const body = await readBrokerBody(response);
+  const body = await readBrokerJson(response);
   if (!response.ok) {
     throw buildClientError(response, body);
   }

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  A2ABrokerMalformedResponseError,
   buildBrokerCreateTaskRequestFromOpenClaw,
   createA2ABrokerClient,
   type A2ABrokerTaskRecord,
@@ -210,5 +211,39 @@ describe("createA2ABrokerClient", () => {
       reason: "No longer needed",
     });
     expect(record.status).toBe("canceled");
+  });
+
+  it("throws a malformed-response error when an ok response body is not JSON", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response("not-json", {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      }),
+    );
+    const client = createA2ABrokerClient({
+      baseUrl: "https://broker.example.com",
+      fetchImpl,
+    });
+
+    await expect(client.health()).rejects.toBeInstanceOf(A2ABrokerMalformedResponseError);
+  });
+
+  it("throws a malformed-response error even when an error response body is not JSON", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response("gateway exploded", {
+        status: 502,
+        headers: {
+          "content-type": "text/plain",
+        },
+      }),
+    );
+    const client = createA2ABrokerClient({
+      baseUrl: "https://broker.example.com",
+      fetchImpl,
+    });
+
+    await expect(client.getTask("task-1")).rejects.toBeInstanceOf(A2ABrokerMalformedResponseError);
   });
 });
