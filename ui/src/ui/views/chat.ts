@@ -1794,56 +1794,60 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
           }
         }
         
-        // Always check content first to see if it has unique content
-        let hasUniqueContent = false;
-        
-        for (const block of currentContent) {
-          const b = block as Record<string, unknown>;
+        // If there are no media URLs in the assistant message, and no details field,
+        // then we can't be deduping media - keep the message
+        if (assistantMediaUrls.size === 0 && !hasDetails) {
+          // No media to dedupe against - keep the message
+        } else {
+          let hasUniqueContent = false;
           
-          if (b.type === "text" && typeof b.text === "string") {
-            const text = b.text.trim();
-            if (!text) {
-              continue;
-            }
-            
-            // Check if this text is just a markdown link to a media URL we already have
-            const linkMatch = text.match(/^[\u{1F3B5}\u{1F3AC}\u{1F4F7}]?\s*\[([^\]]*)\]\(([^)]+)\)$/u);
-            if (linkMatch) {
-              const url = linkMatch[2];
-              // If the URL isn't in the assistant message, this is unique content
-              if (!assistantMediaUrls.has(url)) {
+          if (!hasUniqueContent) {
+            for (const block of currentContent) {
+              const b = block as Record<string, unknown>;
+              
+              if (b.type === "text" && typeof b.text === "string") {
+                const text = b.text.trim();
+                if (!text) {
+                  continue;
+                }
+                
+                // Check if this text is just a markdown link or HTML link to a media URL we already have
+                // Extract URLs from HTML anchor tags or markdown links
+                const urlMatches = text.match(/https?:\/\/[^\s"')>]+/g) || [];
+                const hasNewUrl = urlMatches.some(url => !assistantMediaUrls.has(url));
+                
+                // Check if this text is just an emoji + link (no other meaningful content)
+                const isJustEmojiAndLink = /^[\u{1F300}-\u{1F9FF}]?\s*(?:<a[^>]*>.*?<\/a>|\[[^\]]*\]\([^)]+\))\s*$/u.test(text);
+                
+                if (isJustEmojiAndLink && !hasNewUrl) {
+                  // This is just a duplicate media link - ignore it and keep checking
+                  continue;
+                } else {
+                  // Has meaningful text content or new URLs
+                  hasUniqueContent = true;
+                  break;
+                }
+              } else if (b.type === "audio" || b.type === "video" || b.type === "image") {
+                const url = typeof b.url === "string" ? b.url : undefined;
+                const hasInlinePayload = b.data !== undefined || b.payload !== undefined || b.base64 !== undefined;
+                // If this media URL isn't already in the assistant message, or it has inline payload, it's unique
+                if ((url && !assistantMediaUrls.has(url)) || hasInlinePayload) {
+                  hasUniqueContent = true;
+                  break;
+                }
+              } else if (b.type !== "text") {
+                // Any other content type is considered unique
                 hasUniqueContent = true;
                 break;
               }
-              // Otherwise it's just a duplicate link - ignore it and keep checking
-            } else {
-              // Non-link text content - this is unique
-              hasUniqueContent = true;
-              break;
             }
-          } else if (b.type === "audio" || b.type === "video" || b.type === "image") {
-            const url = typeof b.url === "string" ? b.url : undefined;
-            const hasInlinePayload = b.data !== undefined || b.payload !== undefined || b.base64 !== undefined;
-            // If this media URL isn't already in the assistant message, or it has inline payload, it's unique
-            if ((url && !assistantMediaUrls.has(url)) || hasInlinePayload) {
-              hasUniqueContent = true;
-              break;
-            }
-          } else if (b.type !== "text") {
-            // Any other content type is considered unique
-            hasUniqueContent = true;
-            break;
+          }
+          
+          // If the toolResult adds nothing new, skip it entirely
+          if (!hasUniqueContent) {
+            continue;
           }
         }
-        
-        // If no unique content in the blocks, AND there's no details field, skip this message
-        // Details field alone should NOT cause the message to be kept - it needs actual unique content
-        if (!hasUniqueContent && !hasDetails) {
-          continue;
-        }
-        
-        // If hasDetails is true but hasUniqueContent is false, we still keep it
-        // because details provides important data even without unique content
       }
     }
 
