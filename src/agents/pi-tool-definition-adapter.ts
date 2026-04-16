@@ -348,37 +348,3 @@ export function toClientToolDefinitions(
     } satisfies ToolDefinition;
   });
 }
-
-/**
- * Find conflicts between client tool names and existing tool names
- * @param options.tools - Array of client tools (each has a function.name property)
- * @param options.existingToolNames - Array or Set of existing tool names to check against
- * @returns Array of conflicting tool names
- */
-export function findClientToolNameConflicts({
-  tools,
-  existingToolNames,
-}: {
-  tools: Array<{ function: { name: string } }>;
-  existingToolNames: Set<string> | string[];
-}): string[] {
-  const existingSet = existingToolNames instanceof Set 
-    ? existingToolNames 
-    : new Set(existingToolNames);
-  return tools
-    .map(tool => tool.function.name)
-    .filter(name => existingSet.has(name));
-}
-
-/**
- * Create an error for client tool name conflicts
- * @param conflicts - Array of conflicting tool names
- * @returns Error object with descriptive message
- */
-export function createClientToolNameConflictError(conflicts: string[]): Error {
-  return new Error(
-    `Client tool name conflicts detected: ${conflicts.join(', ')}. ` +
-    `These tool names are already reserved by core system tools. ` +
-    `Please rename your client tools to avoid conflicts.`
-  );
-}

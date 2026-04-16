@@ -349,10 +349,10 @@ function loadSkillEntries(
   workspaceDir: string,
   opts?: {
     config?: OpenClawConfig;
-    agentId?: string;
+    agentId?: string;           // Keep this one
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
-    agentId?: string;
+    // Remove the duplicate agentId line here
   },
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
