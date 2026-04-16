@@ -32,7 +32,7 @@ const {
 } = getFeishuLifecycleTestMocks();
 
 let _handlers: Record<string, (data: unknown) => Promise<void>> = {};
-let lastRuntimeError: ReturnType<typeof vi.fn> | null = null;
+let lastRuntime: ReturnType<typeof createRuntimeEnv> | null = null;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const lifecycleConfig = createFeishuLifecycleConfig({
   accountId: "acct-card",
@@ -95,14 +95,13 @@ function createCardActionEvent(params: {
 }
 
 async function setupLifecycleMonitor() {
-  const runtime = createRuntimeEnv();
-  lastRuntimeError = runtime.error;
+  lastRuntime = createRuntimeEnv();
   return setupFeishuLifecycleHandler({
     createEventDispatcherMock,
     onRegister: (registered) => {
       _handlers = registered;
     },
-    runtime,
+    runtime: lastRuntime,
     cfg: lifecycleConfig,
     account: lifecycleAccount,
     handlerKey: "card.action.trigger",
@@ -115,7 +114,7 @@ describe("Feishu card-action lifecycle", () => {
     vi.useRealTimers();
     vi.clearAllMocks();
     _handlers = {};
-    lastRuntimeError = null;
+    lastRuntime = null;
     resetProcessedFeishuCardActionTokensForTests();
     setFeishuLifecycleStateDir("openclaw-feishu-card-action");
 
@@ -172,7 +171,7 @@ describe("Feishu card-action lifecycle", () => {
       createFeishuReplyDispatcherMock,
     });
 
-    expect(lastRuntimeError).not.toHaveBeenCalled();
+    expect(lastRuntime?.error).not.toHaveBeenCalled();
     expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
     expect(createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
     expect(createFeishuReplyDispatcherMock).toHaveBeenCalledWith(
@@ -213,10 +212,10 @@ describe("Feishu card-action lifecycle", () => {
       handler: onCardAction,
       event,
       dispatchReplyFromConfigMock,
-      runtimeErrorMock: lastRuntimeError as ReturnType<typeof vi.fn>,
+      runtimeErrorMock: lastRuntime?.error as ReturnType<typeof vi.fn>,
     });
 
-    expect(lastRuntimeError).toHaveBeenCalledTimes(1);
+    expect(lastRuntime?.error).toHaveBeenCalledTimes(1);
     expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
     expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
   });
@@ -252,7 +251,7 @@ describe("Feishu card-action lifecycle", () => {
       },
     });
 
-    expect(lastRuntimeError).toHaveBeenCalledWith(
+    expect(lastRuntime?.error).toHaveBeenCalledWith(
       "feishu[acct-card]: ignoring malformed card action payload",
     );
     expect(dispatchReplyFromConfigMock).not.toHaveBeenCalled();
