@@ -206,6 +206,25 @@ async function symlinkQaStagedDirEntry(params: {
   );
 }
 
+async function resolveQaStagedDirEntryDirectory(params: {
+  sourcePath: string;
+  entry?: {
+    isDirectory(): boolean;
+    isSymbolicLink(): boolean;
+  };
+}) {
+  if (params.entry?.isDirectory()) {
+    return true;
+  }
+  if (params.entry?.isSymbolicLink()) {
+    return (await fs.stat(params.sourcePath)).isDirectory();
+  }
+  if (params.entry) {
+    return false;
+  }
+  return (await fs.lstat(params.sourcePath)).isDirectory();
+}
+
 async function seedQaStagedNodeModules(params: { repoRoot: string; stagedRoot: string }) {
   const sourceNodeModulesDir = path.join(params.repoRoot, "node_modules");
   if (!existsSync(sourceNodeModulesDir)) {
@@ -220,7 +239,10 @@ async function seedQaStagedNodeModules(params: { repoRoot: string; stagedRoot: s
     await symlinkQaStagedDirEntry({
       sourcePath: path.join(sourceNodeModulesDir, entry.name),
       targetPath: path.join(stagedNodeModulesDir, entry.name),
-      directory: entry.isDirectory(),
+      directory: await resolveQaStagedDirEntryDirectory({
+        sourcePath: path.join(sourceNodeModulesDir, entry.name),
+        entry,
+      }),
     });
   }
 }
@@ -270,7 +292,10 @@ async function seedQaStagedBuiltTreeRoots(params: {
       await symlinkQaStagedDirEntry({
         sourcePath: path.join(sourceTreeRoot, entry.name),
         targetPath,
-        directory: entry.isDirectory(),
+        directory: await resolveQaStagedDirEntryDirectory({
+          sourcePath: path.join(sourceTreeRoot, entry.name),
+          entry,
+        }),
       });
     }
   }

@@ -926,6 +926,10 @@ describe("qa bundled plugin dir", () => {
     cleanups.push(async () => {
       await rm(repoRoot, { recursive: true, force: true });
     });
+    const fakeDepStoreRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-source-store-"));
+    cleanups.push(async () => {
+      await rm(fakeDepStoreRoot, { recursive: true, force: true });
+    });
     await writeFile(
       path.join(repoRoot, "package.json"),
       JSON.stringify(
@@ -965,17 +969,20 @@ describe("qa bundled plugin dir", () => {
       ].join("\n"),
       "utf8",
     );
-    await mkdir(path.join(repoRoot, "node_modules", "fake-dep"), { recursive: true });
+    const fakeDepPackageDir = path.join(fakeDepStoreRoot, "fake-dep");
+    await mkdir(fakeDepPackageDir, { recursive: true });
     await writeFile(
-      path.join(repoRoot, "node_modules", "fake-dep", "package.json"),
+      path.join(fakeDepPackageDir, "package.json"),
       JSON.stringify({ name: "fake-dep", type: "module" }, null, 2),
       "utf8",
     );
     await writeFile(
-      path.join(repoRoot, "node_modules", "fake-dep", "index.js"),
+      path.join(fakeDepPackageDir, "index.js"),
       'export const marker = "ok";\n',
       "utf8",
     );
+    await mkdir(path.join(repoRoot, "node_modules"), { recursive: true });
+    await symlink(fakeDepPackageDir, path.join(repoRoot, "node_modules", "fake-dep"), "dir");
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-source-target-"));
     cleanups.push(async () => {
       await rm(tempRoot, { recursive: true, force: true });
@@ -1007,6 +1014,14 @@ describe("qa bundled plugin dir", () => {
     ).resolves.toMatchObject({
       accountId: "qa:ok",
     });
+    await expect(
+      lstat(path.join(stagedRoot, "node_modules", "fake-dep")).then((stats) =>
+        stats.isSymbolicLink(),
+      ),
+    ).resolves.toBe(true);
+    await expect(
+      readFile(path.join(stagedRoot, "node_modules", "fake-dep", "index.js"), "utf8"),
+    ).resolves.toContain('marker = "ok"');
   });
 
   it("maps cli backend provider ids to their owning bundled plugin ids", async () => {
