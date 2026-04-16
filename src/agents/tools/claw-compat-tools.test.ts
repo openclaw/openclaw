@@ -99,6 +99,56 @@ describe("claw compat tools", () => {
       details: {
         action: "probe",
         permitted: true,
+        mode: "workspace-write",
+      },
+    });
+  });
+
+  it("maps ask_user_question answer from arguments and option indexes", async () => {
+    const { createAskUserQuestionCompatTool } = await import("./claw-compat-tools.js");
+    const tool = createAskUserQuestionCompatTool();
+    const result = await tool.execute("tool-7b", {
+      question: "Proceed?",
+      options: ["yes", "no"],
+      answer: "1",
+    });
+    expect(result).toMatchObject({
+      details: {
+        status: "answered",
+        answer: "yes",
+        source: "argument",
+      },
+    });
+  });
+
+  it("maps ask_user_question answer from env fallback", async () => {
+    vi.stubEnv("OPENCLAW_ASK_USER_QUESTION_ANSWER", "2");
+    const { createAskUserQuestionCompatTool } = await import("./claw-compat-tools.js");
+    const tool = createAskUserQuestionCompatTool();
+    const result = await tool.execute("tool-7c", {
+      question: "Proceed?",
+      options: ["yes", "no"],
+    });
+    expect(result).toMatchObject({
+      details: {
+        status: "answered",
+        answer: "no",
+        source: "env",
+      },
+    });
+  });
+
+  it("applies testing_permission denial on read-only mode for mutating actions", async () => {
+    configMock.loadConfig.mockReturnValueOnce({ permissions: { defaultMode: "read-only" } });
+    const { createTestingPermissionCompatTool } = await import("./claw-compat-tools.js");
+    const tool = createTestingPermissionCompatTool();
+    const result = await tool.execute("tool-7d", { action: "write_file", allow: true });
+    expect(result).toMatchObject({
+      details: {
+        permitted: false,
+        mode: "read-only",
+        actionKind: "write",
+        matchesExpected: false,
       },
     });
   });

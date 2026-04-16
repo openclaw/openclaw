@@ -1,6 +1,7 @@
 import { setTimeout as sleepTimeout } from "node:timers/promises";
 import fs from "node:fs/promises";
 import path from "node:path";
+import readline from "node:readline/promises";
 import { Type } from "@sinclair/typebox";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import {
@@ -49,6 +50,42 @@ function getPlanModeStatePath(): string {
   return path.join(process.cwd(), ".clawd-plan-mode-state.json");
 }
 
+type PermissionMode = "read-only" | "workspace-write" | "danger-full-access" | "plan";
+
+function normalizePermissionMode(value: unknown): PermissionMode {
+  if (typeof value !== "string") {
+    return "workspace-write";
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "read-only" || normalized === "readonly") {
+    return "read-only";
+  }
+  if (normalized === "danger-full-access" || normalized === "danger") {
+    return "danger-full-access";
+  }
+  if (normalized === "plan") {
+    return "plan";
+  }
+  return "workspace-write";
+}
+
+function classifyActionKind(action: string): "read" | "write" | "exec" | "unknown" {
+  const normalized = action.trim().toLowerCase();
+  if (!normalized) {
+    return "unknown";
+  }
+  if (/(^|[_\-.])(read|get|list|show|status|probe|check|query|search|fetch|inspect)($|[_\-.])/.test(normalized)) {
+    return "read";
+  }
+  if (/(^|[_\-.])(write|edit|update|patch|delete|remove|create|install|uninstall|enable|disable|set|apply|mutate)($|[_\-.])/.test(normalized)) {
+    return "write";
+  }
+  if (/(^|[_\-.])(exec|run|bash|shell|command|spawn|trigger)($|[_\-.])/.test(normalized)) {
+    return "exec";
+  }
+  return "unknown";
+}
+
 export function createAskUserQuestionCompatTool(): AnyAgentTool {
   return {
     name: "ask_user_question",
@@ -58,6 +95,8 @@ export function createAskUserQuestionCompatTool(): AnyAgentTool {
       {
         question: Type.String(),
         options: Type.Optional(Type.Array(Type.String())),
+        answer: Type.Optional(Type.String()),
+        timeoutMs: Type.Optional(Type.Number({ minimum: 1, maximum: 300000 })),
       },
       { additionalProperties: true },
     ),
@@ -67,6 +106,70 @@ export function createAskUserQuestionCompatTool(): AnyAgentTool {
       const options = Array.isArray(params.options)
         ? params.options.filter((entry): entry is string => typeof entry === "string")
         : [];
+      const explicitAnswer = readStringParam(params, "answer");
+      if (explicitAnswer) {
+        const resolvedByOption =
+          options.length > 0 && /^[0-9]+$/.test(explicitAnswer)
+            ? options[Number.parseInt(explicitAnswer, 10) - 1] ?? explicitAnswer
+            : explicitAnswer;
+        return jsonResult({
+          status: "answered",
+          question,
+          options,
+          answer: resolvedByOption,
+          source: "argument",
+        });
+      }
+
+      const envAnswer = process.env.OPENCLAW_ASK_USER_QUESTION_ANSWER?.trim();
+      if (envAnswer) {
+        const resolvedByOption =
+          options.length > 0 && /^[0-9]+$/.test(envAnswer)
+            ? options[Number.parseInt(envAnswer, 10) - 1] ?? envAnswer
+            : envAnswer;
+        return jsonResult({
+          status: "answered",
+          question,
+          options,
+          answer: resolvedByOption,
+          source: "env",
+        });
+      }
+
+      if (process.stdin.isTTY && process.stdout.isTTY && !process.env.CI) {
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        });
+        try {
+          const timeoutMs = Math.max(1, Math.min(300000, Math.floor(readNumberParam(params, "timeoutMs") ?? 120000)));
+          const prompt =
+            options.length > 0
+              ? `\n[Question] ${question}\n${options
+                  .map((option, index) => `  ${index + 1}. ${option}`)
+                  .join("\n")}\nEnter choice (1-${options.length}): `
+              : `\n[Question] ${question}\nYour answer: `;
+          const timeoutPromise = new Promise<string>((_resolve, reject) => {
+            setTimeout(() => reject(new ToolInputError("ask_user_question timed out waiting for input")), timeoutMs);
+          });
+          const answerRaw = await Promise.race([rl.question(prompt), timeoutPromise]);
+          const answerTrimmed = answerRaw.trim();
+          const answer =
+            options.length > 0 && /^[0-9]+$/.test(answerTrimmed)
+              ? options[Number.parseInt(answerTrimmed, 10) - 1] ?? answerTrimmed
+              : answerTrimmed;
+          return jsonResult({
+            status: "answered",
+            question,
+            options,
+            answer,
+            source: "tty",
+          });
+        } finally {
+          rl.close();
+        }
+      }
+
       return jsonResult({
         status: "pending",
         question,
@@ -568,11 +671,27 @@ export function createTestingPermissionCompatTool(): AnyAgentTool {
     ),
     execute: async (_toolCallId, args) => {
       const params = (args ?? {}) as Record<string, unknown>;
+      const cfg = loadConfig() as unknown as Record<string, unknown>;
+      const mode = normalizePermissionMode(getByPath(cfg, "permissions.defaultMode"));
+      const action = readStringParam(params, "action") ?? "";
+      const actionKind = classifyActionKind(action);
+      const permitted =
+        mode === "danger-full-access"
+          ? true
+          : mode === "workspace-write"
+            ? actionKind !== "exec"
+            : mode === "read-only" || mode === "plan"
+              ? actionKind === "read" || actionKind === "unknown"
+              : true;
+      const allow = typeof params.allow === "boolean" ? params.allow : undefined;
       return jsonResult({
-        action: readStringParam(params, "action") ?? null,
-        permitted: true,
-        message: "Testing permission tool stub",
-        allow: params.allow === true,
+        action: action || null,
+        permitted,
+        mode,
+        actionKind,
+        message: permitted ? "Permission allowed by compatibility policy" : "Permission denied by compatibility policy",
+        allow: allow ?? null,
+        matchesExpected: allow === undefined ? null : allow === permitted,
         reason: readStringParam(params, "reason") ?? null,
       });
     },
