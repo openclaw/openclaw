@@ -391,6 +391,35 @@ describe("agentCommand", () => {
     });
   });
 
+  it("normalizes per-agent thinkingDefault for ingress runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      configSpy.mockReturnValue({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-6" },
+            models: { "anthropic/claude-opus-4-6": {} },
+            workspace: path.join(home, "openclaw"),
+          },
+          list: [{ id: "beta", thinkingDefault: " Minimal " as never }],
+        },
+        session: { store, mainKey: "main" },
+      } as OpenClawConfig);
+
+      await agentCommandFromIngress(
+        {
+          message: "hi",
+          sessionKey: "agent:beta:openai:test",
+          senderIsOwner: false,
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(getLastEmbeddedCall()?.thinkLevel).toBe("minimal");
+    });
+  });
+
   it("resumes when session-id is provided", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");

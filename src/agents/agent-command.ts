@@ -782,20 +782,24 @@ async function agentCommandInternal(
     }
 
     if (!resolvedThinkLevel) {
-      const agentThinkingDefault = resolveAgentConfig(cfg, sessionAgentId)?.thinkingDefault;
-      let catalogForThinking = modelCatalog ?? allowedModelCatalog;
-      if (!catalogForThinking || catalogForThinking.length === 0) {
-        modelCatalog = await loadModelCatalog({ config: cfg });
-        catalogForThinking = modelCatalog;
-      }
-      resolvedThinkLevel =
-        agentThinkingDefault ??
-        resolveThinkingDefault({
+      const agentThinkingDefault = normalizeThinkLevel(
+        resolveAgentConfig(cfg, sessionAgentId)?.thinkingDefault,
+      );
+      if (agentThinkingDefault) {
+        resolvedThinkLevel = agentThinkingDefault;
+      } else {
+        let catalogForThinking = modelCatalog ?? allowedModelCatalog;
+        if (!catalogForThinking || catalogForThinking.length === 0) {
+          modelCatalog = await loadModelCatalog({ config: cfg });
+          catalogForThinking = modelCatalog;
+        }
+        resolvedThinkLevel = resolveThinkingDefault({
           cfg,
           provider,
           model,
           catalog: catalogForThinking,
         });
+      }
     }
     if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
       const explicitThink = Boolean(thinkOnce || thinkOverride);
