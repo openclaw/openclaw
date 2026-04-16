@@ -24,10 +24,10 @@ describe("toSanitizedMarkdownHtml", () => {
   });
 
   it("renders fenced code blocks", () => {
-    const html = toSanitizedMarkdownHtml(["```ts", "console.log(1)", "```"].join("\n"));
+    const html = toSanitizedMarkdownHtml(["```ts", "const value = 1", "```"].join("\n"));
     expect(html).toContain("<pre>");
     expect(html).toContain("<code");
-    expect(html).toContain("console.log(1)");
+    expect(html).toContain("const value = 1");
   });
 
   it("flattens remote markdown images into alt text", () => {
@@ -441,10 +441,10 @@ describe("toSanitizedMarkdownHtml", () => {
 
   describe("code blocks", () => {
     it("renders fenced code blocks", () => {
-      const html = toSanitizedMarkdownHtml("```ts\nconsole.log(1)\n```");
+      const html = toSanitizedMarkdownHtml("```ts\nconst value = 1\n```");
       expect(html).toContain("<pre>");
       expect(html).toContain("<code");
-      expect(html).toContain("console.log(1)");
+      expect(html).toContain("const value = 1");
     });
 
     it("renders indented code blocks", () => {
