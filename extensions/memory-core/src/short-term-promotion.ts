@@ -11,7 +11,7 @@ import {
   summarizeConceptTagScriptCoverage,
   type ConceptTagScriptCoverage,
 } from "./concept-vocabulary.js";
-import { asRecord } from "./dreaming-shared.js";
+import { asRecord, isMetadataGarbageText } from "./dreaming-shared.js";
 
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})\.md$/;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
@@ -276,6 +276,9 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
   const snippet = normalizeSnippet(raw);
   if (!snippet) {
     return false;
+  }
+  if (isMetadataGarbageText(snippet)) {
+    return true;
   }
   if (
     /<!--\s*openclaw-memory-promotion:/i.test(snippet) ||

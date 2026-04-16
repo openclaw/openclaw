@@ -22,7 +22,13 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
-import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
+import {
+  asRecord,
+  formatErrorMessage,
+  isMetadataGarbageText,
+  normalizeTrimmedString,
+  sanitizeDreamingMetadataText,
+} from "./dreaming-shared.js";
 import {
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
@@ -546,7 +552,10 @@ function trimTrackedSessionScopes(
 }
 
 function normalizeSessionCorpusSnippet(value: string): string {
-  return value.replace(/\s+/g, " ").trim().slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS);
+  return sanitizeDreamingMetadataText(value)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS);
 }
 
 function hashSessionMessageId(value: string): string {
@@ -830,7 +839,7 @@ async function collectSessionIngestionBatches(params: {
       lastScannedContentLine = index + 1;
       const rawSnippet = lines[index] ?? "";
       const snippet = normalizeSessionCorpusSnippet(rawSnippet);
-      if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
+      if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS || isMetadataGarbageText(snippet)) {
         continue;
       }
       const lineNumber = entry.lineMap[index] ?? index + 1;
@@ -1072,6 +1081,9 @@ async function collectDailyIngestionBatches(params: {
     const chunks = buildDailySnippetChunks(lines, perFileCap);
     const results: MemorySearchResult[] = [];
     for (const chunk of chunks) {
+      if (isMetadataGarbageText(chunk.snippet)) {
+        continue;
+      }
       results.push({
         path: relativePath,
         startLine: chunk.startLine,
@@ -1219,6 +1231,9 @@ export async function seedHistoricalDailyMemorySignals(params: {
     const chunks = buildDailySnippetChunks(lines, perFileCap);
     const results: MemorySearchResult[] = [];
     for (const chunk of chunks) {
+      if (isMetadataGarbageText(chunk.snippet)) {
+        continue;
+      }
       results.push({
         path: `memory/${entry.day}.md`,
         startLine: chunk.startLine,

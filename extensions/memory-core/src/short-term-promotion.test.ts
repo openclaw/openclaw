@@ -1109,6 +1109,118 @@ describe("short-term promotion", () => {
     ).toBe(true);
   });
 
+  it("treats transport metadata wrappers as contaminated", () => {
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        'Conversation info (untrusted metadata):\n```json\n{"message_id":"5417","sender_id":"289522496"}\n```',
+      ),
+    ).toBe(true);
+    expect(
+      __testing.isContaminatedDreamingSnippet('Sender (untrusted metadata): {"sender_id":"42"}'),
+    ).toBe(true);
+  });
+
+  it("keeps normal technical notes that mention metadata fields or reply tags", () => {
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        "Parser should strip [[reply_to_current]] before sending the final message body.",
+      ),
+    ).toBe(false);
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        'Webhook example keeps the "message_id" field so we can correlate retries.',
+      ),
+    ).toBe(false);
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        "Conversation info (untrusted metadata): wrappers should be stripped before indexing.",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not record transport metadata snippets as short-term recalls", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "metadata noise",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            source: "memory",
+            startLine: 1,
+            endLine: 1,
+            score: 0.92,
+            snippet:
+              'Conversation info (untrusted metadata):\n```json\n{"message_id":"5417","sender_id":"289522496"}\n```',
+          },
+          {
+            path: "memory/2026-04-03.md",
+            source: "memory",
+            startLine: 2,
+            endLine: 2,
+            score: 0.93,
+            snippet: "Gateway binds loopback and port 18789",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(ranked.map((candidate) => candidate.snippet)).toEqual([
+        "Gateway binds loopback and port 18789",
+      ]);
+    });
+  });
+
+  it("refuses to append contaminated manual candidates to MEMORY.md", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        candidates: [
+          {
+            key: "memory:memory/2026-04-03.md:1:1",
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet:
+              'Conversation info (untrusted metadata): {"message_id":"5417","sender_id":"289522496"}',
+            recallCount: 3,
+            avgScore: 0.92,
+            maxScore: 0.92,
+            uniqueQueries: 2,
+            firstRecalledAt: "2026-04-03T00:00:00.000Z",
+            lastRecalledAt: "2026-04-03T01:00:00.000Z",
+            ageDays: 0,
+            score: 0.92,
+            recallDays: ["2026-04-03"],
+            conceptTags: [],
+            components: {
+              frequency: 0.2,
+              relevance: 0.2,
+              diversity: 0.2,
+              recency: 0.2,
+              consolidation: 0.1,
+              conceptual: 0.1,
+            },
+          },
+        ],
+      });
+
+      expect(applied.applied).toBe(0);
+      await expect(fs.access(path.join(workspaceDir, "MEMORY.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  });
+
   it("skips direct candidates that exceed maxAgeDays during apply", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const applied = await applyShortTermPromotions({
