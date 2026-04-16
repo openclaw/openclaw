@@ -105,11 +105,11 @@ export function formatPlanAsMarkdown(plan: PlanCardData): string {
   for (const step of plan.steps) {
     const label = step.status === "in_progress" && step.activeForm ? step.activeForm : step.text;
     if (step.status === "completed") {
-      lines.push(`- [x] ~~${label}~~`);
+      lines.push(`- [x] ${label}`);
     } else if (step.status === "cancelled") {
-      lines.push(`- [~] ~~${label}~~`);
+      lines.push(`- [ ] ~~${label}~~ (cancelled)`);
     } else if (step.status === "in_progress") {
-      lines.push(`- [>] **${label}**`);
+      lines.push(`- [ ] **${label}** (in progress)`);
     } else {
       lines.push(`- [ ] ${label}`);
     }
