@@ -4,6 +4,7 @@
  */
 
 import * as crypto from "node:crypto";
+import type { ChatScope } from "../types.js";
 import { debugLog } from "./log.js";
 
 interface CacheEntry {
@@ -34,7 +35,7 @@ function buildCacheKey(
 /** Look up a cached `file_info` value. */
 export function getCachedFileInfo(
   contentHash: string,
-  scope: "c2c" | "group",
+  scope: ChatScope,
   targetId: string,
   fileType: number,
 ): string | null {
@@ -57,7 +58,7 @@ export function getCachedFileInfo(
 /** Store an upload result in the cache. */
 export function setCachedFileInfo(
   contentHash: string,
-  scope: "c2c" | "group",
+  scope: ChatScope,
   targetId: string,
   fileType: number,
   fileInfo: string,

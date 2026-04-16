@@ -14,22 +14,6 @@
 
 import path from "node:path";
 import WebSocket from "ws";
-// ---- core/ api facade (singleton + procedural wrappers) ----
-import {
-  clearTokenCache,
-  getAccessToken,
-  getGatewayUrl,
-  initApiConfig,
-  onMessageSent,
-  PLUGIN_USER_AGENT,
-  sendC2CInputNotify,
-  sendC2CMessage,
-  sendChannelMessage,
-  sendDmMessage,
-  sendGroupMessage,
-  startBackgroundTokenRefresh,
-  stopBackgroundTokenRefresh,
-} from "../api/facade.js";
 // ---- core/ messaging ----
 import {
   parseAndSendMediaTags,
@@ -50,6 +34,22 @@ import {
   sendWithTokenRetry,
   type ReplyDispatcherDeps,
 } from "../messaging/reply-dispatcher.js";
+// ---- core/ messaging sender (singleton + unified routing) ----
+import {
+  clearTokenCache,
+  getAccessToken,
+  getGatewayUrl,
+  initApiConfig,
+  onMessageSent,
+  getPluginUserAgent,
+  startBackgroundTokenRefresh,
+  stopBackgroundTokenRefresh,
+  sendText as senderSendText,
+  sendInputNotify as senderSendInputNotify,
+  createRawInputNotifyFn,
+  buildDeliveryTarget,
+  accountToCreds,
+} from "../messaging/sender.js";
 // ---- core/ ref ----
 import { formatRefEntryForAgent } from "../ref/format-ref-entry.js";
 import { flushRefIndex, getRefIndex, setRefIndex } from "../ref/store.js";
@@ -292,20 +292,15 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       }
 
       log?.info(`[qqbot:${account.accountId}] Slash command matched: ${content}`);
-      const token = await getAccessToken(account.appId, account.clientSecret);
 
       const isFileResult = typeof reply === "object" && reply !== null && "filePath" in reply;
       const replyText = isFileResult ? (reply as { text: string }).text : reply;
       const replyFile = isFileResult ? (reply as { filePath: string }).filePath : null;
 
-      if (msg.type === "c2c") {
-        await sendC2CMessage(account.appId, token, msg.senderId, replyText, msg.messageId);
-      } else if (msg.type === "group" && msg.groupOpenid) {
-        await sendGroupMessage(account.appId, token, msg.groupOpenid, replyText, msg.messageId);
-      } else if (msg.channelId) {
-        await sendChannelMessage(token, msg.channelId, replyText, msg.messageId);
-      } else if (msg.type === "dm" && msg.guildId) {
-        await sendDmMessage(token, msg.guildId, replyText, msg.messageId);
+      if (msg.type === "c2c" || msg.type === "group" || msg.type === "dm" || msg.type === "guild") {
+        const slashTarget = buildDeliveryTarget(msg);
+        const slashCreds = accountToCreds(account);
+        await senderSendText(slashTarget, replyText, slashCreds, { msgId: msg.messageId });
       }
 
       if (replyFile) {
@@ -419,7 +414,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       const gatewayUrl = await getGatewayUrl(accessToken);
       log?.info(`[qqbot:${account.accountId}] Connecting to ${gatewayUrl}`);
 
-      const ws = new WebSocket(gatewayUrl, { headers: { "User-Agent": PLUGIN_USER_AGENT } });
+      const ws = new WebSocket(gatewayUrl, { headers: { "User-Agent": getPluginUserAgent() } });
       currentWs = ws;
 
       // ---- handleMessage ----
@@ -444,18 +439,19 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
             return undefined;
           }
           try {
-            let token = await getAccessToken(account.appId, account.clientSecret);
+            const creds = accountToCreds(account);
+            const rawNotifyFn = createRawInputNotifyFn(account.appId);
             try {
-              const resp = await sendC2CInputNotify(
-                token,
+              const resp = await senderSendInputNotify(
                 event.senderId,
+                creds,
                 event.messageId,
                 TYPING_INPUT_SECOND,
               );
               typing.keepAlive = new TypingKeepAlive(
                 () => getAccessToken(account.appId, account.clientSecret),
                 () => clearTokenCache(account.appId),
-                (t, o, m, s) => sendC2CInputNotify(t, o, m, s),
+                rawNotifyFn,
                 event.senderId,
                 event.messageId,
                 log,
@@ -467,17 +463,16 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
               const errMsg = String(notifyErr);
               if (errMsg.includes("token") || errMsg.includes("401") || errMsg.includes("11244")) {
                 clearTokenCache(account.appId);
-                token = await getAccessToken(account.appId, account.clientSecret);
-                const resp = await sendC2CInputNotify(
-                  token,
+                const resp = await senderSendInputNotify(
                   event.senderId,
+                  creds,
                   event.messageId,
                   TYPING_INPUT_SECOND,
                 );
                 typing.keepAlive = new TypingKeepAlive(
                   () => getAccessToken(account.appId, account.clientSecret),
                   () => clearTokenCache(account.appId),
-                  (t, o, m, s) => sendC2CInputNotify(t, o, m, s),
+                  rawNotifyFn,
                   event.senderId,
                   event.messageId,
                   log,
@@ -490,7 +485,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
             }
           } catch (err) {
             log?.error(
-              `[qqbot:${account.accountId}] sendC2CInputNotify error: ${err instanceof Error ? err.message : String(err)}`,
+              `[qqbot:${account.accountId}] sendInputNotify error: ${err instanceof Error ? err.message : String(err)}`,
             );
             return undefined;
           }

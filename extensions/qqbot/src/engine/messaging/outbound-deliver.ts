@@ -1,23 +1,11 @@
 /**
  * Outbound delivery helpers — core/ version.
  *
- * Migrated from `src/outbound-deliver.ts` with three key changes:
- * 1. `sendC2CMessage` etc. → `core/api/facade.js` (already in core/)
- * 2. `sendPhoto/sendVoice/sendVideoMsg/sendDocument/sendMedia` → injected `MediaSender`
- * 3. `getQQBotRuntime().channel.text.chunkMarkdownText` → `DeliverDeps.chunkText`
- *
- * All other utilities (string-normalize, image-size, media-tags, platform,
- * text-parsing, decode-media-path) are already in core/.
+ * Uses the unified `sender.ts` business function layer for all text and
+ * image sending. Media sends (photo/voice/video/file) are injected via
+ * `DeliverDeps.mediaSender`.
  */
 
-import {
-  sendC2CMessage,
-  sendDmMessage,
-  sendGroupMessage,
-  sendChannelMessage,
-  sendC2CImageMessage,
-  sendGroupImageMessage,
-} from "../api/facade.js";
 import type { GatewayAccount } from "../gateway/types.js";
 import { getImageSize, formatQQBotMarkdownImage, hasQQBotImageSize } from "../utils/image-size.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
@@ -28,6 +16,13 @@ import {
 } from "../utils/string-normalize.js";
 import { filterInternalMarkers } from "../utils/text-parsing.js";
 import { decodeMediaPath } from "./decode-media-path.js";
+import {
+  sendText as senderSendText,
+  sendImage as senderSendImage,
+  withTokenRetry,
+  buildDeliveryTarget,
+  accountToCreds,
+} from "./sender.js";
 
 // ---- Injected dependency interfaces ----
 
@@ -181,21 +176,17 @@ async function sendTextChunkToTarget(params: {
   consumeQuoteRef: ConsumeQuoteRefFn;
   allowDm: boolean;
 }): Promise<unknown> {
-  const { account, event, token, text, consumeQuoteRef, allowDm } = params;
+  const { account, event, text, consumeQuoteRef, allowDm } = params;
   const ref = consumeQuoteRef();
-  if (event.type === "c2c") {
-    return await sendC2CMessage(account.appId, token, event.senderId, text, event.messageId, ref);
+  const target = buildDeliveryTarget(event);
+  if (target.type === "dm" && !allowDm) {
+    return undefined;
   }
-  if (event.type === "group" && event.groupOpenid) {
-    return await sendGroupMessage(account.appId, token, event.groupOpenid, text, event.messageId);
-  }
-  if (allowDm && event.type === "dm" && event.guildId) {
-    return await sendDmMessage(token, event.guildId, text, event.messageId);
-  }
-  if (event.channelId) {
-    return await sendChannelMessage(token, event.channelId, text, event.messageId);
-  }
-  return undefined;
+  const creds = accountToCreds(account);
+  return await senderSendText(target, text, creds, {
+    msgId: event.messageId,
+    messageReference: ref,
+  });
 }
 
 async function sendTextChunks(
@@ -677,29 +668,15 @@ async function sendMarkdownReply(
     log?.info(`${prefix} Sending ${base64ImageUrls.length} image(s) via Rich Media API...`);
     for (const imageUrl of base64ImageUrls) {
       try {
-        await sendWithRetry(async (token) => {
-          if (event.type === "c2c") {
-            await sendC2CImageMessage(
-              account.appId,
-              token,
-              event.senderId,
-              imageUrl,
-              event.messageId,
-            );
-          } else if (event.type === "group" && event.groupOpenid) {
-            await sendGroupImageMessage(
-              account.appId,
-              token,
-              event.groupOpenid,
-              imageUrl,
-              event.messageId,
-            );
-          } else if (event.type === "dm" && event.guildId) {
-            log?.info(`${prefix} DM does not support rich media image, skipping Base64 image`);
-          } else if (event.channelId) {
-            log?.info(`${prefix} Channel does not support rich media, skipping Base64 image`);
-          }
-        });
+        const target = buildDeliveryTarget(event);
+        const creds = accountToCreds(account);
+        if (target.type === "c2c" || target.type === "group") {
+          await withTokenRetry(creds, async () => {
+            await senderSendImage(target, imageUrl, creds, { msgId: event.messageId });
+          });
+        } else {
+          log?.info(`${prefix} ${target.type} does not support rich media, skipping Base64 image`);
+        }
         log?.info(
           `${prefix} Sent Base64 image via Rich Media API (size: ${imageUrl.length} chars)`,
         );

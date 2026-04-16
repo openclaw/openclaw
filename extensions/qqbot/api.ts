@@ -6,4 +6,3 @@ export { registerRemindTool } from "./src/tools/remind.js";
 export * from "./src/types.js";
 export * from "./src/config.js";
 export * from "./src/engine/messaging/outbound.js";
-export * from "./src/engine/messaging/proactive.js";

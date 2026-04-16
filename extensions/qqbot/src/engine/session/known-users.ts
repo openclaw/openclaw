@@ -7,13 +7,14 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import type { ChatScope } from "../types.js";
 import { debugLog, debugError } from "../utils/log.js";
 import { getQQBotDataDir } from "../utils/platform.js";
 
 /** Persisted record for a user who has interacted with the bot. */
 export interface KnownUser {
   openid: string;
-  type: "c2c" | "group";
+  type: ChatScope;
   nickname?: string;
   groupOpenid?: string;
   accountId: string;
@@ -101,7 +102,7 @@ export function flushKnownUsers(): void {
 /** Record a known user whenever a message is received. */
 export function recordKnownUser(user: {
   openid: string;
-  type: "c2c" | "group";
+  type: ChatScope;
   nickname?: string;
   groupOpenid?: string;
   accountId: string;
@@ -138,7 +139,7 @@ export function recordKnownUser(user: {
 export function getKnownUser(
   accountId: string,
   openid: string,
-  type: "c2c" | "group" = "c2c",
+  type: ChatScope = "c2c",
   groupOpenid?: string,
 ): KnownUser | undefined {
   return loadUsersFromFile().get(makeUserKey({ accountId, openid, type, groupOpenid }));
@@ -147,7 +148,7 @@ export function getKnownUser(
 /** List known users with optional filtering and sorting. */
 export function listKnownUsers(options?: {
   accountId?: string;
-  type?: "c2c" | "group";
+  type?: ChatScope;
   activeWithin?: number;
   limit?: number;
   sortBy?: "lastSeenAt" | "firstSeenAt" | "interactionCount";
@@ -201,7 +202,7 @@ export function getKnownUsersStats(accountId?: string): {
 export function removeKnownUser(
   accountId: string,
   openid: string,
-  type: "c2c" | "group" = "c2c",
+  type: ChatScope = "c2c",
   groupOpenid?: string,
 ): boolean {
   const cache = loadUsersFromFile();

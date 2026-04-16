@@ -7,11 +7,13 @@
  * Zero external dependencies.
  */
 
+import type { ChatScope } from "../types.js";
+
 /** Structured reminder payload emitted by the model. */
 export interface CronReminderPayload {
   type: "cron_reminder";
   content: string;
-  targetType: "c2c" | "group";
+  targetType: ChatScope;
   targetAddress: string;
   originalMessageId?: string;
 }

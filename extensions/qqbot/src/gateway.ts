@@ -7,6 +7,7 @@
  * injected by the framework at startup).
  */
 
+import { createRequire } from "node:module";
 import { resolveRuntimeServiceVersion } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
@@ -15,12 +16,23 @@ import {
 } from "./engine/gateway/gateway.js";
 import { registerVersionResolver } from "./engine/gateway/slash-commands-impl.js";
 import type { GatewayAccount } from "./engine/gateway/types.js";
+import { initSender } from "./engine/messaging/sender.js";
 import { registerTextChunker } from "./engine/utils/text-chunk.js";
 import { getQQBotRuntimeForEngine } from "./runtime.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
 // Register framework SDK version resolver for core/ slash commands.
 registerVersionResolver(resolveRuntimeServiceVersion);
+
+// Inject plugin version into sender (avoids dynamic require inside engine/).
+const _require = createRequire(import.meta.url);
+let _pluginVersion = "unknown";
+try {
+  _pluginVersion = _require("../package.json").version ?? "unknown";
+} catch {
+  /* fallback */
+}
+initSender({ pluginVersion: _pluginVersion });
 
 export interface GatewayContext {
   account: ResolvedQQBotAccount;

@@ -46,24 +46,6 @@ function shouldTranscodeVoice(p: string): boolean {
 function waitForFile(p: string, ms?: number): Promise<number> {
   return getAudio().waitForFile(p, ms);
 }
-import {
-  getAccessToken,
-  initApiConfig,
-  sendC2CFileMessage,
-  sendC2CImageMessage,
-  sendC2CMessage,
-  sendC2CVideoMessage,
-  sendC2CVoiceMessage,
-  sendChannelMessage,
-  sendDmMessage,
-  sendGroupFileMessage,
-  sendGroupImageMessage,
-  sendGroupMessage,
-  sendGroupVideoMessage,
-  sendGroupVoiceMessage,
-  sendProactiveC2CMessage,
-  sendProactiveGroupMessage,
-} from "../api/facade.js";
 import type { GatewayAccount } from "../gateway/types.js";
 import {
   checkFileSize,
@@ -90,6 +72,17 @@ import {
 // Bridge to core/ modules — use the canonical implementations from the core
 // package so the same logic can be shared with the standalone version.
 import { ReplyLimiter, type ReplyLimitResult } from "./reply-limiter.js";
+import {
+  sendText as senderSendText,
+  sendProactiveText,
+  sendImage as senderSendImage,
+  sendVoiceMessage as senderSendVoice,
+  sendVideoMessage as senderSendVideo,
+  sendFileMessage as senderSendFile,
+  initApiConfig,
+  accountToCreds,
+  type DeliveryTarget,
+} from "./sender.js";
 import { parseTarget as coreParseTarget } from "./target-parser.js";
 
 // Module-level reply limiter instance (replaces the old Map-based tracker).
@@ -189,14 +182,6 @@ function buildMediaTarget(
     replyToId: ctx.replyToId ?? undefined,
     logPrefix,
   };
-}
-
-/** Resolve an authenticated access token for the account. */
-async function getToken(account: GatewayAccount): Promise<string> {
-  if (!account.appId || !account.clientSecret) {
-    throw new Error("QQBot not configured (missing appId or clientSecret)");
-  }
-  return getAccessToken(account.appId, account.clientSecret);
 }
 
 /** Return true when public URLs should be passed through directly. */
@@ -404,33 +389,22 @@ export async function sendPhoto(
   }
 
   try {
-    const token = await getToken(ctx.account);
     const localPath = isLocal ? mediaPath : undefined;
+    const creds = accountToCreds(ctx.account);
+    const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
 
-    if (ctx.targetType === "c2c") {
-      const r = await sendC2CImageMessage(
-        ctx.account.appId,
-        token,
-        ctx.targetId,
-        imageUrl,
-        ctx.replyToId,
-        undefined,
+    if (target.type === "c2c" || target.type === "group") {
+      const r = await senderSendImage(target, imageUrl, creds, {
+        msgId: ctx.replyToId,
+        content: undefined,
         localPath,
-      );
-      return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-    } else if (ctx.targetType === "group") {
-      const r = await sendGroupImageMessage(
-        ctx.account.appId,
-        token,
-        ctx.targetId,
-        imageUrl,
-        ctx.replyToId,
-      );
+      });
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else {
-      // Channel messages only support public URLs through markdown.
       if (isHttp) {
-        const r = await sendChannelMessage(token, ctx.targetId, `![](${mediaPath})`, ctx.replyToId);
+        const r = await senderSendText(target, `![](${mediaPath})`, creds, {
+          msgId: ctx.replyToId,
+        });
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
       }
       debugLog(`${prefix} sendPhoto: channel does not support local/Base64 images`);
@@ -501,26 +475,13 @@ export async function sendVoice(
   if (isHttp) {
     if (shouldDirectUploadUrl(ctx.account)) {
       try {
-        const token = await getToken(ctx.account);
-        if (ctx.targetType === "c2c") {
-          const r = await sendC2CVoiceMessage(
-            ctx.account.appId,
-            token,
-            ctx.targetId,
-            undefined,
-            mediaPath,
-            ctx.replyToId,
-          );
-          return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-        } else if (ctx.targetType === "group") {
-          const r = await sendGroupVoiceMessage(
-            ctx.account.appId,
-            token,
-            ctx.targetId,
-            undefined,
-            mediaPath,
-            ctx.replyToId,
-          );
+        const creds = accountToCreds(ctx.account);
+        const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
+        if (target.type === "c2c" || target.type === "group") {
+          const r = await senderSendVoice(target, creds, {
+            voiceUrl: mediaPath,
+            msgId: ctx.replyToId,
+          });
           return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
         } else {
           debugLog(`${prefix} sendVoice: voice not supported in channel`);
@@ -600,29 +561,15 @@ async function sendVoiceFromLocal(
       debugLog(`${prefix} sendVoice: SILK ready (${fileSize} bytes)`);
     }
 
-    const token = await getToken(ctx.account);
+    const creds = accountToCreds(ctx.account);
+    const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
 
-    if (ctx.targetType === "c2c") {
-      const r = await sendC2CVoiceMessage(
-        ctx.account.appId,
-        token,
-        ctx.targetId,
-        uploadBase64,
-        undefined,
-        ctx.replyToId,
-        undefined,
-        safeMediaPath,
-      );
-      return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-    } else if (ctx.targetType === "group") {
-      const r = await sendGroupVoiceMessage(
-        ctx.account.appId,
-        token,
-        ctx.targetId,
-        uploadBase64,
-        undefined,
-        ctx.replyToId,
-      );
+    if (target.type === "c2c" || target.type === "group") {
+      const r = await senderSendVoice(target, creds, {
+        voiceBase64: uploadBase64,
+        msgId: ctx.replyToId,
+        filePath: safeMediaPath,
+      });
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else {
       debugLog(`${prefix} sendVoice: voice not supported in channel`);
@@ -658,28 +605,14 @@ export async function sendVideoMsg(
   }
 
   try {
-    const token = await getToken(ctx.account);
-
     if (isHttp) {
-      if (ctx.targetType === "c2c") {
-        const r = await sendC2CVideoMessage(
-          ctx.account.appId,
-          token,
-          ctx.targetId,
-          mediaPath,
-          undefined,
-          ctx.replyToId,
-        );
-        return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-      } else if (ctx.targetType === "group") {
-        const r = await sendGroupVideoMessage(
-          ctx.account.appId,
-          token,
-          ctx.targetId,
-          mediaPath,
-          undefined,
-          ctx.replyToId,
-        );
+      const creds = accountToCreds(ctx.account);
+      const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
+      if (target.type === "c2c" || target.type === "group") {
+        const r = await senderSendVideo(target, creds, {
+          videoUrl: mediaPath,
+          msgId: ctx.replyToId,
+        });
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
       } else {
         debugLog(`${prefix} sendVideoMsg: video not supported in channel`);
@@ -726,28 +659,14 @@ async function sendVideoFromLocal(
   debugLog(`${prefix} sendVideoMsg: local video (${formatFileSize(fileBuffer.length)})`);
 
   try {
-    const token = await getToken(ctx.account);
-    if (ctx.targetType === "c2c") {
-      const r = await sendC2CVideoMessage(
-        ctx.account.appId,
-        token,
-        ctx.targetId,
-        undefined,
+    const creds = accountToCreds(ctx.account);
+    const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
+    if (target.type === "c2c" || target.type === "group") {
+      const r = await senderSendVideo(target, creds, {
         videoBase64,
-        ctx.replyToId,
-        undefined,
-        mediaPath,
-      );
-      return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-    } else if (ctx.targetType === "group") {
-      const r = await sendGroupVideoMessage(
-        ctx.account.appId,
-        token,
-        ctx.targetId,
-        undefined,
-        videoBase64,
-        ctx.replyToId,
-      );
+        msgId: ctx.replyToId,
+        localPath: mediaPath,
+      });
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else {
       debugLog(`${prefix} sendVideoMsg: video not supported in channel`);
@@ -790,30 +709,15 @@ export async function sendDocument(
   }
 
   try {
-    const token = await getToken(ctx.account);
-
     if (isHttp) {
-      if (ctx.targetType === "c2c") {
-        const r = await sendC2CFileMessage(
-          ctx.account.appId,
-          token,
-          ctx.targetId,
-          undefined,
-          mediaPath,
-          ctx.replyToId,
+      const creds = accountToCreds(ctx.account);
+      const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
+      if (target.type === "c2c" || target.type === "group") {
+        const r = await senderSendFile(target, creds, {
+          fileUrl: mediaPath,
+          msgId: ctx.replyToId,
           fileName,
-        );
-        return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-      } else if (ctx.targetType === "group") {
-        const r = await sendGroupFileMessage(
-          ctx.account.appId,
-          token,
-          ctx.targetId,
-          undefined,
-          mediaPath,
-          ctx.replyToId,
-          fileName,
-        );
+        });
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
       } else {
         debugLog(`${prefix} sendDocument: file not supported in channel`);
@@ -864,29 +768,15 @@ async function sendDocumentFromLocal(
   debugLog(`${prefix} sendDocument: local file (${formatFileSize(fileBuffer.length)})`);
 
   try {
-    const token = await getToken(ctx.account);
-    if (ctx.targetType === "c2c") {
-      const r = await sendC2CFileMessage(
-        ctx.account.appId,
-        token,
-        ctx.targetId,
+    const creds = accountToCreds(ctx.account);
+    const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
+    if (target.type === "c2c" || target.type === "group") {
+      const r = await senderSendFile(target, creds, {
         fileBase64,
-        undefined,
-        ctx.replyToId,
+        msgId: ctx.replyToId,
         fileName,
-        mediaPath,
-      );
-      return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-    } else if (ctx.targetType === "group") {
-      const r = await sendGroupFileMessage(
-        ctx.account.appId,
-        token,
-        ctx.targetId,
-        fileBase64,
-        undefined,
-        ctx.replyToId,
-        fileName,
-      );
+        localFilePath: mediaPath,
+      });
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else {
       debugLog(`${prefix} sendDocument: file not supported in channel`);
@@ -1088,93 +978,24 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
     for (const item of sendQueue) {
       try {
         if (item.type === "text") {
+          const target = parseTarget(to);
+          const creds = accountToCreds(account);
+          const deliveryTarget: DeliveryTarget = {
+            type: target.type === "channel" ? "channel" : target.type,
+            id: target.id,
+          };
+          const result = await senderSendText(deliveryTarget, item.content, creds, {
+            msgId: replyToId ?? undefined,
+          });
           if (replyToId) {
-            const accessToken = await getToken(account);
-            const target = parseTarget(to);
-            if (target.type === "c2c") {
-              const result = await sendC2CMessage(
-                account.appId,
-                accessToken,
-                target.id,
-                item.content,
-                replyToId,
-              );
-              recordMessageReply(replyToId);
-              lastResult = {
-                channel: "qqbot",
-                messageId: result.id,
-                timestamp: result.timestamp,
-                refIdx: result.ext_info?.ref_idx,
-              };
-            } else if (target.type === "group") {
-              const result = await sendGroupMessage(
-                account.appId,
-                accessToken,
-                target.id,
-                item.content,
-                replyToId,
-              );
-              recordMessageReply(replyToId);
-              lastResult = {
-                channel: "qqbot",
-                messageId: result.id,
-                timestamp: result.timestamp,
-                refIdx: result.ext_info?.ref_idx,
-              };
-            } else {
-              const result = await sendChannelMessage(
-                accessToken,
-                target.id,
-                item.content,
-                replyToId,
-              );
-              recordMessageReply(replyToId);
-              lastResult = {
-                channel: "qqbot",
-                messageId: result.id,
-                timestamp: result.timestamp,
-                refIdx: getRefIdx(result),
-              };
-            }
-          } else {
-            const accessToken = await getToken(account);
-            const target = parseTarget(to);
-            if (target.type === "c2c") {
-              const result = await sendProactiveC2CMessage(
-                account.appId,
-                accessToken,
-                target.id,
-                item.content,
-              );
-              lastResult = {
-                channel: "qqbot",
-                messageId: result.id,
-                timestamp: result.timestamp,
-                refIdx: getRefIdx(result),
-              };
-            } else if (target.type === "group") {
-              const result = await sendProactiveGroupMessage(
-                account.appId,
-                accessToken,
-                target.id,
-                item.content,
-              );
-              lastResult = {
-                channel: "qqbot",
-                messageId: result.id,
-                timestamp: result.timestamp,
-                refIdx: getRefIdx(result),
-              };
-            } else {
-              const result = await sendChannelMessage(accessToken, target.id, item.content);
-              lastResult = {
-                channel: "qqbot",
-                messageId: result.id,
-                timestamp: result.timestamp,
-                refIdx: getRefIdx(result),
-              };
-            }
+            recordMessageReply(replyToId);
           }
+          lastResult = {
+            channel: "qqbot",
+            messageId: result.id,
+            timestamp: result.timestamp,
+            refIdx: result.ext_info?.ref_idx,
+          };
           debugLog(`[qqbot] sendText: Sent text part: ${item.content.slice(0, 30)}...`);
         } else if (item.type === "image") {
           lastResult = await sendPhoto(mediaTarget, item.content);
@@ -1232,68 +1053,26 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   }
 
   try {
-    const accessToken = await getAccessToken(account.appId, account.clientSecret);
     const target = parseTarget(to);
+    const creds = accountToCreds(account);
+    const deliveryTarget: DeliveryTarget = {
+      type: target.type === "channel" ? "channel" : target.type,
+      id: target.id,
+    };
     debugLog("[qqbot] sendText target:", JSON.stringify(target));
 
-    if (!replyToId) {
-      let outResult: OutboundResult;
-      if (target.type === "c2c") {
-        const result = await sendProactiveC2CMessage(account.appId, accessToken, target.id, text);
-        outResult = {
-          channel: "qqbot",
-          messageId: result.id,
-          timestamp: result.timestamp,
-          refIdx: getRefIdx(result),
-        };
-      } else if (target.type === "group") {
-        const result = await sendProactiveGroupMessage(account.appId, accessToken, target.id, text);
-        outResult = {
-          channel: "qqbot",
-          messageId: result.id,
-          timestamp: result.timestamp,
-          refIdx: getRefIdx(result),
-        };
-      } else {
-        const result = await sendChannelMessage(accessToken, target.id, text);
-        outResult = {
-          channel: "qqbot",
-          messageId: result.id,
-          timestamp: result.timestamp,
-          refIdx: getRefIdx(result),
-        };
-      }
-      return outResult;
+    const result = await senderSendText(deliveryTarget, text, creds, {
+      msgId: replyToId ?? undefined,
+    });
+    if (replyToId) {
+      recordMessageReply(replyToId);
     }
-
-    if (target.type === "c2c") {
-      const result = await sendC2CMessage(account.appId, accessToken, target.id, text, replyToId);
-      recordMessageReply(replyToId);
-      return {
-        channel: "qqbot",
-        messageId: result.id,
-        timestamp: result.timestamp,
-        refIdx: result.ext_info?.ref_idx,
-      };
-    } else if (target.type === "group") {
-      const result = await sendGroupMessage(account.appId, accessToken, target.id, text, replyToId);
-      recordMessageReply(replyToId);
-      return {
-        channel: "qqbot",
-        messageId: result.id,
-        timestamp: result.timestamp,
-        refIdx: result.ext_info?.ref_idx,
-      };
-    } else {
-      const result = await sendChannelMessage(accessToken, target.id, text, replyToId);
-      recordMessageReply(replyToId);
-      return {
-        channel: "qqbot",
-        messageId: result.id,
-        timestamp: result.timestamp,
-        refIdx: getRefIdx(result),
-      };
-    }
+    return {
+      channel: "qqbot",
+      messageId: result.id,
+      timestamp: result.timestamp,
+      refIdx: result.ext_info?.ref_idx,
+    };
   } catch (err) {
     const message = formatErrorMessage(err);
     return { channel: "qqbot", error: message };
@@ -1319,62 +1098,24 @@ export async function sendProactiveMessage(
   );
 
   try {
-    debugLog(
-      `[${timestamp}] [qqbot] sendProactiveMessage: getting access token for appId=${account.appId}`,
-    );
-    const accessToken = await getAccessToken(account.appId, account.clientSecret);
-
-    debugLog(`[${timestamp}] [qqbot] sendProactiveMessage: parsing target=${to}`);
     const target = parseTarget(to);
-    debugLog(
-      `[${timestamp}] [qqbot] sendProactiveMessage: target parsed, type=${target.type}, id=${target.id}`,
-    );
+    const creds = accountToCreds(account);
+    const deliveryTarget: DeliveryTarget = {
+      type: target.type === "channel" ? "channel" : target.type,
+      id: target.id,
+    };
+    debugLog(`[${timestamp}] [qqbot] sendProactiveMessage: target=${target.type}:${target.id}`);
 
-    let outResult: OutboundResult;
-    if (target.type === "c2c") {
-      debugLog(
-        `[${timestamp}] [qqbot] sendProactiveMessage: sending proactive C2C message to user=${target.id}`,
-      );
-      const result = await sendProactiveC2CMessage(account.appId, accessToken, target.id, text);
-      debugLog(
-        `[${timestamp}] [qqbot] sendProactiveMessage: proactive C2C message sent successfully, messageId=${result.id}`,
-      );
-      outResult = {
-        channel: "qqbot",
-        messageId: result.id,
-        timestamp: result.timestamp,
-        refIdx: getRefIdx(result),
-      };
-    } else if (target.type === "group") {
-      debugLog(
-        `[${timestamp}] [qqbot] sendProactiveMessage: sending proactive group message to group=${target.id}`,
-      );
-      const result = await sendProactiveGroupMessage(account.appId, accessToken, target.id, text);
-      debugLog(
-        `[${timestamp}] [qqbot] sendProactiveMessage: proactive group message sent successfully, messageId=${result.id}`,
-      );
-      outResult = {
-        channel: "qqbot",
-        messageId: result.id,
-        timestamp: result.timestamp,
-        refIdx: getRefIdx(result),
-      };
-    } else {
-      debugLog(
-        `[${timestamp}] [qqbot] sendProactiveMessage: sending channel message to channel=${target.id}`,
-      );
-      const result = await sendChannelMessage(accessToken, target.id, text);
-      debugLog(
-        `[${timestamp}] [qqbot] sendProactiveMessage: channel message sent successfully, messageId=${result.id}`,
-      );
-      outResult = {
-        channel: "qqbot",
-        messageId: result.id,
-        timestamp: result.timestamp,
-        refIdx: getRefIdx(result),
-      };
-    }
-    return outResult;
+    const result = await sendProactiveText(deliveryTarget, text, creds);
+    debugLog(
+      `[${timestamp}] [qqbot] sendProactiveMessage: sent successfully, messageId=${result.id}`,
+    );
+    return {
+      channel: "qqbot",
+      messageId: result.id,
+      timestamp: result.timestamp,
+      refIdx: getRefIdx(result),
+    };
   } catch (err) {
     const errorMessage = formatErrorMessage(err);
     debugError(`[${timestamp}] [qqbot] sendProactiveMessage: error: ${errorMessage}`);
@@ -1466,16 +1207,9 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
 /** Send text after media when the transport supports a follow-up text message. */
 async function sendTextAfterMedia(ctx: MediaTargetContext, text: string): Promise<void> {
   try {
-    const token = await getToken(ctx.account);
-    if (ctx.targetType === "c2c") {
-      await sendC2CMessage(ctx.account.appId, token, ctx.targetId, text, ctx.replyToId);
-    } else if (ctx.targetType === "group") {
-      await sendGroupMessage(ctx.account.appId, token, ctx.targetId, text, ctx.replyToId);
-    } else if (ctx.targetType === "channel") {
-      await sendChannelMessage(token, ctx.targetId, text, ctx.replyToId);
-    } else if (ctx.targetType === "dm") {
-      await sendDmMessage(token, ctx.targetId, text, ctx.replyToId);
-    }
+    const creds = accountToCreds(ctx.account);
+    const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
+    await senderSendText(target, text, creds, { msgId: ctx.replyToId });
   } catch (err) {
     debugError(
       `[qqbot] sendTextAfterMedia failed: ${err instanceof Error ? err.message : JSON.stringify(err)}`,
