@@ -21,6 +21,8 @@ export type MatrixQaScenarioId =
   | "matrix-room-thread-reply-override"
   | "matrix-room-quiet-streaming-preview"
   | "matrix-room-block-streaming"
+  | "matrix-room-image-understanding-attachment"
+  | "matrix-room-generated-image-delivery"
   | "matrix-dm-reply-shape"
   | "matrix-dm-shared-session-notice"
   | "matrix-dm-thread-reply-override"
@@ -47,6 +49,7 @@ export const MATRIX_QA_BLOCK_ROOM_KEY = "block";
 export const MATRIX_QA_DRIVER_DM_ROOM_KEY = "driver-dm";
 export const MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY = "driver-dm-shared";
 export const MATRIX_QA_HOMESERVER_ROOM_KEY = "homeserver";
+export const MATRIX_QA_MEDIA_ROOM_KEY = "media";
 export const MATRIX_QA_MEMBERSHIP_ROOM_KEY = "membership";
 export const MATRIX_QA_RESTART_ROOM_KEY = "restart";
 export const MATRIX_QA_SECONDARY_ROOM_KEY = "secondary";
@@ -120,6 +123,12 @@ const MATRIX_QA_BLOCK_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
 const MATRIX_QA_MEMBERSHIP_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
   key: MATRIX_QA_MEMBERSHIP_ROOM_KEY,
   name: "Matrix QA Membership Room",
+  requireMention: true,
+});
+
+const MATRIX_QA_MEDIA_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
+  key: MATRIX_QA_MEDIA_ROOM_KEY,
+  name: "Matrix QA Media Room",
   requireMention: true,
 });
 
@@ -201,6 +210,18 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
       blockStreaming: true,
       streaming: "quiet",
     },
+  },
+  {
+    id: "matrix-room-image-understanding-attachment",
+    timeoutMs: 60_000,
+    title: "Matrix image attachments reach the model vision path",
+    topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
+  },
+  {
+    id: "matrix-room-generated-image-delivery",
+    timeoutMs: 60_000,
+    title: "Matrix generated images deliver as real image attachments",
+    topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
   },
   {
     id: "matrix-dm-reply-shape",
