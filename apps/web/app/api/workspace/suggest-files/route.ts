@@ -22,6 +22,8 @@ type SuggestItem = {
 	objectName?: string;
 	/** DB entry ID */
 	entryId?: string;
+	/** Default view for objects (table or kanban) */
+	defaultView?: "table" | "kanban";
 };
 
 const SKIP_DIRS = new Set([
@@ -205,6 +207,7 @@ type ObjectRow = {
 	description?: string;
 	icon?: string;
 	display_field?: string;
+	default_view?: string;
 };
 
 type FieldRow = {
@@ -273,6 +276,7 @@ async function searchObjects(
 			path: `workspace:object:${obj.name}`,
 			type: "object",
 			icon: yamlIcon ?? obj.icon,
+			defaultView: (obj.default_view === "kanban" ? "kanban" : "table") as "table" | "kanban",
 		});
 	}
 	return items;

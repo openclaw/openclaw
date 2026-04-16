@@ -2,6 +2,17 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import {
+  IconFolderFilled,
+  IconFolderOpenFilled,
+  IconFileFilled,
+  IconTableFilled,
+  IconLayoutKanbanFilled,
+  IconDatabaseFilled,
+  IconReportAnalyticsFilled,
+  IconMessageFilled,
+  IconAppsFilled,
+} from "@tabler/icons-react";
+import {
   DndContext,
   DragOverlay,
   useDraggable,
@@ -116,117 +127,41 @@ function isSystemFile(path: string, workspaceRoot?: string | null): boolean {
 // --- Icons (inline SVG, zero-dep) ---
 
 function FolderIcon({ open }: { open?: boolean }) {
-  return (
-    <img
-      src={open ? "/icons/folder-open.png" : "/icons/folder.png"}
-      alt=""
-      width={16}
-      height={16}
-      draggable={false}
-      style={{ flexShrink: 0 }}
-    />
-  );
+  return open
+    ? <IconFolderOpenFilled size={18} style={{ flexShrink: 0, color: "#60a5fa" }} />
+    : <IconFolderFilled size={18} style={{ flexShrink: 0, color: "#60a5fa" }} />;
 }
 
 function TableIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-      <rect x="1.5" y="2.5" width="13" height="11" rx="2" fill="#42a97a" fillOpacity="0.15" stroke="#42a97a" strokeWidth="1.2" />
-      <path d="M1.5 6.5h13" stroke="#42a97a" strokeWidth="1.2" />
-      <path d="M6 6.5v7" stroke="#42a97a" strokeWidth="1.2" />
-    </svg>
-  );
+  return <IconTableFilled size={18} style={{ flexShrink: 0, color: "#42a97a" }} />;
 }
 
 function KanbanIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-      <rect x="1.5" y="2.5" width="3.5" height="9.5" rx="1" fill="#8b7cf6" fillOpacity="0.18" stroke="#8b7cf6" strokeWidth="1.1" />
-      <rect x="6.25" y="2.5" width="3.5" height="6.5" rx="1" fill="#8b7cf6" fillOpacity="0.18" stroke="#8b7cf6" strokeWidth="1.1" />
-      <rect x="11" y="2.5" width="3.5" height="11" rx="1" fill="#8b7cf6" fillOpacity="0.18" stroke="#8b7cf6" strokeWidth="1.1" />
-    </svg>
-  );
+  return <IconLayoutKanbanFilled size={18} style={{ flexShrink: 0, color: "#8b7cf6" }} />;
 }
 
 function DocumentIcon() {
-  return (
-    <img src="/icons/document.png" alt="" width={16} height={16} draggable={false} style={{ flexShrink: 0, filter: "drop-shadow(0 0.5px 1.5px rgba(0,0,0,0.2))" }} />
-  );
+  return <IconFileFilled size={18} style={{ flexShrink: 0, opacity: 0.7 }} />;
 }
 
 function FileIcon() {
-  return (
-    <img src="/icons/document.png" alt="" width={16} height={16} draggable={false} style={{ flexShrink: 0, filter: "drop-shadow(0 0.5px 1.5px rgba(0,0,0,0.2))" }} />
-  );
+  return <IconFileFilled size={18} style={{ flexShrink: 0, opacity: 0.7 }} />;
 }
 
 function DatabaseIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5V19A9 3 0 0 0 21 19V5" /><path d="M3 12A9 3 0 0 0 21 12" />
-    </svg>
-  );
+  return <IconDatabaseFilled size={18} style={{ flexShrink: 0 }} />;
 }
 
 function ReportIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="12" x2="12" y1="20" y2="10" /><line x1="18" x2="18" y1="20" y2="4" /><line x1="6" x2="6" y1="20" y2="14" />
-    </svg>
-  );
+  return <IconReportAnalyticsFilled size={18} style={{ flexShrink: 0 }} />;
 }
 
 function ChatBubbleIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-    </svg>
-  );
+  return <IconMessageFilled size={18} style={{ flexShrink: 0 }} />;
 }
 
 function AppNodeIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect width="7" height="7" x="3" y="3" rx="1" /><rect width="7" height="7" x="14" y="3" rx="1" />
-      <rect width="7" height="7" x="3" y="14" rx="1" /><rect width="7" height="7" x="14" y="14" rx="1" />
-    </svg>
-  );
-}
-
-function LockBadge() {
-  return (
-    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.4 }}>
-      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
-    </svg>
-  );
-}
-
-function SymlinkBadge() {
-  return (
-    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.55 }}>
-      <path d="m9 18 6-6-6-6" />
-    </svg>
-  );
-}
-
-function ChevronIcon({ open }: { open: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-      style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 150ms ease" }}>
-      <path d="m9 18 6-6-6-6" />
-    </svg>
-  );
-}
-
-function WorkspaceGridIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect width="7" height="7" x="3" y="3" rx="1" />
-      <rect width="7" height="7" x="14" y="3" rx="1" />
-      <rect width="7" height="7" x="14" y="14" rx="1" />
-      <rect width="7" height="7" x="3" y="14" rx="1" />
-    </svg>
-  );
+  return <IconAppsFilled size={18} style={{ flexShrink: 0 }} />;
 }
 
 function NodeIcon({ node, open }: { node: TreeNode; open?: boolean }) {
@@ -484,9 +419,7 @@ function DraggableNode({
   const isExpanded = isWorkspaceRoot ? false : expandedPaths.has(node.path);
   const isActive = activePath === node.path;
   const isSelected = selectedPath === node.path;
-  // Object rows open their table/detail view; only the chevron should expand
-  // their backing folder contents.
-  const shouldToggleOnClick = isExpandable && node.type !== "object";
+  const shouldToggleOnClick = isExpandable;
   const isRenaming = renamingPath === node.path;
   const isSysFile = isSystemFile(node.path, workspaceRoot);
   const isVirtual = isVirtualNode(node);
@@ -514,10 +447,8 @@ function DraggableNode({
   }, [node, onSelect, onNodeSelect, onToggleExpand, shouldToggleOnClick]);
 
   const handleDoubleClick = useCallback(() => {
-    if (!isProtected) {
-      onStartRename(node.path);
-    }
-  }, [node.path, isProtected, onStartRename]);
+    // no-op: rename is only available via context menu
+  }, []);
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
@@ -560,59 +491,33 @@ function DraggableNode({
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
-        className="w-full flex items-center gap-1.5 py-1 px-2 rounded-md text-left text-sm transition-all duration-100 cursor-pointer select-none"
+        className="w-full flex items-center gap-2 py-1.5 px-2 rounded-xl text-left text-sm transition-all duration-100 cursor-pointer select-none"
         style={{
-          paddingLeft: `${depth * 10 + 8}px`,
-          background: isWorkspaceRoot
+          paddingLeft: `${depth * 20 + 14}px`,
+          background: showDropHighlight
             ? "var(--color-accent-light)"
-            : showDropHighlight
-              ? "var(--color-accent-light)"
-              : isSelected
-                ? "var(--color-surface-hover)"
-                : isActive
-                  ? "var(--color-surface-hover)"
-                  : "transparent",
-          color: isWorkspaceRoot
-            ? "var(--color-accent)"
-            : isActive || isSelected ? "var(--color-text)" : "var(--color-text-muted)",
-          outline: isWorkspaceRoot
-            ? "1.5px solid var(--color-accent)"
-            : showDropHighlight ? "1px dashed var(--color-accent)" : "none",
+            : isSelected || isActive
+              ? "var(--color-surface-hover)"
+              : "transparent",
+          color: isActive || isSelected ? "var(--color-text)" : "var(--color-text-secondary)",
+          outline: showDropHighlight ? "1px dashed var(--color-accent)" : "none",
           outlineOffset: "-1px",
-          borderRadius: isWorkspaceRoot ? "8px" : "6px",
-          marginTop: isWorkspaceRoot ? "2px" : undefined,
-          marginBottom: isWorkspaceRoot ? "2px" : undefined,
         }}
         onMouseEnter={(e) => {
-          if (isWorkspaceRoot) {
-            (e.currentTarget as HTMLElement).style.opacity = "0.8";
-          } else if (!isActive && !isSelected && !showDropHighlight) {
+          if (!isActive && !isSelected && !showDropHighlight) {
             (e.currentTarget as HTMLElement).style.background = "var(--color-surface-hover)";
           }
         }}
         onMouseLeave={(e) => {
-          if (isWorkspaceRoot) {
-            (e.currentTarget as HTMLElement).style.opacity = "1";
-          } else if (!isActive && !isSelected && !showDropHighlight) {
+          if (!isActive && !isSelected && !showDropHighlight) {
             (e.currentTarget as HTMLElement).style.background = "transparent";
           }
         }}
       >
-        {/* Expand/collapse chevron – intercept click so it only toggles without navigating */}
-        <span
-          className="flex-shrink-0 w-4 h-4 flex items-center justify-center"
-          style={{ opacity: isExpandable ? 1 : 0, cursor: isExpandable ? "pointer" : undefined }}
-          onClick={isExpandable ? (e) => { e.stopPropagation(); onToggleExpand(node.path); } : undefined}
-        >
-          {isExpandable && <ChevronIcon open={isExpanded} />}
+        <span className="flex-shrink-0 flex items-center" style={{ color: "var(--color-text-muted)", opacity: 0.55, filter: "drop-shadow(0 0.5px 1px rgba(0,0,0,0.15))" }}>
+          <NodeIcon node={node} open={isExpanded} />
         </span>
 
-        {/* Icon */}
-        <span className="flex-shrink-0 flex items-center" style={{ color: isWorkspaceRoot ? "var(--color-accent)" : typeColor(node) }}>
-          {isWorkspaceRoot ? <WorkspaceGridIcon /> : <NodeIcon node={node} open={isExpanded} />}
-        </span>
-
-        {/* Label or rename input */}
         {isRenaming ? (
           <InlineRename
             currentName={node.name}
@@ -623,44 +528,10 @@ function DraggableNode({
           <span className="truncate flex-1">{node.name}</span>
         )}
 
-        {/* Workspace badge for the workspace root entry point */}
-        {isWorkspaceRoot && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 font-medium"
-            style={{ background: "var(--color-accent)", color: "white" }}>
-            workspace
-          </span>
-        )}
-
-        {/* App badge */}
-        {node.type === "app" && (
-          <span className="text-[9px] px-1.5 py-[1px] rounded flex-shrink-0 font-medium"
-            style={{ background: "#6366f118", color: "#6366f1" }}>
-            APP
-          </span>
-        )}
-
-        {/* Lock badge for system/virtual files (skip for workspace root -- it has its own badge) */}
-        {isProtected && !isWorkspaceRoot && !compact && (
-          <span className="flex-shrink-0 ml-1">
-            <LockBadge />
-          </span>
-        )}
-
-        {/* Symlink indicator */}
-        {node.symlink && !compact && (
-          <span className="flex-shrink-0 ml-0.5" title="Symbolic link" style={{ color: "var(--color-text-muted)" }}>
-            <SymlinkBadge />
-          </span>
-        )}
-
       </div>
 
-      {/* Children */}
       {isExpanded && hasChildren && (
-        <div className="relative" style={{
-          borderLeft: depth > 0 ? "1px solid var(--color-border)" : "none",
-          marginLeft: `${depth * 10 + 14}px`,
-        }}>
+        <div>
           {node.children!.map((child) => (
             <DraggableNode
               key={child.path}
@@ -804,6 +675,31 @@ function saveExpandedPaths(paths: Set<string>) {
 export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact, parentDir, onNavigateUp, browseDir: _browseDir, workspaceRoot, onExternalDrop }: FileManagerTreeProps) {
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => loadExpandedPaths());
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  useEffect(() => {
+    if (activePath === null) {
+      setSelectedPath(null);
+      return;
+    }
+    setSelectedPath(null);
+    const relativePath = workspaceRoot && activePath.startsWith(workspaceRoot + "/")
+      ? activePath.slice(workspaceRoot.length + 1)
+      : activePath;
+    const parts = relativePath.split("/");
+    if (parts.length > 1) {
+      setExpandedPaths((prev) => {
+        const next = new Set(prev);
+        let changed = false;
+        for (let i = 1; i < parts.length; i++) {
+          const ancestor = parts.slice(0, i).join("/");
+          if (!next.has(ancestor)) {
+            next.add(ancestor);
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }
+  }, [activePath, workspaceRoot]);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [dragOverPath, setDragOverPath] = useState<string | null>(null);
   const [activeNode, setActiveNode] = useState<TreeNode | null>(null);
@@ -1258,17 +1154,15 @@ export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact
             onKeyDown={handleKeyDown}
             onContextMenu={handleEmptyContextMenu}
           >
-            {/* ".." navigation entry for browsing up */}
             {parentDir != null && onNavigateUp && (
               <div
                 role="treeitem"
                 tabIndex={-1}
                 onClick={onNavigateUp}
-                className="w-full flex items-center gap-1.5 py-1 px-2 rounded-md text-left text-sm transition-all duration-100 cursor-pointer select-none"
+                className="w-full flex items-center gap-2 py-1.5 px-2 rounded-xl text-left text-sm transition-all duration-100 cursor-pointer select-none"
                 style={{
-                  paddingLeft: "8px",
+                  paddingLeft: "14px",
                   color: "var(--color-text-muted)",
-                  borderRadius: "6px",
                 }}
                 onMouseEnter={(e) => {
                   (e.currentTarget as HTMLElement).style.background = "var(--color-surface-hover)";
@@ -1277,15 +1171,12 @@ export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact
                   (e.currentTarget as HTMLElement).style.background = "transparent";
                 }}
               >
-                <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <span className="flex-shrink-0 flex items-center" style={{ opacity: 0.55 }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="m15 18-6-6 6-6" />
                   </svg>
                 </span>
-                <span className="flex-shrink-0 flex items-center" style={{ color: "var(--color-text-muted)" }}>
-                  <FolderIcon />
-                </span>
-                <span className="truncate flex-1">..</span>
+                <span className="truncate flex-1">Back</span>
               </div>
             )}
             {tree.map((node) => (

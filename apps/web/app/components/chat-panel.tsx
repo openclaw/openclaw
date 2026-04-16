@@ -830,6 +830,8 @@ type ChatPanelProps = {
 	gatewayChannel?: string;
 	/** Whether this panel's tab is currently visible/active. Used to focus the editor on tab switch. */
 	visible?: boolean;
+	/** Client-side search function for instant @ mention results. */
+	searchFn?: (query: string, limit?: number) => import("@/lib/search-index").SearchIndexItem[];
 };
 
 export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
@@ -859,6 +861,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			gatewaySessionId,
 			gatewayChannel: _gatewayChannel,
 			visible,
+			searchFn,
 		},
 		ref,
 	) {
@@ -2221,6 +2224,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					}
 					disabled={loadingSession}
 					compact={compact}
+					searchFn={searchFn}
 				/>
 
 				<div className={`flex items-center justify-between ${compact ? "px-2 pb-1.5" : "px-3 pb-2.5"}`}>
@@ -2608,18 +2612,11 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						{showStreamActivity && (
 							<div className="py-3 min-w-0">
 								<div
-									className="inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1.5"
-									style={{
-										background: "var(--color-surface-hover)",
-										border: "1px solid var(--color-border)",
-										color: "var(--color-text-muted)",
-									}}
+									className="inline-flex max-w-full items-center gap-1.5 px-1 py-1.5 dench-shimmer"
+									style={{ color: "var(--color-text-muted)" }}
 								>
-									<UnicodeSpinner
-										name="braille"
-										className={`text-sm ${lastAssistantHasText ? "" : "opacity-90"}`}
-										style={{ color: "inherit" }}
-									/>
+									{/* eslint-disable-next-line @next/next/no-img-element */}
+									<img src="/dench-workspace-icon.png" alt="" width={14} height={14} className="rounded-sm" />
 									<span className="text-xs truncate">
 										{streamActivityLabel}
 									</span>
@@ -2697,7 +2694,6 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				{!showHeroState && (
 					<div
 						className={`${compact ? "px-3 py-2" : "px-3 pb-3 pt-0 md:px-6 md:pb-5"} shrink-0 z-20`}
-						style={{ background: "var(--color-bg-glass)" }}
 					>
 						<div className={compact ? "" : "max-w-[720px] mx-auto"}>
 							{inputBarContainer(handleInputDragOver, handleInputDragLeave, handleInputDrop)}

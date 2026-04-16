@@ -16,6 +16,7 @@ export type SearchIndexItem = {
   fields?: Record<string, string>;
   path?: string;
   nodeType?: "document" | "folder" | "file" | "report" | "database";
+  defaultView?: "table" | "kanban";
 };
 
 // --- Fuse.js config ---

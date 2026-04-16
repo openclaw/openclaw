@@ -10,6 +10,20 @@ import {
 	useState,
 } from "react";
 import { createPortal } from "react-dom";
+import type { SearchIndexItem } from "@/lib/search-index";
+import {
+	IconFolderFilled,
+	IconFileFilled,
+	IconDatabaseFilled,
+	IconTableFilled,
+	IconLayoutKanbanFilled,
+	IconPhoto,
+	IconVideo,
+	IconMusic,
+	IconFileTypePdf,
+	IconCode,
+	IconUserFilled,
+} from "@tabler/icons-react";
 
 // ── Types ──
 
@@ -20,6 +34,7 @@ type SuggestItem = {
 	icon?: string;
 	objectName?: string;
 	entryId?: string;
+	defaultView?: "table" | "kanban";
 };
 
 export type FileMentionListRef = {
@@ -55,7 +70,7 @@ function getFileCategory(name: string, type: string): FileCategory {
 		[
 			"js", "ts", "tsx", "jsx", "py", "rb", "go", "rs", "java",
 			"cpp", "c", "h", "css", "html", "json", "yaml", "yml",
-			"toml", "md", "sh", "bash", "sql", "swift", "kt",
+			"toml", "sh", "bash", "sql", "swift", "kt",
 		].includes(ext)
 	)
 		{return "code";}
@@ -63,110 +78,23 @@ function getFileCategory(name: string, type: string): FileCategory {
 	return "other";
 }
 
-const categoryColors: Record<string, { bg: string; fg: string }> = {
-	folder: { bg: "rgba(245, 158, 11, 0.12)", fg: "#f59e0b" },
-	image: { bg: "rgba(16, 185, 129, 0.12)", fg: "#10b981" },
-	video: { bg: "rgba(139, 92, 246, 0.12)", fg: "#8b5cf6" },
-	audio: { bg: "rgba(245, 158, 11, 0.12)", fg: "#f59e0b" },
-	pdf: { bg: "rgba(239, 68, 68, 0.12)", fg: "#ef4444" },
-	code: { bg: "rgba(59, 130, 246, 0.12)", fg: "#3b82f6" },
-	document: { bg: "rgba(107, 114, 128, 0.12)", fg: "#6b7280" },
-	database: { bg: "rgba(168, 85, 247, 0.12)", fg: "#a855f7" },
-	object: { bg: "rgba(14, 165, 233, 0.12)", fg: "#0ea5e9" },
-	entry: { bg: "rgba(34, 197, 94, 0.12)", fg: "#22c55e" },
-	other: { bg: "rgba(107, 114, 128, 0.08)", fg: "#9ca3af" },
-};
 
-function MiniIcon({ category }: { category: string }) {
-	const props = {
-		width: 12,
-		height: 12,
-		viewBox: "0 0 24 24",
-		fill: "none",
-		stroke: "currentColor",
-		strokeWidth: 2,
-		strokeLinecap: "round" as const,
-		strokeLinejoin: "round" as const,
-	};
+function MentionIcon({ category, defaultView }: { category: string; defaultView?: string }) {
+	const s = { flexShrink: 0 } as const;
 	switch (category) {
-		case "folder":
-			return (
-				<svg {...props}>
-					<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
-				</svg>
-			);
-		case "image":
-			return (
-				<svg {...props}>
-					<rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
-					<circle cx="9" cy="9" r="2" />
-					<path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-				</svg>
-			);
-		case "video":
-			return (
-				<svg {...props}>
-					<path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5" />
-					<rect x="2" y="6" width="14" height="12" rx="2" />
-				</svg>
-			);
-		case "audio":
-			return (
-				<svg {...props}>
-					<path d="M9 18V5l12-2v13" />
-					<circle cx="6" cy="18" r="3" />
-					<circle cx="18" cy="16" r="3" />
-				</svg>
-			);
-		case "pdf":
-			return (
-				<svg {...props}>
-					<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-					<path d="M14 2v6h6" />
-					<path d="M10 13h4" />
-					<path d="M10 17h4" />
-				</svg>
-			);
-		case "code":
-			return (
-				<svg {...props}>
-					<polyline points="16 18 22 12 16 6" />
-					<polyline points="8 6 2 12 8 18" />
-				</svg>
-			);
-		case "database":
-			return (
-				<svg {...props}>
-					<ellipse cx="12" cy="5" rx="9" ry="3" />
-					<path d="M3 5V19A9 3 0 0 0 21 19V5" />
-					<path d="M3 12A9 3 0 0 0 21 12" />
-				</svg>
-			);
-		case "object":
-			return (
-				<svg {...props}>
-					<rect x="3" y="3" width="7" height="7" rx="1" />
-					<rect x="14" y="3" width="7" height="7" rx="1" />
-					<rect x="3" y="14" width="7" height="7" rx="1" />
-					<rect x="14" y="14" width="7" height="7" rx="1" />
-				</svg>
-			);
-		case "entry":
-			return (
-				<svg {...props}>
-					<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-					<circle cx="9" cy="7" r="4" />
-					<path d="M22 21v-2a4 4 0 0 0-3-3.87" />
-					<path d="M16 3.13a4 4 0 0 1 0 7.75" />
-				</svg>
-			);
-		default:
-			return (
-				<svg {...props}>
-					<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-					<path d="M14 2v6h6" />
-				</svg>
-			);
+		case "folder": return <IconFolderFilled size={18} style={{ ...s, color: "#60a5fa" }} />;
+		case "image": return <IconPhoto size={18} style={{ ...s, color: "#10b981" }} />;
+		case "video": return <IconVideo size={18} style={{ ...s, color: "#8b5cf6" }} />;
+		case "audio": return <IconMusic size={18} style={{ ...s, color: "#f59e0b" }} />;
+		case "pdf": return <IconFileFilled size={18} style={{ ...s, color: "#ef4444" }} />;
+		case "code": return <IconCode size={18} style={{ ...s, color: "#3b82f6" }} />;
+		case "database": return <IconDatabaseFilled size={18} style={s} />;
+		case "object": return defaultView === "kanban"
+			? <IconLayoutKanbanFilled size={18} style={{ ...s, color: "#8b7cf6" }} />
+			: <IconTableFilled size={18} style={{ ...s, color: "#42a97a" }} />;
+		case "entry": return <IconUserFilled size={18} style={{ ...s, color: "#22c55e" }} />;
+		case "document": return <IconFileFilled size={18} style={{ ...s, opacity: 0.7 }} />;
+		default: return <IconFileFilled size={18} style={{ ...s, opacity: 0.7 }} />;
 	}
 }
 
@@ -221,151 +149,77 @@ const FileMentionList = forwardRef<FileMentionListRef, FileMentionListProps>(
 			},
 		}));
 
-		if (loading) {
-			return (
-				<div
-					className="rounded-xl py-3 px-4 shadow-xl"
-					style={{
-						background: "var(--color-surface)",
-						border: "1px solid var(--color-border)",
-						backdropFilter: "blur(12px)",
-						minWidth: 260,
-					}}
-				>
-					<div className="flex items-center gap-2">
-						<div
-							className="w-3.5 h-3.5 border-2 rounded-full animate-spin"
-							style={{
-								borderColor: "var(--color-border)",
-								borderTopColor: "var(--color-accent)",
-							}}
-						/>
-						<span
-							className="text-[12px]"
-							style={{ color: "var(--color-text-muted)" }}
-						>
-						Searching...
-					</span>
-					</div>
-				</div>
-			);
-		}
+	const dropdownClass = "bg-neutral-100/[0.67] dark:bg-neutral-900/[0.67] border border-white dark:border-white/10 backdrop-blur-md shadow-[0_0_25px_0_rgba(0,0,0,0.16)]";
 
-		if (items.length === 0) {
-			return (
-				<div
-					className="rounded-xl py-3 px-4 shadow-xl"
-					style={{
-						background: "var(--color-surface)",
-						border: "1px solid var(--color-border)",
-						backdropFilter: "blur(12px)",
-						minWidth: 260,
-					}}
-				>
-					<span
-						className="text-[12px]"
-						style={{ color: "var(--color-text-muted)" }}
-					>
-						No results found
-					</span>
-				</div>
-			);
-		}
-
+	if (loading) {
 		return (
-			<div
-				ref={listRef}
-				className="rounded-xl py-1 shadow-xl overflow-y-auto"
-				style={{
-					background: "var(--color-surface)",
-					border: "1px solid var(--color-border)",
-					backdropFilter: "blur(12px)",
-					minWidth: 280,
-					maxWidth: 400,
-					maxHeight: 300,
-				}}
-			>
-			{items.map((item, index) => {
-				const category = getFileCategory(item.name, item.type);
-				const colors = categoryColors[category] ?? categoryColors.other;
-				const hasEmoji = item.icon && /\p{Emoji_Presentation}/u.test(item.icon);
-				const isDbItem = item.type === "object" || item.type === "entry";
-				const sublabel = item.type === "entry" && item.objectName
-					? item.objectName
-					: isDbItem
-						? item.type
-						: shortenPath(item.path);
-
-				return (
-					<button
-						key={item.path}
-						type="button"
-						className="w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors"
-						style={{
-							background:
-								index === selectedIndex
-									? "var(--color-surface-hover)"
-									: "transparent",
-						}}
-						onClick={() => selectItem(index)}
-						onMouseEnter={() => setSelectedIndex(index)}
-					>
-						<div
-							className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
-							style={{ background: colors.bg, color: colors.fg }}
-						>
-							{hasEmoji ? (
-								<span className="text-[13px] leading-none">{item.icon}</span>
-							) : (
-								<MiniIcon category={category} />
-							)}
-						</div>
-						<div className="min-w-0 flex-1">
-							<div
-								className="text-[12px] font-medium truncate"
-								style={{ color: "var(--color-text)" }}
-							>
-								{item.name}
-							</div>
-							<div
-								className="text-[10px] truncate flex items-center gap-1"
-								style={{ color: "var(--color-text-muted)" }}
-								title={isDbItem ? sublabel : item.path}
-							>
-								{isDbItem && (
-									<span
-										className="inline-block rounded px-1 py-px text-[9px] font-medium leading-tight"
-										style={{
-											background: colors.bg,
-											color: colors.fg,
-										}}
-									>
-										{item.type}
-									</span>
-								)}
-								{sublabel}
-							</div>
-						</div>
-						{item.type === "folder" && (
-							<svg
-								width="12"
-								height="12"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-								className="flex-shrink-0 opacity-40"
-							>
-								<path d="m9 18 6-6-6-6" />
-							</svg>
-						)}
-					</button>
-				);
-			})}
+			<div className={`rounded-3xl p-3 ${dropdownClass}`} style={{ minWidth: 280, maxWidth: 400 }}>
+				<span className="text-xs animate-pulse" style={{ color: "var(--color-text-muted)" }}>
+					Searching...
+				</span>
 			</div>
 		);
+	}
+
+	if (items.length === 0) {
+		return (
+			<div className={`rounded-3xl p-3 text-center ${dropdownClass}`} style={{ minWidth: 280, maxWidth: 400 }}>
+				<span className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+					No results found
+				</span>
+			</div>
+		);
+	}
+
+	return (
+		<div
+			ref={listRef}
+			className={`rounded-3xl p-1 overflow-y-auto thin-scrollbar ${dropdownClass}`}
+			style={{ minWidth: 280, maxWidth: 400, maxHeight: 300 }}
+		>
+		{items.map((item, index) => {
+			const category = getFileCategory(item.name, item.type);
+			const hasEmoji = item.icon && /\p{Emoji_Presentation}/u.test(item.icon);
+			const isDbItem = item.type === "object" || item.type === "entry";
+			const sublabel = item.type === "entry" && item.objectName
+				? item.objectName
+				: isDbItem
+					? (item.defaultView === "kanban" ? "Board" : "Table")
+					: shortenPath(item.path);
+
+			return (
+				<button
+					key={item.path}
+					type="button"
+					className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 text-left transition-all rounded-2xl select-none ${index === selectedIndex ? "bg-neutral-400/15" : ""}`}
+					style={{ color: "var(--color-text)" }}
+					onClick={() => selectItem(index)}
+					onMouseEnter={() => setSelectedIndex(index)}
+				>
+					<span className="flex-shrink-0 flex items-center" style={{ opacity: 0.55 }}>
+						{hasEmoji ? (
+							<span className="text-[15px] leading-none">{item.icon}</span>
+						) : (
+							<MentionIcon category={category} defaultView={item.defaultView} />
+						)}
+					</span>
+					<div className="min-w-0 flex-1">
+						<div className="text-sm font-medium truncate">
+							{item.name}
+						</div>
+						<div
+							className="text-xs truncate"
+							style={{ color: "var(--color-text-muted)" }}
+							title={isDbItem ? sublabel : item.path}
+						>
+							{sublabel}
+						</div>
+					</div>
+				</button>
+			);
+		})}
+		</div>
+	);
 	},
 );
 
@@ -428,10 +282,11 @@ export function MentionPopupRenderer({
 }
 
 /**
- * Creates a Tiptap suggestion render() function that fetches file suggestions
- * from /api/workspace/suggest-files and renders them in a floating popup.
+ * Creates a Tiptap suggestion render() function that fetches file suggestions.
+ * If searchFnRef is provided, uses client-side search for instant results.
+ * Otherwise falls back to /api/workspace/suggest-files.
  */
-export function createFileMentionRenderer() {
+export function createFileMentionRenderer(searchFnRef?: React.RefObject<((query: string, limit?: number) => import("@/lib/search-index").SearchIndexItem[]) | null>) {
 	return () => {
 		let container: HTMLDivElement | null = null;
 		let root: ReturnType<typeof import("react-dom/client").createRoot> | null =
@@ -459,7 +314,34 @@ export function createFileMentionRenderer() {
 			);
 		}
 
+		function indexItemToSuggest(item: SearchIndexItem): SuggestItem {
+			const fullPath = item.path ?? item.id;
+			const fileName = fullPath.split("/").pop() ?? item.label;
+			return {
+				name: item.kind === "object" || item.kind === "entry" ? item.label : fileName,
+				path: fullPath,
+				type: (item.kind === "entry" ? "entry" : item.kind === "object" ? "object" : item.nodeType ?? "file") as SuggestItem["type"],
+				icon: item.icon,
+				objectName: item.objectName,
+				entryId: item.entryId,
+				defaultView: item.defaultView,
+			};
+		}
+
+		function searchInstant(query: string) {
+			const fn = searchFnRef?.current;
+			if (fn) {
+				currentItems = fn(query, 20).map(indexItemToSuggest);
+				isLoading = false;
+				render();
+				return true;
+			}
+			return false;
+		}
+
 		async function fetchSuggestions(query: string) {
+			if (searchInstant(query)) return;
+
 			isLoading = true;
 			render();
 
@@ -488,6 +370,7 @@ export function createFileMentionRenderer() {
 		}
 
 		function debouncedFetch(query: string) {
+			if (searchInstant(query)) return;
 			if (debounceTimer) {clearTimeout(debounceTimer);}
 			debounceTimer = setTimeout(() => {
 				void fetchSuggestions(query);

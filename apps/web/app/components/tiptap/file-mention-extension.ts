@@ -14,32 +14,8 @@ export type FileMentionAttrs = {
 };
 
 /** Resolve mention pill colors from the mention type or filename extension. */
-function mentionColors(label: string, mentionType?: string): { bg: string; fg: string } {
-	if (mentionType === "object") {return { bg: "rgba(14,165,233,0.15)", fg: "#0ea5e9" };}
-	if (mentionType === "entry") {return { bg: "rgba(34,197,94,0.15)", fg: "#22c55e" };}
-	const ext = label.split(".").pop()?.toLowerCase() ?? "";
-	if (
-		["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "tiff", "heic"].includes(ext)
-	)
-		{return { bg: "rgba(16,185,129,0.15)", fg: "#10b981" };}
-	if (["mp4", "webm", "mov", "avi", "mkv", "flv"].includes(ext))
-		{return { bg: "rgba(139,92,246,0.15)", fg: "#8b5cf6" };}
-	if (["mp3", "wav", "ogg", "aac", "flac", "m4a"].includes(ext))
-		{return { bg: "rgba(245,158,11,0.15)", fg: "#f59e0b" };}
-	if (ext === "pdf") {return { bg: "rgba(239,68,68,0.15)", fg: "#ef4444" };}
-	if (
-		[
-			"js", "ts", "tsx", "jsx", "py", "rb", "go", "rs", "java",
-			"cpp", "c", "h", "css", "html", "json", "yaml", "yml",
-			"toml", "md", "sh", "bash", "sql", "swift", "kt",
-		].includes(ext)
-	)
-		{return { bg: "rgba(59,130,246,0.15)", fg: "#3b82f6" };}
-	if (
-		["doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv"].includes(ext)
-	)
-		{return { bg: "rgba(107,114,128,0.15)", fg: "#6b7280" };}
-	return { bg: "rgba(107,114,128,0.10)", fg: "#9ca3af" };
+function mentionColors(_label: string, _mentionType?: string): { bg: string; fg: string } {
+	return { bg: "rgba(120, 113, 108, 0.1)", fg: "inherit" };
 }
 
 /**
@@ -61,6 +37,7 @@ export const FileMentionNode = Node.create({
 			path: { default: "" },
 			mentionType: { default: "file" },
 			objectName: { default: "" },
+			defaultView: { default: "" },
 		};
 	},
 
@@ -70,13 +47,16 @@ export const FileMentionNode = Node.create({
 
 	renderHTML({ HTMLAttributes }) {
 		const label = (HTMLAttributes.label as string) || "file";
-		const mType = HTMLAttributes.mentionType as string | undefined;
+		const mType = (HTMLAttributes.mentionType as string) || "file";
+		const dView = (HTMLAttributes.defaultView as string) || "";
 		const colors = mentionColors(label, mType);
 		return [
 			"span",
 			mergeAttributes(
 				{
 					"data-chat-file-mention": "",
+					"data-mention-type": mType,
+					...(dView ? { "data-default-view": dView } : {}),
 					class: "chat-file-mention",
 					style: `--mention-bg: ${colors.bg}; --mention-fg: ${colors.fg};`,
 					title: HTMLAttributes.path || "",

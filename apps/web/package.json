@@ -21,6 +21,7 @@
     "@radix-ui/react-slot": "^1.2.4",
     "@radix-ui/react-switch": "^1.2.6",
     "@sinm/react-chrome-tabs": "^2.6.3",
+    "@tabler/icons-react": "^3.41.1",
     "@tanstack/match-sorter-utils": "^8.19.4",
     "@tanstack/react-table": "^8.21.3",
     "@tiptap/core": "^3.19.0",

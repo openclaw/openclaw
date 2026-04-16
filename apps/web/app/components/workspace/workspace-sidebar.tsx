@@ -1,6 +1,18 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
+import {
+	Combobox,
+	ComboboxInput,
+	ComboboxContent,
+	ComboboxList,
+	ComboboxItem,
+} from "../ui/combobox";
+import {
+	IconFolderFilled,
+	IconFileFilled,
+	IconDatabaseFilled,
+} from "@tabler/icons-react";
 import { GoTools } from "react-icons/go";
 import { RiApps2AiLine } from "react-icons/ri";
 import { useTheme } from "next-themes";
@@ -8,7 +20,8 @@ import { FileManagerTree, type TreeNode } from "./file-manager-tree";
 import { ProfileSwitcher } from "./profile-switcher";
 import { CreateWorkspaceDialog } from "./create-workspace-dialog";
 import { UnicodeSpinner } from "../unicode-spinner";
-import { ChatSessionsSidebar, type WebSession, type SidebarSubagentInfo, type SidebarGatewaySession, type SidebarChannelStatus } from "./chat-sessions-sidebar";
+import { type WebSession, type SidebarSubagentInfo, type SidebarGatewaySession, type SidebarChannelStatus } from "./chat-sessions-sidebar";
+import type { SearchIndexItem } from "@/lib/search-index";
 
 /** Shape returned by /api/workspace/suggest-files */
 type SuggestItem = {
@@ -16,6 +29,16 @@ type SuggestItem = {
 	path: string;
 	type: "folder" | "file" | "document" | "database";
 };
+
+function indexItemToSuggestItem(item: SearchIndexItem): SuggestItem {
+	const fullPath = item.path ?? item.id;
+	const fileName = fullPath.split("/").pop() ?? item.label;
+	return {
+		name: item.kind === "object" ? item.label : fileName,
+		path: fullPath,
+		type: (item.nodeType ?? (item.kind === "object" ? "folder" : "file")) as SuggestItem["type"],
+	};
+}
 
 type WorkspaceSidebarProps = {
 	tree: TreeNode[];
@@ -80,20 +103,13 @@ type WorkspaceSidebarProps = {
   onTabChange?: (tab: "files" | "chats") => void;
   /** Navigate to a sidebar section (cloud, integrations, skills, cron). */
   onNavigate?: (target: "cloud" | "integrations" | "skills" | "cron") => void;
+  /** Client-side search function from useSearchIndex for instant results. */
+  searchFn?: (query: string, limit?: number) => SearchIndexItem[];
 };
 
 function HomeIcon() {
 	return (
-		<svg
-			width="16"
-			height="16"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="2"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-		>
+		<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
 			<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
 			<polyline points="9 22 9 12 15 12 15 22" />
 		</svg>
@@ -102,28 +118,22 @@ function HomeIcon() {
 
 function FolderOpenIcon() {
 	return (
-		<img
-			src="/icons/folder-open.png"
-			alt=""
-			width={20}
-			height={20}
-			draggable={false}
-			style={{ flexShrink: 0 }}
-		/>
+		<img src="/icons/folder-open.png" alt="" width={20} height={20} draggable={false} style={{ flexShrink: 0 }} />
 	);
 }
 
-/* ─── Theme toggle ─── */
+/** Extract the directory name from an absolute path for display. */
+function dirDisplayName(dir: string): string {
+	if (dir === "/") {return "/";}
+	return dir.split("/").pop() || dir;
+}
 
 function ThemeToggle() {
 	const { resolvedTheme, setTheme } = useTheme();
 	const [mounted, setMounted] = useState(false);
 	useEffect(() => setMounted(true), []);
-
 	if (!mounted) return <div className="w-[28px] h-[28px]" />;
-
 	const isDark = resolvedTheme === "dark";
-
 	return (
 		<button
 			type="button"
@@ -167,220 +177,119 @@ function SearchIcon() {
 	);
 }
 
-function SmallFolderIcon() {
-	return (
-		<img
-			src="/icons/folder.png"
-			alt=""
-			width={14}
-			height={14}
-			draggable={false}
-			style={{ flexShrink: 0 }}
-		/>
-	);
-}
-
-function SmallFileIcon() {
-	return (
-		<img src="/icons/document.png" alt="" width={14} height={14} draggable={false} style={{ flexShrink: 0, filter: "drop-shadow(0 0.5px 1.5px rgba(0,0,0,0.2))" }} />
-	);
-}
-
-function SmallDocIcon() {
-	return (
-		<img src="/icons/document.png" alt="" width={14} height={14} draggable={false} style={{ flexShrink: 0, filter: "drop-shadow(0 0.5px 1.5px rgba(0,0,0,0.2))" }} />
-	);
-}
-
-function SmallDbIcon() {
-	return (
-		<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-			<ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5V19A9 3 0 0 0 21 19V5" /><path d="M3 12A9 3 0 0 0 21 12" />
-		</svg>
-	);
-}
-
 function SuggestTypeIcon({ type }: { type: string }) {
 	switch (type) {
-		case "folder": return <SmallFolderIcon />;
-		case "document": return <SmallDocIcon />;
-		case "database": return <SmallDbIcon />;
-		default: return <SmallFileIcon />;
+		case "folder": return <IconFolderFilled size={16} style={{ flexShrink: 0, color: "#60a5fa" }} />;
+		case "document": return <IconFileFilled size={16} style={{ flexShrink: 0, opacity: 0.7 }} />;
+		case "database": return <IconDatabaseFilled size={16} style={{ flexShrink: 0 }} />;
+		default: return <IconFileFilled size={16} style={{ flexShrink: 0, opacity: 0.7 }} />;
 	}
 }
 
-/* ─── File search ─── */
+/* ─── File search (base-ui Combobox) ─── */
 
-function FileSearch({ onSelect }: { onSelect: (item: SuggestItem) => void }) {
-	const [query, setQuery] = useState("");
+function FileSearch({ onSelect, searchFn }: { onSelect: (item: SuggestItem) => void; searchFn?: (query: string, limit?: number) => SearchIndexItem[] }) {
 	const [results, setResults] = useState<SuggestItem[]>([]);
 	const [open, setOpen] = useState(false);
-	const [loading, setLoading] = useState(false);
-	const [selectedIndex, setSelectedIndex] = useState(0);
-	const inputRef = useRef<HTMLInputElement>(null);
-	const containerRef = useRef<HTMLDivElement>(null);
+	const [query, setQuery] = useState("");
+	const justSelectedRef = useRef(false);
+	const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const anchorRef = useRef<HTMLDivElement>(null);
 
-	// Debounced fetch from the same suggest-files API that tiptap uses
 	useEffect(() => {
-		if (!query.trim()) {
+		return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+	}, []);
+
+	const handleInputValueChange = useCallback((inputValue: string) => {
+		if (justSelectedRef.current) {
+			justSelectedRef.current = false;
+			return;
+		}
+		setQuery(inputValue);
+		if (!inputValue.trim()) {
 			setResults([]);
 			setOpen(false);
 			return;
 		}
-
-		setLoading(true);
-		const timer = setTimeout(async () => {
-			try {
-				const res = await fetch(
-					`/api/workspace/suggest-files?q=${encodeURIComponent(query.trim())}`,
-				);
-				const data = await res.json();
-				setResults(data.items ?? []);
-				setOpen(true);
-				setSelectedIndex(0);
-			} catch {
-				setResults([]);
-			} finally {
-				setLoading(false);
-			}
-		}, 150);
-
-		return () => clearTimeout(timer);
-	}, [query]);
-
-	// Click outside to close
-	useEffect(() => {
-		function handleClickOutside(e: MouseEvent) {
-			if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-				setOpen(false);
-			}
+		if (searchFn) {
+			const hits = searchFn(inputValue.trim(), 20);
+			setResults(hits.map(indexItemToSuggestItem));
+			setOpen(true);
+		} else {
+			if (timerRef.current) clearTimeout(timerRef.current);
+			timerRef.current = setTimeout(async () => {
+				try {
+					const res = await fetch(`/api/workspace/suggest-files?q=${encodeURIComponent(inputValue.trim())}`);
+					const data = await res.json();
+					setResults(data.items ?? []);
+					setOpen(true);
+				} catch {
+					setResults([]);
+				}
+			}, 150);
 		}
-		document.addEventListener("mousedown", handleClickOutside);
-		return () => document.removeEventListener("mousedown", handleClickOutside);
-	}, []);
-
-	const handleKeyDown = useCallback(
-		(e: React.KeyboardEvent) => {
-			if (e.key === "ArrowDown") {
-				e.preventDefault();
-				setSelectedIndex((i) => Math.min(i + 1, results.length - 1));
-			} else if (e.key === "ArrowUp") {
-				e.preventDefault();
-				setSelectedIndex((i) => Math.max(i - 1, 0));
-			} else if (e.key === "Enter" && results[selectedIndex]) {
-				e.preventDefault();
-				onSelect(results[selectedIndex]);
-				setQuery("");
-				setOpen(false);
-				inputRef.current?.blur();
-			} else if (e.key === "Escape") {
-				setOpen(false);
-				setQuery("");
-				inputRef.current?.blur();
-			}
-		},
-		[results, selectedIndex, onSelect],
-	);
-
-	const handleSelect = useCallback(
-		(item: SuggestItem) => {
-			onSelect(item);
-			setQuery("");
-			setOpen(false);
-		},
-		[onSelect],
-	);
+	}, [searchFn]);
 
 	return (
-		<div ref={containerRef} className="relative">
-			<div className="relative">
+		<Combobox
+			value={null}
+			open={open}
+			onOpenChange={(isOpen) => {
+				if (!isOpen) setOpen(false);
+			}}
+			onValueChange={(val) => {
+				if (val) {
+					justSelectedRef.current = true;
+					onSelect(val as SuggestItem);
+					setOpen(false);
+					setQuery("");
+					setResults([]);
+				}
+			}}
+			onInputValueChange={handleInputValueChange}
+			filter={null}
+			itemToStringLabel={() => ""}
+		>
+			<div ref={anchorRef} className="relative">
 				<span
-					className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+					className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none z-10"
 					style={{ color: "var(--color-text-muted)" }}
 				>
 					<SearchIcon />
 				</span>
-				<input
-					ref={inputRef}
-					type="text"
-					value={query}
-					onChange={(e) => setQuery(e.target.value)}
-					onKeyDown={handleKeyDown}
-					onFocus={() => { if (results.length > 0) {setOpen(true);} }}
-					placeholder="Search files..."
-					className="w-full pl-8 pr-3 py-1.5 rounded-lg text-xs outline-none transition-colors"
+				<ComboboxInput
+					placeholder="Search"
+					className="w-full pl-9 pr-10 py-1.5 rounded-xl text-sm outline-none transition-colors"
 					style={{
-						background: "var(--color-bg)",
+						background: "var(--color-surface-hover)",
 						color: "var(--color-text)",
-						border: "1px solid var(--color-border)",
 					}}
 				/>
-				{loading && (
-					<span className="absolute right-2.5 top-1/2 -translate-y-1/2">
-						<UnicodeSpinner
-							name="braille"
-							className="text-sm"
-							style={{ color: "var(--color-text-muted)" }}
-						/>
-					</span>
-				)}
 			</div>
-
-			{open && results.length > 0 && (
-				<div
-					className="absolute left-0 right-0 mt-1 rounded-lg shadow-lg border overflow-hidden z-50 max-h-[300px] overflow-y-auto"
-					style={{ background: "var(--color-surface)", borderColor: "var(--color-border)" }}
-				>
-					{results.map((item, i) => (
-						<button
-							key={item.path}
-							type="button"
-							onClick={() => handleSelect(item)}
-							className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs cursor-pointer transition-colors"
-							style={{
-								background: i === selectedIndex ? "var(--color-surface-hover)" : "transparent",
-								color: "var(--color-text)",
-							}}
-							onMouseEnter={() => setSelectedIndex(i)}
-						>
-							<span className="flex-shrink-0" style={{ color: "var(--color-text-muted)" }}>
+			<ComboboxContent anchor={anchorRef}>
+				<ComboboxList>
+					{results.map((item) => (
+						<ComboboxItem key={item.path} value={item}>
+							<span className="flex-shrink-0" style={{ color: "var(--color-text-muted)", opacity: 0.55 }}>
 								<SuggestTypeIcon type={item.type} />
 							</span>
 							<div className="min-w-0 flex-1">
 								<div className="truncate font-medium">{item.name}</div>
-								<div className="truncate" style={{ color: "var(--color-text-muted)", fontSize: "10px" }}>
+								<div className="truncate text-xs" style={{ color: "var(--color-text-muted)" }}>
 									{item.path.split("/").slice(0, -1).join("/")}
 								</div>
 							</div>
-							<span
-								className="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 capitalize"
-								style={{ background: "var(--color-surface-hover)", color: "var(--color-text-muted)" }}
-							>
-								{item.type}
-							</span>
-						</button>
+						</ComboboxItem>
 					))}
-				</div>
-			)}
-
-			{open && query.trim() && !loading && results.length === 0 && (
-				<div
-					className="absolute left-0 right-0 mt-1 rounded-lg shadow-lg border z-50 px-3 py-3 text-center"
-					style={{ background: "var(--color-surface)", borderColor: "var(--color-border)" }}
-				>
-					<p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+				</ComboboxList>
+				{query.trim() && results.length === 0 && (
+					<div className="py-3 text-center text-sm" style={{ color: "var(--color-text-muted)" }}>
 						No files found
-					</p>
-				</div>
-			)}
-		</div>
+					</div>
+				)}
+			</ComboboxContent>
+		</Combobox>
 	);
-}
-
-/** Extract the directory name from an absolute path for display. */
-function dirDisplayName(dir: string): string {
-	if (dir === "/") {return "/";}
-	return dir.split("/").pop() || dir;
 }
 
 export function WorkspaceSidebar({
@@ -396,7 +305,6 @@ export function WorkspaceSidebar({
 	onGoHome,
 	onFileSearchSelect,
 	workspaceRoot,
-	onGoToChat,
 	onExternalDrop,
 	mobile,
 	onClose,
@@ -406,32 +314,12 @@ export function WorkspaceSidebar({
 	onCollapse,
   activeWorkspace,
   onWorkspaceChanged,
-  chatSessions,
-  activeChatSessionId,
-  activeChatSessionTitle,
-  chatStreamingSessionIds,
-  chatSubagents,
-  chatActiveSubagentKey,
-  chatSessionsLoading,
-  onSelectChatSession,
-  onNewChatSession,
-  onSelectChatSubagent,
-  onDeleteChatSession,
-  onRenameChatSession,
-  activeTab: activeTabProp,
-  onTabChange,
   onNavigate,
+  searchFn,
 }: WorkspaceSidebarProps) {
 	const isBrowsing = browseDir != null;
 	const width = mobile ? "280px" : (widthProp ?? 260);
 	const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
-	const hasChatProps = chatSessions !== undefined;
-	const [internalTab, setInternalTab] = useState<"files" | "chats">(activeTabProp ?? "files");
-	const currentTab = activeTabProp ?? internalTab;
-	const setTab = useCallback((tab: "files" | "chats") => {
-		setInternalTab(tab);
-		onTabChange?.(tab);
-	}, [onTabChange]);
 
 	const sidebar = (
 		<aside
@@ -445,20 +333,16 @@ export function WorkspaceSidebar({
 		>
 			{/* Header */}
 			<div
-				className="flex items-center gap-2 px-3 h-[36px] border-b"
-				style={{ borderColor: "var(--color-border)" }}
+				className="flex items-center gap-2 px-3 h-[52px] shrink-0"
 			>
 				{isBrowsing ? (
 					<>
 						<div className="flex-1 min-w-0 flex items-center gap-1.5">
-							<span
-								className="shrink-0"
-								style={{ color: "var(--color-text-muted)" }}
-							>
+							<span className="shrink-0" style={{ color: "var(--color-text-muted)" }}>
 								<FolderOpenIcon />
 							</span>
 							<span
-								className="text-[12px] font-medium truncate"
+								className="text-[13px] font-semibold truncate"
 								style={{ color: "var(--color-text)" }}
 								title={browseDir}
 							>
@@ -469,8 +353,10 @@ export function WorkspaceSidebar({
 							<button
 								type="button"
 								onClick={onGoHome}
-								className="p-1 rounded-md shrink-0 transition-colors hover:bg-stone-200 dark:hover:bg-stone-700"
+								className="p-1.5 rounded-lg shrink-0 transition-colors"
 								style={{ color: "var(--color-text-muted)" }}
+								onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--color-surface-hover)"; }}
+								onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
 								title="Return to workspace"
 							>
 								<HomeIcon />
@@ -478,59 +364,44 @@ export function WorkspaceSidebar({
 						)}
 					</>
 				) : (
-					<>
-						<div className="flex-1 min-w-0">
-							<ProfileSwitcher
-								activeWorkspaceHint={activeWorkspace ?? null}
-								onWorkspaceSwitch={() => {
-									onWorkspaceChanged?.();
-								}}
-								onWorkspaceDelete={() => {
-									onWorkspaceChanged?.();
-								}}
-								onCreateWorkspace={() => {
-									setCreateWorkspaceOpen(true);
-								}}
-								trigger={({ onClick, activeWorkspace: workspaceName, switching }) => (
-									<button
-										type="button"
-										onClick={onClick}
-										disabled={switching}
-										className="group/ws text-[12px] flex items-center gap-1.5 truncate w-full transition-colors font-medium rounded-md px-1.5 py-1 -mx-1.5 hover:bg-stone-200/60 dark:hover:bg-stone-700/60"
-										style={{ color: "var(--color-text)" }}
-										title="Switch workspace"
-									>
-										<span className="truncate">{orgName || "Workspace"}</span>
-										<span className="flex-1" />
-										<span className="px-1 py-px rounded text-[10px] leading-tight shrink-0 bg-stone-200 text-stone-600 dark:bg-stone-700 dark:text-stone-300">
-											{workspaceName || "-"}
-										</span>
-										<svg
-											width="10"
-											height="10"
-											viewBox="0 0 24 24"
-											fill="none"
-											stroke="currentColor"
-											strokeWidth="2"
-											strokeLinecap="round"
-											strokeLinejoin="round"
-											className="shrink-0"
-											style={{ color: "var(--color-text-muted)" }}
-										>
-											<path d="m6 9 6 6 6-6" />
-										</svg>
-									</button>
-								)}
-							/>
-						</div>
-					</>
+					<div className="flex-1 min-w-0">
+						<ProfileSwitcher
+							activeWorkspaceHint={activeWorkspace ?? null}
+							onWorkspaceSwitch={() => { onWorkspaceChanged?.(); }}
+							onWorkspaceDelete={() => { onWorkspaceChanged?.(); }}
+							onCreateWorkspace={() => { setCreateWorkspaceOpen(true); }}
+							trigger={({ onClick, activeWorkspace: workspaceName, switching }) => (
+								<button
+									type="button"
+									onClick={onClick}
+									disabled={switching}
+									className="group/ws text-[13px] flex items-center gap-2 truncate w-full transition-colors font-semibold rounded-xl px-2 py-1.5"
+									style={{ color: "var(--color-text)" }}
+									onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--color-surface-hover)"; }}
+									onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+									title="Switch workspace"
+								>
+									<span className="truncate">{orgName || "Workspace"}</span>
+									<span className="flex-1" />
+									<span className="px-2 py-0.5 rounded-lg text-[10px] leading-tight shrink-0 bg-stone-200 text-stone-600 dark:bg-stone-700 dark:text-stone-300">
+										{workspaceName || "-"}
+									</span>
+									<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0" style={{ color: "var(--color-text-muted)" }}>
+										<path d="m6 9 6 6 6-6" />
+									</svg>
+								</button>
+							)}
+						/>
+					</div>
 				)}
 				{onCollapse && (
 					<button
 						type="button"
 						onClick={onCollapse}
-						className="p-1 rounded-md shrink-0 transition-colors hover:bg-stone-200 dark:hover:bg-stone-700"
+						className="p-1.5 rounded-lg shrink-0 transition-colors"
 						style={{ color: "var(--color-text-muted)" }}
+						onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--color-surface-hover)"; }}
+						onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
 						title="Hide sidebar (⌘B)"
 					>
 						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -542,8 +413,8 @@ export function WorkspaceSidebar({
 			</div>
 
 		{onFileSearchSelect && (
-			<div className="px-3 pt-2 pb-1">
-				<FileSearch onSelect={onFileSearchSelect} />
+			<div className="px-3">
+				<FileSearch onSelect={onFileSearchSelect} searchFn={searchFn} />
 			</div>
 		)}
 
@@ -571,7 +442,6 @@ export function WorkspaceSidebar({
 				)}
 			</div>
 
-		{/* Navigation */}
 		{onNavigate && (
 			<div
 				className="px-2 py-1.5 border-t space-y-0.5"
@@ -579,7 +449,7 @@ export function WorkspaceSidebar({
 			>
 				{([
 					{ id: "cloud" as const, label: "Cloud", icon: (
-						<svg className="h-4 w-4 shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+						<svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
 							<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" />
 						</svg>
 					)},
@@ -590,7 +460,7 @@ export function WorkspaceSidebar({
 						<GoTools className="h-4 w-4 shrink-0" aria-hidden />
 					)},
 					{ id: "cron" as const, label: "Cron", icon: (
-						<svg className="h-4 w-4 shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+						<svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
 							<circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
 						</svg>
 					)},
@@ -599,8 +469,10 @@ export function WorkspaceSidebar({
 						key={item.id}
 						type="button"
 						onClick={() => onNavigate(item.id)}
-						className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-sm font-medium transition-colors hover:bg-stone-200/60 dark:hover:bg-stone-700/60 hover:[color:var(--color-text)]"
-						style={{ color: "var(--color-text-secondary)" }}
+						className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-xl text-sm font-medium transition-colors"
+						style={{ color: "var(--color-text-muted)" }}
+						onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--color-surface-hover)"; (e.currentTarget as HTMLElement).style.color = "var(--color-text)"; }}
+						onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "var(--color-text-muted)"; }}
 					>
 						<span className="shrink-0">{item.icon}</span>
 						{item.label}
@@ -609,58 +481,49 @@ export function WorkspaceSidebar({
 			</div>
 		)}
 
-		{/* Footer */}
 		<div
 			className="px-3 py-2.5 border-t flex items-center justify-between"
 			style={{ borderColor: "var(--color-border)" }}
 		>
-				<a
-					href="https://dench.com"
-					target="_blank"
-					rel="noopener noreferrer"
-					className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm"
-					style={{ color: "var(--color-text-muted)" }}
-				>
-					dench.com{process.env.NEXT_PUBLIC_DENCHCLAW_VERSION ? ` (v${process.env.NEXT_PUBLIC_DENCHCLAW_VERSION})` : ""}
-				</a>
-				<div className="flex items-center gap-0.5">
-					{onToggleHidden && (
-						<button
-							type="button"
-							onClick={onToggleHidden}
-							className="p-1.5 rounded-lg transition-colors"
-							style={{ color: showHidden ? "var(--color-accent)" : "var(--color-text-muted)" }}
-							title={showHidden ? "Hide dotfiles" : "Show dotfiles"}
-						>
-							<svg
-								width="16"
-								height="16"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-							>
-								{showHidden ? (
-									<>
-										<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" />
-										<circle cx="12" cy="12" r="3" />
-									</>
-								) : (
-									<>
-										<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" />
-										<path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" />
-										<path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" />
-										<path d="m2 2 20 20" />
-									</>
-								)}
-							</svg>
-						</button>
-					)}
-					<ThemeToggle />
-				</div>
+			<a
+				href="https://dench.com"
+				target="_blank"
+				rel="noopener noreferrer"
+				className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm"
+				style={{ color: "var(--color-text-muted)" }}
+			>
+				dench.com{process.env.NEXT_PUBLIC_DENCHCLAW_VERSION ? ` (v${process.env.NEXT_PUBLIC_DENCHCLAW_VERSION})` : ""}
+			</a>
+			<div className="flex items-center gap-0.5">
+				{onToggleHidden && (
+					<button
+						type="button"
+						onClick={onToggleHidden}
+						className="p-1.5 rounded-lg transition-colors"
+						style={{ color: showHidden ? "var(--color-accent)" : "var(--color-text-muted)" }}
+						title={showHidden ? "Hide dotfiles" : "Show dotfiles"}
+					>
+						<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+							{showHidden ? (
+								<>
+									<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" />
+									<circle cx="12" cy="12" r="3" />
+								</>
+							) : (
+								<>
+									<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" />
+									<path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" />
+									<path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" />
+									<path d="m2 2 20 20" />
+								</>
+							)}
+						</svg>
+					</button>
+				)}
+				<ThemeToggle />
 			</div>
+		</div>
+
 		</aside>
 	);
 

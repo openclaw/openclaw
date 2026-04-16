@@ -138,6 +138,7 @@ function flattenTree(
           icon: icon ?? dbObj?.icon,
           path: relPath,
           nodeType: undefined,
+          defaultView: (dbObj?.default_view === "kanban" ? "kanban" : "table") as "table" | "kanban",
         });
       } else {
         // Regular folder -- don't add as item, but recurse
@@ -152,7 +153,7 @@ function flattenTree(
 
       items.push({
         id: relPath,
-        label: entry.name.replace(/\.md$/, ""),
+        label: entry.name,
         sublabel: relPath,
         kind: "file",
         path: relPath,

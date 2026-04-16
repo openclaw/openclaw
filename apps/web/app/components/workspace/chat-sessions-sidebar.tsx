@@ -8,6 +8,12 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import {
+	ContextMenu,
+	ContextMenuTrigger,
+	ContextMenuContent,
+	ContextMenuItem,
+} from "../ui/context-menu";
 
 export type WebSession = {
 	id: string;
@@ -286,18 +292,21 @@ function WebSessionRow({
 	onSelectSubagent?: (key: string) => void; onStopSubagent?: (key: string) => void;
 	showFilePath?: boolean;
 }) {
-	const showMore = isHovered || isStreaming;
-	return (
+	const [ctxOpen, setCtxOpen] = useState(false);
+	const showMore = isHovered || isStreaming || ctxOpen;
+	const highlighted = isHovered || ctxOpen;
+	const hasContextActions = !!(onStartRename || onDelete);
+	const rowContent = (
 		<div
 			className="group relative"
 			onMouseEnter={() => onHover(session.id)}
-			onMouseLeave={onLeave}
+			onMouseLeave={() => { if (!ctxOpen) onLeave(); }}
 		>
 			<div
-				className="flex items-stretch w-full rounded-lg"
+				className="flex items-stretch w-full rounded-xl"
 				style={{
 					background: isActive ? "var(--color-chat-sidebar-active-bg)"
-						: isHovered ? "var(--color-surface-hover)" : "transparent",
+						: highlighted ? "var(--color-surface-hover)" : "transparent",
 				}}
 			>
 				{renamingId === session.id ? (
@@ -399,6 +408,30 @@ function WebSessionRow({
 				</div>
 			)}
 		</div>
+	);
+
+	if (!hasContextActions) return rowContent;
+
+	return (
+		<ContextMenu onOpenChange={(open) => { setCtxOpen(open); if (!open) onLeave(); }}>
+			<ContextMenuTrigger asChild>
+				{rowContent}
+			</ContextMenuTrigger>
+			<ContextMenuContent className="min-w-[160px]">
+				{onStartRename && (
+					<ContextMenuItem onSelect={() => onStartRename(session.id, session.title)}>
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /></svg>
+						Rename
+					</ContextMenuItem>
+				)}
+				{onDelete && (
+					<ContextMenuItem variant="destructive" onSelect={() => onDelete(session.id)}>
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /></svg>
+						Delete
+					</ContextMenuItem>
+				)}
+			</ContextMenuContent>
+		</ContextMenu>
 	);
 }
 

@@ -47,49 +47,11 @@ type ChatEditorProps = {
 	placeholder?: string;
 	disabled?: boolean;
 	compact?: boolean;
+	/** Client-side search function for instant @ mention results. */
+	searchFn?: (query: string, limit?: number) => import("@/lib/search-index").SearchIndexItem[];
 };
 
 // ── Helpers ──
-
-function getFileCategory(name: string): string {
-	const ext = name.split(".").pop()?.toLowerCase() ?? "";
-	if (
-		["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "tiff", "heic"].includes(ext)
-	)
-		{return "image";}
-	if (["mp4", "webm", "mov", "avi", "mkv", "flv"].includes(ext)) {return "video";}
-	if (["mp3", "wav", "ogg", "aac", "flac", "m4a"].includes(ext)) {return "audio";}
-	if (ext === "pdf") {return "pdf";}
-	if (
-		[
-			"js", "ts", "tsx", "jsx", "py", "rb", "go", "rs", "java",
-			"cpp", "c", "h", "css", "html", "json", "yaml", "yml",
-			"toml", "md", "sh", "bash", "sql", "swift", "kt",
-		].includes(ext)
-	)
-		{return "code";}
-	if (["doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv"].includes(ext))
-		{return "document";}
-	return "other";
-}
-
-const categoryColors: Record<string, { bg: string; fg: string }> = {
-	image: { bg: "rgba(16, 185, 129, 0.15)", fg: "#10b981" },
-	video: { bg: "rgba(139, 92, 246, 0.15)", fg: "#8b5cf6" },
-	audio: { bg: "rgba(245, 158, 11, 0.15)", fg: "#f59e0b" },
-	pdf: { bg: "rgba(239, 68, 68, 0.15)", fg: "#ef4444" },
-	code: { bg: "rgba(59, 130, 246, 0.15)", fg: "#3b82f6" },
-	document: { bg: "rgba(107, 114, 128, 0.15)", fg: "#6b7280" },
-	folder: { bg: "rgba(245, 158, 11, 0.15)", fg: "#f59e0b" },
-	other: { bg: "rgba(107, 114, 128, 0.10)", fg: "#9ca3af" },
-};
-
-function shortenPath(path: string): string {
-	return path
-		.replace(/^\/Users\/[^/]+/, "~")
-		.replace(/^\/home\/[^/]+/, "~")
-		.replace(/^[A-Z]:\\Users\\[^\\]+/, "~");
-}
 
 /**
  * Serialize the editor content to plain text with mention markers.
@@ -142,7 +104,7 @@ function serializeContent(editor: ReturnType<typeof useEditor>): {
 
 // ── File mention suggestion extension (wired to the async popup) ──
 
-function createChatFileMentionSuggestion() {
+function createChatFileMentionSuggestion(searchFnRef?: React.RefObject<((query: string, limit?: number) => import("@/lib/search-index").SearchIndexItem[]) | null>) {
 	return Extension.create({
 		name: "chatFileMentionSuggestion",
 
@@ -163,23 +125,11 @@ function createChatFileMentionSuggestion() {
 						range: { from: number; to: number };
 						props: SuggestItem;
 					}) => {
-						// For folders: update the query text to navigate into the folder
-						if (props.type === "folder") {
-							const shortPath = shortenPath(props.path);
-							editor
-								.chain()
-								.focus()
-								.deleteRange(range)
-								.insertContent(`@${shortPath}/`)
-								.run();
-							return;
-						}
-
-						// Determine mention type for objects/entries
 						const mentionType =
 							props.type === "object" ? "object"
 								: props.type === "entry" ? "entry"
-									: "file";
+									: props.type === "folder" ? "folder"
+										: "file";
 
 						editor
 							.chain()
@@ -193,6 +143,7 @@ function createChatFileMentionSuggestion() {
 										path: props.path,
 										mentionType,
 										objectName: props.objectName ?? "",
+										defaultView: props.defaultView ?? "",
 									},
 								},
 								{ type: "text", text: " " },
@@ -204,7 +155,7 @@ function createChatFileMentionSuggestion() {
 						void query;
 						return [];
 					},
-					render: createFileMentionRenderer(),
+					render: createFileMentionRenderer(searchFnRef),
 				}),
 			];
 		},
@@ -214,15 +165,16 @@ function createChatFileMentionSuggestion() {
 // ── Main component ──
 
 export const ChatEditor = forwardRef<ChatEditorHandle, ChatEditorProps>(
-	function ChatEditor({ onSubmit, onChange, onNativeFileDrop, placeholder, disabled, compact }, ref) {
+	function ChatEditor({ onSubmit, onChange, onNativeFileDrop, placeholder, disabled, compact, searchFn }, ref) {
 		const submitRef = useRef(onSubmit);
 		submitRef.current = onSubmit;
 
 		const nativeFileDropRef = useRef(onNativeFileDrop);
 		nativeFileDropRef.current = onNativeFileDrop;
 
-		// Ref to access the TipTap editor from within ProseMirror's handleDOMEvents
-		// (the handlers are defined at useEditor() call time, before the editor exists).
+		const searchFnRef = useRef(searchFn ?? null);
+		searchFnRef.current = searchFn ?? null;
+
 		const editorRefInternal = useRef<Editor | null>(null);
 
 		const editor = useEditor({
@@ -242,7 +194,7 @@ export const ChatEditor = forwardRef<ChatEditorHandle, ChatEditorProps>(
 					showOnlyWhenEditable: false,
 				}),
 				FileMentionNode,
-				createChatFileMentionSuggestion(),
+				createChatFileMentionSuggestion(searchFnRef),
 			],
 			editorProps: {
 				attributes: {
@@ -476,7 +428,7 @@ export const ChatEditor = forwardRef<ChatEditorHandle, ChatEditorProps>(
 						height: 0;
 						pointer-events: none;
 					}
-					/* File mention pill styles */
+					/* File mention pill styles — inherits icon from global span[data-chat-file-mention]::before */
 					.chat-editor-content span[data-chat-file-mention] {
 						display: inline-flex;
 						align-items: center;
@@ -484,21 +436,16 @@ export const ChatEditor = forwardRef<ChatEditorHandle, ChatEditorProps>(
 						padding: 1px 8px 1px 6px;
 						margin: 0 1px;
 						border-radius: 6px;
-						background: var(--mention-bg, rgba(59, 130, 246, 0.12));
-						color: var(--mention-fg, #3b82f6);
+						background: var(--mention-bg, rgba(120, 113, 108, 0.1));
+						color: inherit;
 						font-size: 12px;
 						font-weight: 500;
-						line-height: 1.6;
-						vertical-align: baseline;
+						line-height: 1.4;
+						vertical-align: middle;
 						cursor: default;
 						user-select: all;
 						white-space: nowrap;
 						transition: opacity 0.15s ease;
-					}
-					.chat-editor-content span[data-chat-file-mention]::before {
-						content: "@";
-						opacity: 0.5;
-						font-size: 11px;
 					}
 					.chat-editor-content span[data-chat-file-mention]:hover {
 						opacity: 0.85;
@@ -512,15 +459,3 @@ export const ChatEditor = forwardRef<ChatEditorHandle, ChatEditorProps>(
 	},
 );
 
-/**
- * Helper to extract file mention info for styling (used by renderHTML).
- * Returns CSS custom properties for the mention pill.
- */
-export function getMentionStyle(label: string): React.CSSProperties {
-	const category = getFileCategory(label);
-	const colors = categoryColors[category] ?? categoryColors.other;
-	return {
-		"--mention-bg": colors.bg,
-		"--mention-fg": colors.fg,
-	} as React.CSSProperties;
-}
