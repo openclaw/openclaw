@@ -129,6 +129,10 @@ cleanup() {
 trap cleanup EXIT
 source /src/scripts/lib/live-docker-stage.sh
 openclaw_live_stage_source_tree "$tmp_dir"
+mkdir -p "$tmp_dir/node_modules"
+cp -aRs /app/node_modules/. "$tmp_dir/node_modules"
+rm -rf "$tmp_dir/node_modules/.vite-temp"
+mkdir -p "$tmp_dir/node_modules/.vite-temp"
 openclaw_live_link_runtime_tree "$tmp_dir"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
