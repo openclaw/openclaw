@@ -41,13 +41,7 @@ type EventHandlerContext = {
   isLocalBtwRunId?: (runId: string) => boolean;
   forgetLocalBtwRunId?: (runId: string) => void;
   clearLocalBtwRunIds?: () => void;
-  /**
-   * Milliseconds of stream-delta silence that force the `streaming` activity
-   * indicator to reset to `idle`. Guards against lost/late "final" events from
-   * the gateway (WS flaps, gateway restarts, backends that emit `stopReason`
-   * without an explicit stream-end event) leaving the TUI stuck on
-   * `streaming · Xm Ys` forever. Defaults to 30s. Set to 0 to disable.
-   */
+  /** Reset `streaming` after this much delta silence. Set to 0 to disable. */
   streamingWatchdogMs?: number;
 };
 
@@ -103,16 +97,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamingWatchdogRunId = runId;
     streamingWatchdogTimer = setTimeout(() => {
       streamingWatchdogTimer = null;
-      // Only act if the timer still matches the run that armed it and that run
-      // is still the TUI's active stream. A later `final`/`aborted`/`error`
-      // event already cleared the indicator by the normal path otherwise.
-      if (streamingWatchdogRunId !== runId) {
+      if (streamingWatchdogRunId !== runId || state.activeChatRunId !== runId) {
         return;
       }
       streamingWatchdogRunId = null;
-      if (state.activeChatRunId !== runId) {
-        return;
-      }
       state.activeChatRunId = null;
       setActivityStatus("idle");
       chatLog.addSystem(
@@ -122,8 +110,6 @@ export function createEventHandlers(context: EventHandlerContext) {
       );
       tui.requestRender();
     }, streamingWatchdogMs);
-    // Keep the watchdog from blocking process exit when the TUI is shutting
-    // down. Node timers expose unref() on the returned Timeout object.
     const maybeUnref = (streamingWatchdogTimer as { unref?: () => void }).unref;
     if (typeof maybeUnref === "function") {
       maybeUnref.call(streamingWatchdogTimer);
@@ -318,7 +304,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       chatLog.updateAssistant(displayText, evt.runId);
       setActivityStatus("streaming");
-      armStreamingWatchdog(evt.runId);
+      if (state.activeChatRunId === evt.runId) {
+        armStreamingWatchdog(evt.runId);
+      }
     }
     if (evt.state === "final") {
       const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
