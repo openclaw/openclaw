@@ -865,6 +865,35 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
+  it("keeps fail-closed behavior for symlinked binaries with writable targets", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-symlink-binary-binding-"));
+    const stableDir = path.join(tmp, "stable");
+    const mutableDir = path.join(tmp, "mutable");
+    try {
+      const binaryPath = resolveNativeBinaryFixturePath();
+      fs.mkdirSync(stableDir);
+      fs.mkdirSync(mutableDir);
+      const targetBinaryPath = path.join(mutableDir, "tool");
+      const symlinkPath = path.join(stableDir, "tool");
+      fs.copyFileSync(binaryPath, targetBinaryPath);
+      fs.chmodSync(targetBinaryPath, 0o755);
+      fs.symlinkSync(targetBinaryPath, symlinkPath);
+      fs.chmodSync(stableDir, 0o555);
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", symlinkPath],
+        rawCommand: symlinkPath,
+        cwd: tmp,
+      });
+      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+    } finally {
+      fs.chmodSync(stableDir, 0o755);
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("keeps fail-closed behavior for shell payloads that invoke mutable script files", () => {
     expectShellPayloadApprovalDenied({
       tmpPrefix: "openclaw-shell-script-binding-",

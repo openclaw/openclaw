@@ -249,6 +249,27 @@ function hasMutableSymlinkPathComponentSync(targetPath: string): boolean {
   return false;
 }
 
+function pathLooksMutableForShellPayloadSync(targetPath: string): boolean {
+  if (
+    isWritableByCurrentProcessSync(targetPath) ||
+    isWritableByCurrentProcessSync(path.dirname(targetPath)) ||
+    hasMutableSymlinkPathComponentSync(targetPath)
+  ) {
+    return true;
+  }
+  let realPath: string;
+  try {
+    realPath = fs.realpathSync(targetPath);
+  } catch {
+    return true;
+  }
+  return (
+    isWritableByCurrentProcessSync(realPath) ||
+    isWritableByCurrentProcessSync(path.dirname(realPath)) ||
+    hasMutableSymlinkPathComponentSync(realPath)
+  );
+}
+
 function shouldPinExecutableForApproval(params: {
   shellCommand: string | null;
   wrapperChain: string[] | undefined;
@@ -902,11 +923,7 @@ function shellPayloadNeedsStableBinding(shellCommand: string, cwd: string | unde
     return true;
   }
   const resolvedPath = path.resolve(cwd ?? process.cwd(), firstToken);
-  if (
-    isWritableByCurrentProcessSync(resolvedPath) ||
-    isWritableByCurrentProcessSync(path.dirname(resolvedPath)) ||
-    hasMutableSymlinkPathComponentSync(resolvedPath)
-  ) {
+  if (pathLooksMutableForShellPayloadSync(resolvedPath)) {
     return true;
   }
   return isLikelyScriptLikePathSync(resolvedPath);
