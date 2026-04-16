@@ -59,11 +59,19 @@ fn get_openclaw_command() -> (String, Vec<String>) {
     if let Ok(exe_path) = env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
             let sidecar = exe_dir.join(sidecar_name);
-            // Validate sidecar exists and is > 0 bytes (not just a placeholder)
+            // Validate sidecar exists, isn't the wrapper itself, and is > 0 bytes
             if sidecar.exists() {
-                if let Ok(metadata) = sidecar.metadata() {
-                    if metadata.len() > 0 {
-                        return (sidecar.to_string_lossy().to_string(), vec![]);
+                let is_self = if let (Ok(s), Ok(c)) = (sidecar.canonicalize(), exe_path.canonicalize()) {
+                    s == c
+                } else {
+                    false
+                };
+
+                if !is_self {
+                    if let Ok(metadata) = sidecar.metadata() {
+                        if metadata.len() > 0 {
+                            return (sidecar.to_string_lossy().to_string(), vec![]);
+                        }
                     }
                 }
             }
@@ -174,6 +182,7 @@ fn spawn_gateway(app: AppHandle, state: GatewayState) -> Result<String, String> 
     let mut args = args_base;
     args.push("gateway".to_string());
     args.push("run".to_string());
+    args.push("--allow-unconfigured".to_string());
     
     let mut cmd = Command::new(&program);
     cmd.args(&args)
@@ -185,19 +194,20 @@ fn spawn_gateway(app: AppHandle, state: GatewayState) -> Result<String, String> 
     
     let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn: {}", e))?;
     
-    // Set start time
-    if let Ok(mut start) = state.start_time.lock() {
-        *start = Some(Instant::now());
-    }
-
     if let Some(stdout) = child.stdout.take() {
         drain_stream(stdout, "STDOUT:");
     }
     if let Some(stderr) = child.stderr.take() {
         drain_stream(stderr, "STDERR:");
     }
-    
-    *state.process.lock().map_err(|e| e.to_string())? = Some(child);
+
+    let mut process_guard = state.process.lock().map_err(|e| e.to_string())?;
+    *process_guard = Some(child);
+
+    // Set start time while holding process lock (matching the lock order in get_metrics)
+    if let Ok(mut start) = state.start_time.lock() {
+        *start = Some(Instant::now());
+    }
     let session_id = state.watchdog_session.fetch_add(1, Ordering::SeqCst) + 1;
     
     let state_clone = state.clone();
