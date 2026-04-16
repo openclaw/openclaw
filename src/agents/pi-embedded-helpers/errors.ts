@@ -826,6 +826,9 @@ export function classifyProviderRuntimeFailureKind(
   if (message && isProxyErrorMessage(message, status)) {
     return "proxy";
   }
+  if (message && isCloudflareChallengePage(message, status)) {
+    return "cloudflare_challenge";
+  }
   if (message && isHtmlErrorResponse(message, status)) {
     return status === 403 ? "auth_html_403" : "upstream_html";
   }
