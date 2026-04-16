@@ -317,6 +317,14 @@ Put config under `plugins.entries.memory-wiki.config`:
 Key toggles:
 
 - `vaultMode`: `isolated`, `bridge`, `unsafe-local`
+- `vault.path`: supports `~` home expansion and the template tokens
+  `{workspaceDir}`, `{agentDir}`, `{agentId}`, `{sessionKey}`. Templates are
+  expanded against the tool invocation context on each wiki tool call, so
+  agents in different workspaces can share the plugin instance while writing
+  to their own vaults. Example: `{workspaceDir}/wiki`. Templates are only
+  expanded for the tool surfaces (`wiki_status`, `wiki_lint`, `wiki_apply`,
+  `wiki_search`, `wiki_get`); the `openclaw wiki` CLI and non-agent gateway
+  methods use the literal configured path.
 - `vault.renderMode`: `native` or `obsidian`
 - `bridge.readMemoryArtifacts`: import active memory plugin public artifacts
 - `bridge.followMemoryEvents`: include event logs in bridge mode
