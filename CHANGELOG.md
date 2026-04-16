@@ -10,7 +10,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- QA/Matrix: split the private QA lab runtime into smaller tested modules, add Matrix media contract coverage for image understanding and generated-image delivery, and update the memory-dreaming QA sweep to assert the separate phase-report layout. (#67430) Thanks @gumadeiras.
 - Gateway/tools: anchor trusted local `MEDIA:` tool-result passthrough on the exact raw name of this run's registered built-in tools, and reject client tool definitions whose names normalize-collide with a built-in or with another client tool in the same request (`400 invalid_request_error` on both JSON and SSE paths), so a client-supplied tool named like a built-in can no longer inherit its local-media trust. (#67303)
 - Agents/replay recovery: classify the provider wording `401 input item ID does not belong to this connection` as replay-invalid, so users get the existing `/new` session reset guidance instead of a raw 401-style failure. (#66475) Thanks @dallylee.
 - Gateway/webchat: enforce localRoots containment on webchat audio embedding path [AI-assisted]. (#67298) Thanks @pgondhi987.
@@ -99,6 +98,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/security: enforce `localRoots` containment on the webchat audio embedding path. (#67298) Thanks @pgondhi987.
 - Webchat/security: reject remote-host `file://` URLs in the media embedding path. (#67293) Thanks @pgondhi987.
 - Dreaming/memory-core: use the ingestion day, not the source file day, for daily recall dedupe so repeat sweeps of the same daily note can increment `dailyCount` across days instead of stalling at `1`. (#67091) Thanks @Bartok9.
+- QA/Matrix: split the private QA lab runtime into smaller tested modules, add Matrix media contract coverage for image understanding and generated-image delivery, and update the memory-dreaming QA sweep to assert the separate phase-report layout. (#67430) Thanks @gumadeiras.
 
 ## 2026.4.14
 
