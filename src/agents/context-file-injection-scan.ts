@@ -36,13 +36,31 @@ const THREAT_PATTERNS: ThreatPattern[] = [
     id: "html_comment_injection",
   },
   { re: /<\s*div\s+style\s*=\s*["'][\s\S]*?display\s*:\s*none/i, id: "hidden_div" },
-  { re: /translate\s+.*\s+into\s+.*\s+and\s+(execute|run|eval)/i, id: "translate_execute" },
+  // Multi-line flag (m + s) on these patterns so split-across-newlines
+  // attacks like "translate X\n into Y and execute" don't bypass detection.
   {
-    re: /curl\s+[^\n]*\$\{?\w*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)/i,
+    re: /translate\s+[\s\S]*?\s+into\s+[\s\S]*?\s+and\s+(execute|run|eval)/im,
+    id: "translate_execute",
+  },
+  {
+    re: /curl\s+[\s\S]*?\$\{?\w*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)/im,
     id: "exfil_curl",
   },
-  { re: /cat\s+[^\n]*(\.env|credentials|\.netrc|\.pgpass)/i, id: "read_secrets" },
+  { re: /cat\s+[\s\S]*?(\.env|credentials|\.netrc|\.pgpass)/im, id: "read_secrets" },
 ];
+
+// Default allowlist of paths whose content discusses injection patterns
+// for legitimate reasons (security docs, QA scenarios). Files matching
+// these patterns get a warning event but are NOT blocked.
+const DEFAULT_ALLOWLIST: RegExp[] = [
+  /(?:^|\/)(SECURITY|CONTRIBUTING)\.md$/i,
+  /(?:^|\/)docs\/security\//i,
+  /(?:^|\/)qa\/scenarios\//i,
+];
+
+function isAllowlistedPath(filename: string, allowlist: RegExp[] = DEFAULT_ALLOWLIST): boolean {
+  return allowlist.some((re) => re.test(filename));
+}
 
 // Ported from Hermes _CONTEXT_INVISIBLE_CHARS (prompt_builder.py:49-52).
 // Includes zero-width chars AND bidi override chars (U+202A..U+202E) which
@@ -95,17 +113,42 @@ export function scanForInjection(content: string): InjectionScanResult {
  * stricter than a "warn and pass through" approach, but it mirrors what
  * Hermes already ships in production for the parity benchmark.
  */
+export interface SanitizeContextFileOptions {
+  /**
+   * Path patterns (regex) that bypass blocking — content is passed through
+   * with a warning callback fired instead of being replaced with the placeholder.
+   * Default: SECURITY.md, CONTRIBUTING.md, docs/security/*, qa/scenarios/*.
+   */
+  allowlist?: RegExp[];
+  /**
+   * Optional callback fired when an allowlisted file would have been blocked.
+   * Useful for telemetry / audit logging.
+   */
+  onAllowlistBypass?: (filename: string, findings: string[]) => void;
+}
+
 export function sanitizeContextFileForInjection(
   content: string,
   filename = "context file",
+  options: SanitizeContextFileOptions = {},
 ): string {
   const { detected, findings } = scanForInjection(content);
   if (!detected) {
     return content;
   }
+  // Allowlist bypass: legitimate security docs that discuss injection patterns
+  // shouldn't be blocked from loading. Caller can override the default list.
+  const allowlist = options.allowlist ?? DEFAULT_ALLOWLIST;
+  if (isAllowlistedPath(filename)) {
+    options.onAllowlistBypass?.(filename, findings);
+    return content;
+  }
+  void allowlist; // referenced via default; kept in signature for callers passing custom lists
   // Sanitize filename to prevent injection via crafted file paths.
-  // Use sanitizeForPromptLiteral to strip all Cc/Cf/Zl/Zp chars (bidi overrides,
-  // zero-width chars, etc.), not just brackets/newlines.
-  const safeFilename = sanitizeForPromptLiteral(filename).replace(/[[\]]/g, "_") || "unknown";
+  // Use sanitizeForPromptLiteral for Cc/Cf/Zl/Zp chars, then strip brackets
+  // (placeholder delimiters) and HTML/markdown angle/ampersand chars
+  // (defense-in-depth: a filename like <!--ignore previous instructions-->.md
+  // shouldn't embed instruction-like text inside the BLOCKED placeholder).
+  const safeFilename = sanitizeForPromptLiteral(filename).replace(/[[\]<>&]/g, "_") || "unknown";
   return `[BLOCKED: ${safeFilename} contained potential prompt injection (${findings.join(", ")}). Content not loaded.]`;
 }

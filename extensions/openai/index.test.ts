@@ -502,6 +502,9 @@ describe("openai plugin", () => {
     expect(OPENAI_GPT5_EXECUTION_BIAS).toContain("Investigation Discipline");
     expect(OPENAI_GPT5_EXECUTION_BIAS).toContain("Plan Confidence Gate");
     expect(OPENAI_GPT5_EXECUTION_BIAS).toContain("95%+ confident");
+    // Plan-mode carve-out: confidence gate must NOT bypass plan-mode approval flow
+    expect(OPENAI_GPT5_EXECUTION_BIAS).toContain("plan mode is active");
+    expect(OPENAI_GPT5_EXECUTION_BIAS).toContain("approval flow regardless of confidence");
   });
 
   it("defaults to the friendly OpenAI interaction-style overlay", async () => {

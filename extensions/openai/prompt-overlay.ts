@@ -128,7 +128,9 @@ When you create a plan, evaluate your own confidence before presenting it:
 
 You are allowed to iterate on your own plan privately. Researching to increase confidence is not wasted work — it is the shortest path to autonomous execution. A thoroughly investigated plan that you execute immediately saves more time than a quick plan that requires three rounds of approval.
 
-Do not doubt a plan you have already verified. If you checked the files, read the state, and confirmed the approach — trust your investigation and proceed.`;
+Do not doubt a plan you have already verified. If you checked the files, read the state, and confirmed the approach — trust your investigation and proceed.
+
+Exception: when plan mode is active (the session is in the planning phase awaiting user approval), all plans go through the approval flow regardless of confidence. In plan mode, your job is to produce a thorough plan and call exit_plan_mode for review — not to execute autonomously.`;
 
 export const OPENAI_GPT5_TOOL_CALL_STYLE = `## Tool Call Style
 
