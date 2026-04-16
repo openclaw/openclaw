@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   DEFAULT_LLM_IDLE_TIMEOUT_MS,
+  resolveLlmFirstTokenTimeoutMs,
   resolveLlmIdleTimeoutMs,
   streamWithIdleTimeout,
 } from "./llm-idle-timeout.js";
@@ -102,6 +103,47 @@ describe("resolveLlmIdleTimeoutMs", () => {
   });
 });
 
+describe("resolveLlmFirstTokenTimeoutMs", () => {
+  it("returns undefined (inherit-idle) when nothing is set", () => {
+    expect(resolveLlmFirstTokenTimeoutMs()).toBeUndefined();
+  });
+
+  it("returns undefined (inherit-idle) when firstTokenTimeoutSeconds is unset", () => {
+    const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 30 } } } } as OpenClawConfig;
+    expect(resolveLlmFirstTokenTimeoutMs({ cfg })).toBeUndefined();
+  });
+
+  it("returns 0 when explicitly disabled", () => {
+    const cfg = {
+      agents: { defaults: { llm: { idleTimeoutSeconds: 30, firstTokenTimeoutSeconds: 0 } } },
+    } as OpenClawConfig;
+    expect(resolveLlmFirstTokenTimeoutMs({ cfg })).toBe(0);
+  });
+
+  it("returns configured value in milliseconds when set", () => {
+    const cfg = {
+      agents: { defaults: { llm: { idleTimeoutSeconds: 30, firstTokenTimeoutSeconds: 300 } } },
+    } as OpenClawConfig;
+    expect(resolveLlmFirstTokenTimeoutMs({ cfg })).toBe(300_000);
+  });
+
+  it("returns undefined when firstTokenTimeoutSeconds is negative (ignored)", () => {
+    const cfg = {
+      agents: { defaults: { llm: { idleTimeoutSeconds: 30, firstTokenTimeoutSeconds: -5 } } },
+    } as OpenClawConfig;
+    expect(resolveLlmFirstTokenTimeoutMs({ cfg })).toBeUndefined();
+  });
+
+  it("caps at max safe timeout", () => {
+    const cfg = {
+      agents: {
+        defaults: { llm: { idleTimeoutSeconds: 30, firstTokenTimeoutSeconds: 10_000_000 } },
+      },
+    } as OpenClawConfig;
+    expect(resolveLlmFirstTokenTimeoutMs({ cfg })).toBe(2_147_000_000);
+  });
+});
+
 describe("streamWithIdleTimeout", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -130,14 +172,14 @@ describe("streamWithIdleTimeout", () => {
   it("wraps stream function", () => {
     const mockStream = createMockAsyncIterable([]);
     const baseFn = vi.fn().mockReturnValue(mockStream);
-    const wrapped = streamWithIdleTimeout(baseFn, 1000);
+    const wrapped = streamWithIdleTimeout(baseFn, { idleTimeoutMs: 1000 });
     expect(typeof wrapped).toBe("function");
   });
 
   it("passes through model, context, and options", async () => {
     const mockStream = createMockAsyncIterable([]);
     const baseFn = vi.fn().mockReturnValue(mockStream);
-    const wrapped = streamWithIdleTimeout(baseFn, 1000);
+    const wrapped = streamWithIdleTimeout(baseFn, { idleTimeoutMs: 1000 });
 
     const model = { api: "openai" } as Parameters<typeof baseFn>[0];
     const context = {} as Parameters<typeof baseFn>[1];
@@ -148,7 +190,7 @@ describe("streamWithIdleTimeout", () => {
     expect(baseFn).toHaveBeenCalledWith(model, context, options);
   });
 
-  it("throws on idle timeout", async () => {
+  it("throws on first-token timeout (inherits idle when firstTokenTimeoutMs unset)", async () => {
     vi.useFakeTimers();
     // Create a stream that never yields
     const slowStream: AsyncIterable<unknown> = {
@@ -163,7 +205,7 @@ describe("streamWithIdleTimeout", () => {
     };
 
     const baseFn = vi.fn().mockReturnValue(slowStream);
-    const wrapped = streamWithIdleTimeout(baseFn, 50); // 50ms timeout
+    const wrapped = streamWithIdleTimeout(baseFn, { idleTimeoutMs: 50 });
 
     const model = {} as Parameters<typeof baseFn>[0];
     const context = {} as Parameters<typeof baseFn>[1];
@@ -172,7 +214,9 @@ describe("streamWithIdleTimeout", () => {
     const stream = wrapped(model, context, options) as AsyncIterable<unknown>;
     const iterator = stream[Symbol.asyncIterator]();
 
-    const next = expect(iterator.next()).rejects.toThrow(/LLM idle timeout/);
+    // Before any chunk arrives, the first-token phase is active.
+    // With firstTokenTimeoutMs unset, it inherits idleTimeoutMs (50ms).
+    const next = expect(iterator.next()).rejects.toThrow(/LLM first-token timeout/);
     await vi.advanceTimersByTimeAsync(50);
     await next;
   });
@@ -181,7 +225,7 @@ describe("streamWithIdleTimeout", () => {
     const chunks = [{ text: "a" }, { text: "b" }, { text: "c" }];
     const mockStream = createMockAsyncIterable(chunks);
     const baseFn = vi.fn().mockReturnValue(mockStream);
-    const wrapped = streamWithIdleTimeout(baseFn, 1000);
+    const wrapped = streamWithIdleTimeout(baseFn, { idleTimeoutMs: 1000 });
 
     const model = {} as Parameters<typeof baseFn>[0];
     const context = {} as Parameters<typeof baseFn>[1];
@@ -217,7 +261,7 @@ describe("streamWithIdleTimeout", () => {
     };
 
     const baseFn = vi.fn().mockReturnValue(delayedStream);
-    const wrapped = streamWithIdleTimeout(baseFn, 100); // 100ms timeout - should be enough
+    const wrapped = streamWithIdleTimeout(baseFn, { idleTimeoutMs: 100 });
 
     const model = {} as Parameters<typeof baseFn>[0];
     const context = {} as Parameters<typeof baseFn>[1];
@@ -240,7 +284,7 @@ describe("streamWithIdleTimeout", () => {
     expect(results).toHaveLength(3);
   });
 
-  it("calls timeout hook on idle timeout", async () => {
+  it("calls timeout hook on first-token timeout", async () => {
     vi.useFakeTimers();
     // Create a stream that never yields
     const slowStream: AsyncIterable<unknown> = {
@@ -256,7 +300,7 @@ describe("streamWithIdleTimeout", () => {
 
     const baseFn = vi.fn().mockReturnValue(slowStream);
     const onIdleTimeout = vi.fn();
-    const wrapped = streamWithIdleTimeout(baseFn, 50, onIdleTimeout); // 50ms timeout
+    const wrapped = streamWithIdleTimeout(baseFn, { idleTimeoutMs: 50, onIdleTimeout });
 
     const model = {} as Parameters<typeof baseFn>[0];
     const context = {} as Parameters<typeof baseFn>[1];
@@ -269,12 +313,143 @@ describe("streamWithIdleTimeout", () => {
     await vi.advanceTimersByTimeAsync(50);
     const error = await next;
 
-    // Verify the error message is preserved
+    // Before any chunk arrives, the first-token phase is active —
+    // the hook reports the first-token timeout.
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toMatch(/LLM idle timeout/);
+    expect((error as Error).message).toMatch(/LLM first-token timeout/);
     expect(onIdleTimeout).toHaveBeenCalledTimes(1);
     const [timeoutError] = onIdleTimeout.mock.calls[0] ?? [];
     expect(timeoutError).toBeInstanceOf(Error);
-    expect((timeoutError as Error).message).toMatch(/LLM idle timeout/);
+    expect((timeoutError as Error).message).toMatch(/LLM first-token timeout/);
+  });
+
+  it("uses firstTokenTimeoutMs before the first chunk", async () => {
+    vi.useFakeTimers();
+    // Stream that never yields — first-token window should fire.
+    const hangStream: AsyncIterable<unknown> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            return new Promise<IteratorResult<unknown>>(() => {});
+          },
+        };
+      },
+    };
+    const baseFn = vi.fn().mockReturnValue(hangStream);
+    const wrapped = streamWithIdleTimeout(baseFn, {
+      idleTimeoutMs: 10_000, // would never fire in this test
+      firstTokenTimeoutMs: 50, // should fire first
+    });
+
+    const stream = wrapped(
+      {} as Parameters<typeof baseFn>[0],
+      {} as Parameters<typeof baseFn>[1],
+      {} as Parameters<typeof baseFn>[2],
+    ) as AsyncIterable<unknown>;
+    const iterator = stream[Symbol.asyncIterator]();
+
+    const next = expect(iterator.next()).rejects.toThrow(/LLM first-token timeout/);
+    await vi.advanceTimersByTimeAsync(50);
+    await next;
+  });
+
+  it("uses idleTimeoutMs after the first chunk arrives", async () => {
+    vi.useFakeTimers();
+    // First chunk arrives immediately, then stream hangs — idle window should fire,
+    // not the longer first-token window.
+    const hangAfterOne: AsyncIterable<{ text: string }> = {
+      [Symbol.asyncIterator]() {
+        let emitted = false;
+        return {
+          async next() {
+            if (!emitted) {
+              emitted = true;
+              return { done: false, value: { text: "first" } };
+            }
+            return new Promise<IteratorResult<{ text: string }>>(() => {});
+          },
+        };
+      },
+    };
+    const baseFn = vi.fn().mockReturnValue(hangAfterOne);
+    const wrapped = streamWithIdleTimeout(baseFn, {
+      idleTimeoutMs: 50,
+      firstTokenTimeoutMs: 10_000, // first-token generous, idle tight
+    });
+
+    const stream = wrapped(
+      {} as Parameters<typeof baseFn>[0],
+      {} as Parameters<typeof baseFn>[1],
+      {} as Parameters<typeof baseFn>[2],
+    ) as AsyncIterable<{ text: string }>;
+    const iterator = stream[Symbol.asyncIterator]();
+
+    const first = await iterator.next();
+    expect(first).toEqual({ done: false, value: { text: "first" } });
+
+    const next = expect(iterator.next()).rejects.toThrow(/LLM idle timeout/);
+    await vi.advanceTimersByTimeAsync(50);
+    await next;
+  });
+
+  it("waits indefinitely for first chunk when firstTokenTimeoutMs is 0", async () => {
+    vi.useFakeTimers();
+    // Stream hangs forever before first chunk; first-token timer is disabled (0).
+    // Idle timer (50ms) must not fire during the first-token phase.
+    const hangStream: AsyncIterable<unknown> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            return new Promise<IteratorResult<unknown>>(() => {});
+          },
+        };
+      },
+    };
+    const baseFn = vi.fn().mockReturnValue(hangStream);
+    const wrapped = streamWithIdleTimeout(baseFn, {
+      idleTimeoutMs: 50,
+      firstTokenTimeoutMs: 0, // disable first-token timer entirely
+    });
+
+    const stream = wrapped(
+      {} as Parameters<typeof baseFn>[0],
+      {} as Parameters<typeof baseFn>[1],
+      {} as Parameters<typeof baseFn>[2],
+    ) as AsyncIterable<unknown>;
+    const iterator = stream[Symbol.asyncIterator]();
+
+    let settled = false;
+    const next = iterator.next().finally(() => {
+      settled = true;
+    });
+    // Advance well past the idle window — neither timer should fire.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(settled).toBe(false);
+    // Don't await `next` — it would hang forever; the test ends with the
+    // pending promise, which vitest discards on teardown.
+    void next;
+  });
+
+  it("disables all timeouts when idleTimeoutMs is 0 even if firstTokenTimeoutMs is set", async () => {
+    // When idle is 0, the wrapper short-circuits: returns baseFn untouched.
+    // Stream should pass through without a timer firing.
+    const chunks = [{ text: "a" }];
+    const mockStream = createMockAsyncIterable(chunks);
+    const baseFn = vi.fn().mockReturnValue(mockStream);
+    const wrapped = streamWithIdleTimeout(baseFn, {
+      idleTimeoutMs: 0,
+      firstTokenTimeoutMs: 50,
+    });
+
+    const stream = wrapped(
+      {} as Parameters<typeof baseFn>[0],
+      {} as Parameters<typeof baseFn>[1],
+      {} as Parameters<typeof baseFn>[2],
+    ) as AsyncIterable<{ text: string }>;
+    const results: { text: string }[] = [];
+    for await (const chunk of stream) {
+      results.push(chunk);
+    }
+    expect(results).toEqual(chunks);
   });
 });

@@ -21,6 +21,7 @@ function makeAttemptResult(
     externalAbort: false,
     timedOut: false,
     idleTimedOut: false,
+    llmTimeoutPhase: null,
     timedOutDuringCompaction: false,
     promptError: null,
     promptErrorSource: null,

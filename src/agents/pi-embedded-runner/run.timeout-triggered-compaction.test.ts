@@ -227,6 +227,7 @@ describe("timeout-triggered compaction", () => {
       makeAttemptResult({
         timedOut: true,
         idleTimedOut: true,
+        llmTimeoutPhase: "idle",
         lastAssistant: {
           usage: { input: 20000 },
         } as never,
@@ -239,6 +240,29 @@ describe("timeout-triggered compaction", () => {
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("agents.defaults.llm.idleTimeoutSeconds");
     expect(result.payloads?.[0]?.text).not.toContain("agents.defaults.timeoutSeconds");
+    expect(result.payloads?.[0]?.text).not.toContain("firstTokenTimeoutSeconds");
+  });
+
+  it("points first-token-timeout errors at the LLM first-token timeout config key", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        timedOut: true,
+        idleTimedOut: true,
+        llmTimeoutPhase: "first-token",
+        lastAssistant: {
+          usage: { input: 20000 },
+        } as never,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain(
+      "agents.defaults.llm.firstTokenTimeoutSeconds",
+    );
+    expect(result.payloads?.[0]?.text).not.toContain("idleTimeoutSeconds");
   });
 
   it("retries one silent idle timeout before surfacing an error", async () => {

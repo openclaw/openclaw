@@ -188,6 +188,7 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
     externalAbort: false,
     timedOut: false,
     idleTimedOut: false,
+    llmTimeoutPhase: null,
     timedOutDuringCompaction: false,
     promptError: null,
     promptErrorSource: null,

@@ -156,6 +156,7 @@ export class CodexAppServerEventProjector {
       externalAbort: false,
       timedOut: false,
       idleTimedOut: false,
+      llmTimeoutPhase: null,
       timedOutDuringCompaction: false,
       promptError,
       promptErrorSource: promptError ? this.promptErrorSource || "prompt" : null,
