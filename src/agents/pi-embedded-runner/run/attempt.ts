@@ -150,7 +150,7 @@ import {
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
-import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
+import { applySkillPlanTemplateSeed, resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
   describeEmbeddedAgentStreamStrategy,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
@@ -427,6 +427,31 @@ export async function runEmbeddedAttempt(
           skills: skillEntries ?? [],
           config: params.config,
         });
+
+    // Seed the agent's plan from any loaded skill's `planTemplate` (if
+    // present) BEFORE the first LLM turn (#67541). The seed is a no-op
+    // when no skill carries a template, when more than one skill is
+    // tied (use alpha-first as a deterministic winner), or when an
+    // existing plan would be clobbered. Idempotency against
+    // `AgentRunContext.lastPlanSteps` lands in #67514's follow-up.
+    //
+    // We pass both `entries` and `skillsSnapshot`: in the snapshot-backed
+    // run path `entries` is empty (resolveEmbeddedRunSkillEntries skips
+    // re-loading) and the seeder reads `resolvedPlanTemplates` from the
+    // snapshot instead. Without this fallback the seed would silently
+    // no-op in production sessions.
+    applySkillPlanTemplateSeed({
+      entries: skillEntries ?? [],
+      ...(params.skillsSnapshot ? { skillsSnapshot: params.skillsSnapshot } : {}),
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      config: params.config,
+      // Forward the run-scoped event callback so callback-only consumers
+      // (e.g. the auto-reply pipeline) see the seeded plan event the same
+      // way they see subsequent update_plan events. Codex P2 #67541
+      // r3096399082/r3096435183.
+      ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
+    });
 
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,

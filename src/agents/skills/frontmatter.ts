@@ -19,6 +19,7 @@ import type {
   SkillEntry,
   SkillInstallSpec,
   SkillInvocationPolicy,
+  SkillPlanTemplateStep,
 } from "./types.js";
 
 export function parseFrontmatter(content: string): ParsedSkillFrontmatter {
@@ -184,6 +185,42 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   return spec;
 }
 
+function parsePlanTemplate(raw: unknown): SkillPlanTemplateStep[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const parsed: SkillPlanTemplateStep[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    // Strict type guard: `step` must be a non-empty string after trim.
+    // Reject non-string steps (objects, arrays, numbers, booleans) instead
+    // of coercing them via String() — coercion produces useless output
+    // like "[object Object]" that the agent can't act on.
+    if (typeof record.step !== "string") {
+      continue;
+    }
+    const step = record.step.trim();
+    if (step.length === 0) {
+      continue;
+    }
+    // Trim-before-truthy on activeForm: an entry like
+    // `activeForm: "   "` should be treated as missing, not as a
+    // whitespace-only display string.
+    let activeForm: string | undefined;
+    if (typeof record.activeForm === "string") {
+      const trimmed = record.activeForm.trim();
+      if (trimmed.length > 0) {
+        activeForm = trimmed;
+      }
+    }
+    parsed.push(activeForm !== undefined ? { step, activeForm } : { step });
+  }
+  return parsed;
+}
+
 export function resolveOpenClawMetadata(
   frontmatter: ParsedSkillFrontmatter,
 ): OpenClawSkillMetadata | undefined {
@@ -194,6 +231,12 @@ export function resolveOpenClawMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
+  // Accept both kebab-case (`plan-template`) and camelCase (`planTemplate`)
+  // frontmatter keys. Codex P1 (PR #67541 r3096435164) — natural authors
+  // following the `primaryEnv`/`skillKey` camelCase convention would have
+  // their templates silently ignored otherwise. Kebab-case wins on conflict
+  // for backward compatibility with existing skills.
+  const planTemplate = parsePlanTemplate(metadataObj["plan-template"] ?? metadataObj.planTemplate);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: readStringValue(metadataObj.emoji),
@@ -203,6 +246,7 @@ export function resolveOpenClawMetadata(
     os: osRaw.length > 0 ? osRaw : undefined,
     requires: requires,
     install: install.length > 0 ? install : undefined,
+    planTemplate: planTemplate.length > 0 ? planTemplate : undefined,
   };
 }
 
