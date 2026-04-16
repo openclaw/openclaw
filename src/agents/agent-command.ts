@@ -1042,6 +1042,7 @@ async function agentCommandInternal(
         fallbackModel,
         result,
       });
+      sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
     }
 
     if (result.meta.executionTrace?.runner === "cli") {

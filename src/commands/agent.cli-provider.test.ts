@@ -176,6 +176,14 @@ describe("agentCommand CLI provider handling", () => {
               sessionId: "cli-session-123",
               provider: "google-gemini-cli",
               model: "gemini-3.1-pro-preview",
+              compactionCount: 2,
+              usage: {
+                input: 12,
+                output: 4,
+                cacheRead: 3,
+                cacheWrite: 0,
+                total: 19,
+              },
             },
             executionTrace: {
               winnerProvider: "google-gemini-cli",
@@ -191,6 +199,12 @@ describe("agentCommand CLI provider handling", () => {
         const saved = readSessionStore<{ sessionFile?: string }>(store);
         const sessionFile = saved[sessionKey]?.sessionFile;
         expect(sessionFile).toBeTruthy();
+        expect(saved[sessionKey]).toMatchObject({
+          compactionCount: 2,
+          inputTokens: 12,
+          outputTokens: 4,
+          cacheRead: 3,
+        });
 
         const messages = await readSessionMessages(sessionFile!);
         expect(messages).toHaveLength(2);
