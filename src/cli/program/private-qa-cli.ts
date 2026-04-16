@@ -22,6 +22,12 @@ type LoadPrivateQaCliModuleParams = {
   importModule?: (specifier: string) => Promise<PrivateQaCliModule>;
 };
 
+function usesExplicitPrivateQaResolutionParams(
+  params?: LoadPrivateQaCliModuleParams,
+): params is LoadPrivateQaCliModuleParams {
+  return Boolean(params && Object.keys(params).length > 0);
+}
+
 export function isPrivateQaCliEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1";
 }
@@ -63,13 +69,17 @@ async function dynamicImportPrivateQaCliModule(specifier: string): Promise<Priva
 export function loadPrivateQaCliModule(
   params?: LoadPrivateQaCliModuleParams,
 ): Promise<PrivateQaCliModule> {
-  return (async () => {
-    const importModule = params?.importModule ?? dynamicImportPrivateQaCliModule;
-    const sourceSpecifier = resolvePrivateQaSourceModuleSpecifier(params);
-    if (sourceSpecifier) {
-      return await importModule(sourceSpecifier);
-    }
+  const importModule = params?.importModule ?? dynamicImportPrivateQaCliModule;
+  const sourceSpecifier = resolvePrivateQaSourceModuleSpecifier(params);
+  if (sourceSpecifier) {
+    return importModule(sourceSpecifier);
+  }
 
+  if (usesExplicitPrivateQaResolutionParams(params)) {
+    throw new Error("Private QA CLI is only available from an OpenClaw source checkout.");
+  }
+
+  return (async () => {
     let lastNotFoundError: unknown;
     for (const specifier of PRIVATE_QA_RUNTIME_SPECIFIERS) {
       try {
@@ -81,10 +91,6 @@ export function loadPrivateQaCliModule(
         }
         throw err;
       }
-    }
-
-    if (!isPrivateQaCliEnabled(params?.env ?? process.env)) {
-      throw new Error("Private QA CLI is not enabled.");
     }
 
     throw (
