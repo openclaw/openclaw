@@ -6,6 +6,10 @@ import { formatHelpExamples } from "./help-format.js";
 
 const EXAMPLES = [
   ["openclaw clawmodeler init --workspace ./demo", "Create a workspace template."],
+  [
+    "openclaw clawmodeler scaffold question --path ./question.json --title 'My study area'",
+    "Write a starter question.json you can edit.",
+  ],
   ["openclaw clawmodeler doctor", "Check local modeling runtimes."],
   ["openclaw clawmodeler demo --workspace ./demo", "Create and run a complete demo workspace."],
   [
