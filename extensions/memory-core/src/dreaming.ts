@@ -10,6 +10,7 @@ import {
   resolveMemoryCorePluginConfig,
   resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingWorkspaces,
+  validateMemoryDreamingFrequency,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { writeDeepDreamingReport } from "./dreaming-markdown.js";
@@ -114,6 +115,7 @@ export type ShortTermPromotionDreamingConfig = {
 type ReconcileResult =
   | { status: "unavailable"; removed: number }
   | { status: "disabled"; removed: number }
+  | { status: "invalid"; removed: number }
   | { status: "added"; removed: number }
   | { status: "updated"; removed: number }
   | { status: "noop"; removed: number };
@@ -432,6 +434,20 @@ export async function reconcileShortTermDreamingCronJob(params: {
       params.logger.info(`memory-core: removed ${removed} managed dreaming cron job(s).`);
     }
     return { status: "disabled", removed };
+  }
+
+  const validation = validateMemoryDreamingFrequency(params.config.cron, params.config.timezone);
+  if (!validation.valid) {
+    const timezoneHint =
+      validation.reason === "inline-timezone"
+        ? " Timezone must be set via dreaming.timezone, not inline in the expression."
+        : "";
+    params.logger.error(
+      `memory-core: dreaming.frequency contains invalid cron expression: ${validation.error}.${timezoneHint}`,
+    );
+    // Leave existing jobs untouched so the last-known-good schedule keeps running
+    // until the configured frequency is fixed.
+    return { status: "invalid", removed: 0 };
   }
 
   const desired = buildManagedDreamingCronJob(params.config);

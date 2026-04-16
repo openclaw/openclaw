@@ -18,6 +18,7 @@ import {
   resolveMemoryDreamingPluginId,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
+  validateMemoryDreamingFrequency,
 } from "./dreaming.js";
 
 describe("memory dreaming host helpers", () => {
@@ -129,6 +130,24 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.phases.light.cron).toBe("15 */8 * * *");
     expect(resolved.phases.deep.cron).toBe("15 */8 * * *");
     expect(resolved.phases.rem.cron).toBe("15 */8 * * *");
+  });
+
+  it("validates dreaming frequency with the configured timezone", () => {
+    expect(validateMemoryDreamingFrequency("15 */8 * * *", "UTC")).toEqual({ valid: true });
+
+    const invalid = validateMemoryDreamingFrequency("TZ=UTC 15 */8 * * *", "UTC");
+    expect(invalid).toMatchObject({
+      valid: false,
+      reason: "inline-timezone",
+      error: expect.stringMatching(/\S/),
+    });
+
+    const invalidTimezone = validateMemoryDreamingFrequency("15 */8 * * *", "Not/Real");
+    expect(invalidTimezone).toMatchObject({
+      valid: false,
+      reason: "timezone",
+      error: expect.stringMatching(/\S/),
+    });
   });
 
   it("dedupes shared workspaces across all configured agents", () => {

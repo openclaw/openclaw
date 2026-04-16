@@ -1,4 +1,5 @@
 import path from "node:path";
+import { Cron } from "croner";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
@@ -136,6 +137,10 @@ export type MemoryDreamingWorkspace = {
   agentIds: string[];
 };
 
+export type MemoryDreamingFrequencyValidationResult =
+  | { valid: true }
+  | { valid: false; error: string; reason: "inline-timezone" | "parse" | "timezone" };
+
 const DEFAULT_MEMORY_LIGHT_DREAMING_SOURCES: MemoryLightDreamingSource[] = [
   "daily",
   "sessions",
@@ -156,6 +161,62 @@ function normalizeTrimmedString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function formatValidationError(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+  if (typeof error === "string" && error.trim()) {
+    return error.trim();
+  }
+  return "unknown error";
+}
+
+function resolveMemoryDreamingCronTimezone(timezone?: string): string {
+  const resolved =
+    normalizeTrimmedString(timezone) ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  Intl.DateTimeFormat(undefined, { timeZone: resolved }).format(0);
+  return resolved;
+}
+
+function containsInlineCronTimezone(frequency: string): boolean {
+  return /(?:^|\s)(?:TZ|CRON_TZ)=\S+/.test(frequency);
+}
+
+function resolveMemoryDreamingFrequencyValidationReason(
+  frequency: string,
+  timezone: string | undefined,
+  error: string,
+): Exclude<MemoryDreamingFrequencyValidationResult, { valid: true }>["reason"] {
+  if (containsInlineCronTimezone(frequency)) {
+    return "inline-timezone";
+  }
+  if (timezone && /time\s*zone|timezone/i.test(error)) {
+    return "timezone";
+  }
+  return "parse";
+}
+
+export function validateMemoryDreamingFrequency(
+  frequency: string,
+  timezone?: string,
+): MemoryDreamingFrequencyValidationResult {
+  try {
+    const cron = new Cron(frequency, {
+      timezone: resolveMemoryDreamingCronTimezone(timezone),
+      catch: false,
+    });
+    cron.nextRun(new Date());
+    return { valid: true };
+  } catch (error) {
+    const errorMessage = formatValidationError(error);
+    return {
+      valid: false,
+      error: errorMessage,
+      reason: resolveMemoryDreamingFrequencyValidationReason(frequency, timezone, errorMessage),
+    };
+  }
 }
 
 function normalizeNonNegativeInt(value: unknown, fallback: number): number {

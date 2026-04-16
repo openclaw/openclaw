@@ -500,6 +500,75 @@ describe("short-term dreaming cron reconciliation", () => {
     });
   });
 
+  it("logs invalid dreaming frequency and skips cron writes", async () => {
+    const managedJob: CronJobLike = {
+      id: "job-managed",
+      name: constants.MANAGED_DREAMING_CRON_NAME,
+      description: `${constants.MANAGED_DREAMING_CRON_TAG} test`,
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 3 * * *" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      createdAtMs: 10,
+    };
+    const harness = createCronHarness([managedJob]);
+    const logger = createLogger();
+
+    const result = await reconcileShortTermDreamingCronJob({
+      cron: harness.cron,
+      config: {
+        enabled: true,
+        cron: "TZ=UTC 0 3 * * *",
+        timezone: "UTC",
+        limit: constants.DEFAULT_DREAMING_LIMIT,
+        minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
+        minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
+        minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result).toEqual({ status: "invalid", removed: 0 });
+    expect(harness.addCalls).toHaveLength(0);
+    expect(harness.updateCalls).toHaveLength(0);
+    expect(harness.jobs).toEqual([managedJob]);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^memory-core: dreaming\.frequency contains invalid cron expression: .+ Timezone must be set via dreaming\.timezone, not inline in the expression\.$/,
+      ),
+    );
+  });
+
+  it("does not show timezone guidance for plain invalid dreaming frequency", async () => {
+    const harness = createCronHarness();
+    const logger = createLogger();
+
+    const result = await reconcileShortTermDreamingCronJob({
+      cron: harness.cron,
+      config: {
+        enabled: true,
+        cron: "not a cron",
+        timezone: "UTC",
+        limit: constants.DEFAULT_DREAMING_LIMIT,
+        minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
+        minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
+        minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result).toEqual({ status: "invalid", removed: 0 });
+    expect(harness.addCalls).toHaveLength(0);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.not.stringContaining("Timezone must be set via dreaming.timezone"),
+    );
+  });
+
   it("removes managed dreaming jobs when disabled", async () => {
     const managedJob: CronJobLike = {
       id: "job-managed",
