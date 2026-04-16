@@ -189,13 +189,36 @@ function parsePlanTemplate(raw: unknown): SkillPlanTemplateStep[] {
   if (!Array.isArray(raw)) {
     return [];
   }
-  return raw
-    .filter((item: any) => item && typeof item === "object" && item.step)
-    .map((item: any) => ({
-      step: String(item.step).trim(),
-      ...(item.activeForm ? { activeForm: String(item.activeForm).trim() } : {}),
-    }))
-    .filter((item) => item.step.length > 0);
+  const parsed: SkillPlanTemplateStep[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    // Strict type guard: `step` must be a non-empty string after trim.
+    // Reject non-string steps (objects, arrays, numbers, booleans) instead
+    // of coercing them via String() — coercion produces useless output
+    // like "[object Object]" that the agent can't act on.
+    if (typeof record.step !== "string") {
+      continue;
+    }
+    const step = record.step.trim();
+    if (step.length === 0) {
+      continue;
+    }
+    // Trim-before-truthy on activeForm: an entry like
+    // `activeForm: "   "` should be treated as missing, not as a
+    // whitespace-only display string.
+    let activeForm: string | undefined;
+    if (typeof record.activeForm === "string") {
+      const trimmed = record.activeForm.trim();
+      if (trimmed.length > 0) {
+        activeForm = trimmed;
+      }
+    }
+    parsed.push(activeForm !== undefined ? { step, activeForm } : { step });
+  }
+  return parsed;
 }
 
 export function resolveOpenClawMetadata(
