@@ -140,7 +140,7 @@ function shouldAttachPendingMessageSeq(params: { payload: unknown; cached?: bool
   return status === "started";
 }
 
-function emitSessionsChanged(
+export function emitSessionsChanged(
   context: Pick<
     GatewayRequestContext,
     "broadcastToConnIds" | "getSessionEventSubscriberConnIds" | "getSessionMessageSubscriberConnIds"
