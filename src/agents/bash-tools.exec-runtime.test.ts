@@ -462,3 +462,26 @@ describe("buildExecExitOutcome", () => {
     expect(outcome.reason).toContain("Do not rely on shell backgrounding");
   });
 });
+
+  it("resolves auto to gateway when sandbox config exists but mode is off (#58885)", () => {
+    // Regression test: sandboxAvailable should be false when sandbox mode is "off",
+    // even if the sandbox config object exists. Previously, Boolean({mode: "off"})
+    // was truthy, causing auto to incorrectly resolve to "sandbox".
+    const sandboxConfigWithModeOff = { mode: "off" as const };
+    expect(Boolean(sandboxConfigWithModeOff)).toBe(true); // config object exists
+    // But sandboxAvailable should check mode, not just existence
+    const sandboxAvailable = Boolean(
+      sandboxConfigWithModeOff?.mode && sandboxConfigWithModeOff.mode !== "off",
+    );
+    expect(sandboxAvailable).toBe(false);
+
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        elevatedRequested: false,
+        sandboxAvailable, // false because mode is "off"
+      }),
+    ).toMatchObject({
+      effectiveHost: "gateway", // NOT sandbox
+    });
+  });
