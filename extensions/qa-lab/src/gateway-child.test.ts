@@ -856,6 +856,30 @@ describe("qa bundled plugin dir", () => {
     ).resolves.toBeTruthy();
   });
 
+  it("rejects invalid bundled plugin ids before staging paths are built", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-invalid-id-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await writeFile(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
+      "utf8",
+    );
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-invalid-target-"));
+    cleanups.push(async () => {
+      await rm(tempRoot, { recursive: true, force: true });
+    });
+
+    await expect(
+      __testing.createQaBundledPluginsDir({
+        repoRoot,
+        tempRoot,
+        allowedPluginIds: ["../escape"],
+      }),
+    ).rejects.toThrow("invalid QA bundled plugin id: ../escape");
+  });
+
   it("stages source-only bundled plugins into a repo-like runtime root with node_modules", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-source-stage-"));
     cleanups.push(async () => {

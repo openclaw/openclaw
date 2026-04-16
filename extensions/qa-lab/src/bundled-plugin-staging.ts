@@ -9,6 +9,13 @@ const QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS = Object.freeze([
   "speech-core",
 ]);
 const QA_OPENAI_PLUGIN_ID = "openai";
+const QA_BUNDLED_PLUGIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function assertSafeQaBundledPluginId(pluginId: string) {
+  if (!QA_BUNDLED_PLUGIN_ID_PATTERN.test(pluginId)) {
+    throw new Error(`invalid QA bundled plugin id: ${pluginId}`);
+  }
+}
 
 function parseStableSemverFloor(value: string | undefined) {
   if (!value) {
@@ -56,6 +63,7 @@ function isQaOpenAiResponsesProviderConfig(config: ModelProviderConfig) {
 }
 
 export function resolveQaBundledPluginSourceDir(params: { repoRoot: string; pluginId: string }) {
+  assertSafeQaBundledPluginId(params.pluginId);
   const candidates = [
     path.join(params.repoRoot, "dist", "extensions", params.pluginId),
     path.join(params.repoRoot, "dist-runtime", "extensions", params.pluginId),
@@ -141,7 +149,12 @@ function collectQaBundledPluginIds(params: {
   repoRoot: string;
   allowedPluginIds: readonly string[];
 }) {
-  const pluginIds = new Set(params.allowedPluginIds);
+  const pluginIds = new Set(
+    params.allowedPluginIds.map((pluginId) => {
+      assertSafeQaBundledPluginId(pluginId);
+      return pluginId;
+    }),
+  );
   for (const pluginId of QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS) {
     if (
       resolveQaBundledPluginSourceDir({

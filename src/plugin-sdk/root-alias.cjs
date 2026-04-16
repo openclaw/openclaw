@@ -141,7 +141,9 @@ function listPrivateLocalOnlyPluginSdkSubpaths() {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed.filter((subpath) => typeof subpath === "string");
+    return parsed.filter(
+      (subpath) => typeof subpath === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath),
+    );
   } catch {
     return [];
   }

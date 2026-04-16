@@ -23,9 +23,9 @@ const QA_TRANSPORT_REGISTRY = {
 >;
 
 export function normalizeQaTransportId(input?: string | null): QaTransportId {
-  const transportId = (input?.trim() || DEFAULT_QA_TRANSPORT_ID) as QaTransportId;
-  if (transportId in QA_TRANSPORT_REGISTRY) {
-    return transportId;
+  const transportId = input?.trim() || DEFAULT_QA_TRANSPORT_ID;
+  if (Object.hasOwn(QA_TRANSPORT_REGISTRY, transportId)) {
+    return transportId as QaTransportId;
   }
   throw new Error(`unsupported QA transport: ${transportId}`);
 }
