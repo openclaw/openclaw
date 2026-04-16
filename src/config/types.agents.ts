@@ -111,6 +111,15 @@ export type AgentConfig = {
   embeddedPi?: {
     /** Optional per-agent execution contract override. */
     executionContract?: EmbeddedPiExecutionContract;
+    /**
+     * Optional per-agent auto-continue override (PR #67538). Cascade is
+     * per-field: per-agent → agents.defaults → DEFAULT_AUTO_CONTINUE.
+     */
+    autoContinue?: {
+      enabled?: boolean;
+      maxCycles?: number;
+      stopOnMutation?: boolean;
+    };
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;
