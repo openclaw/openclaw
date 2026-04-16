@@ -1,4 +1,9 @@
 import { Type } from "@sinclair/typebox";
+import {
+  emitAgentPlanEvent,
+  getAgentRunContext,
+  type PlanStepSnapshot,
+} from "../../infra/agent-events.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
   describeUpdatePlanTool,
@@ -6,7 +11,13 @@ import {
 } from "../tool-description-presets.js";
 import { type AnyAgentTool, ToolInputError, readStringParam } from "./common.js";
 
-const PLAN_STEP_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
+/**
+ * Allowed `update_plan` step statuses. Exported so other modules
+ * (`plan-hydration.ts`, hooks, channel renderers) can re-use the
+ * union instead of redefining a parallel string set.
+ */
+export const PLAN_STEP_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
+export type PlanStepStatus = (typeof PLAN_STEP_STATUSES)[number];
 
 const UpdatePlanToolSchema = Type.Object({
   explanation: Type.Optional(
@@ -45,9 +56,9 @@ const UpdatePlanToolSchema = Type.Object({
   ),
 });
 
-type UpdatePlanStep = {
+export type UpdatePlanStep = {
   step: string;
-  status: (typeof PLAN_STEP_STATUSES)[number];
+  status: PlanStepStatus;
   activeForm?: string;
 };
 
@@ -70,7 +81,7 @@ function readPlanSteps(params: Record<string, unknown>): UpdatePlanStep[] {
       required: true,
       label: `plan[${index}].status`,
     });
-    if (!PLAN_STEP_STATUSES.includes(status as (typeof PLAN_STEP_STATUSES)[number])) {
+    if (!PLAN_STEP_STATUSES.includes(status as PlanStepStatus)) {
       throw new ToolInputError(
         `plan[${index}].status must be one of ${PLAN_STEP_STATUSES.join(", ")}`,
       );
@@ -78,7 +89,7 @@ function readPlanSteps(params: Record<string, unknown>): UpdatePlanStep[] {
     const activeForm = readStringParam(stepParams, "activeForm");
     return {
       step,
-      status: status as (typeof PLAN_STEP_STATUSES)[number],
+      status: status as PlanStepStatus,
       ...(activeForm ? { activeForm } : {}),
     };
   });
@@ -90,7 +101,61 @@ function readPlanSteps(params: Record<string, unknown>): UpdatePlanStep[] {
   return steps;
 }
 
-export function createUpdatePlanTool(): AnyAgentTool {
+/**
+ * Merges incoming plan steps into existing ones by matching `step` text.
+ * - Existing steps keep their original order.
+ * - Overlapping steps update their status/activeForm from incoming.
+ * - Novel incoming steps are appended in the order they appear.
+ * Adapted from `src/agents/plan-store.ts:204` on the
+ * `phase4/cross-session-plans` branch (in-memory variant — no
+ * `updatedBy`/`updatedAt` attribution, since this layer doesn't own
+ * cross-session persistence).
+ */
+function mergeSteps(existing: UpdatePlanStep[], incoming: UpdatePlanStep[]): UpdatePlanStep[] {
+  const incomingByStep = new Map<string, UpdatePlanStep>();
+  for (const s of incoming) {
+    if (!incomingByStep.has(s.step)) {
+      incomingByStep.set(s.step, s);
+    }
+  }
+  const existingTexts = new Set(existing.map((s) => s.step));
+  const merged: UpdatePlanStep[] = existing.map((s) => {
+    const update = incomingByStep.get(s.step);
+    if (!update) {
+      return s;
+    }
+    return {
+      step: update.step,
+      status: update.status,
+      ...(update.activeForm !== undefined ? { activeForm: update.activeForm } : {}),
+    };
+  });
+  const appended = new Set<string>();
+  for (const s of incoming) {
+    if (!existingTexts.has(s.step) && !appended.has(s.step)) {
+      merged.push({
+        step: s.step,
+        status: s.status,
+        ...(s.activeForm !== undefined ? { activeForm: s.activeForm } : {}),
+      });
+      appended.add(s.step);
+    }
+  }
+  return merged;
+}
+
+export interface CreateUpdatePlanToolOptions {
+  /**
+   * Stable run identifier. When provided, merge mode reads the previous
+   * plan from `AgentRunContext.lastPlanSteps` and writes the merged
+   * result back. When omitted, merge mode falls back to replace
+   * (no previous plan available — useful for tests/standalone).
+   */
+  runId?: string;
+}
+
+export function createUpdatePlanTool(options?: CreateUpdatePlanToolOptions): AnyAgentTool {
+  const runId = options?.runId;
   return {
     label: "Update Plan",
     name: "update_plan",
@@ -103,16 +168,37 @@ export function createUpdatePlanTool(): AnyAgentTool {
       const merge = typeof params.merge === "boolean" ? params.merge : false;
       const incomingSteps = readPlanSteps(params);
 
-      // Merge mode: requires a plan store lookup to get the previous plan.
-      // Until the plan store (#67542) is wired, merge falls back to replace.
-      // Replace mode (default): use incoming steps as the entire plan.
-      let plan: UpdatePlanStep[];
-      if (merge) {
-        // TODO(#67542): look up previous plan via PlanStore.read() once wired.
-        // For now, merge without a previous plan is equivalent to replace.
-        plan = incomingSteps;
-      } else {
-        plan = incomingSteps;
+      const ctx = runId ? getAgentRunContext(runId) : undefined;
+      const previousSteps = (ctx?.lastPlanSteps ?? []) as UpdatePlanStep[];
+      const plan: UpdatePlanStep[] =
+        merge && previousSteps.length > 0
+          ? mergeSteps(previousSteps, incomingSteps)
+          : incomingSteps;
+
+      // Persist for next merge in this run. Snapshot stored as
+      // `PlanStepSnapshot[]` (structural superset of `UpdatePlanStep[]`).
+      if (ctx) {
+        ctx.lastPlanSteps = plan.map<PlanStepSnapshot>((s) => ({
+          step: s.step,
+          status: s.status,
+          ...(s.activeForm !== undefined ? { activeForm: s.activeForm } : {}),
+        }));
+      }
+
+      // Emit `agent_plan_event` so channel renderers + control UI see updates.
+      // Skip emit when we have no runId — that's the standalone/test path.
+      if (runId) {
+        emitAgentPlanEvent({
+          runId,
+          ...(ctx?.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
+          data: {
+            phase: "update",
+            title: "Plan updated",
+            ...(explanation ? { explanation } : {}),
+            steps: plan.map((s) => s.step),
+            source: "update_plan",
+          },
+        });
       }
 
       return {
