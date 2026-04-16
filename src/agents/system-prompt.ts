@@ -10,6 +10,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import { sanitizeContextFileForInjection } from "./context-file-injection-scan.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type {
@@ -114,7 +115,14 @@ function buildProjectContextSection(params: {
     lines.push("");
   }
   for (const file of params.files) {
-    lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
+    const sanitizedContent = sanitizeContextFileForInjection(
+      sanitizeContextFileContentForPrompt(file.content),
+      file.path,
+    );
+    // Sanitize file.path in the heading to prevent prompt-structure injection
+    // via crafted filenames with control/bidi/zero-width chars.
+    const safePath = sanitizeForPromptLiteral(file.path);
+    lines.push(`## ${safePath}`, "", sanitizedContent, "");
   }
   return lines;
 }
@@ -695,6 +703,10 @@ export function buildAgentSystemPrompt(params: {
       fallback: buildExecutionBiasSection({
         isMinimal,
       }),
+    }),
+    ...buildOverridablePromptSection({
+      override: providerSectionOverrides.tool_enforcement,
+      fallback: [],
     }),
     ...buildOverridablePromptSection({
       override: providerStablePrefix,
