@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -28,6 +30,11 @@ type FakeWrappedStream = {
   [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
 };
 
+type ReplayFixture = {
+  positive: Array<{ type: string; name: string; arguments?: Record<string, unknown> }>;
+  negative: Array<{ type: string; name: string; arguments?: Record<string, unknown> }>;
+};
+
 function createFakeStream(params: {
   events: unknown[];
   resultMessage: unknown;
@@ -54,6 +61,11 @@ async function invokeWrappedTestStream(
 ): Promise<FakeWrappedStream> {
   const wrappedFn = wrap(baseFn);
   return await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+}
+
+function loadClawCodeReplayFixture(): ReplayFixture {
+  const fixturePath = path.resolve(process.cwd(), "test/fixtures/claw-code-tool-call-replay.json");
+  return JSON.parse(readFileSync(fixturePath, "utf8")) as ReplayFixture;
 }
 
 describe("resolvePromptBuildHookResult", () => {
@@ -790,22 +802,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   });
 
   it("replays representative claw-code tool-call samples through normalization", async () => {
-    const toolCalls = [
-      { type: "toolCall", name: "bash", arguments: { command: "pwd" } },
-      { type: "toolCall", name: "ReadFile", arguments: { path: "README.md" } },
-      { type: "toolCall", name: "ToolSearch", arguments: { query: "cron", max_results: 3 } },
-      { type: "toolCall", name: "TaskCreate", arguments: { prompt: "triage alerts" } },
-      { type: "toolCall", name: "TeamCreate", arguments: { name: "ops", tasks: [{ task_id: "task_1" }] } },
-      { type: "toolCall", name: "CronCreate", arguments: { schedule: "*/10 * * * *", prompt: "poll queue" } },
-      { type: "toolCall", name: "ListMcpResources", arguments: { server: "demo" } },
-      { type: "toolCall", name: "MCP", arguments: { server: "demo", tool: "echo", arguments: { text: "ok" } } },
-      { type: "toolCall", name: "LSP", arguments: { action: "symbols", query: "SessionStore" } },
-      { type: "toolCall", name: "LSP", arguments: { action: "diagnostics", path: "src/main.ts" } },
-      { type: "toolCall", name: "LSP", arguments: { action: "completion", path: "src/main.ts", line: 2, character: 5 } },
-      { type: "toolCall", name: "LSP", arguments: { action: "format", path: "src/main.ts" } },
-      { type: "toolCall", name: "Sleep", arguments: { duration_ms: 120 } },
-      { type: "toolCall", name: "SendUserMessage", arguments: { text: "done" } },
-    ];
+    const toolCalls = structuredClone(loadClawCodeReplayFixture().positive);
     const finalMessage = { role: "assistant", content: toolCalls };
     const baseFn = vi.fn(() =>
       createFakeStream({
@@ -861,14 +858,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   });
 
   it("replays invalid claw-code samples without masking downstream validation failures", async () => {
-    const toolCalls = [
-      { type: "toolCall", name: "ToolSearch", arguments: {} },
-      { type: "toolCall", name: "CronDelete", arguments: {} },
-      { type: "toolCall", name: "LSP", arguments: { action: "diagnostics" } },
-      { type: "toolCall", name: "Sleep", arguments: { duration_ms: 999_999_999 } },
-      { type: "toolCall", name: "Config", arguments: { setting: "" } },
-      { type: "toolCall", name: "UnknownFutureTool", arguments: { a: 1 } },
-    ];
+    const toolCalls = structuredClone(loadClawCodeReplayFixture().negative);
     const finalMessage = { role: "assistant", content: toolCalls };
     const baseFn = vi.fn(() =>
       createFakeStream({
