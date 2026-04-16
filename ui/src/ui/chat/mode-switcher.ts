@@ -149,7 +149,7 @@ export function renderModeSwitcher(params: {
         @click=${onToggleMenu}
         title="Switch mode (Ctrl+1-4)"
         aria-haspopup="true"
-        aria-expanded=${menuOpen}
+        aria-expanded="${menuOpen ? "true" : "false"}"
       >
         ${currentMode.icon}
         <span class="agent-chat__mode-chip-label">${currentMode.shortLabel}</span>
