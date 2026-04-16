@@ -151,4 +151,58 @@ describe("detectCommandObfuscation", () => {
       expect(result.matchedPatterns.length).toBeGreaterThanOrEqual(2);
     });
   });
+
+  describe("python-exec-encoded pattern", () => {
+    it("detects python exec() call", () => {
+      const result = detectCommandObfuscation("python3 -c \"exec('payload')\"");
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("python-exec-encoded");
+    });
+
+    it("detects python eval() call", () => {
+      const result = detectCommandObfuscation("python3 -c \"eval('payload')\"");
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("python-exec-encoded");
+    });
+
+    it("detects python system() call", () => {
+      const result = detectCommandObfuscation("python3 -c \"system('ls')\"");
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("python-exec-encoded");
+    });
+
+    it("detects python exec with double quotes", () => {
+      const result = detectCommandObfuscation('python3 -c "exec(\'payload\')"');
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("python-exec-encoded");
+    });
+
+    it("detects python base64.b64decode() call", () => {
+      const result = detectCommandObfuscation("python3 -c \"import base64; exec(base64.b64decode('c3lzdGVtKCdpcw=='))\"");
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("python-exec-encoded");
+    });
+
+    it("does NOT flag false positive signal_executor", () => {
+      const result = detectCommandObfuscation("python3 -c \"import signal_executor\"");
+      expect(result.matchedPatterns).not.toContain("python-exec-encoded");
+    });
+
+    it("does NOT flag legitimate python import", () => {
+      const result = detectCommandObfuscation("python3 -c \"import position_tracker\"");
+      expect(result.matchedPatterns).not.toContain("python-exec-encoded");
+    });
+
+    it("detects perl -e exec pattern", () => {
+      const result = detectCommandObfuscation("perl -e \"exec('ls')\"");
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("python-exec-encoded");
+    });
+
+    it("detects ruby -e eval pattern", () => {
+      const result = detectCommandObfuscation("ruby -e \"eval('payload')\"");
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("python-exec-encoded");
+    });
+  });
 });
