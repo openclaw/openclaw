@@ -83,6 +83,11 @@ export function wrapStreamFnWithAttribution(streamFn: StreamFn): StreamFn {
         const header = getAttributionHeader(firstUserText);
         // Prepend as Block 0
         system.unshift({ type: "text", text: header });
+        console.error(
+          `[attribution] injected billing header as Block 0 (${system.length} system blocks, fp=${header.slice(-4, -1)})`,
+        );
+      } else {
+        console.error("[attribution] WARNING: no system blocks found in params");
       }
       options?.onPayload?.(payload);
     };
