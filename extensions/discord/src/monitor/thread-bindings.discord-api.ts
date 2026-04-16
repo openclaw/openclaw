@@ -238,10 +238,10 @@ export async function resolveChannelIdForBinding(params: {
   if (explicit) {
     return explicit;
   }
-  // Strip "channel:"/"user:" prefix so Discord API receives a raw snowflake.
-  const rawThreadId =
-    parseDiscordTarget(params.threadId, { defaultKind: "channel" })?.id ?? params.threadId;
   try {
+    // Strip "channel:"/"user:" prefix so Discord API receives a raw snowflake.
+    const rawThreadId =
+      parseDiscordTarget(params.threadId, { defaultKind: "channel" })?.id ?? params.threadId;
     const rest = createDiscordRestClient(
       {
         accountId: params.accountId,
@@ -271,7 +271,7 @@ export async function resolveChannelIdForBinding(params: {
     return channelId || null;
   } catch (err) {
     logVerbose(
-      `discord thread binding channel resolve failed for ${rawThreadId}: ${summarizeDiscordError(err)}`,
+      `discord thread binding channel resolve failed for ${params.threadId}: ${summarizeDiscordError(err)}`,
     );
     return null;
   }
