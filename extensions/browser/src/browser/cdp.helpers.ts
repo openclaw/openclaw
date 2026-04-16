@@ -334,37 +334,105 @@ export function openCdpWebSocket(
   });
 }
 
+type CdpSocketOptions = {
+  headers?: Record<string, string>;
+  handshakeTimeoutMs?: number;
+  maxRetries?: number;
+  retryDelayMs?: number;
+  maxRetryDelayMs?: number;
+};
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeRetryCount(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 2;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
+function computeRetryDelayMs(attempt: number, opts?: CdpSocketOptions): number {
+  const baseDelayMs =
+    typeof opts?.retryDelayMs === "number" && Number.isFinite(opts.retryDelayMs)
+      ? Math.max(1, Math.floor(opts.retryDelayMs))
+      : 200;
+  const maxDelayMs =
+    typeof opts?.maxRetryDelayMs === "number" && Number.isFinite(opts.maxRetryDelayMs)
+      ? Math.max(baseDelayMs, Math.floor(opts.maxRetryDelayMs))
+      : 3000;
+  const exponent = Math.max(0, attempt - 1);
+  const raw = Math.min(maxDelayMs, baseDelayMs * 2 ** exponent);
+  // Add 20% jitter to reduce thundering herd behavior on shared CDP endpoints.
+  const jitterScale = 0.8 + Math.random() * 0.4;
+  return Math.max(1, Math.floor(raw * jitterScale));
+}
+
+function shouldRetryCdpSocketError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const msg = err.message.toLowerCase();
+  if (!msg) {
+    return false;
+  }
+  if (msg.includes("rate limit")) {
+    return false;
+  }
+  return (
+    msg.includes("cdp socket closed") ||
+    msg.includes("econnreset") ||
+    msg.includes("econnrefused") ||
+    msg.includes("econnaborted") ||
+    msg.includes("ehostunreach") ||
+    msg.includes("enetunreach") ||
+    msg.includes("etimedout") ||
+    msg.includes("socket hang up") ||
+    msg.includes("websocket is not open")
+  );
+}
+
 export async function withCdpSocket<T>(
   wsUrl: string,
   fn: (send: CdpSendFn) => Promise<T>,
-  opts?: { headers?: Record<string, string>; handshakeTimeoutMs?: number },
+  opts?: CdpSocketOptions,
 ): Promise<T> {
-  const ws = openCdpWebSocket(wsUrl, opts);
-  const { send, closeWithError } = createCdpSender(ws);
+  const maxRetries = normalizeRetryCount(opts?.maxRetries);
+  let lastErr: unknown;
 
-  const openPromise = new Promise<void>((resolve, reject) => {
-    ws.once("open", () => resolve());
-    ws.once("error", (err) => reject(err));
-    ws.once("close", () => reject(new Error("CDP socket closed")));
-  });
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt += 1) {
+    const ws = openCdpWebSocket(wsUrl, opts);
+    const { send, closeWithError } = createCdpSender(ws);
 
-  try {
-    await openPromise;
-  } catch (err) {
-    closeWithError(err instanceof Error ? err : new Error(String(err)));
-    throw err;
-  }
+    const openPromise = new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", (err) => reject(err));
+      ws.once("close", () => reject(new Error("CDP socket closed")));
+    });
 
-  try {
-    return await fn(send);
-  } catch (err) {
-    closeWithError(err instanceof Error ? err : new Error(String(err)));
-    throw err;
-  } finally {
     try {
-      ws.close();
-    } catch {
-      // ignore
+      await openPromise;
+      return await fn(send);
+    } catch (err) {
+      lastErr = err;
+      const normalizedErr = err instanceof Error ? err : new Error(String(err));
+      closeWithError(normalizedErr);
+      if (attempt > maxRetries || !shouldRetryCdpSocketError(normalizedErr)) {
+        throw normalizedErr;
+      }
+      await sleep(computeRetryDelayMs(attempt, opts));
+    } finally {
+      try {
+        ws.close();
+      } catch {
+        // ignore
+      }
     }
   }
+
+  if (lastErr instanceof Error) {
+    throw lastErr;
+  }
+  throw new Error("CDP socket failed");
 }

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
-import { isWebSocketUrl } from "./cdp.helpers.js";
+import { isWebSocketUrl, withCdpSocket } from "./cdp.helpers.js";
 import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
 import { parseHttpUrl } from "./config.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
@@ -446,6 +446,67 @@ describe("cdp", () => {
       "https://production-sfo.browserless.io?token=abc",
     );
     expect(normalized).toBe("wss://production-sfo.browserless.io/?token=abc");
+  });
+
+  it("reconnects and succeeds after an initial socket close", async () => {
+    let connectionCount = 0;
+    const wsPort = await startWsServer();
+    if (!wsServer) {
+      throw new Error("ws server not initialized");
+    }
+
+    wsServer.on("connection", (socket: WebSocket) => {
+      connectionCount += 1;
+      socket.on("message", (data) => {
+        const msg = JSON.parse(rawDataToString(data)) as { id?: number; method?: string };
+        if (msg.method !== "Runtime.evaluate") {
+          return;
+        }
+        if (connectionCount === 1) {
+          socket.close();
+          return;
+        }
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { value: 2 },
+          }),
+        );
+      });
+    });
+
+    const result = await withCdpSocket(
+      `ws://127.0.0.1:${wsPort}`,
+      async (send) => await send("Runtime.evaluate", { expression: "1+1" }),
+      { maxRetries: 2, retryDelayMs: 1, maxRetryDelayMs: 5 },
+    );
+
+    expect(result).toEqual({ value: 2 });
+    expect(connectionCount).toBe(2);
+  });
+
+  it("fails when retries are exhausted", async () => {
+    let connectionCount = 0;
+    const wsPort = await startWsServer();
+    if (!wsServer) {
+      throw new Error("ws server not initialized");
+    }
+
+    wsServer.on("connection", (socket: WebSocket) => {
+      connectionCount += 1;
+      socket.on("message", () => {
+        socket.close();
+      });
+    });
+
+    await expect(
+      withCdpSocket(
+        `ws://127.0.0.1:${wsPort}`,
+        async (send) => await send("Runtime.evaluate", { expression: "1+1" }),
+        { maxRetries: 1, retryDelayMs: 1, maxRetryDelayMs: 5 },
+      ),
+    ).rejects.toThrow("CDP socket closed");
+    expect(connectionCount).toBe(2);
   });
 });
 
