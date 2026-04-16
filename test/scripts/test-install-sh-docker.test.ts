@@ -27,6 +27,15 @@ describe("test-install-sh-docker", () => {
     );
   });
 
+  it("can reuse dist from the already-built root Docker smoke image", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain('UPDATE_DIST_IMAGE="${OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE:-}"');
+    expect(script).toContain("restore_local_dist_from_image");
+    expect(script).toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
+    expect(script).toContain('echo "==> Reuse local dist/ from Docker image: $image"');
+  });
+
   it("prints package size audits for release smoke tarballs", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -43,6 +52,13 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain('assert_pack_unpacked_size_budget "update" "$pack_json_file"');
     expect(script).toContain('from "./scripts/lib/npm-pack-budget.mjs"');
     expect(script).toContain("install smoke cannot verify pack budget");
+  });
+
+  it("writes the package dist inventory before packing ignore-scripts tarballs", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("node --import tsx scripts/write-package-dist-inventory.ts");
+    expect(script).toContain("quiet_npm pack --ignore-scripts");
   });
 });
 

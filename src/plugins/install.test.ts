@@ -1355,8 +1355,8 @@ describe("installPluginFromArchive", () => {
 
         expect(result.ok).toBe(false);
         if (!result.ok) {
-          expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-          expect(result.error).toContain("plain-crypto-js");
+          expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
+          expect(result.error).toContain("manifest dependency scan could not read");
           expect(result.error).toContain("vendor/sealed");
         }
       } finally {
