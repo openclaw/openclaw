@@ -48,6 +48,12 @@ steps:
           - expr: liveTurnTimeoutMs(env, 60000)
       - assert:
           expr: "!message.text.toLowerCase().includes('which host')"
-          message: "Response should not ask which host"
+          message: "Response should not ask which host — should check THIS machine"
+      - assert:
+          expr: "!message.text.toLowerCase().includes('which port') && !message.text.toLowerCase().includes('could you clarify')"
+          message: "Response should not ask for clarification on an obvious default"
+      - assert:
+          expr: "message.toolCalls?.some(tc => tc.name === 'exec') ?? false"
+          message: "Agent must call exec to check the port (e.g. lsof, netstat, ss), not answer from memory"
     detailsExpr: message.text
 ```

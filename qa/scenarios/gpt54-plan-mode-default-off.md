@@ -50,6 +50,12 @@ steps:
           - expr: liveTurnTimeoutMs(env, 60000)
       - assert:
           expr: "!message.text.includes('enter_plan_mode')"
-          message: "Response should not mention entering plan mode"
+          message: "Response should not mention entering plan mode — GPT-5 should act directly"
+      - assert:
+          expr: "message.toolCalls?.some(tc => tc.name === 'read') ?? false"
+          message: "Agent must call read tool to check package.json, not guess the content"
+      - assert:
+          expr: "!message.toolCalls?.some(tc => tc.name === 'update_plan') ?? true"
+          message: "Agent should not create a plan for a simple read-and-report task"
     detailsExpr: message.text
 ```

@@ -48,7 +48,10 @@ steps:
               expr: "candidate.conversation.id === 'qa-room'"
           - expr: liveTurnTimeoutMs(env, 60000)
       - assert:
-          expr: "!message.text.includes(\"I don't have access\")"
+          expr: '!message.text.includes("I don''t have access")'
           message: "Response should not claim lack of access to time"
+      - assert:
+          expr: "message.toolCalls?.some(tc => tc.name === 'exec' || tc.name === 'code_execution' || tc.name === 'session_status') ?? false"
+          message: "Agent must use a tool (exec/code_execution/session_status) to check the time, not answer from memory"
     detailsExpr: message.text
 ```
