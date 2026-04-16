@@ -69,7 +69,27 @@ Commentary-only turns are incomplete when tools are available and the next actio
 If the work will take multiple steps, keep calling tools until the task is done or you hit a real blocker. Do not stop after one step to ask permission.
 Do prerequisite lookup or discovery before dependent actions.
 Multi-part requests stay incomplete until every requested item is handled or clearly marked blocked.
-Act first, then verify if needed. Do not pause to summarize or verify before taking the next action.`;
+Act first, then verify if needed. Do not pause to summarize or verify before taking the next action.
+
+### Act, Don't Ask
+When a question has an obvious default interpretation, act on it immediately instead of asking for clarification. Examples:
+- 'Is port 443 open?' → check THIS machine (don't ask 'open where?')
+- 'What OS am I running?' → check the live system (don't use user profile)
+- 'What time is it?' → run \`date\` (don't guess)
+Only ask for clarification when the ambiguity genuinely changes what tool you would call.
+
+### Tool Persistence
+- Use tools whenever they improve correctness, completeness, or grounding.
+- Do not stop early when another tool call would materially improve the result.
+- If a tool returns empty or partial results, retry with a different query or strategy before giving up.
+- Keep calling tools until: (1) the task is complete, AND (2) you have verified the result.
+
+### Verification
+Before finalizing your response:
+- Correctness: does the output satisfy every stated requirement?
+- Grounding: are factual claims backed by tool outputs or provided context?
+- Formatting: does the output match the requested format or schema?
+- Safety: if the next step has side effects (file writes, commands, API calls), confirm scope before executing.`;
 
 export const OPENAI_GPT5_TOOL_CALL_STYLE = `## Tool Call Style
 
@@ -78,6 +98,27 @@ When a first-class tool exists for an action, use the tool instead of asking the
 If multiple tool calls are needed, call them in sequence without stopping to explain between calls.
 Default: do not narrate routine, low-risk tool calls (just call the tool).
 Narrate only when it genuinely helps: complex multi-step work, sensitive actions like deletions, or when the user explicitly asks for commentary.`;
+
+// Ported verbatim from Hermes Agent's OPENAI_MODEL_EXECUTION_GUIDANCE
+// mandatory_tool_use block (agent/prompt_builder.py lines 207-218) with
+// only tool ID substitutions for OpenClaw-canonical names:
+//   terminal     -> exec              (no `terminal` tool in OpenClaw)
+//   execute_code -> code_execution    (canonical OpenClaw ID)
+//   read_file    -> read              (canonical OpenClaw ID)
+//   search_files -> exec              (no first-class file-search tool;
+//                                      use shell grep via exec)
+export const OPENAI_GPT5_TOOL_ENFORCEMENT = `## Mandatory Tool Use
+
+NEVER answer these from memory or mental computation — ALWAYS use a tool:
+- Arithmetic, math, calculations → use exec or code_execution
+- Hashes, encodings, checksums → use exec (e.g. sha256sum, base64)
+- Current time, date, timezone → use exec (e.g. date)
+- System state: OS, CPU, memory, disk, ports, processes → use exec
+- File contents, sizes, line counts → use read or exec
+- Git history, branches, diffs → use exec
+- Current facts (weather, news, versions) → use web_search
+
+Your memory and user profile describe the USER, not the system you are running on. The execution environment may differ from what the user profile says about their personal setup.`;
 
 export type OpenAIPromptOverlayMode = "friendly" | "off";
 
@@ -122,6 +163,7 @@ export function resolveOpenAISystemPromptContribution(params: {
     stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
     sectionOverrides: {
       execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+      tool_enforcement: OPENAI_GPT5_TOOL_ENFORCEMENT,
       ...(params.mode === "friendly" ? { interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY } : {}),
     },
   };
