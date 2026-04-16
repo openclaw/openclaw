@@ -34,6 +34,13 @@ function pruneAgentRunCache(now = Date.now()) {
       agentRunCache.delete(runId);
     }
   }
+  // Prune orphaned agentRunStarts entries whose terminal lifecycle event
+  // was lost (crash, race). Each entry is a start timestamp.
+  for (const [runId, startedAt] of agentRunStarts) {
+    if (now - startedAt > AGENT_RUN_CACHE_TTL_MS) {
+      agentRunStarts.delete(runId);
+    }
+  }
 }
 
 function recordAgentRunSnapshot(entry: AgentRunSnapshot) {
