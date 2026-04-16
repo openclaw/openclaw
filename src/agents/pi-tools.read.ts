@@ -63,7 +63,7 @@ type OpenClawReadToolOptions = {
   root?: string;
   containerWorkdir?: string;
   bridge?: SandboxFsBridge;
-  getBaseUrl?: () => string; // New option for dynamic base URL
+  getBaseUrl?: () => string;
 };
 
 // --- OPERATIONS HELPERS ---
@@ -584,6 +584,47 @@ const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac", "op
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi", "mkv", "m4v", "mpg", "mpeg"]);
 const MAX_DIR_ENTRIES = 200;
 
+// Export transform function for transports to use
+export function transformToolResultForTransport(result: AgentToolResult): AgentToolResult {
+  if (!result.content || !Array.isArray(result.content)) {
+    return result;
+  }
+
+  const transformedContent = result.content.map((block: any) => {
+    // Transform image blocks from webchat format to transport format
+    if (block.type === 'image' && block.source && block.source.type === 'base64') {
+      return {
+        type: 'image',
+        data: block.source.data,
+        mimeType: block.source.media_type,
+      };
+    }
+    
+    // Audio blocks - transports don't support them, convert to text
+    if (block.type === 'audio') {
+      return {
+        type: 'text',
+        text: `Audio file: ${block.filename || 'audio'}\nURL: ${block.url}`,
+      };
+    }
+    
+    // Video blocks - transports don't support them, convert to text
+    if (block.type === 'video') {
+      return {
+        type: 'text',
+        text: `Video file: ${block.filename || 'video'}\nURL: ${block.url}`,
+      };
+    }
+    
+    return block;
+  });
+
+  return {
+    ...result,
+    content: transformedContent as any,
+  };
+}
+
 export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
@@ -739,6 +780,7 @@ export function createOpenClawReadTool(
             }
           }
 
+          // KEEP THE ORIGINAL WORKING FORMAT
           return {
             toolCallId,
             content: [
@@ -756,7 +798,7 @@ export function createOpenClawReadTool(
           } as AgentToolResult;
         }
 
-        // Audio handling with extended extension support
+        // Audio handling with player - KEEP ORIGINAL FORMAT
         if (AUDIO_EXTENSIONS.has(ext)) {
           const mimeType = getAudioMimeType(ext);
 
@@ -768,14 +810,14 @@ export function createOpenClawReadTool(
                 url: mediaUrl,
                 filename: fileName,
                 mimeType: mimeType,
-              } as const,
+              } as any,
               { type: "text", text: `🎵 [${fileName}](${mediaUrl})` },
             ],
             details: { path: inputPath, size: fileSize },
           } as AgentToolResult;
         }
 
-        // Video handling with extended extension support
+        // Video handling with player - KEEP ORIGINAL FORMAT
         if (VIDEO_EXTENSIONS.has(ext)) {
           const mimeType = getVideoMimeType(ext);
 
@@ -787,7 +829,7 @@ export function createOpenClawReadTool(
                 url: mediaUrl,
                 filename: fileName,
                 mimeType: mimeType,
-              } as const,
+              } as any,
               { type: "text", text: `🎬 [${fileName}](${mediaUrl})` },
             ],
             details: { path: inputPath, size: fileSize },
