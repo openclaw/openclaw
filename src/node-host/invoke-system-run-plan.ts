@@ -901,7 +901,15 @@ function shellPayloadNeedsStableBinding(shellCommand: string, cwd: string | unde
   if (!path.isAbsolute(firstToken)) {
     return true;
   }
-  return isLikelyScriptLikePathSync(path.resolve(cwd ?? process.cwd(), firstToken));
+  const resolvedPath = path.resolve(cwd ?? process.cwd(), firstToken);
+  if (
+    isWritableByCurrentProcessSync(resolvedPath) ||
+    isWritableByCurrentProcessSync(path.dirname(resolvedPath)) ||
+    hasMutableSymlinkPathComponentSync(resolvedPath)
+  ) {
+    return true;
+  }
+  return isLikelyScriptLikePathSync(resolvedPath);
 }
 
 function requiresStableInterpreterApprovalBindingWithShellCommand(params: {

@@ -844,6 +844,27 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
+  it("keeps fail-closed behavior for writable absolute native-binary shell payloads", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-absolute-binary-binding-"));
+    try {
+      const binaryPath = resolveNativeBinaryFixturePath();
+      const copiedBinaryPath = path.join(tmp, "tool");
+      fs.copyFileSync(binaryPath, copiedBinaryPath);
+      fs.chmodSync(copiedBinaryPath, 0o755);
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", copiedBinaryPath],
+        rawCommand: copiedBinaryPath,
+        cwd: tmp,
+      });
+      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("keeps fail-closed behavior for shell payloads that invoke mutable script files", () => {
     expectShellPayloadApprovalDenied({
       tmpPrefix: "openclaw-shell-script-binding-",
