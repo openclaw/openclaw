@@ -913,6 +913,15 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (providerRuntimeFailureKind === "cloudflare_challenge") {
+    return (
+      "Cloudflare blocked the request with a browser challenge (HTTP 403). " +
+      "Node.js TLS fingerprint was detected as non-browser traffic. " +
+      "Set up a local reverse proxy using a browser-compatible HTTP client " +
+      "(e.g. Python cloudscraper) and point the provider's baseUrl to it."
+    );
+  }
+
   if (providerRuntimeFailureKind === "auth_html_403") {
     return (
       "Authentication failed with an HTML 403 response from the provider. " +
