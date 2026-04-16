@@ -1,0 +1,68 @@
+name: Android Debug APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      flavor:
+        description: "Build flavor"
+        required: true
+        default: thirdParty
+        type: choice
+        options:
+          - thirdParty
+          - play
+          - both
+
+jobs:
+  build:
+    name: Build ${{ matrix.flavor }}Debug
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: >-
+          ${{ fromJson(
+            inputs.flavor == 'both'
+              && '["thirdParty","play"]'
+              || format('["{0}"]', inputs.flavor)
+          ) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 12266719
+          packages: "platform-tools platforms;android-36 build-tools;36.0.0"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Capitalize flavor
+        id: flavor
+        run: |
+          flavor="${{ matrix.flavor }}"
+          capitalized="$(tr '[:lower:]' '[:upper:]' <<< "${flavor:0:1}")${flavor:1}"
+          echo "capitalized=$capitalized" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble ${{ matrix.flavor }}Debug
+        working-directory: apps/android
+        run: ./gradlew --no-daemon :app:assemble${{ steps.flavor.outputs.capitalized }}Debug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-${{ matrix.flavor }}-debug-apk
+          path: apps/android/app/build/outputs/apk/${{ matrix.flavor }}/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
