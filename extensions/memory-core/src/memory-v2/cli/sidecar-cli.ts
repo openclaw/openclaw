@@ -1,5 +1,25 @@
 import type { DatabaseSync } from "node:sqlite";
-import { setPinned } from "../sidecar-repo.js";
+import { markStatus, setPinned, type SidecarStatus } from "../sidecar-repo.js";
+
+export type { SidecarStatus };
+
+export const SIDECAR_STATUS_VALUES: readonly SidecarStatus[] = [
+  "active",
+  "superseded",
+  "archived",
+  "deleted",
+];
+
+// Narrow parser for the positional <status> argument. Returns the validated
+// enum value, or null for anything else. Intentionally case-sensitive so
+// `DELETED` vs `deleted` surface as a clear rejection rather than silently
+// coercing.
+export function parseSidecarStatus(raw: string): SidecarStatus | null {
+  const trimmed = raw.trim();
+  return (SIDECAR_STATUS_VALUES as readonly string[]).includes(trimmed)
+    ? (trimmed as SidecarStatus)
+    : null;
+}
 
 export type SidecarStatsSummary = {
   total: number;
@@ -162,6 +182,33 @@ export function formatPinLine(outcome: SidecarPinOutcome): string {
     return `ref-id not found: ${outcome.refId}`;
   }
   return `${outcome.pinned ? "pinned" : "unpinned"} ${outcome.refId}`;
+}
+
+export type SidecarStatusOutcome = {
+  refId: string;
+  found: boolean;
+  status: SidecarStatus;
+};
+
+// Admin-level status write by full ref id. Reuses the existing markStatus
+// primitive, which is a raw UPDATE with no transition gating (deleted →
+// active is allowed; trust the operator). Caller must validate the status
+// string up front via parseSidecarStatus. Returns found=false when no row
+// matches — the UPDATE is a no-op.
+export function writeSidecarStatus(
+  db: DatabaseSync,
+  refId: string,
+  status: SidecarStatus,
+): SidecarStatusOutcome {
+  const found = markStatus(db, refId, status);
+  return { refId, found, status };
+}
+
+export function formatStatusLine(outcome: SidecarStatusOutcome): string {
+  if (!outcome.found) {
+    return `ref-id not found: ${outcome.refId}`;
+  }
+  return `status=${outcome.status} ${outcome.refId}`;
 }
 
 function formatTs(ts: number | null): string {

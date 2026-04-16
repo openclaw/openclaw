@@ -5,9 +5,13 @@ import { ensureSidecarSchema } from "../sidecar-schema.js";
 import {
   DEFAULT_LIST_LIMIT,
   formatPinLine,
+  formatStatusLine,
+  parseSidecarStatus,
   readSidecarList,
   readSidecarStats,
+  SIDECAR_STATUS_VALUES,
   writeSidecarPin,
+  writeSidecarStatus,
 } from "./sidecar-cli.js";
 
 type InsertRow = {
@@ -305,6 +309,134 @@ describe("formatPinLine", () => {
       "unpinned refs:abc",
     );
     expect(formatPinLine({ refId: "refs:missing", found: false, pinned: true })).toBe(
+      "ref-id not found: refs:missing",
+    );
+  });
+});
+
+describe("parseSidecarStatus", () => {
+  it("accepts exactly the four allowed values", () => {
+    expect(parseSidecarStatus("active")).toBe("active");
+    expect(parseSidecarStatus("superseded")).toBe("superseded");
+    expect(parseSidecarStatus("archived")).toBe("archived");
+    expect(parseSidecarStatus("deleted")).toBe("deleted");
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(parseSidecarStatus(" active ")).toBe("active");
+    expect(parseSidecarStatus("\tdeleted\n")).toBe("deleted");
+  });
+
+  it("returns null for unknown or mis-cased values", () => {
+    expect(parseSidecarStatus("ACTIVE")).toBeNull();
+    expect(parseSidecarStatus("Active")).toBeNull();
+    expect(parseSidecarStatus("draft")).toBeNull();
+    expect(parseSidecarStatus("")).toBeNull();
+    expect(parseSidecarStatus("   ")).toBeNull();
+  });
+
+  it("exposes the enum values as SIDECAR_STATUS_VALUES", () => {
+    expect([...SIDECAR_STATUS_VALUES]).toEqual(["active", "superseded", "archived", "deleted"]);
+  });
+});
+
+describe("writeSidecarStatus", () => {
+  let db: DatabaseSync;
+
+  beforeEach(() => {
+    db = new DatabaseSync(":memory:");
+    ensureSidecarSchema(db);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  const seededRefId = (): string =>
+    memoryRefId({
+      source: "memory",
+      path: "memory/a.md",
+      startLine: 1,
+      endLine: 5,
+      contentHash: "memory/a.md:1000",
+    });
+
+  const seedWithStatus = (status: "active" | "superseded" | "archived" | "deleted") => {
+    insertRow(db, {
+      source: "memory",
+      path: "memory/a.md",
+      startLine: 1,
+      endLine: 5,
+      status,
+      pinned: false,
+      salience: null,
+      createdAt: 1000,
+      lastAccessedAt: null,
+    });
+  };
+
+  it("marks an existing active row as superseded and reports found=true", () => {
+    seedWithStatus("active");
+    const id = seededRefId();
+
+    const outcome = writeSidecarStatus(db, id, "superseded");
+
+    expect(outcome).toEqual({ refId: id, found: true, status: "superseded" });
+    const row = db.prepare("SELECT status FROM memory_v2_records WHERE ref_id = ?").get(id) as {
+      status: string;
+    };
+    expect(row.status).toBe("superseded");
+  });
+
+  it("allows any transition (no gating): deleted → active round-trips through the primitive", () => {
+    seedWithStatus("deleted");
+    const id = seededRefId();
+
+    const outcome = writeSidecarStatus(db, id, "active");
+
+    expect(outcome.found).toBe(true);
+    expect(outcome.status).toBe("active");
+    const row = db.prepare("SELECT status FROM memory_v2_records WHERE ref_id = ?").get(id) as {
+      status: string;
+    };
+    expect(row.status).toBe("active");
+  });
+
+  it("reports found=false without throwing or inserting when the ref id is unknown", () => {
+    const outcome = writeSidecarStatus(db, "refs:memory:does-not-exist:0-0:abc", "archived");
+
+    expect(outcome.found).toBe(false);
+    expect(outcome.status).toBe("archived");
+    expect(outcome.refId).toBe("refs:memory:does-not-exist:0-0:abc");
+
+    const total = db.prepare("SELECT COUNT(*) AS n FROM memory_v2_records").get() as { n: number };
+    expect(total.n).toBe(0);
+  });
+
+  it("produces a stable JSON shape (refId, found, status) for --json callers", () => {
+    seedWithStatus("active");
+    const id = seededRefId();
+
+    const outcome = writeSidecarStatus(db, id, "archived");
+
+    expect(Object.keys(outcome).toSorted()).toEqual(["found", "refId", "status"]);
+    expect(JSON.parse(JSON.stringify(outcome))).toEqual({
+      refId: id,
+      found: true,
+      status: "archived",
+    });
+  });
+});
+
+describe("formatStatusLine", () => {
+  it("renders the status text and not-found shapes from the outcome", () => {
+    expect(formatStatusLine({ refId: "refs:abc", found: true, status: "superseded" })).toBe(
+      "status=superseded refs:abc",
+    );
+    expect(formatStatusLine({ refId: "refs:abc", found: true, status: "archived" })).toBe(
+      "status=archived refs:abc",
+    );
+    expect(formatStatusLine({ refId: "refs:missing", found: false, status: "active" })).toBe(
       "ref-id not found: refs:missing",
     );
   });

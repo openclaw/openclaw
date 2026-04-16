@@ -48,3 +48,5 @@ export type MemorySidecarListCommandOptions = MemoryCommandOptions & {
 export type MemorySidecarPinCommandOptions = MemoryCommandOptions & {
   unpin?: boolean;
 };
+
+export type MemorySidecarStatusCommandOptions = MemoryCommandOptions;

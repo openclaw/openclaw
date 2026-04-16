@@ -10,9 +10,9 @@ Everything described here is **off by default**. Nothing in this foundation chan
 - An ingest pipeline wired to `agent_end` that writes sidecar rows for successful agent turns when ingest is enabled.
 - A rerank wrapper wired into `memory_search` that reorders results using salience, recency, pinning, and supersession signals when rerank is enabled.
 - An optional shadow-touch path that updates `last_accessed_at` for memory-v2 hits returned by search (useful later for recency scoring).
-- An `openclaw memory sidecar` CLI: `stats` and `list` inspect the sidecar (read-only); `pin` flips the `pinned` flag on a record by its full ref id.
+- An `openclaw memory sidecar` CLI: `stats` and `list` inspect the sidecar (read-only); `pin` flips the `pinned` flag on a record by its full ref id; `status` sets one of the four lifecycle values on a record by its full ref id.
 
-**Not shipped:** salience writes, supersession writes, status mutation, ref-id prefix matching, dreaming-phase integration, and any form of automatic promotion or demotion. A future change adds each of these surfaces explicitly.
+**Not shipped:** salience writes, supersession-link writes (the `superseded_by` column — `status` only flips the enum), ref-id prefix matching, dreaming-phase integration, and any form of automatic promotion or demotion. A future change adds each of these surfaces explicitly.
 
 ## Opt-in configuration
 
@@ -81,7 +81,7 @@ If the rerank wrapper throws at runtime it falls back to identity (returning the
 
 ## Sidecar CLI
 
-`openclaw memory sidecar` inspects and lightly curates the sidecar database for the default agent (or the agent passed with `--agent`). `stats` and `list` are strictly read-only. `pin` is the only write and touches only the `pinned` flag of an existing row — no inserts, no other column writes.
+`openclaw memory sidecar` inspects and lightly curates the sidecar database for the default agent (or the agent passed with `--agent`). `stats` and `list` are strictly read-only. `pin` and `status` are the only writes, and each touches exactly one column of an existing row — no inserts, no other column writes.
 
 ### `memory sidecar stats`
 
@@ -133,7 +133,28 @@ openclaw memory sidecar pin <ref-id> --json
 
 The command is scoped and safe: it updates `pinned` and nothing else, touches one row at most per agent, and fails the operation quietly (reports `ref-id not found`) rather than inserting placeholder rows when the id is unknown. The rerank `pinnedBoost` weight already reads this flag (see the rerank table above), so pinning takes effect the next time the rerank pass runs.
 
-If the sidecar database has not been initialized yet (for example, because `memoryV2.ingest.enabled` has never been on in this workspace), all three subcommands print a "sidecar not initialized" notice and exit without error.
+### `memory sidecar status`
+
+Set the lifecycle `status` of an existing sidecar record. Accepts exactly `active`, `superseded`, `archived`, or `deleted` (case-sensitive). Requires the **full** ref id — no prefix matching in this slice.
+
+```
+openclaw memory sidecar status <ref-id> active
+openclaw memory sidecar status <ref-id> superseded
+openclaw memory sidecar status <ref-id> archived --agent my-agent
+openclaw memory sidecar status <ref-id> deleted --json
+```
+
+| Option         | Description                                                                          |
+| -------------- | ------------------------------------------------------------------------------------ |
+| `<ref-id>`     | Required positional. Full sidecar ref id. Unknown ids report "ref-id not found".     |
+| `<status>`     | Required positional. One of `active`, `superseded`, `archived`, `deleted`.           |
+| `--agent <id>` | Target a specific agent's sidecar (default: default agent).                          |
+| `--json`       | Emit JSON (`[{ agentId, dbPath, initialized, outcome: { refId, found, status } }]`). |
+| `--verbose`    | Verbose logging for diagnostics.                                                     |
+
+Invalid `<status>` values are rejected before any database work with a single-line `invalid status …` warning. **No transition gating:** any source status can be written to any target status, including `deleted → active`. The command mirrors the behavior of the underlying `markStatus` primitive. Operators who need transition rules should enforce them externally. The rerank `supersededPenalty` weight already reads this column (see the rerank table above), so flipping to `superseded` takes effect the next time the rerank pass runs.
+
+If the sidecar database has not been initialized yet (for example, because `memoryV2.ingest.enabled` has never been on in this workspace), all four subcommands print a "sidecar not initialized" notice and exit without error.
 
 ## Verification flow
 

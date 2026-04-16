@@ -13,6 +13,7 @@ import type {
   MemorySearchCommandOptions,
   MemorySidecarListCommandOptions,
   MemorySidecarPinCommandOptions,
+  MemorySidecarStatusCommandOptions,
 } from "./cli.types.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
@@ -83,6 +84,15 @@ async function runMemorySidecarPin(
 ) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemorySidecarPin(refIdArg, opts);
+}
+
+async function runMemorySidecarStatus(
+  refIdArg: string | undefined,
+  statusArg: string | undefined,
+  opts: MemorySidecarStatusCommandOptions,
+) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemorySidecarStatus(refIdArg, statusArg, opts);
 }
 
 export function registerMemoryCli(program: Command) {
@@ -280,4 +290,25 @@ export function registerMemoryCli(program: Command) {
     .action(async (refIdArg: string | undefined, opts: MemorySidecarPinCommandOptions) => {
       await runMemorySidecarPin(refIdArg, opts);
     });
+
+  sidecar
+    .command("status")
+    .description("Set the status of a sidecar record by its full ref id")
+    .argument(
+      "<ref-id>",
+      "Full sidecar ref id (no prefix matching in this slice; get full ids via `memory sidecar list --json`)",
+    )
+    .argument("<status>", "One of: active | superseded | archived | deleted")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--json", "Print JSON")
+    .option("--verbose", "Verbose logging", false)
+    .action(
+      async (
+        refIdArg: string | undefined,
+        statusArg: string | undefined,
+        opts: MemorySidecarStatusCommandOptions,
+      ) => {
+        await runMemorySidecarStatus(refIdArg, statusArg, opts);
+      },
+    );
 }

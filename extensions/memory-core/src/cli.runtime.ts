@@ -36,6 +36,7 @@ import type {
   MemorySearchCommandOptions,
   MemorySidecarListCommandOptions,
   MemorySidecarPinCommandOptions,
+  MemorySidecarStatusCommandOptions,
 } from "./cli.types.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
 import { previewRemDreaming, seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
@@ -51,12 +52,18 @@ import {
   formatListLines as formatSidecarListLines,
   formatPinLine as formatSidecarPinLine,
   formatStatsLines as formatSidecarStatsLines,
+  formatStatusLine as formatSidecarStatusLine,
+  parseSidecarStatus,
   readSidecarList,
   readSidecarStats,
+  SIDECAR_STATUS_VALUES,
   type SidecarListRow,
   type SidecarPinOutcome,
   type SidecarStatsSummary,
+  type SidecarStatus,
+  type SidecarStatusOutcome,
   writeSidecarPin,
+  writeSidecarStatus,
 } from "./memory-v2/cli/sidecar-cli.js";
 import { SIDECAR_DB_RELATIVE_PATH, openSidecarDatabase } from "./memory-v2/sidecar-store.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
@@ -2190,6 +2197,105 @@ export async function runMemorySidecarPin(
       continue;
     }
     defaultRuntime.log(`  ${formatSidecarPinLine(entry.outcome)}`);
+    defaultRuntime.log("");
+  }
+}
+
+type SidecarStatusEntry = {
+  agentId: string;
+  dbPath: string;
+  initialized: boolean;
+  outcome: SidecarStatusOutcome | null;
+};
+
+async function collectSidecarStatusEntries(
+  cfg: OpenClawConfig,
+  agentIds: readonly string[],
+  refId: string,
+  status: SidecarStatus,
+): Promise<SidecarStatusEntry[]> {
+  const entries: SidecarStatusEntry[] = [];
+  for (const agentId of agentIds) {
+    await withMemoryManagerForAgent({
+      cfg,
+      agentId,
+      purpose: "status",
+      run: async (manager) => {
+        const workspaceDir = manager.status().workspaceDir;
+        if (!workspaceDir) {
+          return;
+        }
+        const dbPath = path.join(workspaceDir, SIDECAR_DB_RELATIVE_PATH);
+        if (!fsSync.existsSync(dbPath)) {
+          entries.push({ agentId, dbPath, initialized: false, outcome: null });
+          return;
+        }
+        const db = openSidecarDatabase(dbPath);
+        try {
+          entries.push({
+            agentId,
+            dbPath,
+            initialized: true,
+            outcome: writeSidecarStatus(db, refId, status),
+          });
+        } finally {
+          db.close();
+        }
+      },
+    });
+  }
+  return entries;
+}
+
+export async function runMemorySidecarStatus(
+  refIdArg: string | undefined,
+  statusArg: string | undefined,
+  opts: MemorySidecarStatusCommandOptions,
+): Promise<void> {
+  setVerbose(Boolean(opts.verbose));
+  const refId = (refIdArg ?? "").trim();
+  if (refId.length === 0) {
+    defaultRuntime.log(
+      theme.warn(
+        "memory sidecar status: <ref-id> is required (full ref id; no prefix matching in this slice).",
+      ),
+    );
+    return;
+  }
+  const rawStatus = (statusArg ?? "").trim();
+  const status = parseSidecarStatus(rawStatus);
+  if (!status) {
+    defaultRuntime.log(
+      theme.warn(
+        `memory sidecar status: invalid status "${rawStatus}". Expected one of: ${SIDECAR_STATUS_VALUES.join(" | ")}.`,
+      ),
+    );
+    return;
+  }
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory sidecar status");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentIds = resolveAgentIds(cfg, opts.agent);
+  const entries = await collectSidecarStatusEntries(cfg, agentIds, refId, status);
+
+  if (opts.json) {
+    defaultRuntime.writeJson(entries);
+    return;
+  }
+
+  const rich = isRich();
+  const heading = (text: string) => colorize(rich, theme.heading, text);
+  const muted = (text: string) => colorize(rich, theme.muted, text);
+  for (const entry of entries) {
+    defaultRuntime.log(heading(`Memory v2 sidecar — ${entry.agentId}`));
+    defaultRuntime.log(muted(`path: ${shortenHomePath(entry.dbPath)}`));
+    if (!entry.initialized || !entry.outcome) {
+      defaultRuntime.log(
+        muted("sidecar not initialized (enable memoryV2.ingest to start populating)."),
+      );
+      defaultRuntime.log("");
+      continue;
+    }
+    defaultRuntime.log(`  ${formatSidecarStatusLine(entry.outcome)}`);
     defaultRuntime.log("");
   }
 }
