@@ -41,13 +41,15 @@ const HEARTBEAT_ISOLATED_SESSION_SUFFIX = ":heartbeat";
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 
 type CronSchedule = { kind: "cron"; expr: string; tz?: string };
-type CronPayload = { kind: "systemEvent"; text: string };
+type CronPayload =
+  | { kind: "systemEvent"; text: string }
+  | { kind: "agentTurn"; message: string; lightContext?: boolean };
 type ManagedCronJobCreate = {
   name: string;
   description: string;
   enabled: boolean;
   schedule: CronSchedule;
-  sessionTarget: "main";
+  sessionTarget: "main" | "isolated";
   wakeMode: "now";
   payload: CronPayload;
 };
@@ -57,7 +59,7 @@ type ManagedCronJobPatch = {
   description?: string;
   enabled?: boolean;
   schedule?: CronSchedule;
-  sessionTarget?: "main";
+  sessionTarget?: "main" | "isolated";
   wakeMode?: "now";
   payload?: CronPayload;
 };
@@ -77,6 +79,8 @@ type ManagedCronJobLike = {
   payload?: {
     kind?: string;
     text?: string;
+    message?: string;
+    lightContext?: boolean;
   };
   createdAtMs?: number;
 };
@@ -149,13 +153,27 @@ function buildManagedDreamingCronJob(
       expr: config.cron,
       ...(config.timezone ? { tz: config.timezone } : {}),
     },
-    sessionTarget: "main",
+    sessionTarget: "isolated",
     wakeMode: "now",
     payload: {
-      kind: "systemEvent",
-      text: DREAMING_SYSTEM_EVENT_TEXT,
+      kind: "agentTurn",
+      message: DREAMING_SYSTEM_EVENT_TEXT,
+      lightContext: true,
     },
   };
+}
+
+function resolveManagedDreamingPayloadToken(
+  payload: ManagedCronJobLike["payload"],
+): string | undefined {
+  const payloadKind = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(payload?.kind));
+  if (payloadKind === "systemevent") {
+    return normalizeTrimmedString(payload?.text);
+  }
+  if (payloadKind === "agentturn") {
+    return normalizeTrimmedString(payload?.message);
+  }
+  return undefined;
 }
 
 function isManagedDreamingJob(job: ManagedCronJobLike): boolean {
@@ -164,8 +182,8 @@ function isManagedDreamingJob(job: ManagedCronJobLike): boolean {
     return true;
   }
   const name = normalizeTrimmedString(job.name);
-  const payloadText = normalizeTrimmedString(job.payload?.text);
-  return name === MANAGED_DREAMING_CRON_NAME && payloadText === DREAMING_SYSTEM_EVENT_TEXT;
+  const payloadToken = resolveManagedDreamingPayloadToken(job.payload);
+  return name === MANAGED_DREAMING_CRON_NAME && payloadToken === DREAMING_SYSTEM_EVENT_TEXT;
 }
 
 function isLegacyPhaseDreamingJob(job: ManagedCronJobLike): boolean {
@@ -249,8 +267,8 @@ function buildManagedDreamingPatch(
   }
 
   const sessionTarget = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.sessionTarget));
-  if (sessionTarget !== "main") {
-    patch.sessionTarget = "main";
+  if (sessionTarget !== desired.sessionTarget) {
+    patch.sessionTarget = desired.sessionTarget;
   }
   const wakeMode = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.wakeMode));
   if (wakeMode !== "now") {
@@ -258,8 +276,15 @@ function buildManagedDreamingPatch(
   }
 
   const payloadKind = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.payload?.kind));
-  const payloadText = normalizeTrimmedString(job.payload?.text);
-  if (payloadKind !== "systemevent" || !compareOptionalStrings(payloadText, desired.payload.text)) {
+  const payloadToken = resolveManagedDreamingPayloadToken(job.payload);
+  const desiredPayloadToken =
+    desired.payload.kind === "systemEvent" ? desired.payload.text : desired.payload.message;
+  const payloadNeedsUpdate =
+    payloadKind !== normalizeLowercaseStringOrEmpty(desired.payload.kind) ||
+    !compareOptionalStrings(payloadToken, desiredPayloadToken) ||
+    (desired.payload.kind === "agentTurn" &&
+      job.payload?.lightContext !== desired.payload.lightContext);
+  if (payloadNeedsUpdate) {
     patch.payload = desired.payload;
   }
 
@@ -446,7 +471,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
 }): Promise<{ handled: true; reason: string } | undefined> {
-  if (params.trigger !== "heartbeat") {
+  if (params.trigger !== "heartbeat" && params.trigger !== "cron") {
     return undefined;
   }
   if (!includesSystemEventToken(params.cleanedBody, DREAMING_SYSTEM_EVENT_TEXT)) {
@@ -709,17 +734,21 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
 
   api.on("before_agent_reply", async (event, ctx) => {
     try {
-      if (ctx.trigger !== "heartbeat") {
+      if (ctx.trigger !== "heartbeat" && ctx.trigger !== "cron") {
         return undefined;
       }
       const currentConfig = resolveCurrentConfig();
       const config = await reconcileManagedDreamingCron({
         reason: "runtime",
       });
-      if (
-        !hasPendingManagedDreamingCronEvent(ctx.sessionKey) ||
-        !includesSystemEventToken(event.cleanedBody, DREAMING_SYSTEM_EVENT_TEXT)
-      ) {
+      const hasManagedDreamingToken = includesSystemEventToken(
+        event.cleanedBody,
+        DREAMING_SYSTEM_EVENT_TEXT,
+      );
+      const isManagedHeartbeatTrigger =
+        ctx.trigger === "heartbeat" && hasPendingManagedDreamingCronEvent(ctx.sessionKey);
+      const isManagedCronTrigger = ctx.trigger === "cron";
+      if (!hasManagedDreamingToken || (!isManagedHeartbeatTrigger && !isManagedCronTrigger)) {
         return undefined;
       }
       return await runShortTermDreamingPromotionIfTriggered({
