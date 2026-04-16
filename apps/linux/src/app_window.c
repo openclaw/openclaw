@@ -41,6 +41,7 @@
 #include "section_control_room.h"
 #include "section_workflows.h"
 #include "ui_model_utils.h"
+#include "runtime_paths.h"
 #include "log.h"
 
 /* ── Section metadata ── */
@@ -2073,27 +2074,13 @@ static void populate_env_checks(GtkWidget *container) {
     systemd_get_runtime_context(&profile, &state_dir, &config_path);
 
     GatewayConfig *cfg = gateway_client_get_config();
-
-    GatewayConfigContext ctx = {0};
-    ctx.explicit_config_path = config_path;
-    ctx.effective_state_dir = state_dir;
-    ctx.profile = profile;
-
-    g_autofree gchar *resolved_config_path = gateway_config_resolve_path(&ctx);
-
-    const gchar *effective_config_path = NULL;
-    if (cfg && cfg->config_path && cfg->config_path[0] != '\0') {
-        effective_config_path = cfg->config_path;
-    } else if (resolved_config_path && resolved_config_path[0] != '\0') {
-        effective_config_path = resolved_config_path;
-    } else if (config_path && config_path[0] != '\0') {
-        effective_config_path = config_path;
-    }
+    RuntimeEffectivePaths effective_paths = {0};
+    runtime_effective_paths_resolve(cfg, profile, state_dir, config_path, &effective_paths);
 
     EnvironmentCheckResult ecr;
     environment_check_build(sys,
-                            effective_config_path,
-                            state_dir,
+                            effective_paths.effective_config_path,
+                            effective_paths.effective_state_dir,
                             &ecr);
 
     for (int i = 0; i < ecr.count; i++) {
@@ -2117,6 +2104,7 @@ static void populate_env_checks(GtkWidget *container) {
     }
 
     environment_check_result_clear(&ecr);
+    runtime_effective_paths_clear(&effective_paths);
 }
 
 static GtkWidget* build_environment_section(void) {

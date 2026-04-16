@@ -15,6 +15,7 @@
 #include "state.h"
 #include "readiness.h"
 #include "display_model.h"
+#include "runtime_paths.h"
 
 static gchar* format_age(gint64 timestamp_us) {
     if (timestamp_us == 0) {
@@ -114,23 +115,14 @@ gchar* build_diagnostics_text(void) {
     extern void systemd_get_runtime_context(gchar **out_profile, gchar **out_state_dir, gchar **out_config_path);
     systemd_get_runtime_context(&profile, &state_dir, &config_path);
 
-    GatewayConfigContext cfg_ctx = {0};
-    cfg_ctx.explicit_config_path = config_path;
-    cfg_ctx.effective_state_dir = state_dir;
-    cfg_ctx.profile = profile;
-    g_autofree gchar *resolved_config_path = gateway_config_resolve_path(&cfg_ctx);
-
-    const gchar *effective_config_path = NULL;
-    if (cfg && cfg->config_path && cfg->config_path[0] != '\0') {
-        effective_config_path = cfg->config_path;
-    } else if (resolved_config_path && resolved_config_path[0] != '\0') {
-        effective_config_path = resolved_config_path;
-    } else if (config_path && config_path[0] != '\0') {
-        effective_config_path = config_path;
-    }
+    RuntimeEffectivePaths effective_paths = {0};
+    runtime_effective_paths_resolve(cfg, profile, state_dir, config_path, &effective_paths);
 
     RuntimePathStatus paths = {0};
-    runtime_path_status_build(effective_config_path, state_dir, NULL, &paths);
+    runtime_path_status_build(effective_paths.effective_config_path,
+                              effective_paths.effective_state_dir,
+                              NULL,
+                              &paths);
 
     g_string_append_printf(out, "Config Path: %s\n",
                            paths.config_path_resolved ? paths.config_path : "N/A");
@@ -157,6 +149,7 @@ gchar* build_diagnostics_text(void) {
     g_string_append_printf(out, "Last Error: %s\n", health->last_error ? health->last_error : "None");
 
     runtime_path_status_clear(&paths);
+    runtime_effective_paths_clear(&effective_paths);
 
     return g_string_free(out, FALSE);
 }

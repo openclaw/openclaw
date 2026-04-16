@@ -23,9 +23,12 @@
 #include "onboarding.h"
 #include "display_model.h"
 #include "gateway_config.h"
+#include "gateway_client.h"
 #include "state.h"
 #include "readiness.h"
 #include "app_window.h"
+#include "runtime_paths.h"
+#include "test_seams.h"
 #include "log.h"
 
 /* ── Version marker persistence ── */
@@ -84,6 +87,7 @@ static GtkWidget *onboard_gateway_next_action_value = NULL;
 
 static GtkWidget *onboard_whats_next_guidance_label = NULL;
 static GtkWidget *onboard_whats_next_dashboard_button = NULL;
+static GtkWidget *onboard_environment_checks_box = NULL;
 
 typedef struct {
     AppState state;
@@ -109,6 +113,77 @@ static GtkWidget* build_gateway_page(GtkWidget *carousel);
 static GtkWidget* build_environment_page(GtkWidget *carousel);
 static GtkWidget* build_whats_next_page(GtkWidget *carousel);
 
+static void onboarding_snapshot_to_input(const OnboardingRenderSnapshot *snap,
+                                         OnboardingRefreshSnapshotInput *out) {
+    if (!snap || !out) return;
+    out->state = (gint)snap->state;
+    out->route = (gint)snap->route;
+    out->stage_configuration = (gint)snap->stage_configuration;
+    out->stage_service_gateway = (gint)snap->stage_service_gateway;
+    out->stage_connection = (gint)snap->stage_connection;
+    out->operational_ready = snap->operational_ready;
+    out->config_valid = snap->config_valid;
+    out->setup_detected = snap->setup_detected;
+    out->sys_installed = snap->sys_installed;
+    out->sys_active = snap->sys_active;
+    out->config_file_exists = snap->config_file_exists;
+    out->state_dir_exists = snap->state_dir_exists;
+    out->next_action = snap->next_action;
+}
+
+static void onboarding_render_environment_checks(GtkWidget *container) {
+    if (!container || !GTK_IS_BOX(container)) return;
+
+    GtkWidget *child = NULL;
+    while ((child = gtk_widget_get_first_child(container)) != NULL) {
+        gtk_box_remove(GTK_BOX(container), child);
+    }
+
+    SystemdState *sys = state_get_systemd();
+    g_autofree gchar *config_path = NULL;
+    g_autofree gchar *state_dir = NULL;
+    g_autofree gchar *profile = NULL;
+    extern void systemd_get_runtime_context(gchar **out_profile, gchar **out_state_dir, gchar **out_config_path);
+    systemd_get_runtime_context(&profile, &state_dir, &config_path);
+
+    GatewayConfig *cfg = gateway_client_get_config();
+    RuntimeEffectivePaths effective_paths = {0};
+    runtime_effective_paths_resolve(cfg, profile, state_dir, config_path, &effective_paths);
+
+    EnvironmentCheckResult ecr;
+    environment_check_build(sys,
+                            effective_paths.effective_config_path,
+                            effective_paths.effective_state_dir,
+                            &ecr);
+
+    for (int i = 0; i < ecr.count; i++) {
+        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        gtk_widget_set_margin_top(row, 4);
+
+        const char *icon = ecr.rows[i].passed ? "\u2705" : "\u274C";
+        GtkWidget *icon_label = gtk_label_new(icon);
+        gtk_box_append(GTK_BOX(row), icon_label);
+
+        g_autofree gchar *text = g_strdup_printf("%s: %s",
+            ecr.rows[i].label, ecr.rows[i].detail ? ecr.rows[i].detail : "");
+        GtkWidget *detail = gtk_label_new(text);
+        gtk_label_set_wrap(GTK_LABEL(detail), TRUE);
+        gtk_label_set_xalign(GTK_LABEL(detail), 0.0);
+        gtk_widget_set_hexpand(detail, TRUE);
+        gtk_box_append(GTK_BOX(row), detail);
+
+        gtk_box_append(GTK_BOX(container), row);
+    }
+
+    environment_check_result_clear(&ecr);
+    runtime_effective_paths_clear(&effective_paths);
+}
+
+static void onboarding_refresh_environment_content(void) {
+    if (!onboard_environment_checks_box) return;
+    onboarding_render_environment_checks(onboard_environment_checks_box);
+}
+
 static void snapshot_free(OnboardingRenderSnapshot *snap) {
     g_free(snap->next_action);
     snap->next_action = NULL;
@@ -131,6 +206,7 @@ static void on_onboard_destroy(GtkWindow *window, gpointer user_data) {
     onboard_gateway_next_action_value = NULL;
     onboard_whats_next_guidance_label = NULL;
     onboard_whats_next_dashboard_button = NULL;
+    onboard_environment_checks_box = NULL;
     onboard_has_render_snapshot = FALSE;
     snapshot_free(&onboard_last_snapshot);
 }
@@ -146,7 +222,6 @@ static void on_finish_clicked(GtkButton *btn, gpointer data) {
 
 static void on_open_dashboard_clicked(GtkButton *btn, gpointer data) {
     (void)btn; (void)data;
-    extern GatewayConfig* gateway_client_get_config(void); /* gateway_client.h */
     GatewayConfig *cfg = gateway_client_get_config();
     if (cfg) {
         g_autofree gchar *url = gateway_config_dashboard_url(cfg);
@@ -388,6 +463,7 @@ static void onboarding_refresh_live_content(void) {
 
     onboarding_update_gateway_content(current, &ri, &progress, &gate);
     onboarding_update_whats_next_content(&ri, &gate);
+    onboarding_refresh_environment_content();
 }
 
 static void onboarding_build_pages(OnboardingRoute route) {
@@ -433,6 +509,7 @@ static void onboarding_rebuild_pages(OnboardingRoute route) {
     onboard_gateway_next_action_value = NULL;
     onboard_whats_next_guidance_label = NULL;
     onboard_whats_next_dashboard_button = NULL;
+    onboard_environment_checks_box = NULL;
 
     onboarding_build_pages(route);
 
@@ -584,41 +661,10 @@ static GtkWidget* build_environment_page(GtkWidget *carousel) {
     gtk_label_set_xalign(GTK_LABEL(title), 0.0);
     gtk_box_append(GTK_BOX(page), title);
 
-    /* Build environment checks */
-    SystemdState *sys = state_get_systemd();
-    gchar *config_path = NULL;
-    gchar *state_dir = NULL;
-    gchar *profile = NULL;
-    extern void systemd_get_runtime_context(gchar **out_profile, gchar **out_state_dir, gchar **out_config_path);
-    systemd_get_runtime_context(&profile, &state_dir, &config_path);
-
-    EnvironmentCheckResult ecr;
-    environment_check_build(sys, config_path, state_dir, &ecr);
-
-    for (int i = 0; i < ecr.count; i++) {
-        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-        gtk_widget_set_margin_top(row, 4);
-
-        const char *icon = ecr.rows[i].passed ? "\u2705" : "\u274C";
-        GtkWidget *icon_label = gtk_label_new(icon);
-        gtk_box_append(GTK_BOX(row), icon_label);
-
-        g_autofree gchar *text = g_strdup_printf("%s: %s",
-            ecr.rows[i].label, ecr.rows[i].detail ? ecr.rows[i].detail : "");
-        GtkWidget *detail = gtk_label_new(text);
-        gtk_label_set_wrap(GTK_LABEL(detail), TRUE);
-        gtk_label_set_xalign(GTK_LABEL(detail), 0.0);
-        gtk_widget_set_hexpand(detail, TRUE);
-        gtk_box_append(GTK_BOX(row), detail);
-
-        gtk_box_append(GTK_BOX(page), row);
-    }
-
-    environment_check_result_clear(&ecr);
-
-    g_free(config_path);
-    g_free(state_dir);
-    g_free(profile);
+    GtkWidget *checks_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    onboard_environment_checks_box = checks_box;
+    onboarding_render_environment_checks(checks_box);
+    gtk_box_append(GTK_BOX(page), checks_box);
 
     GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_halign(btn_row, GTK_ALIGN_CENTER);
@@ -800,8 +846,14 @@ void onboarding_refresh(void) {
     extern void systemd_get_runtime_context(gchar **out_profile, gchar **out_state_dir, gchar **out_config_path);
     systemd_get_runtime_context(&profile, &state_dir, &config_path);
 
-    gboolean config_file_exists = config_path && g_file_test(config_path, G_FILE_TEST_EXISTS);
-    gboolean state_dir_exists = state_dir && g_file_test(state_dir, G_FILE_TEST_IS_DIR);
+    GatewayConfig *cfg = gateway_client_get_config();
+    RuntimeEffectivePaths effective_paths = {0};
+    runtime_effective_paths_resolve(cfg, profile, state_dir, config_path, &effective_paths);
+
+    gboolean config_file_exists = effective_paths.effective_config_path &&
+                                  g_file_test(effective_paths.effective_config_path, G_FILE_TEST_EXISTS);
+    gboolean state_dir_exists = effective_paths.effective_state_dir &&
+                                g_file_test(effective_paths.effective_state_dir, G_FILE_TEST_IS_DIR);
 
     ReadinessInfo ri;
     readiness_evaluate(current, health, sys, &ri);
@@ -840,29 +892,29 @@ void onboarding_refresh(void) {
     g_free(profile);
     g_free(state_dir);
     g_free(config_path);
+    runtime_effective_paths_clear(&effective_paths);
 
-    if (onboard_has_render_snapshot &&
-        onboard_last_snapshot.state == new_snap.state &&
-        onboard_last_snapshot.route == new_snap.route &&
-        onboard_last_snapshot.stage_configuration == new_snap.stage_configuration &&
-        onboard_last_snapshot.stage_service_gateway == new_snap.stage_service_gateway &&
-        onboard_last_snapshot.stage_connection == new_snap.stage_connection &&
-        onboard_last_snapshot.operational_ready == new_snap.operational_ready &&
-        onboard_last_snapshot.config_valid == new_snap.config_valid &&
-        onboard_last_snapshot.setup_detected == new_snap.setup_detected &&
-        onboard_last_snapshot.sys_installed == new_snap.sys_installed &&
-        onboard_last_snapshot.sys_active == new_snap.sys_active &&
-        onboard_last_snapshot.config_file_exists == new_snap.config_file_exists &&
-        onboard_last_snapshot.state_dir_exists == new_snap.state_dir_exists &&
-        g_strcmp0(onboard_last_snapshot.next_action, new_snap.next_action) == 0) {
-        
+    gboolean snapshots_equal = FALSE;
+    if (onboard_has_render_snapshot) {
+        OnboardingRefreshSnapshotInput prev_input = {0};
+        OnboardingRefreshSnapshotInput next_input = {0};
+        onboarding_snapshot_to_input(&onboard_last_snapshot, &prev_input);
+        onboarding_snapshot_to_input(&new_snap, &next_input);
+        snapshots_equal = onboarding_refresh_snapshot_equal(&prev_input, &next_input);
+    }
+
+    if (snapshots_equal) {
         snapshot_free(&new_snap);
         return; /* No material change, skip rebuild */
     }
 
-    if (new_snap.route != onboard_current_route) {
+    OnboardingRefreshAction action = onboarding_refresh_action_decide(
+        snapshots_equal,
+        new_snap.route != onboard_current_route);
+
+    if (action == ONBOARDING_REFRESH_ACTION_REBUILD_PAGES) {
         onboarding_rebuild_pages(new_snap.route);
-    } else {
+    } else if (action == ONBOARDING_REFRESH_ACTION_REFRESH_LIVE) {
         onboarding_refresh_live_content();
     }
 
