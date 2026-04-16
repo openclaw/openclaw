@@ -566,3 +566,92 @@ describe("handleMatrixSubagentDeliveryTarget", () => {
     expect(result).toBeDefined();
   });
 });
+
+describe("concurrent spawns across accounts", () => {
+  beforeEach(() => {
+    bindMock.mockReset();
+    getManagerMock.mockReset();
+    resolveMatrixBaseConfigMock.mockReset();
+    findMatrixAccountConfigMock.mockReset();
+    resolveMatrixBaseConfigMock.mockReturnValue({
+      threadBindings: { enabled: true, spawnSubagentSessions: true },
+    });
+    findMatrixAccountConfigMock.mockReturnValue(undefined);
+    getManagerMock.mockReturnValue({ persist: vi.fn() });
+  });
+
+  it("resolves both spawns independently when two accounts fire simultaneously", async () => {
+    // Each account gets its own bind call that resolves with a distinct conversation
+    bindMock
+      .mockResolvedValueOnce({ conversation: { accountId: "ops", conversationId: "$t-ops" } })
+      .mockResolvedValueOnce({ conversation: { accountId: "forge", conversationId: "$t-forge" } });
+
+    const [opsResult, forgeResult] = await Promise.all([
+      handleMatrixSubagentSpawning(fakeApi, {
+        threadRequested: true,
+        requester: { channel: "matrix", accountId: "ops", to: "room:!room-ops:example.org" },
+        childSessionKey: "agent:ops:subagent:child-ops",
+        agentId: "worker-ops",
+      }),
+      handleMatrixSubagentSpawning(fakeApi, {
+        threadRequested: true,
+        requester: { channel: "matrix", accountId: "forge", to: "room:!room-forge:example.org" },
+        childSessionKey: "agent:forge:subagent:child-forge",
+        agentId: "worker-forge",
+      }),
+    ]);
+
+    expect(opsResult).toEqual({ status: "ok", threadBindingReady: true });
+    expect(forgeResult).toEqual({ status: "ok", threadBindingReady: true });
+    expect(bindMock).toHaveBeenCalledTimes(2);
+
+    // Each bind call targeted the correct account's room
+    expect(bindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: "agent:ops:subagent:child-ops",
+        conversation: expect.objectContaining({
+          accountId: "ops",
+          conversationId: "!room-ops:example.org",
+        }),
+      }),
+    );
+    expect(bindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: "agent:forge:subagent:child-forge",
+        conversation: expect.objectContaining({
+          accountId: "forge",
+          conversationId: "!room-forge:example.org",
+        }),
+      }),
+    );
+  });
+
+  it("one account bind failure does not affect the other account's spawn", async () => {
+    bindMock
+      .mockRejectedValueOnce(new Error("ops provider auth failed"))
+      .mockResolvedValueOnce({ conversation: { accountId: "forge", conversationId: "$t-forge" } });
+
+    const [opsResult, forgeResult] = await Promise.all([
+      handleMatrixSubagentSpawning(fakeApi, {
+        threadRequested: true,
+        requester: { channel: "matrix", accountId: "ops", to: "room:!room-ops:example.org" },
+        childSessionKey: "agent:ops:subagent:child-ops",
+        agentId: "worker-ops",
+      }),
+      handleMatrixSubagentSpawning(fakeApi, {
+        threadRequested: true,
+        requester: { channel: "matrix", accountId: "forge", to: "room:!room-forge:example.org" },
+        childSessionKey: "agent:forge:subagent:child-forge",
+        agentId: "worker-forge",
+      }),
+    ]);
+
+    expect(opsResult).toEqual(
+      expect.objectContaining({
+        status: "error",
+        error: expect.stringContaining("ops provider auth failed"),
+      }),
+    );
+    expect(forgeResult).toEqual({ status: "ok", threadBindingReady: true });
+  });
+});
