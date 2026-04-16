@@ -134,6 +134,40 @@ describe("resolveChannelIdForBinding", () => {
 
     expect(resolved).toBe("forum-1");
   });
+
+  it("strips channel: prefix before calling Discord API", async () => {
+    restGet.mockResolvedValueOnce({
+      id: "123456789",
+      type: ChannelType.GuildText,
+    });
+
+    const resolved = await resolveChannelIdForBinding({
+      accountId: "default",
+      threadId: "channel:123456789",
+    });
+
+    expect(resolved).toBe("123456789");
+    const [calledRoute] = restGet.mock.calls[0] ?? [];
+    expect(String(calledRoute)).toContain("123456789");
+    expect(String(calledRoute)).not.toContain("channel:");
+  });
+
+  it("strips user: prefix before calling Discord API", async () => {
+    restGet.mockResolvedValueOnce({
+      id: "987654321",
+      type: ChannelType.DM,
+    });
+
+    const resolved = await resolveChannelIdForBinding({
+      accountId: "default",
+      threadId: "user:987654321",
+    });
+
+    expect(resolved).toBe("987654321");
+    const [calledRoute] = restGet.mock.calls[0] ?? [];
+    expect(String(calledRoute)).toContain("987654321");
+    expect(String(calledRoute)).not.toContain("user:");
+  });
 });
 
 describe("maybeSendBindingMessage", () => {
