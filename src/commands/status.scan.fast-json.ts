@@ -68,10 +68,11 @@ export async function scanStatusJsonFast(
       hasPotentialConfiguredChannels(cfg, process.env, {
         includePersistedAuthState: false,
       }),
-    resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
+    resolveMemory: async ({ cfg, sourceConfig, agentStatus, memoryPlugin }) =>
       opts.all
         ? await resolveStatusMemoryStatusSnapshot({
             cfg,
+            sourceConfig,
             agentStatus,
             memoryPlugin,
             requireDefaultStore: resolveDefaultMemoryStorePath,

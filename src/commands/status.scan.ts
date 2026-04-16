@@ -26,9 +26,10 @@ export async function scanStatus(
       {
         commandName: "status --json",
         resolveHasConfiguredChannels: (cfg) => hasPotentialConfiguredChannels(cfg),
-        resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
+        resolveMemory: async ({ cfg, sourceConfig, agentStatus, memoryPlugin }) =>
           await resolveStatusMemoryStatusSnapshot({
             cfg,
+            sourceConfig,
             agentStatus,
             memoryPlugin,
           }),
@@ -65,9 +66,10 @@ export async function scanStatus(
       progress.setLabel("Checking memory and sessions…");
       const result = await executeStatusScanFromOverview({
         overview,
-        resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
+        resolveMemory: async ({ cfg, sourceConfig, agentStatus, memoryPlugin }) =>
           await resolveStatusMemoryStatusSnapshot({
             cfg,
+            sourceConfig,
             agentStatus,
             memoryPlugin,
           }),

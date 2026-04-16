@@ -159,6 +159,27 @@ describe("memory runtime auto-enable loading", () => {
     await expectAutoEnabledMemoryRuntimeCase({ run, expectedResult });
   });
 
+  it("prefers an explicit activation source config when bootstrapping from resolved config", async () => {
+    const resolvedConfig = { channels: { memory: { enabled: true } } };
+    const activationSourceConfig = { plugins: { allow: ["openclaw-mem0"] } };
+    const runtime = createMemoryRuntimeFixture();
+    getMemoryRuntimeMock.mockReturnValueOnce(undefined).mockReturnValue(runtime);
+
+    await getActiveMemorySearchManager({
+      cfg: resolvedConfig as never,
+      activationSourceConfig: activationSourceConfig as never,
+      agentId: "main",
+      purpose: "status",
+    });
+
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: resolvedConfig,
+        activationSourceConfig,
+      }),
+    );
+  });
+
   it.each([
     {
       name: "does not bootstrap the memory runtime just to close managers",

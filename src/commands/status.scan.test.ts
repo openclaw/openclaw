@@ -177,6 +177,7 @@ describe("scanStatus", () => {
           }),
         }),
       }),
+      activationSourceConfig: expect.any(Object),
       agentId: "main",
       purpose: "status",
     });
