@@ -1734,6 +1734,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
   const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
+  
   if (historyStart > 0) {
     items.push({
       kind: "message",
@@ -1745,11 +1746,13 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       },
     });
   }
+  
   for (let i = historyStart; i < history.length; i++) {
     const msg = history[i];
     const normalized = normalizeMessage(msg);
     const raw = msg as Record<string, unknown>;
     const marker = raw.__openclaw as Record<string, unknown> | undefined;
+    
     if (marker && marker.kind === "compaction") {
       items.push({
         kind: "divider",
@@ -1769,12 +1772,15 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     // Skip toolResult messages that duplicate media already present in the preceding assistant message
     if (normalized.role.toLowerCase() === "toolresult") {
       // Find the previous message (should be the assistant message that triggered this tool)
-      const prevMsg = i > 0 ? history[i - 1] as Record<string, unknown> : null;
+      const prevMsg = i > 0 ? (history[i - 1] as Record<string, unknown>) : null;
       const prevRole = prevMsg && typeof prevMsg.role === "string" ? prevMsg.role.toLowerCase() : "";
       
       if (prevRole === "assistant" && prevMsg) {
         const prevContent = Array.isArray(prevMsg.content) ? prevMsg.content : [];
         const currentContent = Array.isArray(raw.content) ? raw.content : [];
+        
+        // Check if toolResult has a details field - if so, it contains important data
+        const hasDetails = raw.details !== undefined && raw.details !== null;
         
         // Collect media URLs from the assistant message
         const assistantMediaUrls = new Set<string>();
@@ -1782,52 +1788,64 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
           const b = block as Record<string, unknown>;
           if (b.type === "audio" || b.type === "video" || b.type === "image") {
             const url = typeof b.url === "string" ? b.url : undefined;
-            if (url) { assistantMediaUrls.add(url); }
+            if (url) {
+              assistantMediaUrls.add(url);
+            }
           }
         }
         
-        // Check if toolResult contains any unique content not already in the assistant message
-        let hasUniqueContent = false;
-        for (const block of currentContent) {
-          const b = block as Record<string, unknown>;
+        // If there are no media URLs in the assistant message, and no details field,
+        // then we can't be deduping media - keep the message
+        if (assistantMediaUrls.size === 0 && !hasDetails) {
+          // No media to dedupe against - keep the message
+        } else {
+          let hasUniqueContent = hasDetails; // Details field always counts as unique content
           
-          if (b.type === "text" && typeof b.text === "string") {
-            const text = b.text.trim();
-            if (!text) { continue; }
-            
-            // Check if this text is just a markdown link to a media URL we already have
-            const linkMatch = text.match(/^[\u{1F3B5}\u{1F3AC}\u{1F4F7}]?\s*\[([^\]]*)\]\(([^)]+)\)$/u);
-            if (linkMatch) {
-              const url = linkMatch[2];
-              // If the URL isn't in the assistant message, this is unique content
-              if (!assistantMediaUrls.has(url)) {
+          if (!hasUniqueContent) {
+            for (const block of currentContent) {
+              const b = block as Record<string, unknown>;
+              
+              if (b.type === "text" && typeof b.text === "string") {
+                const text = b.text.trim();
+                if (!text) {
+                  continue;
+                }
+                
+                // Check if this text is just a markdown link to a media URL we already have
+                const linkMatch = text.match(/^[\u{1F3B5}\u{1F3AC}\u{1F4F7}]?\s*\[([^\]]*)\]\(([^)]+)\)$/u);
+                if (linkMatch) {
+                  const url = linkMatch[2];
+                  // If the URL isn't in the assistant message, this is unique content
+                  if (!assistantMediaUrls.has(url)) {
+                    hasUniqueContent = true;
+                    break;
+                  }
+                  // Otherwise it's just a duplicate link - ignore it and keep checking
+                } else {
+                  // Non-link text content - this is unique
+                  hasUniqueContent = true;
+                  break;
+                }
+              } else if (b.type === "audio" || b.type === "video" || b.type === "image") {
+                const url = typeof b.url === "string" ? b.url : undefined;
+                const hasInlinePayload = b.data !== undefined || b.payload !== undefined || b.base64 !== undefined;
+                // If this media URL isn't already in the assistant message, or it has inline payload, it's unique
+                if ((url && !assistantMediaUrls.has(url)) || hasInlinePayload) {
+                  hasUniqueContent = true;
+                  break;
+                }
+              } else if (b.type !== "text") {
+                // Any other content type is considered unique
                 hasUniqueContent = true;
                 break;
               }
-              // Otherwise it's just a duplicate link - ignore it and keep checking
-            } else {
-              // Non-link text content - this is unique
-              hasUniqueContent = true;
-              break;
             }
-          } else if (b.type === "audio" || b.type === "video" || b.type === "image") {
-            const url = typeof b.url === "string" ? b.url : undefined;
-            const hasInlinePayload = b.data !== undefined || b.payload !== undefined || b.base64 !== undefined;
-            // If this media URL isn't already in the assistant message, or it has inline payload, it's unique
-            if ((url && !assistantMediaUrls.has(url)) || hasInlinePayload) {
-              hasUniqueContent = true;
-              break;
-            }
-          } else if (b.type !== "text") {
-            // Any other content type is considered unique
-            hasUniqueContent = true;
-            break;
           }
-        }
-        
-        // If the toolResult adds nothing new, skip it entirely
-        if (!hasUniqueContent) {
-          continue;
+          
+          // If the toolResult adds nothing new, skip it entirely
+          if (!hasUniqueContent) {
+            continue;
+          }
         }
       }
     }
@@ -1843,6 +1861,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       message: msg,
     });
   }
+  
   const liftedCanvasSources = tools
     .map((tool) => extractChatMessagePreview(tool))
     .filter((entry) => Boolean(entry)) as Array<{
@@ -1850,6 +1869,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       text: string | null;
       timestamp: number | null;
     }>;
+    
   for (const liftedCanvasSource of liftedCanvasSources) {
     const assistantIndex = findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);
     if (assistantIndex == null) {
@@ -1868,6 +1888,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       ),
     };
   }
+  
   // Interleave stream segments and tool cards in order. Each segment
   // contains text that was streaming before the corresponding tool started.
   // This ensures correct visual ordering: text → tool → text → tool → ...

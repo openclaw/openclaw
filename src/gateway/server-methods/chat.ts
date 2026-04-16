@@ -2004,7 +2004,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         userTranscriptUpdatePromise = (async () => {
           const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
           const resolvedSessionId = latestEntry?.sessionId ?? entry?.sessionId;
-          if (!resolvedSessionId) return;
+          if (!resolvedSessionId) { return; }
 
           const transcriptPath = resolveTranscriptPath({
             sessionId: resolvedSessionId,
@@ -2012,7 +2012,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
             agentId,
           });
-          if (!transcriptPath) return;
+          if (!transcriptPath) { return; }
 
           const persistedImages = await persistedImagesPromise;
           emitSessionTranscriptUpdate({
@@ -2030,10 +2030,10 @@ export const chatHandlers: GatewayRequestHandlers = {
 
       let transcriptMediaRewriteDone = false;
       const rewriteUserTranscriptMedia = async () => {
-        if (transcriptMediaRewriteDone) return;
+        if (transcriptMediaRewriteDone) { return; }
         const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
         const resolvedSessionId = latestEntry?.sessionId ?? entry?.sessionId;
-        if (!resolvedSessionId) return;
+        if (!resolvedSessionId) { return; }
 
         const transcriptPath = resolveTranscriptPath({
           sessionId: resolvedSessionId,
@@ -2041,7 +2041,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
           agentId,
         });
-        if (!transcriptPath) return;
+        if (!transcriptPath) { return; }
 
         transcriptMediaRewriteDone = true;
         await rewriteChatSendUserTurnMediaPaths({
@@ -2053,15 +2053,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       };
 
       const appendWebchatAgentAudioTranscriptIfNeeded = async (payload: ReplyPayload) => {
-        if (!agentRunStarted || appendedWebchatAgentAudio || !isMediaBearingPayload(payload)) return;
-
+        if (!agentRunStarted || appendedWebchatAgentAudio || !isMediaBearingPayload(payload)) { return; }
         const audioMessage = await buildWebchatAudioOnlyAssistantMessage([payload], {
           localRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
           onLocalAudioAccessDenied: (message) => {
             context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
           },
         });
-        if (!audioMessage) return;
+        if (!audioMessage) { return; }
 
         const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
         const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
