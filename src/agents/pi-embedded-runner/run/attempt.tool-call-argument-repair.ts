@@ -16,6 +16,82 @@ type BalancedJsonPrefix = {
   startIndex: number;
 };
 
+const UNICODE_QUOTE_CHARS = new Set(["\u201C", "\u201D", "\u201E", "\u201F"]);
+
+/**
+ * Attempt to repair tool-call argument JSON by normalizing Unicode smart
+ * quotes (U+201C/U+201D) used as JSON string delimiters down to ASCII `"`.
+ *
+ * Uses a character-level scan that tracks brace depth and string boundaries
+ * (recognizing both ASCII `"` and Unicode smart quotes as delimiters) so that
+ * only structural quotes — those at JSON key/value boundaries — are rewritten.
+ * Smart quotes that appear inside already-delimited string content are left
+ * untouched.
+ */
+function normalizeStructuralUnicodeQuotes(raw: string): string {
+  let start = 0;
+  while (start < raw.length) {
+    const ch = raw[start];
+    if (ch === "{" || ch === "[") {
+      break;
+    }
+    start++;
+  }
+  if (start >= raw.length) {
+    return raw;
+  }
+
+  const chars = [...raw];
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  const structuralQuoteIndices: number[] = [];
+
+  for (let i = start; i < chars.length; i++) {
+    const ch = chars[i];
+    if (ch === undefined) break;
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"' || UNICODE_QUOTE_CHARS.has(ch)) {
+        inString = false;
+        structuralQuoteIndices.push(i);
+      }
+      continue;
+    }
+
+    if (ch === '"' || UNICODE_QUOTE_CHARS.has(ch)) {
+      inString = true;
+      structuralQuoteIndices.push(i);
+      continue;
+    }
+
+    if (ch === "{" || ch === "[") {
+      depth++;
+      continue;
+    }
+
+    if (ch === "}" || ch === "]") {
+      depth--;
+      if (depth === 0) break;
+    }
+  }
+
+  if (structuralQuoteIndices.length === 0) {
+    return raw;
+  }
+
+  for (const idx of structuralQuoteIndices) {
+    if (UNICODE_QUOTE_CHARS.has(chars[idx])) {
+      chars[idx] = '"';
+    }
+  }
+  return chars.join("");
+}
+
 function extractBalancedJsonPrefix(raw: string): BalancedJsonPrefix | null {
   let start = 0;
   while (start < raw.length) {
@@ -42,12 +118,12 @@ function extractBalancedJsonPrefix(raw: string): BalancedJsonPrefix | null {
         escaped = false;
       } else if (char === "\\") {
         escaped = true;
-      } else if (char === '"') {
+      } else if (char === '"' || UNICODE_QUOTE_CHARS.has(char)) {
         inString = false;
       }
       continue;
     }
-    if (char === '"') {
+    if (char === '"' || UNICODE_QUOTE_CHARS.has(char)) {
       inString = true;
       continue;
     }
@@ -118,7 +194,28 @@ function tryExtractUsableToolCallArguments(raw: string): ToolCallArgumentRepair 
         }
       : undefined;
   } catch {
-    const extracted = extractBalancedJsonPrefix(raw);
+    // Try normalizing Unicode smart quotes used as JSON string delimiters
+    // before falling back to balanced-prefix extraction.  Models such as
+    // MiniMax occasionally emit Unicode left/right double quotation marks
+    // (U+201C / U+201D) instead of ASCII `"` for JSON string delimiters,
+    // which causes JSON.parse to fail.
+    const normalized = normalizeStructuralUnicodeQuotes(raw);
+    if (normalized !== raw) {
+      try {
+        const parsed = JSON.parse(normalized) as unknown;
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? {
+              args: parsed as Record<string, unknown>,
+              kind: "repaired",
+              leadingPrefix: "",
+              trailingSuffix: "",
+            }
+          : undefined;
+      } catch {
+        // Fall through to balanced-prefix extraction below
+      }
+    }
+    const extracted = extractBalancedJsonPrefix(normalized);
     if (!extracted) {
       return undefined;
     }
@@ -126,7 +223,7 @@ function tryExtractUsableToolCallArguments(raw: string): ToolCallArgumentRepair 
     if (!isAllowedToolCallRepairLeadingPrefix(leadingPrefix)) {
       return undefined;
     }
-    const suffix = raw.slice(extracted.startIndex + extracted.json.length).trim();
+    const suffix = normalized.slice(extracted.startIndex + extracted.json.length).trim();
     if (leadingPrefix.length === 0 && suffix.length === 0) {
       return undefined;
     }
@@ -136,8 +233,9 @@ function tryExtractUsableToolCallArguments(raw: string): ToolCallArgumentRepair 
     ) {
       return undefined;
     }
+    const candidateJson = normalizeStructuralUnicodeQuotes(extracted.json);
     try {
-      const parsed = JSON.parse(extracted.json) as unknown;
+      const parsed = JSON.parse(candidateJson) as unknown;
       return parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? {
             args: parsed as Record<string, unknown>,
