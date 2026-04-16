@@ -507,7 +507,7 @@ By default, dreaming runs for all agents. You can disable dreaming for specific 
       { id: "main", dreaming: { enabled: false } },
       { id: "oracle", dreaming: { enabled: false } },
       { id: "librarian" },
-    ]
+    ],
   },
   plugins: {
     entries: {
