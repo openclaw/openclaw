@@ -37,6 +37,7 @@ import {
 import { deleteMemoryFtsRows } from "./manager-fts-state.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";
+import { getBuiltinMemoryEmbeddingProviderAdapter } from "./provider-adapters.js";
 
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -304,7 +305,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   private resolveEmbeddingTimeout(kind: "query" | "batch"): number {
-    const isLocal = this.provider?.id === "local";
+    const providerId = this.provider?.id;
+    const adapter = providerId ? getBuiltinMemoryEmbeddingProviderAdapter(providerId) : undefined;
+    const isLocal = adapter ? adapter.transport === "local" : providerId === "local";
     if (kind === "query") {
       return isLocal ? EMBEDDING_QUERY_TIMEOUT_LOCAL_MS : EMBEDDING_QUERY_TIMEOUT_REMOTE_MS;
     }
