@@ -1,9 +1,11 @@
 /**
  * Plan checklist renderer for the GPT-5 parity sprint.
  *
- * Takes structured plan step data (from `AgentPlanEventData`) and renders
- * it as a native checklist for each delivery surface. Channel adapters
- * call {@link renderPlanChecklist} with the appropriate format.
+ * Takes structured plan step data and renders it as a native checklist
+ * for each delivery surface. Channel adapters call
+ * {@link renderPlanChecklist} with the appropriate format.
+ *
+ * Step shape matches the `update_plan` tool output (step, status, activeForm).
  */
 
 export type PlanRenderFormat = "html" | "markdown" | "plaintext" | "slack-mrkdwn";
@@ -22,38 +24,46 @@ export interface PlanStepForRender {
  * - `plaintext`: ASCII markers for iMessage / BlueBubbles / SMS
  * - `slack-mrkdwn`: Slack's mrkdwn format (`*bold*`, `~strike~`)
  */
-export function renderPlanChecklist(
-  steps: PlanStepForRender[],
-  format: PlanRenderFormat,
-): string {
+export function renderPlanChecklist(steps: PlanStepForRender[], format: PlanRenderFormat): string {
   if (steps.length === 0) {
     return "";
   }
 
   const lines = steps.map((s) => {
-    const rawLabel =
-      s.status === "in_progress" && s.activeForm ? s.activeForm : s.step;
+    const rawLabel = s.status === "in_progress" && s.activeForm ? s.activeForm : s.step;
     // Strip newlines from model-generated step text to prevent broken checklists.
     const label = rawLabel.replace(/[\n\r]+/g, " ").trim();
 
     switch (format) {
       case "html": {
         const esc = escapeHtml(label);
-        if (s.status === "completed") { return `✅ ${esc}`; }
-        if (s.status === "in_progress") { return `⏳ <b>${esc}</b>`; }
-        if (s.status === "cancelled") { return `❌ <s>${esc}</s>`; }
+        if (s.status === "completed") {
+          return `✅ ${esc}`;
+        }
+        if (s.status === "in_progress") {
+          return `⏳ <b>${esc}</b>`;
+        }
+        if (s.status === "cancelled") {
+          return `❌ <s>${esc}</s>`;
+        }
         return `⬚ ${esc}`;
       }
 
       case "markdown": {
-        if (s.status === "completed") { return `- [x] ${label}`; }
-        if (s.status === "in_progress") { return `- [>] **${label}**`; }
-        if (s.status === "cancelled") { return `- [~] ~~${label}~~`; }
+        if (s.status === "completed") {
+          return `- [x] ${label}`;
+        }
+        if (s.status === "in_progress") {
+          return `- [>] **${label}**`;
+        }
+        if (s.status === "cancelled") {
+          return `- [~] ~~${label}~~`;
+        }
         return `- [ ] ${label}`;
       }
 
       case "plaintext": {
-        const markers: Record<string, string> = {
+        const markers: Record<PlanStepForRender["status"], string> = {
           completed: "[x]",
           in_progress: "[>]",
           cancelled: "[~]",
@@ -64,9 +74,15 @@ export function renderPlanChecklist(
 
       case "slack-mrkdwn": {
         const escaped = escapeSlackMrkdwn(label);
-        if (s.status === "completed") { return `✅ ${escaped}`; }
-        if (s.status === "in_progress") { return `⏳ *${escaped}*`; }
-        if (s.status === "cancelled") { return `❌ ~${escaped}~`; }
+        if (s.status === "completed") {
+          return `✅ ${escaped}`;
+        }
+        if (s.status === "in_progress") {
+          return `⏳ *${escaped}*`;
+        }
+        if (s.status === "cancelled") {
+          return `❌ ~${escaped}~`;
+        }
         return `⬚ ${escaped}`;
       }
 
@@ -92,16 +108,18 @@ export function renderPlanWithHeader(
   if (!checklist) {
     return "";
   }
+  // Strip newlines from title to prevent broken headings/formatting.
+  const safeTitle = title.replace(/[\n\r]+/g, " ").trim();
 
   switch (format) {
     case "html":
-      return `<b>${escapeHtml(title)}</b>\n${checklist}`;
+      return `<b>${escapeHtml(safeTitle)}</b>\n${checklist}`;
     case "markdown":
-      return `### ${title}\n${checklist}`;
+      return `### ${safeTitle}\n${checklist}`;
     case "plaintext":
-      return `${title}\n${checklist}`;
+      return `${safeTitle}\n${checklist}`;
     case "slack-mrkdwn":
-      return `*${escapeSlackMrkdwn(title)}*\n${checklist}`;
+      return `*${escapeSlackMrkdwn(safeTitle)}*\n${checklist}`;
     default: {
       const _exhaustive: never = format;
       return `${title}\n${checklist}`;
@@ -124,8 +142,5 @@ function escapeSlackMrkdwn(text: string): string {
 }
 
 function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

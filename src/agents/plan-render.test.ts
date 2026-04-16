@@ -35,9 +35,7 @@ describe("renderPlanChecklist", () => {
       });
 
       it("falls back to step text when activeForm is absent", () => {
-        const steps: PlanStepForRender[] = [
-          { step: "Deploy", status: "in_progress" },
-        ];
+        const steps: PlanStepForRender[] = [{ step: "Deploy", status: "in_progress" }];
         const result = renderPlanChecklist(steps, format);
         expect(result).toContain("Deploy");
       });
@@ -99,6 +97,27 @@ describe("renderPlanChecklist", () => {
     expect(result).toContain("⏳ *Building artifacts*");
     expect(result).toContain("⬚ Deploy to staging");
     expect(result).toContain("❌ ~Fix broken migration~");
+  });
+
+  it("slack-mrkdwn: escapes control characters and mention tokens", () => {
+    const steps: PlanStepForRender[] = [
+      { step: "Check *bold* and _italic_ text", status: "pending" },
+      { step: "Handle <@U123> mention and <!here>", status: "pending" },
+      { step: "Test `backtick` and ~strike~ and @channel", status: "pending" },
+    ];
+    const result = renderPlanChecklist(steps, "slack-mrkdwn");
+    // Must not contain raw Slack formatting chars
+    expect(result).not.toContain("<@U123>");
+    expect(result).not.toContain("<!here>");
+    expect(result).not.toMatch(/(?<!\u2217)\*(?!\u2217)/); // no raw asterisks
+    expect(result).not.toContain("@channel");
+  });
+
+  it("slack-mrkdwn: title escaping in renderPlanWithHeader", () => {
+    const steps: PlanStepForRender[] = [{ step: "Step one", status: "pending" }];
+    const result = renderPlanWithHeader("Plan *with* <@mention>", steps, "slack-mrkdwn");
+    expect(result).not.toContain("<@mention>");
+    expect(result).toContain("Plan");
   });
 });
 
