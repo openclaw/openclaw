@@ -73,3 +73,33 @@ export function applyOpencodeGoModelDefault(cfg: OpenClawConfig): {
 } {
   return applyAgentDefaultPrimaryModel({ cfg, model: OPENCODE_GO_DEFAULT_MODEL_REF });
 }
+
+export function applyOpenAICodexConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const providers = { ...cfg.models?.providers };
+  providers["openai-codex"] = {
+    ...providers["openai-codex"],
+    api: "openai-codex-responses",
+    baseUrl: "https://chatgpt.com/backend-api",
+    models: [
+      ...((providers["openai-codex"]?.models as any) ?? []),
+      {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        api: "openai-codex-responses",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1025000,
+        maxTokens: 4096,
+      },
+    ],
+  };
+
+  return {
+    ...cfg,
+    models: {
+      ...cfg.models,
+      providers,
+    },
+  };
+}
