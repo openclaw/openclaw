@@ -705,7 +705,7 @@ async function wakeSlackReplySession(params: {
     Provider: "slack" as const,
     Surface: "slack" as const,
     WasMentioned: true,
-    MessageSid: `interaction:${parsed.messageTs ?? String(Date.now())}`,
+    MessageSid: `interaction:${parsed.messageTs ?? "unknown"}:${Date.now()}`,
     Timestamp: Date.now(),
     SessionKey: sessionKey,
     AccountId: route.accountId,
