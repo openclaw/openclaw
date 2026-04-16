@@ -60,4 +60,48 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
       },
     ]);
   });
+
+  it("keeps real tool results for aborted assistant spans", () => {
+    const rawId = "call_function_av7cbkigmk7x1";
+    const out = sanitizeReplayToolCallIdsForStream({
+      messages: [
+        {
+          role: "assistant",
+          stopReason: "aborted",
+          content: [{ type: "toolUse", id: rawId, name: "read", input: { path: "." } }],
+        } as never,
+        {
+          role: "toolResult",
+          toolCallId: rawId,
+          toolUseId: rawId,
+          toolName: "read",
+          content: [{ type: "text", text: "partial" }],
+          isError: false,
+        } as never,
+        {
+          role: "user",
+          content: [{ type: "text", text: "retry" }],
+        } as never,
+      ],
+      mode: "strict",
+      repairToolUseResultPairing: true,
+    });
+
+    expect(out).toMatchObject([
+      {
+        role: "assistant",
+        stopReason: "aborted",
+        content: [{ type: "toolUse", id: "callfunctionav7cbkigmk7x1", name: "read" }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "callfunctionav7cbkigmk7x1",
+        toolUseId: "callfunctionav7cbkigmk7x1",
+        toolName: "read",
+      },
+      {
+        role: "user",
+      },
+    ]);
+  });
 });

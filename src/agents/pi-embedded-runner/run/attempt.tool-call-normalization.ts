@@ -888,9 +888,7 @@ export function sanitizeReplayToolCallIdsForStream(params: {
   if (!params.repairToolUseResultPairing) {
     return sanitized;
   }
-  return sanitizeToolUseResultPairing(sanitized, {
-    erroredAssistantResultPolicy: "drop",
-  });
+  return sanitizeToolUseResultPairing(sanitized);
 }
 
 export function wrapStreamFnSanitizeMalformedToolCalls(
