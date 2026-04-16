@@ -191,6 +191,8 @@ type DailySnippetChunk = {
   snippet: string;
 };
 
+const REM_REFLECTION_TAG_BLACKLIST = new Set(["assistant", "user", "system", "subagent", "the"]);
+
 function buildDailyChunkSnippet(
   heading: string | null,
   chunkLines: string[],
@@ -1420,7 +1422,7 @@ function buildRemReflections(
   const tagStats = new Map<string, { count: number; evidence: Set<string> }>();
   for (const entry of entries) {
     for (const tag of entry.conceptTags) {
-      if (!tag) {
+      if (!tag || REM_REFLECTION_TAG_BLACKLIST.has(tag.toLowerCase())) {
         continue;
       }
       const stat = tagStats.get(tag) ?? { count: 0, evidence: new Set<string>() };
@@ -1783,6 +1785,7 @@ export function registerMemoryDreamingPhases(_api: OpenClawPluginApi): void {
 
 export const __testing = {
   runPhaseIfTriggered,
+  previewRemDreaming,
   constants: {
     LIGHT_SLEEP_EVENT_TEXT,
     REM_SLEEP_EVENT_TEXT,

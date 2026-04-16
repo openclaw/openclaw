@@ -1333,6 +1333,38 @@ describe("memory-core dreaming phases", () => {
     expect(corpus).not.toContain("Run the qmd sync");
   });
 
+  it("ignores chat scaffolding tags when building rem reflections", () => {
+    const preview = __testing.previewRemDreaming({
+      entries: [
+        {
+          key: "memory:1",
+          path: "memory/.dreams/session-corpus/2026-04-16.txt",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "Assistant: I documented the Ollama provider setup.",
+          recallCount: 1,
+          dailyCount: 0,
+          groundedCount: 0,
+          totalScore: 0.6,
+          maxScore: 0.6,
+          firstRecalledAt: "2026-04-16T18:00:00.000Z",
+          lastRecalledAt: "2026-04-16T18:00:00.000Z",
+          queryHashes: ["q1"],
+          recallDays: ["2026-04-16"],
+          conceptTags: ["assistant", "the", "ollama", "provider"],
+        },
+      ],
+      limit: 5,
+      minPatternStrength: 0,
+    });
+
+    expect(preview.reflections.join("\n")).toContain("`ollama`");
+    expect(preview.reflections.join("\n")).toContain("`provider`");
+    expect(preview.reflections.join("\n")).not.toContain("`assistant`");
+    expect(preview.reflections.join("\n")).not.toContain("`the`");
+  });
+
   it("does not reread unchanged dreaming-generated transcripts after checkpointing skip state", async () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
