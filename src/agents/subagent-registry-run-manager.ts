@@ -276,6 +276,7 @@ export function createSubagentRunManager(params: {
       suppressAnnounceReason: undefined,
       announceRetryCount: undefined,
       lastAnnounceRetryAt: undefined,
+      extraSystemPrompt: undefined,
       spawnMode,
       archiveAtMs,
       runTimeoutSeconds,

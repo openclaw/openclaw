@@ -456,6 +456,28 @@ describe("subagent registry steer restarts", () => {
     expect(run.cleanupHandled).toBe(false);
   });
 
+  it("clears stale extraSystemPrompt when replacing after steer restart", () => {
+    registerRun({
+      runId: "run-prompt-old",
+      childSessionKey: "agent:main:subagent:prompt",
+      task: "prompt reset",
+    });
+
+    const previous = listMainRuns()[0];
+    expect(previous?.runId).toBe("run-prompt-old");
+    if (previous) {
+      previous.extraSystemPrompt = "stale prompt with attachment suffixes from prior run";
+    }
+
+    const run = replaceRunAfterSteer({
+      previousRunId: "run-prompt-old",
+      nextRunId: "run-prompt-new",
+      fallback: previous,
+    });
+
+    expect(run.extraSystemPrompt).toBeUndefined();
+  });
+
   it("preserves cumulative session timing across steer replacement runs", () => {
     registerRun({
       runId: "run-runtime-old",
