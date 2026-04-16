@@ -27,7 +27,12 @@ export type InboundDebounceConfig = {
   /**
    * Debounce interval applied when the inbound message comes from a bot or agent (ms).
    * Takes precedence over `debounceMs` when `senderIsBot` is true.
+   *
    * Priority chain: overrideMs → byChannel → botDebounceMs (if senderIsBot) → debounceMs → 0
+   *
+   * Note: `byChannel` overrides win over `botDebounceMs` even for bot senders.
+   * If you set a per-channel burst window (e.g. `byChannel: { slack: 500 }`),
+   * it will silently override `botDebounceMs` for that channel.
    */
   botDebounceMs?: number;
   byChannel?: InboundDebounceByProvider;
