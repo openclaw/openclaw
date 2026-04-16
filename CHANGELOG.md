@@ -46,6 +46,7 @@ Docs: https://docs.openclaw.ai
 - OpenAI Codex/CLI: keep resumed `codex exec resume` runs on the safe non-interactive path without reintroducing the removed dangerous bypass flag by passing the supported `--skip-git-repo-check` resume arg that real Codex CLI requires outside trusted git directories. (#67666) Thanks @plgonzalezrx8.
 - Codex/app-server: parse Desktop-originated app-server user agents such as `Codex Desktop/0.118.0`, keeping the version gate working when the Codex CLI inherits a multi-word originator. (#64666) Thanks @cyrusaf.
 - Cron/announce delivery: keep isolated announce `NO_REPLY` stripping case-insensitive across direct and text delivery, preserve structured media-only sends when a caption strips silent, and derive main-session awareness from the cleaned payloads so silent captions no longer leak stale `NO_REPLY` text. (#65016) Thanks @BKF-Gitty.
+- Sessions/Codex: skip redundant `delivery-mirror` transcript appends only when the latest assistant message has the same visible text, preventing duplicate visible replies on Codex-backed turns without suppressing repeated answers across turns. (#67185) Thanks @andyylin.
 
 ## 2026.4.15-beta.1
 
