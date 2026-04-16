@@ -448,12 +448,15 @@ export function createTelegramThreadBindingManager(
       continue;
     }
     const sessionEntry = readAcpSessionEntry({ sessionKey: binding.targetSessionKey });
+    if (!sessionEntry || sessionEntry.storeReadFailed) {
+      continue;
+    }
     const isStale =
       !sessionEntry.entry ||
-      sessionEntry.entry?.status === "failed" ||
-      sessionEntry.entry?.status === "killed" ||
-      sessionEntry.entry?.status === "timeout" ||
-      sessionEntry.entry?.acp?.state === "error";
+      sessionEntry.entry.status === "failed" ||
+      sessionEntry.entry.status === "killed" ||
+      sessionEntry.entry.status === "timeout" ||
+      sessionEntry.entry.acp?.state === "error";
     if (isStale) {
       staleSessionKeys.add(binding.targetSessionKey);
     }
@@ -469,10 +472,12 @@ export function createTelegramThreadBindingManager(
         resolveBindingKey({ accountId, conversationId: binding.conversationId }),
       );
     }
-    needsPersist = true;
-    logVerbose(
-      `telegram thread binding: cleaned up ${bindingsToRemove.length} stale binding(s) for session ${sessionKey}`,
-    );
+    if (bindingsToRemove.length > 0) {
+      needsPersist = true;
+      logVerbose(
+        `telegram thread binding: cleaned up ${bindingsToRemove.length} stale binding(s) for session ${sessionKey}`,
+      );
+    }
   }
 
   if (needsPersist && persist) {
