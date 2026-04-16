@@ -3,6 +3,7 @@ type FacadeModule = typeof import("@openclaw/telegram/contract-api.js");
 type SecurityAuditFacadeModule = typeof import("@openclaw/telegram/security-audit-contract-api.js");
 import {
   createLazyFacadeArrayValue,
+  loadBundledPluginPublicSurfaceModule,
   loadBundledPluginPublicSurfaceModuleSync,
 } from "./facade-loader.js";
 
@@ -13,8 +14,8 @@ function loadFacadeModule(): FacadeModule {
   });
 }
 
-function loadSecurityAuditFacadeModule(): SecurityAuditFacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<SecurityAuditFacadeModule>({
+async function loadSecurityAuditFacadeModule(): Promise<SecurityAuditFacadeModule> {
+  return await loadBundledPluginPublicSurfaceModule<SecurityAuditFacadeModule>({
     dirName: "telegram",
     artifactBasename: "security-audit-contract-api.js",
   });
@@ -31,8 +32,8 @@ export const singleAccountKeysToMove: FacadeModule["singleAccountKeysToMove"] =
   createLazyFacadeArrayValue(() => loadFacadeModule().singleAccountKeysToMove);
 
 export const collectTelegramSecurityAuditFindings: FacadeModule["collectTelegramSecurityAuditFindings"] =
-  ((...args) =>
-    loadSecurityAuditFacadeModule().collectTelegramSecurityAuditFindings(
+  (async (...args) =>
+    (await loadSecurityAuditFacadeModule()).collectTelegramSecurityAuditFindings(
       ...args,
     )) as FacadeModule["collectTelegramSecurityAuditFindings"];
 
