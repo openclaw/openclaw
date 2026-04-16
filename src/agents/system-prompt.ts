@@ -1,7 +1,6 @@
 import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { sanitizeContextFileForInjection } from "./context-file-injection-scan.js";
 import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
@@ -11,6 +10,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import { sanitizeContextFileForInjection } from "./context-file-injection-scan.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type {
@@ -119,7 +119,10 @@ function buildProjectContextSection(params: {
       sanitizeContextFileContentForPrompt(file.content),
       file.path,
     );
-    lines.push(`## ${file.path}`, "", sanitizedContent, "");
+    // Sanitize file.path in the heading to prevent prompt-structure injection
+    // via crafted filenames with control/bidi/zero-width chars.
+    const safePath = sanitizeForPromptLiteral(file.path);
+    lines.push(`## ${safePath}`, "", sanitizedContent, "");
   }
   return lines;
 }
