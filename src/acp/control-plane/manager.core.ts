@@ -15,6 +15,7 @@ import {
   startTaskRunByRunId,
 } from "../../tasks/task-executor.js";
 import { getTaskFlowById } from "../../tasks/task-flow-runtime-internal.js";
+import type { TaskNotifyPolicy } from "../../tasks/task-registry.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
   AcpRuntimeError,
@@ -154,6 +155,7 @@ type BackgroundTaskContext = {
   runId: string;
   label?: string;
   task: string;
+  notifyPolicy?: TaskNotifyPolicy;
 };
 
 export class AcpSessionManager {
@@ -2128,13 +2130,26 @@ export class AcpSessionManager {
       cfg: params.cfg,
       sessionKey: requesterSessionKey,
     })?.entry;
+    const requesterOrigin = parentEntry?.deliveryContext ?? childEntry?.deliveryContext;
+    // G3 (Discord Surface Overhaul): close the race where the initial task
+    // record is created here (before acp-spawn.ts can upgrade it) with the
+    // default `done_only` policy. When the requester's delivery context has
+    // a thread id, the spawn is thread-bound and the stream relay owns the
+    // thread. Default to `silent` so the task-registry banner does not
+    // duplicate into the thread even if the acp-spawn upgrade races this
+    // write. Non-thread spawns keep the default policy.
+    const notifyPolicy: TaskNotifyPolicy | undefined =
+      requesterOrigin?.threadId != null && String(requesterOrigin.threadId) !== ""
+        ? "silent"
+        : undefined;
     return {
       requesterSessionKey,
-      requesterOrigin: parentEntry?.deliveryContext ?? childEntry?.deliveryContext,
+      requesterOrigin,
       childSessionKey: params.sessionKey,
       runId: params.requestId,
       label: normalizeText(childEntry?.label),
       task: summarizeBackgroundTaskText(params.text),
+      ...(notifyPolicy ? { notifyPolicy } : {}),
     };
   }
 
@@ -2159,6 +2174,7 @@ export class AcpSessionManager {
         label: context.label,
         task: context.task,
         startedAt,
+        ...(context.notifyPolicy ? { notifyPolicy: context.notifyPolicy } : {}),
       });
     } catch (error) {
       logVerbose(

@@ -774,7 +774,14 @@ function mergeExistingTaskForCreate(
     ownerKey: existing.ownerKey,
     scopeKind: existing.scopeKind,
   });
-  if (notifyPolicy !== existing.notifyPolicy && existing.notifyPolicy === "silent") {
+  // G1 (Discord Surface Overhaul): only update notifyPolicy on merge when the
+  // caller EXPLICITLY passes `notifyPolicy: "silent"`. This closes the race
+  // where the initial task record was created with the default `done_only`
+  // and a subsequent `createRunningTaskRun({ notifyPolicy: "silent" })` must
+  // upgrade the record. Preserves existing silent records (never downgrades)
+  // and leaves other (non-explicit-silent) merges alone to avoid accidental
+  // toggling from defaults.
+  if (params.notifyPolicy === "silent" && existing.notifyPolicy !== "silent") {
     patch.notifyPolicy = notifyPolicy;
   }
   if (Object.keys(patch).length === 0) {

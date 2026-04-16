@@ -1275,16 +1275,42 @@ export async function spawnAcpDirect(
     const threadBoundNotifyPolicy: TaskNotifyPolicy | undefined = isThreadBoundSpawn
       ? "silent"
       : undefined;
+    // G2 (Discord Surface Overhaul): when this spawn is bound to a thread
+    // (either pre-existing or freshly created via preparedBinding), merge the
+    // thread identity onto `requesterOrigin` so the task-registry terminal
+    // banner — if it ever does deliver — routes into the thread instead of
+    // falling back to the parent channel. Webchat-originated spawns have no
+    // threadId on requesterState.origin, so without this merge the origin
+    // persisted on the TaskRecord would leak any banner delivery to the
+    // parent channel.
+    const taskRequesterThreadId =
+      boundThreadIdForRelay ??
+      normalizeOptionalString(preparedBinding?.conversationId) ??
+      fallbackThreadIdForRelay;
+    const taskRequesterOrigin: DeliveryContext | undefined = taskRequesterThreadId
+      ? mergeDeliveryContext(
+          {
+            channel: boundChannelForRelay ?? requesterState.origin?.channel,
+            to:
+              boundChannelForRelay && boundThreadIdForRelay
+                ? `channel:${boundThreadIdForRelay}`
+                : requesterState.origin?.to,
+            accountId: boundAccountForRelay ?? requesterState.origin?.accountId,
+            threadId: taskRequesterThreadId,
+          },
+          requesterState.origin,
+        )
+      : requesterState.origin;
     const managedFlow =
-      requesterInternalKey && requesterState.origin
+      requesterInternalKey && taskRequesterOrigin
         ? ensureAcpManagedFlow({
             taskFlow: createRuntimeTaskFlow().bindSession({
               sessionKey: requesterInternalKey,
-              requesterOrigin: requesterState.origin,
+              requesterOrigin: taskRequesterOrigin,
             }),
             goal: params.label?.trim() || params.task,
             currentStep: "spawn-acp-child",
-            routeSnapshot: requesterState.origin,
+            routeSnapshot: taskRequesterOrigin,
             workflowIntent: {
               kind: "acp_parent_spawn",
               mode: spawnMode,
@@ -1300,7 +1326,7 @@ export async function spawnAcpDirect(
         sourceId: childRunId,
         ownerKey: requesterInternalKey,
         scopeKind: "session",
-        requesterOrigin: requesterState.origin,
+        requesterOrigin: taskRequesterOrigin,
         parentFlowId: managedFlow?.flowId,
         childSessionKey: sessionKey,
         runId: childRunId,

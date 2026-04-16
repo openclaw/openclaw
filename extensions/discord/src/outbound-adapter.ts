@@ -21,6 +21,7 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 import type { DiscordComponentMessageSpec } from "./components.js";
 import type { ThreadBindingRecord } from "./monitor/thread-bindings.js";
+import { resolveThreadBindingPersonaFromRecord } from "./monitor/thread-bindings.persona.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
@@ -110,6 +111,14 @@ function resolveDiscordOutboundTarget(params: {
 // `agents.<id>.identity` (emoji + name), use that as the username source so
 // the webhook identity matches the intro banner (`⚙ claude` / `⚙ codex`)
 // instead of regressing to the raw binding label.
+//
+// G4 (R2 fix): the direct-POST path (sendMessage -> maybeSendDiscordWebhookText)
+// must produce the IDENTICAL username string as the session-active banner
+// path (maybeSendBindingMessage). The banner path runs through
+// resolveThreadBindingPersonaFromRecord which always emits a SYSTEM_MARK-
+// prefixed string ("⚙ claude", etc) even when cfg identity is missing.
+// Delegating here keeps both paths byte-identical so final_reply no longer
+// regresses to the raw bot identity when Discord rejects a bare label.
 function resolveDiscordWebhookIdentity(params: {
   identity?: OutboundIdentity;
   binding: ThreadBindingRecord;
@@ -125,14 +134,9 @@ function resolveDiscordWebhookIdentity(params: {
           }
         })()
       : undefined;
-  const cfgName = normalizeOptionalString(cfgIdentity?.name);
-  const cfgEmoji = normalizeOptionalString(cfgIdentity?.emoji);
   const explicitName = normalizeOptionalString(params.identity?.name);
-  const fallbackName = normalizeOptionalString(params.binding.label) ?? params.binding.agentId;
-  const composedCfgUsername =
-    cfgName && cfgEmoji ? `${cfgEmoji} ${cfgName}` : (cfgName ?? undefined);
-  const username =
-    ((composedCfgUsername ?? explicitName ?? fallbackName) || "").slice(0, 80) || undefined;
+  const unifiedUsername = resolveThreadBindingPersonaFromRecord(params.binding, params.cfg);
+  const username = ((explicitName ?? unifiedUsername) || "").slice(0, 80) || undefined;
   const avatarUrl =
     normalizeOptionalString(params.identity?.avatarUrl) ??
     normalizeOptionalString(cfgIdentity?.avatarUrl);
