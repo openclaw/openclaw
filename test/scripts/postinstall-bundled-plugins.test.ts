@@ -215,7 +215,7 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("restores only postinstall-generated QA lab compat sidecar after pruning old installs", async () => {
+  it("restores only postinstall-generated QA compat sidecars after pruning old installs", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-qa-compat-");
     const currentFile = path.join(packageRoot, "dist", "entry.js");
     const stalePackage = path.join(packageRoot, "dist", "extensions", "qa-lab", "package.json");
@@ -246,9 +246,12 @@ describe("bundled plugin postinstall", () => {
         "utf8",
       ),
     ).resolves.toContain("QA channel implementation is not packaged");
+    await expect(
+      fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"), "utf8"),
+    ).resolves.toContain("QA lab implementation is not packaged");
   });
 
-  it("creates only an empty QA channel compat sidecar for fresh installs", async () => {
+  it("creates only empty QA compat sidecars for fresh installs", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-no-qa-compat-");
     await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
     await fs.writeFile(path.join(packageRoot, "dist", "entry.js"), "export {};\n");
@@ -260,7 +263,10 @@ describe("bundled plugin postinstall", () => {
         removedFiles: ["dist/entry-old.js"],
         log: { log: vi.fn(), warn: vi.fn() },
       }),
-    ).toEqual(["dist/extensions/qa-channel/runtime-api.js"]);
+    ).toEqual([
+      "dist/extensions/qa-channel/runtime-api.js",
+      "dist/extensions/qa-lab/runtime-api.js",
+    ]);
 
     await expect(
       fs.readFile(
@@ -271,10 +277,21 @@ describe("bundled plugin postinstall", () => {
       "// Compatibility stub for older OpenClaw updaters. The QA channel implementation is not packaged.\nexport {};\n",
     );
     await expect(
+      fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"), "utf8"),
+    ).resolves.toBe(
+      "// Compatibility stub for older OpenClaw updaters. The QA lab implementation is not packaged.\nexport {};\n",
+    );
+    await expect(
       fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "package.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
       fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "openclaw.plugin.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-lab", "package.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-lab", "openclaw.plugin.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
