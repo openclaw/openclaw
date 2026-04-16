@@ -449,6 +449,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
       requestedSessionKey = resetResult.key;
       resolvedSessionId = resetResult.sessionId ?? resolvedSessionId;
+      emitSessionsChanged(context, {
+        sessionKey: resetResult.key,
+        reason: resetReason,
+      });
       const postResetMessage = normalizeOptionalString(resetCommandMatch[2]) ?? "";
       if (postResetMessage) {
         message = postResetMessage;
