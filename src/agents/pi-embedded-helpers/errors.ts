@@ -294,7 +294,8 @@ const RETRYABLE_402_SCOPED_RESULT_HINTS = [
   "exhausted",
 ] as const;
 const RAW_402_MARKER_RE =
-  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\b/i;
+  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment required\b|^\s*402\s+.*used up your points\b/i;
+const BARE_LEADING_402_RE = /^\s*402\b/i;
 const LEADING_402_WRAPPER_RE =
   /^(?:error[:\s-]+)?(?:(?:http\s*)?402(?:\s+payment required)?|payment required)(?:[:\s-]+|$)/i;
 const TIMEOUT_ERROR_CODES = new Set([
@@ -476,6 +477,15 @@ function hasRetryable402TransientSignal(text: string): boolean {
   );
 }
 
+function hasKnownBareLeading402Signal(text: string): boolean {
+  return (
+    hasQuotaRefreshWindowSignal(text) ||
+    hasExplicit402BillingSignal(text) ||
+    isRateLimitErrorMessage(text) ||
+    hasRetryable402TransientSignal(text)
+  );
+}
+
 function normalize402Message(raw: string): string {
   return normalizeOptionalLowercaseString(raw)?.replace(LEADING_402_WRAPPER_RE, "").trim() ?? "";
 }
@@ -506,7 +516,14 @@ function classify402Message(message: string): PaymentRequiredFailoverReason {
 }
 
 function classifyFailoverReasonFrom402Text(raw: string): PaymentRequiredFailoverReason | null {
-  if (!RAW_402_MARKER_RE.test(raw)) {
+  if (RAW_402_MARKER_RE.test(raw)) {
+    return classify402Message(raw);
+  }
+  if (!BARE_LEADING_402_RE.test(raw)) {
+    return null;
+  }
+  const normalized = normalize402Message(raw);
+  if (!normalized || !hasKnownBareLeading402Signal(normalized)) {
     return null;
   }
   return classify402Message(raw);

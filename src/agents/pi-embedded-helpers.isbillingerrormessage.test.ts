@@ -917,6 +917,11 @@ describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => 
     expect(classifyFailoverReason(zenMuxMessage)).toBe("rate_limit");
   });
 
+  it("does not classify numeric references that merely start with 402", () => {
+    expect(classifyFailoverReason("402 items found in the database")).toBeNull();
+    expect(classifyFailoverReason("402 records processed")).toBeNull();
+  });
+
   it("keeps plan-upgrade 402 limit messages in billing", () => {
     const billingMessage = "Your usage limit has been reached. Please upgrade your plan.";
     expect(classifyFailoverReason(`HTTP 402 Payment Required: ${billingMessage}`)).toBe("billing");
