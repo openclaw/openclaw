@@ -81,7 +81,7 @@ export class PlanStore {
       const content = await fs.readFile(this.planPath(namespace), "utf-8");
       const plan = JSON.parse(content) as StoredPlan;
       // Verify stored namespace matches requested namespace to catch corruption.
-      if (plan.namespace && plan.namespace !== namespace) {
+      if (plan.namespace !== undefined && plan.namespace !== namespace) {
         throw new Error(`Plan namespace mismatch on read: expected "${namespace}", found "${plan.namespace}"`);
       }
       return plan;
