@@ -15,8 +15,7 @@ import {
 import { readAcpSessionEntry } from "openclaw/plugin-sdk/acp-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
-import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
+import { normalizeAccountId, isAcpSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
