@@ -22,11 +22,11 @@ const UNICODE_QUOTE_CHARS = new Set(["\u201C", "\u201D", "\u201E", "\u201F"]);
  * Attempt to repair tool-call argument JSON by normalizing Unicode smart
  * quotes (U+201C/U+201D) used as JSON string delimiters down to ASCII `"`.
  *
- * Uses a character-level scan that tracks brace depth and string boundaries
- * (recognizing both ASCII `"` and Unicode smart quotes as delimiters) so that
- * only structural quotes — those at JSON key/value boundaries — are rewritten.
- * Smart quotes that appear inside already-delimited string content are left
- * untouched.
+ * Uses a character-level scan that tracks brace depth and string boundaries.
+ * Only strings opened with a Unicode smart quote are considered for
+ * normalisation — strings opened with ASCII `"` are left alone so that
+ * content-level smart quotes inside them are preserved.
+ * Only structural quotes — those at JSON key/value boundaries — are rewritten.
  */
 function normalizeStructuralUnicodeQuotes(raw: string): string {
   let start = 0;
@@ -44,6 +44,7 @@ function normalizeStructuralUnicodeQuotes(raw: string): string {
   const chars = [...raw];
   let depth = 0;
   let inString = false;
+  let stringOpenerIsAscii = false;
   let escaped = false;
   const structuralQuoteIndices: number[] = [];
 
@@ -56,15 +57,27 @@ function normalizeStructuralUnicodeQuotes(raw: string): string {
         escaped = false;
       } else if (ch === "\\") {
         escaped = true;
-      } else if (ch === '"' || UNICODE_QUOTE_CHARS.has(ch)) {
+      } else if (stringOpenerIsAscii && ch === '"') {
+        // ASCII-opened string: only ASCII `"` closes it.
+        inString = false;
+        structuralQuoteIndices.push(i);
+      } else if (!stringOpenerIsAscii && UNICODE_QUOTE_CHARS.has(ch)) {
+        // Unicode-opened string: only Unicode smart quotes close it.
         inString = false;
         structuralQuoteIndices.push(i);
       }
       continue;
     }
 
-    if (ch === '"' || UNICODE_QUOTE_CHARS.has(ch)) {
+    if (ch === '"') {
       inString = true;
+      stringOpenerIsAscii = true;
+      structuralQuoteIndices.push(i);
+      continue;
+    }
+    if (UNICODE_QUOTE_CHARS.has(ch)) {
+      inString = true;
+      stringOpenerIsAscii = false;
       structuralQuoteIndices.push(i);
       continue;
     }
@@ -107,6 +120,7 @@ function extractBalancedJsonPrefix(raw: string): BalancedJsonPrefix | null {
 
   let depth = 0;
   let inString = false;
+  let stringOpenerIsAscii = false;
   let escaped = false;
   for (let i = start; i < raw.length; i += 1) {
     const char = raw[i];
@@ -118,13 +132,21 @@ function extractBalancedJsonPrefix(raw: string): BalancedJsonPrefix | null {
         escaped = false;
       } else if (char === "\\") {
         escaped = true;
-      } else if (char === '"' || UNICODE_QUOTE_CHARS.has(char)) {
+      } else if (stringOpenerIsAscii && char === '"') {
+        inString = false;
+      } else if (!stringOpenerIsAscii && UNICODE_QUOTE_CHARS.has(char)) {
         inString = false;
       }
       continue;
     }
-    if (char === '"' || UNICODE_QUOTE_CHARS.has(char)) {
+    if (char === '"') {
       inString = true;
+      stringOpenerIsAscii = true;
+      continue;
+    }
+    if (UNICODE_QUOTE_CHARS.has(char)) {
+      inString = true;
+      stringOpenerIsAscii = false;
       continue;
     }
     if (char === "{" || char === "[") {
