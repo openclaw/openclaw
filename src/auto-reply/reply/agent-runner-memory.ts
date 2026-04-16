@@ -735,6 +735,7 @@ export async function runMemoryFlushIfNeeded(params: {
     .filter(Boolean)
     .join("\n\n");
   let postCompactionSessionId: string | undefined;
+  let memoryCompactionTokensAfter: number | undefined;
   try {
     await memoryDeps.runWithModelFallback({
       ...resolveModelFallbackOptions(params.followupRun.run),
@@ -769,6 +770,13 @@ export async function runMemoryFlushIfNeeded(params: {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
               if (phase === "end") {
                 memoryCompactionCompleted = true;
+                const result = evt.data?.result;
+                if (result && typeof result === "object") {
+                  const ta = (result as { tokensAfter?: unknown }).tokensAfter;
+                  if (typeof ta === "number" && Number.isFinite(ta) && ta > 0) {
+                    memoryCompactionTokensAfter = ta;
+                  }
+                }
               }
             }
           },
@@ -795,6 +803,7 @@ export async function runMemoryFlushIfNeeded(params: {
         sessionKey: params.sessionKey,
         storePath: params.storePath,
         newSessionId: postCompactionSessionId,
+        tokensAfter: memoryCompactionTokensAfter,
       });
       const updatedEntry = params.sessionKey ? activeSessionStore?.[params.sessionKey] : undefined;
       if (updatedEntry) {

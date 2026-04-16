@@ -81,7 +81,12 @@ export function handleAutoCompactionEnd(
   });
   void ctx.params.onAgentEvent?.({
     stream: "compaction",
-    data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
+    data: {
+      phase: "end",
+      willRetry,
+      completed: hasResult && !wasAborted,
+      result: hasResult && !wasAborted ? evt.result : undefined,
+    },
   });
 
   // Run after_compaction plugin hook (fire-and-forget)

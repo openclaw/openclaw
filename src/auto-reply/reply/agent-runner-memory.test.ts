@@ -98,6 +98,10 @@ describe("runMemoryFlushIfNeeded", () => {
         const storePath = typeof params.storePath === "string" ? params.storePath : rootDir;
         nextEntry.sessionFile = path.join(path.dirname(storePath), `${params.newSessionId}.jsonl`);
       }
+      if (typeof params.tokensAfter === "number" && params.tokensAfter > 0) {
+        nextEntry.totalTokens = params.tokensAfter;
+        nextEntry.totalTokensFresh = true;
+      }
       params.sessionStore[sessionKey] = nextEntry;
       if (typeof params.storePath === "string") {
         await writeSessionStore(params.storePath, sessionKey, nextEntry);
@@ -135,9 +139,15 @@ describe("runMemoryFlushIfNeeded", () => {
 
     runEmbeddedPiAgentMock.mockImplementationOnce(
       async (params: {
-        onAgentEvent?: (evt: { stream: string; data: { phase: string } }) => void;
+        onAgentEvent?: (evt: {
+          stream: string;
+          data: { phase: string; result?: unknown };
+        }) => void;
       }) => {
-        params.onAgentEvent?.({ stream: "compaction", data: { phase: "end" } });
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", result: { tokensAfter: 15_000 } },
+        });
         return {
           payloads: [],
           meta: { agentMeta: { sessionId: "session-rotated" } },
@@ -194,6 +204,60 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.main.compactionCount).toBe(2);
     expect(persisted.main.memoryFlushCompactionCount).toBe(2);
     expect(persisted.main.memoryFlushAt).toBe(1_700_000_000_000);
+    expect(persisted.main.totalTokens).toBe(15_000);
+    expect(persisted.main.totalTokensFresh).toBe(true);
+  });
+
+  it("passes tokensAfter from compaction event to incrementCompactionCount", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeSessionStore(storePath, sessionKey, sessionEntry);
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: {
+        onAgentEvent?: (evt: {
+          stream: string;
+          data: { phase: string; result?: unknown };
+        }) => void;
+      }) => {
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", result: { tokensAfter: 21_225 } },
+        });
+        return { payloads: [], meta: {} };
+      },
+    );
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(incrementCompactionCountMock).toHaveBeenCalledWith(
+      expect.objectContaining({ tokensAfter: 21_225 }),
+    );
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      main: SessionEntry;
+    };
+    expect(persisted.main.totalTokens).toBe(21_225);
+    expect(persisted.main.totalTokensFresh).toBe(true);
   });
 
   it("skips memory flush for CLI providers", async () => {
