@@ -1753,10 +1753,9 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     if (marker && marker.kind === "compaction") {
       items.push({
         kind: "divider",
-        key:
-          typeof marker.id === "string"
-            ? `divider:compaction:${marker.id}`
-            : `divider:compaction:${normalized.timestamp}:${i}`,
+        key: typeof marker.id === "string"
+          ? `divider:compaction:${marker.id}`
+          : `divider:compaction:${normalized.timestamp}:${i}`,
         label: "Compaction",
         timestamp: normalized.timestamp ?? Date.now(),
       });
@@ -1773,7 +1772,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       const prevMsg = i > 0 ? history[i - 1] as Record<string, unknown> : null;
       const prevRole = prevMsg && typeof prevMsg.role === "string" ? prevMsg.role.toLowerCase() : "";
       
-      if (prevRole === "assistant") {
+      if (prevRole === "assistant" && prevMsg) {
         const prevContent = Array.isArray(prevMsg.content) ? prevMsg.content : [];
         const currentContent = Array.isArray(raw.content) ? raw.content : [];
         
@@ -1783,7 +1782,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
           const b = block as Record<string, unknown>;
           if (b.type === "audio" || b.type === "video" || b.type === "image") {
             const url = typeof b.url === "string" ? b.url : undefined;
-            if (url) assistantMediaUrls.add(url);
+            if (url) { assistantMediaUrls.add(url); }
           }
         }
         
@@ -1794,10 +1793,10 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
           
           if (b.type === "text" && typeof b.text === "string") {
             const text = b.text.trim();
-            if (!text) continue;
+            if (!text) { continue; }
             
             // Check if this text is just a markdown link to a media URL we already have
-            const linkMatch = text.match(/^[🎵🎬📷]?\s*\[([^\]]*)\]\(([^)]+)\)$/);
+            const linkMatch = text.match(/^[\u{1F3B5}\u{1F3AC}\u{1F4F7}]?\s*\[([^\]]*)\]\(([^)]+)\)$/u);
             if (linkMatch) {
               const url = linkMatch[2];
               // If the URL isn't in the assistant message, this is unique content
@@ -1847,10 +1846,10 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const liftedCanvasSources = tools
     .map((tool) => extractChatMessagePreview(tool))
     .filter((entry) => Boolean(entry)) as Array<{
-    preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
-    text: string | null;
-    timestamp: number | null;
-  }>;
+      preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
+      text: string | null;
+      timestamp: number | null;
+    }>;
   for (const liftedCanvasSource of liftedCanvasSources) {
     const assistantIndex = findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);
     if (assistantIndex == null) {
