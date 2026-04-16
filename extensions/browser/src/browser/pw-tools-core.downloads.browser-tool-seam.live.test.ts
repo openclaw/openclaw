@@ -256,9 +256,9 @@ describeLive("pw-tools-core downloads via browser-tool seam (live)", () => {
       expect(path.dirname(path.resolve(result.rawDownloadPath ?? ""))).toBe(
         path.resolve(DEFAULT_DOWNLOAD_DIR),
       );
-      expect(path.basename(result.rawDownloadPath ?? "")).toBe(DOWNLOAD_FILENAME);
+      expect(path.basename(result.rawDownloadPath ?? "")).toMatch(/-chuck\.json$/);
       await expect(fs.readFile(result.rawDownloadPath ?? "", "utf8")).resolves.toBe(DOWNLOAD_BODY);
-      expect(result.entriesInManagedDir).toContain(DOWNLOAD_FILENAME);
+      expect(result.entriesInManagedDir).toContain(path.basename(result.rawDownloadPath ?? ""));
     },
   );
 });

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -63,6 +64,10 @@ export type BrowserNetworkRequest = {
 
 type SnapshotForAIResult = { full: string; incremental?: string };
 type SnapshotForAIOptions = { timeout?: number; track?: string };
+
+function buildManagedDownloadPath(fileName: string): string {
+  return path.join(DEFAULT_DOWNLOAD_DIR, `${crypto.randomUUID()}-${fileName}`);
+}
 
 export type WithSnapshotForAI = {
   _snapshotForAI?: (options?: SnapshotForAIOptions) => Promise<SnapshotForAIResult>;
@@ -401,13 +406,13 @@ export function ensurePageState(page: Page): PageState {
         download.suggestedFilename?.() || "download.bin",
         "download.bin",
       );
-      const managedPath = path.join(DEFAULT_DOWNLOAD_DIR, suggested);
+      const managedPath = buildManagedDownloadPath(suggested);
       const managedSave = (async () => {
         await fs.mkdir(DEFAULT_DOWNLOAD_DIR, { recursive: true });
-        await fs.rm(managedPath, { force: true });
         await download.saveAs(managedPath);
         return managedPath;
       })();
+      managedSave.catch(() => {});
       const patched = download as typeof download & { path?: () => Promise<string> };
       patched.path = async () => await managedSave;
     });
