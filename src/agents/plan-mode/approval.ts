@@ -58,6 +58,7 @@ export function resolvePlanApproval(
         ...current,
         mode: "normal",
         approval: "rejected",
+        confirmedAt: undefined,
         updatedAt: now,
       };
 
@@ -66,6 +67,7 @@ export function resolvePlanApproval(
         ...current,
         mode: "normal",
         approval: "timed_out",
+        confirmedAt: undefined,
         updatedAt: now,
       };
 
