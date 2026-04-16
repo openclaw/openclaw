@@ -487,6 +487,10 @@ export const registerTelegramHandlers = ({
     if (!replyMessage || !hasInboundMedia(replyMessage)) {
       return [];
     }
+    // Skip media from the bot's own replies to avoid re-ingesting self-authored content
+    if (isSelfAuthoredTelegramMessage(ctx, replyMessage)) {
+      return [];
+    }
     const replyFileId = resolveInboundMediaFileId(replyMessage);
     if (!replyFileId) {
       return [];
