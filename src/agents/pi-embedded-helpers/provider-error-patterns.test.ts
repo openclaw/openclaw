@@ -215,4 +215,17 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
       '429 {"error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}';
     expect(classifyFailoverReason(jsonRateLimit)).toBe("rate_limit");
   });
+
+  it("classifies 403 Cloudflare challenge as cloudflare_challenge", () => {
+    const cfChallenge403 =
+      "403 <!doctype html><html><head><title>Just a moment...</title></head>" +
+      "<body><h1>Please wait while we verify you are human</h1>" +
+      '<div id="cf-browser-verification"></div>' +
+      '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>' +
+      "<p>Ray ID: 8a1b2c3d4e5f6789</p></body></html>";
+
+    expect(classifyProviderRuntimeFailureKind({ status: 403, message: cfChallenge403 })).toBe(
+      "cloudflare_challenge",
+    );
+  });
 });
