@@ -367,6 +367,28 @@ async function executeFast(
   }
 }
 
+/**
+ * Set the session's plan-mode flag on the backend (PR-8).
+ *
+ * - `"plan"`: arms the runtime mutation gate — write/edit/exec/etc. are
+ *   blocked until the user approves a plan via the approval flow OR the
+ *   user toggles back to `"normal"`.
+ * - `"normal"`: clears any pending plan-mode state and unblocks mutations.
+ *
+ * Mirrors the `thinkingLevel` / `fastMode` patch pattern above so
+ * consumers (the mode switcher chip, `/plan` slash command if we add
+ * one later) get a single helper they can call without knowing the
+ * wire shape. Throws on patch failure so callers can surface an error
+ * rather than silently failing state updates.
+ */
+export async function setSessionPlanMode(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  mode: "plan" | "normal",
+): Promise<void> {
+  await client.request("sessions.patch", { key: sessionKey, planMode: mode });
+}
+
 async function executeUsage(
   client: GatewayBrowserClient,
   sessionKey: string,
