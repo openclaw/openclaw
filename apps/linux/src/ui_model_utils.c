@@ -3,6 +3,8 @@
  *
  * Shared widget/model lifecycle helpers for GTK drop-downs and
  * Adwaita combo rows.
+ *
+ * Author: Thiago Camargo <thiagocmc@proton.me>
  */
 
 #include "ui_model_utils.h"

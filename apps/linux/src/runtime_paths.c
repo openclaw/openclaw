@@ -2,6 +2,8 @@
  * runtime_paths.c
  *
  * Canonical runtime path derivation contract for Linux companion surfaces.
+ *
+ * Author: Thiago Camargo <thiagocmc@proton.me>
  */
 
 #include "runtime_paths.h"
