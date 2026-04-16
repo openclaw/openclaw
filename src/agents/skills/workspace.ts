@@ -736,7 +736,9 @@ export function buildWorkspaceSkillSnapshot(
     )
     .map((e) => ({
       skillName: e.skill.name,
-      planTemplate: e.metadata.planTemplate.slice(),
+      // Guaranteed defined by the filter predicate above (TS narrowing
+      // doesn't propagate through .map's project arrow).
+      planTemplate: e.metadata.planTemplate!.slice(),
     }));
   return {
     prompt,
