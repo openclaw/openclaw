@@ -2,6 +2,7 @@ import path from "node:path";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
+import { isPathInside } from "../../../infra/path-guards.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { resolveMediaBufferPath, getMediaDir } from "../../../media/store.js";
 import { loadWebMedia } from "../../../media/web-media.js";
@@ -412,12 +413,21 @@ export async function loadImageFromRef(
       targetPath = path.resolve(workspaceDir, targetPath);
     }
     if (options?.workspaceOnly && !options?.sandbox) {
-      const root = options?.sandbox?.root ?? workspaceDir;
-      await assertSandboxPath({
-        filePath: targetPath,
-        cwd: root,
-        root,
-      });
+      // Paths inside OpenClaw's inbound media dir are written by channel
+      // plugins on message receipt (not chosen by the agent), so they are
+      // safe to read even under workspaceOnly enforcement. This mirrors the
+      // `media://inbound/<id>` URI path above, which also bypasses the
+      // sandbox check for trusted inbound media. Other media subdirs
+      // (`outbound`, `tool-*`, `remote-cache`, etc.) remain enforced.
+      const inboundMediaDir = path.join(getMediaDir(), "inbound");
+      if (!isPathInside(inboundMediaDir, targetPath)) {
+        const root = options?.sandbox?.root ?? workspaceDir;
+        await assertSandboxPath({
+          filePath: targetPath,
+          cwd: root,
+          root,
+        });
+      }
     }
 
     // loadWebMedia handles local file paths (including file:// URLs)

@@ -364,4 +364,96 @@ describe("detectAndLoadPromptImages", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("allows workspaceOnly agents to load inbound images from OpenClaw's managed inbound media dir", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-inbound-"));
+    const workspaceDir = path.join(stateDir, "workspace-gringo");
+    const mediaInbound = path.join(stateDir, "media", "inbound");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(mediaInbound, { recursive: true });
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    const imagePath = path.join(mediaInbound, "attach.png");
+    await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
+
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: `Look at this ${imagePath}`,
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+      });
+
+      expect(result.detectedRefs).toHaveLength(1);
+      expect(result.loadedCount).toBe(1);
+      expect(result.skippedCount).toBe(0);
+      expect(result.images).toHaveLength(1);
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still blocks workspaceOnly agents from loading outbound or tool-generated media (scope narrowed to inbound/)", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-non-inbound-"));
+    const workspaceDir = path.join(stateDir, "workspace-gringo");
+    const mediaOutbound = path.join(stateDir, "media", "outbound");
+    const mediaTool = path.join(stateDir, "media", "tool-image-generation");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(mediaOutbound, { recursive: true });
+    await fs.mkdir(mediaTool, { recursive: true });
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    const outboundImage = path.join(mediaOutbound, "prior.png");
+    const toolImage = path.join(mediaTool, "generated.png");
+    await fs.writeFile(outboundImage, Buffer.from(pngB64, "base64"));
+    await fs.writeFile(toolImage, Buffer.from(pngB64, "base64"));
+
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: `Check ${outboundImage} and ${toolImage}`,
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+      });
+
+      expect(result.detectedRefs).toHaveLength(2);
+      expect(result.loadedCount).toBe(0);
+      expect(result.images).toHaveLength(0);
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still blocks workspaceOnly agents from loading paths outside both workspace and media dir", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-outside-"));
+    const workspaceDir = path.join(stateDir, "workspace-gringo");
+    const unrelatedDir = path.join(stateDir, "unrelated");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(unrelatedDir, { recursive: true });
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    const imagePath = path.join(unrelatedDir, "private.png");
+    await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
+
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: `Look at this ${imagePath}`,
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+      });
+
+      expect(result.detectedRefs).toHaveLength(1);
+      expect(result.loadedCount).toBe(0);
+      expect(result.images).toHaveLength(0);
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });
