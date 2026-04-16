@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { formatExecCommand } from "../infra/system-run-command.js";
 import {
   buildSystemRunApprovalPlan,
@@ -845,6 +845,50 @@ describe("hardenApprovedExecutionPaths", () => {
       fileName: "mz-script",
       body: "MZ not really a PE file\n",
     });
+  });
+
+  it("keeps fail-closed behavior for unknown NUL-bearing headers", () => {
+    expectShellPayloadApprovalDenied({
+      tmpPrefix: "openclaw-shell-nul-header-binding-",
+      fileName: "nul-script",
+      body: "SAFE\u0000maybe-binary\n",
+    });
+  });
+
+  it("keeps fail-closed behavior when the shell payload probe stops seeing a file", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-race-binding-"));
+    try {
+      const scriptPath = path.join(tmp, "run.sh");
+      fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+      fs.chmodSync(scriptPath, 0o755);
+      const realStatSync = fs.statSync;
+      let targetStatCalls = 0;
+      const statSyncSpy = vi.spyOn(fs, "statSync").mockImplementation((pathLike, options) => {
+        const targetPath = typeof pathLike === "string" ? pathLike : pathLike.toString();
+        if (targetPath === scriptPath) {
+          targetStatCalls += 1;
+          if (targetStatCalls === 2) {
+            return realStatSync(tmp, options);
+          }
+        }
+        return realStatSync(pathLike, options);
+      });
+      try {
+        const prepared = buildSystemRunApprovalPlan({
+          command: ["/bin/sh", "-lc", scriptPath],
+          rawCommand: scriptPath,
+          cwd: tmp,
+        });
+        expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+      } finally {
+        statSyncSpy.mockRestore();
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it.each(unsafeRuntimeInvocationCases)("$name", (testCase) => {

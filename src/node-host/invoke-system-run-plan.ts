@@ -294,7 +294,11 @@ function isKnownBinaryExecutableHeader(buffer: Buffer): boolean {
     (buffer.subarray(0, 4).equals(Buffer.from([0xfe, 0xed, 0xfa, 0xce])) ||
       buffer.subarray(0, 4).equals(Buffer.from([0xce, 0xfa, 0xed, 0xfe])) ||
       buffer.subarray(0, 4).equals(Buffer.from([0xfe, 0xed, 0xfa, 0xcf])) ||
-      buffer.subarray(0, 4).equals(Buffer.from([0xcf, 0xfa, 0xed, 0xfe])))
+      buffer.subarray(0, 4).equals(Buffer.from([0xcf, 0xfa, 0xed, 0xfe])) ||
+      buffer.subarray(0, 4).equals(Buffer.from([0xca, 0xfe, 0xba, 0xbe])) ||
+      buffer.subarray(0, 4).equals(Buffer.from([0xbe, 0xba, 0xfe, 0xca])) ||
+      buffer.subarray(0, 4).equals(Buffer.from([0xca, 0xfe, 0xba, 0xbf])) ||
+      buffer.subarray(0, 4).equals(Buffer.from([0xbf, 0xba, 0xfe, 0xca])))
   ) {
     return true;
   }
@@ -317,7 +321,7 @@ function isLikelyScriptLikePathSync(targetPath: string): boolean {
     return true;
   }
   if (!stat.isFile()) {
-    return false;
+    return true;
   }
   let header: Buffer;
   try {
@@ -341,7 +345,7 @@ function isLikelyScriptLikePathSync(targetPath: string): boolean {
   if (isKnownBinaryExecutableHeader(header)) {
     return false;
   }
-  return !header.includes(0);
+  return true;
 }
 
 function unwrapArgvForMutableOperand(argv: string[]): {
