@@ -1447,7 +1447,7 @@ export function createExecTool(
         requestedTarget: normalizeExecTarget(params.host),
         elevatedRequested,
         sandboxAvailable:
-          Boolean(defaults?.sandbox?.mode && defaults.sandbox.mode !== "off"),
+          Boolean(defaults?.sandbox) && ((defaults?.sandbox as { mode?: string }).mode ?? "") !== "off",
       });
       const host: ExecHost = target.effectiveHost;
 

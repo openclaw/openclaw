@@ -292,18 +292,14 @@ describe("resolveExecTarget", () => {
     ).toThrow(
       "exec host not allowed (requested gateway; configured host is node; set tools.exec.host=gateway or auto to allow this override).",
     );
-  });
-
   it("resolves auto to gateway when sandbox config exists but mode is off (#58885)", () => {
     // Regression test: sandboxAvailable should be false when sandbox mode is "off",
     // even if the sandbox config object exists. Previously, Boolean({mode: "off"})
     // was truthy, causing auto to incorrectly resolve to "sandbox".
     const sandboxConfigWithModeOff = { mode: "off" as const };
     expect(Boolean(sandboxConfigWithModeOff)).toBe(true); // config object exists
-    // But sandboxAvailable should check mode, not just existence
-    const sandboxAvailable = Boolean(
-      sandboxConfigWithModeOff?.mode && sandboxConfigWithModeOff.mode !== "off",
-    );
+    // New formula: sandbox object exists AND mode is not explicitly "off"
+    const sandboxAvailable = Boolean(sandboxConfigWithModeOff) && ((sandboxConfigWithModeOff as { mode?: string }).mode ?? "") !== "off";
     expect(sandboxAvailable).toBe(false);
 
     expect(
@@ -314,6 +310,24 @@ describe("resolveExecTarget", () => {
       }),
     ).toMatchObject({
       effectiveHost: "gateway", // NOT sandbox
+    });
+  });
+
+  it("keeps sandbox available when config exists but mode is undefined (runtime compat)", () => {
+    // Runtime BashSandboxConfig may not carry a mode field (e.g., from pi-tools.ts).
+    // Backward compatible: treat missing/undefined mode as sandbox enabled.
+    const runtimeConfig = {} as { mode?: string };
+    const sandboxAvailable = Boolean(runtimeConfig) && ((runtimeConfig as { mode?: string }).mode ?? "") !== "off";
+    expect(sandboxAvailable).toBe(true);
+
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        elevatedRequested: false,
+        sandboxAvailable,
+      }),
+    ).toMatchObject({
+      effectiveHost: "sandbox", // NOT gateway — runtime compat preserved
     });
   });
 });
