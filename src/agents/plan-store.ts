@@ -52,11 +52,14 @@ function hasControlOrForbiddenChars(s: string): boolean {
 }
 
 function validateNamespace(namespace: string): void {
+  // Normalize dot segments (./foo → foo) before validation to prevent
+  // cross-namespace collisions from equivalent but differently-spelled paths.
+  const normalized = path.normalize(namespace);
   if (
-    !namespace ||
-    namespace.includes("..") ||
-    path.isAbsolute(namespace) ||
-    hasControlOrForbiddenChars(namespace)
+    !normalized ||
+    normalized.includes("..") ||
+    path.isAbsolute(normalized) ||
+    hasControlOrForbiddenChars(normalized)
   ) {
     throw new Error(`Invalid plan namespace: "${namespace}"`);
   }
@@ -84,8 +87,19 @@ export class PlanStore {
     try {
       const content = await fs.readFile(this.planPath(namespace), "utf-8");
       const plan = JSON.parse(content) as StoredPlan;
+      // Runtime shape validation — catch corrupt or manually-edited plan files.
+      if (
+        !plan ||
+        typeof plan !== "object" ||
+        typeof plan.namespace !== "string" ||
+        !Array.isArray(plan.steps)
+      ) {
+        throw new Error(
+          `Plan file for "${namespace}" has invalid shape — expected {namespace, steps[]}`,
+        );
+      }
       // Verify stored namespace matches requested namespace to catch corruption.
-      if (plan.namespace !== undefined && plan.namespace !== namespace) {
+      if (plan.namespace !== namespace) {
         throw new Error(
           `Plan namespace mismatch on read: expected "${namespace}", found "${plan.namespace}"`,
         );
