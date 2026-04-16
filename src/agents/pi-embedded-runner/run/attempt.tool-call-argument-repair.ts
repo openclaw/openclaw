@@ -215,7 +215,12 @@ function tryExtractUsableToolCallArguments(raw: string): ToolCallArgumentRepair 
         // Fall through to balanced-prefix extraction below
       }
     }
-    const extracted = extractBalancedJsonPrefix(normalized);
+    // Prefer extracting from the original string so ASCII-delimited JSON with
+    // Unicode content characters (e.g. CJK smart quotes) is not corrupted by
+    // normalisation.  Fall back to the normalised version only when the raw
+    // extraction yields nothing.
+    const extracted =
+      extractBalancedJsonPrefix(raw) ?? extractBalancedJsonPrefix(normalized);
     if (!extracted) {
       return undefined;
     }
@@ -223,7 +228,7 @@ function tryExtractUsableToolCallArguments(raw: string): ToolCallArgumentRepair 
     if (!isAllowedToolCallRepairLeadingPrefix(leadingPrefix)) {
       return undefined;
     }
-    const suffix = normalized.slice(extracted.startIndex + extracted.json.length).trim();
+    const suffix = raw.slice(extracted.startIndex + extracted.json.length).trim();
     if (leadingPrefix.length === 0 && suffix.length === 0) {
       return undefined;
     }
@@ -233,9 +238,10 @@ function tryExtractUsableToolCallArguments(raw: string): ToolCallArgumentRepair 
     ) {
       return undefined;
     }
-    const candidateJson = normalizeStructuralUnicodeQuotes(extracted.json);
+    // extracted.json is already a slice of either raw or normalized;
+    // try parsing as-is first, then attempt normalisation if it fails.
     try {
-      const parsed = JSON.parse(candidateJson) as unknown;
+      const parsed = JSON.parse(extracted.json) as unknown;
       return parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? {
             args: parsed as Record<string, unknown>,
@@ -245,6 +251,24 @@ function tryExtractUsableToolCallArguments(raw: string): ToolCallArgumentRepair 
           }
         : undefined;
     } catch {
+      // If the raw extraction failed to parse, try normalising Unicode quotes
+      // in the extracted slice and re-attempt.
+      const normalizedJson = normalizeStructuralUnicodeQuotes(extracted.json);
+      if (normalizedJson !== extracted.json) {
+        try {
+          const parsed = JSON.parse(normalizedJson) as unknown;
+          return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? {
+                args: parsed as Record<string, unknown>,
+                kind: "repaired",
+                leadingPrefix,
+                trailingSuffix: suffix,
+              }
+            : undefined;
+        } catch {
+          return undefined;
+        }
+      }
       return undefined;
     }
   }
