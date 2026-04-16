@@ -16,10 +16,6 @@ vi.mock("../../agents/model-auth.js", async () => {
   return createModelAuthMockModule();
 });
 
-function magnitude(values: number[]) {
-  return Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
-}
-
 let buildGeminiEmbeddingRequest: typeof import("./embeddings-gemini.js").buildGeminiEmbeddingRequest;
 let buildGeminiTextEmbeddingRequest: typeof import("./embeddings-gemini.js").buildGeminiTextEmbeddingRequest;
 let createGeminiEmbeddingProvider: typeof import("./embeddings-gemini.js").createGeminiEmbeddingProvider;
@@ -68,12 +64,6 @@ async function createProviderWithFetch(
     ...options,
   });
   return provider;
-}
-
-function expectNormalizedThreeFourVector(embedding: number[]) {
-  expect(embedding[0]).toBeCloseTo(0.6, 5);
-  expect(embedding[1]).toBeCloseTo(0.8, 5);
-  expect(magnitude(embedding)).toBeCloseTo(1, 5);
 }
 
 describe("buildGeminiTextEmbeddingRequest", () => {
@@ -192,21 +182,23 @@ describe("gemini embedding provider", () => {
     expect(parseFetchBody(legacyFetch, 0)).not.toHaveProperty("outputDimensionality");
     expect(parseFetchBody(legacyFetch, 1)).not.toHaveProperty("outputDimensionality");
 
-    const v2QueryFetch = createGeminiFetchMock([3, 4]);
+    const v2QueryFetch = createGeminiFetchMock([3, 4, Number.NaN]);
     const v2QueryProvider = await createProviderWithFetch(v2QueryFetch, {
       model: "gemini-embedding-2-preview",
     });
-    expectNormalizedThreeFourVector(await v2QueryProvider.embedQuery("test query"));
+    await expect(v2QueryProvider.embedQuery("   ")).resolves.toEqual([]);
+    await expect(v2QueryProvider.embedBatch([])).resolves.toEqual([]);
+    await expect(v2QueryProvider.embedQuery("test query")).resolves.toEqual([0.6, 0.8, 0]);
 
-    const v2BatchFetch = createGeminiBatchFetchMock(2, [3, 4]);
+    const v2BatchFetch = createGeminiBatchFetchMock(2, [0, Number.POSITIVE_INFINITY, 5]);
     const v2BatchProvider = await createProviderWithFetch(v2BatchFetch, {
       model: "gemini-embedding-2-preview",
     });
     const batch = await v2BatchProvider.embedBatch(["text1", "text2"]);
-    expect(batch).toHaveLength(2);
-    for (const embedding of batch) {
-      expectNormalizedThreeFourVector(embedding);
-    }
+    expect(batch).toEqual([
+      [0, 0, 1],
+      [0, 0, 1],
+    ]);
 
     expect(parseFetchBody(v2QueryFetch)).toMatchObject({
       outputDimensionality: 3072,
@@ -238,7 +230,7 @@ describe("gemini embedding provider", () => {
     });
 
     await provider.embedQuery("test");
-    await provider.embedBatchInputs?.([
+    const structuredBatch = await provider.embedBatchInputs?.([
       {
         text: "Image file: diagram.png",
         parts: [
@@ -253,6 +245,10 @@ describe("gemini embedding provider", () => {
           { type: "inline-data", mimeType: "audio/wav", data: "aud" },
         ],
       },
+    ]);
+    expect(structuredBatch).toEqual([
+      [0.2672612419124244, 0.5345224838248488, 0.8017837257372732],
+      [0.2672612419124244, 0.5345224838248488, 0.8017837257372732],
     ]);
 
     const { url } = readFirstFetchRequest(fetchMock);
@@ -288,30 +284,6 @@ describe("gemini embedding provider", () => {
       },
     ]);
   });
-
-  it("sanitizes non-finite query and structured batch responses", async () => {
-    const queryFetch = createGeminiFetchMock([3, 4, Number.NaN]);
-    const queryProvider = await createProviderWithFetch(queryFetch, {
-      model: "gemini-embedding-2-preview",
-    });
-    await expect(queryProvider.embedQuery("test")).resolves.toEqual([0.6, 0.8, 0]);
-
-    const batchFetch = createGeminiBatchFetchMock(1, [0, Number.POSITIVE_INFINITY, 5]);
-    const batchProvider = await createProviderWithFetch(batchFetch, {
-      model: "gemini-embedding-2-preview",
-    });
-    await expect(
-      batchProvider.embedBatchInputs?.([
-        {
-          text: "Image file: diagram.png",
-          parts: [
-            { type: "text", text: "Image file: diagram.png" },
-            { type: "inline-data", mimeType: "image/png", data: "img" },
-          ],
-        },
-      ]),
-    ).resolves.toEqual([[0, 0, 1]]);
-  });
 });
 
 // ---------- Model normalization ----------
@@ -328,19 +300,5 @@ describe("gemini model normalization", () => {
       "gemini-embedding-2-preview",
     );
     expect(normalizeGeminiModel("")).toBe(DEFAULT_GEMINI_EMBEDDING_MODEL);
-  });
-
-  it("returns empty arrays without fetching for blank query and empty batch", async () => {
-    mockResolvedProviderKey(authModule.resolveApiKeyForProvider);
-
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "gemini",
-      model: "gemini-embedding-2-preview",
-      fallback: "none",
-    });
-
-    await expect(provider.embedQuery("   ")).resolves.toEqual([]);
-    await expect(provider.embedBatch([])).resolves.toEqual([]);
   });
 });
