@@ -56,6 +56,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
+import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -70,6 +71,7 @@ import {
   resolveConversationDeliveryTarget,
 } from "../utils/delivery-context.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import {
   type AcpSpawnParentRelayHandle,
   resolveAcpSpawnStreamLogPath,
@@ -1048,12 +1050,30 @@ export async function spawnAcpDirect(
 
   let preparedBinding: PreparedAcpThreadBinding | null = null;
   if (requestThreadBinding) {
+    // Thread-binding context falls back to the parent session key's binding
+    // when the caller's provenance is the internal webchat sentinel or
+    // missing. This lets inter-session handoffs from a CLI/webchat-originated
+    // turn into a Discord-bound session create real Discord thread bindings,
+    // instead of failing with `Thread bindings are unavailable for webchat`.
+    const callerChannel = normalizeOptionalLowercaseString(ctx.agentChannel);
+    const callerChannelThreadReady =
+      Boolean(callerChannel) && callerChannel !== INTERNAL_MESSAGE_CHANNEL;
+    const sessionRef = callerChannelThreadReady
+      ? null
+      : parseRawSessionConversationRef(parentSessionKey);
+    const bindingChannel = callerChannelThreadReady
+      ? ctx.agentChannel
+      : (sessionRef?.channel ?? ctx.agentChannel);
+    const bindingTo =
+      callerChannelThreadReady || !sessionRef
+        ? ctx.agentTo
+        : `${sessionRef.kind}:${sessionRef.rawId}`;
     const prepared = prepareAcpThreadBinding({
       cfg,
-      channel: requesterState.origin?.channel,
-      accountId: requesterState.origin?.accountId,
-      to: requesterState.origin?.to,
-      threadId: requesterState.origin?.threadId,
+      channel: bindingChannel,
+      accountId: ctx.agentAccountId,
+      to: bindingTo,
+      threadId: ctx.agentThreadId,
       groupId: ctx.agentGroupId,
     });
     if (!prepared.ok) {
