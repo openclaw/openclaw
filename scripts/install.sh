@@ -255,7 +255,7 @@ detect_os_or_die() {
     OS="unknown"
     if [[ "$OSTYPE" == "darwin"* ]]; then
         OS="macos"
-    elif [[ "$OSTYPE" == "linux-gnu"* ]] || [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
+    elif [[ "$OSTYPE" == "linux"* ]] || [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
         OS="linux"
     fi
 
