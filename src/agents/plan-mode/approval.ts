@@ -49,15 +49,20 @@ export function resolvePlanApproval(
 ): PlanModeSessionState {
   const now = Date.now();
 
-  // Stale-event guard: if the caller provided an approvalId, it must match
-  // the current state's approvalId. Mismatch = the user clicked an outdated
-  // button (e.g. approve on an already-superseded plan). No-op.
-  if (
-    expectedApprovalId !== undefined &&
-    current.approvalId !== undefined &&
-    expectedApprovalId !== current.approvalId
-  ) {
-    return current;
+  // Stale-event guard: if the caller provided an approvalId, the current
+  // state MUST have a matching approvalId. Mismatch — or, importantly,
+  // current state having no approvalId at all when one is expected — means
+  // the event is stale (e.g. user clicked Approve on a plan that was
+  // already approved/rejected and the state moved on). No-op.
+  //
+  // Earlier draft only no-op'd when both sides had defined IDs and they
+  // differed, which left a fail-open: an attacker (or stale UI) could
+  // supply expectedApprovalId and have it accepted whenever the current
+  // state happened to have a cleared/undefined approvalId.
+  if (expectedApprovalId !== undefined) {
+    if (current.approvalId === undefined || expectedApprovalId !== current.approvalId) {
+      return current;
+    }
   }
 
   // Terminal-state guard. Approved, edited, and timed_out are terminal —

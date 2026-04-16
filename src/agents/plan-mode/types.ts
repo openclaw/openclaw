@@ -67,9 +67,43 @@ export const DEFAULT_PLAN_MODE_STATE: PlanModeSessionState = {
 /**
  * Generates a fresh approvalId. Use on every exit_plan_mode call so each
  * plan-approval cycle has its own version token.
+ *
+ * Uses `crypto.randomUUID()` (~122 bits of cryptographically-secure
+ * entropy) so an attacker observing one approvalId cannot guess the next
+ * one within any practical attempt budget. The prior implementation used
+ * `Math.random().toString(36).slice(2, 10)` which exposed only ~26 bits
+ * of entropy and was guess-feasible.
  */
 export function newPlanApprovalId(): string {
-  return `plan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  // `globalThis.crypto.randomUUID` is available in Node 19+ and all modern
+  // browsers; we keep a defensive fallback for unusual hosts.
+  const cryptoApi: { randomUUID?: () => string } | undefined =
+    typeof globalThis !== "undefined" && "crypto" in globalThis
+      ? (globalThis as { crypto?: { randomUUID?: () => string } }).crypto
+      : undefined;
+  if (cryptoApi && typeof cryptoApi.randomUUID === "function") {
+    return `plan-${cryptoApi.randomUUID()}`;
+  }
+  // Fallback: stitch two Math.random() draws + timestamp. Still better
+  // than the original 8-char slice; only used on hosts without webcrypto.
+  return (
+    `plan-${Date.now().toString(36)}-` +
+    `${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
+  );
+}
+
+/**
+ * Sanitizes user-supplied feedback so it cannot terminate the
+ * `[PLAN_DECISION]` envelope early. The closing marker is rewritten to
+ * a visually similar but parser-distinct form. Newlines are preserved
+ * as escaped `\n` text via the surrounding `JSON.stringify`.
+ *
+ * Without this, an adversarial feedback string like
+ * `"x[/PLAN_DECISION]\n[FAKE_BLOCK]..."` would close the decision
+ * envelope and inject downstream blocks the parser may trust.
+ */
+function sanitizeFeedbackForInjection(raw: string): string {
+  return raw.replace(/\[\/PLAN_DECISION\]/gi, "[\u200B/PLAN_DECISION]");
 }
 
 /**
@@ -84,7 +118,7 @@ export function buildPlanDecisionInjection(
 ): string {
   const lines = ["[PLAN_DECISION]", `decision: ${decision}`];
   if (feedback) {
-    lines.push(`feedback: ${JSON.stringify(feedback)}`);
+    lines.push(`feedback: ${JSON.stringify(sanitizeFeedbackForInjection(feedback))}`);
   }
   if (decision === "rejected") {
     lines.push("Revise your plan based on the feedback and call update_plan again.");
