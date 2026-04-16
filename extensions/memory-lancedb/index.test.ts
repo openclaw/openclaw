@@ -274,6 +274,14 @@ describe("memory plugin e2e", () => {
         input: "hello dimensions",
         dimensions: 1024,
       });
+      expect(embeddingsCreate).toHaveBeenCalledWith(
+        {
+          model: "text-embedding-3-small",
+          input: "hello dimensions",
+          dimensions: 1024,
+        },
+        { timeout: 10_000 },
+      );
     } finally {
       vi.doUnmock("openclaw/plugin-sdk/runtime-env");
       vi.doUnmock("openai");

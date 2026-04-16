@@ -156,16 +156,28 @@ class MemoryDB {
 // OpenAI Embeddings
 // ============================================================================
 
+const DEFAULT_EMBEDDING_TIMEOUT_MS = 10_000;
+const DEFAULT_EMBEDDING_MAX_RETRIES = 1;
+
 class Embeddings {
   private client: OpenAI;
+  private timeoutMs: number;
 
   constructor(
     apiKey: string,
     private model: string,
     baseUrl?: string,
     private dimensions?: number,
+    timeoutMs?: number,
+    maxRetries?: number,
   ) {
-    this.client = new OpenAI({ apiKey, baseURL: baseUrl });
+    this.timeoutMs = timeoutMs ?? DEFAULT_EMBEDDING_TIMEOUT_MS;
+    this.client = new OpenAI({
+      apiKey,
+      baseURL: baseUrl,
+      timeout: this.timeoutMs,
+      maxRetries: maxRetries ?? DEFAULT_EMBEDDING_MAX_RETRIES,
+    });
   }
 
   async embed(text: string): Promise<number[]> {
@@ -177,7 +189,7 @@ class Embeddings {
       params.dimensions = this.dimensions;
     }
     ensureGlobalUndiciEnvProxyDispatcher();
-    const response = await this.client.embeddings.create(params);
+    const response = await this.client.embeddings.create(params, { timeout: this.timeoutMs });
     return response.data[0].embedding;
   }
 }
@@ -459,7 +471,14 @@ export default definePluginEntry({
 
     const vectorDim = dimensions ?? vectorDimsForModel(model);
     const db = new MemoryDB(resolvedDbPath, vectorDim, cfg.storageOptions);
-    const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions);
+    const embeddings = new Embeddings(
+      apiKey,
+      model,
+      baseUrl,
+      dimensions,
+      cfg.embedding.timeoutMs,
+      cfg.embedding.maxRetries,
+    );
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
 

@@ -9,6 +9,8 @@ export type MemoryConfig = {
     apiKey: string;
     baseUrl?: string;
     dimensions?: number;
+    timeoutMs?: number;
+    maxRetries?: number;
   };
   dreaming?: Record<string, unknown>;
   dbPath?: string;
@@ -115,7 +117,11 @@ export const memoryConfigSchema = {
     if (!embedding || typeof embedding.apiKey !== "string") {
       throw new Error("embedding.apiKey is required");
     }
-    assertAllowedKeys(embedding, ["apiKey", "model", "baseUrl", "dimensions"], "embedding config");
+    assertAllowedKeys(
+      embedding,
+      ["apiKey", "model", "baseUrl", "dimensions", "timeoutMs", "maxRetries"],
+      "embedding config",
+    );
 
     const model = resolveEmbeddingModel(embedding);
 
@@ -162,6 +168,8 @@ export const memoryConfigSchema = {
         baseUrl:
           typeof embedding.baseUrl === "string" ? resolveEnvVars(embedding.baseUrl) : undefined,
         dimensions: typeof embedding.dimensions === "number" ? embedding.dimensions : undefined,
+        timeoutMs: typeof embedding.timeoutMs === "number" ? embedding.timeoutMs : undefined,
+        maxRetries: typeof embedding.maxRetries === "number" ? embedding.maxRetries : undefined,
       },
       dreaming,
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
@@ -194,6 +202,18 @@ export const memoryConfigSchema = {
       label: "Embedding Model",
       placeholder: DEFAULT_MODEL,
       help: "OpenAI embedding model to use",
+    },
+    "embedding.timeoutMs": {
+      label: "Timeout (ms)",
+      placeholder: "10000",
+      help: "Timeout for embedding API requests in milliseconds",
+      advanced: true,
+    },
+    "embedding.maxRetries": {
+      label: "Max Retries",
+      placeholder: "1",
+      help: "Maximum number of retries for failed embedding requests",
+      advanced: true,
     },
     dbPath: {
       label: "Database Path",
