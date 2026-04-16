@@ -574,6 +574,39 @@ describe("memory plugin e2e", () => {
     expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
   });
 
+  test("sanitizeForMemoryCapture strips bare sentinel lines without code fences", () => {
+    const input = [
+      "Sender (untrusted metadata): Alex",
+      "",
+      "I always prefer dark mode",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I always prefer dark mode");
+  });
+
+  test("sanitizeForMemoryCapture strips bare sentinel line with trailing content on same line", () => {
+    const input =
+      "Conversation info (untrusted metadata): {some inline json}\nI prefer verbose output";
+    expect(sanitizeForMemoryCapture(input)).toBe("I prefer verbose output");
+  });
+
+  test("sanitizeForMemoryCapture pre-truncates very large inputs", () => {
+    // Build a string longer than 10,000 chars with valid content at the end
+    const padding = "x".repeat(11_000);
+    const input = `${padding}\nI always prefer dark mode`;
+    const result = sanitizeForMemoryCapture(input);
+    // The trailing content should be lost because the input was truncated
+    expect(result).not.toContain("I always prefer dark mode");
+    expect(result.length).toBeLessThanOrEqual(10_000);
+  });
+
+  test("sanitizeForMemoryCapture does not strip untrusted context phrase mid-line", () => {
+    const input =
+      "The user mentioned Untrusted context (metadata) in their question about security";
+    expect(sanitizeForMemoryCapture(input)).toBe(
+      "The user mentioned Untrusted context (metadata) in their question about security",
+    );
+  });
+
   test("sanitizeForMemoryCapture returns empty string for pure metadata", () => {
     const input = [
       "Conversation info (untrusted metadata):",

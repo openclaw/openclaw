@@ -232,6 +232,8 @@ export function looksLikePromptInjection(text: string): boolean {
  * fresh media attachments.
  */
 const MEDIA_ATTACHED_PATTERN = /\[media attached(?:\s+\d+\/\d+)?:[^\]]*\]/gi;
+/** Same pattern without the `g` flag, safe for repeated `.test()` calls. */
+const MEDIA_ATTACHED_PATTERN_TEST = /\[media attached(?:\s+\d+\/\d+)?:[^\]]*\]/i;
 
 export function escapeMemoryForPrompt(text: string): string {
   // Strip [media attached: ...] annotations before HTML-escaping so that
@@ -291,10 +293,8 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
     return true;
   }
 
-  // Check for [media attached ...] annotations
-  if (MEDIA_ATTACHED_PATTERN.test(text)) {
-    // Reset lastIndex since the pattern uses the global flag
-    MEDIA_ATTACHED_PATTERN.lastIndex = 0;
+  // Check for [media attached ...] annotations (use non-global variant for .test())
+  if (MEDIA_ATTACHED_PATTERN_TEST.test(text)) {
     return true;
   }
 
@@ -322,31 +322,38 @@ export function sanitizeForMemoryCapture(text: string): string {
     return "";
   }
 
-  let cleaned = text;
+  // Pre-truncate to cap regex work on very large inputs (ReDoS mitigation)
+  const MAX_SANITIZE_CHARS = 10_000;
+  let cleaned = text.length > MAX_SANITIZE_CHARS ? text.slice(0, MAX_SANITIZE_CHARS) : text;
 
   // Strip leading timestamp prefix
   cleaned = cleaned.replace(LEADING_TIMESTAMP_PREFIX_RE, "");
 
-  // Strip inbound metadata blocks: sentinel line + ```json + content + ```
+  // Strip inbound metadata blocks: sentinel line + optional ```json + content + ```
   for (const sentinel of INBOUND_META_SENTINELS) {
     const escapedSentinel = sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Strip sentinel + code-fence blocks first (order matters: the block regex
+    // needs the sentinel line intact to anchor the match).
     const blockRe = new RegExp(
       `${escapedSentinel}\\s*\\n\\s*\`\`\`json\\s*\\n[\\s\\S]*?\\n\\s*\`\`\`\\s*\\n?`,
       "g",
     );
     cleaned = cleaned.replace(blockRe, "");
+    // Then strip any remaining bare sentinel lines (without code fences) so
+    // shouldCapture does not reject the entire text.
+    cleaned = cleaned.replace(new RegExp(`^${escapedSentinel}.*$`, "gm"), "");
   }
 
-  // Strip the "Untrusted context (metadata..." header and everything after it
-  const untrustedIdx = cleaned.indexOf(UNTRUSTED_CONTEXT_HEADER_PREFIX);
-  if (untrustedIdx !== -1) {
-    cleaned = cleaned.slice(0, untrustedIdx);
+  // Strip the "Untrusted context (metadata..." header and everything after it,
+  // but only when it appears at the start of a line to avoid false positives
+  // on user content that happens to quote the phrase mid-line.
+  const untrustedLineMatch = /^Untrusted context \(metadata/m.exec(cleaned);
+  if (untrustedLineMatch) {
+    cleaned = cleaned.slice(0, untrustedLineMatch.index);
   }
 
   // Strip [media attached: ...] and [media attached N/M: ...] annotations
   cleaned = cleaned.replace(MEDIA_ATTACHED_PATTERN, "");
-  // Reset lastIndex since the pattern uses the global flag
-  MEDIA_ATTACHED_PATTERN.lastIndex = 0;
 
   // Strip <active_memory_plugin>...</active_memory_plugin> blocks
   cleaned = cleaned.replace(/<active_memory_plugin>[\s\S]*?<\/active_memory_plugin>/g, "");
@@ -692,10 +699,14 @@ export default definePluginEntry({
 
         try {
           const vector = await embeddings.embed(event.prompt);
-          const results = await db.search(vector, 3, 0.3);
+          // Overfetch to compensate for sludge filtering: if contaminated
+          // entries occupy the top slots we still surface enough clean ones.
+          const results = await db.search(vector, 10, 0.3);
 
-          // Filter out contaminated memories before injection
-          const cleanResults = results.filter((r) => !looksLikeEnvelopeSludge(r.entry.text));
+          // Filter out contaminated memories, then cap at 3 clean results
+          const cleanResults = results
+            .filter((r) => !looksLikeEnvelopeSludge(r.entry.text))
+            .slice(0, 3);
           if (cleanResults.length === 0) {
             return undefined;
           }
