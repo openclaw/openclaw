@@ -28,10 +28,10 @@ const resolveGlobalManager = vi.fn();
 const serviceLoaded = vi.fn();
 const serviceStop = vi.fn();
 const serviceRestart = vi.fn();
+const serviceReadCommand = vi.fn();
 const prepareRestartScript = vi.fn();
 const runRestartScript = vi.fn();
 const mockedRunDaemonInstall = vi.fn();
-const serviceReadCommand = vi.fn();
 const serviceReadRuntime = vi.fn();
 const mockGetSelfAndAncestorPidsSync = vi.fn(() => new Set<number>([process.pid]));
 const inspectPortUsage = vi.fn();
@@ -1158,6 +1158,203 @@ describe("update-cli", () => {
 
     expect(defaultRuntime.exit).toHaveBeenCalledWith(2);
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+  });
+
+  it("blocks git updates when this install's gateway service is still running", async () => {
+    const root = createCaseDir("openclaw-running-gateway");
+    const entrypoint = path.join(root, "dist", "index.js");
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root,
+      installKind: "git",
+      packageManager: "pnpm",
+      git: {
+        root,
+        sha: "abcdef1234567890",
+        tag: "v1.2.3",
+        branch: "main",
+        upstream: "origin/main",
+        dirty: false,
+        ahead: 0,
+        behind: 0,
+        fetchOk: true,
+      },
+      deps: {
+        manager: "pnpm",
+        status: "ok",
+        lockfilePath: path.join(root, "pnpm-lock.yaml"),
+        markerPath: path.join(root, "node_modules"),
+      },
+      registry: {
+        latestVersion: "1.2.3",
+      },
+    });
+    pathExists.mockImplementation(async (candidate: string) => candidate === entrypoint);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["/usr/bin/node", entrypoint, "gateway", "--port", "18789"],
+    });
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 7331,
+      state: "running",
+    });
+
+    await updateCommand({});
+
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks git updates with --no-restart when this install's running gateway uses an absolute entrypoint", async () => {
+    const root = createCaseDir("openclaw-running-gateway-norestart");
+    const entrypoint = path.join(root, "dist", "index.js");
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root,
+      installKind: "git",
+      packageManager: "pnpm",
+      git: {
+        root,
+        sha: "abcdef1234567890",
+        tag: "v1.2.3",
+        branch: "main",
+        upstream: "origin/main",
+        dirty: false,
+        ahead: 0,
+        behind: 0,
+        fetchOk: true,
+      },
+      deps: {
+        manager: "pnpm",
+        status: "ok",
+        lockfilePath: path.join(root, "pnpm-lock.yaml"),
+        markerPath: path.join(root, "node_modules"),
+      },
+      registry: {
+        latestVersion: "1.2.3",
+      },
+    });
+    pathExists.mockImplementation(async (candidate: string) => candidate === entrypoint);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["/usr/bin/node", entrypoint, "gateway", "--port", "18789"],
+    });
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 7331,
+      state: "running",
+    });
+
+    await updateCommand({ restart: false });
+
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Update blocked: this install's gateway service is still running"),
+    );
+    const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.join("\n")).toContain("Stop or restart the gateway first");
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("auto-stops and continues git updates when this install's running gateway uses a relative entrypoint", async () => {
+    const root = createCaseDir("openclaw-running-gateway-relative");
+    const entrypoint = path.join(root, "dist", "index.js");
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root,
+      installKind: "git",
+      packageManager: "pnpm",
+      git: {
+        root,
+        sha: "abcdef1234567890",
+        tag: "v1.2.3",
+        branch: "main",
+        upstream: "origin/main",
+        dirty: false,
+        ahead: 0,
+        behind: 0,
+        fetchOk: true,
+      },
+      deps: {
+        manager: "pnpm",
+        status: "ok",
+        lockfilePath: path.join(root, "pnpm-lock.yaml"),
+        markerPath: path.join(root, "node_modules"),
+      },
+      registry: {
+        latestVersion: "1.2.3",
+      },
+    });
+    pathExists.mockImplementation(async (candidate: string) => candidate === entrypoint);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        path.join("dist", "index.js"),
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      workingDirectory: root,
+    });
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 7331,
+      state: "running",
+    });
+
+    await updateCommand({});
+
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows git updates when the running gateway belongs to a different install", async () => {
+    const root = createCaseDir("openclaw-current-install");
+    const otherRoot = createCaseDir("openclaw-other-install");
+    const currentEntrypoint = path.join(root, "dist", "index.js");
+    const otherEntrypoint = path.join(otherRoot, "dist", "index.js");
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root,
+      installKind: "git",
+      packageManager: "pnpm",
+      git: {
+        root,
+        sha: "abcdef1234567890",
+        tag: "v1.2.3",
+        branch: "main",
+        upstream: "origin/main",
+        dirty: false,
+        ahead: 0,
+        behind: 0,
+        fetchOk: true,
+      },
+      deps: {
+        manager: "pnpm",
+        status: "ok",
+        lockfilePath: path.join(root, "pnpm-lock.yaml"),
+        markerPath: path.join(root, "node_modules"),
+      },
+      registry: {
+        latestVersion: "1.2.3",
+      },
+    });
+    pathExists.mockImplementation(async (candidate: string) => candidate === currentEntrypoint);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["/usr/bin/node", otherEntrypoint, "gateway", "--port", "18789"],
+    });
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 7331,
+      state: "running",
+    });
+
+    await updateCommand({});
+
+    expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("Update blocked: this install's gateway service is still running"),
+    );
   });
 
   it("post-core resume mode skips the core update and only runs post-update tasks", async () => {
