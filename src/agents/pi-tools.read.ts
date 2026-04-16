@@ -8,6 +8,12 @@ import {
   mkdirPathWithinRoot,
 } from "../infra/fs-safe.js";
 import { trySafeFileURLToPath } from "../infra/local-file-access.js";
+import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
+import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
+import { detectMime } from "../media/mime.js";
+import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import { toRelativeWorkspacePath } from "./path-policy.js";
 import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
 import {
   REQUIRED_PARAM_GROUPS,
@@ -581,6 +587,16 @@ export function createOpenClawReadTool(
       const limit = typeof record?.limit === "number" ? record.limit : undefined;
 
       const rootDirResolved = options?.root ? path.resolve(options.root) : process.cwd();
+function expandTildeToOsHome(filePath: string): string {
+  const home = resolveOsHomeDir();
+  return home ? expandHomePrefix(filePath, { home }) : filePath;
+}
+
+async function writeHostFile(absolutePath: string, content: string) {
+  const resolved = path.resolve(expandTildeToOsHome(absolutePath));
+  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  await fs.writeFile(resolved, content, "utf-8");
+}
 
       const inputPath = resolveToolPathAgainstWorkspaceRoot({
         filePath: rawPath,
@@ -611,6 +627,16 @@ export function createOpenClawReadTool(
           isDirectory = stats.isDirectory();
           fileSize = stats.size;
         }
+  if (!workspaceOnly) {
+    // When workspaceOnly is false, allow writes anywhere on the host
+    return {
+      mkdir: async (dir: string) => {
+        const resolved = path.resolve(expandTildeToOsHome(dir));
+        await fs.mkdir(resolved, { recursive: true });
+      },
+      writeFile: writeHostFile,
+    } as const;
+  }
 
         if (isDirectory) {
           if (signal?.aborted) {
@@ -745,6 +771,20 @@ export function createOpenClawReadTool(
             details: { path: inputPath, size: fileSize },
           } as AgentToolResult;
         }
+  if (!workspaceOnly) {
+    // When workspaceOnly is false, allow edits anywhere on the host
+    return {
+      readFile: async (absolutePath: string) => {
+        const resolved = path.resolve(expandTildeToOsHome(absolutePath));
+        return await fs.readFile(resolved);
+      },
+      writeFile: writeHostFile,
+      access: async (absolutePath: string) => {
+        const resolved = path.resolve(expandTildeToOsHome(absolutePath));
+        await fs.access(resolved);
+      },
+    } as const;
+  }
 
         // FIX P2: Video handling with extended extension support
         if (VIDEO_EXTENSIONS.has(ext)) {

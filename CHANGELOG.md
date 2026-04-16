@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Google/TTS: add Gemini text-to-speech support to the bundled `google` plugin, including provider registration, voice selection, WAV reply output, PCM telephony output, and setup/docs guidance. (#67515) Thanks @barronlroth.
+
 ### Fixes
 
 - Gateway/tools: anchor trusted local `MEDIA:` tool-result passthrough on the exact raw name of this run's registered built-in tools, and reject client tool definitions whose names normalize-collide with a built-in or with another client tool in the same request (`400 invalid_request_error` on both JSON and SSE paths), so a client-supplied tool named like a built-in can no longer inherit its local-media trust. (#67303)
@@ -23,6 +25,17 @@ Docs: https://docs.openclaw.ai
 - Agents/local models: clarify low-context preflight hints for self-hosted models, point config-backed caps at the relevant OpenClaw setting, and stop suggesting larger models when `agents.defaults.contextTokens` is the real limit. (#66236) Thanks @ImLukeF.
 - Dreaming/memory-core: change the default `dreaming.storage.mode` from `inline` to `separate` so Dreaming phase blocks (`## Light Sleep`, `## REM Sleep`) land in `memory/dreaming/{phase}/YYYY-MM-DD.md` instead of being injected into `memory/YYYY-MM-DD.md`. Daily memory files no longer get dominated by structured candidate output, and the daily-ingestion scanner that already strips dream marker blocks no longer has to compete with hundreds of phase-block lines on every run. Operators who want the previous behavior can opt in by setting `plugins.entries.memory-core.config.dreaming.storage.mode: "inline"`. (#66412) Thanks @mjamiv.
 - Control UI/Overview: fix false-positive "missing" alerts on the Model Auth status card for aliased providers, env-backed OAuth with auth.profiles, and unresolvable env SecretRefs. (#67253) Thanks @omarshahine.
+- Dashboard: constrain exec approval modal overflow on desktop so long command content no longer pushes action buttons out of view. (#67082) Thanks @Ziy1-Tan.
+- Agents/CLI transcripts: persist successful CLI-backed turns into the OpenClaw session transcript so google-gemini-cli replies appear in session history and the Control UI again. (#67490) Thanks @obviyus.
+- Discord/tool-call text: strip standalone Gemma-style `<function>...</function>` tool-call payloads from visible assistant text without truncating prose examples or trailing replies. (#67318) Thanks @joelnishanth.
+- WhatsApp/web-session: drain the pending per-auth creds save queue before reopening sockets so reconnect-time auth bootstrap no longer races in-flight `creds.json` writes and falsely restores from backup. (#67464) Thanks @neeravmakwana.
+- BlueBubbles/catchup: add a per-message retry ceiling (`catchup.maxFailureRetries`, default 10) so a persistently-failing message with a malformed payload no longer wedges the catchup cursor forever. After N consecutive `processMessage` failures against the same GUID, catchup logs a WARN, skips that message on subsequent sweeps, and lets the cursor advance past it. Transient failures still retry from the same point as before. Also fixes a lost-update race in the persistent dedupe file lock that silently dropped inbound GUIDs on concurrent writes, a dedupe file naming migration gap on version upgrade, and a balloon-event bypass that let catchup replay debouncer-coalesced events as standalone messages. (#67426, #66870) Thanks @omarshahine.
+- Ollama/chat: strip the `ollama/` provider prefix from Ollama chat request model ids so configured refs like `ollama/qwen3:14b-q8_0` stop 404ing against the Ollama API. (#67457) Thanks @suboss87.
+- QA/Matrix: split the private QA lab runtime into smaller tested modules, add Matrix media contract coverage for image understanding and generated-image delivery, and update the memory-dreaming QA sweep to assert the separate phase-report layout. (#67430) Thanks @gumadeiras.
+- Agents/tools: resolve non-workspace host tilde paths against the OS home directory and keep edit recovery aligned with that same path target, so `~/...` host edit/write operations stop failing or reading back the wrong file when `OPENCLAW_HOME` differs. (#62804) Thanks @stainlu.
+- Speech/TTS: auto-enable the bundled Microsoft and ElevenLabs speech providers, and route generic TTS directive tokens through the explicit or active provider first so overrides like `[[tts:speed=1.2]]` stop silently landing on the wrong provider. (#62846) Thanks @stainlu.
+- OpenAI Codex/models: normalize stale native transport metadata in both runtime resolution and discovery/listing so legacy `openai-codex` rows with missing `api` or `https://chatgpt.com/backend-api/v1` self-heal to the canonical Codex transport instead of routing requests through broken HTML/Cloudflare paths, combining the original fixes proposed in #66969 (saamuelng601-pixel) and #67159 (hclsys). (#67635)
+- Agents/failover: treat HTML provider error pages as upstream transport failures for CDN-style 5xx responses without misclassifying embedded body text as API rate limits, while still preserving auth remediation for HTML 401/403 pages and proxy remediation for HTML 407 pages. (#67642) Thanks @stainlu.
 
 ## 2026.4.15-beta.1
 
@@ -435,6 +448,7 @@ Docs: https://docs.openclaw.ai
 - iMessage: retry transient `watch.subscribe` startup failures before tearing down the monitor, so brief local transport stalls do not immediately bounce the channel. (#65393) Thanks @vincentkoc.
 - Status/session_status: move shared session status text into a neutral internal status module and keep the tool importing a local runtime shim, so built `session_status` no longer depends on reply command internals or a bundler-opaque runtime import. (#65807) Thanks @dutifulbob.
 - QQBot/security: replace raw `fetch()` in the image-size probe with SSRF-guarded `fetchRemoteMedia`, fix `resolveRepoRoot()` to walk up to `.git` instead of hardcoding two parent levels, and refresh the raw-fetch allowlist to match the corrected scan. (#63495) Thanks @dims.
+- WhatsApp/web: rewrite queued `creds.json` updates atomically so interrupted saves do not leave truncated login state behind. (#63577) thanks @OwenYWT
 
 ## 2026.4.9
 
