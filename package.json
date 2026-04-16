@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.15",
+  "version": "2026.4.16",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -33,6 +33,7 @@
     "!dist/extensions/qa-channel/**",
     "dist/extensions/qa-channel/runtime-api.js",
     "!dist/extensions/qa-lab/**",
+    "dist/extensions/qa-lab/runtime-api.js",
     "!dist/extensions/qa-matrix/**",
     "!dist/plugin-sdk/extensions/qa-lab/**",
     "!dist/plugin-sdk/qa-lab.*",
