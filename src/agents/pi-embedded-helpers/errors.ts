@@ -320,7 +320,7 @@ const DNS_ERROR_RE = /\benotfound\b|\beai_again\b|\bgetaddrinfo\b|\bno such host
 const INTERRUPTED_NETWORK_ERROR_RE =
   /\beconnrefused\b|\beconnreset\b|\beconnaborted\b|\benetreset\b|\behostunreach\b|\behostdown\b|\benetunreach\b|\bepipe\b|\bsocket hang up\b|\bconnection refused\b|\bconnection reset\b|\bconnection aborted\b|\bnetwork is unreachable\b|\bhost is unreachable\b|\bfetch failed\b|\bconnection error\b|\bnetwork request failed\b/i;
 const REPLAY_INVALID_RE =
-  /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b/i;
+  /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
 const SANDBOX_BLOCKED_RE =
   /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b/i;
 
@@ -668,6 +668,10 @@ function isOpenRouterKeyLimitExceededError(raw: string, provider?: string): bool
   );
 }
 
+function isExactUnknownNoDetailsError(raw: string): boolean {
+  return normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)";
+}
+
 function classifyFailoverClassificationFromMessage(
   raw: string,
   provider?: string,
@@ -736,6 +740,9 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isCloudCodeAssistFormatError(raw)) {
     return toReasonClassification("format");
+  }
+  if (isExactUnknownNoDetailsError(raw)) {
+    return toReasonClassification("unknown");
   }
   if (isTimeoutErrorMessage(raw)) {
     return toReasonClassification("timeout");
@@ -1102,6 +1109,7 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
     lower.includes("session expired") ||
     lower.includes("session invalid") ||
     lower.includes("conversation not found") ||
+    lower.includes("no conversation found") ||
     lower.includes("conversation does not exist") ||
     lower.includes("conversation expired") ||
     lower.includes("conversation invalid") ||

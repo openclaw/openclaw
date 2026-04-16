@@ -9,6 +9,7 @@ overrides:
   hono: 4.12.12
   '@hono/node-server': 1.19.13
   axios: 1.15.0
+  follow-redirects: 1.16.0
   defu: 6.1.5
   fast-xml-parser: 5.5.7
   request: npm:@cypress/request@3.0.10
@@ -26,6 +27,11 @@ overrides:
   yauzl: 3.2.1
 
 packageExtensionsChecksum: sha256-n+P/SQo4Pf+dHYpYn1Y6wL4cJEVoVzZ835N0OEp4TM8=
+
+patchedDependencies:
+  '@whiskeysockets/baileys@7.0.0-rc.9':
+    hash: 23ec8efe1484afa57c51b96955ba331d1467521a8e676a18c2690da7e70a6201
+    path: patches/@whiskeysockets__baileys@7.0.0-rc.9.patch
 
 importers:
 
@@ -73,9 +79,6 @@ importers:
       '@larksuiteoapi/node-sdk':
         specifier: ^1.60.0
         version: 1.60.0
-      '@line/bot-sdk':
-        specifier: ^11.0.0
-        version: 11.0.0
       '@lydell/node-pty':
         specifier: 1.2.0-beta.12
         version: 1.2.0-beta.12
@@ -103,6 +106,9 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.89
         version: 0.1.92
+      '@pierre/diffs':
+        specifier: 1.1.13
+        version: 1.1.13(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
@@ -114,7 +120,7 @@ importers:
         version: 7.15.0
       '@whiskeysockets/baileys':
         specifier: 7.0.0-rc.9
-        version: 7.0.0-rc.9(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
+        version: 7.0.0-rc.9(patch_hash=23ec8efe1484afa57c51b96955ba331d1467521a8e676a18c2690da7e70a6201)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
       ajv:
         specifier: ^8.18.0
         version: 8.18.0
@@ -154,9 +160,6 @@ importers:
       grammy:
         specifier: ^1.42.0
         version: 1.42.0
-      hono:
-        specifier: 4.12.12
-        version: 4.12.12
       https-proxy-agent:
         specifier: ^9.0.0
         version: 9.0.0
@@ -333,9 +336,6 @@ importers:
       music-metadata:
         specifier: ^11.12.3
         version: 11.12.3
-      openshell:
-        specifier: 0.1.0
-        version: 0.1.0
 
   extensions/acpx:
     dependencies:
@@ -688,6 +688,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/line:
+    dependencies:
+      '@line/bot-sdk':
+        specifier: ^11.0.0
+        version: 11.0.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -955,6 +959,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/openshell:
+    dependencies:
+      openshell:
+        specifier: 0.1.0
+        version: 0.1.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -980,6 +988,15 @@ importers:
       playwright-core:
         specifier: 1.59.1
         version: 1.59.1
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/qa-matrix:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1221,7 +1238,7 @@ importers:
     dependencies:
       '@whiskeysockets/baileys':
         specifier: 7.0.0-rc.9
-        version: 7.0.0-rc.9(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
+        version: 7.0.0-rc.9(patch_hash=23ec8efe1484afa57c51b96955ba331d1467521a8e676a18c2690da7e70a6201)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
       jimp:
         specifier: ^1.6.1
         version: 1.6.1
@@ -5324,8 +5341,8 @@ packages:
   flatbuffers@24.12.23:
     resolution: {integrity: sha512-dLVCAISd5mhls514keQzmEG6QHmUUsNuWsb4tFafIUwvvgDjXhtfAYSKOzt5SWOy+qByV5pbsDZ+Vb7HUOBEdA==}
 
-  follow-redirects@1.15.11:
-    resolution: {integrity: sha512-deG2P0JfjrTxl50XGCDyfI97ZGVCxIpfKYmfyrQ54n5FO/0gfIES8C/Psl6kWVDolizcaaxZJnTS0QSMxvnsBQ==}
+  follow-redirects@1.16.0:
+    resolution: {integrity: sha512-y5rN/uOsadFT/JfYwhxRS5R7Qce+g3zG97+JrtFZlC9klX/W5hD7iiLzScI4nZqUS7DNUdhPgw4xI8W2LuXlUw==}
     engines: {node: '>=4.0'}
     peerDependencies:
       debug: '*'
@@ -10968,8 +10985,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@telegraf/types@7.1.0':
-    optional: true
+  '@telegraf/types@7.1.0': {}
 
   '@thi.ng/bitstream@2.4.45':
     dependencies:
@@ -11423,7 +11439,7 @@ snapshots:
       '@wasm-audio-decoders/common': 9.0.7
     optional: true
 
-  '@whiskeysockets/baileys@7.0.0-rc.9(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)':
+  '@whiskeysockets/baileys@7.0.0-rc.9(patch_hash=23ec8efe1484afa57c51b96955ba331d1467521a8e676a18c2690da7e70a6201)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)':
     dependencies:
       '@cacheable/node-cache': 1.7.6
       '@hapi/boom': 9.1.4
@@ -11610,7 +11626,7 @@ snapshots:
 
   axios@1.15.0:
     dependencies:
-      follow-redirects: 1.15.11
+      follow-redirects: 1.16.0
       form-data: 2.5.4
       proxy-from-env: 2.1.0
     transitivePeerDependencies:
@@ -11717,21 +11733,18 @@ snapshots:
     dependencies:
       base-x: 5.0.1
 
-  buffer-alloc-unsafe@1.1.0:
-    optional: true
+  buffer-alloc-unsafe@1.1.0: {}
 
   buffer-alloc@1.2.0:
     dependencies:
       buffer-alloc-unsafe: 1.1.0
       buffer-fill: 1.0.0
-    optional: true
 
   buffer-crc32@0.2.13: {}
 
   buffer-equal-constant-time@1.0.1: {}
 
-  buffer-fill@1.0.0:
-    optional: true
+  buffer-fill@1.0.0: {}
 
   buffer-from@1.1.2: {}
 
@@ -12120,8 +12133,7 @@ snapshots:
       domelementtype: 2.3.0
       domhandler: 5.0.3
 
-  dotenv@16.6.1:
-    optional: true
+  dotenv@16.6.1: {}
 
   dotenv@17.4.1: {}
 
@@ -12423,7 +12435,7 @@ snapshots:
 
   flatbuffers@24.12.23: {}
 
-  follow-redirects@1.15.11: {}
+  follow-redirects@1.16.0: {}
 
   form-data@2.5.4:
     dependencies:
@@ -13429,8 +13441,7 @@ snapshots:
     dependencies:
       '@wasm-audio-decoders/common': 9.0.7
 
-  mri@1.2.0:
-    optional: true
+  mri@1.2.0: {}
 
   mrmime@2.0.1: {}
 
@@ -13662,7 +13673,6 @@ snapshots:
     transitivePeerDependencies:
       - encoding
       - supports-color
-    optional: true
 
   opus-decoder@0.7.11:
     dependencies:
@@ -13777,8 +13787,7 @@ snapshots:
     dependencies:
       p-finally: 1.0.0
 
-  p-timeout@4.1.0:
-    optional: true
+  p-timeout@4.1.0: {}
 
   p-timeout@7.0.1: {}
 
@@ -14363,14 +14372,12 @@ snapshots:
   safe-compare@1.1.4:
     dependencies:
       buffer-alloc: 1.2.0
-    optional: true
 
   safe-stable-stringify@2.5.0: {}
 
   safer-buffer@2.1.2: {}
 
-  sandwich-stream@2.0.2:
-    optional: true
+  sandwich-stream@2.0.2: {}
 
   sass-lookup@6.1.1:
     dependencies:
@@ -14766,7 +14773,6 @@ snapshots:
     transitivePeerDependencies:
       - encoding
       - supports-color
-    optional: true
 
   text-decoder@1.2.7:
     dependencies:
