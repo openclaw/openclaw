@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
 import { emitAgentPlanEvent } from "../../infra/agent-events.js";
@@ -213,6 +215,21 @@ function backfillSessionKey(params: {
   }
 }
 
+function buildHandledReplyPayloads(reply?: ReplyPayload) {
+  const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
+  return [
+    {
+      text: normalized.text,
+      mediaUrl: normalized.mediaUrl,
+      mediaUrls: normalized.mediaUrls,
+      replyToId: normalized.replyToId,
+      audioAsVoice: normalized.audioAsVoice,
+      isError: normalized.isError,
+      isReasoning: normalized.isReasoning,
+    },
+  ];
+}
+
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
@@ -314,6 +331,27 @@ export async function runEmbeddedPiAgent(
         trigger: params.trigger,
         channelId: params.messageChannel ?? params.messageProvider ?? undefined,
       };
+      if (params.trigger === "cron" && hookRunner?.hasHooks("before_agent_reply")) {
+        const hookResult = await hookRunner.runBeforeAgentReply(
+          { cleanedBody: params.prompt },
+          hookCtx,
+        );
+        if (hookResult?.handled) {
+          return {
+            payloads: buildHandledReplyPayloads(hookResult.reply),
+            meta: {
+              durationMs: Date.now() - started,
+              agentMeta: {
+                sessionId: params.sessionId,
+                provider,
+                model: modelId,
+              },
+              finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+              finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+            },
+          };
+        }
+      }
 
       const hookSelection = await resolveHookModelSelection({
         prompt: params.prompt,
