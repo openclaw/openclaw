@@ -138,8 +138,9 @@ export function renderModeSwitcher(params: {
   const { currentMode, menuOpen, onToggleMenu, onSelectMode } = params;
 
   return html`
-    <div class="agent-chat__mode-switcher" style="position: relative;">
+    <div class="agent-chat__mode-switcher">
       <button
+        type="button"
         class="agent-chat__mode-chip"
         @click=${onToggleMenu}
         title="Switch mode (Ctrl+1-4)"
@@ -165,6 +166,7 @@ export function renderModeSwitcher(params: {
               ${MODE_DEFINITIONS.map(
                 (mode) => html`
                   <button
+                    type="button"
                     class="agent-chat__mode-menu__item ${mode.id === currentMode.id
                       ? "agent-chat__mode-menu__item--active"
                       : ""}"
@@ -175,7 +177,7 @@ export function renderModeSwitcher(params: {
                   >
                     ${mode.icon}
                     <span class="agent-chat__mode-menu__label">${mode.label}</span>
-                    <kbd class="agent-chat__mode-menu__shortcut">${mode.shortcut}</kbd>
+                    <kbd class="agent-chat__mode-menu__shortcut">Ctrl+${mode.shortcut}</kbd>
                   </button>
                 `,
               )}
@@ -191,7 +193,8 @@ export function renderModeSwitcher(params: {
  * Returns the selected mode if a shortcut matched, or null.
  */
 export function handleModeShortcut(e: KeyboardEvent): ModeDefinition | null {
-  if (!e.ctrlKey && !e.metaKey) {
+  // Only use Ctrl, not Cmd/Meta — Cmd+1-4 is browser tab switching on macOS.
+  if (!e.ctrlKey || e.metaKey) {
     return null;
   }
   const mode = MODE_DEFINITIONS.find((m) => m.shortcut === e.key);
