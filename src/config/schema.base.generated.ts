@@ -4127,7 +4127,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         maximum: 9007199254740991,
                         title: "Embedding Batch Timeout (s)",
                         description:
-                          "Timeout in seconds for local and Ollama embedding batch operations during memory indexing (default: 120). Increase on low-CPU machines where local embedding providers like Ollama take longer to process a batch.",
+                          "Timeout in seconds for local and Ollama embedding batch operations during memory indexing (default: 120). Increase on low-CPU machines where local embedding providers like Ollama take longer to process a batch. The existing remote.batch.timeoutMinutes only covers provider batch APIs; this field covers inline embedding calls.",
                       },
                       sessions: {
                         type: "object",
@@ -5982,9 +5982,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           type: "integer",
                           exclusiveMinimum: 0,
                           maximum: 9007199254740991,
-                          title: "Embedding Batch Timeout (s)",
-                          description:
-                            "Timeout in seconds for local and Ollama embedding batch operations during memory indexing (default: 120). Increase on low-CPU machines where local embedding providers like Ollama take longer to process a batch.",
                         },
                         sessions: {
                           type: "object",
