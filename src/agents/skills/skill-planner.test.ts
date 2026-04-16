@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveSkillPlanTemplate } from "../pi-embedded-runner/skills-runtime.js";
 import { buildPlanTemplatePayload, hasSkillPlanTemplate } from "./skill-planner.js";
 import type { SkillPlanTemplateStep } from "./types.js";
 
@@ -8,7 +9,8 @@ describe("buildPlanTemplatePayload", () => {
   });
 
   it("returns null for undefined template", () => {
-    expect(buildPlanTemplatePayload("deploy", undefined as unknown as SkillPlanTemplateStep[])).toBeNull();
+    expect(buildPlanTemplatePayload("deploy", undefined)).toBeNull();
+    expect(buildPlanTemplatePayload("deploy")).toBeNull();
   });
 
   it("builds pending steps from template", () => {
@@ -24,9 +26,7 @@ describe("buildPlanTemplatePayload", () => {
   });
 
   it("preserves activeForm when present", () => {
-    const template: SkillPlanTemplateStep[] = [
-      { step: "Run tests", activeForm: "Running tests" },
-    ];
+    const template: SkillPlanTemplateStep[] = [{ step: "Run tests", activeForm: "Running tests" }];
     const result = buildPlanTemplatePayload("deploy", template);
     expect(result!.plan[0].activeForm).toBe("Running tests");
   });
@@ -54,5 +54,33 @@ describe("hasSkillPlanTemplate", () => {
 
   it("returns true for non-empty planTemplate", () => {
     expect(hasSkillPlanTemplate({ planTemplate: [{ step: "x" }] })).toBe(true);
+  });
+});
+
+describe("resolveSkillPlanTemplate", () => {
+  it("returns null when no entries have a plan template", () => {
+    const entries = [
+      { skill: { name: "deploy" }, metadata: {} },
+      { skill: { name: "lint" }, metadata: { planTemplate: [] } },
+    ] as Parameters<typeof resolveSkillPlanTemplate>[0];
+    expect(resolveSkillPlanTemplate(entries)).toBeNull();
+  });
+
+  it("returns payload for the first entry with a plan template", () => {
+    const entries = [
+      { skill: { name: "deploy" }, metadata: {} },
+      {
+        skill: { name: "release" },
+        metadata: { planTemplate: [{ step: "Tag release" }] },
+      },
+    ] as Parameters<typeof resolveSkillPlanTemplate>[0];
+    const result = resolveSkillPlanTemplate(entries);
+    expect(result).not.toBeNull();
+    expect(result!.plan[0].step).toBe("Tag release");
+    expect(result!.explanation).toContain("release");
+  });
+
+  it("returns null for empty entries array", () => {
+    expect(resolveSkillPlanTemplate([])).toBeNull();
   });
 });
