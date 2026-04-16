@@ -23,7 +23,13 @@ import {
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
-import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
+import {
+  formatTaskStatusDetail,
+  formatTaskStatusTitle,
+  sanitizeTaskStatusText,
+  TASK_STATUS_DETAIL_MAX_CHARS,
+} from "../../tasks/task-status.js";
+import { loadA2ATaskStatusIndex, type A2ATaskStatusIndexEntry } from "../a2a/list.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
   buildAllowedModelSet,
@@ -48,6 +54,7 @@ import {
   resolveSandboxedSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
+import { reconcileSessionsSendA2ATask } from "./sessions-send-tool.a2a.js";
 
 const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -179,6 +186,180 @@ function formatSessionTaskLine(params: {
   const detail = formatTaskStatusDetail(task);
   const parts = [headline, task.runtime, title, detail].filter(Boolean);
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
+}
+
+function formatA2ATaskStatusLabel(status: string): string {
+  return status.replaceAll("_", " ");
+}
+
+function resolveA2ABrokerAdapterLabel(cfg: OpenClawConfig): string {
+  const pluginEntry = cfg.plugins?.entries?.["a2a-broker-adapter"];
+  const baseUrl = pluginEntry?.config?.baseUrl;
+  return pluginEntry &&
+    pluginEntry.enabled !== false &&
+    typeof baseUrl === "string" &&
+    baseUrl.trim()
+    ? "broker on"
+    : "broker off";
+}
+
+function formatA2ATaskDetail(entry: A2ATaskStatusIndexEntry): string | undefined {
+  const raw =
+    entry.statusCategory === "terminal-failure"
+      ? (entry.error?.message ?? entry.error?.code)
+      : entry.summary;
+  const sanitized = sanitizeTaskStatusText(raw, {
+    errorContext: entry.statusCategory === "terminal-failure",
+    maxChars: TASK_STATUS_DETAIL_MAX_CHARS,
+  });
+  return sanitized || undefined;
+}
+
+function formatRelativeDuration(from: number, now = Date.now()): string {
+  const diffMs = Math.max(0, now - from);
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 60) {
+    return `${diffSec}s`;
+  }
+  const minutes = Math.floor(diffSec / 60);
+  const seconds = diffSec % 60;
+  if (minutes < 60) {
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
+function formatA2ATaskDirection(entry: A2ATaskStatusIndexEntry): string | undefined {
+  const requester = entry.requester?.displayKey?.trim();
+  const target = entry.target?.displayKey?.trim();
+  if (!requester && !target) {
+    return undefined;
+  }
+  return `${requester ?? "unknown"} → ${target ?? "unknown"}`;
+}
+
+function formatA2ATaskElapsed(
+  entry: A2ATaskStatusIndexEntry,
+  now = Date.now(),
+): string | undefined {
+  const origin = entry.startedAt ?? entry.updatedAt;
+  return typeof origin === "number" ? formatRelativeDuration(origin, now) : undefined;
+}
+
+function formatA2AHeartbeatAge(
+  entry: A2ATaskStatusIndexEntry,
+  now = Date.now(),
+): string | undefined {
+  if (entry.statusCategory !== "active" || typeof entry.heartbeatAt !== "number") {
+    return undefined;
+  }
+  return `heartbeat ${formatRelativeDuration(entry.heartbeatAt, now)} ago`;
+}
+
+function buildA2ATaskLine(
+  index: A2ATaskStatusIndexEntry[],
+  cfg: OpenClawConfig,
+): string | undefined {
+  if (index.length === 0) {
+    return undefined;
+  }
+
+  const now = Date.now();
+  const active = index.filter((entry) => entry.statusCategory === "active");
+  const terminalFailures = index.filter((entry) => entry.statusCategory === "terminal-failure");
+  const waitingExternal = index.filter((entry) => entry.executionStatus === "waiting_external");
+  const lines: string[] = [];
+  const headlineParts: string[] = [resolveA2ABrokerAdapterLabel(cfg)];
+
+  if (active.length > 0) {
+    headlineParts.push(`${active.length} active`);
+  }
+  if (waitingExternal.length > 0) {
+    headlineParts.push(`${waitingExternal.length} waiting external`);
+  }
+  if (terminalFailures.length > 0) {
+    headlineParts.push(
+      `${terminalFailures.length} recent failure${terminalFailures.length === 1 ? "" : "s"}`,
+    );
+  }
+  if (headlineParts.length === 0) {
+    headlineParts.push(
+      `latest ${formatA2ATaskStatusLabel(index[0]?.executionStatus ?? "unknown")}`,
+    );
+  }
+  lines.push(`🔁 A2A: ${headlineParts.join(", ")}`);
+
+  const activeFocus = active.slice(0, 3);
+  activeFocus.forEach((entry, idx) => {
+    const branch = idx === activeFocus.length - 1 && terminalFailures.length === 0 ? "└─" : "├─";
+    const detailBranch = branch === "└─" ? "   " : "│  ";
+    const parts = [
+      `[${formatA2ATaskStatusLabel(entry.executionStatus)}]`,
+      formatA2ATaskDirection(entry),
+      formatA2ATaskElapsed(entry, now),
+      formatA2AHeartbeatAge(entry, now),
+      entry.deliveryStatus === "none"
+        ? undefined
+        : `delivery ${formatA2ATaskStatusLabel(entry.deliveryStatus)}`,
+    ].filter(Boolean);
+    lines.push(`  ${branch} ${parts.join(" · ")}`);
+    const detail = formatA2ATaskDetail(entry);
+    if (detail) {
+      lines.push(`  ${detailBranch}└─ ${detail}`);
+    }
+  });
+
+  if (active.length > activeFocus.length) {
+    lines.push(`  ├─ …and ${active.length - activeFocus.length} more active`);
+  }
+
+  const recentFailure = terminalFailures[0];
+  if (recentFailure) {
+    const failureParts = [
+      `[${formatA2ATaskStatusLabel(recentFailure.executionStatus)}]`,
+      formatA2ATaskDirection(recentFailure),
+      typeof recentFailure.updatedAt === "number"
+        ? `${formatRelativeDuration(recentFailure.updatedAt, now)} ago`
+        : undefined,
+      recentFailure.deliveryStatus === "none"
+        ? undefined
+        : `delivery ${formatA2ATaskStatusLabel(recentFailure.deliveryStatus)}`,
+    ].filter(Boolean);
+    lines.push(`  └─ ✗ ${failureParts.join(" · ")}`);
+    const failureDetail = formatA2ATaskDetail(recentFailure);
+    if (failureDetail) {
+      lines.push(`     └─ ${failureDetail}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+async function formatSessionA2ATaskLine(params: {
+  sessionKey: string;
+  cfg: OpenClawConfig;
+}): Promise<string | undefined> {
+  try {
+    let index = await loadA2ATaskStatusIndex({ sessionKey: params.sessionKey });
+    const activeTasks = index.filter((entry) => entry.statusCategory === "active");
+    if (activeTasks.length > 0) {
+      await Promise.allSettled(
+        activeTasks.map((entry) =>
+          reconcileSessionsSendA2ATask({
+            sessionKey: params.sessionKey,
+            taskId: entry.taskId,
+            config: params.cfg,
+          }),
+        ),
+      );
+      index = await loadA2ATaskStatusIndex({ sessionKey: params.sessionKey });
+    }
+    return buildA2ATaskLine(index, params.cfg);
+  } catch {
+    return undefined;
+  }
 }
 
 async function resolveModelOverride(params: {
@@ -515,6 +696,10 @@ export function createSessionStatusTool(opts?: {
         relatedSessionKey: resolved.key,
         callerOwnerKey: visibilityRequesterKey,
       });
+      const a2aTaskLine = await formatSessionA2ATaskLine({
+        sessionKey: resolved.key,
+        cfg,
+      });
       const { buildStatusText } = await loadCommandsStatusRuntime();
       const statusText = await buildStatusText({
         cfg,
@@ -544,8 +729,11 @@ export function createSessionStatusTool(opts?: {
         ...(providerForCard ? {} : { modelAuthOverride: undefined }),
         includeTranscriptUsage: true,
       });
+      const extraLines = [taskLine, a2aTaskLine].filter(
+        (line): line is string => Boolean(line) && !statusText.includes(line),
+      );
       const fullStatusText =
-        taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;
+        extraLines.length > 0 ? `${statusText}\n${extraLines.join("\n")}` : statusText;
 
       return {
         content: [{ type: "text", text: fullStatusText }],

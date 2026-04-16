@@ -37,6 +37,46 @@ export type HeartbeatStatus = {
   everyMs: number | null;
 };
 
+export type A2AHealthState = "ok" | "delayed" | "waiting_external" | "failed" | "config_error";
+
+export type A2ALatestFailedTaskSummary = {
+  agentId: string;
+  sessionKey: string;
+  taskId: string;
+  executionStatus: string;
+  deliveryStatus: string;
+  updatedAt: number;
+  errorCode?: string;
+  errorMessage?: string;
+  summary?: string;
+};
+
+export type A2AStatusSummary = {
+  state: A2AHealthState;
+  tasks: {
+    total: number;
+    active: number;
+    failed: number;
+    waitingExternal: number;
+    delayed: number;
+    latestFailed: A2ALatestFailedTaskSummary | null;
+  };
+  issues: {
+    brokerUnreachable: number;
+    reconcileFailed: number;
+    deliveryFailed: number;
+    cancelNotAttempted: number;
+    sessionAbortFailed: number;
+  };
+  broker: {
+    pluginEnabled: boolean;
+    adapterEnabled: boolean;
+    baseUrlPresent: boolean;
+    edgeSecretPresent: boolean;
+    methodScopesOk: boolean;
+  };
+};
+
 export type StatusSummary = {
   runtimeVersion?: string | null;
   linkChannel?: {
@@ -51,6 +91,7 @@ export type StatusSummary = {
   };
   channelSummary: string[];
   queuedSystemEvents: string[];
+  a2a: A2AStatusSummary;
   tasks: TaskRegistrySummary;
   taskAudit: TaskAuditSummary;
   sessions: {

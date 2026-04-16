@@ -1,8 +1,20 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
+import { buildA2ATaskEnvelopeFromExchange } from "./a2a/broker.js";
+import {
+  createA2ATaskAcceptedEvent,
+  createA2ATaskCreatedEvent,
+  createA2ATaskFailedEvent,
+  createA2AWorkerHeartbeatEvent,
+  createA2AWorkerStartedEvent,
+} from "./a2a/events.js";
+import { resolveA2ATaskEventLogPath } from "./a2a/log.js";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -42,6 +54,45 @@ const createMockConfig = () => ({
 
 let mockConfig: Record<string, unknown> = createMockConfig();
 const TASK_STATUS_SNAPSHOT_NOW = 1_000_000_000_000;
+const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+const tempStateDirs: string[] = [];
+
+async function makeA2AEnv() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-status-a2a-"));
+  tempStateDirs.push(dir);
+  process.env.OPENCLAW_STATE_DIR = dir;
+  return { OPENCLAW_STATE_DIR: dir } as NodeJS.ProcessEnv;
+}
+
+async function writeA2ATaskLog(params: {
+  env: NodeJS.ProcessEnv;
+  sessionKey: string;
+  taskId: string;
+  at: number;
+  events?: object[];
+}) {
+  const envelope = buildA2ATaskEnvelopeFromExchange({
+    request: {
+      target: { sessionKey: params.sessionKey, displayKey: params.sessionKey },
+      originalMessage: `Inspect ${params.taskId}`,
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      waitRunId: params.taskId,
+    },
+    taskId: params.taskId,
+  });
+  const eventLogPath = resolveA2ATaskEventLogPath({
+    sessionKey: params.sessionKey,
+    taskId: params.taskId,
+    env: params.env,
+  });
+  const lines = [
+    JSON.stringify(createA2ATaskCreatedEvent({ envelope, at: params.at })),
+    ...(params.events ?? []).map((event) => JSON.stringify(event)),
+  ];
+  await fs.mkdir(path.dirname(eventLogPath), { recursive: true });
+  await fs.writeFile(eventLogPath, `${lines.join("\n")}\n`, "utf8");
+}
 
 function createScopedSessionStores() {
   return new Map<string, Record<string, unknown>>([
@@ -278,6 +329,17 @@ let createSessionStatusTool: typeof import("./tools/session-status-tool.js").cre
 
 beforeAll(async () => {
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
+});
+
+afterEach(async () => {
+  if (originalOpenClawStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+  }
+  await Promise.all(
+    tempStateDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+  );
 });
 
 function resetSessionStore(store: Record<string, SessionEntry>) {
@@ -517,6 +579,87 @@ describe("session_status tool", () => {
     expect(text).toContain("acp");
     expect(text).toContain("Summarize inbox backlog");
     expect(text).toContain("Indexing the latest threads");
+  });
+
+  it("includes session-scoped A2A state in session_status output", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    });
+    const env = await makeA2AEnv();
+    await writeA2ATaskLog({
+      env,
+      sessionKey: "agent:main:main",
+      taskId: "task-active",
+      at: 10,
+      events: [
+        createA2ATaskAcceptedEvent({ taskId: "task-active", at: 11 }),
+        createA2AWorkerStartedEvent({ taskId: "task-active", at: 12 }),
+        createA2AWorkerHeartbeatEvent({ taskId: "task-active", at: 18 }),
+      ],
+    });
+    await writeA2ATaskLog({
+      env,
+      sessionKey: "agent:main:subagent:other",
+      taskId: "task-other-session",
+      at: 20,
+      events: [
+        createA2ATaskAcceptedEvent({ taskId: "task-other-session", at: 21 }),
+        createA2ATaskFailedEvent({
+          taskId: "task-other-session",
+          at: 22,
+          errorCode: "hidden",
+          errorMessage: "should stay hidden",
+        }),
+      ],
+    });
+
+    const tool = createSessionStatusTool({ agentSessionKey: "agent:main:main" });
+    const result = await tool.execute("tc-a2a-active", { sessionKey: "agent:main:main" });
+    const firstContent = result.content?.[0];
+    const text = (firstContent as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("🔁 A2A: broker off, 1 active");
+    expect(text).toContain("[running]");
+    expect(text).toContain("delivery pending");
+    expect(text).toContain("heartbeat");
+    expect(text).not.toContain("should stay hidden");
+  });
+
+  it("shows A2A failure context in session_status output when no exchange is active", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    });
+    const env = await makeA2AEnv();
+    await writeA2ATaskLog({
+      env,
+      sessionKey: "agent:main:main",
+      taskId: "task-failed",
+      at: 10,
+      events: [
+        createA2ATaskAcceptedEvent({ taskId: "task-failed", at: 11 }),
+        createA2ATaskFailedEvent({
+          taskId: "task-failed",
+          at: 13,
+          errorCode: "permission_denied",
+          errorMessage: "Permission denied by operator policy",
+        }),
+      ],
+    });
+
+    const tool = createSessionStatusTool({ agentSessionKey: "agent:main:main" });
+    const result = await tool.execute("tc-a2a-failed", { sessionKey: "agent:main:main" });
+    const firstContent = result.content?.[0];
+    const text = (firstContent as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("🔁 A2A: broker off, 1 recent failure");
+    expect(text).toContain("[failed]");
+    expect(text).toContain("Permission denied by operator policy");
   });
 
   it("hides stale completed task rows from session_status output", async () => {

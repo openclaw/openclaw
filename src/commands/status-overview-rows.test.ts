@@ -10,9 +10,55 @@ import {
 
 describe("status-overview-rows", () => {
   it("builds command overview rows from the shared surface", () => {
-    expect(buildStatusCommandOverviewRows(createStatusCommandOverviewRowsParams())).toEqual(
+    expect(
+      buildStatusCommandOverviewRows(
+        createStatusCommandOverviewRowsParams({
+          summary: {
+            ...createStatusCommandOverviewRowsParams().summary,
+            a2a: {
+              state: "waiting_external",
+              tasks: {
+                total: 3,
+                active: 1,
+                failed: 1,
+                waitingExternal: 1,
+                delayed: 0,
+                latestFailed: {
+                  agentId: "main",
+                  sessionKey: "agent:main:main",
+                  taskId: "a2a-1",
+                  executionStatus: "failed",
+                  deliveryStatus: "failed",
+                  updatedAt: 1,
+                  errorMessage: "broker unavailable",
+                },
+              },
+              issues: {
+                brokerUnreachable: 1,
+                reconcileFailed: 0,
+                deliveryFailed: 1,
+                cancelNotAttempted: 0,
+                sessionAbortFailed: 0,
+              },
+              broker: {
+                pluginEnabled: true,
+                adapterEnabled: true,
+                baseUrlPresent: true,
+                edgeSecretPresent: true,
+                methodScopesOk: true,
+              },
+            },
+          } as never,
+        }),
+      ),
+    ).toEqual(
       expect.arrayContaining([
         { Item: "OS", Value: `macOS · node ${process.versions.node}` },
+        {
+          Item: "A2A",
+          Value:
+            "warn(waiting external) · broker on · 1 active · 1 waiting external · warn(1 failed) · latest broker unavailable",
+        },
         {
           Item: "Memory",
           Value:

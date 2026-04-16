@@ -18,6 +18,7 @@ import {
 } from "./status-overview-values.ts";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import {
+  buildStatusA2AValue,
   buildStatusAgentsValue,
   buildStatusHeartbeatValue,
   buildStatusLastHeartbeatValue,
@@ -76,6 +77,12 @@ export function buildStatusCommandOverviewRows(params: {
     warn: params.warn,
     muted: params.muted,
   });
+  const a2aValue = buildStatusA2AValue({
+    summary: params.summary,
+    ok: params.ok,
+    warn: params.warn,
+    muted: params.muted,
+  });
   const probesValue = buildStatusProbesValue({
     health: params.health,
     ok: params.ok,
@@ -120,6 +127,7 @@ export function buildStatusCommandOverviewRows(params: {
       { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
       { Item: "Probes", Value: probesValue },
       { Item: "Events", Value: eventsValue },
+      { Item: "A2A", Value: a2aValue },
       { Item: "Tasks", Value: tasksValue },
       { Item: "Heartbeat", Value: heartbeatValue },
       ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),

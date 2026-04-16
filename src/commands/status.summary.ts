@@ -1,3 +1,6 @@
+import { listA2ATaskEventLogTaskTokens, loadA2ATaskRecordFromEventLog } from "../agents/a2a/log.js";
+import { A2A_BROKER_ADAPTER_PLUGIN_ID } from "../agents/a2a/standalone-broker-client.js";
+import { buildA2ATaskProtocolStatus, classifyA2AExecutionStatus } from "../agents/a2a/status.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
@@ -6,12 +9,19 @@ import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { resolveLeastPrivilegeOperatorScopesForMethod } from "../gateway/method-scopes.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
+import type {
+  A2AStatusSummary,
+  HeartbeatStatus,
+  SessionStatus,
+  StatusSummary,
+} from "./status.types.js";
 
 let channelSummaryModulePromise: Promise<typeof import("../infra/channel-summary.js")> | undefined;
 let linkChannelModulePromise: Promise<typeof import("./status.link-channel.js")> | undefined;
@@ -19,6 +29,14 @@ let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined
 let taskRegistryMaintenanceModulePromise:
   | Promise<typeof import("../tasks/task-registry.maintenance.js")>
   | undefined;
+
+const A2A_DELAYED_HEARTBEAT_MS = 10 * 60_000;
+const A2A_REQUIRED_METHODS = [
+  "a2a.task.request",
+  "a2a.task.update",
+  "a2a.task.cancel",
+  "a2a.task.status",
+] as const;
 
 function loadChannelSummaryModule() {
   channelSummaryModulePromise ??= import("../infra/channel-summary.js");
@@ -81,6 +99,175 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   }
   return flags;
 };
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isA2ATaskDelayed(entry: {
+  statusCategory: string;
+  executionStatus: string;
+  startedAt?: number;
+  heartbeatAt?: number;
+  updatedAt: number;
+}): boolean {
+  if (entry.statusCategory !== "active" || entry.executionStatus === "waiting_external") {
+    return false;
+  }
+  const reference = entry.heartbeatAt ?? entry.startedAt ?? entry.updatedAt;
+  return Date.now() - reference >= A2A_DELAYED_HEARTBEAT_MS;
+}
+
+function isBrokerUnreachableCode(code?: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(code);
+  return (
+    normalized === "broker_unavailable" ||
+    normalized === "broker_timeout" ||
+    normalized === "broker_request_failed"
+  );
+}
+
+function isReconcileFailureCode(code?: string): boolean {
+  return normalizeLowercaseStringOrEmpty(code) === "broker_malformed_response";
+}
+
+function resolveA2AHealthState(
+  summary: Omit<A2AStatusSummary, "state">,
+): A2AStatusSummary["state"] {
+  if (
+    summary.broker.pluginEnabled &&
+    (!summary.broker.baseUrlPresent || !summary.broker.methodScopesOk)
+  ) {
+    return "config_error";
+  }
+  if (summary.tasks.waitingExternal > 0 || summary.issues.brokerUnreachable > 0) {
+    return "waiting_external";
+  }
+  if (
+    summary.tasks.failed > 0 ||
+    summary.issues.reconcileFailed > 0 ||
+    summary.issues.deliveryFailed > 0 ||
+    summary.issues.cancelNotAttempted > 0 ||
+    summary.issues.sessionAbortFailed > 0
+  ) {
+    return "failed";
+  }
+  if (summary.tasks.delayed > 0) {
+    return "delayed";
+  }
+  return "ok";
+}
+
+async function buildA2AStatusSummary(params: {
+  cfg: OpenClawConfig;
+  agentIds: string[];
+}): Promise<A2AStatusSummary> {
+  const pluginEntry = params.cfg.plugins?.entries?.[A2A_BROKER_ADAPTER_PLUGIN_ID];
+  const pluginConfig = pluginEntry?.config;
+  const broker = {
+    pluginEnabled: Boolean(pluginEntry) && pluginEntry?.enabled !== false,
+    adapterEnabled:
+      Boolean(pluginEntry) &&
+      pluginEntry?.enabled !== false &&
+      Boolean(readOptionalString(pluginConfig?.baseUrl)),
+    baseUrlPresent: Boolean(readOptionalString(pluginConfig?.baseUrl)),
+    edgeSecretPresent: Boolean(readOptionalString(pluginConfig?.edgeSecret)),
+    methodScopesOk: A2A_REQUIRED_METHODS.every(
+      (method) => resolveLeastPrivilegeOperatorScopesForMethod(method).length > 0,
+    ),
+  } satisfies A2AStatusSummary["broker"];
+
+  const indexed: Array<
+    {
+      agentId: string;
+      sessionKey: string;
+      statusCategory: ReturnType<typeof classifyA2AExecutionStatus>;
+    } & ReturnType<typeof buildA2ATaskProtocolStatus>
+  > = [];
+
+  for (const agentId of params.agentIds) {
+    const sessionKey = `agent:${agentId}:main`;
+    let taskIds: string[] = [];
+    try {
+      taskIds = await listA2ATaskEventLogTaskTokens({ sessionKey });
+    } catch {
+      continue;
+    }
+    if (taskIds.length === 0) {
+      continue;
+    }
+    const rows = await Promise.all(
+      taskIds.map(async (taskId) => {
+        try {
+          const record = await loadA2ATaskRecordFromEventLog({ sessionKey, taskId });
+          if (!record) {
+            return null;
+          }
+          const status = buildA2ATaskProtocolStatus(record);
+          return {
+            agentId,
+            sessionKey: record.envelope.target.sessionKey,
+            ...status,
+            statusCategory: classifyA2AExecutionStatus(status.executionStatus),
+          };
+        } catch {
+          return null;
+        }
+      }),
+    );
+    indexed.push(...rows.filter((row) => row !== null));
+  }
+
+  const failures = indexed
+    .filter((entry) => entry.statusCategory === "terminal-failure")
+    .toSorted((a, b) => b.updatedAt - a.updatedAt);
+
+  const summaryWithoutState = {
+    tasks: {
+      total: indexed.length,
+      active: indexed.filter((entry) => entry.statusCategory === "active").length,
+      failed: failures.length,
+      waitingExternal: indexed.filter((entry) => entry.executionStatus === "waiting_external")
+        .length,
+      delayed: indexed.filter((entry) => isA2ATaskDelayed(entry)).length,
+      latestFailed: failures[0]
+        ? {
+            agentId: failures[0].agentId,
+            sessionKey: failures[0].sessionKey,
+            taskId: failures[0].taskId,
+            executionStatus: failures[0].executionStatus,
+            deliveryStatus: failures[0].deliveryStatus,
+            updatedAt: failures[0].updatedAt,
+            ...(failures[0].error?.code ? { errorCode: failures[0].error.code } : {}),
+            ...(failures[0].error?.message ? { errorMessage: failures[0].error.message } : {}),
+            ...(failures[0].summary ? { summary: failures[0].summary } : {}),
+          }
+        : null,
+    },
+    issues: {
+      brokerUnreachable: indexed.filter((entry) => isBrokerUnreachableCode(entry.error?.code))
+        .length,
+      reconcileFailed: indexed.filter((entry) => isReconcileFailureCode(entry.error?.code)).length,
+      deliveryFailed: indexed.filter((entry) => entry.deliveryStatus === "failed").length,
+      cancelNotAttempted: indexed.filter((entry) => {
+        const code = normalizeLowercaseStringOrEmpty(entry.error?.code);
+        const message = normalizeLowercaseStringOrEmpty(entry.error?.message);
+        return code === "cancel_not_attempted" || message.includes("abort not wired");
+      }).length,
+      sessionAbortFailed: indexed.filter((entry) => {
+        const code = normalizeLowercaseStringOrEmpty(entry.error?.code);
+        const message = normalizeLowercaseStringOrEmpty(entry.error?.message);
+        return code === "session_abort_failed" || message.includes("abort failed");
+      }).length,
+    },
+    broker,
+  } satisfies Omit<A2AStatusSummary, "state">;
+
+  return {
+    ...summaryWithoutState,
+    state: resolveA2AHealthState(summaryWithoutState),
+  };
+}
 
 export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSummary {
   return {
@@ -147,6 +334,10 @@ export async function getStatusSummary(
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
   const tasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
   const taskAudit = taskMaintenanceModule.getInspectableTaskAuditSummary();
+  const a2a = await buildA2AStatusSummary({
+    cfg,
+    agentIds: agentList.agents.map((agent) => agent.id),
+  });
 
   const resolved = resolveConfiguredStatusModelRef({
     cfg,
@@ -200,10 +391,11 @@ export async function getStatusSummary(
         const total = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh =
           typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
-        const remaining =
-          contextTokens != null && total !== undefined ? Math.max(0, contextTokens - total) : null;
+        const canComputeContextUtilization =
+          contextTokens != null && total !== undefined && total <= contextTokens;
+        const remaining = canComputeContextUtilization ? Math.max(0, contextTokens - total) : null;
         const pct =
-          contextTokens && contextTokens > 0 && total !== undefined
+          canComputeContextUtilization && contextTokens > 0
             ? Math.min(999, Math.round((total / contextTokens) * 100))
             : null;
         const parsedAgentId = parseAgentSessionKey(key)?.agentId;
@@ -275,6 +467,7 @@ export async function getStatusSummary(
     },
     channelSummary,
     queuedSystemEvents,
+    a2a,
     tasks,
     taskAudit,
     sessions: {

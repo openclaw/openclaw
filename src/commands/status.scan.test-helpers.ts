@@ -266,6 +266,31 @@ export function createStatusSummary(
 ) {
   return {
     linkChannel: options.linkChannel,
+    a2a: {
+      state: "ok",
+      tasks: {
+        total: 0,
+        active: 0,
+        failed: 0,
+        waitingExternal: 0,
+        delayed: 0,
+        latestFailed: null,
+      },
+      issues: {
+        brokerUnreachable: 0,
+        reconcileFailed: 0,
+        deliveryFailed: 0,
+        cancelNotAttempted: 0,
+        sessionAbortFailed: 0,
+      },
+      broker: {
+        pluginEnabled: false,
+        adapterEnabled: false,
+        baseUrlPresent: false,
+        edgeSecretPresent: false,
+        methodScopesOk: true,
+      },
+    },
     tasks: {
       total: 0,
       active: 0,

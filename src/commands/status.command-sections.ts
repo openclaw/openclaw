@@ -5,7 +5,7 @@ import type { TableColumn } from "../terminal/table.js";
 import type { HealthSummary } from "./health.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import type { MemoryStatusSnapshot, MemoryPluginStatus } from "./status.scan.shared.js";
-import type { SessionStatus, StatusSummary } from "./status.types.js";
+import type { A2AStatusSummary, SessionStatus, StatusSummary } from "./status.types.js";
 
 type AgentStatusLike = {
   defaultId?: string | null;
@@ -14,7 +14,7 @@ type AgentStatusLike = {
   agents: AgentLocalStatus[];
 };
 
-type SummaryLike = Pick<StatusSummary, "tasks" | "taskAudit" | "heartbeat" | "sessions">;
+type SummaryLike = Pick<StatusSummary, "a2a" | "tasks" | "taskAudit" | "heartbeat" | "sessions">;
 type MemoryLike = MemoryStatusSnapshot | null;
 type MemoryPluginLike = MemoryPluginStatus;
 type SessionsRecentLike = SessionStatus;
@@ -74,6 +74,75 @@ export function buildStatusTasksValue(params: {
         : params.muted("audit clean"),
     `${params.summary.tasks.total} tracked`,
   ].join(" · ");
+}
+
+export function buildStatusA2AValue(params: {
+  summary: Pick<SummaryLike, "a2a">;
+  ok: (value: string) => string;
+  warn: (value: string) => string;
+  muted: (value: string) => string;
+}) {
+  const a2a = params.summary.a2a;
+  const decorateState = (value: string) => {
+    if (a2a.state === "ok") {
+      return params.ok(value);
+    }
+    if (a2a.state === "delayed") {
+      return params.warn(value);
+    }
+    if (a2a.state === "waiting_external") {
+      return params.warn(value);
+    }
+    if (a2a.state === "failed" || a2a.state === "config_error") {
+      return params.warn(value);
+    }
+    return value;
+  };
+
+  const labelByState: Record<A2AStatusSummary["state"], string> = {
+    ok: "ok",
+    delayed: "delayed",
+    waiting_external: "waiting external",
+    failed: "failed",
+    config_error: "config error",
+  };
+
+  const parts = [decorateState(labelByState[a2a.state])];
+  parts.push(`broker ${a2a.broker.adapterEnabled ? "on" : "off"}`);
+  if (a2a.tasks.active > 0) {
+    parts.push(`${a2a.tasks.active} active`);
+  } else {
+    parts.push(params.muted("no active"));
+  }
+  if (a2a.tasks.waitingExternal > 0) {
+    parts.push(`${a2a.tasks.waitingExternal} waiting external`);
+  }
+  if (a2a.tasks.delayed > 0) {
+    parts.push(`${a2a.tasks.delayed} delayed`);
+  }
+  if (a2a.tasks.failed > 0) {
+    parts.push(params.warn(`${a2a.tasks.failed} failed`));
+  }
+  if (a2a.state === "config_error") {
+    const configHints: string[] = [];
+    if (!a2a.broker.baseUrlPresent) {
+      configHints.push("baseUrl missing");
+    }
+    if (!a2a.broker.methodScopesOk) {
+      configHints.push("scope map missing");
+    }
+    if (configHints.length > 0) {
+      parts.push(configHints.join(", "));
+    }
+  } else if (a2a.tasks.latestFailed) {
+    const detail =
+      a2a.tasks.latestFailed.errorMessage ??
+      a2a.tasks.latestFailed.errorCode ??
+      a2a.tasks.latestFailed.summary ??
+      a2a.tasks.latestFailed.taskId;
+    parts.push(`latest ${detail}`);
+  }
+  return parts.join(" · ");
 }
 
 export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "heartbeat"> }) {
