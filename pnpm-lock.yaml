@@ -459,6 +459,16 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/databricks:
+    dependencies:
+      '@mariozechner/pi-ai':
+        specifier: 0.66.1
+        version: 0.66.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/deepgram:
     devDependencies:
       '@openclaw/plugin-sdk':

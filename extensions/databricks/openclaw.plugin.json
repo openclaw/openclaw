@@ -1,0 +1,45 @@
+{
+  "id": "databricks",
+  "enabledByDefault": true,
+  "providers": ["databricks"],
+  "providerAuthEnvVars": {
+    "databricks": ["DATABRICKS_API_KEY", "DATABRICKS_TOKEN"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "databricks",
+      "method": "api-key",
+      "choiceId": "databricks-api-key",
+      "choiceLabel": "Databricks API key",
+      "groupId": "databricks",
+      "groupLabel": "Databricks",
+      "groupHint": "Databricks Serving token",
+      "optionKey": "databricksApiKey",
+      "cliFlag": "--databricks-api-key",
+      "cliOption": "--databricks-api-key <key>",
+      "cliDescription": "Databricks API key"
+    },
+    {
+      "provider": "databricks",
+      "method": "api-key",
+      "choiceId": "databricks-base-url",
+      "assistantVisibility": "manual-only",
+      "optionKey": "databricksBaseUrl",
+      "cliFlag": "--databricks-base-url",
+      "cliOption": "--databricks-base-url <url>",
+      "cliDescription": "Databricks Workspace Base URL"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string"
+      }
+    }
+  },
+  "install": {
+    "npmSpec": "@openclaw/databricks"
+  }
+}
