@@ -966,6 +966,7 @@ export async function preflightDiscordMessage(
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
+      suppressIfOtherAgentMentioned: true,
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;

@@ -169,6 +169,7 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
       allowTextCommands: false,
       hasControlCommand: false,
       commandAuthorized: false,
+      suppressIfOtherAgentMentioned: true,
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned || shouldBypassMention;

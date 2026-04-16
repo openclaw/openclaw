@@ -459,6 +459,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         allowTextCommands: true,
         hasControlCommand: hasControlCommand(rawText, cfg),
         commandAuthorized: decision.commandAuthorized,
+        suppressIfOtherAgentMentioned: true,
       },
     });
     if (mentionDecision.shouldSkip) {

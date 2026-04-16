@@ -683,6 +683,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         allowTextCommands: true,
         hasControlCommand: hasControlCommandInMessage,
         commandAuthorized,
+        suppressIfOtherAgentMentioned: true,
       },
     });
     const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;

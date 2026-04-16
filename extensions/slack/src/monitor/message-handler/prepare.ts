@@ -513,6 +513,7 @@ export async function prepareSlackMessage(params: {
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
+      suppressIfOtherAgentMentioned: true,
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;

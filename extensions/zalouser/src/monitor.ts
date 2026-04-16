@@ -511,6 +511,7 @@ async function processMessage(
       }),
       hasControlCommand,
       commandAuthorized: commandAuthorized === true,
+      suppressIfOtherAgentMentioned: true,
     },
   });
   if (isGroup && requireMention && !canDetectMention && !mentionDecision.effectiveWasMentioned) {

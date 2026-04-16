@@ -270,6 +270,7 @@ export async function resolveTelegramInboundBody(params: {
       allowTextCommands: true,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
+      suppressIfOtherAgentMentioned: true,
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;

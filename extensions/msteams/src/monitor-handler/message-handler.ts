@@ -517,6 +517,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         allowTextCommands: false,
         hasControlCommand: false,
         commandAuthorized: false,
+        suppressIfOtherAgentMentioned: true,
       },
     });
 

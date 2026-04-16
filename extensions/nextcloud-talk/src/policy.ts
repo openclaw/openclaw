@@ -177,6 +177,7 @@ export function resolveNextcloudTalkMentionGate(params: {
       allowTextCommands: params.allowTextCommands,
       hasControlCommand: params.hasControlCommand,
       commandAuthorized: params.commandAuthorized,
+      suppressIfOtherAgentMentioned: true,
     },
   });
   return { shouldSkip: result.shouldSkip, shouldBypassMention: result.shouldBypassMention };
