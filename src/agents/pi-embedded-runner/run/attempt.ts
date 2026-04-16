@@ -489,7 +489,10 @@ export async function runEmbeddedAttempt(
     const workspaceNotes = hookAdjustedBootstrapFiles.some(
       (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
     )
-      ? ["Reminder: commit your changes in this workspace after edits."]
+      ? [
+          "If BOOTSTRAP.md is present in Project Context, it overrides the normal first greeting. Read it and follow its instructions first, then update or delete it when complete.",
+          "Reminder: commit your changes in this workspace after edits.",
+        ]
       : undefined;
 
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
