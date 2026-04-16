@@ -295,6 +295,10 @@ describe("stripAssistantInternalScaffolding", () => {
 
     it("does not preserve newline JSON tool-call payloads without a literal syntax cue", () => {
       expectVisibleText('Use this:\n<tool_call>{"name":"exec"}</tool_call>', "Use this:\n");
+      expectVisibleText(
+        'Use this tag:\n<tool_call>{"name":"read","arguments":{"path":"/secret"}}</tool_call>',
+        "Use this tag:\n",
+      );
     });
 
     it("strips self-closing <tool_call/> tags", () => {

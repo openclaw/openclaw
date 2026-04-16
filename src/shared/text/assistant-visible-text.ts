@@ -214,6 +214,8 @@ const LITERAL_TOOL_PAYLOAD_AFTER_RE =
   /^[^.!?\n]*\b(?:docs?|documentation|example|literal(?:ly)?|syntax)\b/i;
 const LITERAL_TOOL_PAYLOAD_INLINE_BEFORE_RE =
   /(?:^|[\n.!?]\s*)(?:example|literal(?:ly)?|syntax)\b[^.!?\n]*$/i;
+const LITERAL_TOOL_PAYLOAD_MULTILINE_BEFORE_RE =
+  /(?:^|[\n.!?]\s*)(?:(?:use|type|write|include|document)\b[^.!?\n]*\b(?:example|literal(?:ly)?|syntax)\b|(?:example|literal(?:ly)?|syntax)\b[^.!?\n]*)[ \t:;]*(?:\r?\n[ \t]*)$/i;
 const LITERAL_TOOL_PAYLOAD_SENTENCE_END_BEFORE_RE =
   /(?:^|[\n.!?]\s*)(?:example|literal(?:ly)?|syntax)\b[^.!?\n]*$/i;
 const LITERAL_TOOL_SENTENCE_END_AFTER_RE = /^[\s)"'`.,:;!?]*(?:$|\n)/;
@@ -233,10 +235,10 @@ function looksLikeLiteralToolPayloadContext(text: string, start: number, end: nu
   const after = text.slice(end, Math.min(text.length, end + 80));
   const hasLiteralPayloadCueBefore =
     LITERAL_TOOL_PAYLOAD_INLINE_BEFORE_RE.test(before) ||
-    LITERAL_TOOL_TAG_MULTILINE_BEFORE_RE.test(before);
+    LITERAL_TOOL_PAYLOAD_MULTILINE_BEFORE_RE.test(before);
   return (
     (hasLiteralPayloadCueBefore && LITERAL_TOOL_PAYLOAD_AFTER_RE.test(after)) ||
-    (LITERAL_TOOL_TAG_MULTILINE_BEFORE_RE.test(before) &&
+    (LITERAL_TOOL_PAYLOAD_MULTILINE_BEFORE_RE.test(before) &&
       LITERAL_TOOL_SENTENCE_END_AFTER_RE.test(after)) ||
     (LITERAL_TOOL_PAYLOAD_SENTENCE_END_BEFORE_RE.test(before) &&
       LITERAL_TOOL_SENTENCE_END_AFTER_RE.test(after))

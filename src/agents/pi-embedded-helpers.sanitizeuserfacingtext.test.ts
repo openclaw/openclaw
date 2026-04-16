@@ -447,6 +447,11 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText('Use this:\n<tool_call>{"name":"exec"}</tool_call>')).toBe(
       "Use this:\n",
     );
+    expect(
+      sanitizeUserFacingText(
+        'Use this tag:\n<tool_call>{"name":"read","arguments":{"path":"/secret"}}</tool_call>',
+      ),
+    ).toBe("Use this tag:\n");
   });
 
   it("strips tool-call tags inside indented code blocks", () => {

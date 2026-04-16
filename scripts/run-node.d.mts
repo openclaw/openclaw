@@ -11,8 +11,7 @@ export function resolveBuildRequirement(deps: {
   buildStampPath: string;
   sourceRoots: Array<{ name: string; path: string }>;
   configFiles: string[];
-  privateQaDistEntry?: string;
-  privateQaDistEntries?: string[];
+  privateQaRequiredDistEntries?: string[];
 }): { shouldBuild: boolean; reason: string };
 
 export function resolveRuntimePostBuildRequirement(deps: {
