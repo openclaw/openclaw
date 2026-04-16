@@ -1,0 +1,30 @@
+{
+  "name": "@openclaw/agent-runbook-generator",
+  "version": "1.0.0",
+  "description": "Automatically generate and maintain a runbook for common agent tasks, collector failures, and recovery steps",
+  "type": "module",
+  "main": "dist/generator.js",
+  "bin": {
+    "agent-runbook-generator": "dist/generator.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/generator.js",
+    "dev": "tsx generator.ts",
+    "test": "echo \"No tests yet\" && exit 0"
+  },
+  "keywords": [
+    "openclaw",
+    "agent",
+    "runbook",
+    "documentation",
+    "automation"
+  ],
+  "author": "OpenClaw Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
