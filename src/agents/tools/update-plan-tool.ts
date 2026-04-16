@@ -97,7 +97,7 @@ export function createUpdatePlanTool(): AnyAgentTool {
     displaySummary: UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
     description: describeUpdatePlanTool(),
     parameters: UpdatePlanToolSchema,
-    execute: async (_toolCallId, args, context) => {
+    execute: async (_toolCallId, args, _context) => {
       const params = args as Record<string, unknown>;
       const explanation = readStringParam(params, "explanation");
       const merge = typeof params.merge === "boolean" ? params.merge : false;
