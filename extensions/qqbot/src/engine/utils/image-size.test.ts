@@ -5,13 +5,13 @@ const adapterMocks = vi.hoisted(() => ({
   fetchMedia: vi.fn(),
 }));
 
-vi.mock("../engine/adapter/index.js", () => ({
+vi.mock("../adapter/index.js", () => ({
   getPlatformAdapter: () => ({
     fetchMedia: (...args: unknown[]) => adapterMocks.fetchMedia(...args),
   }),
 }));
 
-import { getImageSizeFromUrl, parseImageSize } from "../engine/utils/image-size.js";
+import { getImageSizeFromUrl, parseImageSize } from "./image-size.js";
 
 /** Build a minimal valid PNG header with the given dimensions. */
 function buildPngHeader(width: number, height: number): Buffer {

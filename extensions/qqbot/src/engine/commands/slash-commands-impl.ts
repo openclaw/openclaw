@@ -151,9 +151,16 @@ registerCommand({
     `查看所有可用的 QQBot 内置命令及其简要说明。`,
     `在命令后追加 ? 可查看详细用法。`,
   ].join("\n"),
-  handler: () => {
+  handler: (ctx) => {
+    // Exclude c2c-only commands from group listings.
+    const GROUP_EXCLUDED = new Set(["bot-upgrade", "bot-clear-storage"]);
+    const isGroup = ctx.type === "group";
+
     const lines = [`### QQBot 内置命令`, ``];
     for (const [name, cmd] of registry.getAllCommands()) {
+      if (isGroup && GROUP_EXCLUDED.has(name)) {
+        continue;
+      }
       lines.push(`<qqbot-cmd-input text="/${name}" show="/${name}"/> ${cmd.description}`);
     }
     return lines.join("\n");
@@ -509,6 +516,188 @@ registerCommand({
       return `⛔ 权限不足：请先在 channels.qqbot.allowFrom（或对应账号 allowFrom）中配置明确的发送者列表后再使用 /bot-logs。`;
     }
     return buildBotLogsResult();
+  },
+});
+
+// ============ /bot-clear-storage ============
+
+/** Recursively scan all files under a directory, sorted by size descending. */
+function scanDirectoryFiles(dirPath: string): { filePath: string; size: number }[] {
+  const files: { filePath: string; size: number }[] = [];
+  if (!fs.existsSync(dirPath)) {
+    return files;
+  }
+  const walk = (dir: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (entry.isFile()) {
+        try {
+          const stat = fs.statSync(fullPath);
+          files.push({ filePath: fullPath, size: stat.size });
+        } catch {
+          // Skip inaccessible files.
+        }
+      }
+    }
+  };
+  walk(dirPath);
+  files.sort((a, b) => b.size - a.size);
+  return files;
+}
+
+/** Format byte count into a human-readable string. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+/** Recursively remove empty directories (leaf-to-root). */
+function removeEmptyDirs(dirPath: string): void {
+  if (!fs.existsSync(dirPath)) {
+    return;
+  }
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      removeEmptyDirs(path.join(dirPath, entry.name));
+    }
+  }
+  try {
+    const remaining = fs.readdirSync(dirPath);
+    if (remaining.length === 0) {
+      fs.rmdirSync(dirPath);
+    }
+  } catch {
+    // Directory may be in use, skip.
+  }
+}
+
+/** Maximum number of files to display in the scan preview. */
+const CLEAR_STORAGE_MAX_DISPLAY = 10;
+
+registerCommand({
+  name: "bot-clear-storage",
+  description: "清理通过 QQBot 对话产生的下载文件，释放主机磁盘空间",
+  usage: [
+    `/bot-clear-storage`,
+    ``,
+    `扫描当前机器人产生的下载文件并列出明细。`,
+    `确认后执行删除，释放主机磁盘空间。`,
+    ``,
+    `/bot-clear-storage --force   确认执行清理`,
+    ``,
+    `⚠️ 仅在私聊中可用。`,
+  ].join("\n"),
+  handler: (ctx) => {
+    const { appId, type } = ctx;
+
+    if (type !== "c2c") {
+      return `💡 请在私聊中使用此指令`;
+    }
+
+    const isForce = ctx.args.trim() === "--force";
+    const targetDir = path.join(getHomeDir(), ".openclaw", "media", "qqbot", "downloads", appId);
+    const displayDir = `~/.openclaw/media/qqbot/downloads/${appId}`;
+
+    if (!isForce) {
+      // Step 1: scan and display file list with a confirmation button.
+      const files = scanDirectoryFiles(targetDir);
+
+      if (files.length === 0) {
+        return [`✅ 当前没有需要清理的文件`, ``, `目录 \`${displayDir}\` 为空或不存在。`].join(
+          "\n",
+        );
+      }
+
+      const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+      const lines: string[] = [
+        `即将清理 \`${displayDir}\` 目录下所有文件，总共 ${files.length} 个文件，占用磁盘存储空间 ${formatBytes(totalSize)}。`,
+        ``,
+        `目录文件概况：`,
+      ];
+
+      const displayFiles = files.slice(0, CLEAR_STORAGE_MAX_DISPLAY);
+      for (const f of displayFiles) {
+        const relativePath = path.relative(targetDir, f.filePath).replace(/\\/g, "/");
+        lines.push(`${relativePath} (${formatBytes(f.size)})`, ``, ``);
+      }
+      if (files.length > CLEAR_STORAGE_MAX_DISPLAY) {
+        lines.push(`...[合计：${files.length} 个文件（${formatBytes(totalSize)}）]`, ``);
+      }
+
+      lines.push(
+        ``,
+        `---`,
+        ``,
+        `确认清理后，上述保存在 OpenClaw 运行主机磁盘上的文件将永久删除，后续对话过程中 AI 无法再找回相关文件。`,
+        `‼️ 点击指令确认删除`,
+        `<qqbot-cmd-enter text="/bot-clear-storage --force" />`,
+      );
+
+      return lines.join("\n");
+    }
+
+    // Step 2: --force — execute deletion.
+    const files = scanDirectoryFiles(targetDir);
+
+    if (files.length === 0) {
+      return `✅ 目录已为空，无需清理`;
+    }
+
+    let deletedCount = 0;
+    let deletedSize = 0;
+    let failedCount = 0;
+
+    for (const f of files) {
+      try {
+        fs.unlinkSync(f.filePath);
+        deletedCount++;
+        deletedSize += f.size;
+      } catch {
+        failedCount++;
+      }
+    }
+
+    try {
+      removeEmptyDirs(targetDir);
+    } catch {
+      // Non-critical, silently ignore.
+    }
+
+    if (failedCount === 0) {
+      return [
+        `✅ 清理成功`,
+        ``,
+        `已删除 ${deletedCount} 个文件，释放 ${formatBytes(deletedSize)} 磁盘空间。`,
+      ].join("\n");
+    }
+
+    return [
+      `⚠️ 部分清理完成`,
+      ``,
+      `已删除 ${deletedCount} 个文件（${formatBytes(deletedSize)}），${failedCount} 个文件删除失败。`,
+    ].join("\n");
   },
 });
 

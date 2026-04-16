@@ -7,13 +7,13 @@ const adapterMocks = vi.hoisted(() => ({
   fetchMedia: vi.fn(),
 }));
 
-vi.mock("../engine/adapter/index.js", () => ({
+vi.mock("../adapter/index.js", () => ({
   getPlatformAdapter: () => ({
     fetchMedia: (...args: unknown[]) => adapterMocks.fetchMedia(...args),
   }),
 }));
 
-import { QQBOT_MEDIA_SSRF_POLICY, downloadFile } from "../engine/utils/file-utils.js";
+import { QQBOT_MEDIA_SSRF_POLICY, downloadFile } from "./file-utils.js";
 
 describe("qqbot file-utils downloadFile", () => {
   let tempDir: string;

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseFaceTags } from "../engine/utils/text-parsing.js";
+import { parseFaceTags } from "./text-parsing.js";
 
 describe("parseFaceTags", () => {
   it("returns empty string when input is undefined", () => {
