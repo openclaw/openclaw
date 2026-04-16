@@ -1,0 +1,148 @@
+/**
+ * Persistent plan store for cross-session task coordination.
+ *
+ * Phase 4.2 of the GPT 5.4 parity sprint. Modeled after Claude Code's
+ * Tasks API with `CLAUDE_CODE_TASK_LIST_ID` env var concept.
+ *
+ * When a namespace is configured, plan state is shared across all
+ * sessions using that namespace. Plans are persisted to disk at
+ * `~/.openclaw/plans/<namespace>/plan.json`.
+ *
+ * Default (no namespace): plan is session-scoped (current behavior,
+ * no change to existing flow).
+ */
+
+import fs from "node:fs/promises";
+import path from "node:path";
+
+export interface StoredPlanStep {
+  step: string;
+  status: "pending" | "in_progress" | "completed" | "cancelled";
+  activeForm?: string;
+  updatedBy?: string; // session key that last updated this step
+  updatedAt?: number;
+}
+
+export interface StoredPlan {
+  namespace: string;
+  steps: StoredPlanStep[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+const LOCK_STALE_MS = 10_000;
+
+export class PlanStore {
+  constructor(private readonly baseDir: string) {}
+
+  private planPath(namespace: string): string {
+    return path.join(this.baseDir, namespace, "plan.json");
+  }
+
+  private lockPath(namespace: string): string {
+    return path.join(this.baseDir, namespace, ".lock");
+  }
+
+  /**
+   * Reads the current plan for a namespace.
+   * Returns null if no plan exists.
+   */
+  async read(namespace: string): Promise<StoredPlan | null> {
+    try {
+      const content = await fs.readFile(this.planPath(namespace), "utf-8");
+      return JSON.parse(content) as StoredPlan;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Writes a plan for a namespace. Creates the directory if needed.
+   * Callers should acquire a lock first for concurrent safety.
+   */
+  async write(namespace: string, plan: StoredPlan): Promise<void> {
+    const dir = path.dirname(this.planPath(namespace));
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      this.planPath(namespace),
+      JSON.stringify(plan, null, 2),
+      "utf-8",
+    );
+  }
+
+  /**
+   * Acquires a file-level lock for a namespace.
+   * Returns a release function. The lock auto-expires after 10s
+   * to prevent deadlocks from crashed processes.
+   */
+  async lock(namespace: string): Promise<() => Promise<void>> {
+    const lockFile = this.lockPath(namespace);
+    const dir = path.dirname(lockFile);
+    await fs.mkdir(dir, { recursive: true });
+
+    // Try to acquire lock with O_EXCL (fails if file exists).
+    // If lock exists but is stale (>10s), remove and retry.
+    const maxRetries = 5;
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        const handle = await fs.open(lockFile, "wx");
+        await handle.write(String(Date.now()));
+        await handle.close();
+
+        // Lock acquired. Return release function.
+        return async () => {
+          try {
+            await fs.unlink(lockFile);
+          } catch {
+            // Lock file may have been cleaned up already.
+          }
+        };
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+          // Lock exists. Check if stale.
+          try {
+            const stat = await fs.stat(lockFile);
+            if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+              await fs.unlink(lockFile);
+              continue; // Retry after removing stale lock.
+            }
+          } catch {
+            continue; // Stat failed, retry.
+          }
+          // Lock is fresh. Wait and retry.
+          await new Promise((r) => setTimeout(r, 200 * (i + 1)));
+        } else {
+          throw err;
+        }
+      }
+    }
+    throw new Error(`Failed to acquire plan lock for namespace "${namespace}" after ${maxRetries} retries`);
+  }
+
+  /**
+   * Merges incoming steps into an existing plan by matching step text.
+   * New steps are appended; existing steps are updated.
+   * Returns the merged plan.
+   */
+  mergeSteps(
+    existing: StoredPlanStep[],
+    incoming: StoredPlanStep[],
+    sessionKey?: string,
+  ): StoredPlanStep[] {
+    const now = Date.now();
+    const incomingMap = new Map(incoming.map((s) => [s.step, s]));
+    const merged = existing.map((s) => {
+      const update = incomingMap.get(s.step);
+      if (update) {
+        return { ...update, updatedBy: sessionKey, updatedAt: now };
+      }
+      return s;
+    });
+    for (const s of incoming) {
+      if (!existing.some((e) => e.step === s.step)) {
+        merged.push({ ...s, updatedBy: sessionKey, updatedAt: now });
+      }
+    }
+    return merged;
+  }
+}
