@@ -103,18 +103,14 @@ export function createUpdatePlanTool(): AnyAgentTool {
       const merge = typeof params.merge === "boolean" ? params.merge : false;
       const incomingSteps = readPlanSteps(params);
 
-      // Merge mode: update existing steps by matching step text, append new ones.
+      // Merge mode: requires a plan store lookup to get the previous plan.
+      // Until the plan store (#67542) is wired, merge falls back to replace.
       // Replace mode (default): use incoming steps as the entire plan.
       let plan: UpdatePlanStep[];
-      if (merge && context?.previousPlan) {
-        const existing = context.previousPlan as UpdatePlanStep[];
-        const incomingMap = new Map(incomingSteps.map((s) => [s.step, s]));
-        plan = existing.map((s) => incomingMap.get(s.step) ?? s);
-        for (const s of incomingSteps) {
-          if (!existing.some((e) => e.step === s.step)) {
-            plan.push(s);
-          }
-        }
+      if (merge) {
+        // TODO(#67542): look up previous plan via PlanStore.read() once wired.
+        // For now, merge without a previous plan is equivalent to replace.
+        plan = incomingSteps;
       } else {
         plan = incomingSteps;
       }
