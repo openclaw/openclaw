@@ -47,6 +47,7 @@ function toModelDefinition(id: string): ModelDefinitionConfig {
   return {
     id,
     name: id,
+    api: "openai-completions",
     reasoning: id.toLowerCase().includes("r1") || id.toLowerCase().includes("reason"),
     input: ["text"],
     contextWindow: QINIU_DEFAULT_CONTEXT_WINDOW,
