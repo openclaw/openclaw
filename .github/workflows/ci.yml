@@ -1254,7 +1254,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_macos_node == 'true' && needs.build-artifacts.result == 'success'
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -1309,7 +1309,7 @@ jobs:
     name: "macos-swift"
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
-    runs-on: macos-latest
+    runs-on: blacksmith-12vcpu-macos-latest
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -1317,11 +1317,6 @@ jobs:
         with:
           persist-credentials: false
           submodules: false
-
-      - name: Select Xcode 26.1
-        run: |
-          sudo xcode-select -s /Applications/Xcode_26.1.app
-          xcodebuild -version
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: brew install xcodegen swiftlint swiftformat
