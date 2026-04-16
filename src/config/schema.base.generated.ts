@@ -3588,6 +3588,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
               },
+              bootstrapTier: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "minimal",
+                  },
+                  {
+                    type: "string",
+                    const: "standard",
+                  },
+                  {
+                    type: "string",
+                    const: "full",
+                  },
+                ],
+                title: "Bootstrap Tier",
+                description:
+                  'Bootstrap loading tier: "minimal" (AGENTS.md + TOOLS.md + SOUL.md + IDENTITY.md + USER.md), "standard" (all recognized files, default), or "full" (standard + extra patterns).',
+              },
               bootstrapMaxChars: {
                 type: "integer",
                 exclusiveMinimum: 0,
@@ -25746,6 +25765,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.contextInjection": {
       label: "Context Injection",
       help: 'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+      tags: ["advanced"],
+    },
+    "agents.defaults.bootstrapTier": {
+      label: "Bootstrap Tier",
+      help: 'Bootstrap loading tier: "minimal" (AGENTS.md + TOOLS.md + SOUL.md + IDENTITY.md + USER.md), "standard" (all recognized files, default), or "full" (standard + extra patterns).',
       tags: ["advanced"],
     },
     "agents.defaults.bootstrapMaxChars": {
