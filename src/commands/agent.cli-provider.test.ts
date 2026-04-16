@@ -200,6 +200,7 @@ describe("agentCommand CLI provider handling", () => {
         });
         expect(messages[1]).toMatchObject({
           role: "assistant",
+          api: "cli",
           provider: "google-gemini-cli",
           model: "gemini-3.1-pro-preview",
           content: [{ type: "text", text: "hello from cli" }],
