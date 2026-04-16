@@ -498,19 +498,27 @@ async function runBlueBubblesCatchupInner(
       continue;
     }
 
-    // Skip balloon/tapback/reaction events: they carry an
+    // Skip tapback/reaction/balloon events. These carry an
     // `associatedMessageGuid` pointing at the parent text message and
     // have a different `guid` of their own. The live webhook path handles
-    // them via the debouncer, which coalesces balloons with their parent.
+    // balloons via the debouncer, which coalesces them with their parent.
     // Without debouncing here, replaying a balloon would dispatch it as a
     // standalone message — producing a duplicate reply to the parent.
+    //
+    // Guard: only skip when `associatedMessageType` is set (tapbacks and
+    // reactions — e.g., "like", 2000) OR `balloonBundleId` is set (URL
+    // previews, stickers). iMessage threaded replies use a separate
+    // `threadOriginatorGuid` field and do NOT set either of these, so
+    // they pass through for correct catchup replay.
     const assocGuid =
       typeof rec.associatedMessageGuid === "string"
         ? rec.associatedMessageGuid.trim()
         : typeof rec.associated_message_guid === "string"
           ? rec.associated_message_guid.trim()
           : "";
-    if (assocGuid) {
+    const assocType = rec.associatedMessageType ?? rec.associated_message_type;
+    const balloonId = typeof rec.balloonBundleId === "string" ? rec.balloonBundleId.trim() : "";
+    if (assocGuid && (assocType != null || balloonId)) {
       continue;
     }
 

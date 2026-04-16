@@ -170,11 +170,17 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
     const prev = fileWriteQueues.get(filePath) ?? Promise.resolve();
     const next = prev.then(fn, fn);
     fileWriteQueues.set(filePath, next);
-    void next.finally(() => {
-      if (fileWriteQueues.get(filePath) === next) {
-        fileWriteQueues.delete(filePath);
-      }
-    });
+    // Cleanup: remove the queue entry once this link settles, but only if
+    // no newer work was chained after us. The `.catch(() => {})` prevents
+    // an unhandled rejection when `next` rejects — callers still observe
+    // the rejection through the returned `next` promise directly.
+    next
+      .finally(() => {
+        if (fileWriteQueues.get(filePath) === next) {
+          fileWriteQueues.delete(filePath);
+        }
+      })
+      .catch(() => {});
     return next;
   }
 
