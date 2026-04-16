@@ -257,7 +257,14 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
       content: [],
       api: "openai" as const,
       model: "gpt-4",
-      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
       timestamp: Date.now(),
     };
 
