@@ -24,6 +24,12 @@ export type InboundDebounceByProvider = Record<string, number>;
 
 export type InboundDebounceConfig = {
   debounceMs?: number;
+  /**
+   * Debounce interval applied when the inbound message comes from a bot or agent (ms).
+   * Takes precedence over `debounceMs` when `senderIsBot` is true.
+   * Priority chain: overrideMs → byChannel → botDebounceMs (if senderIsBot) → debounceMs → 0
+   */
+  botDebounceMs?: number;
   byChannel?: InboundDebounceByProvider;
 };
 
