@@ -17,8 +17,8 @@ const UpdatePlanToolSchema = Type.Object({
   merge: Type.Optional(
     Type.Boolean({
       description:
-        'When true, update existing steps by matching step text and add new ones. ' +
-        'When false (default), replace the entire plan.',
+        "When true, update existing steps by matching step text and add new ones. " +
+        "When false (default), replace the entire plan.",
     }),
   ),
   plan: Type.Array(
@@ -32,7 +32,7 @@ const UpdatePlanToolSchema = Type.Object({
           Type.String({
             description:
               'Present-continuous form shown while in_progress (e.g. "Running tests"). ' +
-              'Omit for pending/completed/cancelled steps.',
+              "Present-continuous form used during in_progress display. Accepted on any status but only rendered for in_progress steps.",
           }),
         ),
       },
@@ -97,7 +97,7 @@ export function createUpdatePlanTool(): AnyAgentTool {
     displaySummary: UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
     description: describeUpdatePlanTool(),
     parameters: UpdatePlanToolSchema,
-    execute: async (_toolCallId, args, _context) => {
+    execute: async (_toolCallId, args, _signal) => {
       const params = args as Record<string, unknown>;
       const explanation = readStringParam(params, "explanation");
       const merge = typeof params.merge === "boolean" ? params.merge : false;

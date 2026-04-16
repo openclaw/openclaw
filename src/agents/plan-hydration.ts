@@ -26,7 +26,7 @@ const ACTIVE_STATUSES = new Set(["pending", "in_progress"]);
  * Returns `null` if there are no active steps to preserve.
  *
  * Matches Hermes's format_for_injection() output:
- *   [Your active task list was preserved across context compression]
+ *   [Your active plan was preserved across context compression]
  *   - [ ] step text (pending)
  *   - [>] step text (in_progress)
  */
