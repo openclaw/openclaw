@@ -443,6 +443,8 @@ describe("Databricks plugin", () => {
       // Content should be a flattened text string, not an array
       expect(typeof toolMsg?.content).toBe("string");
       expect(toolMsg?.content).toBe("first line second line");
+      // Non-text blocks (like image) should be filtered out
+      expect(toolMsg?.content).not.toContain("base64data");
     });
   });
 
