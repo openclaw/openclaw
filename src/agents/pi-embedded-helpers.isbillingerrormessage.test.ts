@@ -1020,6 +1020,8 @@ describe("classifyFailoverReason", () => {
         "402 No available asset for API access, please purchase a subscription",
       ),
     ).toBe("billing");
+    expect(classifyFailoverReason("402 items found in the database")).toBeNull();
+    expect(classifyFailoverReason("402 room is available")).toBeNull();
     expect(classifyFailoverReason(INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");

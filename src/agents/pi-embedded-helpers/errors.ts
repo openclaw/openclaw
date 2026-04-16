@@ -302,6 +302,8 @@ const RAW_402_MARKER_RE =
 const BARE_LEADING_402_RE = /^\s*402\b/i;
 const LEADING_402_WRAPPER_RE =
   /^(?:error[:\s-]+)?(?:(?:http\s*)?402(?:\s+payment required)?|payment required)(?:[:\s-]+|$)/i;
+const LEADING_BARE_402_RE = /^\s*402\s+\S/i;
+const LEADING_402_PAYMENT_REQUIRED_RE = /^\s*402\s+payment required\b/i;
 const TIMEOUT_ERROR_CODES = new Set([
   "ETIMEDOUT",
   "ESOCKETTIMEDOUT",
@@ -464,7 +466,6 @@ function isOAuthCallbackTimeoutMessage(raw: string): boolean {
 function isOAuthCallbackValidationMessage(raw: string): boolean {
   return /\bcallback_validation_failed\b/i.test(raw);
 }
-
 function includesAnyHint(text: string, hints: readonly string[]): boolean {
   return hints.some((hint) => text.includes(hint));
 }
@@ -539,6 +540,18 @@ function classify402Message(message: string): PaymentRequiredFailoverReason {
   return "billing";
 }
 
+function hasBareLeading402Signal(text: string): boolean {
+  return (
+    hasQuotaRefreshWindowSignal(text) ||
+    hasExplicit402BillingSignal(text) ||
+    isRateLimitErrorMessage(text) ||
+    hasRetryable402TransientSignal(text) ||
+    text.includes("used up your points") ||
+    text.includes("no available asset for api access") ||
+    (text.includes("purchase") && text.includes("subscription"))
+  );
+}
+
 function classifyFailoverReasonFrom402Text(raw: string): PaymentRequiredFailoverReason | null {
   if (RAW_402_MARKER_RE.test(raw)) {
     return classify402Message(raw);
@@ -548,6 +561,15 @@ function classifyFailoverReasonFrom402Text(raw: string): PaymentRequiredFailover
   }
   const normalized = normalize402Message(raw);
   if (!normalized || !hasKnownBareLeading402Signal(normalized)) {
+    return null;
+  }
+  const normalized = normalize402Message(raw);
+  if (
+    normalized &&
+    LEADING_BARE_402_RE.test(raw) &&
+    !LEADING_402_PAYMENT_REQUIRED_RE.test(raw) &&
+    !hasBareLeading402Signal(normalized)
+  ) {
     return null;
   }
   return classify402Message(raw);
