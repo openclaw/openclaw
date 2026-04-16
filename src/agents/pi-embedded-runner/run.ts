@@ -14,6 +14,7 @@ import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js"
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
   hasConfiguredModelFallbacks,
+  resolveAgentAutoContinue,
   resolveAgentExecutionContract,
   resolveSessionAgentIds,
 } from "../agent-scope.js";
@@ -95,6 +96,7 @@ import {
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
 import {
+  AUTO_CONTINUE_FAST_PATH_INSTRUCTION,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   resolveAckExecutionFastPathInstruction,
@@ -103,6 +105,7 @@ import {
   resolveIncompleteTurnPayloadText,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  resolveEscalatingPlanningRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
@@ -464,6 +467,19 @@ export async function runEmbeddedPiAgent(
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
       let planningOnlyRetryAttempts = 0;
+      let autoContinueCycles = 0;
+      let autoContinueAccumulatedMutation = false;
+      // Codex P2 (PR #67538 r3096325365): use the session-resolved agent id
+      // (already computed above for execution-contract resolution) instead of
+      // the raw `params.agentId`, which is undefined for many runs that select
+      // an agent via sessionKey alone. Without this fix, per-agent
+      // `agents.list[].embeddedPi.autoContinue` overrides were silently
+      // ignored — strict-agentic worked but auto-continue fell back to
+      // hardcoded defaults.
+      const autoContinueConfig = resolveAgentAutoContinue(
+        params.config,
+        sessionAgentId ?? params.agentId,
+      );
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
@@ -652,13 +668,17 @@ export async function runEmbeddedPiAgent(
           const basePrompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
           const promptAdditions = [
-            ackExecutionFastPathInstruction,
-            planningOnlyRetryInstruction,
-            reasoningOnlyRetryInstruction,
-            emptyResponseRetryInstruction,
-          ].filter(
-            (value): value is string => typeof value === "string" && value.trim().length > 0,
-          );
+            ...new Set(
+              [
+                ackExecutionFastPathInstruction,
+                planningOnlyRetryInstruction,
+                reasoningOnlyRetryInstruction,
+                emptyResponseRetryInstruction,
+              ].filter(
+                (value): value is string => typeof value === "string" && value.trim().length > 0,
+              ),
+            ),
+          ];
           const prompt =
             promptAdditions.length > 0
               ? `${basePrompt}\n\n${promptAdditions.join("\n\n")}`
@@ -1738,7 +1758,9 @@ export async function runEmbeddedPiAgent(
               });
             }
             planningOnlyRetryAttempts += 1;
-            planningOnlyRetryInstruction = nextPlanningOnlyRetryInstruction;
+            planningOnlyRetryInstruction = resolveEscalatingPlanningRetryInstruction(
+              planningOnlyRetryAttempts - 1,
+            );
             log.warn(
               `planning-only turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${provider}/${modelId} contract=${executionContract} configured=${configuredExecutionContract} — retrying ` +
@@ -1792,6 +1814,51 @@ export async function runEmbeddedPiAgent(
             );
           }
           if (!incompleteTurnText && nextPlanningOnlyRetryInstruction && strictAgenticActive) {
+            // Track mutations across the entire run, not just the current
+            // attempt, so stopOnMutation cannot be bypassed by a plan-only
+            // turn following a mutating turn.
+            if (attempt.replayMetadata.hadPotentialSideEffects) {
+              autoContinueAccumulatedMutation = true;
+            }
+            // Auto-continue: when enabled and budget remains, inject ACK
+            // fast-path instead of blocking. This keeps the agent working
+            // on planning-heavy tasks without requiring manual "continue".
+            // Each "cycle" = 1 ACK injection + up to 3 planning retries = ~4 API calls.
+            if (
+              autoContinueConfig.enabled &&
+              autoContinueCycles < autoContinueConfig.maxCycles &&
+              (!autoContinueConfig.stopOnMutation || !autoContinueAccumulatedMutation)
+            ) {
+              autoContinueCycles += 1;
+              planningOnlyRetryAttempts = 0;
+              planningOnlyRetryInstruction = AUTO_CONTINUE_FAST_PATH_INSTRUCTION;
+              // Emit plan event so UI observers track the auto-continue transition.
+              const planningOnlyText = attempt.assistantTexts.join("\n\n").trim();
+              const planDetails = extractPlanningOnlyPlanDetails(planningOnlyText);
+              if (planDetails) {
+                const planEventData = {
+                  phase: "update" as const,
+                  title: "Auto-continuing — agent proposed a plan",
+                  explanation: planDetails.explanation,
+                  steps: planDetails.steps,
+                  source: "auto_continue",
+                };
+                emitAgentPlanEvent({
+                  runId: params.runId,
+                  ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+                  data: planEventData,
+                });
+                void params.onAgentEvent?.({
+                  stream: "plan",
+                  data: planEventData,
+                });
+              }
+              log.info(
+                `auto-continue active: runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `cycle=${autoContinueCycles}/${autoContinueConfig.maxCycles} — injecting ACK fast-path`,
+              );
+              continue;
+            }
             log.warn(
               `strict-agentic run exhausted planning-only retries: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${provider}/${modelId} configured=${configuredExecutionContract} — surfacing blocked state`,
