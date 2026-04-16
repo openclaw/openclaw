@@ -346,11 +346,31 @@ function isHtmlErrorResponse(raw: string, status?: number): boolean {
     typeof status === "number" && Number.isFinite(status)
       ? status
       : extractLeadingHttpStatus(candidate)?.code;
-  if (typeof inferred !== "number" || inferred < 400) {
+  const rest = extractLeadingHttpStatus(candidate)?.rest ?? candidate;
+  const hasHtmlStructure = HTML_BODY_RE.test(rest) && HTML_CLOSE_RE.test(rest);
+  if (!hasHtmlStructure) {
     return false;
   }
-  const rest = extractLeadingHttpStatus(candidate)?.rest ?? candidate;
-  return HTML_BODY_RE.test(rest) && HTML_CLOSE_RE.test(rest);
+  // Status code present and >= 400: clearly an error page.
+  if (typeof inferred === "number" && inferred >= 400) {
+    return true;
+  }
+  // No parseable status code: accept as HTML error when CDN/proxy indicators
+  // are present, so Cloudflare pages are not misclassified as DNS errors.
+  if (typeof inferred !== "number") {
+    const lowerRest = rest.toLowerCase();
+    return (
+      lowerRest.includes("cloudflare") ||
+      lowerRest.includes("nginx") ||
+      lowerRest.includes("error") ||
+      lowerRest.includes("denied") ||
+      lowerRest.includes("forbidden") ||
+      lowerRest.includes("not found") ||
+      lowerRest.includes("bad gateway") ||
+      lowerRest.includes("service unavailable")
+    );
+  }
+  return false;
 }
 
 function isTransportHtmlErrorStatus(status: number | undefined): boolean {
