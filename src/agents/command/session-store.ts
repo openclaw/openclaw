@@ -72,13 +72,17 @@ export async function updateSessionStoreAfterAgentRun(params: {
     sessionId,
     updatedAt: Date.now(),
   };
+  const runtimeModelChanged =
+    entry.model?.trim() !== modelUsed.trim() || entry.modelProvider?.trim() !== providerUsed.trim();
   const next: SessionEntry = {
     ...entry,
     sessionId,
     updatedAt: Date.now(),
     ...(typeof resolvedContextTokens === "number" && resolvedContextTokens > 0
       ? { contextTokens: resolvedContextTokens }
-      : {}),
+      : runtimeModelChanged
+        ? { contextTokens: undefined }
+        : {}),
   };
   setSessionRuntimeModel(next, {
     provider: providerUsed,

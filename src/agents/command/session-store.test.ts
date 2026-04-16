@@ -80,4 +80,51 @@ describe("updateSessionStoreAfterAgentRun", () => {
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("cli-session-123");
     expect(persisted[sessionKey]?.claudeCliSessionId).toBe("cli-session-123");
   });
+
+  it("clears stale context tokens when the runtime model changes and lookup is unresolved", async () => {
+    const cfg = {} as OpenClawConfig;
+    const sessionKey = "agent:main:explicit:test-context-window";
+    const sessionId = "test-openclaw-session";
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: 1,
+        modelProvider: "openai-codex",
+        model: "gpt-5.4",
+        contextTokens: 272000,
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+    const result: EmbeddedPiRunResult = {
+      meta: {
+        durationMs: 1,
+        agentMeta: {
+          sessionId: "unknown-runtime-session",
+          provider: "unknown-provider",
+          model: "unknown-model",
+        },
+      },
+    };
+
+    await updateSessionStoreAfterAgentRun({
+      cfg,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore,
+      defaultProvider: "openai-codex",
+      defaultModel: "gpt-5.4",
+      result,
+    });
+
+    expect(sessionStore[sessionKey]?.modelProvider).toBe("unknown-provider");
+    expect(sessionStore[sessionKey]?.model).toBe("unknown-model");
+    expect(sessionStore[sessionKey]?.contextTokens).toBeUndefined();
+
+    const persisted = loadSessionStore(storePath);
+    expect(persisted[sessionKey]?.modelProvider).toBe("unknown-provider");
+    expect(persisted[sessionKey]?.model).toBe("unknown-model");
+    expect(persisted[sessionKey]?.contextTokens).toBeUndefined();
+  });
 });
