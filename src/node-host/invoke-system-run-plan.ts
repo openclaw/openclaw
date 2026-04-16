@@ -898,6 +898,9 @@ function shellPayloadNeedsStableBinding(shellCommand: string, cwd: string | unde
   if (!resolvesToExistingFileSync(firstToken, cwd)) {
     return false;
   }
+  if (!path.isAbsolute(firstToken)) {
+    return true;
+  }
   return isLikelyScriptLikePathSync(path.resolve(cwd ?? process.cwd(), firstToken));
 }
 

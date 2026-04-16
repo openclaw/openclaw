@@ -823,6 +823,27 @@ describe("hardenApprovedExecutionPaths", () => {
     expect(prepared.plan.mutableFileOperand).toBeUndefined();
   });
 
+  it("keeps fail-closed behavior for relative native-binary shell payloads", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-relative-binary-binding-"));
+    try {
+      const binaryPath = resolveNativeBinaryFixturePath();
+      const relativeBinaryPath = path.join(tmp, "tool");
+      fs.copyFileSync(binaryPath, relativeBinaryPath);
+      fs.chmodSync(relativeBinaryPath, 0o755);
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", "./tool"],
+        rawCommand: "./tool",
+        cwd: tmp,
+      });
+      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("keeps fail-closed behavior for shell payloads that invoke mutable script files", () => {
     expectShellPayloadApprovalDenied({
       tmpPrefix: "openclaw-shell-script-binding-",
