@@ -515,6 +515,7 @@ export async function runEmbeddedPiAgent(
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
+      let lastCompactionTokensAfter: number | undefined;
       let runLoopIterations = 0;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
@@ -758,6 +759,7 @@ export async function runEmbeddedPiAgent(
               });
               if (compactResult.compacted) {
                 autoCompactionCount += 1;
+                lastCompactionTokensAfter = compactResult.result?.tokensAfter;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 continue;
               }
@@ -1068,6 +1070,7 @@ export async function runEmbeddedPiAgent(
             lastCallUsage: lastCallUsage ?? undefined,
             promptTokens,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
+            compactionTokensAfter: lastCompactionTokensAfter,
           };
 
           const payloads = buildEmbeddedRunPayloads({
