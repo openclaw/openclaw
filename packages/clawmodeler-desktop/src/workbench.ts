@@ -14,6 +14,7 @@ export type WorkspaceArtifacts = {
   workflowReport: Record<string, unknown> | null;
   reportMarkdown: string | null;
   files: string[];
+  filesTruncated: boolean;
 };
 
 export function normalizePathList(input: string): string[] {

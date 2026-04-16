@@ -99,8 +99,11 @@ async function readTextIfExists(filePath: string): Promise<string | null> {
   }
 }
 
-async function listFiles(root: string): Promise<string[]> {
+const FILE_LIST_LIMIT = 500;
+
+async function listFiles(root: string): Promise<{ files: string[]; truncated: boolean }> {
   const files: string[] = [];
+  let truncated = false;
   type FileEntry = {
     name: string;
     isDirectory(): boolean;
@@ -114,7 +117,8 @@ async function listFiles(root: string): Promise<string[]> {
       return;
     }
     for (const entry of entries) {
-      if (files.length >= 500) {
+      if (files.length >= FILE_LIST_LIMIT) {
+        truncated = true;
         return;
       }
       const fullPath = path.join(current, entry.name);
@@ -126,7 +130,7 @@ async function listFiles(root: string): Promise<string[]> {
     }
   }
   await walk(root);
-  return files.toSorted();
+  return { files: files.toSorted(), truncated };
 }
 
 function clawModelerApiPlugin(): Plugin {
@@ -157,6 +161,7 @@ function clawModelerApiPlugin(): Plugin {
               throw new Error("workspace is required");
             }
             const runRoot = path.join(workspace, "runs", runId);
+            const { files, truncated } = await listFiles(runRoot);
             const payload = {
               workspace,
               runId,
@@ -166,7 +171,8 @@ function clawModelerApiPlugin(): Plugin {
               reportMarkdown: await readTextIfExists(
                 path.join(workspace, "reports", `${runId}_report.md`),
               ),
-              files: await listFiles(runRoot),
+              files,
+              filesTruncated: truncated,
             };
             sendJson(response, 200, { ok: true, json: payload });
             return;

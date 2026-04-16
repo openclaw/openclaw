@@ -13,6 +13,7 @@ struct EngineResult {
     stdout: String,
     stderr: String,
     json: Option<Value>,
+    json_parse_error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -25,6 +26,7 @@ struct WorkspaceArtifacts {
     workflow_report: Option<Value>,
     report_markdown: Option<String>,
     files: Vec<String>,
+    files_truncated: bool,
 }
 
 #[derive(Serialize)]
@@ -99,7 +101,10 @@ fn run_engine_args(app: &tauri::AppHandle, args: Vec<String>) -> Result<EngineRe
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let json = serde_json::from_str(stdout.trim()).ok();
+    let (json, json_parse_error) = match serde_json::from_str(stdout.trim()) {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(format!("{error}"))),
+    };
 
     Ok(EngineResult {
         ok: output.status.success(),
@@ -107,6 +112,7 @@ fn run_engine_args(app: &tauri::AppHandle, args: Vec<String>) -> Result<EngineRe
         stdout,
         stderr,
         json,
+        json_parse_error,
     })
 }
 
@@ -139,6 +145,7 @@ fn clawmodeler_workspace(workspace: String, run_id: String) -> Result<ArtifactRe
     };
     let run_root = workspace_path.join("runs").join(&run_id);
     let reports_dir = workspace_path.join("reports");
+    let (files, files_truncated) = list_files(&run_root);
     let artifacts = WorkspaceArtifacts {
         workspace: workspace_path.to_string_lossy().to_string(),
         run_id: run_id.clone(),
@@ -146,7 +153,8 @@ fn clawmodeler_workspace(workspace: String, run_id: String) -> Result<ArtifactRe
         qa_report: read_json(run_root.join("qa_report.json")),
         workflow_report: read_json(run_root.join("workflow_report.json")),
         report_markdown: fs::read_to_string(reports_dir.join(format!("{run_id}_report.md"))).ok(),
-        files: list_files(&run_root),
+        files,
+        files_truncated,
     };
 
     Ok(ArtifactResult {
@@ -160,16 +168,19 @@ fn read_json(path: PathBuf) -> Option<Value> {
     serde_json::from_str(&text).ok()
 }
 
-fn list_files(root: &Path) -> Vec<String> {
+const FILE_LIST_LIMIT: usize = 500;
+
+fn list_files(root: &Path) -> (Vec<String>, bool) {
     let mut files = Vec::new();
     collect_files(root, &mut files);
     files.sort();
-    files.truncate(500);
-    files
+    let truncated = files.len() > FILE_LIST_LIMIT;
+    files.truncate(FILE_LIST_LIMIT);
+    (files, truncated)
 }
 
 fn collect_files(root: &Path, files: &mut Vec<String>) {
-    if files.len() >= 500 {
+    if files.len() > FILE_LIST_LIMIT {
         return;
     }
     let Ok(entries) = fs::read_dir(root) else {
@@ -186,7 +197,7 @@ fn collect_files(root: &Path, files: &mut Vec<String>) {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    if let Err(error) = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             clawmodeler_doctor,
             clawmodeler_tools,
@@ -194,5 +205,8 @@ pub fn run() {
             clawmodeler_workspace
         ])
         .run(tauri::generate_context!())
-        .expect("error while running ClawModeler desktop app");
+    {
+        eprintln!("ClawModeler desktop failed to start: {error}");
+        std::process::exit(1);
+    }
 }

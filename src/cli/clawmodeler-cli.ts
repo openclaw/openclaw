@@ -101,6 +101,14 @@ export function registerClawModelerCli(program: Command) {
     .allowExcessArguments(true)
     .argument("[args...]", "Arguments passed to clawmodeler-engine")
     .addHelpText(
+      "before",
+      () =>
+        `${theme.muted(
+          "All arguments are forwarded verbatim to the clawmodeler-engine Python sidecar; " +
+            "unknown options and typos will surface as sidecar errors.",
+        )}\n`,
+    )
+    .addHelpText(
       "after",
       () => `\n${theme.heading("Examples:")}\n${formatHelpExamples(EXAMPLES)}\n`,
     )

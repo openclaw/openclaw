@@ -14,6 +14,7 @@ type ApiResult<T = unknown> = {
   stdout?: string;
   stderr?: string;
   json?: T;
+  jsonParseError?: string;
   error?: string;
 };
 
@@ -45,6 +46,7 @@ type WorkspaceArtifacts = {
   workflowReport: Record<string, unknown> | null;
   reportMarkdown: string | null;
   files: string[];
+  filesTruncated: boolean;
 };
 
 type AppState = {
