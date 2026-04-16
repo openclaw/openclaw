@@ -115,25 +115,18 @@ if (-not $srcExe) { $srcExe = Get-Item -Path (Join-Path $PSScriptRoot "..\..\app
 
 # NEW: Automatic remote download if no local binary is found
 if (-not $srcExe) {
-    Write-Host "Local binary not found. Attempting to download latest release from GitHub..." -ForegroundColor Cyan
-    $repo = "openclaw/openclaw"
-    $assetName = "OpenClaw.exe"
-    try {
-        $releaseUrl = "https://github.com/$repo/releases/latest/download/$assetName"
-        $downloadPath = Join-Path $env:TEMP $assetName
-        Write-Host "Downloading from $releaseUrl..." -ForegroundColor Gray
-        Invoke-WebRequest -Uri $releaseUrl -OutFile $downloadPath -ErrorAction Stop
-        $srcExe = Get-Item -Path $downloadPath
-    } catch {
-        Write-Host "Failed to download remote binary: $_" -ForegroundColor Yellow
-        Write-Host "Please ensure OpenClaw.exe exists in $PSScriptRoot or run 'pnpm build' first." -ForegroundColor Gray
-    }
-}
-
-if (-not $srcExe) {
-    Write-Host "ERROR: OpenClaw application binary not found." -ForegroundColor Red
+    Write-Host "" -ForegroundColor Red
+    Write-Host "ERROR: OpenClaw desktop binary not found locally." -ForegroundColor Red
+    Write-Host "" 
+    Write-Host "To install the OpenClaw desktop app, either:" -ForegroundColor Yellow
+    Write-Host "  1. Build it locally:  pnpm install && pnpm tauri build" -ForegroundColor Gray
+    Write-Host "     Then re-run this script from: apps/windows/src-tauri/target/release/" -ForegroundColor Gray
+    Write-Host "  2. Download a pre-built release from the project releases page." -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "Note: The OpenClaw CLI is already installed via npm (openclaw command)." -ForegroundColor Cyan
     exit 1
 }
+
 
 New-Item -ItemType Directory -Force -Path $InstallPath | Out-Null
 Copy-Item $srcExe.FullName -Destination (Join-Path $InstallPath "OpenClaw.exe") -Force
