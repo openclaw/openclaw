@@ -109,3 +109,65 @@ python3 {baseDir}/scripts/tfc_client.py list-workspaces
 - Destroy requires a second explicit confirmation: "Type DESTROY to confirm"
 - Keep AWS and Azure in separate TFC workspaces
 - Always pin provider versions in `required_providers`
+
+## Git Versioning (Optional)
+
+By default, generated configs live in the `--dir` you specify (e.g. `/tmp/tf-aws`). To persist configs in a Git repo with full history, enable the feature toggle:
+
+### Setup
+
+Add these env vars to your OpenClaw config (`~/.clawdbot/openclaw.json` under `env.vars`):
+
+```
+TFC_GIT_ENABLED=true
+TFC_GIT_REPO_DIR=~/terraform-iac
+TFC_GIT_REPO_URL=https://github.com/<user>/terraform-iac.git
+```
+
+- `TFC_GIT_ENABLED` — `true` to activate, omit or `false` to keep default behavior
+- `TFC_GIT_REPO_DIR` — local clone path (default: `~/terraform-iac`)
+- `TFC_GIT_REPO_URL` — GitHub remote URL (with or without `.git` suffix)
+
+The repo is auto-cloned on first generate if it doesn't exist locally.
+
+### Repo Layout
+
+```
+terraform-iac/
+├── .gitignore          # auto-generated, excludes .terraform/, tfplan, state, secrets
+├── prod-aws/
+│   ├── s3-my-bucket/
+│   │   └── main.tf
+│   ├── vpc-main/
+│   │   └── main.tf
+│   └── ec2-web-server/
+│       └── main.tf
+└── prod-azure/
+    └── rg-mygroup/
+        └── main.tf
+```
+
+### Workflow with Git
+
+When enabled, `--dir` becomes optional for `generate` — the path is auto-resolved:
+
+```bash
+# --dir is auto-resolved to ~/terraform-iac/prod-aws/s3-my-bucket/
+python3 {baseDir}/scripts/tfc_client.py generate \
+  --resource s3 --name my-bucket --workspace prod-aws
+```
+
+Automatic Git commits happen after:
+- `generate` — commits the new/updated `.tf` files
+- `plan` — commits any config changes made during plan
+- `apply` — commits post-apply state
+
+All commits are pushed to the remote automatically if configured.
+
+### What is NOT stored in Git
+
+- `.terraform/` directory (provider binaries)
+- `tfplan` files
+- `*.tfstate` / `*.tfstate.*` files (state lives in TFC)
+- `*.tfvars` / `*.tfvars.json` (secrets)
+- `.terraformrc` / `terraform.rc` (credentials)

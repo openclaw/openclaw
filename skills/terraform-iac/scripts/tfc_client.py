@@ -15,14 +15,21 @@ Usage:
 Required env vars:
   TFC_TOKEN   Terraform Cloud user or team API token (not org token)
   TFC_ORG     Terraform Cloud organization name
+
+Optional env vars (Git versioning — off by default):
+  TFC_GIT_ENABLED   Set to 'true' to persist generated configs in a Git repo
+  TFC_GIT_REPO_DIR  Local clone path (default: ~/terraform-iac)
+  TFC_GIT_REPO_URL  Remote URL, e.g. https://github.com/user/terraform-iac.git
 """
 
 import argparse
 import ipaddress
 import json
 import os
+import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 requests = None
@@ -40,6 +47,117 @@ def _require_requests():
     return requests
 
 TFC_API = "https://app.terraform.io/api/v2"
+
+# ---------------------------------------------------------------------------
+# Git versioning helpers (opt-in via TFC_GIT_ENABLED=true)
+# ---------------------------------------------------------------------------
+
+_GITIGNORE_CONTENT = """# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+*.tfvars
+*.tfvars.json
+"""
+
+
+def _git_enabled():
+    return os.environ.get("TFC_GIT_ENABLED", "").lower() == "true"
+
+
+def _git_repo_dir():
+    raw = os.environ.get("TFC_GIT_REPO_DIR", "~/terraform-iac")
+    return str(Path(raw).expanduser().resolve())
+
+
+def _git_repo_url():
+    url = os.environ.get("TFC_GIT_REPO_URL", "")
+    return url.rstrip("/")
+
+
+def _git(*args, cwd=None, check=True):
+    repo = cwd or _git_repo_dir()
+    result = subprocess.run(
+        ["git"] + list(args), cwd=repo, capture_output=True, text=True,
+    )
+    if check and result.returncode != 0:
+        print(f"WARNING: git {' '.join(args)} failed: {result.stderr.strip()}")
+    return result
+
+
+def _git_init_repo():
+    repo = _git_repo_dir()
+    repo_path = Path(repo)
+    if not shutil.which("git"):
+        print("WARNING: git not found on PATH — skipping Git versioning")
+        return False
+    if (repo_path / ".git").is_dir():
+        return True
+    url = _git_repo_url()
+    if url:
+        print(f"Cloning {url} -> {repo}")
+        result = subprocess.run(
+            ["git", "clone", url, repo], capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            _ensure_gitignore(repo_path)
+            return True
+        print(f"WARNING: clone failed ({result.stderr.strip()}), initializing locally")
+    repo_path.mkdir(parents=True, exist_ok=True)
+    _git("init", cwd=repo)
+    _ensure_gitignore(repo_path)
+    if url:
+        _git("remote", "add", "origin", url, cwd=repo, check=False)
+    _git("add", ".", cwd=repo)
+    _git("commit", "-m", "chore: initialize terraform-iac repo", cwd=repo, check=False)
+    return True
+
+
+def _ensure_gitignore(repo_path):
+    gi = repo_path / ".gitignore"
+    if not gi.exists():
+        gi.write_text(_GITIGNORE_CONTENT)
+
+
+def _git_commit(message, cwd=None):
+    repo = cwd or _git_repo_dir()
+    _git("add", ".", cwd=repo)
+    status = _git("status", "--porcelain", cwd=repo)
+    if not status.stdout.strip():
+        return
+    _git("commit", "-m", message, cwd=repo)
+    print(f"  Git commit: {message}")
+
+
+def _git_push():
+    repo = _git_repo_dir()
+    result = _git("remote", "get-url", "origin", cwd=repo, check=False)
+    if result.returncode != 0 or not result.stdout.strip():
+        return
+    push = _git("push", "origin", "HEAD", cwd=repo, check=False)
+    if push.returncode == 0:
+        print("  Pushed to remote")
+    else:
+        print(f"WARNING: push failed — {push.stderr.strip()}")
+
+
+def _resolve_git_dir(workspace, resource, name=None):
+    slug = resource
+    if name:
+        safe = name.lower().replace(" ", "-").replace("_", "-")
+        slug = f"{resource}-{safe}"
+    d = Path(_git_repo_dir()) / workspace / slug
+    d.mkdir(parents=True, exist_ok=True)
+    return str(d)
 
 
 def sanitize_hcl(value):
@@ -72,9 +190,11 @@ def prompt_raw(question, default=None, choices=None):
 
 
 def validate_dir(path_str):
-    """Validate --dir is a safe path under /tmp or the user's home directory."""
+    """Validate --dir is a safe path under /tmp, user's home, or the git repo dir."""
     resolved = Path(path_str).resolve()
     allowed_roots = [Path("/tmp").resolve(), Path.home().resolve()]
+    if _git_enabled():
+        allowed_roots.append(Path(_git_repo_dir()).resolve())
     if not any(resolved == root or root in resolved.parents for root in allowed_roots):
         print(f"ERROR: --dir must be under /tmp or $HOME, got '{resolved}'")
         sys.exit(1)
@@ -3670,11 +3790,29 @@ def validate_azure_rg_name(name):
 
 
 def cmd_generate(args):
-    validate_dir(args.dir)
-    outdir = Path(args.dir)
+    if _git_enabled():
+        git_ok = _git_init_repo()
+        if git_ok and not args.dir:
+            outdir = Path(_resolve_git_dir(args.workspace, args.resource, args.name))
+            print(f"  Git repo: {_git_repo_dir()}")
+            print(f"  Output:   {outdir}")
+        elif git_ok and args.dir:
+            outdir = Path(args.dir)
+        else:
+            if not args.dir:
+                print("ERROR: --dir is required (git init failed)")
+                sys.exit(1)
+            outdir = Path(args.dir)
+    else:
+        if not args.dir:
+            print("ERROR: --dir is required (set TFC_GIT_ENABLED=true for auto dir)")
+            sys.exit(1)
+        outdir = Path(args.dir)
+    validate_dir(str(outdir))
     outdir.mkdir(parents=True, exist_ok=True)
     org = sanitize_hcl(get_org())
     workspace = sanitize_hcl(args.workspace)
+    args._resolved_dir = str(outdir)
 
     if args.resource == "s3":
         if not args.name:
@@ -3853,6 +3991,11 @@ output "role_name" {{ value = aws_iam_role.this.name }}
         print(f"ERROR: Unknown resource type '{args.resource}'. Supported: s3, rg")
         sys.exit(1)
 
+    if _git_enabled():
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _git_commit(f"generate: {args.resource} in {args.workspace} ({ts})")
+        _git_push()
+
 
 def cmd_plan(args):
     work_dir = validate_dir(args.dir)
@@ -3865,6 +4008,10 @@ def cmd_plan(args):
         sys.exit(1)
     print(f"\n✅ Plan complete. Plan saved to {plan_file}")
     print("Review above and approve to apply.")
+    if _git_enabled():
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _git_commit(f"plan: reviewed at {ts}")
+        _git_push()
 
 
 def cmd_apply(args):
@@ -3881,6 +4028,10 @@ def cmd_apply(args):
         sys.exit(1)
     Path(plan_file).unlink(missing_ok=True)
     print("\n✅ Apply complete.")
+    if _git_enabled():
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _git_commit(f"apply: successful at {ts}")
+        _git_push()
 
 
 def cmd_destroy(args):
@@ -4051,7 +4202,7 @@ def main():
     p_gen.add_argument("--resource", required=True, choices=["s3", "vpc", "ec2", "sg", "lambda", "iam-user", "budget", "cloudtrail", "cloudwatch", "efs", "landing-zone", "iam-role", "rg"])
     p_gen.add_argument("--name", required=False)
     p_gen.add_argument("--workspace", required=True)
-    p_gen.add_argument("--dir", required=True)
+    p_gen.add_argument("--dir", required=False, default=None)
     p_gen.add_argument("--region", default=None)
     p_gen.add_argument("--service", default=None, help="AWS service principal for IAM role trust policy (e.g. ec2.amazonaws.com)")
     p_gen.add_argument("--policy-arn", dest="policy_arn", default=None, help="AWS managed policy ARN to attach to IAM role")
