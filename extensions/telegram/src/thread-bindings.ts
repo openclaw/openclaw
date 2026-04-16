@@ -16,7 +16,7 @@ import { readAcpSessionEntry } from "openclaw/plugin-sdk/acp-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { isAcpSessionKey } from "openclaw/sessions/session-key-utils";
+import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -463,7 +463,7 @@ export function createTelegramThreadBindingManager(
   }
 
   const staleSessionKeys = new Set<string>();
-  for (const [targetSessionKey, bindings] of bindingsByTargetSession) {
+  for (const targetSessionKey of bindingsByTargetSession.keys()) {
     const sessionEntry = readAcpSessionEntry({ sessionKey: targetSessionKey });
     if (!sessionEntry || sessionEntry.storeReadFailed) {
       continue;
