@@ -1,8 +1,8 @@
 import type {
   PluginHookSubagentDeliveryTargetEvent,
   PluginHookSubagentDeliveryTargetResult,
-} from "openclaw/plugin-sdk/plugin-types";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-api-types";
+} from "openclaw/plugins/hook-types.ts";
+import type { OpenClawPluginApi } from "openclaw/plugins/types.ts";
 
 /**
  * Route subagent completion messages back into the originating Slack thread.
