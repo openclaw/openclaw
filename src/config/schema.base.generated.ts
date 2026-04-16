@@ -4121,6 +4121,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         minimum: 0,
                         maximum: 9007199254740991,
                       },
+                      embeddingBatchTimeoutSeconds: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Embedding Batch Timeout (s)",
+                        description:
+                          "Timeout in seconds for local and Ollama embedding batch operations during memory indexing (default: 120). Increase on low-CPU machines where local embedding providers like Ollama take longer to process a batch.",
+                      },
                       sessions: {
                         type: "object",
                         properties: {
@@ -5969,6 +5977,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           type: "integer",
                           minimum: 0,
                           maximum: 9007199254740991,
+                        },
+                        embeddingBatchTimeoutSeconds: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                          title: "Embedding Batch Timeout (s)",
+                          description:
+                            "Timeout in seconds for local and Ollama embedding batch operations during memory indexing (default: 120). Increase on low-CPU machines where local embedding providers like Ollama take longer to process a batch.",
                         },
                         sessions: {
                           type: "object",
@@ -24947,6 +24963,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Force Reindex After Compaction",
       help: "Forces a session memory-search reindex after compaction-triggered transcript updates (default: true). Keep enabled when compacted summaries must be immediately searchable, or disable to reduce write-time indexing pressure.",
       tags: ["storage"],
+    },
+    "agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds": {
+      label: "Embedding Batch Timeout (s)",
+      help: "Timeout in seconds for local and Ollama embedding batch operations during memory indexing (default: 120). Increase on low-CPU machines where local embedding providers like Ollama take longer to process a batch. The existing remote.batch.timeoutMinutes only covers provider batch APIs; this field covers inline embedding calls.",
+      tags: ["performance"],
     },
     "agents.defaults.memorySearch.query.maxResults": {
       label: "Memory Search Max Results",

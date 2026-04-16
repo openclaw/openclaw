@@ -225,12 +225,44 @@ describe("memory search config", () => {
       watch: false,
       watchDebounceMs: 25,
       intervalMinutes: 3,
+      embeddingBatchTimeoutSeconds: 120,
       sessions: {
         deltaBytes: 321,
         deltaMessages: 7,
         postCompactionForce: false,
       },
     });
+  });
+
+  it("uses configured embeddingBatchTimeoutSeconds when set", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            sync: {
+              embeddingBatchTimeoutSeconds: 600,
+            },
+          },
+        },
+      },
+    });
+    const result = resolveMemorySearchSyncConfig(cfg, "main");
+    expect(result?.embeddingBatchTimeoutSeconds).toBe(600);
+  });
+
+  it("defaults embeddingBatchTimeoutSeconds to 120", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+          },
+        },
+      },
+    });
+    const result = resolveMemorySearchSyncConfig(cfg, "main");
+    expect(result?.embeddingBatchTimeoutSeconds).toBe(120);
   });
 
   it("merges defaults and overrides", () => {

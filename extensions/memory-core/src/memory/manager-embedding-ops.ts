@@ -308,6 +308,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (kind === "query") {
       return isLocal ? EMBEDDING_QUERY_TIMEOUT_LOCAL_MS : EMBEDDING_QUERY_TIMEOUT_REMOTE_MS;
     }
+    const configuredTimeoutSeconds = this.settings.sync.embeddingBatchTimeoutSeconds;
+    if (typeof configuredTimeoutSeconds === "number" && configuredTimeoutSeconds > 0) {
+      return configuredTimeoutSeconds * 1000;
+    }
     return isLocal ? EMBEDDING_BATCH_TIMEOUT_LOCAL_MS : EMBEDDING_BATCH_TIMEOUT_REMOTE_MS;
   }
 

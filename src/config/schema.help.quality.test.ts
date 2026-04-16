@@ -110,6 +110,7 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.sync.watch",
   "agents.defaults.memorySearch.sync.sessions.deltaBytes",
   "agents.defaults.memorySearch.sync.sessions.deltaMessages",
+  "agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds",
   "models.mode",
   "models.providers.*.auth",
   "models.providers.*.authHeader",

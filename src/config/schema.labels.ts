@@ -409,6 +409,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.sync.sessions.deltaMessages": "Session Delta Messages",
   "agents.defaults.memorySearch.sync.sessions.postCompactionForce":
     "Force Reindex After Compaction",
+  "agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds": "Embedding Batch Timeout (s)",
   "agents.defaults.memorySearch.query.maxResults": "Memory Search Max Results",
   "agents.defaults.memorySearch.query.minScore": "Memory Search Min Score",
   "agents.defaults.memorySearch.query.hybrid.enabled": "Memory Search Hybrid",

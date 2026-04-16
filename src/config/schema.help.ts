@@ -1063,6 +1063,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Requires at least this many appended transcript messages before reindex is triggered (default: 50). Lower this for near-real-time transcript recall, or raise it to reduce indexing churn.",
   "agents.defaults.memorySearch.sync.sessions.postCompactionForce":
     "Forces a session memory-search reindex after compaction-triggered transcript updates (default: true). Keep enabled when compacted summaries must be immediately searchable, or disable to reduce write-time indexing pressure.",
+  "agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds":
+    "Timeout in seconds for local and Ollama embedding batch operations during memory indexing (default: 120). Increase on low-CPU machines where local embedding providers like Ollama take longer to process a batch. The existing remote.batch.timeoutMinutes only covers provider batch APIs; this field covers inline embedding calls.",
   ui: "UI presentation settings for accenting and assistant identity shown in control surfaces. Use this for branding and readability customization without changing runtime behavior.",
   "ui.seamColor":
     "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
