@@ -350,7 +350,7 @@ export async function runCliAgent(params: {
       bootstrapFiles: [],
       injectedFiles: contextFiles,
       skillsPrompt: "",
-      tools: [] as AgentTool[],
+      tools: [],
     });
 
     return {
