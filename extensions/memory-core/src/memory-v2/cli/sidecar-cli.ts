@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { setPinned } from "../sidecar-repo.js";
 
 export type SidecarStatsSummary = {
   total: number;
@@ -134,6 +135,33 @@ export function formatListLines(rows: readonly SidecarListRow[]): string[] {
     const sal = r.salience === null ? "-" : r.salience.toFixed(2);
     return `${refPrefix}  ${r.source.padEnd(8)} ${location.padEnd(40)} ${r.status.padEnd(11)} ${pin.padEnd(6)} sal=${sal}  ${formatTs(r.createdAt)}`;
   });
+}
+
+export type SidecarPinOutcome = {
+  refId: string;
+  found: boolean;
+  pinned: boolean;
+};
+
+// Admin-level pin/unpin by full ref id. No prefix matching in this slice —
+// callers must pass a full ref id (use `memory sidecar list --json` to get
+// one). `found` is false when no row matches the ref id; in that case the
+// UPDATE is a no-op and `pinned` echoes the requested target value purely
+// for log-line symmetry.
+export function writeSidecarPin(
+  db: DatabaseSync,
+  refId: string,
+  pinned: boolean,
+): SidecarPinOutcome {
+  const found = setPinned(db, refId, pinned);
+  return { refId, found, pinned };
+}
+
+export function formatPinLine(outcome: SidecarPinOutcome): string {
+  if (!outcome.found) {
+    return `ref-id not found: ${outcome.refId}`;
+  }
+  return `${outcome.pinned ? "pinned" : "unpinned"} ${outcome.refId}`;
 }
 
 function formatTs(ts: number | null): string {

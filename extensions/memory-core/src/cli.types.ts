@@ -44,3 +44,7 @@ export type MemorySidecarListCommandOptions = MemoryCommandOptions & {
   status?: string;
   limit?: number;
 };
+
+export type MemorySidecarPinCommandOptions = MemoryCommandOptions & {
+  unpin?: boolean;
+};

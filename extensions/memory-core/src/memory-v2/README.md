@@ -10,9 +10,9 @@ Everything described here is **off by default**. Nothing in this foundation chan
 - An ingest pipeline wired to `agent_end` that writes sidecar rows for successful agent turns when ingest is enabled.
 - A rerank wrapper wired into `memory_search` that reorders results using salience, recency, pinning, and supersession signals when rerank is enabled.
 - An optional shadow-touch path that updates `last_accessed_at` for memory-v2 hits returned by search (useful later for recency scoring).
-- A read-only CLI (`openclaw memory sidecar`) for inspecting the sidecar.
+- An `openclaw memory sidecar` CLI: `stats` and `list` inspect the sidecar (read-only); `pin` flips the `pinned` flag on a record by its full ref id.
 
-**Not shipped:** pinning or salience writes, supersession writes, status mutation, dreaming-phase integration, and any form of automatic promotion or demotion. The foundation is observation-only until a future change adds those surfaces explicitly.
+**Not shipped:** salience writes, supersession writes, status mutation, ref-id prefix matching, dreaming-phase integration, and any form of automatic promotion or demotion. A future change adds each of these surfaces explicitly.
 
 ## Opt-in configuration
 
@@ -79,9 +79,9 @@ Ingest only fires on `agent_end` with `success: true` and a known `workspaceDir`
 
 If the rerank wrapper throws at runtime it falls back to identity (returning the input list unchanged) rather than surfacing an error to the search path.
 
-## Read-only sidecar CLI
+## Sidecar CLI
 
-`openclaw memory sidecar` inspects the sidecar database for the default agent (or the agent passed with `--agent`). Both subcommands are read-only; neither writes to the sidecar.
+`openclaw memory sidecar` inspects and lightly curates the sidecar database for the default agent (or the agent passed with `--agent`). `stats` and `list` are strictly read-only. `pin` is the only write and touches only the `pinned` flag of an existing row — no inserts, no other column writes.
 
 ### `memory sidecar stats`
 
@@ -112,7 +112,28 @@ openclaw memory sidecar list --json
 | `--json`       | Emit JSON instead of the human table.                               |
 | `--verbose`    | Verbose logging for diagnostics.                                    |
 
-If the sidecar database has not been initialized yet (for example, because `memoryV2.ingest.enabled` has never been on in this workspace), both commands print a "sidecar not initialized" notice and exit without error.
+### `memory sidecar pin`
+
+Flip the `pinned` flag on an existing sidecar record. Requires the **full** ref id — no prefix matching in this slice. Get a full ref id from `memory sidecar list --json` (the human-readable list truncates to the first 8 characters for display).
+
+```
+openclaw memory sidecar pin <ref-id>
+openclaw memory sidecar pin <ref-id> --unpin
+openclaw memory sidecar pin <ref-id> --agent my-agent
+openclaw memory sidecar pin <ref-id> --json
+```
+
+| Option         | Description                                                                          |
+| -------------- | ------------------------------------------------------------------------------------ |
+| `<ref-id>`     | Required positional. Full sidecar ref id. Unknown ids report "ref-id not found".     |
+| `--unpin`      | Clear the pinned flag instead of setting it.                                         |
+| `--agent <id>` | Target a specific agent's sidecar (default: default agent).                          |
+| `--json`       | Emit JSON (`[{ agentId, dbPath, initialized, outcome: { refId, found, pinned } }]`). |
+| `--verbose`    | Verbose logging for diagnostics.                                                     |
+
+The command is scoped and safe: it updates `pinned` and nothing else, touches one row at most per agent, and fails the operation quietly (reports `ref-id not found`) rather than inserting placeholder rows when the id is unknown. The rerank `pinnedBoost` weight already reads this flag (see the rerank table above), so pinning takes effect the next time the rerank pass runs.
+
+If the sidecar database has not been initialized yet (for example, because `memoryV2.ingest.enabled` has never been on in this workspace), all three subcommands print a "sidecar not initialized" notice and exit without error.
 
 ## Verification flow
 

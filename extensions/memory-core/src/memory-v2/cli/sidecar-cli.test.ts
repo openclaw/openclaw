@@ -2,7 +2,13 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { memoryRefId } from "../ref.js";
 import { ensureSidecarSchema } from "../sidecar-schema.js";
-import { DEFAULT_LIST_LIMIT, readSidecarList, readSidecarStats } from "./sidecar-cli.js";
+import {
+  DEFAULT_LIST_LIMIT,
+  formatPinLine,
+  readSidecarList,
+  readSidecarStats,
+  writeSidecarPin,
+} from "./sidecar-cli.js";
 
 type InsertRow = {
   source: "memory" | "sessions";
@@ -189,5 +195,117 @@ describe("readSidecarList", () => {
     }
     const rows = readSidecarList(db);
     expect(rows).toHaveLength(DEFAULT_LIST_LIMIT);
+  });
+});
+
+describe("writeSidecarPin", () => {
+  let db: DatabaseSync;
+
+  beforeEach(() => {
+    db = new DatabaseSync(":memory:");
+    ensureSidecarSchema(db);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  const seededRefId = (): string =>
+    memoryRefId({
+      source: "memory",
+      path: "memory/a.md",
+      startLine: 1,
+      endLine: 5,
+      contentHash: "memory/a.md:1000",
+    });
+
+  const seedUnpinned = () => {
+    insertRow(db, {
+      source: "memory",
+      path: "memory/a.md",
+      startLine: 1,
+      endLine: 5,
+      status: "active",
+      pinned: false,
+      salience: null,
+      createdAt: 1000,
+      lastAccessedAt: null,
+    });
+  };
+
+  const seedPinned = () => {
+    insertRow(db, {
+      source: "memory",
+      path: "memory/a.md",
+      startLine: 1,
+      endLine: 5,
+      status: "active",
+      pinned: true,
+      salience: null,
+      createdAt: 1000,
+      lastAccessedAt: null,
+    });
+  };
+
+  it("flips pinned to true on an existing row and reports found=true", () => {
+    seedUnpinned();
+    const refId = seededRefId();
+
+    const outcome = writeSidecarPin(db, refId, true);
+
+    expect(outcome).toEqual({ refId, found: true, pinned: true });
+    const row = db.prepare("SELECT pinned FROM memory_v2_records WHERE ref_id = ?").get(refId) as {
+      pinned: number;
+    };
+    expect(row.pinned).toBe(1);
+  });
+
+  it("flips pinned to false on an existing pinned row (unpin path)", () => {
+    seedPinned();
+    const refId = seededRefId();
+
+    const outcome = writeSidecarPin(db, refId, false);
+
+    expect(outcome).toEqual({ refId, found: true, pinned: false });
+    const row = db.prepare("SELECT pinned FROM memory_v2_records WHERE ref_id = ?").get(refId) as {
+      pinned: number;
+    };
+    expect(row.pinned).toBe(0);
+  });
+
+  it("reports found=false without throwing or inserting when the ref id is unknown", () => {
+    const outcome = writeSidecarPin(db, "refs:memory:does-not-exist:0-0:abc", true);
+
+    expect(outcome.found).toBe(false);
+    expect(outcome.refId).toBe("refs:memory:does-not-exist:0-0:abc");
+
+    const total = db.prepare("SELECT COUNT(*) AS n FROM memory_v2_records").get() as { n: number };
+    expect(total.n).toBe(0);
+  });
+
+  it("produces a stable JSON shape (refId, found, pinned) for --json callers", () => {
+    seedUnpinned();
+    const refId = seededRefId();
+
+    const outcome = writeSidecarPin(db, refId, true);
+
+    expect(Object.keys(outcome).toSorted()).toEqual(["found", "pinned", "refId"]);
+    expect(JSON.parse(JSON.stringify(outcome))).toEqual({
+      refId,
+      found: true,
+      pinned: true,
+    });
+  });
+});
+
+describe("formatPinLine", () => {
+  it("renders pinned/unpinned/not-found lines from the outcome", () => {
+    expect(formatPinLine({ refId: "refs:abc", found: true, pinned: true })).toBe("pinned refs:abc");
+    expect(formatPinLine({ refId: "refs:abc", found: true, pinned: false })).toBe(
+      "unpinned refs:abc",
+    );
+    expect(formatPinLine({ refId: "refs:missing", found: false, pinned: true })).toBe(
+      "ref-id not found: refs:missing",
+    );
   });
 });

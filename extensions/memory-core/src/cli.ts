@@ -12,6 +12,7 @@ import type {
   MemoryRemHarnessOptions,
   MemorySearchCommandOptions,
   MemorySidecarListCommandOptions,
+  MemorySidecarPinCommandOptions,
 } from "./cli.types.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
@@ -74,6 +75,14 @@ async function runMemorySidecarStats(opts: MemoryCommandOptions) {
 async function runMemorySidecarList(opts: MemorySidecarListCommandOptions) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemorySidecarList(opts);
+}
+
+async function runMemorySidecarPin(
+  refIdArg: string | undefined,
+  opts: MemorySidecarPinCommandOptions,
+) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemorySidecarPin(refIdArg, opts);
 }
 
 export function registerMemoryCli(program: Command) {
@@ -255,5 +264,20 @@ export function registerMemoryCli(program: Command) {
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemorySidecarListCommandOptions) => {
       await runMemorySidecarList(opts);
+    });
+
+  sidecar
+    .command("pin")
+    .description("Pin or unpin a sidecar record by its full ref id")
+    .argument(
+      "<ref-id>",
+      "Full sidecar ref id (no prefix matching in this slice; get full ids via `memory sidecar list --json`)",
+    )
+    .option("--unpin", "Clear the pinned flag instead of setting it", false)
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--json", "Print JSON")
+    .option("--verbose", "Verbose logging", false)
+    .action(async (refIdArg: string | undefined, opts: MemorySidecarPinCommandOptions) => {
+      await runMemorySidecarPin(refIdArg, opts);
     });
 }

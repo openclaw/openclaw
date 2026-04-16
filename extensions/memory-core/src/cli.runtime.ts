@@ -35,6 +35,7 @@ import type {
   MemoryRemHarnessOptions,
   MemorySearchCommandOptions,
   MemorySidecarListCommandOptions,
+  MemorySidecarPinCommandOptions,
 } from "./cli.types.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
 import { previewRemDreaming, seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
@@ -48,11 +49,14 @@ import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import {
   formatListLines as formatSidecarListLines,
+  formatPinLine as formatSidecarPinLine,
   formatStatsLines as formatSidecarStatsLines,
   readSidecarList,
   readSidecarStats,
   type SidecarListRow,
+  type SidecarPinOutcome,
   type SidecarStatsSummary,
+  writeSidecarPin,
 } from "./memory-v2/cli/sidecar-cli.js";
 import { SIDECAR_DB_RELATIVE_PATH, openSidecarDatabase } from "./memory-v2/sidecar-store.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
@@ -2095,6 +2099,97 @@ export async function runMemorySidecarList(opts: MemorySidecarListCommandOptions
     for (const line of formatSidecarListLines(entry.rows)) {
       defaultRuntime.log(line);
     }
+    defaultRuntime.log("");
+  }
+}
+
+type SidecarPinEntry = {
+  agentId: string;
+  dbPath: string;
+  initialized: boolean;
+  outcome: SidecarPinOutcome | null;
+};
+
+async function collectSidecarPinEntries(
+  cfg: OpenClawConfig,
+  agentIds: readonly string[],
+  refId: string,
+  pinned: boolean,
+): Promise<SidecarPinEntry[]> {
+  const entries: SidecarPinEntry[] = [];
+  for (const agentId of agentIds) {
+    await withMemoryManagerForAgent({
+      cfg,
+      agentId,
+      purpose: "status",
+      run: async (manager) => {
+        const workspaceDir = manager.status().workspaceDir;
+        if (!workspaceDir) {
+          return;
+        }
+        const dbPath = path.join(workspaceDir, SIDECAR_DB_RELATIVE_PATH);
+        if (!fsSync.existsSync(dbPath)) {
+          entries.push({ agentId, dbPath, initialized: false, outcome: null });
+          return;
+        }
+        const db = openSidecarDatabase(dbPath);
+        try {
+          entries.push({
+            agentId,
+            dbPath,
+            initialized: true,
+            outcome: writeSidecarPin(db, refId, pinned),
+          });
+        } finally {
+          db.close();
+        }
+      },
+    });
+  }
+  return entries;
+}
+
+export async function runMemorySidecarPin(
+  refIdArg: string | undefined,
+  opts: MemorySidecarPinCommandOptions,
+): Promise<void> {
+  setVerbose(Boolean(opts.verbose));
+  const refId = (refIdArg ?? "").trim();
+  if (refId.length === 0) {
+    // Commander enforces the required positional, so this branch only fires
+    // if runMemorySidecarPin is driven programmatically with an empty arg.
+    defaultRuntime.log(
+      theme.warn(
+        "memory sidecar pin: <ref-id> is required (full ref id; no prefix matching in this slice).",
+      ),
+    );
+    return;
+  }
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory sidecar pin");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentIds = resolveAgentIds(cfg, opts.agent);
+  const pinned = opts.unpin !== true;
+  const entries = await collectSidecarPinEntries(cfg, agentIds, refId, pinned);
+
+  if (opts.json) {
+    defaultRuntime.writeJson(entries);
+    return;
+  }
+
+  const rich = isRich();
+  const heading = (text: string) => colorize(rich, theme.heading, text);
+  const muted = (text: string) => colorize(rich, theme.muted, text);
+  for (const entry of entries) {
+    defaultRuntime.log(heading(`Memory v2 sidecar — ${entry.agentId}`));
+    defaultRuntime.log(muted(`path: ${shortenHomePath(entry.dbPath)}`));
+    if (!entry.initialized || !entry.outcome) {
+      defaultRuntime.log(
+        muted("sidecar not initialized (enable memoryV2.ingest to start populating)."),
+      );
+      defaultRuntime.log("");
+      continue;
+    }
+    defaultRuntime.log(`  ${formatSidecarPinLine(entry.outcome)}`);
     defaultRuntime.log("");
   }
 }
