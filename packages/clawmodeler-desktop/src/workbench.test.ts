@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildFullWorkflowArgs,
   countJsonLines,
+  deriveQuestionSavePath,
   friendlyError,
   manifestOutputCategories,
   normalizePathList,
@@ -84,5 +85,19 @@ describe("clawmodeler workbench helpers", () => {
     expect(friendlyError("custom short message")).toBe("custom short message");
     const longLine = "a".repeat(500);
     expect(friendlyError(longLine).length).toBeLessThanOrEqual(220);
+  });
+
+  it("derives a sensible default path for the starter question.json save dialog", () => {
+    expect(deriveQuestionSavePath("/home/nat/project", "")).toBe("/home/nat/project/question.json");
+    expect(deriveQuestionSavePath("/home/nat/project/", "")).toBe(
+      "/home/nat/project/question.json",
+    );
+    expect(deriveQuestionSavePath("C:\\Users\\nat\\project", "")).toBe(
+      "C:\\Users\\nat\\project\\question.json",
+    );
+    expect(deriveQuestionSavePath("/home/nat/project", "/tmp/custom.json")).toBe(
+      "/tmp/custom.json",
+    );
+    expect(deriveQuestionSavePath("", "")).toBe("question.json");
   });
 });

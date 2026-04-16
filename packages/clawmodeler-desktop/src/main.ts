@@ -1,8 +1,9 @@
 import "./styles.css";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   buildFullWorkflowArgs,
+  deriveQuestionSavePath,
   friendlyError,
   manifestOutputCategories,
   normalizePathList,
@@ -357,6 +358,36 @@ async function pickQuestionFile() {
   }
 }
 
+async function createStarterQuestion() {
+  let selected: string | null;
+  try {
+    selected = await save({
+      title: "Save starter question.json",
+      defaultPath: deriveQuestionSavePath(state.workspace, state.questionPath),
+      filters: [
+        { name: "JSON", extensions: ["json"] },
+        { name: "All files", extensions: ["*"] },
+      ],
+    });
+  } catch (error) {
+    state.status = friendlyError(error instanceof Error ? error.message : String(error));
+    render();
+    return;
+  }
+  if (typeof selected !== "string" || !selected) {
+    return;
+  }
+  await runAction("Creating starter question.json", async () => {
+    const result = await api<{ question_path: string; created: boolean }>("/api/clawmodeler/run", {
+      args: ["scaffold", "question", "--path", selected, "--force"],
+    });
+    const created = result.json?.question_path ?? selected;
+    state.questionPath = created;
+    saveForm();
+    return result;
+  });
+}
+
 function bindControls() {
   appRoot.querySelector<HTMLInputElement>("#workspace")?.addEventListener("input", (event) => {
     state.workspace = (event.target as HTMLInputElement).value;
@@ -423,6 +454,11 @@ function bindControls() {
     .querySelector<HTMLButtonElement>("[data-action='pick-question']")
     ?.addEventListener("click", () => {
       void pickQuestionFile();
+    });
+  appRoot
+    .querySelector<HTMLButtonElement>("[data-action='create-question']")
+    ?.addEventListener("click", () => {
+      void createStarterQuestion();
     });
   appRoot
     .querySelector<HTMLButtonElement>("[data-action='full']")
@@ -639,7 +675,10 @@ function render() {
             <label>
               <span class="label-row">
                 <span>Question JSON</span>
-                <button type="button" data-action="pick-question" class="pick-btn" ${!isTauriRuntime() || state.busy ? "disabled" : ""} title="${isTauriRuntime() ? "Browse for a question.json file" : "Available in the desktop app"}">Pick file…</button>
+                <span class="label-row-actions">
+                  <button type="button" data-action="create-question" class="pick-btn" ${!isTauriRuntime() || state.busy ? "disabled" : ""} title="${isTauriRuntime() ? "Write a starter question.json you can edit" : "Available in the desktop app"}">Create starter…</button>
+                  <button type="button" data-action="pick-question" class="pick-btn" ${!isTauriRuntime() || state.busy ? "disabled" : ""} title="${isTauriRuntime() ? "Browse for a question.json file" : "Available in the desktop app"}">Pick file…</button>
+                </span>
               </span>
               <input id="question-path" value="${escapeHtml(
                 state.questionPath,

@@ -264,6 +264,12 @@ small {
   gap: 10px;
 }
 
+.label-row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .pick-btn {
   min-height: 28px;
   padding: 4px 12px;

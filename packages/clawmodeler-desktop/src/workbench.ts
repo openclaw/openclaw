@@ -146,3 +146,17 @@ export function friendlyError(raw: string): string {
   const firstLine = trimmed.split(/\r?\n/u).at(0) ?? trimmed;
   return firstLine.length > 220 ? `${firstLine.slice(0, 217)}...` : firstLine;
 }
+
+export function deriveQuestionSavePath(workspace: string, currentQuestion: string): string {
+  const trimmedQuestion = currentQuestion.trim();
+  if (trimmedQuestion) {
+    return trimmedQuestion;
+  }
+  const trimmedWorkspace = workspace.trim();
+  if (!trimmedWorkspace) {
+    return "question.json";
+  }
+  const separator = trimmedWorkspace.includes("\\") && !trimmedWorkspace.includes("/") ? "\\" : "/";
+  const normalized = trimmedWorkspace.replace(/[/\\]+$/u, "");
+  return `${normalized}${separator}question.json`;
+}

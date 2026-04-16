@@ -51,6 +51,53 @@ class ClawModelerEngineTest(unittest.TestCase):
             self.assertEqual(question["question_type"], "accessibility")
             self.assertEqual(question["scenarios"][0]["scenario_id"], "baseline")
 
+    def test_scaffold_question_writes_starter_template(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "nested" / "question.json"
+            result = self.run_engine(
+                "scaffold",
+                "question",
+                "--path",
+                str(path),
+                "--title",
+                "Sample question",
+                "--place-query",
+                "Grass Valley, California, USA",
+            )
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["question_path"], str(path))
+            self.assertTrue(payload["created"])
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(data["title"], "Sample question")
+            self.assertEqual(data["geography"]["place_query"], "Grass Valley, California, USA")
+            self.assertEqual(data["question_type"], "accessibility")
+
+    def test_scaffold_question_refuses_overwrite_without_force(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "question.json"
+            self.run_engine("scaffold", "question", "--path", str(path))
+            stamp = path.stat().st_mtime_ns
+            failure = self.run_engine(
+                "scaffold",
+                "question",
+                "--path",
+                str(path),
+                expected_code=1,
+            )
+            self.assertIn("already exists", failure.stderr)
+            self.assertEqual(path.stat().st_mtime_ns, stamp)
+            self.run_engine(
+                "scaffold",
+                "question",
+                "--path",
+                str(path),
+                "--force",
+                "--title",
+                "Overwritten",
+            )
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(data["title"], "Overwritten")
+
     def test_tools_json_includes_model_inventory(self) -> None:
         result = self.run_engine("tools", "--json")
         payload = json.loads(result.stdout)

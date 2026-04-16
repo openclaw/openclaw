@@ -12,7 +12,7 @@ from .demo import write_demo_inputs
 from .dtalite_bridge import prepare_dtalite_bridge
 from .matsim_bridge import prepare_matsim_bridge
 from .orchestration import select_engine, write_export, write_intake, write_plan, write_run
-from .project import init_workspace
+from .project import init_workspace, starter_question
 from .routing import build_osmnx_graphml, build_zone_node_map
 from .sumo_bridge import prepare_sumo_bridge, run_sumo_bridge, validate_sumo_bridge
 from .tbest_bridge import prepare_tbest_bridge
@@ -30,6 +30,7 @@ from .workspace import (
     InsufficientDataError,
     ensure_workspace,
     read_json,
+    write_json,
 )
 
 
@@ -53,6 +54,29 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--workspace", required=True, type=Path)
     init.add_argument("--force", action="store_true", help="Overwrite starter files.")
     init.set_defaults(func=command_init)
+
+    scaffold = subparsers.add_parser(
+        "scaffold",
+        help="Write starter artifacts planners can edit.",
+    )
+    scaffold_subparsers = scaffold.add_subparsers(required=True)
+    scaffold_question = scaffold_subparsers.add_parser(
+        "question",
+        help="Write a starter question.json at the given path.",
+    )
+    scaffold_question.add_argument("--path", required=True, type=Path)
+    scaffold_question.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing file at the same path.",
+    )
+    scaffold_question.add_argument("--title", help="Optional title override.")
+    scaffold_question.add_argument(
+        "--place-query",
+        dest="place_query",
+        help="Optional OSMnx place query for geography.place_query.",
+    )
+    scaffold_question.set_defaults(func=command_scaffold_question)
 
     intake = subparsers.add_parser("intake", help="Stage and validate workspace inputs.")
     intake.add_argument("--workspace", required=True, type=Path)
@@ -255,6 +279,21 @@ def build_parser() -> argparse.ArgumentParser:
 def command_init(args: argparse.Namespace) -> None:
     result = init_workspace(args.workspace, force=args.force)
     print(json.dumps(result))
+
+
+def command_scaffold_question(args: argparse.Namespace) -> None:
+    path: Path = args.path
+    if path.exists() and not args.force:
+        raise ClawModelerError(
+            f"{path} already exists. Pass --force to overwrite."
+        )
+    question = starter_question()
+    if args.title:
+        question["title"] = args.title
+    if args.place_query:
+        question["geography"]["place_query"] = args.place_query
+    write_json(path, question)
+    print(json.dumps({"question_path": str(path), "created": True}))
 
 
 def command_intake(args: argparse.Namespace) -> None:
