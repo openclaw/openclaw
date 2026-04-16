@@ -220,6 +220,51 @@ describe("gateway broadcaster", () => {
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
     expect(pairingSocket.send).toHaveBeenCalledTimes(1);
   });
+
+  it("blocks operator-only chat events for node-role clients", () => {
+    const operatorSocket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    const nodeSocket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+
+    const clients = new Set<GatewayWsClient>([
+      {
+        socket: operatorSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: [] } as GatewayWsClient["connect"],
+        connId: "c-operator",
+        usesSharedGatewayAuth: false,
+      },
+      {
+        socket: nodeSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "node", scopes: [] } as GatewayWsClient["connect"],
+        connId: "c-node",
+        usesSharedGatewayAuth: false,
+      },
+    ]);
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("agent", { runId: "r-1" });
+    broadcast("chat", { runId: "r-1" });
+    broadcast("chat.side_result", {
+      kind: "btw",
+      runId: "r-1",
+      sessionKey: "main",
+      question: "q",
+      text: "a",
+      ts: Date.now(),
+      seq: 1,
+    });
+
+    expect(operatorSocket.send).toHaveBeenCalledTimes(3);
+    expect(nodeSocket.send).toHaveBeenCalledTimes(0);
+  });
 });
 
 describe("chat run registry", () => {

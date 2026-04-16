@@ -15,7 +15,7 @@ import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
-const OPERATOR_ONLY_EVENTS = new Set(["agent", "chat"]);
+const OPERATOR_ONLY_EVENTS = new Set(["agent", "chat", "chat.side_result"]);
 
 const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "exec.approval.requested": [APPROVALS_SCOPE],
