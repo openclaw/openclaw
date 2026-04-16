@@ -12,6 +12,7 @@ import {
   loadConfig,
   readConfigFileSnapshot,
   registerConfigWriteListener,
+  registerPendingConfigWriteNotifier,
   writeConfigFile,
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -777,6 +778,7 @@ export async function startGatewayServer(
       watchPath: configSnapshot.path,
       readSnapshot: readConfigFileSnapshot,
       subscribeToWrites: registerConfigWriteListener,
+      subscribeToPendingWrites: registerPendingConfigWriteNotifier,
       deps,
       broadcast,
       getState: () => ({

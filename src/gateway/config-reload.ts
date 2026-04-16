@@ -81,6 +81,9 @@ export function startGatewayConfigReloader(opts: {
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   subscribeToWrites?: (listener: (event: ConfigWriteNotification) => void) => () => void;
+  subscribeToPendingWrites?: (
+    listener: (event: { configPath: string; persistedHash: string }) => void,
+  ) => () => void;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -256,6 +259,17 @@ export function startGatewayConfigReloader(opts: {
       scheduleAfter(0);
     }) ?? (() => {});
 
+  // Subscribe to pre-write notifications so the hash is set before the atomic
+  // rename hits disk.  This closes the race where chokidar fires before the
+  // post-write notification arrives, causing a spurious reload (#67436).
+  const unsubscribeFromPendingWrites =
+    opts.subscribeToPendingWrites?.((event) => {
+      if (event.configPath !== opts.watchPath) {
+        return;
+      }
+      lastAppliedWriteHash = event.persistedHash;
+    }) ?? (() => {});
+
   watcher.on("add", scheduleFromWatcher);
   watcher.on("change", scheduleFromWatcher);
   watcher.on("unlink", scheduleFromWatcher);
@@ -278,6 +292,7 @@ export function startGatewayConfigReloader(opts: {
       debounceTimer = null;
       watcherClosed = true;
       unsubscribeFromWrites();
+      unsubscribeFromPendingWrites();
       await watcher.close().catch(() => {});
     },
   };

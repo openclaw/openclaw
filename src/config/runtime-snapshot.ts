@@ -17,10 +17,16 @@ export type RuntimeConfigWriteNotification = {
   writtenAtMs: number;
 };
 
+export type PendingConfigWriteNotification = {
+  configPath: string;
+  persistedHash: string;
+};
+
 let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
 const runtimeConfigWriteListeners = new Set<(event: RuntimeConfigWriteNotification) => void>();
+const pendingConfigWriteListeners = new Set<(event: PendingConfigWriteNotification) => void>();
 
 export function setRuntimeConfigSnapshot(
   config: OpenClawConfig,
@@ -72,6 +78,25 @@ export function notifyRuntimeConfigWriteListeners(event: RuntimeConfigWriteNotif
       listener(event);
     } catch {
       // Best-effort observer path only; successful writes must still complete.
+    }
+  }
+}
+
+export function registerPendingConfigWriteListener(
+  listener: (event: PendingConfigWriteNotification) => void,
+): () => void {
+  pendingConfigWriteListeners.add(listener);
+  return () => {
+    pendingConfigWriteListeners.delete(listener);
+  };
+}
+
+export function notifyPendingConfigWrite(event: PendingConfigWriteNotification): void {
+  for (const listener of pendingConfigWriteListeners) {
+    try {
+      listener(event);
+    } catch {
+      // Best-effort; must not block the write path.
     }
   }
 }

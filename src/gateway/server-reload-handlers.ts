@@ -253,6 +253,7 @@ export function startManagedGatewayConfigReloader(params: {
   watchPath: string;
   readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
   subscribeToWrites: typeof import("../config/config.js").registerConfigWriteListener;
+  subscribeToPendingWrites: typeof import("../config/config.js").registerPendingConfigWriteNotifier;
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   getState: () => GatewayHotReloadState;
@@ -304,6 +305,7 @@ export function startManagedGatewayConfigReloader(params: {
     initialInternalWriteHash: params.initialInternalWriteHash,
     readSnapshot: params.readSnapshot,
     subscribeToWrites: params.subscribeToWrites,
+    subscribeToPendingWrites: params.subscribeToPendingWrites,
     onHotReload: async (plan, nextConfig) => {
       const previousSharedGatewaySessionGeneration =
         params.sharedGatewaySessionGenerationState.current;

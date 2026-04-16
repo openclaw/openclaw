@@ -3,6 +3,7 @@ export {
   ConfigRuntimeRefreshError,
   clearRuntimeConfigSnapshot,
   registerConfigWriteListener,
+  registerPendingConfigWriteNotifier,
   createConfigIO,
   getRuntimeConfig,
   getRuntimeConfigSnapshot,

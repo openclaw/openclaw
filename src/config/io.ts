@@ -75,7 +75,9 @@ import {
   getRuntimeConfigSnapshot as getRuntimeConfigSnapshotState,
   getRuntimeConfigSourceSnapshot as getRuntimeConfigSourceSnapshotState,
   loadPinnedRuntimeConfig,
+  notifyPendingConfigWrite,
   notifyRuntimeConfigWriteListeners,
+  registerPendingConfigWriteListener,
   registerRuntimeConfigWriteListener,
   resetConfigRuntimeState as resetConfigRuntimeStateState,
   setRuntimeConfigSnapshot as setRuntimeConfigSnapshotState,
@@ -1668,6 +1670,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         await maintainConfigBackups(configPath, deps.fs.promises);
       }
 
+      // Notify watchers of the pending write hash before the atomic rename so
+      // the config reloader can suppress the self-induced file-change event.
+      // On Linux (inotify), chokidar can fire before the post-write
+      // notification arrives, causing a spurious hot-reload cycle (#67436).
+      notifyPendingConfigWrite({ configPath, persistedHash: nextHash });
+
       try {
         await deps.fs.promises.rename(tmp, configPath);
       } catch (err) {
@@ -1734,6 +1742,14 @@ export function registerConfigWriteListener(
   listener: (event: ConfigWriteNotification) => void,
 ): () => void {
   return registerRuntimeConfigWriteListener(listener);
+}
+
+export type { PendingConfigWriteNotification } from "./runtime-snapshot.js";
+
+export function registerPendingConfigWriteNotifier(
+  listener: (event: { configPath: string; persistedHash: string }) => void,
+): () => void {
+  return registerPendingConfigWriteListener(listener);
 }
 
 function isCompatibleTopLevelRuntimeProjectionShape(params: {

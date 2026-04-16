@@ -370,6 +370,9 @@ function createReloaderHarness(
   const onHotReload = vi.fn(async () => {});
   const onRestart = vi.fn();
   let writeListener: ((event: ConfigWriteNotification) => void) | null = null;
+  let pendingWriteListener:
+    | ((event: { configPath: string; persistedHash: string }) => void)
+    | null = null;
   const subscribeToWrites = vi.fn((listener: (event: ConfigWriteNotification) => void) => {
     writeListener = listener;
     return () => {
@@ -378,6 +381,16 @@ function createReloaderHarness(
       }
     };
   });
+  const subscribeToPendingWrites = vi.fn(
+    (listener: (event: { configPath: string; persistedHash: string }) => void) => {
+      pendingWriteListener = listener;
+      return () => {
+        if (pendingWriteListener === listener) {
+          pendingWriteListener = null;
+        }
+      };
+    },
+  );
   const log = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -388,6 +401,7 @@ function createReloaderHarness(
     initialInternalWriteHash: options.initialInternalWriteHash,
     readSnapshot,
     subscribeToWrites,
+    subscribeToPendingWrites,
     onHotReload,
     onRestart,
     log,
@@ -401,6 +415,9 @@ function createReloaderHarness(
     reloader,
     emitWrite(event: ConfigWriteNotification) {
       writeListener?.(event);
+    },
+    emitPendingWrite(event: { configPath: string; persistedHash: string }) {
+      pendingWriteListener?.(event);
     },
   };
 }
@@ -612,6 +629,33 @@ describe("startGatewayConfigReloader", () => {
 
     expect(readSnapshot).toHaveBeenCalledTimes(2);
     expect(harness.onRestart).toHaveBeenCalledTimes(1);
+
+    await harness.reloader.stop();
+  });
+
+  it("suppresses watcher reload when pending write hash matches snapshot (#67436)", async () => {
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValue(
+      makeSnapshot({
+        config: { gateway: { reload: { debounceMs: 0 }, port: 19999 } },
+        hash: "self-write-hash-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot);
+
+    // Simulate the pre-write notification arriving before chokidar fires
+    harness.emitPendingWrite({
+      configPath: "/tmp/openclaw.json",
+      persistedHash: "self-write-hash-1",
+    });
+
+    // chokidar fires after the atomic rename
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    // The snapshot was read but the reload was suppressed because the hash matched
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).not.toHaveBeenCalled();
 
     await harness.reloader.stop();
   });
