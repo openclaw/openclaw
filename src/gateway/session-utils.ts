@@ -6,6 +6,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
@@ -1008,10 +1009,10 @@ function resolveExplicitProviderModelSupportsImages(
     if (!providers) {
       return false;
     }
-    const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
+    const normalizedProvider = normalizeProviderId(provider);
     const normalizedModel = normalizeLowercaseStringOrEmpty(model);
     for (const [providerId, providerConfig] of Object.entries(providers)) {
-      if (normalizeLowercaseStringOrEmpty(providerId) !== normalizedProvider) {
+      if (normalizeProviderId(providerId) !== normalizedProvider) {
         continue;
       }
       for (const modelDef of providerConfig.models ?? []) {
