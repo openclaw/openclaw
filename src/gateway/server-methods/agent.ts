@@ -41,6 +41,7 @@ import {
   type ChatAbortControllerEntry,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
+import { AGENT_LANE_SUBAGENT } from "../../agents/lanes.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { createRunningTaskRun } from "../../tasks/task-executor.js";
 import {
@@ -824,9 +825,19 @@ export const agentHandlers: GatewayRequestHandlers = {
     // call and observe an empty controller map.
     const now = Date.now();
     const abortController = new AbortController();
+    // Match the lane-aware timeout resolution in
+    // `src/agents/agent-command.ts` (around line 338): `lane: "subagent"`
+    // requests without an explicit `timeout` are treated as "no timeout"
+    // (0 seconds), not as default-timeout runs. Without this mirror, the
+    // maintenance loop would force-abort long-running subagent runs based on
+    // the default-timeout window even though the run itself was started as
+    // no-timeout.
+    const isSubagentLane = request.lane === AGENT_LANE_SUBAGENT;
+    const overrideSeconds =
+      request.timeout !== undefined ? request.timeout : isSubagentLane ? 0 : undefined;
     const runTimeoutMs = resolveAgentTimeoutMs({
       cfg: cfgForAgent ?? cfg,
-      overrideSeconds: request.timeout,
+      overrideSeconds,
     });
     const abortEntry: ChatAbortControllerEntry = {
       controller: abortController,

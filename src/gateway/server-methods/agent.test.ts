@@ -1324,6 +1324,47 @@ describe("gateway agent handler", () => {
       resolveAgent();
     });
 
+    it("treats a subagent-lane run without an explicit timeout as no-timeout for abort expiry", async () => {
+      primeMainAgentRun();
+
+      const context = makeContextWithAbort();
+      let resolveAgent!: () => void;
+      mocks.agentCommand.mockImplementation(
+        () =>
+          new Promise<{ payloads: []; meta: { durationMs: number } }>((r) => {
+            resolveAgent = () => r({ payloads: [], meta: { durationMs: 0 } });
+          }),
+      );
+
+      const before = Date.now();
+      await invokeAgent(
+        {
+          message: "subagent-work",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "subagent-timeout-test-idem",
+          lane: "subagent",
+          // No explicit timeout. agent-command.ts treats subagent lane +
+          // missing timeout as 0 (no timeout); the abort entry must match so
+          // the maintenance loop doesn't force-abort long-running subagent
+          // runs after the default-timeout window.
+        },
+        { context },
+      );
+
+      const entry = context.chatAbortControllers.get("subagent-timeout-test-idem");
+      expect(entry).toBeDefined();
+      // 0 seconds -> MAX_SAFE_TIMEOUT_MS in resolveAgentTimeoutMs, then
+      // clamped to the 24h maximum in resolveChatRunExpiresAtMs. A naive
+      // default (e.g. 48h default agent timeout without the subagent rule)
+      // would still produce ~24h, so guard against both: the expiry must be
+      // right at the 24h cap.
+      const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+      expect(entry!.expiresAtMs).toBeGreaterThanOrEqual(before + TWENTY_FOUR_HOURS_MS - 1_000);
+
+      resolveAgent();
+    });
+
     it("derives expiresAtMs from the request timeout, not a hard-coded value", async () => {
       primeMainAgentRun();
 
