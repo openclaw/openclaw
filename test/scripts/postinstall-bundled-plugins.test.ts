@@ -241,11 +241,14 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(stalePackage)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(staleManifest)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
-      fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"), "utf8"),
-    ).resolves.toContain("QA Lab is not packaged");
+      fs.readFile(
+        path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"),
+        "utf8",
+      ),
+    ).resolves.toContain("QA channel implementation is not packaged");
   });
 
-  it("creates only an empty QA lab compat sidecar for fresh installs", async () => {
+  it("creates only an empty QA channel compat sidecar for fresh installs", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-no-qa-compat-");
     await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
     await fs.writeFile(path.join(packageRoot, "dist", "entry.js"), "export {};\n");
@@ -257,18 +260,21 @@ describe("bundled plugin postinstall", () => {
         removedFiles: ["dist/entry-old.js"],
         log: { log: vi.fn(), warn: vi.fn() },
       }),
-    ).toEqual(["dist/extensions/qa-lab/runtime-api.js"]);
+    ).toEqual(["dist/extensions/qa-channel/runtime-api.js"]);
 
     await expect(
-      fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"), "utf8"),
+      fs.readFile(
+        path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"),
+        "utf8",
+      ),
     ).resolves.toBe(
-      "// Compatibility stub for older OpenClaw updaters. QA Lab is not packaged.\nexport {};\n",
+      "// Compatibility stub for older OpenClaw updaters. The QA channel implementation is not packaged.\nexport {};\n",
     );
     await expect(
-      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-lab", "package.json")),
+      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "package.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
-      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-lab", "openclaw.plugin.json")),
+      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "openclaw.plugin.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
