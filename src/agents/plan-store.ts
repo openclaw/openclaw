@@ -115,7 +115,10 @@ export class PlanStore {
     // Atomic write: write to a temp file in the same directory, then rename.
     const tmpFile = path.join(dir, `.plan-${crypto.randomBytes(4).toString("hex")}.tmp`);
     try {
-      await fs.writeFile(tmpFile, JSON.stringify(plan, null, 2), "utf-8");
+      await fs.writeFile(tmpFile, JSON.stringify(plan, null, 2), {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
       await fs.rename(tmpFile, planFile);
     } catch (err) {
       // Clean up temp file on failure.
