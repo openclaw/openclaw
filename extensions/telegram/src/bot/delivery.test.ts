@@ -48,6 +48,7 @@ vi.mock("../../../../src/hooks/internal-hooks.js", async () => {
 
 vi.resetModules();
 const { deliverReplies } = await import("./delivery.js");
+const { sendTelegramText } = await import("./delivery.send.js");
 
 vi.mock("grammy", () => ({
   API_CONSTANTS: {
@@ -639,6 +640,11 @@ describe("deliverReplies", () => {
   });
 
   it("handles Telegram 400 text-must-be-non-empty error by silently skipping the chunk", async () => {
+    // Call sendTelegramText directly: whitespace-only text is pre-filtered by
+    // deliverTextReply before reaching sendTelegramText, so testing the 400
+    // error-handling path requires bypassing the higher-level filters.
+    // Use a zero-width space — it passes the htmlText.trim() guard (non-empty)
+    // but Telegram can still reject it as empty text.
     const runtime = createRuntime();
     const sendMessage = vi
       .fn()
@@ -647,17 +653,12 @@ describe("deliverReplies", () => {
       );
     const bot = createBot({ sendMessage });
 
-    // Should not throw — empty-text 400s are silently skipped.
-    const result = await deliverReplies({
-      replies: [{ text: "   " }],
-      chatId: "123",
-      token: "tok",
-      runtime,
-      bot,
-      replyToMode: "off",
-      textLimit: 4000,
+    // plainText is empty so hasFallbackText is false — triggers the silent-skip path.
+    const result = await sendTelegramText(bot, "123", "\u200B", runtime, {
+      plainText: "",
     });
-    expect(result.delivered).toBe(false);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(result).toBeUndefined();
   });
 
   it("uses reply_to_message_id when quote text is provided", async () => {
