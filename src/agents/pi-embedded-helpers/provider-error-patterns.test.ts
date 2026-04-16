@@ -19,8 +19,10 @@ vi.mock("../../plugins/provider-runtime.js", async () => {
 import {
   classifyFailoverReason,
   classifyProviderRuntimeFailureKind,
+  formatAssistantErrorText,
   isContextOverflowError,
 } from "./errors.js";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import {
   classifyProviderSpecificError,
   matchesProviderContextOverflow,
@@ -246,5 +248,17 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
     expect(classifyProviderRuntimeFailureKind({ status: 403, message: cfChallenge403 })).toBe(
       "cloudflare_challenge",
     );
+
+    const msg: AssistantMessage = {
+      stopReason: "error",
+      errorMessage: cfChallenge403,
+      provider: "openai-codex",
+    };
+
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Cloudflare blocked");
+    expect(result).toContain("TLS fingerprint");
+    expect(result).toContain("reverse proxy");
+    expect(result).toContain("cloudscraper");
   });
 });
