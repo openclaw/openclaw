@@ -1053,7 +1053,7 @@ describe("gateway agent handler", () => {
     const call = readLastAgentCommandCall();
     // Message is now dynamically built with current date — check key substrings
     expect(call?.message).toContain(
-      "If runtime-provided startup context is included for this first turn",
+      "Execute your Session Startup sequence now",
     );
     expect(call?.message).toContain("Current time:");
     expect(call?.message).not.toBe(BARE_SESSION_RESET_PROMPT);
