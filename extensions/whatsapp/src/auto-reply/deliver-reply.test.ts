@@ -5,7 +5,15 @@ import { loadWebMedia } from "../media.js";
 import type { WebInboundMsg } from "./types.js";
 
 const hookMocks = vi.hoisted(() => {
-  const runMessageSending = vi.fn(async () => undefined);
+  const runMessageSending = vi.fn<
+    (...args: unknown[]) => Promise<
+      | undefined
+      | {
+          cancel?: boolean;
+          content?: string;
+        }
+    >
+  >(async () => undefined);
   const runMessageSent = vi.fn(async () => undefined);
   const hasHooks = vi.fn((name: string) => name === "message_sending" || name === "message_sent");
   return {
@@ -222,9 +230,11 @@ describe("deliverWebReply", () => {
     ).rejects.toThrow("send failed");
 
     expect(hookMocks.runMessageSent).toHaveBeenCalledTimes(1);
-    const sentEvent = hookMocks.runMessageSent.mock.calls[0]?.[0] as {
-      success?: boolean;
-    };
+    const sentEvent = hookMocks.runMessageSent.mock.calls.at(0)?.[0] as
+      | {
+          success?: boolean;
+        }
+      | undefined;
     expect(sentEvent?.success).toBe(false);
   });
 
