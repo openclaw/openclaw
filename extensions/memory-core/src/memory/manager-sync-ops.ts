@@ -404,7 +404,20 @@ export abstract class MemoryManagerSyncOps {
         pollInterval: 100,
       },
     });
-    const markDirty = () => {
+    const markDirty = (filePath: string) => {
+      // Only trigger sync for .md files (or multimodal files).
+      // When watching a directory directly on macOS + Node 25, chokidar fires
+      // events for all file types including .json state files under .dreams/.
+      // Filtering here prevents spurious syncs and ensures the dirty flag is
+      // only set when a memory-relevant file actually changes.
+      const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
+      const isMarkdown = ext === ".md";
+      const isMultimodal =
+        this.settings.multimodal.enabled &&
+        classifyMemoryMultimodalPath(filePath, this.settings.multimodal) !== null;
+      if (!isMarkdown && !isMultimodal) {
+        return;
+      }
       this.dirty = true;
       this.scheduleWatchSync();
     };
