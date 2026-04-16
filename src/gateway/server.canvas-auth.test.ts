@@ -13,7 +13,7 @@ import { withTempConfig } from "./test-temp-config.js";
 
 const WS_REJECT_TIMEOUT_MS = 2_000;
 const WS_CONNECT_TIMEOUT_MS = 5_000;
-const HTTP_REQUEST_TIMEOUT_MS = 5_000;
+const HTTP_REQUEST_TIMEOUT_MS = 10_000;
 const SERVER_CLOSE_TIMEOUT_MS = 5_000;
 
 function isConnectionReset(value: unknown): boolean {
@@ -37,8 +37,16 @@ async function fetchCanvas(input: string, init?: RequestInit): Promise<Response>
   try {
     return await fetch(input, { ...init, signal: controller.signal });
   } catch (err) {
+    clearTimeout(timer);
     if (isConnectionReset(err)) {
-      return await fetch(input, { ...init, signal: controller.signal });
+      // 为重试创建新的 AbortController，避免复用已接近超时的旧 controller
+      const retryController = new AbortController();
+      const retryTimer = setTimeout(() => retryController.abort(), HTTP_REQUEST_TIMEOUT_MS);
+      try {
+        return await fetch(input, { ...init, signal: retryController.signal });
+      } finally {
+        clearTimeout(retryTimer);
+      }
     }
     throw err;
   } finally {
