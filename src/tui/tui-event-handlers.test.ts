@@ -721,9 +721,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
-    expect(chatLog.addSystem).toHaveBeenCalledWith(
-      expect.stringContaining("streaming watchdog"),
-    );
+    expect(chatLog.addSystem).toHaveBeenCalledWith(expect.stringContaining("streaming watchdog"));
 
     handlers.dispose?.();
   });
@@ -751,8 +749,6 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     vi.advanceTimersByTime(3_000);
 
-    // 6s total, but the latest delta was only 3s ago, so the watchdog must not
-    // have fired yet.
     expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
     expect(state.activeChatRunId).toBe("run-flow");
 
@@ -784,8 +780,6 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     vi.advanceTimersByTime(10_000);
 
-    // After a normal final, the watchdog timer must have been cancelled and
-    // cannot later re-overwrite the status or emit the warning banner.
     const statusCalls = setActivityStatus.mock.calls.map((c) => c[0]);
     expect(statusCalls.filter((s) => s === "idle").length).toBe(1);
     expect(chatLog.addSystem).not.toHaveBeenCalledWith(
@@ -813,6 +807,47 @@ describe("tui-event-handlers: streaming watchdog", () => {
     expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
     expect(chatLog.addSystem).not.toHaveBeenCalled();
     expect(state.activeChatRunId).toBe("run-no-watchdog");
+
+    handlers.dispose?.();
+  });
+
+  it("does not let an older run steal the active run watchdog", () => {
+    const { state, chatLog, setActivityStatus, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-old",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "old" },
+    } satisfies ChatEvent);
+
+    vi.advanceTimersByTime(5_001);
+    expect(state.activeChatRunId).toBeNull();
+
+    handlers.handleChatEvent({
+      runId: "run-new",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "new" },
+    } satisfies ChatEvent);
+    expect(state.activeChatRunId).toBe("run-new");
+
+    vi.advanceTimersByTime(3_000);
+
+    handlers.handleChatEvent({
+      runId: "run-old",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "old again" },
+    } satisfies ChatEvent);
+
+    vi.advanceTimersByTime(2_001);
+
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(state.activeChatRunId).toBeNull();
+    expect(chatLog.addSystem).toHaveBeenCalledTimes(2);
 
     handlers.dispose?.();
   });
