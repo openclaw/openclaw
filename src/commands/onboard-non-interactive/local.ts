@@ -101,10 +101,22 @@ export async function resolveGatewayHealthProbeToken(
     envFallback: "no-secret-ref",
     unresolvedReasonStyle: "detailed",
   });
-  return {
-    ...(resolved.token ? { token: resolved.token } : {}),
-    ...(resolved.unresolvedRefReason ? { unresolvedRefReason: resolved.unresolvedRefReason } : {}),
-  };
+  const probeAuth: { token?: string; unresolvedRefReason?: string } = {};
+  if (resolved.token) {
+    probeAuth.token = resolved.token;
+  }
+  if (resolved.unresolvedRefReason) {
+    probeAuth.unresolvedRefReason = resolved.unresolvedRefReason;
+  }
+  return probeAuth;
+}
+
+function formatGatewayHealthFailureDetail(params: {
+  probeDetail?: string;
+  unresolvedRefReason?: string;
+}): string | undefined {
+  const detail = [params.probeDetail, params.unresolvedRefReason].filter(Boolean).join("\n");
+  return detail || undefined;
 }
 
 export async function runNonInteractiveLocalSetup(params: {
@@ -258,8 +270,10 @@ export async function runNonInteractiveLocalSetup(params: {
         : undefined,
     });
     if (!probe.ok) {
-      const detail =
-        [probe.detail, probeAuth.unresolvedRefReason].filter(Boolean).join("\n") || undefined;
+      const detail = formatGatewayHealthFailureDetail({
+        probeDetail: probe.detail,
+        unresolvedRefReason: probeAuth.unresolvedRefReason,
+      });
       const diagnostics = opts.installDaemon
         ? await collectGatewayHealthFailureDiagnostics()
         : undefined;
