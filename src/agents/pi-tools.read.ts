@@ -688,7 +688,7 @@ function toolAcceptsCanonicalEditParams(tool: AnyAgentTool): boolean {
   const required = Array.isArray(schema?.required) ? schema.required : [];
   return (
     (properties && Object.prototype.hasOwnProperty.call(properties, "edits")) ||
-      required.includes("edits"),
+      required.includes("edits")
   );
 }
 
@@ -700,7 +700,7 @@ function toolAcceptsLegacySingleEditParams(tool: AnyAgentTool): boolean {
     (properties &&
       Object.prototype.hasOwnProperty.call(properties, "oldText") &&
       Object.prototype.hasOwnProperty.call(properties, "newText")) ||
-      (required.has("oldText") && required.has("newText")),
+      (required.has("oldText") && required.has("newText"))
   );
 }
 
