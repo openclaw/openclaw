@@ -227,8 +227,12 @@ export function buildOllamaChatRequest(params: {
   options?: Record<string, unknown>;
   stream?: boolean;
 }): OllamaChatRequest {
+  const OLLAMA_PREFIX = "ollama/";
+  const bareModelId = params.modelId.startsWith(OLLAMA_PREFIX)
+    ? params.modelId.slice(OLLAMA_PREFIX.length)
+    : params.modelId;
   return {
-    model: params.modelId,
+    model: bareModelId,
     messages: params.messages,
     stream: params.stream ?? true,
     ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildAssistantMessage, createOllamaStreamFn } from "./stream.js";
+import { buildAssistantMessage, buildOllamaChatRequest, createOllamaStreamFn } from "./stream.js";
 
 function makeOllamaResponse(params: {
   content?: string;
@@ -224,5 +224,23 @@ describe("createOllamaStreamFn thinking events", () => {
     // Text content index should be 0 (no thinking block)
     const textStart = events.find((e) => e.type === "text_start") as { contentIndex?: number };
     expect(textStart?.contentIndex).toBe(0);
+  });
+});
+
+describe("buildOllamaChatRequest", () => {
+  it("strips ollama/ provider prefix from model ID (regression #67435)", () => {
+    const req = buildOllamaChatRequest({
+      modelId: "ollama/qwen3:14b-q8_0",
+      messages: [],
+    });
+    expect(req.model).toBe("qwen3:14b-q8_0");
+  });
+
+  it("passes through bare model IDs unchanged", () => {
+    const req = buildOllamaChatRequest({
+      modelId: "qwen3:14b-q8_0",
+      messages: [],
+    });
+    expect(req.model).toBe("qwen3:14b-q8_0");
   });
 });
