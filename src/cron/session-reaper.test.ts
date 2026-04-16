@@ -2,9 +2,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeEach } from "vitest";
+import { addSession, resetProcessRegistryForTests } from "../agents/bash-process-registry.js";
+import {
+  __testing as embeddedRunTesting,
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../agents/pi-embedded-runner/runs.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { createTaskRecord, resetTaskRegistryForTests } from "../tasks/task-registry.js";
 import type { Logger } from "./service/state.js";
-import { sweepCronRunSessions, resolveRetentionMs, resetReaperThrottle } from "./session-reaper.js";
+import {
+  resolveRetentionMs,
+  resetReaperThrottle,
+  scanCronRunSessionCandidates,
+  sweepCronRunSessions,
+} from "./session-reaper.js";
 
 function createTestLogger(): Logger {
   return {
@@ -62,12 +74,41 @@ describe("isCronRunSessionKey", () => {
 describe("sweepCronRunSessions", () => {
   let tmpDir: string;
   let storePath: string;
+  let cronStorePath: string;
   const log = createTestLogger();
+
+  function writeRunLog(
+    jobId: string,
+    entries: Array<{
+      ts: number;
+      sessionKey: string;
+      sessionId?: string;
+      status?: "ok" | "error" | "skipped";
+      summary?: string;
+      runAtMs?: number;
+    }>,
+  ) {
+    const runsDir = path.join(path.dirname(cronStorePath), "runs");
+    fs.mkdirSync(runsDir, { recursive: true });
+    const runLogPath = path.join(runsDir, `${jobId}.jsonl`);
+    const lines = entries.map((entry) =>
+      JSON.stringify({
+        action: "finished",
+        jobId,
+        ...entry,
+      }),
+    );
+    fs.writeFileSync(runLogPath, `${lines.join("\n")}\n`);
+  }
 
   beforeEach(async () => {
     resetReaperThrottle();
+    resetProcessRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    embeddedRunTesting.resetActiveEmbeddedRuns();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-reaper-"));
     storePath = path.join(tmpDir, "sessions.json");
+    cronStorePath = path.join(tmpDir, "cron", "jobs.json");
   });
 
   it("prunes expired cron run sessions", async () => {
@@ -91,9 +132,28 @@ describe("sweepCronRunSessions", () => {
       },
     };
     fs.writeFileSync(storePath, JSON.stringify(store));
+    writeRunLog("job1", [
+      {
+        ts: now - 25 * 3_600_000,
+        runAtMs: now - 25 * 3_600_000 - 5_000,
+        sessionKey: "agent:main:cron:job1:run:old-run",
+        sessionId: "old-run",
+        status: "ok",
+        summary: "HEARTBEAT_OK",
+      },
+      {
+        ts: now - 1 * 3_600_000,
+        runAtMs: now - 1 * 3_600_000 - 5_000,
+        sessionKey: "agent:main:cron:job1:run:recent-run",
+        sessionId: "recent-run",
+        status: "ok",
+        summary: "done",
+      },
+    ]);
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
+      cronStorePath,
       nowMs: now,
       log,
       force: true,
@@ -121,9 +181,19 @@ describe("sweepCronRunSessions", () => {
       },
     };
     fs.writeFileSync(storePath, JSON.stringify(store));
+    writeRunLog("job1", [
+      {
+        ts: now - 25 * 3_600_000,
+        sessionKey: "agent:main:cron:job1:run:old-run",
+        sessionId: runSessionId,
+        status: "ok",
+        summary: "HEARTBEAT_OK",
+      },
+    ]);
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
+      cronStorePath,
       nowMs: now,
       log,
       force: true,
@@ -148,10 +218,20 @@ describe("sweepCronRunSessions", () => {
       },
     };
     fs.writeFileSync(storePath, JSON.stringify(store));
+    writeRunLog("job1", [
+      {
+        ts: now - 25 * 3_600_000,
+        sessionKey: "agent:main:cron:job1:run:old-run",
+        sessionId: "old-run",
+        status: "ok",
+        summary: "HEARTBEAT_OK",
+      },
+    ]);
 
     try {
       const result = await sweepCronRunSessions({
         sessionStorePath: storePath,
+        cronStorePath,
         nowMs: now,
         log,
         force: true,
@@ -173,16 +253,167 @@ describe("sweepCronRunSessions", () => {
       },
     };
     fs.writeFileSync(storePath, JSON.stringify(store));
+    writeRunLog("job1", [
+      {
+        ts: now - 2 * 3_600_000,
+        sessionKey: "agent:main:cron:job1:run:run1",
+        sessionId: "run1",
+        status: "ok",
+        summary: "done",
+      },
+    ]);
 
     const result = await sweepCronRunSessions({
       cronConfig: { sessionRetention: "1h" },
       sessionStorePath: storePath,
+      cronStorePath,
       nowMs: now,
       log,
       force: true,
     });
 
     expect(result.pruned).toBe(1);
+  });
+
+  it("skips cron run sessions with active related tasks waiting for input", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:job1:run:wait-task";
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "wait-task",
+          updatedAt: now - 25 * 3_600_000,
+        },
+      }),
+    );
+    writeRunLog("job1", [
+      {
+        ts: now - 25 * 3_600_000,
+        sessionKey,
+        sessionId: "wait-task",
+        status: "ok",
+        summary: "done",
+      },
+    ]);
+    createTaskRecord({
+      runtime: "acp",
+      requesterSessionKey: sessionKey,
+      ownerKey: sessionKey,
+      scopeKind: "session",
+      task: "ACP background task",
+      status: "running",
+      progressSummary: "No output for 60s. It may be waiting for input.",
+    });
+
+    const scan = await scanCronRunSessionCandidates({
+      sessionStorePath: storePath,
+      cronStorePath,
+      nowMs: now,
+      idleThresholdMs: 24 * 3_600_000,
+      mode: "standard",
+    });
+
+    expect(scan.candidates).toHaveLength(0);
+    expect(scan.skipped["active-task"]).toBe(1);
+  });
+
+  it("does not prune cron run sessions with active background exec", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:job1:run:exec-run";
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "exec-run",
+          updatedAt: now - 25 * 3_600_000,
+        },
+      }),
+    );
+    writeRunLog("job1", [
+      {
+        ts: now - 25 * 3_600_000,
+        sessionKey,
+        sessionId: "exec-run",
+        status: "ok",
+        summary: "done",
+      },
+    ]);
+    addSession({
+      id: "proc-1",
+      command: "sleep 60",
+      sessionKey,
+      startedAt: now - 5_000,
+      maxOutputChars: 4_000,
+      totalOutputChars: 0,
+      pendingStdout: [],
+      pendingStderr: [],
+      pendingStdoutChars: 0,
+      pendingStderrChars: 0,
+      aggregated: "",
+      tail: "",
+      exited: false,
+      truncated: false,
+      backgrounded: true,
+      cursorKeyMode: "unknown",
+    });
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      cronStorePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(0);
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(updated[sessionKey]).toBeDefined();
+  });
+
+  it("skips cron run sessions that still have an active embedded run", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:job1:run:active-run";
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "active-run",
+          updatedAt: now - 25 * 3_600_000,
+        },
+      }),
+    );
+    writeRunLog("job1", [
+      {
+        ts: now - 25 * 3_600_000,
+        sessionKey,
+        sessionId: "active-run",
+        status: "ok",
+        summary: "done",
+      },
+    ]);
+    const handle = {
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: () => {},
+    };
+    setActiveEmbeddedRun("active-run", handle, sessionKey);
+
+    try {
+      const scan = await scanCronRunSessionCandidates({
+        sessionStorePath: storePath,
+        cronStorePath,
+        nowMs: now,
+        idleThresholdMs: 24 * 3_600_000,
+        mode: "standard",
+      });
+
+      expect(scan.candidates).toHaveLength(0);
+      expect(scan.skipped["active-session-run"]).toBe(1);
+    } finally {
+      clearActiveEmbeddedRun("active-run", handle, sessionKey);
+    }
   });
 
   it("does nothing when pruning is disabled", async () => {

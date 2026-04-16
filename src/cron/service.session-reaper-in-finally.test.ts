@@ -132,6 +132,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-10T10:00:00.000Z");
     const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    const runLogDir = path.join(path.dirname(store.storePath), "runs");
 
     // Force onTimer's try-block to throw before normal execution flow.
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
@@ -147,6 +148,21 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
           updatedAt: now - 3 * 24 * 3_600_000,
         },
       }),
+      "utf-8",
+    );
+    await fs.mkdir(runLogDir, { recursive: true });
+    await fs.writeFile(
+      path.join(runLogDir, "failing-job.jsonl"),
+      `${JSON.stringify({
+        ts: now - 3 * 24 * 3_600_000,
+        jobId: "failing-job",
+        action: "finished",
+        status: "ok",
+        summary: "HEARTBEAT_OK",
+        sessionId: "session-stale",
+        sessionKey: "agent:agent-default:cron:failing-job:run:stale",
+        runAtMs: now - 3 * 24 * 3_600_000 - 10_000,
+      })}\n`,
       "utf-8",
     );
 
