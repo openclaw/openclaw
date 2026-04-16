@@ -7,6 +7,7 @@ import {
   buildSessionEntry,
   listSessionFilesForAgent,
   loadDreamingNarrativeTranscriptPathSetForAgent,
+  loadTriggerExcludedTranscriptPathSetForAgent,
   normalizeSessionTranscriptPathForComparison,
   parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
@@ -14,6 +15,7 @@ import {
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   formatMemoryDreamingDay,
+  resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
@@ -40,6 +42,7 @@ type RunPhaseIfTriggeredParams = {
   trigger?: string;
   workspaceDir?: string;
   cfg?: OpenClawConfig;
+  excludeTriggers?: readonly string[];
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   eventText: string;
@@ -672,6 +675,7 @@ async function collectSessionIngestionBatches(params: {
   lookbackDays: number;
   nowMs: number;
   timezone?: string;
+  excludeTriggers?: readonly string[];
   state: SessionIngestionState;
 }): Promise<SessionIngestionCollectionResult> {
   if (!params.cfg) {
@@ -690,6 +694,11 @@ async function collectSessionIngestionBatches(params: {
   const nextSeenMessages: Record<string, string[]> = { ...params.state.seenMessages };
   let changed = false;
 
+  const excludeTriggersSet =
+    params.excludeTriggers && params.excludeTriggers.length > 0
+      ? new Set(params.excludeTriggers)
+      : undefined;
+
   const sessionFiles: Array<{
     agentId: string;
     absolutePath: string;
@@ -702,13 +711,19 @@ async function collectSessionIngestionBatches(params: {
       files.length > 0
         ? loadDreamingNarrativeTranscriptPathSetForAgent(agentId)
         : new Set<string>();
+    const triggerExcludedPaths =
+      files.length > 0 && excludeTriggersSet
+        ? loadTriggerExcludedTranscriptPathSetForAgent(agentId, excludeTriggersSet)
+        : new Set<string>();
     for (const absolutePath of files) {
+      const normalizedPath = normalizeSessionTranscriptPathForComparison(absolutePath);
+      if (triggerExcludedPaths.has(normalizedPath)) {
+        continue;
+      }
       sessionFiles.push({
         agentId,
         absolutePath,
-        generatedByDreamingNarrative: dreamingTranscriptPaths.has(
-          normalizeSessionTranscriptPathForComparison(absolutePath),
-        ),
+        generatedByDreamingNarrative: dreamingTranscriptPaths.has(normalizedPath),
         sessionPath: sessionPathForFile(absolutePath),
       });
     }
@@ -960,6 +975,7 @@ async function ingestSessionTranscriptSignals(params: {
   lookbackDays: number;
   nowMs: number;
   timezone?: string;
+  excludeTriggers?: readonly string[];
 }): Promise<void> {
   const state = await readSessionIngestionState(params.workspaceDir);
   const collected = await collectSessionIngestionBatches({
@@ -968,6 +984,7 @@ async function ingestSessionTranscriptSignals(params: {
     lookbackDays: params.lookbackDays,
     nowMs: params.nowMs,
     timezone: params.timezone,
+    excludeTriggers: params.excludeTriggers,
     state,
   });
   const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
@@ -1478,6 +1495,7 @@ async function runLightDreaming(params: {
     timezone?: string;
     storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
   };
+  excludeTriggers?: readonly string[];
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   nowMs?: number;
@@ -1497,6 +1515,7 @@ async function runLightDreaming(params: {
     lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
+    excludeTriggers: params.excludeTriggers,
   });
   const entries = dedupeEntries(
     (await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }))
@@ -1558,6 +1577,7 @@ async function runRemDreaming(params: {
     timezone?: string;
     storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
   };
+  excludeTriggers?: readonly string[];
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   nowMs?: number;
@@ -1577,6 +1597,7 @@ async function runRemDreaming(params: {
     lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
+    excludeTriggers: params.excludeTriggers,
   });
   const entries = (
     await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs })
@@ -1641,6 +1662,12 @@ export async function runDreamingSweepPhases(params: {
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   nowMs?: number;
 }): Promise<void> {
+  const dreamingConfig = resolveMemoryDreamingConfig({
+    pluginConfig: params.pluginConfig,
+    cfg: params.cfg,
+  });
+  const { excludeTriggers } = dreamingConfig.sessionIngestion;
+
   const light = resolveMemoryLightDreamingConfig({
     pluginConfig: params.pluginConfig,
     cfg: params.cfg,
@@ -1650,6 +1677,7 @@ export async function runDreamingSweepPhases(params: {
       workspaceDir: params.workspaceDir,
       cfg: params.cfg,
       config: light,
+      excludeTriggers,
       logger: params.logger,
       subagent: params.subagent,
       nowMs: params.nowMs,
@@ -1665,6 +1693,7 @@ export async function runDreamingSweepPhases(params: {
       workspaceDir: params.workspaceDir,
       cfg: params.cfg,
       config: rem,
+      excludeTriggers,
       logger: params.logger,
       subagent: params.subagent,
       nowMs: params.nowMs,
@@ -1703,6 +1732,7 @@ async function runPhaseIfTriggered(
           workspaceDir,
           cfg: params.cfg,
           config: params.config,
+          excludeTriggers: params.excludeTriggers,
           logger: params.logger,
           subagent: params.subagent,
         });
@@ -1711,6 +1741,7 @@ async function runPhaseIfTriggered(
           workspaceDir,
           cfg: params.cfg,
           config: params.config,
+          excludeTriggers: params.excludeTriggers,
           logger: params.logger,
           subagent: params.subagent,
         });

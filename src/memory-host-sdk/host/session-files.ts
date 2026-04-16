@@ -150,6 +150,42 @@ export function loadDreamingNarrativeTranscriptPathSetForAgent(
   );
 }
 
+/**
+ * Returns the set of absolute transcript paths whose session entry has a
+ * `trigger` value in the given exclusion list. Used by the dreaming ingestion
+ * pipeline to skip automated session transcripts (e.g. cron, heartbeat).
+ */
+export function loadTriggerExcludedTranscriptPathSetForSessionsDir(
+  sessionsDir: string,
+  excludeTriggers: ReadonlySet<string>,
+): ReadonlySet<string> {
+  if (excludeTriggers.size === 0) {
+    return new Set();
+  }
+  const storePath = path.join(sessionsDir, "sessions.json");
+  const store = loadSessionStore(storePath);
+  const excludedPaths = new Set<string>();
+  for (const entry of Object.values(store)) {
+    if (entry.trigger && excludeTriggers.has(entry.trigger)) {
+      const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
+      if (transcriptPath) {
+        excludedPaths.add(transcriptPath);
+      }
+    }
+  }
+  return excludedPaths;
+}
+
+export function loadTriggerExcludedTranscriptPathSetForAgent(
+  agentId: string,
+  excludeTriggers: ReadonlySet<string>,
+): ReadonlySet<string> {
+  return loadTriggerExcludedTranscriptPathSetForSessionsDir(
+    resolveSessionTranscriptsDirForAgent(agentId),
+    excludeTriggers,
+  );
+}
+
 function isDreamingNarrativeTranscriptFromSessionStore(absPath: string): boolean {
   const sessionsDir = path.dirname(absPath);
   const normalizedAbsPath = normalizeComparablePath(absPath);

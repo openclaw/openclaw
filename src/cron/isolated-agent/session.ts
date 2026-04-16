@@ -71,6 +71,7 @@ export function resolveCronSession(params: {
     sessionId,
     updatedAt: params.nowMs,
     systemSent,
+    trigger: "cron",
     // When starting a fresh session (forceNew / isolated), clear delivery routing
     // state inherited from prior sessions. Without this, lastThreadId leaks into
     // the new session and causes announce-mode cron deliveries to post as thread

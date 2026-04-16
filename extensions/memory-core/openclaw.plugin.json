@@ -48,6 +48,20 @@
               }
             }
           },
+          "sessionIngestion": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Controls which sessions are ingested into the dreaming corpus.",
+            "properties": {
+              "excludeTriggers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Session triggers to exclude from corpus ingestion (default: [\"cron\", \"heartbeat\"]). Set to [] to ingest all sessions."
+              }
+            }
+          },
           "phases": {
             "type": "object",
             "additionalProperties": false,

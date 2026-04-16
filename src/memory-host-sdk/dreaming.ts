@@ -115,6 +115,15 @@ export type MemoryRemDreamingConfig = {
 
 export type MemoryDreamingPhaseName = "light" | "deep" | "rem";
 
+export type MemoryDreamingSessionIngestionConfig = {
+  /**
+   * Session triggers whose transcripts are excluded from dreaming corpus
+   * ingestion. Defaults to `["cron", "heartbeat"]` so automated sessions
+   * do not pollute the recall store with repetitive noise.
+   */
+  excludeTriggers: readonly string[];
+};
+
 export type MemoryDreamingConfig = {
   enabled: boolean;
   frequency: string;
@@ -124,6 +133,7 @@ export type MemoryDreamingConfig = {
   execution: {
     defaults: MemoryDreamingExecutionConfig;
   };
+  sessionIngestion: MemoryDreamingSessionIngestionConfig;
   phases: {
     light: MemoryLightDreamingConfig;
     deep: MemoryDeepDreamingConfig;
@@ -136,6 +146,7 @@ export type MemoryDreamingWorkspace = {
   agentIds: string[];
 };
 
+const DEFAULT_MEMORY_SESSION_INGESTION_EXCLUDE_TRIGGERS: readonly string[] = ["cron", "heartbeat"];
 const DEFAULT_MEMORY_LIGHT_DREAMING_SOURCES: MemoryLightDreamingSource[] = [
   "daily",
   "sessions",
@@ -245,6 +256,20 @@ function normalizeStringArray<T extends string>(
     }
   }
   return normalized.length > 0 ? normalized : [...fallback];
+}
+
+function normalizeStringArrayLoose(value: unknown, fallback: readonly string[]): readonly string[] {
+  if (!Array.isArray(value)) {
+    return fallback;
+  }
+  const normalized: string[] = [];
+  for (const entry of value) {
+    const trimmed = normalizeTrimmedString(entry);
+    if (trimmed && !normalized.includes(trimmed)) {
+      normalized.push(trimmed);
+    }
+  }
+  return normalized;
 }
 
 function normalizeStorageMode(value: unknown): MemoryDreamingStorageMode {
@@ -358,6 +383,7 @@ export function resolveMemoryDreamingConfig(params: {
     DEFAULT_MEMORY_DREAMING_TIMEZONE;
   const storage = asNullableRecord(dreaming?.storage);
   const execution = asNullableRecord(dreaming?.execution);
+  const sessionIngestionRaw = asNullableRecord(dreaming?.sessionIngestion);
   const phases = asNullableRecord(dreaming?.phases);
 
   const defaultExecution = resolveExecutionConfig(execution?.defaults, {
@@ -389,6 +415,12 @@ export function resolveMemoryDreamingConfig(params: {
     },
     execution: {
       defaults: defaultExecution,
+    },
+    sessionIngestion: {
+      excludeTriggers: normalizeStringArrayLoose(
+        sessionIngestionRaw?.excludeTriggers,
+        DEFAULT_MEMORY_SESSION_INGESTION_EXCLUDE_TRIGGERS,
+      ),
     },
     phases: {
       light: {

@@ -124,6 +124,13 @@ export type SessionEntry = {
   heartbeatIsolatedBaseSessionKey?: string;
   /** Heartbeat task state (task name -> last run timestamp ms). */
   heartbeatTaskState?: Record<string, number>;
+  /**
+   * What initiated this session: "user", "cron", "heartbeat", "memory",
+   * "overflow", or "manual". Persisted so downstream consumers (dreaming
+   * ingestion, analytics) can distinguish automated sessions from
+   * interactive ones.
+   */
+  trigger?: "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
