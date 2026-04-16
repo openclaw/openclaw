@@ -209,4 +209,45 @@ describe("resolveTelegramAllowFromEntries", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("ignores malformed allowFrom entries instead of crashing", async () => {
+    const globalFetch = vi.fn(async () => {
+      throw new Error("global fetch should not be called");
+    });
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ok: true, result: { id: 56789 } }),
+    }));
+    vi.stubGlobal("fetch", globalFetch);
+    const proxyFetch = vi.fn();
+    const fetchModule = await import("./fetch.js");
+    const proxyModule = await import("./proxy.js");
+    const resolveTelegramFetch = vi.spyOn(fetchModule, "resolveTelegramFetch");
+    const makeProxyFetch = vi.spyOn(proxyModule, "makeProxyFetch");
+    makeProxyFetch.mockReturnValue(proxyFetch as unknown as typeof fetch);
+    resolveTelegramFetch.mockReturnValue(fetchMock as unknown as typeof fetch);
+
+    try {
+      const resolved = await resolveTelegramAllowFromEntries({
+        entries: ["123", undefined, "@user", null],
+        credentialValue: "tok",
+        apiRoot: "https://api.telegram.org",
+        proxyUrl: undefined,
+        network: undefined,
+      });
+
+      expect(resolved).toEqual([
+        { input: "123", resolved: true, id: "123" },
+        { input: "@user", resolved: true, id: "56789" },
+      ]);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://api.telegram.org/bottok/getChat?chat_id=%40user",
+        undefined,
+      );
+    } finally {
+      makeProxyFetch.mockRestore();
+      resolveTelegramFetch.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
 });

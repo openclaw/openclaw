@@ -32,38 +32,52 @@ export const TELEGRAM_USER_ID_HELP_LINES = [
   "Website: https://openclaw.ai",
 ];
 
-export function normalizeTelegramAllowFromInput(raw: string): string {
+export function normalizeTelegramAllowFromInput(raw: unknown): string {
+  if (typeof raw !== "string") {
+    return "";
+  }
   return raw
     .trim()
     .replace(/^(telegram|tg):/i, "")
     .trim();
 }
 
-export function parseTelegramAllowFromId(raw: string): string | null {
+export function parseTelegramAllowFromId(raw: unknown): string | null {
   const stripped = normalizeTelegramAllowFromInput(raw);
   return isNumericTelegramSenderUserId(stripped) ? stripped : null;
 }
 
 export async function resolveTelegramAllowFromEntries(params: {
-  entries: string[];
+  entries: Array<string | number | null | undefined>;
   credentialValue?: string;
   apiRoot?: string;
   proxyUrl?: string;
   network?: TelegramNetworkConfig;
 }) {
+  const token = typeof params.credentialValue === "string" ? params.credentialValue.trim() : "";
+  const normalizedEntries = params.entries
+    .map((entry) => {
+      if (entry == null) {
+        return "";
+      }
+      return typeof entry === "string" ? entry : String(entry);
+    })
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
   return await Promise.all(
-    params.entries.map(async (entry) => {
+    normalizedEntries.map(async (entry) => {
       const numericId = parseTelegramAllowFromId(entry);
       if (numericId) {
         return { input: entry, resolved: true, id: numericId };
       }
       const stripped = normalizeTelegramAllowFromInput(entry);
-      if (!stripped || !params.credentialValue?.trim()) {
+      if (!stripped || !token) {
         return { input: entry, resolved: false, id: null };
       }
       const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
       const id = await lookupTelegramChatId({
-        token: params.credentialValue,
+        token,
         chatId: username,
         apiRoot: params.apiRoot,
         proxyUrl: params.proxyUrl,

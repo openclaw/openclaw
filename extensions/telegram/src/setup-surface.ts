@@ -63,7 +63,7 @@ export const telegramSetupWizard: ChannelSetupWizard = {
         const resolved = resolveTelegramAccount({ cfg, accountId });
         const hasConfiguredBotToken = hasConfiguredSecretInput(resolved.config.botToken);
         const hasConfiguredValue =
-          hasConfiguredBotToken || Boolean(resolved.config.tokenFile?.trim());
+          hasConfiguredBotToken || Boolean(normalizeOptionalString(resolved.config.tokenFile));
         return {
           accountConfigured: Boolean(resolved.token) || hasConfiguredValue,
           hasConfiguredValue,
