@@ -58,8 +58,9 @@ export function resolveThinkingDefault(params: {
     normalizedProvider === "anthropic" &&
     explicitModelConfigured &&
     typeof catalogCandidate?.name === "string" &&
-    /4\.6\b/.test(catalogCandidate.name) &&
-    (normalizedModel.startsWith("claude-opus-4-6") ||
+    /4\.[67]\b/.test(catalogCandidate.name) &&
+    (normalizedModel.startsWith("claude-opus-4-7") ||
+      normalizedModel.startsWith("claude-opus-4-6") ||
       normalizedModel.startsWith("claude-sonnet-4-6"))
   ) {
     return "adaptive";
