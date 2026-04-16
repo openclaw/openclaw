@@ -252,6 +252,12 @@ export async function syncMemoryWikiBridgeSources(params: {
   // source files on disk, the memory capability is likely temporarily unavailable
   // rather than all sources being genuinely deleted. Skip pruning in that case to
   // avoid wiping all bridge pages on a transient capability outage. (#67658)
+  //
+  // Known limitation: this heuristic cannot distinguish a transient outage from
+  // a legitimate "all workspaces removed" scenario where source files still linger
+  // on disk. In that edge case stale bridge pages will persist until the next sync
+  // cycle where the capability is available and returns a definitive empty result.
+  // This is an acceptable tradeoff: stale pages are benign, data loss is not.
   const existingBridgeSourcePaths = Object.values(state.entries)
     .filter((entry) => entry.group === "bridge")
     .map((entry) => entry.sourcePath);
