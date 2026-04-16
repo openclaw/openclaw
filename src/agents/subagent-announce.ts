@@ -386,9 +386,12 @@ export async function runSubagentAnnounceFlow(params: {
       if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
         if (fallbackReply && !fallbackIsSilent) {
           reply = fallbackReply;
-        } else {
+        } else if (!isAnnounceSkip(reply)) {
+          // Preserve silent-token suppression for completion delivery. Only
+          // ANNOUNCE_SKIP should continue into the deterministic completion path.
           return true;
         }
+        // Always proceed to delivery when reply is ANNOUNCE_SKIP.
       }
     }
 

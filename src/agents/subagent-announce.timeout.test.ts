@@ -518,9 +518,9 @@ describe("subagent announce timeout config", () => {
       roundOneReply: undefined,
     });
 
-    expect(
-      findGatewayCall((call) => call.method === "agent" && call.expectFinal === true),
-    ).toBeUndefined();
+    expect(findGatewayCall((call) => call.method === "agent" && call.expectFinal === true)).toBe(
+      undefined,
+    );
   });
 
   it("prefers later visible assistant progress over an earlier NO_REPLY marker", async () => {

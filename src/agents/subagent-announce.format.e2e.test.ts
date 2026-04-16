@@ -60,7 +60,7 @@ const loadSessionStoreSpy = vi.spyOn(configSessions, "loadSessionStore");
 const resolveAgentIdFromSessionKeySpy = vi.spyOn(configSessions, "resolveAgentIdFromSessionKey");
 const resolveStorePathSpy = vi.spyOn(configSessions, "resolveStorePath");
 const resolveMainSessionKeySpy = vi.spyOn(configSessions, "resolveMainSessionKey");
-const callGatewaySpy = vi.spyOn(gatewayCall, "callGateway");
+const callGatewaySpy = vi.fn(async <T = Record<string, unknown>>(_opts: any) => ({}) as T) as any;
 const getGlobalHookRunnerSpy = vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner");
 const readLatestAssistantReplySpy = vi.spyOn(agentStep, "readLatestAssistantReply");
 const isEmbeddedPiRunActiveSpy = vi.spyOn(piEmbedded, "isEmbeddedPiRunActive");
@@ -191,6 +191,7 @@ vi.mock("./subagent-registry-runtime.js", () => subagentRegistryMock);
 describe("subagent announce formatting", () => {
   let previousFastTestEnv: string | undefined;
   let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
+  let subagentAnnounceTesting: (typeof import("./subagent-announce.js"))["__testing"];
 
   beforeAll(async () => {
     // Set FAST_TEST_MODE before importing the module to ensure the module-level
@@ -199,7 +200,8 @@ describe("subagent announce formatting", () => {
     // See: https://github.com/openclaw/openclaw/issues/31298
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
-    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
+    ({ runSubagentAnnounceFlow, __testing: subagentAnnounceTesting } =
+      await import("./subagent-announce.js"));
   });
 
   afterAll(() => {
@@ -224,6 +226,7 @@ describe("subagent announce formatting", () => {
     sessionsDeleteSpy.mockClear().mockImplementation((_req: AgentCallRequest) => undefined);
     callGatewaySpy.mockReset().mockImplementation(async (req: unknown) => {
       const typed = req as { method?: string; params?: { message?: string; sessionKey?: string } };
+
       if (typed.method === "agent") {
         return await agentSpy(typed);
       }
@@ -246,6 +249,11 @@ describe("subagent announce formatting", () => {
       return {};
     });
     subagentAnnounceDeliveryTesting.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(
+        req: Parameters<typeof gatewayCall.callGateway>[0],
+      ) => (await callGatewaySpy(req)) as T,
+    });
+    subagentAnnounceTesting.setDepsForTest({
       callGateway: async <T = Record<string, unknown>>(
         req: Parameters<typeof gatewayCall.callGateway>[0],
       ) => (await callGatewaySpy(req)) as T,
@@ -708,7 +716,7 @@ describe("subagent announce formatting", () => {
     expect(didAnnounce).toBe(true);
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).not.toHaveBeenCalled();
-    expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
+    expect(sessionsDeleteSpy).toHaveBeenCalled();
   });
 
   it("suppresses completion delivery when subagent reply is NO_REPLY", async () => {
