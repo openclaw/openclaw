@@ -11,6 +11,7 @@ export type McpServerCatalog = {
   serverName: string;
   launchSummary: string;
   toolCount: number;
+  resourceCount: number;
 };
 
 export type McpCatalogTool = {
@@ -23,11 +24,20 @@ export type McpCatalogTool = {
   fallbackDescription: string;
 };
 
+export type McpCatalogResource = {
+  serverName: string;
+  uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
+};
+
 export type McpToolCatalog = {
   version: number;
   generatedAt: number;
   servers: Record<string, McpServerCatalog>;
   tools: McpCatalogTool[];
+  resources: McpCatalogResource[];
 };
 
 export type SessionMcpRuntime = {
@@ -40,6 +50,14 @@ export type SessionMcpRuntime = {
   getCatalog: () => Promise<McpToolCatalog>;
   markUsed: () => void;
   callTool: (serverName: string, toolName: string, input: unknown) => Promise<CallToolResult>;
+  listResources: (serverName?: string) => Promise<McpCatalogResource[]>;
+  readResource: (serverName: string, uri: string) => Promise<unknown>;
+  getServerAuthState: (serverName: string) => Promise<{
+    server: string;
+    status: "connected" | "disconnected";
+    toolCount: number;
+    resourceCount: number;
+  }>;
   dispose: () => Promise<void>;
 };
 

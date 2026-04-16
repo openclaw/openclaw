@@ -14,6 +14,7 @@ import { resolveMcpTransport } from "./mcp-transport.js";
 import { sanitizeServerName } from "./pi-bundle-mcp-names.js";
 import type {
   McpCatalogTool,
+  McpCatalogResource,
   McpServerCatalog,
   McpToolCatalog,
   SessionMcpRuntime,
@@ -69,6 +70,39 @@ async function listAllTools(client: Client) {
     cursor = page.nextCursor;
   } while (cursor);
   return tools;
+}
+
+async function listAllResources(client: Client): Promise<
+  Array<{
+    uri: string;
+    name?: string;
+    description?: string;
+    mimeType?: string;
+  }>
+> {
+  const resources: Array<{
+    uri: string;
+    name?: string;
+    description?: string;
+    mimeType?: string;
+  }> = [];
+  let cursor: string | undefined;
+  do {
+    const page = await (client as unknown as {
+      listResources: (params?: { cursor?: string }) => Promise<{
+        resources: Array<{
+          uri: string;
+          name?: string;
+          description?: string;
+          mimeType?: string;
+        }>;
+        nextCursor?: string;
+      }>;
+    }).listResources(cursor ? { cursor } : undefined);
+    resources.push(...(page.resources ?? []));
+    cursor = page.nextCursor;
+  } while (cursor);
+  return resources;
 }
 
 async function disposeSession(session: BundleMcpSession) {
@@ -149,11 +183,13 @@ export function createSessionMcpRuntime(params: {
           generatedAt: Date.now(),
           servers: {},
           tools: [],
+          resources: [],
         };
       }
 
       const servers: Record<string, McpServerCatalog> = {};
       const tools: McpCatalogTool[] = [];
+      const resources: McpCatalogResource[] = [];
       const usedServerNames = new Set<string>();
 
       try {
@@ -191,11 +227,28 @@ export function createSessionMcpRuntime(params: {
             await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
             failIfDisposed();
             const listedTools = await listAllTools(client);
+            let listedResources: Array<{
+              uri: string;
+              name?: string;
+              description?: string;
+              mimeType?: string;
+            }> = [];
+            try {
+              failIfDisposed();
+              listedResources = await listAllResources(client);
+            } catch (error) {
+              if (!disposed) {
+                logWarn(
+                  `bundle-mcp: listResources unavailable for server "${serverName}": ${redactErrorUrls(error)}`,
+                );
+              }
+            }
             failIfDisposed();
             servers[serverName] = {
               serverName,
               launchSummary: resolved.description,
               toolCount: listedTools.length,
+              resourceCount: listedResources.length,
             };
             for (const tool of listedTools) {
               const toolName = tool.name.trim();
@@ -210,6 +263,24 @@ export function createSessionMcpRuntime(params: {
                 description: normalizeOptionalString(tool.description),
                 inputSchema: tool.inputSchema,
                 fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
+              });
+            }
+            for (const resource of listedResources) {
+              if (!normalizeOptionalString(resource.uri)) {
+                continue;
+              }
+              resources.push({
+                serverName,
+                uri: resource.uri,
+                ...(normalizeOptionalString(resource.name)
+                  ? { name: normalizeOptionalString(resource.name) }
+                  : {}),
+                ...(normalizeOptionalString(resource.description)
+                  ? { description: normalizeOptionalString(resource.description) }
+                  : {}),
+                ...(normalizeOptionalString(resource.mimeType)
+                  ? { mimeType: normalizeOptionalString(resource.mimeType) }
+                  : {}),
               });
             }
           } catch (error) {
@@ -230,6 +301,7 @@ export function createSessionMcpRuntime(params: {
           generatedAt: Date.now(),
           servers,
           tools,
+          resources,
         };
       } catch (error) {
         await Promise.allSettled(
@@ -274,6 +346,45 @@ export function createSessionMcpRuntime(params: {
         name: toolName,
         arguments: isMcpConfigRecord(input) ? input : {},
       })) as CallToolResult;
+    },
+    async listResources(serverName) {
+      failIfDisposed();
+      const nextCatalog = await getCatalog();
+      const requestedServer = normalizeOptionalString(serverName);
+      if (!requestedServer) {
+        return nextCatalog.resources;
+      }
+      return nextCatalog.resources.filter((entry) => entry.serverName === requestedServer);
+    },
+    async readResource(serverName, uri) {
+      failIfDisposed();
+      await getCatalog();
+      const session = sessions.get(serverName);
+      if (!session) {
+        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
+      }
+      return await (session.client as unknown as {
+        readResource: (params: { uri: string }) => Promise<unknown>;
+      }).readResource({ uri });
+    },
+    async getServerAuthState(serverName) {
+      failIfDisposed();
+      const nextCatalog = await getCatalog();
+      const serverCatalog = nextCatalog.servers[serverName];
+      if (!serverCatalog) {
+        return {
+          server: serverName,
+          status: "disconnected" as const,
+          toolCount: 0,
+          resourceCount: 0,
+        };
+      }
+      return {
+        server: serverName,
+        status: "connected" as const,
+        toolCount: serverCatalog.toolCount,
+        resourceCount: serverCatalog.resourceCount,
+      };
     },
     async dispose() {
       if (disposed) {

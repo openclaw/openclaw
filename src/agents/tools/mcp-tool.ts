@@ -108,32 +108,43 @@ export function createMcpTool(options: McpToolOptions): AnyAgentTool {
       }
 
       if (action === "list_resources") {
-        const catalog = await runtime.getCatalog();
+        const requestedServer = readStringParam(params, "server");
+        const resources = await runtime.listResources(requestedServer);
         return jsonResult({
           status: "ok",
           action,
-          resources: [],
-          servers: catalog.servers,
-          note: "bundle MCP runtime currently exposes tool catalog/call; resource listing is not yet surfaced.",
+          ...(requestedServer ? { server: requestedServer } : {}),
+          resources,
+          count: resources.length,
         });
       }
 
       if (action === "read_resource") {
         const uri = readStringParam(params, "uri", { required: true, label: "uri" });
+        const serverName = readStringParam(params, "server", { required: true, label: "server" });
+        const result = await runtime.readResource(serverName, uri);
         return jsonResult({
-          status: "failed",
+          status: "ok",
           action,
+          server: serverName,
           uri,
-          error:
-            "bundle MCP runtime does not currently expose direct resource reads via this bridge.",
+          result,
         });
       }
 
       if (action === "auth") {
+        const serverName = readStringParam(params, "server", { required: true, label: "server" });
+        const state = await runtime.getServerAuthState(serverName);
         return jsonResult({
-          status: "ok",
+          status: state.status === "connected" ? "ok" : "failed",
           action,
-          note: "mcp auth handshake is delegated to server-specific runtime flows.",
+          server: state.server,
+          connectionStatus: state.status,
+          toolCount: state.toolCount,
+          resourceCount: state.resourceCount,
+          ...(state.status === "connected"
+            ? {}
+            : { message: "Server not registered. Use MCP tool to connect first." }),
         });
       }
 
@@ -150,4 +161,3 @@ export function createMcpTool(options: McpToolOptions): AnyAgentTool {
     },
   };
 }
-
