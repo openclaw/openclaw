@@ -51,6 +51,8 @@ type WhatsAppSharedConfig = {
   selfChatMode?: boolean;
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
+  /** Optional denylist — silently block these senders even when dmPolicy is open (E.164). */
+  denyFrom?: string[];
   /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided (E.164 or group JID). */
   defaultTo?: string;
   /** Optional allowlist for WhatsApp group senders (E.164). */

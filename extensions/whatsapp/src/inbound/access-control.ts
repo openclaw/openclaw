@@ -46,6 +46,7 @@ export async function checkInboundAccessControl(params: {
   });
   const dmPolicy = account.dmPolicy ?? "pairing";
   const configuredAllowFrom = account.allowFrom ?? [];
+  const configuredDenyFrom = account.denyFrom ?? [];
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "whatsapp",
     accountId: account.accountId,
@@ -93,6 +94,7 @@ export async function checkInboundAccessControl(params: {
     groupPolicy,
     // Groups intentionally fall back to configured allowFrom only (not DM self-chat fallback).
     allowFrom: params.group ? configuredAllowFrom : dmAllowFrom,
+    denyFrom: configuredDenyFrom,
     groupAllowFrom,
     storeAllowFrom,
     isSenderAllowed: (allowEntries) => {
@@ -112,7 +114,30 @@ export async function checkInboundAccessControl(params: {
         ? Boolean(normalizedGroupSender && normalizedEntrySet.has(normalizedGroupSender))
         : normalizedEntrySet.has(normalizedDmSender);
     },
+    isSenderDenied: (denyEntries) => {
+      const normalizedEntrySet = new Set(
+        denyEntries
+          .map((entry) => normalizeE164(String(entry)))
+          .filter((entry): entry is string => Boolean(entry)),
+      );
+      return params.group
+        ? Boolean(normalizedGroupSender && normalizedEntrySet.has(normalizedGroupSender))
+        : normalizedEntrySet.has(normalizedDmSender);
+    },
   });
+  // denyFrom silently blocks — no pairing reply, no error message.
+  if (access.decision === "block" && access.reasonCode === "dm_policy_denylisted") {
+    logVerbose(
+      `Blocked denylisted sender ${params.group ? (params.senderE164 ?? "unknown") : params.from}`,
+    );
+    return {
+      allowed: false,
+      shouldMarkRead: false,
+      isSelfChat,
+      resolvedAccountId: account.accountId,
+    };
+  }
+
   if (params.group && access.decision !== "allow") {
     if (access.reason === "groupPolicy=disabled") {
       logVerbose("Blocked group message (groupPolicy: disabled)");
