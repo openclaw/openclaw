@@ -260,7 +260,19 @@ export function renderModeSwitcher(params: {
       </button>
       ${menuOpen
         ? html`
-            <div class="agent-chat__mode-menu" role="menu">
+            <div class="agent-chat__mode-menu">
+              <!--
+                Codex/Copilot #67721 r3095798757: previously declared
+                role="menu" / role="menuitem" but did NOT implement the
+                WAI-ARIA menu keyboard contract (arrow nav, Home/End,
+                roving tabindex, focus trap). Per WAI-ARIA, claiming the
+                menu role without those keyboard semantics misleads
+                assistive tech. Rather than ship a partial menu, we
+                expose this surface as a popover of plain <button>s —
+                native button focus + Escape-on-chip already gives
+                keyboard users a usable interaction with no false ARIA
+                promise.
+              -->
               ${MODE_DEFINITIONS.map(
                 (mode) => html`
                   <button
@@ -268,7 +280,6 @@ export function renderModeSwitcher(params: {
                     class="agent-chat__mode-menu__item ${mode.id === currentMode.id
                       ? "agent-chat__mode-menu__item--active"
                       : ""}"
-                    role="menuitem"
                     @click=${() => {
                       onSelectMode(mode);
                     }}
