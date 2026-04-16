@@ -41,7 +41,7 @@ runs:
         check-latest: false
 
     - name: Setup pnpm + cache store
-      uses: ./.github/actions/setup-pnpm-store-cache
+      uses: ../setup-pnpm-store-cache
       with:
         pnpm-version: ${{ inputs.pnpm-version }}
         cache-key-suffix: ${{ inputs.cache-key-suffix }}
