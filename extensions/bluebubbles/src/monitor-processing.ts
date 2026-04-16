@@ -751,7 +751,7 @@ async function processMessageAfterDedupe(
     requireQuoted: !tapbackContext,
   });
   const isTapbackMessage = Boolean(tapbackParsed);
-  let rawBody = tapbackParsed
+  const rawBody = tapbackParsed
     ? tapbackParsed.action === "removed"
       ? `removed ${tapbackParsed.emoji} reaction`
       : `reacted with ${tapbackParsed.emoji}`
@@ -833,60 +833,8 @@ async function processMessageAfterDedupe(
   }
 
   if (!rawBody) {
-    // Image-only `new-message` events can arrive with text="" and attachments=[]
-    // before BB finishes attachment indexing. The retry block lower in this function
-    // is unreachable in that case (the early return above would fire), so attempt one
-    // recovery fetch from the BB API here. Without this, deployments where BB never
-    // sends a follow-up `updated-message` would silently drop image-only messages.
-    // (#65430, #67437, #67510)
-    const retryBaseUrl = normalizeSecretInputString(account.config.serverUrl);
-    const retryPassword = normalizeSecretInputString(account.config.password);
-    const retryMessageIdEarly = message.messageId?.trim();
-    const canRecoverEmpty =
-      attachments.length === 0 &&
-      retryMessageIdEarly &&
-      retryBaseUrl &&
-      retryPassword &&
-      (text.length === 0 || message.eventType === "updated-message");
-    let recoveredEmpty = false;
-    if (canRecoverEmpty) {
-      try {
-        await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
-        const fetched = await fetchBlueBubblesMessageAttachments(retryMessageIdEarly, {
-          baseUrl: retryBaseUrl,
-          password: retryPassword,
-          timeoutMs: 10_000,
-          allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
-        });
-        if (fetched.length > 0) {
-          message.attachments = fetched;
-          attachments = fetched;
-          const recoveredPlaceholder = buildMessagePlaceholder(message);
-          if (recoveredPlaceholder) {
-            placeholder = recoveredPlaceholder;
-            rawBody = text || placeholder;
-            recoveredEmpty = rawBody.length > 0;
-            if (recoveredEmpty) {
-              logVerbose(
-                core,
-                runtime,
-                `attachment retry recovered ${fetched.length} attachment(s) for empty msgId=${message.messageId}`,
-              );
-            }
-          }
-        }
-      } catch (err) {
-        logVerbose(
-          core,
-          runtime,
-          `attachment retry (empty body) failed for msgId=${message.messageId}: ${String(err)}`,
-        );
-      }
-    }
-    if (!recoveredEmpty) {
-      logVerbose(core, runtime, `drop: empty text sender=${message.senderId}`);
-      return;
-    }
+    logVerbose(core, runtime, `drop: empty text sender=${message.senderId}`);
+    return;
   }
   logVerbose(
     core,
