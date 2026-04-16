@@ -10,6 +10,7 @@ import {
   modelsAuthOrderSetCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
+  modelsCustomTestCommand,
   modelsFallbacksAddCommand,
   modelsFallbacksClearCommand,
   modelsFallbacksListCommand,
@@ -271,6 +272,25 @@ export function registerModelsCli(program: Command) {
     .action(async (opts) => {
       await runModelsCommand(async () => {
         await modelsScanCommand(opts, defaultRuntime);
+      });
+    });
+
+  models
+    .command("custom-test")
+    .description("Test all configured custom model providers")
+    .option("--provider <id>", "Only test a specific provider id")
+    .option("--concurrency <n>", "Number of concurrent tests", "4")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runModelsCommand(async () => {
+        await modelsCustomTestCommand(
+          {
+            provider: opts.provider as string | undefined,
+            concurrency: opts.concurrency as string | undefined,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
       });
     });
 

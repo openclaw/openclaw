@@ -309,7 +309,7 @@ function formatVerificationError(error: unknown): string {
   }
 }
 
-type VerificationResult = {
+export type VerificationResult = {
   ok: boolean;
   status?: number;
   error?: unknown;
@@ -364,7 +364,7 @@ async function requestVerification(params: {
   }
 }
 
-async function requestOpenAiVerification(params: {
+export async function requestOpenAiVerification(params: {
   baseUrl: string;
   apiKey: string;
   modelId: string;
@@ -408,7 +408,7 @@ async function requestOpenAiVerification(params: {
   }
 }
 
-async function requestAnthropicVerification(params: {
+export async function requestAnthropicVerification(params: {
   baseUrl: string;
   apiKey: string;
   modelId: string;
