@@ -167,6 +167,8 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
   const html407 =
     "<!doctype html><html><head><title>407 Proxy Authentication Required</title></head>" +
     "<body><h1>Proxy Authentication Required</h1></body></html>";
+  const prefixedHtml401 = `Error: 401 ${html401}`;
+  const prefixedHtml407 = `Error: 407 ${html407}`;
 
   it("classifies Cloudflare HTML 502 as timeout", () => {
     expect(classifyFailoverReason(`502 ${cloudflareHtml502}`)).toBe("timeout");
@@ -184,6 +186,10 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
     expect(classifyFailoverReason(`403 ${html403}`)).toBe("auth");
   });
 
+  it("preserves auth classification for Error-prefixed 401 HTML", () => {
+    expect(classifyFailoverReason(prefixedHtml401)).toBe("auth");
+  });
+
   it("classifies runtime failure kind as upstream_html for non-auth HTML", () => {
     expect(classifyProviderRuntimeFailureKind({ status: 502, message: cloudflareHtml502 })).toBe(
       "upstream_html",
@@ -198,6 +204,10 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
 
   it("classifies 407 HTML runtime failures as proxy", () => {
     expect(classifyProviderRuntimeFailureKind({ status: 407, message: html407 })).toBe("proxy");
+  });
+
+  it("classifies Error-prefixed 407 HTML runtime failures as proxy", () => {
+    expect(classifyProviderRuntimeFailureKind(prefixedHtml407)).toBe("proxy");
   });
 
   it("does not misclassify JSON API rate-limit responses as HTML", () => {

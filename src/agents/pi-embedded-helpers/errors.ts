@@ -325,11 +325,15 @@ const REPLAY_INVALID_RE =
 const SANDBOX_BLOCKED_RE =
   /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b/i;
 
+function stripErrorPrefix(raw: string): string {
+  return raw.replace(/^error:\s*/i, "").trim();
+}
+
 function inferSignalStatus(signal: FailoverSignal): number | undefined {
   if (typeof signal.status === "number" && Number.isFinite(signal.status)) {
     return signal.status;
   }
-  return extractLeadingHttpStatus(signal.message?.trim() ?? "")?.code;
+  return extractLeadingHttpStatus(stripErrorPrefix(signal.message?.trim() ?? ""))?.code;
 }
 
 function isHtmlErrorResponse(raw: string, status?: number): boolean {
@@ -337,9 +341,7 @@ function isHtmlErrorResponse(raw: string, status?: number): boolean {
   if (!trimmed) {
     return false;
   }
-  const candidate = extractLeadingHttpStatus(trimmed)
-    ? trimmed
-    : trimmed.replace(/^error:\s*/i, "").trim();
+  const candidate = extractLeadingHttpStatus(trimmed) ? trimmed : stripErrorPrefix(trimmed);
   const inferred =
     typeof status === "number" && Number.isFinite(status)
       ? status
