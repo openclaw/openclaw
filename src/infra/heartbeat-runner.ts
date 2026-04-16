@@ -506,7 +506,6 @@ type HeartbeatPreflight = HeartbeatReasonFlags & {
   shouldInspectPendingEvents: boolean;
   skipReason?: HeartbeatSkipReason;
   tasks?: HeartbeatTask[];
-  heartbeatFileContent?: string;
 };
 
 function resolveHeartbeatReasonFlags(reason?: string): HeartbeatReasonFlags {
@@ -579,32 +578,24 @@ async function resolveHeartbeatPreflight(params: {
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
-  let heartbeatFileContent: string | undefined;
   try {
-    heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
+    const heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
     const tasks = parseHeartbeatTasks(heartbeatFileContent);
     if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) && tasks.length === 0) {
       return {
         ...basePreflight,
         skipReason: "empty-heartbeat-file",
         tasks: [],
-        heartbeatFileContent,
       };
     }
-    // Return tasks even if file has other content - backward compatible
     return {
       ...basePreflight,
       tasks,
-      heartbeatFileContent,
     };
   } catch (err: unknown) {
     if (hasErrnoCode(err, "ENOENT")) {
-      // Missing HEARTBEAT.md is intentional in some setups (for example, when
-      // heartbeat instructions live outside the file), so keep the run active.
-      // The heartbeat prompt already says "if it exists".
       return basePreflight;
     }
-    // For other read errors, proceed with heartbeat as before.
   }
 
   return basePreflight;
@@ -635,7 +626,6 @@ function resolveHeartbeatRunPrompt(params: {
   canRelayToUser: boolean;
   workspaceDir: string;
   startedAt: number;
-  heartbeatFileContent?: string;
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
   const pendingEvents = params.preflight.shouldInspectPendingEvents
@@ -670,15 +660,6 @@ ${taskList}
 
 After completing all due tasks, reply HEARTBEAT_OK.`;
 
-      // Preserve HEARTBEAT.md directives (non-task content)
-      if (params.heartbeatFileContent) {
-        const directives = params.heartbeatFileContent
-          .replace(/^[\s\S]*?^tasks:[\s\S]*?(?=^[^\s]|^$)/m, "")
-          .trim();
-        if (directives) {
-          prompt += `\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
-        }
-      }
       return { prompt, hasExecCompletion: false, hasCronEvents: false };
     }
     // No tasks due - skip this heartbeat to avoid wasteful API calls
@@ -820,7 +801,6 @@ export async function runHeartbeatOnce(opts: {
     canRelayToUser,
     workspaceDir,
     startedAt,
-    heartbeatFileContent: preflight.heartbeatFileContent,
   });
 
   // If no tasks are due, skip heartbeat entirely
