@@ -667,10 +667,13 @@ ${taskList}
 
 After completing all due tasks, reply HEARTBEAT_OK.`;
 
-      // Preserve HEARTBEAT.md directives (non-task content)
+      // Preserve HEARTBEAT.md directives (non-task content).
+      // Two-pass replace: first handles tasks block followed by other YAML keys,
+      // second handles tasks block at end of file (no lookahead match otherwise).
       if (params.heartbeatFileContent) {
         const directives = params.heartbeatFileContent
-          .replace(/^tasks:[\s\S]*?(?=^[^\s]|^$)/m, "")
+          .replace(/^tasks:[\s\S]*?(?=^[^\s])/m, "")
+          .replace(/^tasks:[\s\S]*/m, "")
           .trim();
         if (directives) {
           prompt += `\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
