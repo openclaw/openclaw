@@ -325,6 +325,8 @@ const REPLAY_INVALID_RE =
   /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
 const SANDBOX_BLOCKED_RE =
   /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b/i;
+const CLOUDFLARE_CHALLENGE_RE =
+  /\bcf-browser-verification\b|challenges\.cloudflare\.com|\b_cf_chl_|\bjust a moment\b|\bray id:/i;
 
 function stripErrorPrefix(raw: string): string {
   return raw.replace(/^error:\s*/i, "").trim();
@@ -412,6 +414,16 @@ function isReplayInvalidErrorMessage(raw: string): boolean {
 
 function isSandboxBlockedErrorMessage(raw: string): boolean {
   return Boolean(formatExecDeniedUserMessage(raw)) || SANDBOX_BLOCKED_RE.test(raw);
+}
+
+function isCloudflareChallengePage(raw: string, status?: number): boolean {
+  if (status !== 403) {
+    return false;
+  }
+  if (!isHtmlErrorResponse(raw, status)) {
+    return false;
+  }
+  return CLOUDFLARE_CHALLENGE_RE.test(raw);
 }
 
 function isSchemaErrorMessage(raw: string): boolean {
