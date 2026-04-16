@@ -110,4 +110,42 @@ describe("checkMutationGate", () => {
       expect(checkMutationGate("bash", "plan", "ls -la").blocked).toBe(false);
     });
   });
+
+  describe("plan mode — bash tool blocked without command", () => {
+    it("blocks bash in plan mode when no command is given", () => {
+      const result = checkMutationGate("bash", "plan");
+      expect(result.blocked).toBe(true);
+      expect(result.reason).toContain("blocked in plan mode");
+    });
+  });
+
+  describe("plan mode — shell compound operators blocked", () => {
+    it("blocks redirect operator: echo hi > file", () => {
+      expect(checkMutationGate("exec", "plan", "echo hi > file").blocked).toBe(true);
+    });
+
+    it("blocks pipe operator: cat file | grep x", () => {
+      expect(checkMutationGate("exec", "plan", "cat file | grep x").blocked).toBe(true);
+    });
+
+    it("blocks semicolon chaining: ls; rm -rf /", () => {
+      expect(checkMutationGate("exec", "plan", "ls; rm -rf /").blocked).toBe(true);
+    });
+  });
+
+  describe("plan mode — newlines in commands blocked", () => {
+    it("blocks newline-separated commands: ls\\nrm -rf tmp", () => {
+      expect(checkMutationGate("exec", "plan", "ls\nrm -rf tmp").blocked).toBe(true);
+    });
+  });
+
+  describe("plan mode — dangerous flags blocked", () => {
+    it("blocks find . -delete", () => {
+      expect(checkMutationGate("exec", "plan", "find . -delete").blocked).toBe(true);
+    });
+
+    it("blocks find . -exec rm {} ;", () => {
+      expect(checkMutationGate("exec", "plan", "find . -exec rm {} ;").blocked).toBe(true);
+    });
+  });
 });

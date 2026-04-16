@@ -27,6 +27,11 @@ export function resolvePlanApproval(
 ): PlanModeSessionState {
   const now = Date.now();
 
+  // Stale timeout — user already resolved the approval.
+  if (action === "timeout" && current.approval !== "pending") {
+    return current;
+  }
+
   switch (action) {
     case "approve":
       return {
