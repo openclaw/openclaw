@@ -71,6 +71,17 @@ function initLogger(api: OpenClawPluginApi): void {
   init(api);
 }
 
+/**
+ * 通过 loadBundledEntryExportSync 懒加载注册生命周期 hook
+ */
+function registerHooks(api: OpenClawPluginApi): void {
+  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
+    specifier: "./api.js",
+    exportName: "registerYuanbaoHooks",
+  });
+  register(api);
+}
+
 export default defineBundledChannelEntry({
   id: "yuanbao",
   name: "YuanBao",
@@ -96,5 +107,8 @@ export default defineBundledChannelEntry({
 
     // 初始化内置表情缓存（首次写入后不会覆盖 received 来源的条目）
     initBuiltinStickers();
+
+    // 统一注册所有生命周期 hook（内部按事件类型分模块管理）
+    registerHooks(api);
   },
 });

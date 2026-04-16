@@ -13,3 +13,4 @@ export {
 } from "./src/business/commands/upgrade/index.js";
 export { logUploadCommandDefinition } from "./src/business/commands/log-upload.js";
 export { initBuiltinStickers } from "./src/business/actions/sticker/init-builtin-stickers.js";
+export { registerYuanbaoHooks } from "./src/business/hooks/index.js";
