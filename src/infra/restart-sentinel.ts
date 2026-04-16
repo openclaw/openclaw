@@ -42,6 +42,7 @@ export type RestartSentinelPayload = {
   threadId?: string;
   message?: string | null;
   doctorHint?: string | null;
+  doctorSummary?: string | null;
   stats?: RestartSentinelStats | null;
 };
 
@@ -120,6 +121,9 @@ export function formatRestartSentinelMessage(payload: RestartSentinelPayload): s
   const reason = payload.stats?.reason?.trim();
   if (reason && reason !== message) {
     lines.push(`Reason: ${reason}`);
+  }
+  if (payload.doctorSummary?.trim()) {
+    lines.push(`Doctor: ${payload.doctorSummary.trim()}`);
   }
   if (payload.doctorHint?.trim()) {
     lines.push(payload.doctorHint.trim());

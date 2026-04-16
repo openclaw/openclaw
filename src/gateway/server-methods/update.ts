@@ -1,5 +1,6 @@
 import { loadConfig } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import { runDoctorNonInteractiveSummary } from "../../infra/doctor-summary.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import {
   formatDoctorNonInteractiveHint,
@@ -38,11 +39,12 @@ export const updateHandlers: GatewayRequestHandlers = {
         ? Math.max(1000, Math.floor(timeoutMsRaw))
         : undefined;
 
+    let root: string | undefined;
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     try {
       const config = loadConfig();
       const configChannel = normalizeUpdateChannel(config.update?.channel);
-      const root =
+      root =
         (await resolveOpenClawPackageRoot({
           moduleUrl: import.meta.url,
           argv1: process.argv[1],
@@ -61,8 +63,20 @@ export const updateHandlers: GatewayRequestHandlers = {
         reason: String(err),
         steps: [],
         durationMs: 0,
+        root,
       };
     }
+
+    const doctorSummaryTimeoutMs =
+      typeof timeoutMs === "number" ? Math.max(1000, Math.min(timeoutMs, 60_000)) : undefined;
+    const doctorSummary =
+      result.status === "error"
+        ? await runDoctorNonInteractiveSummary({
+            cwd: result.root,
+            entry: result.root ? `${result.root}/openclaw.mjs` : undefined,
+            timeoutMs: doctorSummaryTimeoutMs,
+          })
+        : null;
 
     const payload: RestartSentinelPayload = {
       kind: "update",
@@ -73,6 +87,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       threadId,
       message: note ?? null,
       doctorHint: formatDoctorNonInteractiveHint(),
+      doctorSummary,
       stats: {
         mode: result.mode,
         root: result.root ?? undefined,
