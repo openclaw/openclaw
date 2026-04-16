@@ -230,6 +230,7 @@ describe("createGatewayCloseHandler", () => {
   it("fails shutdown when http server close still hangs after force close", async () => {
     vi.useFakeTimers();
 
+    const closeAllConnections = vi.fn();
     const close = createGatewayCloseHandler({
       bonjourStop: null,
       tailscaleCleanup: null,
@@ -257,7 +258,7 @@ describe("createGatewayCloseHandler", () => {
       wss: { close: (cb: () => void) => cb() } as never,
       httpServer: {
         close: () => undefined,
-        closeAllConnections: vi.fn(),
+        closeAllConnections,
         closeIdleConnections: vi.fn(),
       } as never,
     });
@@ -268,6 +269,12 @@ describe("createGatewayCloseHandler", () => {
     );
     await vi.advanceTimersByTimeAsync(HTTP_CLOSE_GRACE_MS + HTTP_CLOSE_FORCE_WAIT_MS);
     await closeExpectation;
-    expect(vi.getTimerCount()).toBe(0);
+
+    expect(closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes("http server close exceeded 1000ms"),
+      ),
+    ).toBe(true);
   });
 });
