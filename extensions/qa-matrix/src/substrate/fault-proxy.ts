@@ -4,6 +4,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -114,12 +115,21 @@ async function forwardMatrixQaFaultProxyRequest(params: {
   if (method !== "GET" && method !== "HEAD") {
     init.body = bufferToArrayBuffer(params.body);
   }
-  const response = await fetch(params.targetUrl, init);
-  return {
-    body: Buffer.from(await response.arrayBuffer()),
-    headers: response.headers,
-    status: response.status,
-  };
+  const { response, release } = await fetchWithSsrFGuard({
+    url: params.targetUrl.toString(),
+    init,
+    policy: { allowPrivateNetwork: true },
+    auditContext: "qa-matrix-fault-proxy-forward",
+  });
+  try {
+    return {
+      body: Buffer.from(await response.arrayBuffer()),
+      headers: response.headers,
+      status: response.status,
+    };
+  } finally {
+    await release();
+  }
 }
 
 function writeForwardedResponse(
