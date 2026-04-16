@@ -184,6 +184,7 @@ export class PlanStore {
   ): StoredPlanStep[] {
     const now = Date.now();
     const incomingMap = new Map(incoming.map((s) => [s.step, s]));
+    const existingStepTexts = new Set(existing.map((s) => s.step));
     const merged = existing.map((s) => {
       const update = incomingMap.get(s.step);
       if (update) {
@@ -192,7 +193,7 @@ export class PlanStore {
       return s;
     });
     for (const s of incoming) {
-      if (!existing.some((e) => e.step === s.step)) {
+      if (!existingStepTexts.has(s.step)) {
         merged.push({ ...s, updatedBy: sessionKey, updatedAt: now });
       }
     }
