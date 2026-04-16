@@ -2015,6 +2015,10 @@ Docs: https://docs.openclaw.ai
 
 - Agents/edit tool: accept common path/text alias spellings, show current file contents on exact-match failures, and avoid false edit failures after successful writes. (#52516) thanks @mbelinky.
 
+### Fixes
+
+- Agents/failover: avoid treating bare leading `402 ...` prose as billing errors while still recognizing proxy subscription failures. (#45827) Thanks @junyuc25.
+
 ## 2026.3.13
 
 ### Changes
