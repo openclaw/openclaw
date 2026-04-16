@@ -257,6 +257,7 @@ export type ProviderRuntimeFailureKind =
   | "auth_scope"
   | "auth_refresh"
   | "auth_html_403"
+  | "cloudflare_challenge"
   | "upstream_html"
   | "proxy"
   | "rate_limit"
