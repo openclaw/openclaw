@@ -171,6 +171,30 @@ export type SessionEntry = {
   execSecurity?: string;
   execAsk?: string;
   execNode?: string;
+  /**
+   * Plan-mode session state (PR-8). When `mode === "plan"`, the runtime
+   * mutation gate (src/agents/plan-mode/mutation-gate.ts) blocks
+   * write/edit/exec/etc. Read-only tools remain available. Set via
+   * `sessions.patch { planMode: "plan" | "normal" }` from the UI mode
+   * switcher OR by the `enter_plan_mode` agent tool. Clearing back to
+   * "normal" releases the gate.
+   *
+   * Stored as a structural type rather than importing
+   * `PlanModeSessionState` from `src/agents/plan-mode/types.ts` to avoid
+   * an `agents/*` → `config/sessions/*` dependency on what is still a
+   * transitional plan-mode lib (PR #67538). The shape mirrors that type
+   * and is enforced via Zod at sessions.patch time.
+   */
+  planMode?: {
+    mode: "plan" | "normal";
+    approval: "none" | "pending" | "approved" | "edited" | "rejected" | "timed_out";
+    enteredAt?: number;
+    confirmedAt?: number;
+    updatedAt?: number;
+    feedback?: string;
+    rejectionCount: number;
+    approvalId?: string;
+  };
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;

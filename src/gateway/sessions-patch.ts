@@ -385,6 +385,35 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  // PR-8: plan-mode toggle. Wire-format only exposes the literal mode; the
+  // server constructs the full PlanModeSessionState shape on transitions.
+  if ("planMode" in patch) {
+    const raw = patch.planMode;
+    if (raw === null || raw === "normal") {
+      // Clear any pending plan-mode state — runtime gate disarms.
+      delete next.planMode;
+    } else if (raw === "plan") {
+      const now = Date.now();
+      if (next.planMode?.mode === "plan") {
+        // Already in plan mode — refresh updatedAt but preserve approval state.
+        next.planMode = { ...next.planMode, updatedAt: now };
+      } else {
+        // Fresh entry: clear any stale rejection history, reset to a clean
+        // pending-nothing state. The agent calls exit_plan_mode to actually
+        // submit a plan for approval; until then approval is "none".
+        next.planMode = {
+          mode: "plan",
+          approval: "none",
+          enteredAt: now,
+          updatedAt: now,
+          rejectionCount: 0,
+        };
+      }
+    } else if (raw !== undefined) {
+      return invalid('invalid planMode (use "plan"|"normal" or null)');
+    }
+  }
+
   if ("model" in patch) {
     const raw = patch.model;
     if (raw === null) {

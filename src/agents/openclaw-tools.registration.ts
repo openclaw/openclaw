@@ -27,3 +27,20 @@ export function isUpdatePlanToolEnabledForOpenClawTools(params: {
     modelId: params.modelId,
   });
 }
+
+/**
+ * Plan-mode tools (`enter_plan_mode` / `exit_plan_mode`) are gated on
+ * `agents.defaults.planMode.enabled`. Default OFF — opt-in feature so a
+ * default GPT-5.4 / Claude Sonnet run does NOT see these tools and
+ * doesn't accidentally fall into a plan-first workflow.
+ *
+ * Once enabled, the tools appear in the tool catalog AND the runtime
+ * mutation gate (src/agents/plan-mode/mutation-gate.ts) starts enforcing
+ * the block-mutations contract whenever a session has
+ * `planMode.mode === "plan"`.
+ */
+export function isPlanModeToolsEnabledForOpenClawTools(params: {
+  config?: OpenClawConfig;
+}): boolean {
+  return params.config?.agents?.defaults?.planMode?.enabled === true;
+}

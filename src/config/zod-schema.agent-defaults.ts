@@ -203,6 +203,21 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    // PR-8: plan-mode integration. Default OFF — opt-in feature.
+    planMode: z
+      .object({
+        /** Master switch. Registers enter_plan_mode/exit_plan_mode tools and arms the runtime mutation gate. Default: false. */
+        enabled: z.boolean().optional(),
+        /**
+         * Optional model-id regex patterns. When a session's model matches AND the user hasn't toggled plan mode, the
+         * runtime auto-enters plan mode at session start. Default: empty (no auto-enable).
+         */
+        autoEnableFor: z.array(z.string()).optional(),
+        /** Seconds an unanswered approval stays pending. Default: 600 (10 min). */
+        approvalTimeoutSeconds: z.number().int().min(10).max(86_400).optional(),
+      })
+      .strict()
+      .optional(),
     thinkingDefault: z
       .union([
         z.literal("off"),
