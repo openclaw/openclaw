@@ -105,7 +105,13 @@ export function checkMutationGate(
     }
     // Block dangerous flags on otherwise-allowed commands.
     const DANGEROUS_FLAGS = ["-delete", "-exec", "-execdir", "--delete", "-rf"];
-    const hasFlag = DANGEROUS_FLAGS.some((f) => cmd.includes(` ${f}`) || cmd.includes(` ${f} `));
+    const hasFlag = DANGEROUS_FLAGS.some((f) => {
+      const idx = cmd.indexOf(` ${f}`);
+      if (idx === -1) return false;
+      const afterFlag = idx + f.length + 1;
+      // Flag must be at end of command or followed by space/non-alphanumeric
+      return afterFlag >= cmd.length || /[\s\W]/.test(cmd[afterFlag]);
+    });
     if (hasFlag) {
       return {
         blocked: true,

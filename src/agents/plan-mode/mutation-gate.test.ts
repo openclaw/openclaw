@@ -148,4 +148,14 @@ describe("checkMutationGate", () => {
       expect(checkMutationGate("exec", "plan", "find . -exec rm {} ;").blocked).toBe(true);
     });
   });
+
+  describe("plan mode — dangerous flag substring false positives", () => {
+    it("allows find . -executable (not a match for -exec)", () => {
+      expect(checkMutationGate("exec", "plan", "find . -executable").blocked).toBe(false);
+    });
+
+    it("allows grep -rfl pattern (not a match for -rf)", () => {
+      expect(checkMutationGate("exec", "plan", "grep -rfl pattern").blocked).toBe(false);
+    });
+  });
 });
