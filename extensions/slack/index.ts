@@ -46,5 +46,4 @@ export default defineBundledChannelEntry({
     specifier: "./account-inspect-api.js",
     exportName: "inspectSlackReadOnlyAccount",
   },
-  registerFull: registerSlackPluginHttpRoutes,
 });

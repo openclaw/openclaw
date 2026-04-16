@@ -1,8 +1,8 @@
 import type {
   PluginHookSubagentDeliveryTargetEvent,
   PluginHookSubagentDeliveryTargetResult,
-} from "openclaw/plugins/hook-types.ts";
-import type { OpenClawPluginApi } from "openclaw/plugins/types.ts";
+  OpenClawPluginApi,
+} from "openclaw/plugin-sdk/plugin-runtime";
 
 /**
  * Route subagent completion messages back into the originating Slack thread.
@@ -14,7 +14,7 @@ import type { OpenClawPluginApi } from "openclaw/plugins/types.ts";
  */
 export function handleSlackSubagentDeliveryTarget(
   event: PluginHookSubagentDeliveryTargetEvent,
-): PluginHookSubagentDeliveryTargetResult {
+): PluginHookSubagentDeliveryTargetResult | void {
   if (!event.expectsCompletionMessage) {
     return undefined;
   }
@@ -43,7 +43,5 @@ export function handleSlackSubagentDeliveryTarget(
 }
 
 export function registerSlackSubagentHooks(api: OpenClawPluginApi): void {
-  api.on("subagent_delivery_target", (event) =>
-    handleSlackSubagentDeliveryTarget(event),
-  );
+  api.on("subagent_delivery_target", (event) => handleSlackSubagentDeliveryTarget(event));
 }
