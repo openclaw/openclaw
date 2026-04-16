@@ -35,6 +35,36 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
+    func updatedRemoteGatewayConfigPinsLoopbackUrlForSshTransport() {
+        let remote = AppState._testUpdatedRemoteGatewayConfig(
+            current: ["url": "ws://gateway.example:18789"],
+            transport: .ssh,
+            remoteUrl: "",
+            remoteHost: "gateway.example",
+            remoteTarget: "alice@gateway.example",
+            remoteIdentity: "",
+            remoteToken: "",
+            remoteTokenDirty: false)
+
+        #expect(remote["url"] as? String == "ws://127.0.0.1:18789")
+    }
+
+    @Test
+    func updatedRemoteGatewayConfigPreservesCustomLoopbackTunnelPort() {
+        let remote = AppState._testUpdatedRemoteGatewayConfig(
+            current: ["url": "ws://127.0.0.1:29876"],
+            transport: .ssh,
+            remoteUrl: "",
+            remoteHost: "gateway.example",
+            remoteTarget: "alice@gateway.example",
+            remoteIdentity: "",
+            remoteToken: "",
+            remoteTokenDirty: false)
+
+        #expect(remote["url"] as? String == "ws://127.0.0.1:29876")
+    }
+
+    @Test
     func syncedGatewayRootPreservesObjectTokenAcrossModeAndTransportChangesWhenUntouched() {
         let initialRoot: [String: Any] = [
             "gateway": [

@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import OpenClawKit
 import ServiceManagement
 import SwiftUI
 
@@ -386,6 +387,19 @@ final class AppState {
         return trimmed
     }
 
+    private static func sshTunnelGatewayUrl(existingUrl: String?) -> String {
+        let trimmed = existingUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty, let url = URL(string: trimmed), let host = url.host else {
+            return "ws://127.0.0.1:18789"
+        }
+        // Keep custom forwarded ports only when the current URL already points at loopback.
+        guard LoopbackHost.isLoopbackHost(host) else {
+            return "ws://127.0.0.1:18789"
+        }
+        let port = url.port ?? 18789
+        return "ws://127.0.0.1:\(port)"
+    }
+
     private static func updateGatewayString(
         _ dictionary: inout [String: Any],
         key: String,
@@ -422,7 +436,7 @@ final class AppState {
         current: [String: Any],
         transport: RemoteTransport,
         remoteUrl: String,
-        remoteHost: String?,
+        remoteHost _: String?,
         remoteTarget: String,
         remoteIdentity: String,
         remoteToken: String,
@@ -448,15 +462,10 @@ final class AppState {
         case .ssh:
             changed = Self.updateGatewayString(&remote, key: "transport", value: nil) || changed
 
-            if let host = remoteHost {
-                let existingUrl = (remote["url"] as? String)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let parsedExisting = existingUrl.isEmpty ? nil : URL(string: existingUrl)
-                let scheme = parsedExisting?.scheme?.isEmpty == false ? parsedExisting?.scheme : "ws"
-                let port = parsedExisting?.port ?? 18789
-                let desiredUrl = "\(scheme ?? "ws")://\(host):\(port)"
-                changed = Self.updateGatewayString(&remote, key: "url", value: desiredUrl) || changed
-            }
+            let existingUrl = (remote["url"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let desiredUrl = Self.sshTunnelGatewayUrl(existingUrl: existingUrl)
+            changed = Self.updateGatewayString(&remote, key: "url", value: desiredUrl) || changed
 
             let sanitizedTarget = Self.sanitizeSSHTarget(remoteTarget)
             changed = Self.updateGatewayString(&remote, key: "sshTarget", value: sanitizedTarget) || changed
