@@ -416,9 +416,9 @@ async function requestAnthropicVerification(params: {
   // Use a base URL with /v1 injected for this raw fetch only. The rest of the app uses the
   // Anthropic client, which appends /v1 itself; config should store the base URL
   // without /v1 to avoid /v1/v1/messages at runtime. See docs/gateway/configuration-reference.md.
-  const baseUrlForRequest = /\/v1\/?$/.test(params.baseUrl.trim())
-    ? params.baseUrl.trim()
-    : params.baseUrl.trim().replace(/\/?$/, "") + "/v1";
+  const baseUrlForRequest = /\/v1\/?$/.test((params.baseUrl ?? "").trim())
+    ? (params.baseUrl ?? "").trim()
+    : (params.baseUrl ?? "").trim().replace(/\/?$/, "") + "/v1";
   const endpoint = resolveVerificationEndpoint({
     baseUrl: baseUrlForRequest,
     modelId: params.modelId,
@@ -450,7 +450,7 @@ async function promptBaseUrlAndKey(params: {
       return URL.canParse(val) ? undefined : "Please enter a valid URL (e.g. http://...)";
     },
   });
-  const baseUrl = baseUrlInput.trim();
+  const baseUrl = (baseUrlInput ?? "").trim();
   const providerHint = buildEndpointIdFromUrl(baseUrl) || "custom";
   let apiKeyInput: SecretInput | undefined;
   const resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
@@ -545,7 +545,7 @@ export function resolveCustomProviderId(
   params: ResolveCustomProviderIdParams,
 ): ResolvedCustomProviderId {
   const providers = params.config.models?.providers ?? {};
-  const baseUrl = params.baseUrl.trim();
+  const baseUrl = (params.baseUrl ?? "").trim();
   const explicitProviderId = params.providerId?.trim();
   if (explicitProviderId && !normalizeEndpointId(explicitProviderId)) {
     throw new CustomApiError(

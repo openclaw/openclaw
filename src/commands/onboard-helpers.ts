@@ -222,7 +222,7 @@ export async function probeGatewayReachable(params: {
   password?: string;
   timeoutMs?: number;
 }): Promise<{ ok: boolean; detail?: string }> {
-  const url = params.url.trim();
+  const url = (params.url ?? "").trim();
   const timeoutMs = params.timeoutMs ?? 1500;
   try {
     const probe = await probeGateway({

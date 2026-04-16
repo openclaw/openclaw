@@ -221,8 +221,8 @@ function createInstallSuccess(result: CommandResult): SkillInstallResult {
   return {
     ok: true,
     message: "Installed",
-    stdout: result.stdout.trim(),
-    stderr: result.stderr.trim(),
+    stdout: (result.stdout ?? "").trim(),
+    stderr: (result.stderr ?? "").trim(),
     code: result.code,
   };
 }

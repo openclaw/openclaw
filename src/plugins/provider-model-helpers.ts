@@ -18,7 +18,7 @@ export function cloneFirstTemplateModel(params: {
   ctx: ProviderResolveDynamicModelContext;
   patch?: Partial<ProviderRuntimeModel>;
 }): ProviderRuntimeModel | undefined {
-  const trimmedModelId = params.modelId.trim();
+  const trimmedModelId = (params.modelId ?? "").trim();
   for (const templateId of [...new Set(params.templateIds)].filter(Boolean)) {
     const template = params.ctx.modelRegistry.find(
       params.providerId,
