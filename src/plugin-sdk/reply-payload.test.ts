@@ -86,6 +86,21 @@ describe("normalizeOutboundReplyPayload", () => {
       replyToId: undefined,
     });
   });
+
+  it("ignores blank media alias entries and preserves the legacy mediaUrl fallback", () => {
+    expect(
+      normalizeOutboundReplyPayload({
+        text: "done",
+        media: ["   "],
+        mediaUrl: "https://example.com/legacy.png",
+      }),
+    ).toEqual({
+      text: "done",
+      mediaUrls: undefined,
+      mediaUrl: "https://example.com/legacy.png",
+      replyToId: undefined,
+    });
+  });
 });
 
 describe("createNormalizedOutboundDeliverer", () => {

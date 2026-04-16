@@ -14,12 +14,12 @@ export type OutboundReplyPayload = {
 
 function normalizeLooseMediaAlias(value: unknown): string[] | undefined {
   if (Array.isArray(value)) {
-    const normalized = value.filter(
-      (entry): entry is string => typeof entry === "string" && entry.length > 0,
-    );
+    const normalized = value
+      .map((entry) => (typeof entry === "string" ? entry.trim() : undefined))
+      .filter((entry): entry is string => Boolean(entry));
     return normalized.length > 0 ? normalized : undefined;
   }
-  const single = readStringValue(value);
+  const single = readStringValue(value)?.trim();
   return single ? [single] : undefined;
 }
 
