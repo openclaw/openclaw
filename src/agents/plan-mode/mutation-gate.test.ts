@@ -94,5 +94,20 @@ describe("checkMutationGate", () => {
       expect(checkMutationGate("exec", "plan").blocked).toBe(true);
       expect(checkMutationGate("exec", "plan", "").blocked).toBe(true);
     });
+
+    it("blocks commands with newline separators", () => {
+      expect(checkMutationGate("exec", "plan", "ls\nrm -rf tmp").blocked).toBe(true);
+      expect(checkMutationGate("exec", "plan", "cat file\r\necho > pwned").blocked).toBe(true);
+    });
+
+    it("blocks dangerous flags on otherwise-allowed commands", () => {
+      expect(checkMutationGate("exec", "plan", "find . -delete").blocked).toBe(true);
+      expect(checkMutationGate("exec", "plan", "find . -exec rm {} ;").blocked).toBe(true);
+    });
+
+    it("blocks bash alias the same way as exec", () => {
+      expect(checkMutationGate("bash", "plan", "rm -rf /").blocked).toBe(true);
+      expect(checkMutationGate("bash", "plan", "ls -la").blocked).toBe(false);
+    });
   });
 });
