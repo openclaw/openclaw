@@ -148,7 +148,7 @@ export function encodeBizPB(key: string, value: Record<string, unknown>): Uint8A
  * @param data - 二进制数据
  * @returns 解码后的对象，失败返回 null
  */
-export function decodeBizPB<T = Record<string, unknown>>(key: string, data: Uint8Array | ArrayBuffer): T | null {
+export function decodeBizPB<T>(key: string, data: Uint8Array | ArrayBuffer): T | null {
   try {
     const buf = data instanceof Uint8Array ? data : new Uint8Array(data);
     const type = getRoot().lookupType(key);

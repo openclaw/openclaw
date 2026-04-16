@@ -1035,10 +1035,10 @@ export class YuanbaoWsClient {
         if (head.status && head.status !== 0) {
           rsp.code = head.status;
           if ("message" in rsp) {
-            (rsp as Record<string, unknown>).message = (rsp as Record<string, unknown>).message || "FAIL";
+            rsp.message = rsp.message || "FAIL";
           }
           if ("msg" in rsp) {
-            (rsp as Record<string, unknown>).msg = (rsp as Record<string, unknown>).msg || "FAIL";
+            rsp.msg = rsp.msg || "FAIL";
           }
         }
         pending.resolve(rsp);

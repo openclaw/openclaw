@@ -46,7 +46,7 @@ export function encodePB(key: string, value: Record<string, unknown>): Uint8Arra
  * @param data - 二进制数据
  * @returns 解码后的对象，失败返回 null
  */
-export function decodePB<T = Record<string, unknown>>(key: string, data: Uint8Array | ArrayBuffer): T | null {
+export function decodePB<T>(key: string, data: Uint8Array | ArrayBuffer): T | null {
   try {
     const type = getRoot().lookupType(key);
     return type.decode(data instanceof Uint8Array ? data : new Uint8Array(data)) as unknown as T;

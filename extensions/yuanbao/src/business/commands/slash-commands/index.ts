@@ -154,7 +154,7 @@ function toBotCommandItems(commands: ChatCommandDef[]): CommandItem[] {
 
   for (const cmd of commands) {
     // 优先取 textAliases 中的第一个（通常是主命令名，含 /）
-    const aliases = cmd.textAliases as string[] | undefined;
+    const aliases = cmd.textAliases;
     let name = "";
     if (aliases && aliases.length > 0) {
       [name] = aliases;
