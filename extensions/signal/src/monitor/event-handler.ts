@@ -26,6 +26,7 @@ import {
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { requestHeartbeatNow } from "openclaw/plugin-sdk/infra-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildPendingHistoryContextFromMap,
@@ -66,7 +67,6 @@ import type {
 } from "./event-handler.types.js";
 import { resolveSignalQuoteContext } from "./inbound-context.js";
 import { renderSignalMentions } from "./mentions.js";
-import { requestHeartbeatNow } from "openclaw/plugin-sdk/infra-runtime";
 
 function formatAttachmentKindCount(kind: string, count: number): string {
   if (kind === "attachment") {
@@ -884,11 +884,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const messageId =
       typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined;
     const quoteId = dataMessage.quote?.id;
-    const quoteAuthor =
-      dataMessage.quote?.author?.trim() ||
-      dataMessage.quote?.authorUuid?.trim() ||
-      dataMessage.quote?.authorNumber?.trim() ||
-      undefined;
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,

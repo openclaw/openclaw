@@ -27,6 +27,7 @@ import { signalMessageActions } from "./message-actions.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
+import { resolveSignalQuoteParams } from "./send.js";
 import { signalSetupAdapter } from "./setup-core.js";
 import {
   createSignalPluginBase,
@@ -34,7 +35,6 @@ import {
   signalSecurityAdapter,
   signalSetupWizard,
 } from "./shared.js";
-import { resolveSignalQuoteParams } from "./send.js";
 
 /** Default text chunk size for Signal outbound messages (chars). */
 const SIGNAL_TEXT_CHUNK_LIMIT = 4000;
@@ -236,7 +236,9 @@ async function sendFormattedSignalText(ctx: {
   const results = [];
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
-    if (!chunk) continue;
+    if (!chunk) {
+      continue;
+    }
     ctx.abortSignal?.throwIfAborted();
     const result = await send(ctx.to, chunk.text, {
       cfg: ctx.cfg,
@@ -295,7 +297,7 @@ async function sendFormattedSignalMedia(ctx: {
 }
 
 async function sendSignalOutboundChunked(params: {
-  cfg: Parameters<typeof resolveSignalAccount>[0][cfg];
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   to: string;
   text: string;
   accountId?: string | null;
@@ -323,7 +325,9 @@ async function sendSignalOutboundChunked(params: {
   let lastResult: { channel: string; messageId: string } | undefined;
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
-    if (!chunk) continue;
+    if (!chunk) {
+      continue;
+    }
     const result = await send(params.to, chunk.text, {
       cfg: params.cfg,
       maxBytes,
@@ -332,9 +336,9 @@ async function sendSignalOutboundChunked(params: {
       textStyles: chunk.styles,
       replyToId: i === 0 ? (params.replyToId ?? undefined) : undefined,
     });
-    lastResult = { channel: signal, ...result };
+    lastResult = { channel: "signal", ...result };
   }
-  return lastResult ?? { channel: signal, messageId:  };
+  return lastResult ?? { channel: "signal", messageId: "" };
 }
 
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
@@ -510,7 +514,9 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             let lastResult: { channel: string; messageId: string } | undefined;
             for (let i = 0; i < urls.length; i++) {
               const mediaUrl = urls[i];
-              if (!mediaUrl) continue;
+              if (!mediaUrl) {
+                continue;
+              }
               const result = await sendSignalOutbound({
                 cfg: ctx.cfg,
                 to: ctx.to,
