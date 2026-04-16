@@ -446,26 +446,58 @@ async function ensureFfmpeg(): Promise<void> {
 }
 
 async function findWorkspaceFolder(): Promise<string> {
+  // FIX: Use session workspace when saving downloaded videos
+  // First check if we're already in a workspace directory
   let currentPath = path.resolve(process.cwd());
   const root = path.parse(currentPath).root;
   
+  // Check for workspace marker files/directories that indicate an active session workspace
   while (currentPath !== root) {
     const parent = path.dirname(currentPath);
     
+    // Check for common workspace indicators
+    const workspaceIndicators = [
+      '.workspace',
+      'workspace.json',
+      '.agent-workspace',
+      'workspace',
+      '.openclaw-workspace'
+    ];
+    
+    for (const indicator of workspaceIndicators) {
+      const indicatorPath = path.join(currentPath, indicator);
+      try {
+        const stat = await fs.stat(indicatorPath);
+        if (indicator === 'workspace' && stat.isDirectory()) {
+          return indicatorPath;
+        } else if (stat.isFile()) {
+          return currentPath;
+        }
+      } catch {
+        // Indicator doesn't exist, continue checking
+      }
+    }
+    
+    // Check if parent directory is named 'workspace'
     if (path.basename(parent) === 'workspace') {
       return currentPath;
     }
     
-    const workspaceDir = path.join(currentPath, 'workspace');
-    try {
-      if ((await fs.stat(workspaceDir)).isDirectory()) {
-        return workspaceDir;
-      }
-    } catch {}
-    
     currentPath = parent;
   }
   
+  // Check for environment variable that might indicate workspace
+  const envWorkspace = process.env.OPENCLAW_WORKSPACE || process.env.AGENT_WORKSPACE;
+  if (envWorkspace) {
+    try {
+      await fs.mkdir(envWorkspace, { recursive: true });
+      return envWorkspace;
+    } catch {
+      // Fall through to fallback if env workspace is invalid
+    }
+  }
+  
+  // Fallback to home directory workspace
   const fallback = path.join(os.homedir(), '.openclaw', 'workspace');
   await fs.mkdir(fallback, { recursive: true });
   return fallback;
