@@ -10,6 +10,7 @@ WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
 ACP_AGENT_LIST_RAW="${OPENCLAW_LIVE_ACP_BIND_AGENTS:-${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude,codex,gemini}}"
 TEMP_DIRS=()
+DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
 
 openclaw_live_acp_bind_resolve_auth_provider() {
   case "${1:-}" in
@@ -49,16 +50,18 @@ else
 fi
 
 mkdir -p "$CLI_TOOLS_DIR"
-chmod 0777 "$CLI_TOOLS_DIR" || true
+if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  DOCKER_USER="$(id -u):$(id -g)"
+fi
 
 PROFILE_MOUNT=()
-if [[ -r "$PROFILE_FILE" ]]; then
+if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
 fi
 
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
-[ -r "$HOME/.profile" ] && source "$HOME/.profile" || true
+[ -f "$HOME/.profile" ] && [ -r "$HOME/.profile" ] && source "$HOME/.profile" || true
 export NPM_CONFIG_PREFIX="${NPM_CONFIG_PREFIX:-$HOME/.npm-global}"
 export npm_config_prefix="$NPM_CONFIG_PREFIX"
 export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$HOME/.npm-cache}"
@@ -226,7 +229,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
   echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
   echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
   docker run --rm -t \
-    -u node \
+    -u "$DOCKER_USER" \
     --entrypoint bash \
     -e ANTHROPIC_API_KEY \
     -e ANTHROPIC_API_KEY_OLD \

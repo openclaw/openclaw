@@ -5,7 +5,7 @@ profile_path="${1:-${RUNNER_TEMP:-/tmp}/openclaw-live.profile}"
 
 mkdir -p "$(dirname "$profile_path")"
 : >"$profile_path"
-chmod 644 "$profile_path"
+chmod 600 "$profile_path"
 
 append_profile_env() {
   local key="$1"
@@ -24,9 +24,8 @@ write_secret_file() {
     return
   fi
   mkdir -p "$(dirname "$destination")"
-  chmod 755 "$(dirname "$destination")"
   printf '%s' "$value" >"$destination"
-  chmod 644 "$destination"
+  chmod 600 "$destination"
 }
 
 for env_key in \

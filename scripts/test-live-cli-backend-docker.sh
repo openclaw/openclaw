@@ -14,6 +14,7 @@ CLI_PROVIDER="${CLI_MODEL%%/*}"
 CLI_DISABLE_MCP_CONFIG="${OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG:-}"
 CLI_AUTH_MODE="${OPENCLAW_LIVE_CLI_BACKEND_AUTH:-auto}"
 TEMP_DIRS=()
+DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
 
 if [[ -z "$CLI_PROVIDER" || "$CLI_PROVIDER" == "$CLI_MODEL" ]]; then
   CLI_PROVIDER="$DEFAULT_PROVIDER"
@@ -72,7 +73,9 @@ else
 fi
 
 mkdir -p "$CLI_TOOLS_DIR"
-chmod 0777 "$CLI_TOOLS_DIR" || true
+if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  DOCKER_USER="$(id -u):$(id -g)"
+fi
 
 if [[ "$CLI_PROVIDER" == "claude-cli" && "$CLI_AUTH_MODE" == "subscription" ]]; then
   CLAUDE_CREDS_FILE="$HOME/.claude/.credentials.json"
@@ -125,7 +128,7 @@ if [[ "$CLI_PROVIDER" == "claude-cli" && "$CLI_AUTH_MODE" == "subscription" ]]; 
 fi
 
 PROFILE_MOUNT=()
-if [[ -r "$PROFILE_FILE" ]]; then
+if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
 fi
 
@@ -179,7 +182,7 @@ fi
 
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
-[ -r "$HOME/.profile" ] && source "$HOME/.profile" || true
+[ -f "$HOME/.profile" ] && [ -r "$HOME/.profile" ] && source "$HOME/.profile" || true
 export NPM_CONFIG_PREFIX="${NPM_CONFIG_PREFIX:-$HOME/.npm-global}"
 export npm_config_prefix="$NPM_CONFIG_PREFIX"
 export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$HOME/.npm-cache}"
@@ -348,7 +351,7 @@ else
 fi
 
 docker run --rm -t \
-  -u node \
+  -u "$DOCKER_USER" \
   --entrypoint bash \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e HOME=/home/node \
