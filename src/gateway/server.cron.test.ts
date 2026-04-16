@@ -289,6 +289,12 @@ describe("gateway server cron", () => {
         ((jobs as Array<{ delivery?: { mode?: unknown } }>)[0]?.delivery?.mode as string) ?? "",
       ).toBe("webhook");
 
+      const firstJobId = ((jobs as Array<{ id?: unknown }>)[0]?.id as string) ?? "";
+      const getRes = await rpcReq(ws, "cron.get", { id: firstJobId });
+      expect(getRes.ok).toBe(true);
+      expect((getRes.payload as { id?: unknown; name?: unknown } | null)?.id).toBe(firstJobId);
+      expect((getRes.payload as { name?: unknown } | null)?.name).toBe("daily");
+
       const routeAtMs = Date.now() - 1;
       const routeRes = await rpcReq(ws, "cron.add", {
         name: "route test",
@@ -716,6 +722,25 @@ describe("gateway server cron", () => {
         status: "ok",
         summary: "background finished",
       });
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
+  test("returns an error for cron.get when the job is missing", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-get-missing-",
+      cronEnabled: true,
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const response = await rpcReq(ws, "cron.get", { id: "missing-job-id" });
+      expect(response.ok).toBe(false);
+      expect(response.error?.code).toBe("INVALID_REQUEST");
+      expect(response.error?.message).toContain("cron job not found");
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }

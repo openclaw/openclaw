@@ -42,6 +42,10 @@ export class CronService implements CronServiceContract {
     return await ops.listPage(this.state, opts);
   }
 
+  async get(id: string) {
+    return await ops.get(this.state, id);
+  }
+
   async add(input: CronJobCreate) {
     return await ops.add(this.state, input);
   }

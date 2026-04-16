@@ -79,6 +79,7 @@ import {
 } from "./config.js";
 import {
   CronAddParamsSchema,
+  CronGetParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
   CronRemoveParamsSchema,
@@ -328,6 +329,7 @@ export const ProtocolSchemas = {
   CronJob: CronJobSchema,
   CronListParams: CronListParamsSchema,
   CronStatusParams: CronStatusParamsSchema,
+  CronGetParams: CronGetParamsSchema,
   CronAddParams: CronAddParamsSchema,
   CronUpdateParams: CronUpdateParamsSchema,
   CronRemoveParams: CronRemoveParamsSchema,

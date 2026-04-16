@@ -129,6 +129,12 @@ async function runCronSimpleAndGetUpdatePatch(
   };
 }
 
+async function runCronGetAndCaptureParams(args: string[] = ["cron", "get", "job-1"]) {
+  await runCronCommand(args);
+  const getCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.get");
+  return (getCall?.[2] ?? {}) as { id?: string };
+}
+
 function mockCronEditJobLookup(schedule: unknown): void {
   callGatewayFromCli.mockImplementation(
     async (method: string, _opts: unknown, params?: unknown) => {
@@ -216,6 +222,10 @@ async function runCronRunAndCaptureExit(params: {
 }
 
 describe("cron cli", () => {
+  it("routes cron get to cron.get with the provided id", async () => {
+    await expect(runCronGetAndCaptureParams()).resolves.toEqual({ id: "job-1" });
+  });
+
   it.each([
     {
       name: "exits 0 for cron run when job executes successfully",

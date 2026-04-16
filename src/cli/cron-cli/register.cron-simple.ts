@@ -32,6 +32,22 @@ function registerCronToggleCommand(params: {
 export function registerCronSimpleCommands(cron: Command) {
   addGatewayClientOptions(
     cron
+      .command("get")
+      .description("Show a cron job by id")
+      .argument("<id>", "Job id")
+      .option("--json", "Output JSON", false)
+      .action(async (id, opts) => {
+        try {
+          const res = await callGatewayFromCli("cron.get", opts, { id });
+          printCronJson(res);
+        } catch (err) {
+          handleCronCliError(err);
+        }
+      }),
+  );
+
+  addGatewayClientOptions(
+    cron
       .command("rm")
       .alias("remove")
       .alias("delete")

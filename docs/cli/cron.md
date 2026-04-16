@@ -39,6 +39,8 @@ Note: `openclaw cron run` now returns as soon as the manual run is queued for ex
 Note: `openclaw cron run <job-id>` force-runs by default. Use `--due` to keep the
 older "only run if due" behavior.
 
+Note: `openclaw cron get <job-id>` returns the full stored job definition for one job, which is the right fit for scripting or inspection when you already know the id.
+
 Note: isolated cron turns suppress stale acknowledgement-only replies. If the
 first result is just an interim status update and no descendant subagent run is
 responsible for the eventual answer, cron re-prompts once for the real result
@@ -131,6 +133,12 @@ Delivery ownership note:
   directly.
 
 ## Common admin commands
+
+Inspect a single job:
+
+```bash
+openclaw cron get <job-id>
+```
 
 Manual run:
 

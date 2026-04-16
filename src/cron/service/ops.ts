@@ -260,6 +260,13 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
   });
 }
 
+export async function get(state: CronServiceState, id: string) {
+  return await locked(state, async () => {
+    await ensureLoadedForRead(state);
+    return state.store?.jobs.find((job) => job.id === id);
+  });
+}
+
 export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");

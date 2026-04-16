@@ -25,6 +25,7 @@ openclaw cron add \
 
 # Check your jobs
 openclaw cron list
+openclaw cron get <job-id>
 
 # See run history
 openclaw cron runs --id <job-id>

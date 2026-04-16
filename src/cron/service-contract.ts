@@ -45,6 +45,7 @@ export interface CronServiceContract {
   status(): Promise<CronStatusSummary>;
   list(opts?: { includeDisabled?: boolean }): Promise<CronListResult>;
   listPage(opts?: CronListPageOptions): Promise<CronListPageResult>;
+  get(id: string): Promise<CronJob | undefined>;
   add(input: CronAddInput): Promise<CronAddResult>;
   update(id: string, patch: CronUpdateInput): Promise<CronUpdateResult>;
   remove(id: string): Promise<CronRemoveResult>;

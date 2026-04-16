@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   validateCronAddParams,
+  validateCronGetParams,
   validateCronListParams,
   validateCronRemoveParams,
   validateCronRunParams,
@@ -57,6 +58,11 @@ describe("cron protocol validators", () => {
   it("accepts remove params for id and jobId selectors", () => {
     expect(validateCronRemoveParams({ id: "job-1" })).toBe(true);
     expect(validateCronRemoveParams({ jobId: "job-2" })).toBe(true);
+  });
+
+  it("accepts get params for id and jobId selectors", () => {
+    expect(validateCronGetParams({ id: "job-1" })).toBe(true);
+    expect(validateCronGetParams({ jobId: "job-2" })).toBe(true);
   });
 
   it("accepts run params mode for id and jobId selectors", () => {
