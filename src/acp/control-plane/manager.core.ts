@@ -766,13 +766,13 @@ export class AcpSessionManager {
             internalAbortController = new AbortController();
             onCallerAbort = () => {
               try {
-                internalAbortController?.abort();
+                internalAbortController?.abort(input.signal?.reason);
               } catch (err) {
                 logVerbose(`acp-manager: onCallerAbort threw for ${sessionKey}: ${String(err)}`);
               }
             };
             if (input.signal?.aborted) {
-              internalAbortController.abort();
+              internalAbortController.abort(input.signal.reason);
             } else if (input.signal) {
               input.signal.addEventListener("abort", onCallerAbort, { once: true });
             }

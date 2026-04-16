@@ -430,7 +430,9 @@ export async function tryDispatchAcpReply(params: {
     // runTurn acquires the session actor). If the session was updated in that window,
     // this ensures dispatch and AcpSessionManager.runTurn share the same budget.
     const { readAcpSessionEntry: readLiveAcpSessionEntry } = await loadDispatchAcpSessionRuntime();
-    const liveAcpMeta = readLiveAcpSessionEntry({ cfg: params.cfg, sessionKey })?.acp ?? undefined;
+    const liveAcpMeta =
+      readLiveAcpSessionEntry({ cfg: params.cfg, sessionKey: canonicalSessionKey })?.acp ??
+      undefined;
     const liveTimeoutSeconds = liveAcpMeta
       ? resolveRuntimeOptionsFromMeta(liveAcpMeta).timeoutSeconds
       : undefined;
@@ -453,10 +455,26 @@ export async function tryDispatchAcpReply(params: {
         // so that either cancellation path (caller abort OR dispatch timeout)
         // reaches runTurn. Previously only the timeout signal was forwarded,
         // dropping params.abortSignal entirely.
-        const signal =
-          params.abortSignal != null && typeof AbortSignal.any === "function"
-            ? AbortSignal.any([timeoutSignal!, params.abortSignal])
-            : timeoutSignal;
+        let signal: AbortSignal | undefined;
+        if (params.abortSignal != null && typeof AbortSignal.any === "function") {
+          signal = AbortSignal.any([timeoutSignal!, params.abortSignal]);
+        } else if (params.abortSignal != null && timeoutSignal != null) {
+          // Fallback for runtimes without AbortSignal.any: relay params.abortSignal
+          // into a local controller that also listens to the timeout signal.
+          const controller = new AbortController();
+          const relayAbort = (source: AbortSignal) => () => {
+            if (!controller.signal.aborted) {
+              controller.abort(source.reason);
+            }
+          };
+          timeoutSignal.addEventListener("abort", relayAbort(timeoutSignal), { once: true });
+          params.abortSignal.addEventListener("abort", relayAbort(params.abortSignal), {
+            once: true,
+          });
+          signal = controller.signal;
+        } else {
+          signal = timeoutSignal;
+        }
         runTurnSettlePromise = acpManager.runTurn({
           cfg: params.cfg,
           sessionKey: canonicalSessionKey,
