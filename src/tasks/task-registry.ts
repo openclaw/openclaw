@@ -1016,7 +1016,11 @@ function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus
   return task.scopeKind === "system" ? "not_applicable" : "parent_missing";
 }
 
-function queueTaskSystemEvent(task: TaskRecord, text: string) {
+function queueTaskSystemEvent(
+  task: TaskRecord,
+  text: string,
+  messageClass: "completion" | "progress" = "completion",
+) {
   const owner = resolveTaskDeliveryOwner(task);
   const ownerKey = owner.sessionKey?.trim();
   if (!ownerKey) {
@@ -1026,6 +1030,12 @@ function queueTaskSystemEvent(task: TaskRecord, text: string) {
     sessionKey: ownerKey,
     contextKey: `task:${task.taskId}`,
     deliveryContext: owner.requesterOrigin,
+    // Phase 1 Discord Surface Overhaul: terminal task deliveries are
+    // "completion" (status transitions, etc.); state-change deliveries are
+    // "progress". Callers pass the explicit class so the classifier does not
+    // need to parse the text.
+    messageClass,
+    trusted: true,
   });
   requestHeartbeatNow({
     reason: "background-task",
@@ -1048,6 +1058,10 @@ function queueBlockedTaskFollowup(task: TaskRecord) {
     sessionKey: ownerKey,
     contextKey: `task:${task.taskId}:blocked-followup`,
     deliveryContext: owner.requesterOrigin,
+    // Phase 1 Discord Surface Overhaul: blocked follow-ups carry the
+    // Blocked-Child Protocol invariant — always deliver to the user.
+    messageClass: "blocked",
+    trusted: true,
   });
   requestHeartbeatNow({
     reason: "background-task-blocked",
@@ -1266,7 +1280,7 @@ export async function maybeDeliverTaskStateChangeUpdate(
       });
     }
     if (!canDeliverTaskToRequesterOrigin(current)) {
-      queueTaskSystemEvent(current, eventText);
+      queueTaskSystemEvent(current, eventText, "progress");
       upsertTaskDeliveryState({
         taskId,
         requesterOrigin: deliveryState?.requesterOrigin,

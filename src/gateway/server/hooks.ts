@@ -34,7 +34,13 @@ export function createGatewayHooksRequestHandler(params: {
 
   const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
     const sessionKey = resolveMainSessionKeyFromConfig();
-    enqueueSystemEvent(value.text, { sessionKey, trusted: false });
+    // Hooks emit untrusted inbound content; classify as internal narration
+    // so the Phase 1 policy doesn't treat hook payloads as user messages.
+    enqueueSystemEvent(value.text, {
+      sessionKey,
+      trusted: false,
+      messageClass: "internal_narration",
+    });
     if (value.mode === "now") {
       requestHeartbeatNow({ reason: "hook:wake" });
     }
@@ -99,6 +105,7 @@ export function createGatewayHooksRequestHandler(params: {
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
             sessionKey: mainSessionKey,
             trusted: false,
+            messageClass: "internal_narration",
           });
           if (value.wakeMode === "now") {
             requestHeartbeatNow({ reason: `hook:${jobId}` });
@@ -109,6 +116,7 @@ export function createGatewayHooksRequestHandler(params: {
         enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
           sessionKey: mainSessionKey,
           trusted: false,
+          messageClass: "internal_narration",
         });
         if (value.wakeMode === "now") {
           requestHeartbeatNow({ reason: `hook:${jobId}:error` });

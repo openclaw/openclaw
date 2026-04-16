@@ -439,6 +439,7 @@ export async function handleDirectiveOnly(
       enqueueSystemEvent(formatModelSwitchEvent(nextLabel, modelSelection.alias), {
         sessionKey,
         contextKey: `model:${nextLabel}`,
+        messageClass: "internal_narration",
       });
     }
   }
@@ -573,6 +574,7 @@ export async function handleDirectiveOnly(
     enqueueSystemEvent(`Fast mode ${sessionEntry.fastMode ? "enabled" : "disabled"}.`, {
       sessionKey,
       contextKey: `fast:${sessionEntry.fastMode ? "on" : "off"}`,
+      messageClass: "internal_narration",
     });
   }
   const ack = parts.join(" ").trim();

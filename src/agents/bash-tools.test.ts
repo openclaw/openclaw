@@ -620,8 +620,11 @@ describe("exec notifyOnExit", () => {
 
     expect(finished).toBeTruthy();
     expect(hasEvent).toBe(true);
-    expect(queuedEvent).toMatchObject({ trusted: false });
-    expect(formatted).toContain("System (untrusted):");
+    // Phase 1 Discord Surface Overhaul: exec completion is now classified as
+    // user-facing "completion" output (the legacy `trusted: false` flag is
+    // preserved for compatibility, but the renderer prefers messageClass).
+    expect(queuedEvent).toMatchObject({ trusted: false, messageClass: "completion" });
+    expect(formatted).toContain("System:");
   });
 
   it("preserves the origin delivery context on background exec completion events", async () => {

@@ -303,6 +303,10 @@ describe("scheduleRestartSentinelWake", () => {
 
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
       sessionKey: "agent:main:main",
+      // Phase 1 Discord Surface Overhaul: restart sentinel events are
+      // boot-class operator signals.
+      messageClass: "boot",
+      trusted: true,
     });
     expect(mocks.requestHeartbeatNow).not.toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();

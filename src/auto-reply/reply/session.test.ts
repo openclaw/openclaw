@@ -2047,7 +2047,14 @@ describe("drainFormattedSystemEvents", () => {
       const expectedTimestamp = formatZonedTimestamp(timestamp, { displaySeconds: true });
       vi.setSystemTime(timestamp);
 
-      enqueueSystemEvent("Model switched.", { sessionKey: "agent:main:main" });
+      // Phase 1 Discord Surface Overhaul: unclassified events now default to
+      // untrusted. Keep the legacy "System:" prefix by explicitly tagging
+      // this event as a user-facing informational message.
+      enqueueSystemEvent("Model switched.", {
+        sessionKey: "agent:main:main",
+        messageClass: "progress",
+        trusted: true,
+      });
 
       const result = await drainFormattedSystemEvents({
         cfg: {} as OpenClawConfig,

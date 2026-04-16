@@ -12,13 +12,18 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { MessageClass } from "./outbound/message-class.js";
 
 export type SystemEvent = {
   text: string;
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  // legacy: derive-on-read when messageClass is the authoritative field
   trusted?: boolean;
+  // Phase 1 of the Discord Surface Overhaul: classification is the
+  // authoritative signal. `trusted` remains for backwards compatibility.
+  messageClass?: MessageClass;
 };
 
 const MAX_EVENTS = 20;
@@ -27,6 +32,7 @@ type SessionQueue = {
   queue: SystemEvent[];
   lastText: string | null;
   lastContextKey: string | null;
+  lastMessageClass: MessageClass | null;
 };
 
 const SYSTEM_EVENT_QUEUES_KEY = Symbol.for("openclaw.systemEvents.queues");
@@ -38,7 +44,22 @@ type SystemEventOptions = {
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
   trusted?: boolean;
+  messageClass?: MessageClass;
 };
+
+// Resolve the effective message class given an explicit value (preferred) and
+// the legacy `trusted` boolean. When both are absent, default to
+// "internal_narration" so new callers cannot accidentally surface progress as
+// user-facing final replies.
+function resolveMessageClass(
+  messageClass: MessageClass | undefined,
+  trusted: boolean,
+): MessageClass {
+  if (messageClass) {
+    return messageClass;
+  }
+  return trusted ? "final_reply" : "internal_narration";
+}
 
 function requireSessionKey(key?: string | null): string {
   const trimmed = normalizeOptionalString(key) ?? "";
@@ -66,6 +87,7 @@ function getOrCreateSessionQueue(sessionKey: string): SessionQueue {
     queue: [],
     lastText: null,
     lastContextKey: null,
+    lastMessageClass: null,
   };
   queues.set(key, created);
   return created;
@@ -96,17 +118,28 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   }
   const normalizedContextKey = normalizeContextKey(options?.contextKey);
   const normalizedDeliveryContext = normalizeDeliveryContext(options?.deliveryContext);
+  // Phase 1 fix: default `trusted` to false, not true. Legacy callers that
+  // omitted the flag previously defaulted to trusted=true, which the new
+  // classification layer would treat as final_reply — silently promoting
+  // arbitrary events onto user-facing surfaces. The explicit comparison
+  // `=== true` keeps only callers who opt in explicitly.
+  const trusted = options.trusted === true;
+  const normalizedMessageClass = resolveMessageClass(options.messageClass, trusted);
   entry.lastContextKey = normalizedContextKey;
-  if (entry.lastText === cleaned) {
+  // Dedup is now keyed by (text, messageClass) so a re-classification of an
+  // identical message still delivers a distinct queue entry.
+  if (entry.lastText === cleaned && entry.lastMessageClass === normalizedMessageClass) {
     return false;
-  } // skip consecutive duplicates
+  } // skip consecutive duplicates with the same classification
   entry.lastText = cleaned;
+  entry.lastMessageClass = normalizedMessageClass;
   entry.queue.push({
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
-    trusted: options.trusted !== false,
+    trusted,
+    messageClass: normalizedMessageClass,
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -124,6 +157,7 @@ export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   entry.queue.length = 0;
   entry.lastText = null;
   entry.lastContextKey = null;
+  entry.lastMessageClass = null;
   queues.delete(key);
   return out;
 }
@@ -147,7 +181,11 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     left.text === right.text &&
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
-    (left.trusted ?? true) === (right.trusted ?? true) &&
+    // Phase 1 Discord Surface Overhaul: legacy `trusted` now defaults to
+    // false, matching the new enqueue-time default. Events that predate this
+    // change may lack the property; treat missing as false.
+    (left.trusted ?? false) === (right.trusted ?? false) &&
+    (left.messageClass ?? null) === (right.messageClass ?? null) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
 }
@@ -171,11 +209,13 @@ export function consumeSystemEventEntries(
   if (entry.queue.length === 0) {
     entry.lastText = null;
     entry.lastContextKey = null;
+    entry.lastMessageClass = null;
     queues.delete(key);
   } else {
     const newest = entry.queue[entry.queue.length - 1];
     entry.lastText = newest.text;
     entry.lastContextKey = newest.contextKey ?? null;
+    entry.lastMessageClass = newest.messageClass ?? null;
   }
   return removed;
 }

@@ -588,6 +588,9 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         sessionKey,
         contextKey: `notification:${keyRaw}`,
         trusted: false,
+        // Remote notifications arrive from nodes; route as internal narration
+        // until Phase 2 teaches the classifier about notification payloads.
+        messageClass: "internal_narration",
       });
       if (queued) {
         requestHeartbeatNow({ reason: "notifications-event", sessionKey });
@@ -688,6 +691,8 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         sessionKey,
         contextKey: runId ? `exec:${runId}` : "exec",
         trusted: false,
+        // Remote node exec events are treated as completion-class task output.
+        messageClass: "completion",
       });
       if (queued) {
         // Scope wakes only for canonical agent sessions. Synthetic node-* fallback

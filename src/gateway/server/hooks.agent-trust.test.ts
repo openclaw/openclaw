@@ -100,6 +100,9 @@ describe("dispatchAgentHook trust handling", () => {
       {
         sessionKey: "main-session",
         trusted: false,
+        // Phase 1 Discord Surface Overhaul: hook events are operator-plane
+        // narration (routed through the new messageClass field).
+        messageClass: "internal_narration",
       },
     );
   });
@@ -116,6 +119,7 @@ describe("dispatchAgentHook trust handling", () => {
       {
         sessionKey: "main-session",
         trusted: false,
+        messageClass: "internal_narration",
       },
     );
   });

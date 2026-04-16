@@ -90,7 +90,15 @@ export async function drainFormattedSystemEvents(params: {
       if (!compacted) {
         return [];
       }
-      const prefix = event.trusted === false ? "System (untrusted)" : "System";
+      // Prefer the explicit messageClass when present (Phase 1 Discord Surface
+      // Overhaul). User-facing classes render as trusted; internal_narration
+      // renders as untrusted. Fall back to the legacy `trusted` boolean for
+      // older writers (now defaults to false at enqueue time).
+      const classifiedTrusted =
+        event.messageClass !== undefined
+          ? event.messageClass !== "internal_narration"
+          : event.trusted === true;
+      const prefix = classifiedTrusted ? "System" : "System (untrusted)";
       const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
       return compacted
         .split("\n")

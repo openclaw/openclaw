@@ -301,6 +301,8 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     sessionKey,
     deliveryContext: session.notifyDeliveryContext,
     trusted: false,
+    // Phase 1 Discord Surface Overhaul: exec completion is a terminal task event.
+    messageClass: "completion",
   });
   requestHeartbeatNow(
     scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
@@ -379,6 +381,10 @@ export function emitExecSystemEvent(
     sessionKey,
     contextKey: opts.contextKey,
     deliveryContext: opts.deliveryContext,
+    // Phase 1 Discord Surface Overhaul: generic exec events are internal
+    // narration by default; specific callers (approval flows, completion
+    // notices) should promote via explicit messageClass upstream.
+    messageClass: "internal_narration",
   });
   requestHeartbeatNow(
     scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),

@@ -1568,7 +1568,12 @@ export async function runReplyAgent(params: {
         })
           .then((contextContent) => {
             if (contextContent) {
-              enqueueSystemEvent(contextContent, { sessionKey });
+              enqueueSystemEvent(contextContent, {
+                sessionKey,
+                // Post-compaction context reminders are operator-plane and
+                // should not surface to user channels.
+                messageClass: "internal_narration",
+              });
             }
           })
           .catch(() => {

@@ -45,6 +45,9 @@ function enqueueRestartSentinelWake(
   enqueueSystemEvent(message, {
     sessionKey,
     ...(deliveryContext ? { deliveryContext } : {}),
+    // Restart sentinel messages are boot-class: they signal a gateway restart.
+    messageClass: "boot",
+    trusted: true,
   });
   requestHeartbeatNow({ reason: "wake", sessionKey });
 }
@@ -144,7 +147,12 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
 
   if (!sessionKey) {
     const mainSessionKey = resolveMainSessionKeyFromConfig();
-    enqueueSystemEvent(message, { sessionKey: mainSessionKey });
+    enqueueSystemEvent(message, {
+      sessionKey: mainSessionKey,
+      // Restart sentinel messages are boot-class signals.
+      messageClass: "boot",
+      trusted: true,
+    });
     return;
   }
 

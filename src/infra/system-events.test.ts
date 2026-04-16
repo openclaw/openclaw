@@ -48,6 +48,11 @@ describe("system events (session routing)", () => {
     enqueueSystemEvent("Discord reaction added: ✅", {
       sessionKey: "discord:group:123",
       contextKey: "discord:reaction:added:msg:user:✅",
+      // Phase 1 Discord Surface Overhaul: default for unclassified events is
+      // now internal_narration; explicit messageClass keeps the legacy
+      // "System:" prefix and user-facing semantics for this assertion.
+      messageClass: "progress",
+      trusted: true,
     });
 
     expect(peekSystemEvents(mainKey)).toEqual([]);
@@ -196,7 +201,14 @@ describe("system events (session routing)", () => {
 
   it("prefixes every line of a multi-line event", async () => {
     const key = "agent:main:test-multiline";
-    enqueueSystemEvent("Post-compaction context:\nline one\nline two", { sessionKey: key });
+    enqueueSystemEvent("Post-compaction context:\nline one\nline two", {
+      sessionKey: key,
+      // Phase 1 Discord Surface Overhaul: this test asserts the "System:"
+      // trusted prefix; classify explicitly so the default-false `trusted`
+      // path does not prepend "(untrusted)".
+      messageClass: "progress",
+      trusted: true,
+    });
 
     const result = await drainFormattedEvents(key);
     expect(result).toBeDefined();
@@ -216,6 +228,49 @@ describe("system events (session routing)", () => {
 
     const result = await drainFormattedEvents(key);
     expect(result).toMatch(/^System \(untrusted\): \[[^\]]+\] Notification posted:/);
+  });
+
+  it("defaults unclassified events to untrusted when trusted flag is omitted", async () => {
+    // Phase 1 Discord Surface Overhaul: legacy callers that omitted `trusted`
+    // previously defaulted to true (a critical bug that silently promoted
+    // arbitrary events to user surfaces). Default is now false; callers must
+    // opt in by passing `trusted: true` or an explicit user-facing
+    // messageClass.
+    const key = "agent:main:test-default-untrusted";
+    enqueueSystemEvent("Legacy omitted trusted flag", { sessionKey: key });
+    const result = await drainFormattedEvents(key);
+    expect(result).toMatch(/^System \(untrusted\):/);
+  });
+
+  it("persists an explicit messageClass on queued entries", () => {
+    const key = "agent:main:test-message-class";
+    enqueueSystemEvent("Final reply", {
+      sessionKey: key,
+      messageClass: "final_reply",
+    });
+    const entries = peekSystemEventEntries(key);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].messageClass).toBe("final_reply");
+  });
+
+  it("treats (text, messageClass) combinations as distinct for dedup", () => {
+    const key = "agent:main:test-dedup-class";
+    const first = enqueueSystemEvent("same text", {
+      sessionKey: key,
+      messageClass: "internal_narration",
+    });
+    const secondSameClass = enqueueSystemEvent("same text", {
+      sessionKey: key,
+      messageClass: "internal_narration",
+    });
+    const thirdDifferentClass = enqueueSystemEvent("same text", {
+      sessionKey: key,
+      messageClass: "progress",
+    });
+
+    expect(first).toBe(true);
+    expect(secondSameClass).toBe(false); // exact dedup by text + class
+    expect(thirdDifferentClass).toBe(true); // same text, different class
   });
 
   it("scrubs node last-input suffix", async () => {

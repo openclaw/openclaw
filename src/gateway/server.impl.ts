@@ -234,6 +234,8 @@ export async function startGatewayServer(
     enqueueSystemEvent(`[${code}] ${message}`, {
       sessionKey: resolveMainSessionKey(cfg),
       contextKey: code,
+      // Secrets reloader state transitions are operator-plane signals.
+      messageClass: "internal_narration",
     });
   };
   const activateRuntimeSecrets = createRuntimeSecretsActivator({

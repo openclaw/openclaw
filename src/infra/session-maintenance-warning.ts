@@ -115,13 +115,23 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   const target = resolveWarningDeliveryTarget(params.entry);
 
   if (!target.channel || !target.to) {
-    enqueueSystemEvent(text, { sessionKey: params.sessionKey });
+    enqueueSystemEvent(text, {
+      sessionKey: params.sessionKey,
+      // Session maintenance warnings are user-facing informational messages.
+      messageClass: "progress",
+      trusted: true,
+    });
     return;
   }
 
   const channel = normalizeMessageChannel(target.channel) ?? target.channel;
   if (!isDeliverableMessageChannel(channel)) {
-    enqueueSystemEvent(text, { sessionKey: params.sessionKey });
+    enqueueSystemEvent(text, {
+      sessionKey: params.sessionKey,
+      // Session maintenance warnings are user-facing informational messages.
+      messageClass: "progress",
+      trusted: true,
+    });
     return;
   }
 
@@ -142,6 +152,11 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
     });
   } catch (err) {
     log.warn(`Failed to deliver session maintenance warning: ${String(err)}`);
-    enqueueSystemEvent(text, { sessionKey: params.sessionKey });
+    enqueueSystemEvent(text, {
+      sessionKey: params.sessionKey,
+      // Session maintenance warnings are user-facing informational messages.
+      messageClass: "progress",
+      trusted: true,
+    });
   }
 }

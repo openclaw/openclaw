@@ -19,7 +19,7 @@ export type TaskDeliveryStatus =
   | "parent_missing"
   | "not_applicable";
 
-export type TaskNotifyPolicy = "done_only" | "state_changes" | "silent";
+export type TaskNotifyPolicy = "done_only" | "state_changes" | "silent" | "operator_only";
 
 export type TaskTerminalOutcome = "succeeded" | "blocked";
 export type TaskScopeKind = "session" | "system";

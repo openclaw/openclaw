@@ -288,7 +288,12 @@ export function buildGatewayCronService(params: {
       enqueueSystemEvent(text, {
         sessionKey,
         contextKey: opts?.contextKey,
-        trusted: opts?.trusted,
+        // Phase 1 Discord Surface Overhaul: cron-originated events are
+        // user-facing job output; classify as progress so they route as
+        // trusted informational updates. Honor explicit opts.trusted if
+        // caller passes one (upstream-compatible).
+        messageClass: "progress",
+        trusted: opts?.trusted ?? true,
       });
     },
     requestHeartbeatNow: (opts) => {

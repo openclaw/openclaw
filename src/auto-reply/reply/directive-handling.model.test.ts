@@ -729,6 +729,8 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       {
         sessionKey,
         contextKey: "model:anthropic/claude-opus-4-6",
+        // Phase 1 Discord Surface Overhaul: model switches are operator-plane.
+        messageClass: "internal_narration",
       },
     );
   });

@@ -195,6 +195,8 @@ export async function persistInlineDirectives(params: {
             {
               sessionKey,
               contextKey: `model:${nextLabel}`,
+              // Model switches are operator-plane signals; narration class.
+              messageClass: "internal_narration",
             },
           );
         }

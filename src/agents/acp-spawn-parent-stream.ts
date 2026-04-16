@@ -201,6 +201,11 @@ export function startAcpSpawnParentStreamRelay(params: {
       contextKey,
       deliveryContext: params.deliveryContext,
       trusted: false,
+      // Phase 1 Discord Surface Overhaul: until Phase 2 wires actual per-stream
+      // classification, every stream emission defaults to internal_narration
+      // (the safe default). The classifier will promote user-visible streams
+      // to progress/final_reply in a subsequent phase.
+      messageClass: "internal_narration",
     });
     wake();
   };

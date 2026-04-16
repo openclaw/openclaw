@@ -167,6 +167,7 @@ export async function applyInlineDirectiveOverrides(params: {
       {
         sessionKey,
         contextKey: `model:reset:${initialModelLabel}`,
+        messageClass: "internal_narration",
       },
     );
   }

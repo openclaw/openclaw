@@ -324,7 +324,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Morning briefing complete.", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:run-123:telegram::123456:",
-      trusted: false,
+      // Phase 1 Discord Surface Overhaul: cron awareness events are
+      // user-facing progress updates from scheduled jobs.
+      messageClass: "progress",
+      trusted: true,
     });
   });
 

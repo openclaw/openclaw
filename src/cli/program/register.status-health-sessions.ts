@@ -353,13 +353,13 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .command("notify")
     .description("Set task notify policy")
     .argument("<lookup>", "Task id, run id, or session key")
-    .argument("<notify>", "Notify policy (done_only, state_changes, silent)")
+    .argument("<notify>", "Notify policy (done_only, state_changes, silent, operator_only)")
     .action(async (lookup, notify) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await tasksNotifyCommand(
           {
             lookup,
-            notify: notify as "done_only" | "state_changes" | "silent",
+            notify: notify as "done_only" | "state_changes" | "silent" | "operator_only",
           },
           defaultRuntime,
         );

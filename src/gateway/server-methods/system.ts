@@ -137,11 +137,17 @@ export const systemHandlers: GatewayRequestHandlers = {
           enqueueSystemEvent(deltaText, {
             sessionKey,
             contextKey: presenceUpdate.key,
+            // Presence deltas are operator/narration-class; keep untrusted.
+            messageClass: "internal_narration",
           });
         }
       }
     } else {
-      enqueueSystemEvent(text, { sessionKey });
+      enqueueSystemEvent(text, {
+        sessionKey,
+        // Presence snapshot text is operator-class; narration default.
+        messageClass: "internal_narration",
+      });
     }
     broadcastPresenceSnapshot({
       broadcast: context.broadcast,

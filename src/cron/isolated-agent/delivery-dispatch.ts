@@ -351,7 +351,10 @@ async function queueCronAwarenessSystemEvent(params: {
         agentId: params.agentId,
       }),
       contextKey: params.deliveryIdempotencyKey,
-      trusted: false,
+      // Isolated cron awareness surfaces job output to the main session;
+      // treat as progress (user-facing informational).
+      messageClass: "progress",
+      trusted: true,
     });
   } catch (err) {
     await logCronDeliveryWarn(
