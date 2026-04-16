@@ -488,6 +488,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       } catch {}
     }
     this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(pathname, source);
+    this.hasIndexedContentCached = null;
   }
 
   private upsertFileRecord(entry: MemoryFileEntry | SessionFileEntry, source: MemorySource): void {
@@ -567,6 +568,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           )
           .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
       }
+    }
+    if (chunks.length > 0) {
+      this.hasIndexedContentCached = true;
     }
     if (this.vector.enabled && !vectorReady && chunks.length > 0) {
       const errDetail = this.vector.loadError ? `: ${this.vector.loadError}` : "";
