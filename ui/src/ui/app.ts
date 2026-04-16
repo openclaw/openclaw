@@ -41,6 +41,7 @@ import {
   applySettings as applySettingsInternal,
   loadCron as loadCronInternal,
   loadOverview as loadOverviewInternal,
+  promoteStagedAutostartPrompt,
   setTab as setTabInternal,
   setTheme as setThemeInternal,
   setThemeMode as setThemeModeInternal,
@@ -54,6 +55,7 @@ import {
 } from "./app-tool-stream.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
+import type { ChatAutostartRequest } from "./chat-autostart.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import {
@@ -189,6 +191,7 @@ export class OpenClawApp extends LitElement {
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;
   @state() navDrawerOpen = false;
+  chatAutostart: ChatAutostartRequest | null = null;
 
   onSlashAction?: (action: string) => void;
 
@@ -216,6 +219,7 @@ export class OpenClawApp extends LitElement {
   @state() execApprovalError: string | null = null;
   @state() pendingGatewayUrl: string | null = null;
   pendingGatewayToken: string | null = null;
+  pendingChatAutostart: ChatAutostartRequest | null = null;
 
   @state() configLoading = false;
   @state() configRaw = "{\n}\n";
@@ -765,6 +769,7 @@ export class OpenClawApp extends LitElement {
     const nextToken = this.pendingGatewayToken?.trim() || "";
     this.pendingGatewayUrl = null;
     this.pendingGatewayToken = null;
+    promoteStagedAutostartPrompt(this);
     applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
       ...this.settings,
       gatewayUrl: nextGatewayUrl,
@@ -776,6 +781,7 @@ export class OpenClawApp extends LitElement {
   handleGatewayUrlCancel() {
     this.pendingGatewayUrl = null;
     this.pendingGatewayToken = null;
+    this.pendingChatAutostart = null;
   }
 
   // Sidebar handlers for tool output viewing

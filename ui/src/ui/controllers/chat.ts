@@ -124,6 +124,13 @@ export type ChatEventPayload = {
   errorMessage?: string;
 };
 
+type SendChatMessageOptions = {
+  attachments?: ChatAttachment[];
+  hideUserMessage?: boolean;
+  idempotencyKey?: string;
+  localEcho?: boolean;
+};
+
 function maybeResetToolStream(state: ChatState) {
   const toolHost = state as ChatState & Partial<Parameters<typeof resetToolStream>[0]>;
   if (
@@ -136,9 +143,9 @@ function maybeResetToolStream(state: ChatState) {
   }
 }
 
-export async function loadChatHistory(state: ChatState) {
+export async function loadChatHistory(state: ChatState): Promise<boolean> {
   if (!state.client || !state.connected) {
-    return;
+    return false;
   }
   const sessionKey = state.sessionKey;
   const requestVersion = beginChatHistoryRequest(state);
@@ -159,14 +166,14 @@ export async function loadChatHistory(state: ChatState) {
         break;
       } catch (err) {
         if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
-          return;
+          return false;
         }
         const withinStartupRetryWindow =
           Date.now() - startedAt < STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
         if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, "chat.history")) {
           await sleep(resolveStartupRetryDelayMs(err));
           if (!state.client || !state.connected) {
-            return;
+            return false;
           }
           continue;
         }
@@ -174,7 +181,7 @@ export async function loadChatHistory(state: ChatState) {
       }
     }
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
-      return;
+      return false;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
     state.chatMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
@@ -184,9 +191,10 @@ export async function loadChatHistory(state: ChatState) {
     maybeResetToolStream(state);
     state.chatStream = null;
     state.chatStreamStartedAt = null;
+    return true;
   } catch (err) {
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
-      return;
+      return false;
     }
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
@@ -195,6 +203,7 @@ export async function loadChatHistory(state: ChatState) {
     } else {
       state.lastError = String(err);
     }
+    return false;
   } finally {
     if (isLatestChatHistoryRequest(state, requestVersion)) {
       state.chatLoading = false;
@@ -231,12 +240,18 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
 
 async function requestChatSend(
   state: ChatState,
-  params: { message: string; attachments?: ChatAttachment[]; runId: string },
+  params: {
+    message: string;
+    attachments?: ChatAttachment[];
+    runId: string;
+    hideUserMessage?: boolean;
+  },
 ) {
   await state.client!.request("chat.send", {
     sessionKey: state.sessionKey,
     message: params.message,
     deliver: false,
+    ...(params.hideUserMessage === true ? { hideUserMessage: true } : {}),
     idempotencyKey: params.runId,
     attachments: buildApiAttachments(params.attachments),
   });
@@ -294,12 +309,13 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
 export async function sendChatMessage(
   state: ChatState,
   message: string,
-  attachments?: ChatAttachment[],
+  options?: SendChatMessageOptions,
 ): Promise<string | null> {
   if (!state.client || !state.connected) {
     return null;
   }
   const msg = message.trim();
+  const attachments = options?.attachments;
   const hasAttachments = attachments && attachments.length > 0;
   if (!msg && !hasAttachments) {
     return null;
@@ -322,24 +338,31 @@ export async function sendChatMessage(
     }
   }
 
-  state.chatMessages = [
-    ...state.chatMessages,
-    {
-      role: "user",
-      content: contentBlocks,
-      timestamp: now,
-    },
-  ];
+  if (options?.localEcho !== false) {
+    state.chatMessages = [
+      ...state.chatMessages,
+      {
+        role: "user",
+        content: contentBlocks,
+        timestamp: now,
+      },
+    ];
+  }
 
   state.chatSending = true;
   state.lastError = null;
-  const runId = generateUUID();
+  const runId = options?.idempotencyKey ?? generateUUID();
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
 
   try {
-    await requestChatSend(state, { message: msg, attachments, runId });
+    await requestChatSend(state, {
+      message: msg,
+      attachments,
+      runId,
+      hideUserMessage: options?.hideUserMessage === true,
+    });
     return runId;
   } catch (err) {
     const error = formatConnectError(err);
@@ -347,14 +370,16 @@ export async function sendChatMessage(
     state.chatStream = null;
     state.chatStreamStartedAt = null;
     state.lastError = error;
-    state.chatMessages = [
-      ...state.chatMessages,
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Error: " + error }],
-        timestamp: Date.now(),
-      },
-    ];
+    if (options?.hideUserMessage !== true) {
+      state.chatMessages = [
+        ...state.chatMessages,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Error: " + error }],
+          timestamp: Date.now(),
+        },
+      ];
+    }
     return null;
   } finally {
     state.chatSending = false;

@@ -1,6 +1,7 @@
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
+import type { ChatAutostartRequest } from "./chat-autostart.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand, refreshSlashCommands } from "./chat/slash-commands.ts";
@@ -43,6 +44,7 @@ export type ChatHost = {
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
+  chatAutostart?: ChatAutostartRequest | null;
   updateComplete?: Promise<unknown>;
   refreshSessionsAfterChat: Set<string>;
   /** Callback for slash-command side effects that need app-level access. */
@@ -149,12 +151,20 @@ async function sendChatMessageNow(
     previousAttachments?: ChatAttachment[];
     restoreAttachments?: boolean;
     refreshSessions?: boolean;
+    hideUserMessage?: boolean;
+    idempotencyKey?: string;
+    localEcho?: boolean;
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
   // Reset scroll state before sending to ensure auto-scroll works for the response
   resetChatScroll(host as unknown as Parameters<typeof resetChatScroll>[0]);
-  const runId = await sendChatMessage(host as unknown as ChatState, message, opts?.attachments);
+  const runId = await sendChatMessage(host as unknown as ChatState, message, {
+    attachments: opts?.attachments,
+    hideUserMessage: opts?.hideUserMessage,
+    idempotencyKey: opts?.idempotencyKey,
+    localEcho: opts?.localEcho,
+  });
   const ok = Boolean(runId);
   if (!ok && opts?.previousDraft != null) {
     host.chatMessage = opts.previousDraft;
@@ -183,6 +193,43 @@ async function sendChatMessageNow(
     host.refreshSessionsAfterChat.add(runId);
   }
   return ok;
+}
+
+async function maybeAutostartChat(
+  host: ChatHost,
+  historyLoaded: boolean,
+  expectedSessionKey?: string,
+) {
+  if (expectedSessionKey && host.sessionKey !== expectedSessionKey) {
+    return;
+  }
+  const request = host.chatAutostart;
+  if (!request) {
+    return;
+  }
+  const targetSessionKey = request.sessionKey ?? null;
+  if (targetSessionKey && targetSessionKey !== host.sessionKey) {
+    return;
+  }
+  if (!historyLoaded || !host.connected || !host.client || isChatBusy(host)) {
+    return;
+  }
+  if (host.chatMessages.length > 0 || typeof host.chatStream === "string") {
+    host.chatAutostart = null;
+    return;
+  }
+
+  host.chatAutostart = null;
+  const ok = await sendChatMessageNow(host, request.prompt, {
+    hideUserMessage: true,
+    idempotencyKey: request.idempotencyKey,
+    localEcho: false,
+  });
+  if (!ok) {
+    // Restore the original request so retries stay bound to the same session
+    // and reuse the same idempotency key.
+    host.chatAutostart = request;
+  }
 }
 
 async function sendDetachedBtwMessage(
@@ -451,7 +498,8 @@ function injectCommandResult(host: ChatHost, content: string) {
 }
 
 export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
-  await Promise.all([
+  const expectedSessionKey = host.sessionKey;
+  const [historyLoaded] = await Promise.all([
     loadChatHistory(host as unknown as ChatState),
     loadSessions(host as unknown as SessionsState, {
       activeMinutes: 0,
@@ -463,6 +511,7 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
     refreshChatModels(host),
     refreshChatCommands(host),
   ]);
+  await maybeAutostartChat(host, historyLoaded, expectedSessionKey);
   if (opts?.scheduleScroll !== false) {
     scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
   }

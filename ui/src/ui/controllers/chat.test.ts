@@ -651,6 +651,90 @@ describe("sendChatMessage", () => {
       ],
     });
   });
+
+  it("omits hideUserMessage for normal chat sends", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "hello");
+
+    expect(result).toBeTypeOf("string");
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: "hello",
+      deliver: false,
+      idempotencyKey: expect.any(String),
+      attachments: undefined,
+    });
+  });
+
+  it("can send a hidden prompt without local echoing the user turn", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "Please introduce yourself.", {
+      hideUserMessage: true,
+      localEcho: false,
+    });
+
+    expect(result).toBeTypeOf("string");
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: "Please introduce yourself.",
+      deliver: false,
+      hideUserMessage: true,
+      idempotencyKey: expect.any(String),
+      attachments: undefined,
+    });
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("reuses a caller-provided idempotency key when retrying hidden sends", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "Please introduce yourself.", {
+      hideUserMessage: true,
+      idempotencyKey: "hidden-autostart-id",
+      localEcho: false,
+    });
+
+    expect(result).toBe("hidden-autostart-id");
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: "Please introduce yourself.",
+      deliver: false,
+      hideUserMessage: true,
+      idempotencyKey: "hidden-autostart-id",
+      attachments: undefined,
+    });
+  });
+
+  it("does not inject an orphaned assistant error for hidden prompt failures", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("network failed"));
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "Please introduce yourself.", {
+      hideUserMessage: true,
+      localEcho: false,
+    });
+
+    expect(result).toBeNull();
+    expect(state.lastError).toContain("network failed");
+    expect(state.chatMessages).toEqual([]);
+  });
 });
 
 describe("abortChatRun", () => {

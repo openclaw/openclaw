@@ -4234,6 +4234,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let message: String
     public let thinking: String?
     public let deliver: Bool?
+    public let hideusermessage: Bool?
     public let originatingchannel: String?
     public let originatingto: String?
     public let originatingaccountid: String?
@@ -4249,6 +4250,7 @@ public struct ChatSendParams: Codable, Sendable {
         message: String,
         thinking: String?,
         deliver: Bool?,
+        hideusermessage: Bool?,
         originatingchannel: String?,
         originatingto: String?,
         originatingaccountid: String?,
@@ -4263,6 +4265,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.message = message
         self.thinking = thinking
         self.deliver = deliver
+        self.hideusermessage = hideusermessage
         self.originatingchannel = originatingchannel
         self.originatingto = originatingto
         self.originatingaccountid = originatingaccountid
@@ -4279,6 +4282,7 @@ public struct ChatSendParams: Codable, Sendable {
         case message
         case thinking
         case deliver
+        case hideusermessage = "hideUserMessage"
         case originatingchannel = "originatingChannel"
         case originatingto = "originatingTo"
         case originatingaccountid = "originatingAccountId"
