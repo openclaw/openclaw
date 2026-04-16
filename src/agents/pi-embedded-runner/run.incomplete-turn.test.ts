@@ -645,6 +645,19 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(instruction).toContain("Do not recap or restate the plan");
   });
 
+  it("adds the ack-turn fast path for timestamped approval-prefixed action prompts", () => {
+    expect(isLikelyExecutionAckPrompt("[Wed 2026-04-15 20:35 PDT] ok do it")).toBe(true);
+
+    const instruction = resolveAckExecutionFastPathInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt:
+        "[Wed 2026-04-15 20:35 PDT] ok do it. read `QA_KICKOFF_TASK.md` now and reply with the QA mission in one short sentence.",
+    });
+
+    expect(instruction).toContain("execute that directive first");
+  });
+
   it("applies the planning-only retry guard to prefixed GPT-5 ids", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",

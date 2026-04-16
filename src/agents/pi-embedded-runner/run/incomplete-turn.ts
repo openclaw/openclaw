@@ -126,6 +126,11 @@ const ACTIONABLE_PROMPT_DIRECTIVE_RE =
   /^\s*(?:please\s+)?(?:check|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare)\b/i;
 const ACTIONABLE_PROMPT_REQUEST_RE =
   /\b(?:can|could|would|will)\s+you\b|\b(?:please|pls)\b|\b(?:help|explain|summari(?:s|z)e|analy(?:s|z)e|review|investigate|debug|fix|check|look(?:\s+into|\s+at)?|read|write|edit|update|run|search|find|implement|add|remove|refactor|show|tell me|walk me through)\b/i;
+const LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\]\s*/;
+const ACK_EXECUTION_ACTIONABLE_PROMPT_MAX_VISIBLE_TEXT = 240;
+const ACK_EXECUTION_NORMALIZED_PREFIXES = [...ACK_EXECUTION_NORMALIZED_SET].toSorted(
+  (left, right) => right.length - left.length,
+);
 
 export const PLANNING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. If a real blocker prevents action, reply with the exact blocker in one sentence.";
@@ -134,7 +139,7 @@ export const REASONING_ONLY_RETRY_INSTRUCTION =
 export const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 export const ACK_EXECUTION_FAST_PATH_INSTRUCTION =
-  "The latest user message is a short approval to proceed. Do not recap or restate the plan. Start with the first concrete tool action immediately. Keep any user-facing follow-up brief and natural.";
+  "The latest user message is an approval to proceed. Do not recap or restate the plan. If the user named a specific tool, action, or file, execute that directive first. Start with the first concrete tool action immediately. Keep any user-facing follow-up brief and natural.";
 export const STRICT_AGENTIC_BLOCKED_TEXT =
   "Agent stopped after repeated plan-only turns without taking a concrete action. No concrete tool action or external side effect advanced the task.";
 
@@ -368,8 +373,12 @@ function shouldApplyPlanningOnlyRetryGuard(params: {
   });
 }
 
+function stripLeadingPromptMetadata(text: string): string {
+  return text.replace(LEADING_TIMESTAMP_PREFIX_RE, "").trim();
+}
+
 function normalizeAckPrompt(text: string): string {
-  const normalized = text
+  const normalized = stripLeadingPromptMetadata(text)
     .normalize("NFKC")
     .trim()
     .replace(/[\p{P}\p{S}]+/gu, " ")
@@ -378,16 +387,43 @@ function normalizeAckPrompt(text: string): string {
   return normalizeLowercaseStringOrEmpty(normalized);
 }
 
-export function isLikelyExecutionAckPrompt(text: string): boolean {
-  const trimmed = text.trim();
+function isLikelyShortExecutionAckPrompt(text: string): boolean {
+  const trimmed = stripLeadingPromptMetadata(text);
   if (!trimmed || trimmed.length > 80 || trimmed.includes("\n") || trimmed.includes("?")) {
     return false;
   }
   return ACK_EXECUTION_NORMALIZED_SET.has(normalizeAckPrompt(trimmed));
 }
 
+export function isLikelyExecutionAckPrompt(text: string): boolean {
+  return isLikelyShortExecutionAckPrompt(text);
+}
+
+function isLikelyExecutionAckActionPrompt(text: string): boolean {
+  const trimmed = stripLeadingPromptMetadata(text);
+  if (
+    !trimmed ||
+    trimmed.length > ACK_EXECUTION_ACTIONABLE_PROMPT_MAX_VISIBLE_TEXT ||
+    trimmed.includes("\n") ||
+    trimmed.includes("?")
+  ) {
+    return false;
+  }
+  const normalized = normalizeAckPrompt(trimmed);
+  for (const ack of ACK_EXECUTION_NORMALIZED_PREFIXES) {
+    if (!normalized.startsWith(`${ack} `)) {
+      continue;
+    }
+    const remainder = normalized.slice(ack.length).trim();
+    if (remainder && isLikelyActionableUserPrompt(remainder)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isLikelyActionableUserPrompt(text: string): boolean {
-  const trimmed = text.trim();
+  const trimmed = stripLeadingPromptMetadata(text);
   if (!trimmed) {
     return false;
   }
@@ -407,7 +443,7 @@ export function resolveAckExecutionFastPathInstruction(params: {
       provider: params.provider,
       modelId: params.modelId,
     }) ||
-    !isLikelyExecutionAckPrompt(params.prompt)
+    (!isLikelyExecutionAckPrompt(params.prompt) && !isLikelyExecutionAckActionPrompt(params.prompt))
   ) {
     return null;
   }
