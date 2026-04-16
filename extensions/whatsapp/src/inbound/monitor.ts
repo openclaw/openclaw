@@ -717,13 +717,10 @@ export async function attachWebInboxToSocket(
         }
       } finally {
         if (timedOut && fetchPromise) {
-          // fetchStatus is still pending — keep probeInFlight true to prevent
-          // accumulation of hung promises. Release only when it settles.
-          void fetchPromise
-            .catch(() => {})
-            .finally(() => {
-              probeInFlight = false;
-            });
+          // fetchStatus is still pending but timed out — release the lock immediately
+          // so future probes can run, but let the hung promise clean up on its own.
+          probeInFlight = false;
+          void fetchPromise.catch(() => {}); // Prevent unhandled rejection
         } else {
           probeInFlight = false;
         }
