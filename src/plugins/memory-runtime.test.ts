@@ -178,6 +178,11 @@ describe("memory runtime auto-enable loading", () => {
         activationSourceConfig,
       }),
     );
+    expect(runtime.getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: resolvedConfig,
+      agentId: "main",
+      purpose: "status",
+    });
   });
 
   it.each([

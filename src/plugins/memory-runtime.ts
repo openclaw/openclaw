@@ -40,7 +40,11 @@ export async function getActiveMemorySearchManager(params: {
   if (!runtime) {
     return { manager: null, error: "memory plugin unavailable" };
   }
-  return await runtime.getMemorySearchManager(params);
+  return await runtime.getMemorySearchManager({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    purpose: params.purpose,
+  });
 }
 
 export function resolveActiveMemoryBackendConfig(params: { cfg: OpenClawConfig; agentId: string }) {
