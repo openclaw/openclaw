@@ -397,4 +397,21 @@ describe("resolveInboundMentionDecision — suppressIfOtherAgentMentioned", () =
     expect(res.suppressedByOtherAgentMention).toBe(false);
     expect(res.shouldSkip).toBe(false);
   });
+
+  it("forwards suppressIfOtherAgentMentioned through the deprecated flat-params call shape", () => {
+    // Regression: normalizeMentionDecisionParams previously dropped the field silently.
+    const res = resolveInboundMentionDecision({
+      isGroup: true,
+      requireMention: false,
+      canDetectMention: true,
+      wasMentioned: false,
+      hasAnyMention: true,
+      allowTextCommands: true,
+      hasControlCommand: false,
+      commandAuthorized: false,
+      suppressIfOtherAgentMentioned: true,
+    });
+    expect(res.shouldSkip).toBe(true);
+    expect(res.suppressedByOtherAgentMention).toBe(true);
+  });
 });

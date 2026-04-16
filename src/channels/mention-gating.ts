@@ -173,6 +173,7 @@ function normalizeMentionDecisionParams(
     allowTextCommands,
     hasControlCommand,
     commandAuthorized,
+    suppressIfOtherAgentMentioned,
   } = params;
   return {
     facts: {
@@ -188,6 +189,7 @@ function normalizeMentionDecisionParams(
       allowTextCommands,
       hasControlCommand,
       commandAuthorized,
+      suppressIfOtherAgentMentioned,
     },
   };
 }
