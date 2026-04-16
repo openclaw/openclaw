@@ -161,7 +161,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     assertPrepared(prepared);
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      expect.stringContaining("Slack DM from Alice: hi"),
+      "Slack DM from Alice",
       expect.objectContaining({
         sessionKey: expect.any(String),
         contextKey: "slack:message:D123:1.000",

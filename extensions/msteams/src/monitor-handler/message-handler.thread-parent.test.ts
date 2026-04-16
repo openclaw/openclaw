@@ -72,6 +72,27 @@ describe("msteams thread parent context injection", () => {
     channels: { msteams: { groupPolicy: "open" } },
   } as OpenClawConfig;
 
+  it("queues inbound message system events without the message preview", async () => {
+    const { deps, enqueueSystemEvent } = createMessageHandlerDeps(cfg);
+    const handler = createMSTeamsMessageHandler(deps);
+
+    await handler({
+      activity: buildChannelActivity({
+        id: "msg-preview-1",
+        text: "please investigate the deployment preview leak",
+      }),
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Teams message in channel from Test User",
+      expect.objectContaining({
+        contextKey: `msteams:message:${channelConversationId}:msg-preview-1`,
+      }),
+    );
+    expect(enqueueSystemEvent.mock.calls[0]?.[0]).not.toContain("deployment preview leak");
+  });
+
   it("enqueues a Replying to @sender system event on the first thread reply", async () => {
     fetchChannelMessageMock.mockResolvedValueOnce({
       id: "thread-root-123",
