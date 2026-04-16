@@ -5,8 +5,7 @@
  * this module builds the initial `update_plan` call payload from
  * the template steps. All steps start as "pending".
  *
- * This is Phase 4.1 of the GPT 5.4 parity sprint — a differentiator
- * feature not present in Hermes or Claude Code.
+ * Phase 4.1 of the GPT 5.4 parity sprint.
  */
 
 import type { SkillPlanTemplateStep } from "./types.js";
