@@ -51,6 +51,7 @@ describe("executeStatusScanFromOverview", () => {
     const resolveMemory = vi.fn<
       (args: {
         cfg: unknown;
+        sourceConfig: unknown;
         agentStatus: unknown;
         memoryPlugin: unknown;
         runtime?: unknown;
@@ -74,6 +75,7 @@ describe("executeStatusScanFromOverview", () => {
     expect(resolveStatusSummaryFromOverview).toHaveBeenCalledWith({ overview });
     expect(resolveMemory).toHaveBeenCalledWith({
       cfg: overview.cfg,
+      sourceConfig: overview.sourceConfig,
       agentStatus: overview.agentStatus,
       memoryPlugin: { enabled: false, slot: null, reason: "memorySearch not configured" },
       runtime: {},
