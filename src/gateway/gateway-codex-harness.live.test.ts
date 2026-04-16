@@ -433,9 +433,11 @@ describeLive("gateway live (Codex harness)", () => {
       // Keep the runtime fixed on the plugin-owned Codex app-server harness.
       // CI can opt into API-key auth to avoid stale OAuth refresh secrets,
       // while local maintainer runs can continue exercising staged ~/.codex auth.
+      // This lane should never inherit an arbitrary OpenAI base URL when a real
+      // API key is present.
+      delete process.env.OPENAI_BASE_URL;
       if (CODEX_HARNESS_AUTH_MODE !== "api-key") {
         delete process.env.OPENAI_API_KEY;
-        delete process.env.OPENAI_BASE_URL;
       }
       process.env.OPENCLAW_CONFIG_PATH = configPath;
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
