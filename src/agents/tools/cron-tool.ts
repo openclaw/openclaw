@@ -541,6 +541,21 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           }
 
           if (
+            job &&
+            typeof job === "object" &&
+            "payload" in job &&
+            (job as { payload?: { kind?: string; timeoutSeconds?: number } }).payload?.kind ===
+              "agentTurn"
+          ) {
+            const payload = (job as {
+              payload: { kind: "agentTurn"; timeoutSeconds?: number };
+            }).payload;
+            if (typeof payload.timeoutSeconds !== "number") {
+              payload.timeoutSeconds = 240;
+            }
+          }
+
+          if (
             opts?.agentSessionKey &&
             job &&
             typeof job === "object" &&
@@ -566,10 +581,14 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             const hasTarget =
               (typeof delivery?.channel === "string" && delivery.channel.trim()) ||
               (typeof delivery?.to === "string" && delivery.to.trim());
+            const hasSessionKey =
+              typeof (job as { sessionKey?: unknown }).sessionKey === "string" &&
+              (job as { sessionKey?: string }).sessionKey!.trim().length > 0;
             const shouldInfer =
               (deliveryValue == null || delivery) &&
               (mode === "" || mode === "announce") &&
-              !hasTarget;
+              !hasTarget &&
+              !hasSessionKey;
             if (shouldInfer) {
               const inferred = inferDeliveryFromSessionKey(opts.agentSessionKey);
               if (inferred) {
