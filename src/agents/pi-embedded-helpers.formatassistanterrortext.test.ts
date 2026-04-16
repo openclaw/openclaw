@@ -176,7 +176,7 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
-  it("returns upstream HTML copy for prefixed HTML rate-limit pages", () => {
+  it("returns upstream HTML copy for prefixed 521 HTML rate-limit pages", () => {
     const msg = makeAssistantError(
       "Error: 521 <!DOCTYPE html><html><body>rate limit</body></html>",
     );
