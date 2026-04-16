@@ -671,7 +671,48 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       PLANNING_ONLY_RETRY_INSTRUCTION_FINAL,
     );
     expect(PLANNING_ONLY_RETRY_INSTRUCTION_FIRM).toContain("CRITICAL");
-    expect(PLANNING_ONLY_RETRY_INSTRUCTION_FINAL).toContain("FINAL WARNING");
+    // Final retry tone hardened: removed "execute or cancel" threat language.
+    // Now uses Hermes-style escalating reminder instead of ultimatum.
+    expect(PLANNING_ONLY_RETRY_INSTRUCTION_FINAL).toContain("Final reminder");
+    expect(PLANNING_ONLY_RETRY_INSTRUCTION_FINAL).toContain("third planning-only turn");
+    expect(PLANNING_ONLY_RETRY_INSTRUCTION_FINAL).not.toContain("cancelled");
+  });
+
+  it("returns null for planning-only retry when plan mode is active", () => {
+    // Planning-only IS the desired state in plan mode — the retry guard
+    // must not pressure the agent to act. The agent should produce a thorough
+    // plan and call exit_plan_mode for approval.
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      planModeActive: true,
+      attempt: {
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+        clientToolCall: false,
+        yieldDetected: false,
+        didSendDeterministicApprovalPrompt: false,
+        didSendViaMessagingTool: false,
+        lastToolError: false,
+        lastAssistant: { stopReason: "stop" },
+        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        toolMetas: [],
+      } as unknown as Parameters<typeof resolvePlanningOnlyRetryInstruction>[0]["attempt"],
+    });
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("ack fast-path is also disabled in plan mode (approval signal, not skip)", () => {
+    const result = resolveAckExecutionFastPathInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: "ok do it",
+      planModeActive: true,
+    });
+    expect(result).toBeNull();
   });
 
   it("detects short execution approval prompts", () => {

@@ -36,18 +36,34 @@ export const DEFAULT_APPROVAL_CONFIG: PlanApprovalConfig = {
  * Resolves a plan approval action into the next session state.
  *
  * @param feedback - Optional user feedback on rejection
+ * @param expectedApprovalId - Optional version token from the approval event.
+ *   If provided and doesn't match `current.approvalId`, the action is ignored
+ *   as stale (e.g. user clicks Approve on a plan that was already rejected
+ *   and revised on another surface).
  */
 export function resolvePlanApproval(
   current: PlanModeSessionState,
   action: "approve" | "edit" | "reject" | "timeout",
   feedback?: string,
+  expectedApprovalId?: string,
 ): PlanModeSessionState {
   const now = Date.now();
 
-  // Ignore stale timeouts when approval is already resolved, and ignore
-  // actions on terminal states (approved, edited, timed_out). Rejected
-  // state can transition to approve/edit (user changes mind) or reject
-  // again (revised feedback).
+  // Stale-event guard: if the caller provided an approvalId, it must match
+  // the current state's approvalId. Mismatch = the user clicked an outdated
+  // button (e.g. approve on an already-superseded plan). No-op.
+  if (
+    expectedApprovalId !== undefined &&
+    current.approvalId !== undefined &&
+    expectedApprovalId !== current.approvalId
+  ) {
+    return current;
+  }
+
+  // Terminal-state guard. Approved, edited, and timed_out are terminal —
+  // they require a fresh exit_plan_mode call (which mints a new approvalId)
+  // before any new action can apply. Rejected stays open for re-approval
+  // or re-rejection.
   if (
     current.approval !== "pending" &&
     current.approval !== "rejected" &&
@@ -61,6 +77,8 @@ export function resolvePlanApproval(
 
   switch (action) {
     case "approve":
+      // Approve clears feedback AND resets rejectionCount — the user is
+      // moving forward, so cycle history is no longer relevant.
       return {
         ...current,
         mode: "normal",
@@ -68,10 +86,11 @@ export function resolvePlanApproval(
         confirmedAt: now,
         updatedAt: now,
         feedback: undefined,
+        rejectionCount: 0,
       };
 
     case "edit":
-      // User's edits count as approval — transition to execute mode.
+      // Edit counts as approval — same reset behavior as approve.
       return {
         ...current,
         mode: "normal",
@@ -79,6 +98,7 @@ export function resolvePlanApproval(
         confirmedAt: now,
         updatedAt: now,
         feedback: undefined,
+        rejectionCount: 0,
       };
 
     case "reject":
