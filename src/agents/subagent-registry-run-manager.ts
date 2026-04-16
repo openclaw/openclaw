@@ -279,6 +279,7 @@ export function createSubagentRunManager(params: {
     attachmentsDir?: string;
     attachmentsRootDir?: string;
     retainAttachmentsOnKeep?: boolean;
+    extraSystemPrompt?: string;
   }) => {
     const runId = registerParams.runId.trim();
     const childSessionKey = registerParams.childSessionKey.trim();
@@ -326,6 +327,7 @@ export function createSubagentRunManager(params: {
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
+      extraSystemPrompt: registerParams.extraSystemPrompt,
     };
     params.runs.set(runId, entry);
     try {
