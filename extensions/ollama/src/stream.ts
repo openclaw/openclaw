@@ -613,7 +613,7 @@ export function createOllamaStreamFn(
   defaultHeaders?: Record<string, string>,
 ): StreamFn {
   const chatUrl = resolveOllamaChatUrl(baseUrl);
-  const ssrfPolicy = buildOllamaBaseUrlSsrFPolicy(baseUrl);
+  const ssrfPolicy = buildOllamaBaseUrlSsrFPolicy(chatUrl);
 
   return (model, context, options) => {
     const stream = createAssistantMessageEventStream();

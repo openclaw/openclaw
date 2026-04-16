@@ -763,6 +763,28 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
+  it("uses the default loopback policy when baseUrl is empty", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({ baseUrl: "" });
+
+        const events = await collectStreamEvents(stream);
+        expect(events.at(-1)?.type).toBe("done");
+
+        const request = getGuardedFetchCall(fetchMock);
+        expect(request.url).toBe("http://127.0.0.1:11434/api/chat");
+        expect(request.policy).toMatchObject({
+          hostnameAllowlist: ["127.0.0.1"],
+          allowPrivateNetwork: true,
+        });
+      },
+    );
+  });
+
   it("merges default headers and allows request headers to override them", async () => {
     await withMockNdjsonFetch(
       [
