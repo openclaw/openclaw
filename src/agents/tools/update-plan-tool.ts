@@ -98,6 +98,24 @@ function readPlanSteps(params: Record<string, unknown>): UpdatePlanStep[] {
   if (inProgressCount > 1) {
     throw new ToolInputError("plan can contain at most one in_progress step");
   }
+
+  // Reject duplicate step TEXT within a single incoming patch (Codex P2
+  // on PR #67514). Merge mode keys steps by `step` text — if the patch
+  // contains two entries with the same step text, the second clobbers the
+  // first, and in merge mode they collide on the same map key when
+  // matching against the previous plan, silently rewriting unrelated
+  // history. Better to surface this at input time.
+  const seenSteps = new Set<string>();
+  for (let i = 0; i < steps.length; i += 1) {
+    const stepText = steps[i].step;
+    if (seenSteps.has(stepText)) {
+      throw new ToolInputError(
+        `plan[${i}].step is duplicated within the patch ("${stepText}"); ` +
+          "step text must be unique because merge mode uses it as the join key",
+      );
+    }
+    seenSteps.add(stepText);
+  }
   return steps;
 }
 
@@ -174,6 +192,21 @@ export function createUpdatePlanTool(options?: CreateUpdatePlanToolOptions): Any
         merge && previousSteps.length > 0
           ? mergeSteps(previousSteps, incomingSteps)
           : incomingSteps;
+
+      // Re-validate the active-step invariant on the MERGED plan
+      // (Codex P1 on PR #67514): readPlanSteps only enforces the
+      // single-in_progress rule on the incoming patch, but merge can
+      // still produce a final plan with two in_progress entries when
+      // the previous plan had one in_progress step and the patch marks
+      // a different step as in_progress. The tool's own contract — and
+      // downstream renderers — assume at most one active step.
+      const mergedInProgress = plan.filter((s) => s.status === "in_progress").length;
+      if (mergedInProgress > 1) {
+        throw new ToolInputError(
+          "merge would produce a plan with multiple in_progress steps; " +
+            "explicitly mark the prior in_progress step as completed/cancelled in the same patch",
+        );
+      }
 
       // Persist for next merge in this run. Snapshot stored as
       // `PlanStepSnapshot[]` (structural superset of `UpdatePlanStep[]`).

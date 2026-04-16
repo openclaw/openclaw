@@ -306,6 +306,42 @@ describe("update_plan tool – merge mode (#67514)", () => {
     expect(events.filter((e) => e.stream === "plan")).toHaveLength(0);
   });
 
+  it("rejects merge that would yield two in_progress steps (Codex P1 r3096162551)", async () => {
+    const runId = "run-double-active";
+    registerAgentRunContext(runId, {});
+    const tool = createUpdatePlanTool({ runId });
+
+    // Seed a plan with one in_progress step.
+    await tool.execute("c1", {
+      plan: [
+        { step: "Step A", status: "in_progress", activeForm: "Doing A" },
+        { step: "Step B", status: "pending" },
+      ],
+    });
+
+    // Merge a patch that marks a DIFFERENT step as in_progress without
+    // moving the old one off active. Final plan would have two in_progress —
+    // violates the tool's own invariant and breaks downstream renderers.
+    await expect(
+      tool.execute("c2", {
+        merge: true,
+        plan: [{ step: "Step B", status: "in_progress", activeForm: "Doing B" }],
+      }),
+    ).rejects.toThrow(/multiple in_progress steps/);
+  });
+
+  it("rejects incoming patch with duplicate step text (Codex P2 r3096162555)", async () => {
+    const tool = createUpdatePlanTool();
+    await expect(
+      tool.execute("c1", {
+        plan: [
+          { step: "Same step", status: "completed" },
+          { step: "Same step", status: "pending" },
+        ],
+      }),
+    ).rejects.toThrow(/duplicated within the patch/);
+  });
+
   it("emits even when no AgentRunContext is registered (best-effort)", async () => {
     const runId = "run-no-context";
     // Note: we deliberately do NOT register a context for this run.
