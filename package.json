@@ -879,6 +879,10 @@
       "types": "./dist/plugin-sdk/skill-commands-runtime.d.ts",
       "default": "./dist/plugin-sdk/skill-commands-runtime.js"
     },
+    "./plugin-sdk/native-command-config-runtime": {
+      "types": "./dist/plugin-sdk/native-command-config-runtime.d.ts",
+      "default": "./dist/plugin-sdk/native-command-config-runtime.js"
+    },
     "./plugin-sdk/native-command-registry": {
       "types": "./dist/plugin-sdk/native-command-registry.d.ts",
       "default": "./dist/plugin-sdk/native-command-registry.js"
@@ -1134,7 +1138,7 @@
     "canon:check:json": "node scripts/canon.mjs check --json",
     "canon:enforce": "node scripts/canon.mjs enforce --json",
     "canvas:a2ui:bundle": "node scripts/bundle-a2ui.mjs",
-    "check": "pnpm check:no-conflict-markers && pnpm tool-display:check && pnpm check:host-env-policy:swift && pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm tsgo && node scripts/prepare-extension-package-boundary-artifacts.mjs && pnpm lint && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
+    "check": "pnpm check:no-conflict-markers && pnpm tool-display:check && pnpm check:host-env-policy:swift && pnpm tsgo && pnpm lint && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope && pnpm check:import-cycles && pnpm check:madge-import-cycles && node scripts/prepare-extension-package-boundary-artifacts.mjs",
     "check:base-config-schema": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "check:bundled-channel-config-metadata": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-i18n-glossary && pnpm docs:check-links",
