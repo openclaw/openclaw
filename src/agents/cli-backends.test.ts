@@ -244,7 +244,7 @@ beforeEach(() => {
           "workspace-write",
           "--skip-git-repo-check",
         ],
-        resumeArgs: ["exec", "resume", "{sessionId}", "--dangerously-bypass-approvals-and-sandbox"],
+        resumeArgs: ["exec", "resume", "{sessionId}"],
         systemPromptFileConfigArg: "-c",
         systemPromptFileConfigKey: "model_instructions_file",
         systemPromptWhen: "first",
@@ -322,12 +322,7 @@ describe("resolveCliBackendConfig reliability merge", () => {
       "workspace-write",
       "--skip-git-repo-check",
     ]);
-    expect(resolved?.config.resumeArgs).toEqual([
-      "exec",
-      "resume",
-      "{sessionId}",
-      "--dangerously-bypass-approvals-and-sandbox",
-    ]);
+    expect(resolved?.config.resumeArgs).toEqual(["exec", "resume", "{sessionId}"]);
   });
 
   it("deep-merges reliability watchdog overrides for codex", () => {

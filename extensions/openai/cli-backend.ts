@@ -31,7 +31,7 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
         "workspace-write",
         "--skip-git-repo-check",
       ],
-      resumeArgs: ["exec", "resume", "{sessionId}", "--dangerously-bypass-approvals-and-sandbox"],
+      resumeArgs: ["exec", "resume", "{sessionId}"],
       output: "jsonl",
       resumeOutput: "text",
       input: "arg",
