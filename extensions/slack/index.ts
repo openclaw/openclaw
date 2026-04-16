@@ -42,4 +42,9 @@ export default defineBundledChannelEntry({
       return handleSlackSubagentDeliveryTarget(event);
     });
   },
+  accountInspect: {
+    specifier: "./account-inspect-api.js",
+    exportName: "inspectSlackReadOnlyAccount",
+  },
+  registerFull: registerSlackPluginHttpRoutes,
 });
