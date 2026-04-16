@@ -109,7 +109,7 @@ import {
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
 import {
-  ACK_EXECUTION_FAST_PATH_INSTRUCTION,
+  AUTO_CONTINUE_FAST_PATH_INSTRUCTION,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   resolveAckExecutionFastPathInstruction,
@@ -2008,21 +2008,26 @@ export async function runEmbeddedPiAgent(
             ) {
               autoContinueCycles += 1;
               planningOnlyRetryAttempts = 0;
-              planningOnlyRetryInstruction = ACK_EXECUTION_FAST_PATH_INSTRUCTION;
+              planningOnlyRetryInstruction = AUTO_CONTINUE_FAST_PATH_INSTRUCTION;
               // Emit plan event so UI observers track the auto-continue transition.
               const planningOnlyText = attempt.assistantTexts.join("\n\n").trim();
               const planDetails = extractPlanningOnlyPlanDetails(planningOnlyText);
               if (planDetails) {
+                const planEventData = {
+                  phase: "update" as const,
+                  title: "Auto-continuing — agent proposed a plan",
+                  explanation: planDetails.explanation,
+                  steps: planDetails.steps,
+                  source: "auto_continue",
+                };
                 emitAgentPlanEvent({
                   runId: params.runId,
                   ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-                  data: {
-                    phase: "update",
-                    title: "Auto-continuing — agent proposed a plan",
-                    explanation: planDetails.explanation,
-                    steps: planDetails.steps,
-                    source: "auto_continue",
-                  },
+                  data: planEventData,
+                });
+                void params.onAgentEvent?.({
+                  stream: "plan",
+                  data: planEventData,
                 });
               }
               log.info(
