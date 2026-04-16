@@ -327,6 +327,21 @@ describe("shouldRunPreflightCompaction", () => {
       }),
     ).toBe(true);
   });
+
+  // Regression: openclaw/openclaw#66520. When Anthropic prompt cache hits absorb
+  // nearly all tokens, incoming-token counts stay tiny but fresh total context
+  // tokens (input + cacheRead + cacheWrite) can exceed the context window.
+  // Preflight compaction must still fire off the fresh persisted totals.
+  it("triggers when fresh persisted totals exceed threshold with no projected count", () => {
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 305_000, totalTokensFresh: true },
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 30_000,
+        softThresholdTokens: 4_000,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("hasAlreadyFlushedForCurrentCompaction", () => {
