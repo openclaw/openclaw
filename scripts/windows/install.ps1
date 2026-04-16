@@ -99,25 +99,34 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
 
 # 3. Installation
 Write-Step "Installing files to $InstallPath..."
-# Priority: 1. Exact binary names (Branded or Cargo-native), 2. Build output in release folder, 3. Anything that isn't a Setup installer
+
+# Build the candidate list for the source binary
 $srcExe = Get-Item -Path (Join-Path $PSScriptRoot "OpenClaw.exe") -ErrorAction SilentlyContinue
+if (-not $srcExe) { $srcExe = Get-Item -Path (Join-Path $PSScriptRoot "openclaw-desktop.exe") -ErrorAction SilentlyContinue }
+if (-not $srcExe) { $srcExe = Get-Item -Path (Join-Path $PSScriptRoot "..\..\apps\windows\src-tauri\target\release\openclaw-desktop.exe") -ErrorAction SilentlyContinue }
+
+# NEW: Automatic remote download if no local binary is found
 if (-not $srcExe) {
-    $srcExe = Get-Item -Path (Join-Path $PSScriptRoot "openclaw-desktop.exe") -ErrorAction SilentlyContinue
-}
-if (-not $srcExe) {
-    # Try looking in the local build output folder (release)
-    $srcExe = Get-Item -Path (Join-Path $PSScriptRoot "..\..\apps\windows\src-tauri\target\release\openclaw-desktop.exe") -ErrorAction SilentlyContinue
-}
-if (-not $srcExe) {
-    # Fallback to any branded .exe that doesn't look like a setup/bundle
-    $srcExe = Get-ChildItem -Path $PSScriptRoot -Filter "*.exe" | Where-Object { $_.Name -notlike "OpenClaw_*_setup.exe" -and $_.Name -notlike "OpenClaw_*_x64*" } | Select-Object -First 1
+    Write-Host "Local binary not found. Attempting to download latest release from GitHub..." -ForegroundColor Cyan
+    $repo = "aliyevaladddin/openclaw"
+    $assetName = "OpenClaw.exe"
+    try {
+        $releaseUrl = "https://github.com/$repo/releases/latest/download/$assetName"
+        $downloadPath = Join-Path $env:TEMP $assetName
+        Write-Host "Downloading from $releaseUrl..." -ForegroundColor Gray
+        Invoke-WebRequest -Uri $releaseUrl -OutFile $downloadPath -ErrorAction Stop
+        $srcExe = Get-Item -Path $downloadPath
+    } catch {
+        Write-Host "Failed to download remote binary: $_" -ForegroundColor Yellow
+        Write-Host "Please ensure OpenClaw.exe exists in $PSScriptRoot or run 'pnpm build' first." -ForegroundColor Gray
+    }
 }
 
 if (-not $srcExe) {
-    Write-Host "ERROR: OpenClaw application binary (openclaw-desktop.exe or OpenClaw.exe) not found." -ForegroundColor Red
-    Write-Host "Please ensure you have built the project (pnpm build) or placed the binary in $PSScriptRoot." -ForegroundColor Gray
+    Write-Host "ERROR: OpenClaw application binary not found." -ForegroundColor Red
     exit 1
 }
+
 New-Item -ItemType Directory -Force -Path $InstallPath | Out-Null
 Copy-Item $srcExe.FullName -Destination (Join-Path $InstallPath "OpenClaw.exe") -Force
 

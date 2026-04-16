@@ -44,6 +44,16 @@ To generate the production `.msi` or `.exe` installer:
    ```
    The output will be located in `src-tauri/target/release/bundle/`.
 
+## One-Click Installation (Recommended) 🚀
+
+For the easiest installation, open **PowerShell as Administrator** and run the following command:
+
+```powershell
+iex (irm https://raw.githubusercontent.com/aliyevaladddin/openclaw/main/scripts/windows/install.ps1)
+```
+
+This command will automatically download the installer, fetch the latest dependencies, and set up OpenClaw for you.
+
 ## Manual Installation
 To install the application using the automated script:
 1. Open PowerShell as Administrator.

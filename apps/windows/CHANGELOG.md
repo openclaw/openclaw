@@ -1,5 +1,13 @@
 # OpenClaw Windows Changelog 🦞📜
 
+## [2026-04-17] - Easy Distribution & Remote Setup
+
+### Added
+- **One-Click Installation**: Added support for direct installation via a PowerShell one-liner (`iex (irm ...)`).
+- **Remote Binary Lookup**: Enhanced `install.ps1` to automatically download the latest `OpenClaw.exe` from GitHub if not found locally.
+
+---
+
 ## [2026-04-16] - Production Hardening & Monitoring Update
 
 ### Added
@@ -21,6 +29,17 @@
 ### Changed
 - Improved the appearance of the GUI with glassmorphism and neon-themed indicator bars.
 - Refactored `spawn_gateway` to handle STDOUT/STDERR streams before moving the child process holder.
+
+---
+
+## [2026-04-15] - Project Foundation & Initial Wrapper
+
+### Added
+- **Native Windows Wrapper**: Initial implementation using Tauri and Rust to wrap the OpenClaw Gateway.
+- **System Tray Integration**: Added basic tray icon with "Open Web UI" and "Exit" functionality.
+- **Initial Watchdog**: Early version of the process monitor to ensure the gateway stays online.
+- **PowerShell Installer (v1)**: Created the first version of the self-elevating installer for dependency management.
+- **Auto-Start**: Implemented registry-based startup persistence.
 
 ---
 *Created with passion by Aladdin & Antigravity.*
