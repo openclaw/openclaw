@@ -1,7 +1,7 @@
 import DOMPurify from "dompurify";
 import MarkdownIt from "markdown-it";
-import markdownItTaskLists from "markdown-it-task-lists";
 import { truncateText } from "./format.ts";
+import { markdownTaskLists } from "./markdown-task-lists.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const allowedTags = [
@@ -274,7 +274,6 @@ md.linkify.add("www", {
       break;
     }
     return len;
-
   },
   normalize(match) {
     match.url = "http://" + match.url;
@@ -358,13 +357,12 @@ md.core.ruler.after("linkify", "linkify-cjk-trim", (state) => {
 // chat messages are display-only, not interactive forms.
 // label: false avoids wrapping item text in <label>, which would break
 // accessibility when the item contains links (MDN warns against anchors inside labels).
-md.use(markdownItTaskLists, { enabled: false, label: false });
+md.use(markdownTaskLists);
 
 // Mark the <input> html_inline token inside task-list items as trusted so the
-// html_inline override lets it through. With label: false, the plugin generates
-// only a single <input ...> token per item.
+// html_inline override lets it through.
 // We identify task-list items by the class="task-list-item" the plugin sets.
-md.core.ruler.after("github-task-lists", "task-list-allowlist", (state) => {
+md.core.ruler.after("task_lists", "task-list-allowlist", (state) => {
   const tokens = state.tokens;
   for (let i = 2; i < tokens.length; i++) {
     if (tokens[i].type !== "inline" || !tokens[i].children) {
