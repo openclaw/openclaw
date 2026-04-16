@@ -1097,3 +1097,87 @@
 
 /* Mobile dropdown toggle — hidden on desktop */
 /* Mobile gear toggle + dropdown are hidden by default in layout.css */
+
+/* ── Mode switcher ── */
+
+.agent-chat__mode-switcher {
+  position: relative;
+}
+
+.agent-chat__mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--mono);
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.agent-chat__mode-chip:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.agent-chat__mode-chip-label {
+  white-space: nowrap;
+}
+
+.agent-chat__mode-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 200px;
+  background: var(--card, #1a1a2e);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  padding: 4px;
+  z-index: 100;
+}
+
+.agent-chat__mode-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.agent-chat__mode-menu__item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.agent-chat__mode-menu__item--active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.agent-chat__mode-menu__label {
+  flex: 1;
+}
+
+.agent-chat__mode-menu__shortcut {
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text-tertiary);
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-hover);
+}
