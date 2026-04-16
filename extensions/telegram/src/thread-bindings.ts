@@ -15,7 +15,7 @@ import {
 import { readAcpSessionEntry } from "openclaw/plugin-sdk/acp-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
-import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { isAcpSessionKey, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -443,9 +443,14 @@ export function createTelegramThreadBindingManager(
 
   // Clean up bindings to stale/failed ACP sessions on startup
   // Group bindings by targetSessionKey to avoid redundant session store reads
+  // Only process ACP runtime sessions (skip plugin-bound sessions like "plugin-binding:*")
   const bindingsByTargetSession = new Map<string, TelegramThreadBindingRecord[]>();
   for (const binding of getThreadBindingsState().bindingsByAccountConversation.values()) {
     if (binding.targetKind !== "acp") {
+      continue;
+    }
+    // Skip plugin-bound sessions — they use "plugin-binding:*" keys, not ACP session keys
+    if (!isAcpSessionKey(binding.targetSessionKey)) {
       continue;
     }
     const existing = bindingsByTargetSession.get(binding.targetSessionKey);
