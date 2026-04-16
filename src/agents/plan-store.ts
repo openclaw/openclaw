@@ -52,12 +52,15 @@ function hasControlOrForbiddenChars(s: string): boolean {
 }
 
 function validateNamespace(namespace: string): void {
-  // Normalize dot segments (./foo → foo) before validation to prevent
-  // cross-namespace collisions from equivalent but differently-spelled paths.
+  // Check raw input for traversal BEFORE normalizing — path.normalize()
+  // resolves "foo/../bar" to "bar" which would pass a post-normalize check.
+  if (!namespace || namespace === "." || namespace.includes("..")) {
+    throw new Error(`Invalid plan namespace: "${namespace}"`);
+  }
   const normalized = path.normalize(namespace);
   if (
     !normalized ||
-    normalized.includes("..") ||
+    normalized === "." ||
     path.isAbsolute(normalized) ||
     hasControlOrForbiddenChars(normalized)
   ) {
@@ -124,7 +127,7 @@ export class PlanStore {
       throw new Error(`Plan namespace mismatch: expected "${namespace}", got "${plan.namespace}"`);
     }
     const dir = path.dirname(planFile);
-    await fs.mkdir(dir, { recursive: true });
+    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
 
     // Atomic write: write to a temp file in the same directory, then rename.
     const tmpFile = path.join(dir, `.plan-${crypto.randomBytes(4).toString("hex")}.tmp`);
@@ -153,7 +156,7 @@ export class PlanStore {
   async lock(namespace: string): Promise<() => Promise<void>> {
     const lockFile = this.lockPath(namespace);
     const dir = path.dirname(lockFile);
-    await fs.mkdir(dir, { recursive: true });
+    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
 
     // Generate a unique lock token so release can verify ownership.
     const lockToken = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
@@ -165,7 +168,23 @@ export class PlanStore {
       let handle: fs.FileHandle | undefined;
       try {
         handle = await fs.open(lockFile, "wx");
-        await handle.writeFile(lockToken);
+        try {
+          await handle.writeFile(lockToken);
+        } catch {
+          // Write failed — clean up the empty/partial lock file immediately
+          // instead of waiting for stale-lock cleanup.
+          try {
+            await handle.close();
+          } catch {
+            /* ignore */
+          }
+          try {
+            await fs.unlink(lockFile);
+          } catch {
+            /* ignore */
+          }
+          throw new Error("Failed to write lock token");
+        }
         await handle.close();
         handle = undefined; // closed successfully
 
