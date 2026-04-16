@@ -43,6 +43,7 @@ Docs: https://docs.openclaw.ai
 - Agents/replay: re-run tool/result pairing after strict replay tool-call ID sanitization on outbound requests so Anthropic-compatible providers like MiniMax no longer receive malformed orphan tool-result IDs such as `...toolresult1` during compaction and retry flows. (#67620) Thanks @stainlu.
 - Gateway/startup: fix spurious SIGUSR1 restart loop on Linux/systemd when plugin auto-enable is the only startup config write; the config hash guard was not captured for that write path, causing chokidar to treat each boot write as an external change and trigger a reload → restart cycle that corrupts manifest.db after repeated cycles. Fixes #67436. (#67557) thanks @openperf
 - OpenAI Codex/CLI: keep resumed `codex exec resume` runs on the safe non-interactive path without reintroducing the removed dangerous bypass flag by passing the supported `--skip-git-repo-check` resume arg that real Codex CLI requires outside trusted git directories. (#67666) Thanks @plgonzalezrx8.
+- Codex/app-server: parse Desktop-originated app-server user agents such as `Codex Desktop/0.118.0`, keeping the version gate working when the Codex CLI inherits a multi-word originator. (#64666) Thanks @cyrusaf.
 
 ## 2026.4.15-beta.1
 
