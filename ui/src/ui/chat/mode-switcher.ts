@@ -30,6 +30,7 @@ const shieldIcon = html`<svg
   stroke-width="2"
   stroke-linecap="round"
   stroke-linejoin="round"
+  aria-hidden="true"
 >
   <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
 </svg>`;
@@ -42,6 +43,7 @@ const checkIcon = html`<svg
   stroke-width="2"
   stroke-linecap="round"
   stroke-linejoin="round"
+  aria-hidden="true"
 >
   <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
   <path d="M22 4 12 14.01l-3-3" />
@@ -55,6 +57,7 @@ const listIcon = html`<svg
   stroke-width="2"
   stroke-linecap="round"
   stroke-linejoin="round"
+  aria-hidden="true"
 >
   <path d="M9 11l3 3L22 4" />
   <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
@@ -68,6 +71,7 @@ const unlockIcon = html`<svg
   stroke-width="2"
   stroke-linecap="round"
   stroke-linejoin="round"
+  aria-hidden="true"
 >
   <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
   <path d="M7 11V7a5 5 0 0 1 9.9-1" />
@@ -156,6 +160,7 @@ export function renderModeSwitcher(params: {
           fill="none"
           stroke="currentColor"
           stroke-width="2"
+          aria-hidden="true"
         >
           <path d="M6 9l6 6 6-6" />
         </svg>
@@ -193,8 +198,8 @@ export function renderModeSwitcher(params: {
  * Returns the selected mode if a shortcut matched, or null.
  */
 export function handleModeShortcut(e: KeyboardEvent): ModeDefinition | null {
-  // Only use Ctrl, not Cmd/Meta — Cmd+1-4 is browser tab switching on macOS.
-  if (!e.ctrlKey || e.metaKey) {
+  // Only bare Ctrl+digit — exclude Cmd (macOS tab switch), Shift, and Alt modifiers.
+  if (!e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) {
     return null;
   }
   const mode = MODE_DEFINITIONS.find((m) => m.shortcut === e.key);
