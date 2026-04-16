@@ -1240,7 +1240,11 @@ describe("gateway agent handler", () => {
           }),
       );
 
-      void invokeAgent(
+      // dispatchAgentRunFromGateway is called synchronously at the tail of the
+      // handler before it returns, and the registration happens synchronously
+      // before the fire-and-forget agentCommandFromIngress call. Awaiting the
+      // handler is therefore sufficient to observe the registration.
+      await invokeAgent(
         {
           message: "hello",
           agentId: "main",
@@ -1249,8 +1253,6 @@ describe("gateway agent handler", () => {
         },
         { context },
       );
-      // Yield to let the handler reach dispatchAgentRunFromGateway
-      await Promise.resolve();
 
       expect(context.chatAbortControllers.has("reg-test-idem")).toBe(true);
       const entry = context.chatAbortControllers.get("reg-test-idem");
@@ -1259,7 +1261,8 @@ describe("gateway agent handler", () => {
       expect(entry?.controller.signal.aborted).toBe(false);
 
       resolveAgent();
-      // After completion, entry must be cleaned up
+      // Flush the .then() and .finally() callbacks
+      await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
       expect(context.chatAbortControllers.has("reg-test-idem")).toBe(false);
@@ -1284,6 +1287,77 @@ describe("gateway agent handler", () => {
       await Promise.resolve();
 
       expect(context.chatAbortControllers.has("fail-test-idem")).toBe(false);
+    });
+
+    it("captures caller ownership metadata so chat.abort stays scoped to the run owner", async () => {
+      primeMainAgentRun();
+
+      const context = makeContextWithAbort();
+      let resolveAgent!: () => void;
+      mocks.agentCommand.mockImplementation(
+        () =>
+          new Promise<{ payloads: []; meta: { durationMs: number } }>((r) => {
+            resolveAgent = () => r({ payloads: [], meta: { durationMs: 0 } });
+          }),
+      );
+
+      await invokeAgent(
+        {
+          message: "hello",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "owner-test-idem",
+        },
+        {
+          context,
+          client: {
+            connId: "conn-owner",
+            connect: { device: { id: "dev-owner" } },
+          } as unknown as AgentHandlerArgs["client"],
+        },
+      );
+
+      const entry = context.chatAbortControllers.get("owner-test-idem");
+      expect(entry?.ownerConnId).toBe("conn-owner");
+      expect(entry?.ownerDeviceId).toBe("dev-owner");
+
+      resolveAgent();
+    });
+
+    it("derives expiresAtMs from the request timeout, not a hard-coded value", async () => {
+      primeMainAgentRun();
+
+      const context = makeContextWithAbort();
+      let resolveAgent!: () => void;
+      mocks.agentCommand.mockImplementation(
+        () =>
+          new Promise<{ payloads: []; meta: { durationMs: number } }>((r) => {
+            resolveAgent = () => r({ payloads: [], meta: { durationMs: 0 } });
+          }),
+      );
+
+      const before = Date.now();
+      await invokeAgent(
+        {
+          message: "long-running",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "timeout-test-idem",
+          // 2-hour timeout in seconds; maintenance loop must not evict this
+          // run before the timeout + grace period actually elapses.
+          timeout: 2 * 60 * 60,
+        },
+        { context },
+      );
+
+      const entry = context.chatAbortControllers.get("timeout-test-idem");
+      expect(entry).toBeDefined();
+      // expiresAtMs should be at least the requested timeout past `before`,
+      // proving it is derived from request.timeout rather than a fixed 30m
+      // default that would clamp shorter runs unexpectedly.
+      expect(entry!.expiresAtMs).toBeGreaterThanOrEqual(before + 2 * 60 * 60 * 1000);
+
+      resolveAgent();
     });
   });
 });

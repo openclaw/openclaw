@@ -41,6 +41,7 @@ import {
   type ChatAbortControllerEntry,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
+import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { createRunningTaskRun } from "../../tasks/task-executor.js";
 import {
   mergeDeliveryContext,
@@ -208,6 +209,8 @@ function dispatchAgentRunFromGateway(params: {
   idempotencyKey: string;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
+  client: GatewayRequestHandlerOptions["client"];
+  timeoutMs: number;
 }) {
   const inputProvenance = normalizeInputProvenance(params.ingressOpts.inputProvenance);
   const shouldTrackTask =
@@ -243,9 +246,9 @@ function dispatchAgentRunFromGateway(params: {
     sessionId: params.ingressOpts.sessionId ?? params.runId,
     sessionKey,
     startedAtMs: now,
-    expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs: 30 * 60 * 1000 }),
-    ownerConnId: undefined,
-    ownerDeviceId: undefined,
+    expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs: params.timeoutMs }),
+    ownerConnId: normalizeOptionalString(params.client?.connId),
+    ownerDeviceId: normalizeOptionalString(params.client?.connect?.device?.id),
   };
   params.context.chatAbortControllers.set(params.runId, abortEntry);
 
@@ -918,6 +921,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       idempotencyKey: idem,
       respond,
       context,
+      client,
+      timeoutMs: resolveAgentTimeoutMs({
+        cfg: cfgForAgent ?? cfg,
+        overrideSeconds: request.timeout,
+      }),
     });
   },
   "agent.identity.get": ({ params, respond }) => {
