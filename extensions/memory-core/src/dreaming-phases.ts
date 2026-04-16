@@ -6,7 +6,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
-  loadDreamingNarrativeTranscriptPathSetForAgent,
+  loadSessionTranscriptClassificationForAgent,
   normalizeSessionTranscriptPathForComparison,
   parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
@@ -710,21 +710,26 @@ async function collectSessionIngestionBatches(params: {
     agentId: string;
     absolutePath: string;
     generatedByDreamingNarrative: boolean;
+    generatedByCronRun: boolean;
     sessionPath: string;
   }> = [];
   for (const agentId of agentIds) {
     const files = await listSessionFilesForAgent(agentId);
-    const dreamingTranscriptPaths =
+    const transcriptClassification =
       files.length > 0
-        ? loadDreamingNarrativeTranscriptPathSetForAgent(agentId)
-        : new Set<string>();
+        ? loadSessionTranscriptClassificationForAgent(agentId)
+        : {
+            dreamingNarrativeTranscriptPaths: new Set<string>(),
+            cronRunTranscriptPaths: new Set<string>(),
+          };
     for (const absolutePath of files) {
+      const normalizedPath = normalizeSessionTranscriptPathForComparison(absolutePath);
       sessionFiles.push({
         agentId,
         absolutePath,
-        generatedByDreamingNarrative: dreamingTranscriptPaths.has(
-          normalizeSessionTranscriptPathForComparison(absolutePath),
-        ),
+        generatedByDreamingNarrative:
+          transcriptClassification.dreamingNarrativeTranscriptPaths.has(normalizedPath),
+        generatedByCronRun: transcriptClassification.cronRunTranscriptPaths.has(normalizedPath),
         sessionPath: sessionPathForFile(absolutePath),
       });
     }
@@ -783,11 +788,12 @@ async function collectSessionIngestionBatches(params: {
 
     const entry = await buildSessionEntry(file.absolutePath, {
       generatedByDreamingNarrative: file.generatedByDreamingNarrative,
+      generatedByCronRun: file.generatedByCronRun,
     });
     if (!entry) {
       continue;
     }
-    if (entry.generatedByDreamingNarrative) {
+    if (entry.generatedByDreamingNarrative || entry.generatedByCronRun) {
       nextFiles[stateKey] = {
         mtimeMs: fingerprint.mtimeMs,
         size: fingerprint.size,

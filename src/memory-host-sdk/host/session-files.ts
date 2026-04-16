@@ -1,11 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { stripInternalRuntimeContext } from "../../agents/internal-runtime-context.js";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
+import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { isUsageCountedSessionTranscriptFileName } from "../../config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { hashText } from "./internal.js";
 
 const log = createSubsystemLogger("memory");
@@ -29,11 +33,20 @@ export type SessionFileEntry = {
   messageTimestampsMs: number[];
   /** True when this transcript belongs to an internal dreaming narrative run. */
   generatedByDreamingNarrative?: boolean;
+  /** True when this transcript belongs to an isolated cron run session. */
+  generatedByCronRun?: boolean;
 };
 
 export type BuildSessionEntryOptions = {
   /** Optional preclassification from a caller-managed dreaming transcript lookup. */
   generatedByDreamingNarrative?: boolean;
+  /** Optional preclassification from a caller-managed cron transcript lookup. */
+  generatedByCronRun?: boolean;
+};
+
+export type SessionTranscriptClassification = {
+  dreamingNarrativeTranscriptPaths: ReadonlySet<string>;
+  cronRunTranscriptPaths: ReadonlySet<string>;
 };
 
 function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
@@ -133,25 +146,45 @@ function resolveSessionStoreTranscriptPath(
 export function loadDreamingNarrativeTranscriptPathSetForSessionsDir(
   sessionsDir: string,
 ): ReadonlySet<string> {
+  return loadSessionTranscriptClassificationForSessionsDir(sessionsDir)
+    .dreamingNarrativeTranscriptPaths;
+}
+
+export function loadSessionTranscriptClassificationForSessionsDir(
+  sessionsDir: string,
+): SessionTranscriptClassification {
   const storePath = path.join(sessionsDir, "sessions.json");
   const store = loadSessionStore(storePath);
   const dreamingTranscriptPaths = new Set<string>();
+  const cronRunTranscriptPaths = new Set<string>();
   for (const [sessionKey, entry] of Object.entries(store)) {
-    if (!isDreamingNarrativeSessionStoreKey(sessionKey)) {
+    const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
+    if (!transcriptPath) {
       continue;
     }
-    const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
-    if (transcriptPath) {
+    if (isDreamingNarrativeSessionStoreKey(sessionKey)) {
       dreamingTranscriptPaths.add(transcriptPath);
     }
+    if (isCronRunSessionKey(sessionKey)) {
+      cronRunTranscriptPaths.add(transcriptPath);
+    }
   }
-  return dreamingTranscriptPaths;
+  return {
+    dreamingNarrativeTranscriptPaths: dreamingTranscriptPaths,
+    cronRunTranscriptPaths,
+  };
 }
 
 export function loadDreamingNarrativeTranscriptPathSetForAgent(
   agentId: string,
 ): ReadonlySet<string> {
-  return loadDreamingNarrativeTranscriptPathSetForSessionsDir(
+  return loadSessionTranscriptClassificationForAgent(agentId).dreamingNarrativeTranscriptPaths;
+}
+
+export function loadSessionTranscriptClassificationForAgent(
+  agentId: string,
+): SessionTranscriptClassification {
+  return loadSessionTranscriptClassificationForSessionsDir(
     resolveSessionTranscriptsDirForAgent(agentId),
   );
 }
@@ -159,8 +192,15 @@ export function loadDreamingNarrativeTranscriptPathSetForAgent(
 function isDreamingNarrativeTranscriptFromSessionStore(absPath: string): boolean {
   const sessionsDir = path.dirname(absPath);
   const normalizedAbsPath = normalizeComparablePath(absPath);
-  const dreamingTranscriptPaths = loadDreamingNarrativeTranscriptPathSetForSessionsDir(sessionsDir);
-  return dreamingTranscriptPaths.has(normalizedAbsPath);
+  const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+  return classification.dreamingNarrativeTranscriptPaths.has(normalizedAbsPath);
+}
+
+function isCronRunTranscriptFromSessionStore(absPath: string): boolean {
+  const sessionsDir = path.dirname(absPath);
+  const normalizedAbsPath = normalizeComparablePath(absPath);
+  const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+  return classification.cronRunTranscriptPaths.has(normalizedAbsPath);
 }
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
@@ -287,6 +327,48 @@ function stripInboundMetadataForUserRole(text: string, role: "user" | "assistant
   return stripInboundMetadata(text);
 }
 
+const GENERATED_SYSTEM_MESSAGE_RE = /^System(?: \(untrusted\))?: \[[^\]]+\]\s*/;
+
+function isGeneratedSystemWrapperMessage(text: string, role: "user" | "assistant"): boolean {
+  if (role !== "user") {
+    return false;
+  }
+  return GENERATED_SYSTEM_MESSAGE_RE.test(text);
+}
+
+function shouldSkipGeneratedSystemFollowup(rawText: string, role: "user" | "assistant"): boolean {
+  const strippedInbound = stripInboundMetadataForUserRole(rawText, role);
+  const strippedInternal = stripInternalRuntimeContext(strippedInbound);
+  const normalized = normalizeSessionText(strippedInternal);
+  if (!normalized) {
+    return strippedInternal !== rawText;
+  }
+  return (
+    isGeneratedSystemWrapperMessage(normalized, role) ||
+    isExecCompletionEvent(normalized.replace(GENERATED_SYSTEM_MESSAGE_RE, "").trim())
+  );
+}
+
+function sanitizeSessionText(text: string, role: "user" | "assistant"): string | null {
+  const strippedInbound = stripInboundMetadataForUserRole(text, role);
+  const strippedInternal = stripInternalRuntimeContext(strippedInbound);
+  const normalized = normalizeSessionText(strippedInternal);
+  if (!normalized) {
+    return null;
+  }
+  if (isGeneratedSystemWrapperMessage(normalized, role)) {
+    return null;
+  }
+  if (isSilentReplyPayloadText(normalized)) {
+    return null;
+  }
+  const withoutSystemEnvelope = normalized.replace(GENERATED_SYSTEM_MESSAGE_RE, "").trim();
+  if (isExecCompletionEvent(withoutSystemEnvelope)) {
+    return null;
+  }
+  return normalized;
+}
+
 export function extractSessionText(
   content: unknown,
   role: "user" | "assistant" = "assistant",
@@ -295,9 +377,7 @@ export function extractSessionText(
   if (rawText === null) {
     return null;
   }
-  const stripped = stripInboundMetadataForUserRole(rawText, role);
-  const normalized = normalizeSessionText(stripped);
-  return normalized ? normalized : null;
+  return sanitizeSessionText(rawText, role);
 }
 
 function parseSessionTimestampMs(
@@ -335,6 +415,9 @@ export async function buildSessionEntry(
     const messageTimestampsMs: number[] = [];
     let generatedByDreamingNarrative =
       opts.generatedByDreamingNarrative ?? isDreamingNarrativeTranscriptFromSessionStore(absPath);
+    const generatedByCronRun =
+      opts.generatedByCronRun ?? isCronRunTranscriptFromSessionStore(absPath);
+    let skippingGeneratedSystemFollowup = false;
     for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
       const line = lines[jsonlIdx];
       if (!line.trim()) {
@@ -365,11 +448,27 @@ export async function buildSessionEntry(
       if (message.role !== "user" && message.role !== "assistant") {
         continue;
       }
-      const text = extractSessionText(message.content, message.role);
+      const rawText = collectRawSessionText(message.content);
+      if (rawText === null) {
+        continue;
+      }
+      const text = sanitizeSessionText(rawText, message.role);
+      if (message.role === "user") {
+        if (!text) {
+          skippingGeneratedSystemFollowup = shouldSkipGeneratedSystemFollowup(
+            rawText,
+            message.role,
+          );
+          continue;
+        }
+        skippingGeneratedSystemFollowup = false;
+      } else if (skippingGeneratedSystemFollowup) {
+        continue;
+      }
       if (!text) {
         continue;
       }
-      if (generatedByDreamingNarrative) {
+      if (generatedByDreamingNarrative || generatedByCronRun) {
         continue;
       }
       const safe = redactSensitiveText(text, { mode: "tools" });
@@ -394,6 +493,7 @@ export async function buildSessionEntry(
       lineMap,
       messageTimestampsMs,
       ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
+      ...(generatedByCronRun ? { generatedByCronRun: true } : {}),
     };
   } catch (err) {
     log.debug(`Failed reading session file ${absPath}: ${String(err)}`);
