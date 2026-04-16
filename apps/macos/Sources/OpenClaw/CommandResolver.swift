@@ -397,7 +397,7 @@ enum CommandResolver {
         """
         let options: [String] = [
             "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "StrictHostKeyChecking=yes",
             "-o", "UpdateHostKeys=yes",
         ]
         let args = self.sshArguments(

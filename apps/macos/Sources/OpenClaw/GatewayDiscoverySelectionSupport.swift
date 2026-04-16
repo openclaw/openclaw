@@ -4,11 +4,22 @@ import OpenClawDiscovery
 enum GatewayDiscoverySelectionSupport {
     static func applyRemoteSelection(
         gateway: GatewayDiscoveryModel.DiscoveredGateway,
-        state: AppState)
+        state: AppState,
+        deps: GatewayDiscoveryTrustSupport.Deps = .live) async -> Bool
     {
         let preferredTransport = self.preferredTransport(
             for: gateway,
             current: state.remoteTransport)
+        guard await GatewayDiscoveryTrustSupport.confirmSelection(
+            gateway: gateway,
+            transport: preferredTransport,
+            deps: deps)
+        else {
+            return false
+        }
+        guard !Task.isCancelled else {
+            return false
+        }
         if preferredTransport != state.remoteTransport {
             state.remoteTransport = preferredTransport
         }
@@ -23,6 +34,7 @@ enum GatewayDiscoverySelectionSupport {
         } else {
             OpenClawConfigFile.clearRemoteGatewayUrl()
         }
+        return true
     }
 
     static func preferredTransport(

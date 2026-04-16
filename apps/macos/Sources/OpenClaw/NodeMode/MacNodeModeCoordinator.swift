@@ -171,16 +171,9 @@ final class MacNodeModeCoordinator {
     }
 
     private func buildSessionBox(url: URL) -> WebSocketSessionBox? {
-        guard url.scheme?.lowercased() == "wss" else { return nil }
-        let host = url.host ?? "gateway"
-        let port = url.port ?? 443
-        let stableID = "\(host):\(port)"
-        let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
-        let params = GatewayTLSParams(
-            required: true,
-            expectedFingerprint: stored,
-            allowTOFU: stored == nil,
-            storeKey: stableID)
+        guard let params = GatewayTLSPinningSupport.tlsParams(url: url, allowTOFU: true) else {
+            return nil
+        }
         let session = GatewayTLSPinningSession(params: params)
         return WebSocketSessionBox(session: session)
     }

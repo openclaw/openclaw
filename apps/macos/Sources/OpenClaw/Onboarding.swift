@@ -79,6 +79,7 @@ struct OnboardingView: View {
     @State var didAutoKickoff = false
     @State var showAdvancedConnection = false
     @State var preferredGatewayID: String?
+    @State var remoteSelectionTask: Task<Void, Never>?
     @State var remoteProbeState: RemoteOnboardingProbeState = .idle
     @State var remoteAuthIssue: RemoteGatewayAuthIssue?
     @State var suppressRemoteProbeReset = false
