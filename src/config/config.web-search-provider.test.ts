@@ -229,7 +229,6 @@ let validateConfigObjectWithPlugins: typeof import("./validation.js").validateCo
 let resolveSearchProvider: typeof import("../agents/tools/web-search.js").__testing.resolveSearchProvider;
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ validateConfigObjectWithPlugins } = await import("./validation.js"));
   ({
     __testing: { resolveSearchProvider },
