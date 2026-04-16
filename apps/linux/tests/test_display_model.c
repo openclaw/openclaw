@@ -13,6 +13,7 @@
 #include <string.h>
 #include "../src/display_model.h"
 #include "../src/gateway_config.h"
+#include "../src/runtime_paths.h"
 
 /* ── Helper ── */
 static void assert_contains(const char *haystack, const char *needle, const char *ctx) {
@@ -506,6 +507,59 @@ static void test_environment_check_result_clear_resets_owned_details(void) {
     g_assert_null(ecr.rows[0].detail);
 }
 
+static void test_runtime_effective_paths_prefers_loaded_config_path(void) {
+    GatewayConfig cfg = {0};
+    cfg.config_path = g_strdup("/tmp/openclaw-loaded/openclaw.json");
+
+    RuntimeEffectivePaths paths = {0};
+    runtime_effective_paths_resolve(&cfg,
+                                    "default",
+                                    "/tmp/openclaw-state",
+                                    "/tmp/openclaw-runtime/openclaw.json",
+                                    &paths);
+
+    g_assert_cmpstr(paths.effective_config_path, ==, "/tmp/openclaw-loaded/openclaw.json");
+    g_assert_cmpstr(paths.effective_state_dir, ==, "/tmp/openclaw-state");
+
+    runtime_effective_paths_clear(&paths);
+    g_assert_null(paths.effective_config_path);
+    g_assert_null(paths.effective_state_dir);
+
+    g_free(cfg.config_path);
+}
+
+static void test_runtime_effective_paths_derives_state_dir_from_effective_config(void) {
+    GatewayConfig cfg = {0};
+    cfg.config_path = g_strdup("/tmp/openclaw-cfg/openclaw.json");
+
+    RuntimeEffectivePaths paths = {0};
+    runtime_effective_paths_resolve(&cfg,
+                                    "default",
+                                    NULL,
+                                    NULL,
+                                    &paths);
+
+    g_assert_cmpstr(paths.effective_config_path, ==, "/tmp/openclaw-cfg/openclaw.json");
+    g_assert_cmpstr(paths.effective_state_dir, ==, "/tmp/openclaw-cfg");
+
+    runtime_effective_paths_clear(&paths);
+    g_free(cfg.config_path);
+}
+
+static void test_runtime_effective_paths_resolves_from_runtime_state_dir_when_no_loaded_config(void) {
+    RuntimeEffectivePaths paths = {0};
+    runtime_effective_paths_resolve(NULL,
+                                    "default",
+                                    "/tmp/openclaw-runtime-state",
+                                    NULL,
+                                    &paths);
+
+    g_assert_cmpstr(paths.effective_config_path, ==, "/tmp/openclaw-runtime-state/openclaw.json");
+    g_assert_cmpstr(paths.effective_state_dir, ==, "/tmp/openclaw-runtime-state");
+
+    runtime_effective_paths_clear(&paths);
+}
+
 /* ══════════════════════════════════════════════════════════════════
  * Onboarding routing tests
  * ══════════════════════════════════════════════════════════════════ */
@@ -722,6 +776,9 @@ int main(int argc, char **argv) {
     g_test_add_func("/display_model/runtime_paths/loaded_path_precedence", test_runtime_path_status_uses_loaded_path_precedence);
     g_test_add_func("/display_model/runtime_paths/derive_state_dir_from_config", test_runtime_path_status_derives_state_dir_from_config);
     g_test_add_func("/display_model/runtime_paths/invalid_utf8_display_safe", test_runtime_path_status_invalid_utf8_paths_are_display_safe);
+    g_test_add_func("/display_model/runtime_paths/effective_prefers_loaded_config", test_runtime_effective_paths_prefers_loaded_config_path);
+    g_test_add_func("/display_model/runtime_paths/effective_derives_state_dir", test_runtime_effective_paths_derives_state_dir_from_effective_config);
+    g_test_add_func("/display_model/runtime_paths/effective_from_runtime_state_dir", test_runtime_effective_paths_resolves_from_runtime_state_dir_when_no_loaded_config);
     g_test_add_func("/display_model/env/result_clear_resets_details", test_environment_check_result_clear_resets_owned_details);
 
     /* Onboarding routing */

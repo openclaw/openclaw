@@ -19,6 +19,65 @@ static void test_ancestor_walk_existing_dir(void) {
     g_free(res);
 }
 
+/* ── Onboarding refresh route-stable environment regression tests ── */
+
+static OnboardingRefreshSnapshotInput make_onboarding_snapshot_seed(void) {
+    OnboardingRefreshSnapshotInput snap = {0};
+    snap.state = 1;
+    snap.route = 2;
+    snap.stage_configuration = 1;
+    snap.stage_service_gateway = 1;
+    snap.stage_connection = 0;
+    snap.operational_ready = FALSE;
+    snap.config_valid = TRUE;
+    snap.setup_detected = TRUE;
+    snap.sys_installed = TRUE;
+    snap.sys_active = TRUE;
+    snap.config_file_exists = TRUE;
+    snap.state_dir_exists = TRUE;
+    snap.next_action = "do thing";
+    return snap;
+}
+
+static void test_onboarding_refresh_route_stable_env_change_refreshes_live(void) {
+    OnboardingRefreshSnapshotInput prev = make_onboarding_snapshot_seed();
+    OnboardingRefreshSnapshotInput next = prev;
+
+    next.config_file_exists = FALSE;
+
+    gboolean equal = onboarding_refresh_snapshot_equal(&prev, &next);
+    g_assert_false(equal);
+
+    OnboardingRefreshAction action = onboarding_refresh_action_decide(equal, FALSE);
+    g_assert_cmpint(action, ==, ONBOARDING_REFRESH_ACTION_REFRESH_LIVE);
+}
+
+static void test_onboarding_refresh_route_stable_state_dir_change_refreshes_live(void) {
+    OnboardingRefreshSnapshotInput prev = make_onboarding_snapshot_seed();
+    OnboardingRefreshSnapshotInput next = prev;
+
+    next.state_dir_exists = FALSE;
+
+    gboolean equal = onboarding_refresh_snapshot_equal(&prev, &next);
+    g_assert_false(equal);
+
+    OnboardingRefreshAction action = onboarding_refresh_action_decide(equal, FALSE);
+    g_assert_cmpint(action, ==, ONBOARDING_REFRESH_ACTION_REFRESH_LIVE);
+}
+
+static void test_onboarding_refresh_route_changed_rebuilds_pages(void) {
+    OnboardingRefreshSnapshotInput prev = make_onboarding_snapshot_seed();
+    OnboardingRefreshSnapshotInput next = prev;
+
+    next.route = 3;
+
+    gboolean equal = onboarding_refresh_snapshot_equal(&prev, &next);
+    g_assert_false(equal);
+
+    OnboardingRefreshAction action = onboarding_refresh_action_decide(equal, TRUE);
+    g_assert_cmpint(action, ==, ONBOARDING_REFRESH_ACTION_REBUILD_PAGES);
+}
+
 static void test_ancestor_walk_nonexistent_child(void) {
     gchar *path = g_strdup_printf("/tmp/openclaw_test_nonexistent_%d/foo/bar", g_random_int());
     gchar *res = find_nearest_existing_ancestor(path);
@@ -159,6 +218,14 @@ int main(int argc, char **argv) {
     g_test_add_func("/seams/tray_dispatch/settings_onboarding_hidden", test_tray_dispatch_settings_onboarding_hidden);
     g_test_add_func("/seams/tray_dispatch/diagnostics_onboarding_visible", test_tray_dispatch_diagnostics_onboarding_visible);
     g_test_add_func("/seams/tray_dispatch/repeated_requests_safe", test_tray_dispatch_repeated_requests_safe);
+
+    /* onboarding refresh regression tests */
+    g_test_add_func("/seams/onboarding_refresh/route_stable_config_change_refreshes_live",
+                    test_onboarding_refresh_route_stable_env_change_refreshes_live);
+    g_test_add_func("/seams/onboarding_refresh/route_stable_state_dir_change_refreshes_live",
+                    test_onboarding_refresh_route_stable_state_dir_change_refreshes_live);
+    g_test_add_func("/seams/onboarding_refresh/route_changed_rebuilds_pages",
+                    test_onboarding_refresh_route_changed_rebuilds_pages);
 
     return g_test_run();
 }

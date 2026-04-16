@@ -76,4 +76,34 @@ typedef enum {
 
 TrayUiAction tray_ui_dispatch_decide(TrayUiRequest request, gboolean onboarding_visible);
 
+/* ── Onboarding refresh decisions (from onboarding.c) ─────────────── */
+
+typedef struct {
+    gint state;
+    gint route;
+    gint stage_configuration;
+    gint stage_service_gateway;
+    gint stage_connection;
+    gboolean operational_ready;
+    gboolean config_valid;
+    gboolean setup_detected;
+    gboolean sys_installed;
+    gboolean sys_active;
+    gboolean config_file_exists;
+    gboolean state_dir_exists;
+    const gchar *next_action;
+} OnboardingRefreshSnapshotInput;
+
+typedef enum {
+    ONBOARDING_REFRESH_ACTION_NOOP = 0,
+    ONBOARDING_REFRESH_ACTION_REBUILD_PAGES = 1,
+    ONBOARDING_REFRESH_ACTION_REFRESH_LIVE = 2,
+} OnboardingRefreshAction;
+
+gboolean onboarding_refresh_snapshot_equal(const OnboardingRefreshSnapshotInput *a,
+                                           const OnboardingRefreshSnapshotInput *b);
+
+OnboardingRefreshAction onboarding_refresh_action_decide(gboolean snapshots_equal,
+                                                         gboolean route_changed);
+
 #endif /* TEST_SEAMS_H */

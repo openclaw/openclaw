@@ -152,3 +152,37 @@ TrayUiAction tray_ui_dispatch_decide(TrayUiRequest request, gboolean onboarding_
             return TRAY_UI_ACTION_SHOW_SETTINGS;
     }
 }
+
+/* ── Onboarding refresh decisions (from onboarding.c) ─────────────── */
+
+gboolean onboarding_refresh_snapshot_equal(const OnboardingRefreshSnapshotInput *a,
+                                           const OnboardingRefreshSnapshotInput *b) {
+    if (!a || !b) return FALSE;
+
+    return a->state == b->state &&
+           a->route == b->route &&
+           a->stage_configuration == b->stage_configuration &&
+           a->stage_service_gateway == b->stage_service_gateway &&
+           a->stage_connection == b->stage_connection &&
+           a->operational_ready == b->operational_ready &&
+           a->config_valid == b->config_valid &&
+           a->setup_detected == b->setup_detected &&
+           a->sys_installed == b->sys_installed &&
+           a->sys_active == b->sys_active &&
+           a->config_file_exists == b->config_file_exists &&
+           a->state_dir_exists == b->state_dir_exists &&
+           g_strcmp0(a->next_action, b->next_action) == 0;
+}
+
+OnboardingRefreshAction onboarding_refresh_action_decide(gboolean snapshots_equal,
+                                                         gboolean route_changed) {
+    if (snapshots_equal) {
+        return ONBOARDING_REFRESH_ACTION_NOOP;
+    }
+
+    if (route_changed) {
+        return ONBOARDING_REFRESH_ACTION_REBUILD_PAGES;
+    }
+
+    return ONBOARDING_REFRESH_ACTION_REFRESH_LIVE;
+}
