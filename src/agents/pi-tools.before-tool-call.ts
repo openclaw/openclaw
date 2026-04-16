@@ -10,6 +10,7 @@ import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
+import type { PluginHookToolApprovalTrace } from "../plugins/types.js";
 
 export type HookContext = {
   agentId?: string;
@@ -27,6 +28,7 @@ const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
 const adjustedParamsByToolCallId = new Map<string, unknown>();
+const approvalTraceByToolCallId = new Map<string, PluginHookToolApprovalTrace>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
@@ -41,6 +43,27 @@ function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }):
     return `${params.runId}:${params.toolCallId}`;
   }
   return params.toolCallId;
+}
+
+function trackApprovalTraceForToolCall(params: {
+  toolCallId?: string;
+  runId?: string;
+  trace: PluginHookToolApprovalTrace;
+}): void {
+  if (!params.toolCallId) {
+    return;
+  }
+  const adjustedParamsKey = buildAdjustedParamsKey({
+    runId: params.runId,
+    toolCallId: params.toolCallId,
+  });
+  approvalTraceByToolCallId.set(adjustedParamsKey, params.trace);
+  if (approvalTraceByToolCallId.size > MAX_TRACKED_ADJUSTED_PARAMS) {
+    const oldest = approvalTraceByToolCallId.keys().next().value;
+    if (oldest) {
+      approvalTraceByToolCallId.delete(oldest);
+    }
+  }
 }
 
 function mergeParamsWithApprovalOverrides(
@@ -321,6 +344,16 @@ export async function runBeforeToolCallHook(args: {
             ? decision
             : PluginApprovalResolutions.TIMEOUT;
         safeOnResolution(resolution);
+        trackApprovalTraceForToolCall({
+          toolCallId: args.toolCallId,
+          runId: args.ctx?.runId,
+          trace: {
+            kind: "plugin",
+            approvalId: id,
+            pluginId: approval.pluginId,
+            resolution,
+          },
+        });
         if (
           decision === PluginApprovalResolutions.ALLOW_ONCE ||
           decision === PluginApprovalResolutions.ALLOW_ALWAYS
@@ -453,11 +486,23 @@ export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: str
   return params;
 }
 
+export function consumeApprovalTraceForToolCall(
+  toolCallId: string,
+  runId?: string,
+): PluginHookToolApprovalTrace | undefined {
+  const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
+  const trace = approvalTraceByToolCallId.get(adjustedParamsKey);
+  approvalTraceByToolCallId.delete(adjustedParamsKey);
+  return trace;
+}
+
 export const __testing = {
   BEFORE_TOOL_CALL_WRAPPED,
   buildAdjustedParamsKey,
   adjustedParamsByToolCallId,
+  approvalTraceByToolCallId,
   runBeforeToolCallHook,
   mergeParamsWithApprovalOverrides,
   isPlainObject,
+  trackApprovalTraceForToolCall,
 };

@@ -306,6 +306,13 @@ export const PluginApprovalResolutions = {
 export type PluginApprovalResolution =
   (typeof PluginApprovalResolutions)[keyof typeof PluginApprovalResolutions];
 
+export type PluginHookToolApprovalTrace = {
+  kind: "plugin";
+  approvalId: string;
+  pluginId?: string;
+  resolution: PluginApprovalResolution;
+};
+
 export type PluginHookBeforeToolCallResult = {
   params?: Record<string, unknown>;
   block?: boolean;
@@ -329,6 +336,7 @@ export type PluginHookAfterToolCallEvent = {
   result?: unknown;
   error?: string;
   durationMs?: number;
+  approval?: PluginHookToolApprovalTrace;
 };
 
 export type PluginHookToolResultPersistContext = {

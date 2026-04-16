@@ -1119,8 +1119,10 @@ export async function handleToolExecutionEnd(
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    const { consumeAdjustedParamsForToolCall } = await loadBeforeToolCall();
+    const { consumeAdjustedParamsForToolCall, consumeApprovalTraceForToolCall } =
+      await loadBeforeToolCall();
     const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
+    const approval = consumeApprovalTraceForToolCall(toolCallId, runId);
     const afterToolCallArgs =
       adjustedArgs && typeof adjustedArgs === "object"
         ? (adjustedArgs as Record<string, unknown>)
@@ -1134,6 +1136,7 @@ export async function handleToolExecutionEnd(
       result: sanitizedResult,
       error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
       durationMs,
+      approval,
     };
     void hookRunnerAfter
       .runAfterToolCall(hookEvent, {

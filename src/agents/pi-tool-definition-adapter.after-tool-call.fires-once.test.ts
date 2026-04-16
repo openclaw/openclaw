@@ -21,6 +21,7 @@ const hookMocks = vi.hoisted(() => ({
 
 const beforeToolCallMocks = vi.hoisted(() => ({
   consumeAdjustedParamsForToolCall: vi.fn((_: string): unknown => undefined),
+  consumeApprovalTraceForToolCall: vi.fn((_: string): unknown => undefined),
   isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
     blocked: false,
@@ -89,6 +90,7 @@ async function loadFreshAfterToolCallModulesForTest() {
   }));
   vi.doMock("./pi-tools.before-tool-call.js", () => ({
     consumeAdjustedParamsForToolCall: beforeToolCallMocks.consumeAdjustedParamsForToolCall,
+    consumeApprovalTraceForToolCall: beforeToolCallMocks.consumeApprovalTraceForToolCall,
     isToolWrappedWithBeforeToolCallHook: beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook,
     runBeforeToolCallHook: beforeToolCallMocks.runBeforeToolCallHook,
   }));
@@ -109,6 +111,8 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
     hookMocks.runner.runBeforeToolCall.mockResolvedValue(undefined);
     beforeToolCallMocks.consumeAdjustedParamsForToolCall.mockClear();
     beforeToolCallMocks.consumeAdjustedParamsForToolCall.mockReturnValue(undefined);
+    beforeToolCallMocks.consumeApprovalTraceForToolCall.mockClear();
+    beforeToolCallMocks.consumeApprovalTraceForToolCall.mockReturnValue(undefined);
     beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook.mockClear();
     beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(false);
     beforeToolCallMocks.runBeforeToolCallHook.mockClear();
@@ -245,6 +249,42 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
     const event = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as { params?: unknown } | undefined;
     expect(event?.params).toEqual(adjusted);
+  });
+
+  it("includes plugin approval trace in after_tool_call payload", async () => {
+    const { def, extensionContext } = resolveAdapterDefinition(createTestTool("exec"));
+
+    const toolCallId = "integration-call-approved";
+    const args = { command: "echo hi" };
+    const approval = {
+      kind: "plugin",
+      approvalId: "plugin:approval-123",
+      pluginId: "sage",
+      resolution: "allow-once",
+    };
+    const ctx = createToolHandlerCtx();
+
+    beforeToolCallMocks.consumeApprovalTraceForToolCall.mockImplementation((id: string) =>
+      id === toolCallId ? approval : undefined,
+    );
+
+    await emitToolExecutionStartEvent({ ctx, toolName: "exec", toolCallId, args });
+    await def.execute(toolCallId, args, undefined, undefined, extensionContext);
+    await emitToolExecutionEndEvent({
+      ctx,
+      toolName: "exec",
+      toolCallId,
+      isError: false,
+      result: { content: [{ type: "text", text: "ok" }] },
+    });
+
+    expect(beforeToolCallMocks.consumeApprovalTraceForToolCall).toHaveBeenCalledWith(
+      toolCallId,
+      "integration-test",
+    );
+    const event = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as { approval?: unknown } | undefined;
+    expect(event?.approval).toEqual(approval);
   });
 
   it("fires after_tool_call exactly once per tool across multiple sequential tool calls", async () => {

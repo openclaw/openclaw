@@ -13,6 +13,7 @@ import {
 import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
+import { consumeApprovalTraceForToolCall } from "./pi-tools.before-tool-call.js";
 
 vi.mock("../plugins/hook-runner-global.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
@@ -649,6 +650,38 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(onResolution).toHaveBeenCalledWith("allow-once");
+  });
+
+  it("stores plugin approval trace for later execution correlation", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Trace me",
+        description: "Capture approval metadata",
+        pluginId: "sage",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "plugin:trace-1", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "plugin:trace-1", decision: "allow-once" });
+
+    const toolCallId = "trace-call-1";
+    const runId = "trace-run-1";
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "echo trace" },
+      toolCallId,
+      ctx: { agentId: "main", sessionKey: "main", runId },
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(consumeApprovalTraceForToolCall(toolCallId, runId)).toEqual({
+      kind: "plugin",
+      approvalId: "plugin:trace-1",
+      pluginId: "sage",
+      resolution: "allow-once",
+    });
+    expect(consumeApprovalTraceForToolCall(toolCallId, runId)).toBeUndefined();
   });
 
   it("does not await onResolution before returning approval outcome", async () => {
