@@ -6,7 +6,6 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setCliSessionBinding, setCliSessionId } from "../cli-session.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
@@ -61,15 +60,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const { resolveContextTokensForModel } = await getContextModule();
-  const contextTokens =
-    resolveContextTokensForModel({
-      cfg,
-      provider: providerUsed,
-      model: modelUsed,
-      contextTokensOverride: params.contextTokensOverride,
-      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-      allowAsyncLoad: false,
-    }) ?? DEFAULT_CONTEXT_TOKENS;
+  const resolvedContextTokens = resolveContextTokensForModel({
+    cfg,
+    provider: providerUsed,
+    model: modelUsed,
+    contextTokensOverride: params.contextTokensOverride,
+    allowAsyncLoad: false,
+  });
 
   const entry = sessionStore[sessionKey] ?? {
     sessionId,
@@ -79,7 +76,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
     ...entry,
     sessionId,
     updatedAt: Date.now(),
-    contextTokens,
+    ...(typeof resolvedContextTokens === "number" && resolvedContextTokens > 0
+      ? { contextTokens: resolvedContextTokens }
+      : {}),
   };
   setSessionRuntimeModel(next, {
     provider: providerUsed,
@@ -106,7 +105,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     const output = usage.output ?? 0;
     const totalTokens = deriveSessionTotalTokens({
       usage: promptTokens ? undefined : usage,
-      contextTokens,
+      contextTokens: resolvedContextTokens,
       promptTokens,
     });
     const runEstimatedCostUsd = resolveNonNegativeNumber(
