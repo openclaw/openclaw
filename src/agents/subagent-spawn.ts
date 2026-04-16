@@ -290,7 +290,10 @@ function summarizeError(err: unknown): string {
 // Delivery targets carry a channel-side prefix (e.g. Matrix uses `room:<roomId>`;
 // LINE uses `line:group:<id>`), but route bindings store raw peer ids on
 // `match.peer.id`. Peel the `<channel>:` namespace first, then loop over generic
-// target-kind prefixes so the raw peer id surfaces.
+// target-kind prefixes so the raw peer id surfaces. Each kind prefix also
+// implies a ChatType — we capture it as a fallback when the channel plugin does
+// not implement `inferTargetChatType`, and as the authoritative source when the
+// target shape is `<channel>:<kind>:<id>`.
 const KIND_PREFIX_TO_CHAT_TYPE: Readonly<Record<string, ChatType>> = {
   "room:": "channel",
   "channel:": "channel",

@@ -190,6 +190,77 @@ describe("resolveFirstBoundAccountId", () => {
     ).toBe("bot-alpha-dm");
   });
 
+  it("treats group and channel peer kinds as equivalent (matches resolve-route semantics)", () => {
+    const cfg = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "line",
+          peer: { kind: "group", id: "*" },
+          accountId: "bot-alpha-group",
+        },
+      },
+    ]);
+    // Caller inferred as `channel` (e.g. Matrix room, Mattermost channel)
+    // should still match a `group` wildcard binding because group/channel are
+    // compatible kinds in the routing model.
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "line",
+        agentId: "bot-alpha",
+        peerId: "!roomA:example.org",
+        peerKind: "channel",
+      }),
+    ).toBe("bot-alpha-group");
+    // And vice versa: `channel` binding matches a `group` caller.
+    const cfg2 = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "line",
+          peer: { kind: "channel", id: "*" },
+          accountId: "bot-alpha-channel",
+        },
+      },
+    ]);
+    expect(
+      resolveFirstBoundAccountId({
+        cfg: cfg2,
+        channelId: "line",
+        agentId: "bot-alpha",
+        peerId: "groupA",
+        peerKind: "group",
+      }),
+    ).toBe("bot-alpha-channel");
+  });
+
+  it("accepts a wildcard peer binding as fallback for peerless callers", () => {
+    // Cron-style peerless caller: we have no peer context to verify kind
+    // safety against, so a wildcard binding is the only available answer and
+    // must not silently regress to undefined.
+    const cfg = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "matrix",
+          peer: { kind: "channel", id: "*" },
+          accountId: "bot-alpha-wildcard",
+        },
+      },
+    ]);
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "matrix",
+        agentId: "bot-alpha",
+      }),
+    ).toBe("bot-alpha-wildcard");
+  });
+
   it("skips wildcard peer bindings when the caller's peerKind is unknown", () => {
     const cfg = cfgWithBindings([
       {

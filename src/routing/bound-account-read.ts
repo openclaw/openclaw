@@ -48,6 +48,18 @@ function resolveNormalizedBindingMatch(binding: AgentRouteBinding): {
   };
 }
 
+// Peer-kind equivalence matches resolve-route.ts: `group` and `channel` are
+// treated as compatible so bindings authored as `peer.kind: "group"` resolve
+// for callers inferred as `"channel"` (Matrix rooms, Slack/Mattermost
+// channels) and vice versa.
+function peerKindMatches(a: ChatType, b: ChatType): boolean {
+  if (a === b) {
+    return true;
+  }
+  const pair = new Set([a, b]);
+  return pair.has("group") && pair.has("channel");
+}
+
 export function resolveFirstBoundAccountId(params: {
   cfg: OpenClawConfig;
   channelId: string;
@@ -75,18 +87,26 @@ export function resolveFirstBoundAccountId(params: {
       continue;
     }
     if (resolved.peerId === "*") {
-      // Wildcard peer bindings are only safe when both sides declare a peer
-      // kind AND the kinds agree. If either side lacks a kind, skip — a
-      // direct/* binding must never win for a channel caller (or vice versa),
-      // and we'd rather fall through to channel-only or the caller account
-      // than actively route to the wrong identity.
-      if (!resolved.peerKind || !normalizedPeerKind || resolved.peerKind !== normalizedPeerKind) {
-        continue;
-      }
-      if (normalizedPeerId) {
-        wildcardPeerMatch ??= resolved.accountId;
-      } else {
+      if (!normalizedPeerId) {
+        // Peerless caller (for example cron delivery resolution). We have no
+        // peer context to apply kind safety against, so accept wildcards as a
+        // last-resort fallback — this preserves the pre-existing first-match
+        // semantics for configs that only declare wildcard peer bindings.
         peerlessPeerSpecificFallback ??= resolved.accountId;
+      } else {
+        // Caller has a peer. Wildcard bindings are only safe when both sides
+        // declare a peer kind AND the kinds agree — a direct/* binding must
+        // never win for a channel caller (or vice versa), and we'd rather fall
+        // through to channel-only or the caller account than actively route to
+        // the wrong identity.
+        if (
+          !resolved.peerKind ||
+          !normalizedPeerKind ||
+          !peerKindMatches(resolved.peerKind, normalizedPeerKind)
+        ) {
+          continue;
+        }
+        wildcardPeerMatch ??= resolved.accountId;
       }
     } else if (resolved.peerId) {
       // Exact peer id match: peer ids are channel-unique so id alone is
@@ -94,7 +114,11 @@ export function resolveFirstBoundAccountId(params: {
       // (avoids a direct-kind binding matching a channel caller that happens
       // to share an id, which can occur on channels where ids are reused
       // across kinds).
-      if (resolved.peerKind && normalizedPeerKind && resolved.peerKind !== normalizedPeerKind) {
+      if (
+        resolved.peerKind &&
+        normalizedPeerKind &&
+        !peerKindMatches(resolved.peerKind, normalizedPeerKind)
+      ) {
         continue;
       }
       if (normalizedPeerId && resolved.peerId === normalizedPeerId) {

@@ -705,6 +705,18 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       messages: { queue: { debounceMs: 0 } },
       agents: { defaults: { subagents: { allowAgents: ["bot-alpha"] } } },
       bindings: [
+        // Wildcard peer binding with a conflicting kind (direct) — must be
+        // skipped because the inferred kind from the `line:group:` target is
+        // `group`, not `direct`.
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "line",
+            peer: { kind: "direct", id: "*" },
+            accountId: "bot-alpha-line-dm",
+          },
+        },
         {
           type: "route",
           agentId: "bot-alpha",
