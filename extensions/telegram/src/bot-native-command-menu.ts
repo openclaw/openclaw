@@ -312,10 +312,8 @@ export function syncTelegramMenuCommands(params: {
       return;
     }
 
-    // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
-    const deleteSucceeded = await deleteTelegramMenuCommandsForScopes({ bot, runtime });
-
     if (commandsToRegister.length === 0) {
+      const deleteSucceeded = await deleteTelegramMenuCommandsForScopes({ bot, runtime });
       if (!deleteSucceeded) {
         runtime.log?.("telegram: deleteMyCommands failed; skipping empty-menu hash cache write");
         return;

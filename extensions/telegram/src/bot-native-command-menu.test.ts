@@ -150,7 +150,7 @@ describe("bot-native-command-menu", () => {
     );
   });
 
-  it("deletes stale commands before setting new menu", async () => {
+  it("skips deleteMyCommands before setting a non-empty menu", async () => {
     const callOrder: string[] = [];
     const deleteMyCommands = vi.fn(async (options?: { scope?: { type?: string } }) => {
       callOrder.push(options?.scope?.type ? `delete:${options.scope.type}` : "delete:default");
@@ -170,15 +170,11 @@ describe("bot-native-command-menu", () => {
     });
 
     await vi.waitFor(() => {
-      expect(setMyCommands).toHaveBeenCalled();
+      expect(setMyCommands).toHaveBeenCalledTimes(2);
     });
 
-    expect(callOrder).toEqual([
-      "delete:default",
-      "delete:all_group_chats",
-      "set:default",
-      "set:all_group_chats",
-    ]);
+    expect(deleteMyCommands).not.toHaveBeenCalled();
+    expect(callOrder).toEqual(["set:default", "set:all_group_chats"]);
   });
 
   it("registers the menu in default and group chat scopes", async () => {
@@ -202,6 +198,29 @@ describe("bot-native-command-menu", () => {
     expect(setMyCommands).toHaveBeenCalledWith(commands, {
       scope: { type: "all_group_chats" },
     });
+  });
+
+  it("deletes commands when syncing an empty menu", async () => {
+    const callOrder: string[] = [];
+    const deleteMyCommands = vi.fn(async (options?: { scope?: { type?: string } }) => {
+      callOrder.push(options?.scope?.type ? `delete:${options.scope.type}` : "delete:default");
+    });
+    const setMyCommands = vi.fn(async () => undefined);
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      commandsToRegister: [],
+      accountId: `test-empty-delete-${Date.now()}`,
+      botIdentity: "bot-a",
+    });
+
+    await vi.waitFor(() => {
+      expect(deleteMyCommands).toHaveBeenCalledTimes(2);
+    });
+
+    expect(setMyCommands).not.toHaveBeenCalled();
+    expect(callOrder).toEqual(["delete:default", "delete:all_group_chats"]);
   });
 
   it("produces a stable hash regardless of command order (#32017)", () => {
@@ -241,6 +260,7 @@ describe("bot-native-command-menu", () => {
     await vi.waitFor(() => {
       expect(setMyCommands).toHaveBeenCalledTimes(2);
     });
+    await Promise.resolve();
 
     // Second sync with the same commands — hash is cached, should skip.
     syncMenuCommandsWithMocks({
