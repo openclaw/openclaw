@@ -70,7 +70,6 @@ describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
       defaultPort: 18789,
     });
 
-    expect(result?.gatewayToken).toBe("existing-user-token");
     expect(result?.nextConfig.gateway?.auth?.token).toBe("existing-user-token");
     expect(randomToken).not.toHaveBeenCalled();
   });
@@ -90,7 +89,6 @@ describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
       defaultPort: 18789,
     });
 
-    expect(result?.gatewayToken).toBe("existing-user-token");
     expect(result?.nextConfig.gateway?.auth?.token).toBe("existing-user-token");
     expect(randomToken).not.toHaveBeenCalled();
   });
@@ -107,7 +105,6 @@ describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
       defaultPort: 18789,
     });
 
-    expect(result?.gatewayToken).toBe("flag-token");
     expect(result?.nextConfig.gateway?.auth?.token).toBe("flag-token");
     expect(randomToken).not.toHaveBeenCalled();
   });
@@ -122,7 +119,6 @@ describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
       defaultPort: 18789,
     });
 
-    expect(result?.gatewayToken).toBe("env-token");
     expect(result?.nextConfig.gateway?.auth?.token).toBe("env-token");
     expect(randomToken).not.toHaveBeenCalled();
   });
@@ -136,7 +132,6 @@ describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
     });
 
     expect(randomToken).toHaveBeenCalledOnce();
-    expect(result?.gatewayToken).toBe("generated-random-token");
     expect(result?.nextConfig.gateway?.auth?.token).toBe("generated-random-token");
   });
 
@@ -176,9 +171,7 @@ describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
     expect(randomToken).not.toHaveBeenCalled();
   });
 
-  it("resolves an env-source SecretRef for the health probe without persisting plaintext", () => {
-    // For probe/runtime use only: resolve process.env[ref.id] and return it
-    // as gatewayToken, while leaving the SecretRef intact in config.
+  it("leaves env-source SecretRef resolution to the health probe path", () => {
     process.env[SAMPLE_SECRET_REF.id] = "resolved-secret-value";
     const nextConfig = {
       gateway: { auth: { mode: "token", token: SAMPLE_SECRET_REF } },
@@ -191,24 +184,8 @@ describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
       defaultPort: 18789,
     });
 
-    expect(result?.gatewayToken).toBe("resolved-secret-value");
     expect(result?.nextConfig.gateway?.auth?.token).toEqual(SAMPLE_SECRET_REF);
-  });
-
-  it("leaves gatewayToken undefined when an env-source SecretRef is unresolved", () => {
-    const nextConfig = {
-      gateway: { auth: { mode: "token", token: SAMPLE_SECRET_REF } },
-    } as unknown as OpenClawConfig;
-
-    const result = applyNonInteractiveGatewayConfig({
-      nextConfig,
-      opts: baseOpts,
-      runtime: createRuntime() as never,
-      defaultPort: 18789,
-    });
-
-    expect(result?.gatewayToken).toBeUndefined();
-    expect(result?.nextConfig.gateway?.auth?.token).toEqual(SAMPLE_SECRET_REF);
+    expect(randomToken).not.toHaveBeenCalled();
   });
 
   it("overrides an existing SecretRef when --gateway-token flag is provided", () => {
@@ -223,7 +200,6 @@ describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
       defaultPort: 18789,
     });
 
-    expect(result?.gatewayToken).toBe("flag-token");
     expect(result?.nextConfig.gateway?.auth?.token).toBe("flag-token");
     expect(randomToken).not.toHaveBeenCalled();
   });
@@ -243,7 +219,6 @@ describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
         defaultPort: 18789,
       });
 
-      expect(result?.gatewayToken).toBe("resolved-new-ref-value");
       const newToken = result?.nextConfig.gateway?.auth?.token;
       expect(newToken).toMatchObject({ source: "env", id: newRefId });
       expect(newToken).not.toEqual(SAMPLE_SECRET_REF);

@@ -18,7 +18,6 @@ export function applyNonInteractiveGatewayConfig(params: {
   authMode: string;
   tailscaleMode: string;
   tailscaleResetOnExit: boolean;
-  gatewayToken?: string;
 } | null {
   const { opts, runtime } = params;
 
@@ -121,16 +120,6 @@ export function applyNonInteractiveGatewayConfig(params: {
           },
         },
       };
-      // Resolve env-source refs inline for the health probe only — do not
-      // persist any plaintext here. Other ref sources (file/exec) defer to
-      // the gateway's own resolver; the health probe may then fail unless
-      // --skip-health is set.
-      if (existingTokenRef.source === "env") {
-        const resolved = process.env[existingTokenRef.id]?.trim();
-        gatewayToken = resolved || undefined;
-      } else {
-        gatewayToken = undefined;
-      }
     } else {
       if (!gatewayToken) {
         gatewayToken = randomToken();
@@ -190,6 +179,5 @@ export function applyNonInteractiveGatewayConfig(params: {
     authMode,
     tailscaleMode,
     tailscaleResetOnExit,
-    gatewayToken,
   };
 }
