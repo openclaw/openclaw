@@ -99,7 +99,7 @@ type SubagentRegistryDeps = {
   ensureContextEnginesInitialized?: () => void;
   ensureRuntimePluginsLoaded?: typeof ensureRuntimePluginsLoadedFn;
   resolveContextEngine?: (
-    cfg: OpenClawConfig,
+    cfg?: OpenClawConfig,
     options?: ResolveContextEngineOptions,
   ) => Promise<ContextEngine>;
 };
@@ -145,7 +145,7 @@ type ContextEngineInitModule = Pick<
 type ContextEngineRegistryModule = Pick<
   {
     resolveContextEngine: (
-      cfg: OpenClawConfig,
+      cfg?: OpenClawConfig,
       options?: ResolveContextEngineOptions,
     ) => Promise<ContextEngine>;
   },
