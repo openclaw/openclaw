@@ -3,6 +3,7 @@ import {
 	duckdbQueryOnFile,
 	findDuckDBForObject,
 	findObjectDir,
+	pivotViewIdentifier,
 	readObjectYaml,
 	writeObjectYaml,
 } from "@/lib/workspace";
@@ -27,7 +28,7 @@ export async function PATCH(
 ) {
 	const { name, fieldId } = await params;
 
-	if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+	if (!/^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(name)) {
 		return Response.json(
 			{ error: "Invalid object name" },
 			{ status: 400 },
@@ -119,7 +120,7 @@ export async function DELETE(
 ) {
 	const { name, fieldId } = await params;
 
-	if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+	if (!/^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(name)) {
 		return Response.json(
 			{ error: "Invalid object name" },
 			{ status: 400 },
@@ -183,8 +184,10 @@ function regeneratePivotView(dbFile: string, objectName: string, objectId: strin
 		`SELECT name FROM fields WHERE object_id = '${sqlEscape(objectId)}' AND type != 'action' ORDER BY sort_order`,
 	);
 
+	const viewIdent = pivotViewIdentifier(objectName);
+
 	if (fields.length === 0) {
-		duckdbExecOnFile(dbFile, `DROP VIEW IF EXISTS v_${objectName}`);
+		duckdbExecOnFile(dbFile, `DROP VIEW IF EXISTS ${viewIdent}`);
 		return;
 	}
 
@@ -192,7 +195,7 @@ function regeneratePivotView(dbFile: string, objectName: string, objectId: strin
 
 	duckdbExecOnFile(
 		dbFile,
-		`CREATE OR REPLACE VIEW v_${objectName} AS
+		`CREATE OR REPLACE VIEW ${viewIdent} AS
 		 PIVOT (
 		   SELECT e.id as entry_id, e.created_at, e.updated_at,
 		          f.name as field_name, ef.value

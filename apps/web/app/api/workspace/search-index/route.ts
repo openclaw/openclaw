@@ -7,6 +7,7 @@ import {
   discoverDuckDBPaths,
   duckdbQueryOnFileAsync,
   isDatabaseFile,
+  pivotViewIdentifier,
 } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
@@ -203,9 +204,12 @@ async function buildEntryItems(): Promise<SearchIndexItem[]> {
       .filter((f) => !["relation", "richtext"].includes(f.type))
       .slice(0, 4);
 
-    // Try PIVOT view first, then raw EAV (on the same DB)
+    // Try PIVOT view first, then raw EAV (on the same DB).
+    // Use pivotViewIdentifier so object names with hyphens (e.g. "ai-agent")
+    // resolve to the correct quoted identifier ("v_ai_agent") instead of
+    // producing invalid SQL.
     let entries: Record<string, unknown>[] = await duckdbQueryOnFileAsync(dbPath,
-      `SELECT * FROM v_${obj.name} ORDER BY created_at DESC LIMIT 500`,
+      `SELECT * FROM ${pivotViewIdentifier(obj.name)} ORDER BY created_at DESC LIMIT 500`,
     );
 
     if (entries.length === 0) {

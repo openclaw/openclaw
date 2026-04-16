@@ -1153,6 +1153,49 @@ export async function duckdbQueryOnFileAsync<T = Record<string, unknown>>(
   }
 }
 
+/**
+ * Like `duckdbQueryOnFileAsync`, but rethrows errors instead of silently
+ * returning `[]`. Use when callers need to distinguish "no rows" from "query
+ * failed" (e.g. to trigger an EAV fallback when a pivot view is missing or
+ * has a bad identifier).
+ */
+export async function duckdbQueryOnFileAsyncStrict<T = Record<string, unknown>>(
+  dbFilePath: string,
+  sql: string,
+): Promise<T[]> {
+  const bin = resolveDuckdbBin();
+  if (!bin) {
+    throw new Error("DuckDB CLI binary not found");
+  }
+
+  const escapedSql = sql.replace(/'/g, "'\\''");
+  const { stdout } = await execAsync(`'${bin}' -json '${dbFilePath}' '${escapedSql}'`, {
+    encoding: "utf-8",
+    timeout: 15_000,
+    maxBuffer: 10 * 1024 * 1024,
+    shell: "/bin/sh",
+  });
+
+  const trimmed = stdout.trim();
+  if (!trimmed || trimmed === "[]") {return [];}
+  return JSON.parse(trimmed) as T[];
+}
+
+/**
+ * Build a safe, quoted DuckDB identifier for an object's auto-generated PIVOT
+ * view. DuckDB object names may contain hyphens (e.g. `ai-agent`), which are
+ * parsed as the minus operator in unquoted identifiers. We normalize hyphens
+ * to underscores AND wrap the identifier in double quotes so it is always a
+ * single valid identifier regardless of what other characters appear.
+ *
+ * Example: `ai-agent` → `"v_ai_agent"`.
+ */
+export function pivotViewIdentifier(objectName: string): string {
+  const normalized = objectName.replace(/-/g, "_");
+  const escaped = normalized.replace(/"/g, '""');
+  return `"v_${escaped}"`;
+}
+
 export type ResolvedFilesystemPath = {
   absolutePath: string;
   kind: WorkspacePathKind;

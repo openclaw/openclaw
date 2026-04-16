@@ -3,6 +3,8 @@ import {
   parseRelationValue,
   resolveDuckdbBin,
   duckdbQueryOnFileAsync,
+  duckdbQueryOnFileAsyncStrict,
+  pivotViewIdentifier,
   discoverDuckDBPathsAsync,
   getObjectViews,
   duckdbExecOnFileAsync,
@@ -463,23 +465,43 @@ export async function GET(
     }
   }
 
-  // Try the PIVOT view first, then fall back to raw EAV query + client-side pivot
+  // Try the PIVOT view first, then fall back to raw EAV query + client-side pivot.
+  // IMPORTANT: use the *Strict* query variant here so DuckDB errors (e.g. missing
+  // view, bad identifier from hyphenated object names, concurrency hiccups) reject
+  // and actually trigger the fallback — the non-strict variant silently returns []
+  // and would leave the UI stuck on "No results found" while `objects.entry_count`
+  // still says otherwise.
+  const viewIdent = pivotViewIdentifier(name);
   let entries: Record<string, unknown>[] = [];
   let totalCount = 0;
+  let usedFallback = false;
 
   try {
-    // Get total count with same WHERE clause but no LIMIT/OFFSET
-    const countResult = await q<{ cnt: number }>(dbFile,
-      `SELECT COUNT(*) as cnt FROM v_${name}${whereClause}`,
+    const countResult = await duckdbQueryOnFileAsyncStrict<{ cnt: number }>(dbFile,
+      `SELECT COUNT(*) as cnt FROM ${viewIdent}${whereClause}`,
     );
-    totalCount = countResult[0]?.cnt ?? 0;
+    totalCount = Number(countResult[0]?.cnt ?? 0);
 
-    const pivotEntries = await q(dbFile,
-      `SELECT * FROM v_${name}${whereClause}${orderByClause}${limitClause}`,
+    let pivotEntries = await duckdbQueryOnFileAsyncStrict<Record<string, unknown>>(dbFile,
+      `SELECT * FROM ${viewIdent}${whereClause}${orderByClause}${limitClause}`,
     );
+
+    // Parallel DuckDB CLI processes against the same file can intermittently
+    // return empty JSON arrays even when data exists. Retry once on the
+    // obvious mismatch case (count says rows exist, first page is empty).
+    if (pivotEntries.length === 0 && totalCount > 0) {
+      await new Promise((r) => setTimeout(r, 120));
+      pivotEntries = await duckdbQueryOnFileAsyncStrict<Record<string, unknown>>(dbFile,
+        `SELECT * FROM ${viewIdent}${whereClause}${orderByClause}${limitClause}`,
+      );
+    }
+
     entries = pivotEntries;
   } catch {
-    // Pivot view might not exist or filter SQL may not apply; fall back
+    // Pivot view might not exist, may have been created with a stale schema,
+    // or may fail because of a view-identifier mismatch (e.g. object renamed).
+    // Fall back to reading the raw EAV tables and pivoting in JS.
+    usedFallback = true;
     const rawRows = await q<EavRow>(dbFile,
       `SELECT e.id as entry_id, e.created_at, e.updated_at,
               f.name as field_name, ef.value
@@ -491,6 +513,16 @@ export async function GET(
        LIMIT 5000`,
     );
     entries = pivotEavRows(rawRows);
+  }
+
+  if (usedFallback) {
+    // When falling back to raw EAV, derive totalCount from a COUNT(DISTINCT)
+    // over entries (which does not depend on the pivot view existing), so the
+    // UI footer / pagination match the rows the user actually sees.
+    const countRows = await q<{ cnt: number }>(dbFile,
+      `SELECT COUNT(*) as cnt FROM entries WHERE object_id = '${obj.id}'`,
+    );
+    totalCount = Number(countRows[0]?.cnt ?? entries.length);
   }
 
   const parsedFields = fields.map((f) => ({

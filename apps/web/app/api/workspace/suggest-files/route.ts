@@ -7,6 +7,7 @@ import {
 	discoverDuckDBPaths,
 	duckdbQueryOnFileAsync,
 	parseSimpleYaml,
+	pivotViewIdentifier,
 } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
@@ -349,14 +350,17 @@ async function searchEntries(
 
 		if (objectMap.size === 0) {continue;}
 
-		// Step 2: build a single UNION ALL query searching all pivot views
-		// Wrap each SELECT in parens so per-view LIMIT is valid DuckDB syntax
+		// Step 2: build a single UNION ALL query searching all pivot views.
+		// Wrap each SELECT in parens so per-view LIMIT is valid DuckDB syntax.
+		// Use pivotViewIdentifier so hyphenated object names (e.g. "ai-agent")
+		// resolve to a valid quoted identifier instead of being parsed as
+		// `v_ai - agent`.
 		const unionParts: string[] = [];
 		for (const [name, { displayField }] of objectMap) {
 			const safeDisplay = sqlEscape(displayField);
 			unionParts.push(
 				`(SELECT '${sqlEscape(name)}' as _obj_name, entry_id, "${safeDisplay}" as _display
-				  FROM v_${name}
+				  FROM ${pivotViewIdentifier(name)}
 				  WHERE LOWER(CAST("${safeDisplay}" AS VARCHAR)) LIKE LOWER('${likePattern}')
 				  LIMIT ${max})`,
 			);

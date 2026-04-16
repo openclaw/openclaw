@@ -3,6 +3,7 @@ import {
 	duckdbQueryOnFile,
 	findDuckDBForObject,
 	findObjectDir,
+	pivotViewIdentifier,
 	readObjectYaml,
 	writeObjectYaml,
 } from "@/lib/workspace";
@@ -30,7 +31,7 @@ export async function POST(
 ) {
 	const { name } = await params;
 
-	if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+	if (!/^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(name)) {
 		return Response.json({ error: "Invalid object name" }, { status: 400 });
 	}
 
@@ -130,10 +131,11 @@ function regeneratePivotView(dbFile: string, objectName: string, objectId: strin
 	if (fields.length === 0) return;
 
 	const fieldList = fields.map((f) => `'${sqlEscape(f.name)}'`).join(", ");
+	const viewIdent = pivotViewIdentifier(objectName);
 
 	duckdbExecOnFile(
 		dbFile,
-		`CREATE OR REPLACE VIEW v_${objectName} AS
+		`CREATE OR REPLACE VIEW ${viewIdent} AS
 		 PIVOT (
 		   SELECT e.id as entry_id, e.created_at, e.updated_at,
 		          f.name as field_name, ef.value
