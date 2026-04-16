@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { startQaLabServer } from "./lab-server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -79,20 +80,26 @@ async function waitForFile(filePath: string, timeoutMs = 5_000) {
   throw new Error(`file did not appear: ${filePath}`);
 }
 
-describe("qa-lab server", () => {
-  it("serves bootstrap state and writes a self-check report", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-test-"));
-    cleanups.push(async () => {
-      await rm(tempDir, { recursive: true, force: true });
-    });
-    const outputPath = path.join(tempDir, "self-check.md");
+function decodeWebSocketRawData(data: RawData): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString("utf8");
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  return Buffer.from(data).toString("utf8");
+}
 
+describe("qa-lab server", () => {
+  it("serves bootstrap state and records inbound messages", async () => {
     const lab = await startQaLabServer({
       host: "127.0.0.1",
       port: 0,
-      outputPath,
       controlUiUrl: "http://127.0.0.1:18789/",
-      controlUiToken: "qa-token",
+      embeddedGateway: "disabled",
     });
     cleanups.push(async () => {
       await lab.stop();
@@ -111,7 +118,8 @@ describe("qa-lab server", () => {
     expect(bootstrap.defaults.conversationId).toBe("qa-operator");
     expect(bootstrap.defaults.senderId).toBe("qa-operator");
     expect(bootstrap.controlUiUrl).toBe("http://127.0.0.1:18789/");
-    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/#token=qa-token");
+    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/");
+    expect(bootstrap.controlUiEmbeddedUrl).not.toContain("token=");
     expect(bootstrap.kickoffTask).toContain("Lobster Invaders");
     expect(bootstrap.scenarios.length).toBeGreaterThanOrEqual(10);
     expect(bootstrap.scenarios.some((scenario) => scenario.id === "dm-chat-baseline")).toBe(true);
@@ -139,12 +147,25 @@ describe("qa-lab server", () => {
       messages: Array<{ direction: string; text: string }>;
     };
     expect(snapshot.messages.some((message) => message.text === "hello from test")).toBe(true);
+  });
 
-    const result = await lab.runSelfCheck();
-    expect(result.scenarioResult.status).toBe("pass");
-    const markdown = await readFile(outputPath, "utf8");
-    expect(markdown).toContain("Synthetic Slack-class roundtrip");
-    expect(markdown).toContain("- Status: pass");
+  it("does not expose control-ui hash fragments in bootstrap URLs", async () => {
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+      controlUiUrl: "http://127.0.0.1:18789/#token=from-url-fragment",
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+
+    const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
+      controlUiUrl: string | null;
+      controlUiEmbeddedUrl: string | null;
+    };
+    expect(bootstrap.controlUiUrl).toBe("http://127.0.0.1:18789/");
+    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/");
+    expect(bootstrap.controlUiEmbeddedUrl).not.toContain("token=");
   });
 
   it("anchors direct self-check runs under the explicit repo root by default", async () => {
@@ -245,7 +266,6 @@ describe("qa-lab server", () => {
       advertiseHost: "127.0.0.1",
       advertisePort: 43124,
       controlUiProxyTarget: `http://127.0.0.1:${address.port}/`,
-      controlUiToken: "proxy-token",
     });
     cleanups.push(async () => {
       await lab.stop();
@@ -256,9 +276,8 @@ describe("qa-lab server", () => {
       controlUiEmbeddedUrl: string | null;
     };
     expect(bootstrap.controlUiUrl).toBe("http://127.0.0.1:43124/control-ui/");
-    expect(bootstrap.controlUiEmbeddedUrl).toBe(
-      "http://127.0.0.1:43124/control-ui/#token=proxy-token",
-    );
+    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:43124/control-ui/");
+    expect(bootstrap.controlUiEmbeddedUrl).not.toContain("token=");
 
     const healthResponse = await fetchWithRetry(`${lab.listenUrl}/control-ui/healthz`);
     expect(healthResponse.status).toBe(200);
@@ -269,6 +288,181 @@ describe("qa-lab server", () => {
     expect(rootResponse.headers.get("x-frame-options")).toBeNull();
     expect(rootResponse.headers.get("content-security-policy")).toContain("frame-ancestors 'self'");
     expect(await rootResponse.text()).toContain("Control UI");
+  });
+
+  it("mints proxy-scoped bootstrap auth and rewrites it to gateway bearer auth", async () => {
+    const gatewayToken = "gateway-token";
+    const upstream = createServer(async (req, res) => {
+      if ((req.url ?? "/") === "/healthz") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, status: "live" }));
+        return;
+      }
+      if ((req.url ?? "/") === "/tools/invoke") {
+        if (req.headers.authorization !== `Bearer ${gatewayToken}`) {
+          res.writeHead(401, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "Unauthorized" }));
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+      res.end("control-ui");
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once("error", reject);
+      upstream.listen(0, "127.0.0.1", () => resolve());
+    });
+    cleanups.push(
+      async () =>
+        await new Promise<void>((resolve, reject) =>
+          upstream.close((error) => (error ? reject(error) : resolve())),
+        ),
+    );
+
+    const address = upstream.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected upstream address");
+    }
+
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+      advertiseHost: "127.0.0.1",
+      advertisePort: 43124,
+      controlUiProxyTarget: `http://127.0.0.1:${address.port}/`,
+      controlUiProxyAuthToken: gatewayToken,
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+
+    const bootstrap = (await (await fetchWithRetry(`${lab.listenUrl}/api/bootstrap`)).json()) as {
+      controlUiEmbeddedUrl: string | null;
+    };
+    expect(bootstrap.controlUiEmbeddedUrl).toBeTruthy();
+    expect(bootstrap.controlUiEmbeddedUrl).toContain("#token=");
+    expect(bootstrap.controlUiEmbeddedUrl).not.toContain(gatewayToken);
+
+    const embeddedToken = decodeURIComponent(
+      new URL(String(bootstrap.controlUiEmbeddedUrl)).hash.match(/token=([^&]+)/)?.[1] ?? "",
+    );
+    expect(embeddedToken).toBeTruthy();
+    expect(embeddedToken).not.toBe(gatewayToken);
+
+    const noAuth = await fetch(`${lab.listenUrl}/control-ui/tools/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(noAuth.status).toBe(401);
+
+    const withBootstrapToken = await fetch(`${lab.listenUrl}/control-ui/tools/invoke`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${embeddedToken}`,
+      },
+      body: "{}",
+    });
+    expect(withBootstrapToken.status).toBe(200);
+    expect(await withBootstrapToken.json()).toEqual({ ok: true });
+  });
+
+  it("rewrites bootstrap token in websocket connect payloads", async () => {
+    const gatewayToken = "gateway-token";
+    let resolveSeenToken: ((value: string) => void) | null = null;
+    const seenToken = new Promise<string>((resolve) => {
+      resolveSeenToken = resolve;
+    });
+    const upstreamWss = new WebSocketServer({ noServer: true });
+    const upstream = createServer();
+    upstream.on("upgrade", (req, socket, head) => {
+      upstreamWss.handleUpgrade(req, socket, head, (ws) => {
+        ws.once("message", (data) => {
+          const text = decodeWebSocketRawData(data);
+          const parsed = JSON.parse(text) as {
+            params?: {
+              auth?: { token?: string };
+            };
+          };
+          resolveSeenToken?.(parsed.params?.auth?.token ?? "");
+          ws.close();
+        });
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once("error", reject);
+      upstream.listen(0, "127.0.0.1", () => resolve());
+    });
+    cleanups.push(
+      async () =>
+        await new Promise<void>((resolve) => {
+          upstreamWss.close(() => {
+            upstream.close(() => resolve());
+          });
+        }),
+    );
+
+    const address = upstream.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected websocket upstream address");
+    }
+
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+      advertiseHost: "127.0.0.1",
+      advertisePort: 43124,
+      controlUiProxyTarget: `http://127.0.0.1:${address.port}/`,
+      controlUiProxyAuthToken: gatewayToken,
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+
+    const bootstrap = (await (await fetchWithRetry(`${lab.listenUrl}/api/bootstrap`)).json()) as {
+      controlUiEmbeddedUrl: string | null;
+    };
+    const embeddedToken = decodeURIComponent(
+      new URL(String(bootstrap.controlUiEmbeddedUrl)).hash.match(/token=([^&]+)/)?.[1] ?? "",
+    );
+    expect(embeddedToken).toBeTruthy();
+    expect(embeddedToken).not.toBe(gatewayToken);
+
+    const wsUrl = new URL(lab.listenUrl);
+    wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+    wsUrl.pathname = "/control-ui/";
+    const client = new WebSocket(wsUrl.toString());
+    cleanups.push(async () => {
+      client.close();
+    });
+    await new Promise<void>((resolve, reject) => {
+      client.once("open", () => resolve());
+      client.once("error", reject);
+    });
+    client.send(
+      JSON.stringify({
+        type: "req",
+        id: "connect-test",
+        method: "connect",
+        params: {
+          auth: {
+            token: embeddedToken,
+          },
+        },
+      }),
+    );
+
+    const forwardedToken = await Promise.race([
+      seenToken,
+      sleep(2_000).then(() => {
+        throw new Error("timed out waiting for websocket connect frame");
+      }),
+    ]);
+    expect(forwardedToken).toBe(gatewayToken);
   });
 
   it("reports startup reachability for proxy and gateway", async () => {
@@ -641,13 +835,13 @@ describe("qa-lab server", () => {
     });
     lab.setControlUi({
       controlUiUrl: "http://127.0.0.1:18789/",
-      controlUiToken: "late-token",
     });
 
     const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
       controlUiEmbeddedUrl: string | null;
     };
-    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/#token=late-token");
+    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/");
+    expect(bootstrap.controlUiEmbeddedUrl).not.toContain("token=");
 
     const outcomes = (await (await fetchWithRetry(`${lab.baseUrl}/api/outcomes`)).json()) as {
       run: {

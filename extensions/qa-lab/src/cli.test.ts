@@ -101,6 +101,13 @@ describe("qa cli registration", () => {
     );
   });
 
+  it("does not expose a no-op control-ui token flag on qa ui", () => {
+    const qa = program.commands.find((command) => command.name() === "qa");
+    const ui = qa?.commands.find((command) => command.name() === "ui");
+    expect(ui).toBeDefined();
+    expect(ui?.options.some((option) => option.long === "--control-ui-token")).toBe(false);
+  });
+
   it("delegates discovered qa runner registration through the generic host seam", () => {
     const [{ registration }] = listQaRunnerCliContributions.mock.results[0]?.value;
     expect(registration.register).toHaveBeenCalledTimes(1);

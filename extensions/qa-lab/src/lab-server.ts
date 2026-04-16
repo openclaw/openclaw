@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import {
   createServer,
@@ -9,7 +9,7 @@ import {
 import { request as httpsRequest } from "node:https";
 import net from "node:net";
 import path from "node:path";
-import type { Duplex } from "node:stream";
+import { Transform, type Duplex } from "node:stream";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -362,6 +362,14 @@ function rewriteControlUiProxyPath(pathname: string, search: string) {
   return `${stripped}${search}`;
 }
 
+function stripUrlFragment(rawUrl: string | null): string | null {
+  if (!rawUrl) {
+    return null;
+  }
+  const hashIndex = rawUrl.indexOf("#");
+  return hashIndex >= 0 ? rawUrl.slice(0, hashIndex) : rawUrl;
+}
+
 function rewriteEmbeddedControlUiHeaders(
   headers: IncomingMessage["headers"],
 ): Record<string, string | string[] | number | undefined> {
@@ -378,13 +386,305 @@ function rewriteEmbeddedControlUiHeaders(
   return rewritten;
 }
 
+function rewriteProxyAuthorizationValue(params: {
+  value: string;
+  bootstrapToken: string | null;
+  gatewayToken: string | null;
+}): string {
+  if (!params.bootstrapToken || !params.gatewayToken) {
+    return params.value;
+  }
+  const match = /^\s*Bearer\s+(.+)\s*$/i.exec(params.value);
+  if (!match) {
+    return params.value;
+  }
+  return match[1] === params.bootstrapToken ? `Bearer ${params.gatewayToken}` : params.value;
+}
+
+function rewriteProxyAuthorizationHeader(params: {
+  value: string | string[] | undefined;
+  bootstrapToken: string | null;
+  gatewayToken: string | null;
+}): string | string[] | undefined {
+  if (!params.value) {
+    return params.value;
+  }
+  if (Array.isArray(params.value)) {
+    return params.value.map((value) =>
+      rewriteProxyAuthorizationValue({
+        value,
+        bootstrapToken: params.bootstrapToken,
+        gatewayToken: params.gatewayToken,
+      }),
+    );
+  }
+  return rewriteProxyAuthorizationValue({
+    value: params.value,
+    bootstrapToken: params.bootstrapToken,
+    gatewayToken: params.gatewayToken,
+  });
+}
+
+type ParsedWebSocketFrame = {
+  raw: Buffer;
+  firstByte: number;
+  fin: boolean;
+  opcode: number;
+  masked: boolean;
+  maskKey: Buffer | null;
+  payload: Buffer;
+};
+
+function xorWebSocketPayload(payload: Buffer, maskKey: Buffer) {
+  const next = Buffer.allocUnsafe(payload.length);
+  for (let index = 0; index < payload.length; index += 1) {
+    next[index] = payload[index] ^ maskKey[index % 4];
+  }
+  return next;
+}
+
+function decodeWebSocketFrames(source: Buffer): {
+  frames: ParsedWebSocketFrame[];
+  remainder: Buffer;
+} {
+  const frames: ParsedWebSocketFrame[] = [];
+  let offset = 0;
+
+  while (offset + 2 <= source.length) {
+    const firstByte = source[offset];
+    const secondByte = source[offset + 1];
+    const fin = (firstByte & 0x80) !== 0;
+    const opcode = firstByte & 0x0f;
+    const masked = (secondByte & 0x80) !== 0;
+    let payloadLength = secondByte & 0x7f;
+    let cursor = offset + 2;
+
+    if (payloadLength === 126) {
+      if (cursor + 2 > source.length) {
+        break;
+      }
+      payloadLength = source.readUInt16BE(cursor);
+      cursor += 2;
+    } else if (payloadLength === 127) {
+      if (cursor + 8 > source.length) {
+        break;
+      }
+      const upper = source.readUInt32BE(cursor);
+      const lower = source.readUInt32BE(cursor + 4);
+      cursor += 8;
+      const wideLength = upper * 2 ** 32 + lower;
+      if (!Number.isSafeInteger(wideLength)) {
+        throw new Error("websocket frame exceeds safe integer length");
+      }
+      payloadLength = wideLength;
+    }
+
+    let maskKey: Buffer | null = null;
+    if (masked) {
+      if (cursor + 4 > source.length) {
+        break;
+      }
+      maskKey = source.subarray(cursor, cursor + 4);
+      cursor += 4;
+    }
+
+    if (cursor + payloadLength > source.length) {
+      break;
+    }
+
+    const payloadSegment = source.subarray(cursor, cursor + payloadLength);
+    const payload =
+      masked && maskKey ? xorWebSocketPayload(payloadSegment, maskKey) : payloadSegment;
+    const raw = source.subarray(offset, cursor + payloadLength);
+    frames.push({
+      raw,
+      firstByte,
+      fin,
+      opcode,
+      masked,
+      maskKey,
+      payload,
+    });
+    offset = cursor + payloadLength;
+  }
+
+  return {
+    frames,
+    remainder: source.subarray(offset),
+  };
+}
+
+function encodeWebSocketFrame(params: {
+  firstByte: number;
+  masked: boolean;
+  maskKey: Buffer | null;
+  payload: Buffer;
+}) {
+  const payloadLength = params.payload.byteLength;
+  const maskKey = params.masked ? (params.maskKey ?? Buffer.from([0, 0, 0, 0])) : null;
+  const headerLength =
+    2 + (payloadLength < 126 ? 0 : payloadLength < 65_536 ? 2 : 8) + (params.masked ? 4 : 0);
+  const header = Buffer.allocUnsafe(headerLength);
+
+  let cursor = 0;
+  header[cursor] = params.firstByte;
+  cursor += 1;
+
+  if (payloadLength < 126) {
+    header[cursor] = (params.masked ? 0x80 : 0) | payloadLength;
+    cursor += 1;
+  } else if (payloadLength < 65_536) {
+    header[cursor] = (params.masked ? 0x80 : 0) | 126;
+    cursor += 1;
+    header.writeUInt16BE(payloadLength, cursor);
+    cursor += 2;
+  } else {
+    header[cursor] = (params.masked ? 0x80 : 0) | 127;
+    cursor += 1;
+    const upper = Math.floor(payloadLength / 2 ** 32);
+    const lower = payloadLength >>> 0;
+    header.writeUInt32BE(upper, cursor);
+    cursor += 4;
+    header.writeUInt32BE(lower, cursor);
+    cursor += 4;
+  }
+
+  if (params.masked && maskKey) {
+    maskKey.copy(header, cursor);
+    cursor += 4;
+  }
+
+  const payload =
+    params.masked && maskKey ? xorWebSocketPayload(params.payload, maskKey) : params.payload;
+  return Buffer.concat([header, payload]);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function rewriteConnectFrameToken(params: {
+  frame: ParsedWebSocketFrame;
+  bootstrapToken: string;
+  gatewayToken: string;
+}): {
+  raw: Buffer;
+  rewritten: boolean;
+} {
+  if (!params.frame.fin || params.frame.opcode !== 0x1) {
+    return { raw: params.frame.raw, rewritten: false };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(params.frame.payload.toString("utf8")) as unknown;
+  } catch {
+    return { raw: params.frame.raw, rewritten: false };
+  }
+  if (!isRecord(parsed) || parsed.method !== "connect") {
+    return { raw: params.frame.raw, rewritten: false };
+  }
+
+  const requestParams = isRecord(parsed.params) ? parsed.params : null;
+  const auth = requestParams && isRecord(requestParams.auth) ? requestParams.auth : null;
+  if (!auth || auth.token !== params.bootstrapToken) {
+    return { raw: params.frame.raw, rewritten: false };
+  }
+
+  auth.token = params.gatewayToken;
+  const nextPayload = Buffer.from(JSON.stringify(parsed), "utf8");
+  return {
+    raw: encodeWebSocketFrame({
+      firstByte: params.frame.firstByte,
+      masked: params.frame.masked,
+      maskKey: params.frame.maskKey,
+      payload: nextPayload,
+    }),
+    rewritten: true,
+  };
+}
+
+function createConnectTokenRewriteTransform(params: {
+  bootstrapToken: string | null;
+  gatewayToken: string | null;
+}) {
+  const bootstrapToken = params.bootstrapToken;
+  const gatewayToken = params.gatewayToken;
+  if (!bootstrapToken || !gatewayToken) {
+    return new Transform({
+      transform(chunk, _encoding, callback) {
+        this.push(chunk);
+        callback();
+      },
+    });
+  }
+
+  let pending = Buffer.alloc(0);
+  let disabled = false;
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      if (disabled) {
+        this.push(chunk);
+        callback();
+        return;
+      }
+
+      pending = Buffer.concat([pending, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
+      let decoded: ReturnType<typeof decodeWebSocketFrames>;
+      try {
+        decoded = decodeWebSocketFrames(pending);
+      } catch {
+        disabled = true;
+        this.push(pending);
+        pending = Buffer.alloc(0);
+        callback();
+        return;
+      }
+
+      pending = Buffer.from(decoded.remainder);
+      for (const frame of decoded.frames) {
+        const rewritten = rewriteConnectFrameToken({
+          frame,
+          bootstrapToken,
+          gatewayToken,
+        });
+        this.push(rewritten.raw);
+      }
+      callback();
+    },
+    flush(callback) {
+      if (pending.length > 0) {
+        this.push(pending);
+      }
+      callback();
+    },
+  });
+}
+
 async function proxyHttpRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
   target: URL;
   pathname: string;
   search: string;
+  bootstrapToken: string | null;
+  gatewayToken: string | null;
 }) {
+  const upstreamHeaders: Record<string, string | string[] | number | undefined> = {
+    ...params.req.headers,
+    host: params.target.host,
+  };
+  const rewrittenAuthorization = rewriteProxyAuthorizationHeader({
+    value: params.req.headers.authorization,
+    bootstrapToken: params.bootstrapToken,
+    gatewayToken: params.gatewayToken,
+  });
+  if (typeof rewrittenAuthorization === "undefined") {
+    delete upstreamHeaders.authorization;
+  } else {
+    upstreamHeaders.authorization = rewrittenAuthorization;
+  }
+
   const client = params.target.protocol === "https:" ? httpsRequest : httpRequest;
   const upstreamReq = client(
     {
@@ -393,10 +693,7 @@ async function proxyHttpRequest(params: {
       port: params.target.port || (params.target.protocol === "https:" ? 443 : 80),
       method: params.req.method,
       path: rewriteControlUiProxyPath(params.pathname, params.search),
-      headers: {
-        ...params.req.headers,
-        host: params.target.host,
-      },
+      headers: upstreamHeaders,
     },
     (upstreamRes) => {
       params.res.writeHead(
@@ -427,6 +724,8 @@ function proxyUpgradeRequest(params: {
   socket: Duplex;
   head: Buffer;
   target: URL;
+  bootstrapToken: string | null;
+  gatewayToken: string | null;
 }) {
   const requestUrl = new URL(params.req.url ?? "/", "http://127.0.0.1");
   const port = Number(params.target.port || (params.target.protocol === "https:" ? 443 : 80));
@@ -442,11 +741,37 @@ function proxyUpgradeRequest(params: {
           port,
         });
 
+  const closeBoth = () => {
+    if (!params.socket.destroyed) {
+      params.socket.destroy();
+    }
+    if (!upstream.destroyed) {
+      upstream.destroy();
+    }
+  };
+
+  const clientToUpstream = createConnectTokenRewriteTransform({
+    bootstrapToken: params.bootstrapToken,
+    gatewayToken: params.gatewayToken,
+  });
+  clientToUpstream.on("error", closeBoth);
+
   const headerLines: string[] = [];
   for (let index = 0; index < params.req.rawHeaders.length; index += 2) {
     const name = params.req.rawHeaders[index];
     const value = params.req.rawHeaders[index + 1] ?? "";
-    if (normalizeLowercaseStringOrEmpty(name) === "host") {
+    const normalized = normalizeLowercaseStringOrEmpty(name);
+    if (normalized === "host") {
+      continue;
+    }
+    if (normalized === "authorization") {
+      headerLines.push(
+        `${name}: ${rewriteProxyAuthorizationValue({
+          value,
+          bootstrapToken: params.bootstrapToken,
+          gatewayToken: params.gatewayToken,
+        })}`,
+      );
       continue;
     }
     headerLines.push(`${name}: ${value}`);
@@ -461,21 +786,12 @@ function proxyUpgradeRequest(params: {
       "",
     ].join("\r\n");
     upstream.write(requestText);
-    if (params.head.length > 0) {
-      upstream.write(params.head);
-    }
+    params.socket.pipe(clientToUpstream).pipe(upstream);
     upstream.pipe(params.socket);
-    params.socket.pipe(upstream);
+    if (params.head.length > 0) {
+      clientToUpstream.write(params.head);
+    }
   });
-
-  const closeBoth = () => {
-    if (!params.socket.destroyed) {
-      params.socket.destroy();
-    }
-    if (!upstream.destroyed) {
-      upstream.destroy();
-    }
-  };
 
   upstream.on("error", () => {
     if (!params.socket.destroyed) {
@@ -572,7 +888,11 @@ export async function startQaLabServer(
     ? new URL(params.controlUiProxyTarget)
     : null;
   let controlUiUrl = params?.controlUiUrl?.trim() || null;
-  let controlUiToken = params?.controlUiToken?.trim() || null;
+  let controlUiProxyAuthToken =
+    params?.controlUiProxyAuthToken?.trim() ||
+    process.env.OPENCLAW_QA_CONTROL_UI_TOKEN?.trim() ||
+    null;
+  let controlUiEmbeddedToken = controlUiProxyAuthToken ? randomUUID() : null;
   let gateway:
     | {
         cfg: OpenClawConfig;
@@ -666,6 +986,8 @@ export async function startQaLabServer(
           target: controlUiProxyTarget,
           pathname: url.pathname,
           search: url.search,
+          bootstrapToken: controlUiEmbeddedToken,
+          gatewayToken: controlUiProxyAuthToken,
         });
         return;
       }
@@ -675,14 +997,15 @@ export async function startQaLabServer(
         const resolvedControlUiUrl = controlUiProxyTarget
           ? `${publicBaseUrl}/control-ui/`
           : controlUiUrl;
+        const publicControlUiUrl = stripUrlFragment(resolvedControlUiUrl);
         const controlUiEmbeddedUrl =
-          resolvedControlUiUrl && controlUiToken
-            ? `${resolvedControlUiUrl.replace(/\/?$/, "/")}#token=${encodeURIComponent(controlUiToken)}`
-            : resolvedControlUiUrl;
+          publicControlUiUrl && controlUiProxyTarget && controlUiEmbeddedToken
+            ? `${publicControlUiUrl.replace(/\/?$/, "/")}#token=${encodeURIComponent(controlUiEmbeddedToken)}`
+            : publicControlUiUrl;
         writeJson(res, 200, {
           baseUrl: publicBaseUrl,
           latestReport,
-          controlUiUrl: resolvedControlUiUrl,
+          controlUiUrl: publicControlUiUrl,
           controlUiEmbeddedUrl,
           kickoffTask: scenarioCatalog.kickoffTask,
           scenarios: scenarioCatalog.scenarios,
@@ -999,6 +1322,8 @@ export async function startQaLabServer(
       socket,
       head,
       target: controlUiProxyTarget,
+      bootstrapToken: controlUiEmbeddedToken,
+      gatewayToken: controlUiProxyAuthToken,
     });
   });
 
@@ -1008,14 +1333,15 @@ export async function startQaLabServer(
     state,
     setControlUi(next: {
       controlUiUrl?: string | null;
-      controlUiToken?: string | null;
       controlUiProxyTarget?: string | null;
+      controlUiProxyAuthToken?: string | null;
     }) {
       controlUiUrl = next.controlUiUrl?.trim() || null;
-      controlUiToken = next.controlUiToken?.trim() || null;
       controlUiProxyTarget = next.controlUiProxyTarget?.trim()
         ? new URL(next.controlUiProxyTarget)
         : null;
+      controlUiProxyAuthToken = next.controlUiProxyAuthToken?.trim() || null;
+      controlUiEmbeddedToken = controlUiProxyAuthToken ? randomUUID() : null;
     },
     setScenarioRun(next: Omit<QaLabScenarioRun, "counts"> | null) {
       latestScenarioRun = next ? withQaLabRunCounts(next) : null;
