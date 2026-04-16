@@ -604,7 +604,17 @@ export async function runEmbeddedPiAgent(
       let planningOnlyRetryAttempts = 0;
       let autoContinueCycles = 0;
       let autoContinueAccumulatedMutation = false;
-      const autoContinueConfig = resolveAgentAutoContinue(params.config, params.agentId);
+      // Codex P2 (PR #67538 r3096325365): use the session-resolved agent id
+      // (already computed above for execution-contract resolution) instead of
+      // the raw `params.agentId`, which is undefined for many runs that select
+      // an agent via sessionKey alone. Without this fix, per-agent
+      // `agents.list[].embeddedPi.autoContinue` overrides were silently
+      // ignored — strict-agentic worked but auto-continue fell back to
+      // hardcoded defaults.
+      const autoContinueConfig = resolveAgentAutoContinue(
+        params.config,
+        sessionAgentId ?? params.agentId,
+      );
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
