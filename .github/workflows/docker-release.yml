@@ -24,7 +24,7 @@ env:
 jobs:
   # Build amd64 image
   build-amd64:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       packages: write
       contents: read
@@ -82,9 +82,9 @@ jobs:
           provenance: false
           push: true
 
-  # Build arm64 image
+  # Build arm64 image (cross-compiled via QEMU on amd64 runner)
   build-arm64:
-    runs-on: blacksmith-16vcpu-ubuntu-2404-arm
+    runs-on: ubuntu-24.04
     permissions:
       packages: write
       contents: read
@@ -93,6 +93,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -144,7 +149,7 @@ jobs:
 
   # Create multi-platform manifest
   create-manifest:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       packages: write
       contents: read

@@ -7,11 +7,12 @@
 
 ## Last Session
 
-- **Date**: 2026-04-16 (CI/CD + Telegram group access)
+- **Date**: 2026-04-16 (CI runner fix)
 - **What changed**:
-  - Fixed Telegram group access: `accessMode: "subscribed"` now defaults group policy to `"allowlist"`; owner bypasses `groupEnabled: false` in groups (deployed as `v2026.04.16-group-access` on 2ndclaw)
-  - CI/CD (`docker-release.yml`): main-branch pushes now also tag `latest` / `latest-amd64` / `latest-arm64` on GHCR (alongside existing `main` tags)
-  - `deploy.sh` (`scripts/ops/` + `/opt/openclaw-ops/scripts/`): warns before overwriting an agent's `docker.env` when the running image differs from the incoming one
+  - **CI fix**: replaced Blacksmith third-party runners (`blacksmith-16vcpu-*`) with GitHub-hosted runners (`ubuntu-24.04`, `windows-latest`) across all 8 workflow files — Blacksmith integration was broken, leaving every workflow stuck in `queued` for 23+ hours
+  - arm64 Docker build now uses QEMU emulation via `docker/setup-qemu-action` instead of a native arm runner
+  - Added memory rule: always ask before integrating third-party CI/CD services
+  - (prior in this session) Fixed Telegram group access, added `latest` GHCR tags, `deploy.sh` image-overwrite warning
 - **Sync state**: re-check `STATUS.md` before creating a branch; one branch = one owner
 
 ---
@@ -33,6 +34,7 @@
 ## Blockers / Open Questions
 
 - Gateway: Venice model discovery still times out during startup and falls back to the static catalog
+- CI: arm64 Docker builds now use QEMU emulation (slower than native) — if build times are a problem, consider GitHub's `ubuntu-24.04-arm` runner (requires Team/Enterprise plan)
 - Coordination: confirm ownership before touching any branch or file area the other agent is actively editing
 - Branch hygiene: `chore/staging-deploy-gcp` is still listed as open and stale; verify before reuse or cleanup
 
