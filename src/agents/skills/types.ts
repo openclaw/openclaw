@@ -114,5 +114,12 @@ export type SkillSnapshot = {
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
   resolvedSkills?: Skill[];
+  /**
+   * Per-skill plan templates carried forward from snapshot build so the
+   * skill-template seeder (#67541) doesn't have to re-load workspace skill
+   * entries when running off a pre-built snapshot. Only skills with a
+   * non-empty `planTemplate` appear here.
+   */
+  resolvedPlanTemplates?: Array<{ skillName: string; planTemplate: SkillPlanTemplateStep[] }>;
   version?: number;
 };

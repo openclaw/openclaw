@@ -8,6 +8,7 @@ import {
   hasSkillPlanTemplate,
   type PlanTemplatePayload,
 } from "../skills/skill-planner.js";
+import type { SkillPlanTemplateStep } from "../skills/types.js";
 
 export function resolveEmbeddedRunSkillEntries(params: {
   workspaceDir: string;
@@ -75,25 +76,63 @@ export function resolveSkillPlanTemplate(
     return null;
   }
 
+  return resolveSkillPlanTemplateFromCandidates(
+    candidates.map((c) => ({
+      skillName: c.skill.name,
+      planTemplate: c.metadata?.planTemplate ?? [],
+    })),
+    config,
+  );
+}
+
+/**
+ * Lower-level resolver that operates on the snapshot's
+ * `resolvedPlanTemplates` shape — name + template list, without the
+ * full SkillEntry. Used in the snapshot-backed run path where
+ * `resolveEmbeddedRunSkillEntries` returns no entries.
+ *
+ * Candidates MUST be alpha-sorted by `skillName` if the caller wants
+ * deterministic collision behavior; this function does not re-sort.
+ */
+export function resolveSkillPlanTemplateFromCandidates(
+  candidates: ReadonlyArray<{ skillName: string; planTemplate: SkillPlanTemplateStep[] }>,
+  config?: OpenClawConfig,
+): SkillPlanTemplateResolution | null {
+  const filtered = candidates
+    .filter((c) => Array.isArray(c.planTemplate) && c.planTemplate.length > 0)
+    .toSorted((a, b) => a.skillName.localeCompare(b.skillName));
+  if (filtered.length === 0) {
+    return null;
+  }
+  const winner = filtered[0];
   const maxSteps = config?.skills?.limits?.maxPlanTemplateSteps;
   const payload =
     maxSteps && maxSteps > 0
-      ? buildPlanTemplatePayload(winner.skill.name, winnerTemplate, { maxSteps })
-      : buildPlanTemplatePayload(winner.skill.name, winnerTemplate);
+      ? buildPlanTemplatePayload(winner.skillName, winner.planTemplate, { maxSteps })
+      : buildPlanTemplatePayload(winner.skillName, winner.planTemplate);
   if (!payload) {
     return null;
   }
-
   return {
     payload,
-    skillName: winner.skill.name,
-    rejected: candidates.slice(1).map((c) => c.skill.name),
+    skillName: winner.skillName,
+    rejected: filtered.slice(1).map((c) => c.skillName),
   };
 }
 
 export interface ApplySkillPlanTemplateSeedParams {
-  /** Loaded skill entries for this run. */
+  /**
+   * Loaded skill entries for this run. May be empty in the
+   * snapshot-backed run path; see `skillsSnapshot` below.
+   */
   entries: SkillEntry[];
+  /**
+   * Optional pre-built snapshot. When `entries` is empty (the main
+   * run path uses a snapshot built by `buildWorkspaceSkillSnapshot`
+   * and skips re-loading entries), the seeder falls back to the
+   * snapshot's `resolvedPlanTemplates` so the seed still fires.
+   */
+  skillsSnapshot?: SkillSnapshot;
   /** Stable run identifier used to scope the emitted plan event. */
   runId?: string;
   /** Session key for control UI / channel routing. */
@@ -143,7 +182,16 @@ export function applySkillPlanTemplateSeed(
     // Existing plan present — treat it as user intent and skip the seed.
     return null;
   }
-  const resolution = resolveSkillPlanTemplate(params.entries, params.config);
+  // Snapshot fallback: when entries are empty (main snapshot-backed path),
+  // use the templates baked into the snapshot at build time. Otherwise the
+  // seed silently no-ops in production runs that supply a snapshot.
+  let resolution = resolveSkillPlanTemplate(params.entries, params.config);
+  if (!resolution) {
+    const snapshotTemplates = params.skillsSnapshot?.resolvedPlanTemplates;
+    if (snapshotTemplates && snapshotTemplates.length > 0) {
+      resolution = resolveSkillPlanTemplateFromCandidates(snapshotTemplates, params.config);
+    }
+  }
   if (!resolution) {
     return null;
   }
