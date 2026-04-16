@@ -1,6 +1,6 @@
 # PR Monitor Report
 
-**Date:** 2026-04-15 (run 24)
+**Date:** 2026-04-16 (run 25)
 **Contributor:** suboss87
 **Repo:** openclaw/openclaw
 
@@ -35,7 +35,7 @@ No action required.
 
 **Status:** OPEN | **Branch:** `feat/cron-fresh-session-option`
 **Head SHA:** `46e2b30607303996c6423abd33ec854c42b57ac3` (2026-04-06 — **unchanged since run 9**)
-**Last PR activity:** 2026-04-06T03:49:37Z (10 days stale as of this run — unchanged from run 23)
+**Last PR activity:** 2026-04-06T03:49:37Z (10 days stale as of this run — **unchanged from run 24**)
 
 **Commits unique to PR branch vs fork/main (in order, oldest first):**
 
@@ -57,7 +57,7 @@ Upstream remote is not reachable from this environment; automated rebase not pos
 - `chatgpt-codex-connector[bot]`: `freshSession` propagation — already implemented in `src/cron/service/jobs.ts`.
 No human maintainer reviews. No `CHANGES_REQUESTED` per GitHub search.
 
-**No new activity since run 9 (2026-04-06). Branch tip unchanged since run 23.**
+**No new activity since run 9 (2026-04-06). Branch tip unchanged since run 24.**
 
 **Needs human attention:**
 1. **Upstream rebase required** — dirty against `openclaw/openclaw:main`; cannot be done from this environment.
@@ -81,7 +81,7 @@ No action required.
 
 **Status:** OPEN | **Branch:** `fix/subagent-identity-fallback`
 **Head SHA:** `f052129db44607fed72a0769dc5de6b919bcd5dc` (2026-04-06 — **unchanged since run 9**)
-**Last PR activity:** 2026-04-07T05:14:52Z (8 days stale as of this run — unchanged from run 23)
+**Last PR activity:** 2026-04-07T05:14:52Z (9 days stale as of this run — **unchanged from run 24**)
 
 **Commits unique to PR branch vs fork/main (in order, oldest first):**
 
@@ -126,7 +126,7 @@ changes are not causing node-layer failures.
 - No human maintainer reviews; no `CHANGES_REQUESTED`.
 - Community: `MoltyCel` confirmed fix logic and tests look correct (2026-04-06/07).
 
-**No new activity since run 9 (2026-04-06). Branch tip unchanged since run 23.**
+**No new activity since run 9 (2026-04-06). Branch tip unchanged since run 24.**
 
 **Needs human attention:**
 1. **CI investigation** — confirm whether `security-fast`, `checks-fast-contracts-protocol`, and
@@ -139,24 +139,25 @@ changes are not causing node-layer failures.
 
 ---
 
-## Actions Taken This Run (run 24 — 2026-04-15)
+## Actions Taken This Run (run 25 — 2026-04-16)
 
 **GitHub API access:** BLOCKED — MCP restricted to `suboss87/openclaw` (fork only); `gh` CLI not
 installed; `openclaw/openclaw` PRs are not accessible via direct MCP calls. `search_pull_requests`
-and `search_issues` work as read-only workarounds for status and review-state queries.
+and `search_issues` provide partial read access to `openclaw/openclaw` (PR state, comment counts,
+label state, review-state filters) but not full comment/review bodies.
 
-**Branch SHAs confirmed from fork (run 24 vs run 23):**
+**Branch SHAs confirmed from fork (run 25 vs run 24):**
 
-| Branch                                  | SHA (tip)                                  | Changed since run 23? |
+| Branch                                  | SHA (tip)                                  | Changed since run 24? |
 | --------------------------------------- | ------------------------------------------ | --------------------- |
 | fix/telegram-approval-callback-fallback | `14fd49c362b7d84b8fda157967befe2a0ca730f5` | No                    |
 | feat/cron-fresh-session-option          | `46e2b30607303996c6423abd33ec854c42b57ac3` | No                    |
 | fix/chat-send-button-contrast           | `76c2ea44d857b9ae68cf056dfc72c8e4d4cfcd64` | No                    |
 | fix/subagent-identity-fallback          | `f052129db44607fed72a0769dc5de6b919bcd5dc` | No                    |
 
-All branch tips are **unchanged since run 9 (2026-04-06)** — now 9–10 days with no new commits.
+All branch tips are **unchanged since run 9 (2026-04-06)** — now 10–11 days with no new commits.
 
-**PR updated_at timestamps (run 24 vs run 23):**
+**PR updated_at timestamps (run 25 vs run 24):**
 - #45584: 2026-04-06T03:49:37Z — **unchanged**
 - #54730: 2026-04-07T05:14:52Z — **unchanged**
 
@@ -166,33 +167,36 @@ No new review comments, CI re-runs, or maintainer activity detected on either op
 - `review:changes_requested` for open suboss87 PRs → 0 results (no blocking reviews)
 - `review:approved` for open suboss87 PRs → 0 results (no approvals yet)
 
-**Rebase:** Not attempted — upstream remote returns 502 for `openclaw/openclaw`. #45584 remains
+**Rebase:** Not attempted — upstream remote not reachable from this environment. #45584 remains
 dirty per last known state (run 16). #54730 had no upstream conflicts per run 16.
 
 **No code changes made this run.**
 
 **Other open PRs by suboss87 (outside monitoring scope — noted for awareness):**
+- openclaw/openclaw#67457 (`fix(ollama): strip provider prefix from model ID in chat requests`)
+  — **NEW this run**, opened 2026-04-16T01:08:42Z, 2 comments, labels: size: XS. Already has
+  2 👍 reactions. Opened and got initial feedback same day.
 - openclaw/openclaw#66544 (`fix(gateway): exclude heartbeat sender ID from session display name`)
-  — opened 2026-04-14T12:46:21Z, 2 comments, labels: gateway, size: XS (noted run 23)
+  — updated 2026-04-16T01:10:53Z (**new activity since run 24**), now 3 comments (was 2), labels: gateway, size: XS, 2 👍
 - openclaw/openclaw#66225 (`fix(agents): align final tag regexes to handle self-closing <final/> variant`)
-  — opened 2026-04-14T00:12:26Z, 4 comments, labels: agents, size: S (noted run 23)
+  — updated 2026-04-16T01:14:10Z (**new activity since run 24**), 4 comments, labels: agents, size: S, 1 👍
 - openclaw/openclaw#56978 (`fix(whatsapp): exclude DM allowFrom from group policy sender bypass`)
-  — opened 2026-03-29, updated 2026-04-14T00:25:20Z, 4 comments, assigned: mcaxtr, labels: channel: whatsapp-web, size: S (**new to report**)
+  — updated 2026-04-16T00:49:29Z (**new activity since run 24**), 4 comments, assigned: mcaxtr, labels: channel: whatsapp-web, size: S
 - openclaw/openclaw#55787 (`fix: strip orphaned OpenAI reasoning blocks before responses API call`)
-  — opened 2026-03-27, updated 2026-04-14T00:24:43Z, 5 comments, labels: agents, size: XS (**new to report**)
+  — last updated 2026-04-14T00:24:43Z (unchanged from run 24), 5 comments, labels: agents, size: XS, 3 👍
 
 ---
 
 ## PRs Requiring Human Attention
 
-| PR | Issue | Priority | Update (run 24) |
+| PR | Issue | Priority | Update (run 25) |
 | --- | --- | --- | --- |
-| openclaw/openclaw#45584 | Upstream rebase required (dirty with `openclaw/openclaw:main`) | High | Still blocked; upstream proxy 502. Now 10+ days stale. |
+| openclaw/openclaw#45584 | Upstream rebase required (dirty with `openclaw/openclaw:main`) | High | Still blocked; upstream not reachable. Now 11+ days stale. |
 | openclaw/openclaw#45584 | Remove monitoring artifact tip commit `46e2b30607` before merge | Medium | Unchanged |
 | openclaw/openclaw#45584 | Re-trigger CI after rebase | Medium | Blocked on rebase |
 | openclaw/openclaw#54730 | CI failures (security-fast, contracts-protocol, ext shards 2/3/4/6) — likely pre-existing | Medium | Unchanged — assessed as pre-existing (run 20) |
 | openclaw/openclaw#54730 | Remove monitoring artifact tip commits `f052129db4` + `d18c8771bb` before merge | Medium | Unchanged |
-| openclaw/openclaw#54730 | Needs human maintainer review (none yet; 8+ days stale) | Medium | Unchanged |
+| openclaw/openclaw#54730 | Needs human maintainer review (none yet; 9+ days stale) | Medium | Unchanged |
 
 ---
 
@@ -203,8 +207,8 @@ dirty per last known state (run 16). #54730 had no upstream conflicts per run 16
   check runs, and review threads are inaccessible via direct MCP calls.
 - `search_pull_requests` and `search_issues` provide partial read access to `openclaw/openclaw`
   (PR state, comment counts, label state, review-state filters) but not full comment/review bodies.
-- Upstream `openclaw/openclaw` remote not configured; git proxy returns 502.
-- Fork git proxy (`http://127.0.0.1:49087/git/suboss87/openclaw`) works for fork branches only.
+- Upstream `openclaw/openclaw` remote not configured; git proxy not reachable for that repo.
+- Fork git proxy (`origin`) works for fork branches only.
 - **Action required by operator:** Install `gh` CLI (authenticated) or extend MCP scope to
   `openclaw/openclaw` to restore full monitoring capability.
 
