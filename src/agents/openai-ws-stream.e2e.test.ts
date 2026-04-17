@@ -378,10 +378,12 @@ describe("OpenAI WebSocket e2e", () => {
       const sid = freshSession("warmup");
       const streamFn = openAIWsStreamModule.createOpenAIWebSocketStreamFn(API_KEY!, sid);
       const events = await collectEvents(
-        streamFn(model, makeContext("Reply with the word warmed."), {
+        streamFn(model, makeContext("Reply with exactly the single word warmed."), {
           transport: "websocket",
           openaiWsWarmup: true,
-          maxTokens: 32,
+          maxTokens: 8,
+          reasoningEffort: "none",
+          textVerbosity: "low",
         } as unknown as StreamFnParams[2]),
       );
 
@@ -393,8 +395,9 @@ describe("OpenAI WebSocket e2e", () => {
         expect(assistantText(done).toLowerCase()).toContain("warmed");
       }
     },
-    // The first websocket warm-up turn is the most latency-sensitive live case
-    // in this suite and can exceed eight minutes on loaded CI runners.
+    // This transport check does not need expensive reasoning. Keep the timeout
+    // generous for CI jitter, but force a minimal response shape so the first
+    // websocket request stays bounded.
     720_000,
   );
 
