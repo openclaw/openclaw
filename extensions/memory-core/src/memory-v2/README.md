@@ -10,9 +10,9 @@ Everything described here is **off by default**. Nothing in this foundation chan
 - An ingest pipeline wired to `agent_end` that writes sidecar rows for successful agent turns when ingest is enabled.
 - A rerank wrapper wired into `memory_search` that reorders results using salience, recency, pinning, and supersession signals when rerank is enabled.
 - An optional shadow-touch path that updates `last_accessed_at` for memory-v2 hits returned by search (useful later for recency scoring).
-- An `openclaw memory sidecar` CLI: `stats` and `list` inspect the sidecar (read-only); `pin`, `status`, and `salience` each touch exactly one column of an existing record, addressed by either the full ref id or a unique ref-id prefix, covering every input the rerank pass reads (`pinnedBoost`, `supersededPenalty`, `salienceWeight`).
+- An `openclaw memory sidecar` CLI: `stats` and `list` inspect the sidecar (read-only); `pin`, `status`, `salience`, and `supersede` each touch exactly one column of an existing record, addressed by the full ref id or a unique ref-id prefix, covering every input the rerank pass reads (`pinnedBoost`, `supersededPenalty`, `salienceWeight`) plus the `superseded_by` link that records _what_ superseded a row.
 
-**Not shipped:** supersession-link writes (the `superseded_by` column — `status` only flips the enum), dreaming-phase integration, and any form of automatic promotion or demotion. A future change adds each of these surfaces explicitly.
+**Not shipped:** dreaming-phase integration, backfill of pre-existing memory data into the sidecar, and any form of automatic promotion or demotion. A future change adds each of these surfaces explicitly.
 
 ## Opt-in configuration
 
@@ -81,11 +81,11 @@ If the rerank wrapper throws at runtime it falls back to identity (returning the
 
 ## Sidecar CLI
 
-`openclaw memory sidecar` inspects and lightly curates the sidecar database for the default agent (or the agent passed with `--agent`). `stats` and `list` are strictly read-only. `pin`, `status`, and `salience` are the only writes, and each touches exactly one column of an existing row — no inserts, no other column writes.
+`openclaw memory sidecar` inspects and lightly curates the sidecar database for the default agent (or the agent passed with `--agent`). `stats` and `list` are strictly read-only. `pin`, `status`, `salience`, and `supersede` are the only writes, and each touches exactly one column of an existing row — no inserts, no other column writes. No writer cross-touches another writer's column (for example, `supersede` does not flip `status` to `superseded`; run both commands if you want both effects).
 
 ### Ref-id resolution
 
-`pin`, `status`, and `salience` all accept either a full sidecar ref id or a unique **prefix** of one. Resolution runs once per agent against that agent's own sidecar and is shared by all three writers:
+`pin`, `status`, `salience`, and both positionals of `supersede` all accept either a full sidecar ref id or a unique **prefix** of one. Resolution runs once per agent against that agent's own sidecar and is shared by every writer:
 
 - **Exact match** always wins — a full ref id continues to round-trip identically, even if it happens to be a prefix of a longer id.
 - **Unique prefix** resolves to the single matching full ref id and the write proceeds against it.
@@ -188,7 +188,28 @@ openclaw memory sidecar salience <ref-id> 0.5 --json
 
 Invalid `<value>` input — empty, `NaN`, `Infinity`, non-numeric strings, or `CLEAR` (case-sensitive) — is rejected before any database work. Empty strings are rejected explicitly so `Number("") === 0` cannot sneak through as a silent zero-salience write. **No range gating:** any finite number is accepted; operators who want bounds should enforce them externally. The rerank `salienceWeight` weight already reads this column (see the rerank table above), so salience writes take effect the next time the rerank pass runs.
 
-If the sidecar database has not been initialized yet (for example, because `memoryV2.ingest.enabled` has never been on in this workspace), all five subcommands print a "sidecar not initialized" notice and exit without error.
+### `memory sidecar supersede`
+
+Record that one sidecar row is superseded by another — writes the `superseded_by` column on the `<old-ref-id>` row, linking it to the resolved `<new-ref-id>`. **Does not flip `status`**: an operator who wants both the link _and_ `status=superseded` runs `supersede` and `status` as two commands. Both positionals go through the shared ref-id resolver (see "Ref-id resolution" above). Use the literal sentinel `clear` in the second position to unlink a previously-recorded supersession (writes SQL `NULL` to `superseded_by`).
+
+```
+openclaw memory sidecar supersede <old-ref-id> <new-ref-id>
+openclaw memory sidecar supersede <old-ref-id> clear
+openclaw memory sidecar supersede <old-ref-id> <new-ref-id> --agent my-agent
+openclaw memory sidecar supersede <old-ref-id> <new-ref-id> --json
+```
+
+| Option                  | Description                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------- |
+| `<old-ref-id>`          | Required positional. The record being superseded. Full ref id or unique prefix.                                    |
+| `<new-ref-id-or-clear>` | Required positional. The record that supersedes it, or the literal `clear` to unlink.                              |
+| `--agent <id>`          | Target a specific agent's sidecar (default: default agent).                                                        |
+| `--json`                | Emit JSON (`[{ agentId, dbPath, initialized, oldResolution, newResolution, outcome: { refId, found, supersededBy } | null }]`). |
+| `--verbose`             | Verbose logging for diagnostics.                                                                                   |
+
+Resolution runs on both positionals per agent. If `<old-ref-id>` misses or is ambiguous, the `<new-ref-id>` side is not consulted and nothing is written. If `<old-ref-id>` resolves but `<new-ref-id>` misses or is ambiguous, the error is labelled `target ref-id ...` so operators can tell which side of the supersede failed. Empty / whitespace-only `<new-ref-id>` is rejected up front — unlinking requires the explicit `clear` sentinel. The rerank `supersededPenalty` weight reads `status === "superseded"`, not the `superseded_by` link, so this command alone does not change rerank scoring; pair it with `status` when that is the intent.
+
+If the sidecar database has not been initialized yet (for example, because `memoryV2.ingest.enabled` has never been on in this workspace), all six subcommands print a "sidecar not initialized" notice and exit without error.
 
 ## Verification flow
 

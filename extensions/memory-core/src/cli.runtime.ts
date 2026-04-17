@@ -39,6 +39,7 @@ import type {
   MemorySidecarPinCommandOptions,
   MemorySidecarSalienceCommandOptions,
   MemorySidecarStatusCommandOptions,
+  MemorySidecarSupersedeCommandOptions,
 } from "./cli.types.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
 import { previewRemDreaming, seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
@@ -56,16 +57,20 @@ import {
   formatSalienceLine as formatSidecarSalienceLine,
   formatStatsLines as formatSidecarStatsLines,
   formatStatusLine as formatSidecarStatusLine,
+  formatSupersedeLine as formatSidecarSupersedeLine,
   parseSidecarSalienceArg,
   parseSidecarStatus,
+  parseSidecarSupersedeArg,
   readSidecarList,
   readSidecarStats,
   SIDECAR_STATUS_VALUES,
   type SidecarListRow,
   type SidecarStatsSummary,
+  type SidecarSupersedeOutcome,
   writeSidecarPin,
   writeSidecarSalience,
   writeSidecarStatus,
+  writeSidecarSupersede,
 } from "./memory-v2/cli/sidecar-cli.js";
 import { type RefIdResolution, resolveRefIdByPrefix } from "./memory-v2/sidecar-repo.js";
 import { SIDECAR_DB_RELATIVE_PATH, openSidecarDatabase } from "./memory-v2/sidecar-store.js";
@@ -2170,6 +2175,33 @@ async function collectResolvedWriteEntries<O>(
   return entries;
 }
 
+// Logs the human-readable lines for a non-match resolution under the given
+// label prefix (e.g. "ref-id" or "target ref-id"). Returns true when it
+// logged something (caller should then skip the match-path rendering).
+// No-op when the resolution is a match.
+function logNonMatchResolution(resolution: RefIdResolution, labelPrefix: string): boolean {
+  if (resolution.kind === "match") {
+    return false;
+  }
+  if (resolution.kind === "miss") {
+    defaultRuntime.log(`  ${labelPrefix} not found: ${resolution.input}`);
+    return true;
+  }
+  const countLabel = resolution.hasMore
+    ? `${resolution.candidates.length}+`
+    : String(resolution.candidates.length);
+  defaultRuntime.log(
+    `  ${labelPrefix} prefix "${resolution.input}" is ambiguous (matched ${countLabel}):`,
+  );
+  for (const candidate of resolution.candidates) {
+    defaultRuntime.log(`    ${candidate}`);
+  }
+  if (resolution.hasMore) {
+    defaultRuntime.log("    … and more — provide a longer prefix to disambiguate.");
+  }
+  return true;
+}
+
 // Text renderer shared by every resolve+write command. Walks the entries in
 // the order they were collected and emits:
 //   - "sidecar not initialized" when the per-agent sidecar db is missing,
@@ -2194,24 +2226,7 @@ function renderResolvedWriteEntries<O>(
       defaultRuntime.log("");
       continue;
     }
-    if (entry.resolution.kind === "miss") {
-      defaultRuntime.log(`  ref-id not found: ${entry.resolution.input}`);
-      defaultRuntime.log("");
-      continue;
-    }
-    if (entry.resolution.kind === "ambiguous") {
-      const countLabel = entry.resolution.hasMore
-        ? `${entry.resolution.candidates.length}+`
-        : String(entry.resolution.candidates.length);
-      defaultRuntime.log(
-        `  ref-id prefix "${entry.resolution.input}" is ambiguous (matched ${countLabel}):`,
-      );
-      for (const candidate of entry.resolution.candidates) {
-        defaultRuntime.log(`    ${candidate}`);
-      }
-      if (entry.resolution.hasMore) {
-        defaultRuntime.log("    … and more — provide a longer prefix to disambiguate.");
-      }
+    if (logNonMatchResolution(entry.resolution, "ref-id")) {
       defaultRuntime.log("");
       continue;
     }
@@ -2323,4 +2338,165 @@ export async function runMemorySidecarSalience(
     return;
   }
   renderResolvedWriteEntries(entries, formatSidecarSalienceLine);
+}
+
+// Per-agent entry for the supersede writer. Carries two resolutions because
+// the command takes two positional ref ids. `newResolution` is null in two
+// distinct cases — the operator asked for `clear`, or the old ref already
+// failed resolution (so we never attempted the new one). The outcome is
+// present only when the write actually ran (old matched, and new either
+// matched or was `clear`).
+type SidecarSupersedeEntry = {
+  agentId: string;
+  dbPath: string;
+  initialized: boolean;
+  oldResolution: RefIdResolution | null;
+  newResolution: RefIdResolution | null;
+  outcome: SidecarSupersedeOutcome | null;
+};
+
+async function collectSidecarSupersedeEntries(
+  cfg: OpenClawConfig,
+  agentIds: readonly string[],
+  rawOldRefId: string,
+  newTarget: { kind: "clear" } | { kind: "link"; rawNewRefId: string },
+): Promise<SidecarSupersedeEntry[]> {
+  const entries: SidecarSupersedeEntry[] = [];
+  for (const agentId of agentIds) {
+    await withMemoryManagerForAgent({
+      cfg,
+      agentId,
+      purpose: "status",
+      run: async (manager) => {
+        const workspaceDir = manager.status().workspaceDir;
+        if (!workspaceDir) {
+          return;
+        }
+        const dbPath = path.join(workspaceDir, SIDECAR_DB_RELATIVE_PATH);
+        if (!fsSync.existsSync(dbPath)) {
+          entries.push({
+            agentId,
+            dbPath,
+            initialized: false,
+            oldResolution: null,
+            newResolution: null,
+            outcome: null,
+          });
+          return;
+        }
+        const db = openSidecarDatabase(dbPath);
+        try {
+          const oldResolution = resolveRefIdByPrefix(db, rawOldRefId);
+          if (oldResolution.kind !== "match") {
+            entries.push({
+              agentId,
+              dbPath,
+              initialized: true,
+              oldResolution,
+              newResolution: null,
+              outcome: null,
+            });
+            return;
+          }
+          if (newTarget.kind === "clear") {
+            entries.push({
+              agentId,
+              dbPath,
+              initialized: true,
+              oldResolution,
+              newResolution: null,
+              outcome: writeSidecarSupersede(db, oldResolution.refId, null),
+            });
+            return;
+          }
+          const newResolution = resolveRefIdByPrefix(db, newTarget.rawNewRefId);
+          if (newResolution.kind !== "match") {
+            entries.push({
+              agentId,
+              dbPath,
+              initialized: true,
+              oldResolution,
+              newResolution,
+              outcome: null,
+            });
+            return;
+          }
+          entries.push({
+            agentId,
+            dbPath,
+            initialized: true,
+            oldResolution,
+            newResolution,
+            outcome: writeSidecarSupersede(db, oldResolution.refId, newResolution.refId),
+          });
+        } finally {
+          db.close();
+        }
+      },
+    });
+  }
+  return entries;
+}
+
+export async function runMemorySidecarSupersede(
+  oldRefIdArg: string | undefined,
+  newRefIdArg: string | undefined,
+  opts: MemorySidecarSupersedeCommandOptions,
+): Promise<void> {
+  setVerbose(Boolean(opts.verbose));
+  const rawOldRefId = (oldRefIdArg ?? "").trim();
+  if (rawOldRefId.length === 0) {
+    defaultRuntime.log(
+      theme.warn("memory sidecar supersede: <old-ref-id> is required (full id or unique prefix)."),
+    );
+    return;
+  }
+  const parsed = parseSidecarSupersedeArg(newRefIdArg ?? "");
+  if (!parsed) {
+    defaultRuntime.log(
+      theme.warn(
+        "memory sidecar supersede: <new-ref-id-or-clear> is required (full id, unique prefix, or the literal `clear` to unlink).",
+      ),
+    );
+    return;
+  }
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory sidecar supersede");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentIds = resolveAgentIds(cfg, opts.agent);
+  const entries = await collectSidecarSupersedeEntries(cfg, agentIds, rawOldRefId, parsed);
+
+  if (opts.json) {
+    defaultRuntime.writeJson(entries);
+    return;
+  }
+
+  const rich = isRich();
+  const heading = (text: string) => colorize(rich, theme.heading, text);
+  const muted = (text: string) => colorize(rich, theme.muted, text);
+  for (const entry of entries) {
+    defaultRuntime.log(heading(`Memory v2 sidecar — ${entry.agentId}`));
+    defaultRuntime.log(muted(`path: ${shortenHomePath(entry.dbPath)}`));
+    if (!entry.initialized || entry.oldResolution === null) {
+      defaultRuntime.log(
+        muted("sidecar not initialized (enable memoryV2.ingest to start populating)."),
+      );
+      defaultRuntime.log("");
+      continue;
+    }
+    if (logNonMatchResolution(entry.oldResolution, "ref-id")) {
+      defaultRuntime.log("");
+      continue;
+    }
+    if (
+      entry.newResolution !== null &&
+      logNonMatchResolution(entry.newResolution, "target ref-id")
+    ) {
+      defaultRuntime.log("");
+      continue;
+    }
+    if (entry.outcome !== null) {
+      defaultRuntime.log(`  ${formatSidecarSupersedeLine(entry.outcome)}`);
+    }
+    defaultRuntime.log("");
+  }
 }

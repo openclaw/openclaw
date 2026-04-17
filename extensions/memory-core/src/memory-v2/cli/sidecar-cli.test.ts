@@ -7,14 +7,17 @@ import {
   formatPinLine,
   formatSalienceLine,
   formatStatusLine,
+  formatSupersedeLine,
   parseSidecarSalienceArg,
   parseSidecarStatus,
+  parseSidecarSupersedeArg,
   readSidecarList,
   readSidecarStats,
   SIDECAR_STATUS_VALUES,
   writeSidecarPin,
   writeSidecarSalience,
   writeSidecarStatus,
+  writeSidecarSupersede,
 } from "./sidecar-cli.js";
 
 type InsertRow = {
@@ -603,5 +606,179 @@ describe("formatSalienceLine", () => {
     expect(formatSalienceLine({ refId: "refs:missing", found: false, salience: 0.1 })).toBe(
       "ref-id not found: refs:missing",
     );
+  });
+});
+
+describe("parseSidecarSupersedeArg", () => {
+  it("recognizes the literal `clear` sentinel (case-sensitive, whitespace-tolerant)", () => {
+    expect(parseSidecarSupersedeArg("clear")).toEqual({ kind: "clear" });
+    expect(parseSidecarSupersedeArg("  clear\n")).toEqual({ kind: "clear" });
+  });
+
+  it("carries a non-clear, non-empty string as a link payload for the caller to resolve", () => {
+    expect(parseSidecarSupersedeArg("refs:abc123")).toEqual({
+      kind: "link",
+      rawNewRefId: "refs:abc123",
+    });
+    expect(parseSidecarSupersedeArg("  refs:abc  ")).toEqual({
+      kind: "link",
+      rawNewRefId: "refs:abc",
+    });
+  });
+
+  it("treats `CLEAR` and other case variants as link payloads, not sentinels", () => {
+    // Case-sensitive by design: matches the case-sensitive posture of
+    // parseSidecarStatus. A mis-cased "clear" would still pass down to the
+    // resolver, which will correctly report it as not-found.
+    expect(parseSidecarSupersedeArg("CLEAR")).toEqual({
+      kind: "link",
+      rawNewRefId: "CLEAR",
+    });
+  });
+
+  it("rejects empty / whitespace-only input so unlinking requires the explicit sentinel", () => {
+    expect(parseSidecarSupersedeArg("")).toBeNull();
+    expect(parseSidecarSupersedeArg("   ")).toBeNull();
+    expect(parseSidecarSupersedeArg("\t\n")).toBeNull();
+  });
+});
+
+describe("writeSidecarSupersede", () => {
+  let db: DatabaseSync;
+
+  beforeEach(() => {
+    db = new DatabaseSync(":memory:");
+    ensureSidecarSchema(db);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  const seededRefId = (): string =>
+    memoryRefId({
+      source: "memory",
+      path: "memory/a.md",
+      startLine: 1,
+      endLine: 5,
+      contentHash: "memory/a.md:1000",
+    });
+
+  const seedActive = () => {
+    insertRow(db, {
+      source: "memory",
+      path: "memory/a.md",
+      startLine: 1,
+      endLine: 5,
+      status: "active",
+      pinned: false,
+      salience: null,
+      createdAt: 1000,
+      lastAccessedAt: null,
+    });
+  };
+
+  it("links an existing row to a new ref id and reports found=true", () => {
+    seedActive();
+    const oldId = seededRefId();
+
+    const outcome = writeSidecarSupersede(db, oldId, "refs:new-target");
+
+    expect(outcome).toEqual({ refId: oldId, found: true, supersededBy: "refs:new-target" });
+    const row = db
+      .prepare("SELECT superseded_by, status FROM memory_v2_records WHERE ref_id = ?")
+      .get(oldId) as { superseded_by: string | null; status: string };
+    expect(row.superseded_by).toBe("refs:new-target");
+    // Status is not auto-flipped — confirms the one-column-per-writer contract.
+    expect(row.status).toBe("active");
+  });
+
+  it("clears the supersession link to NULL when given null", () => {
+    insertRow(db, {
+      source: "memory",
+      path: "memory/a.md",
+      startLine: 1,
+      endLine: 5,
+      status: "superseded",
+      pinned: false,
+      salience: null,
+      createdAt: 1000,
+      lastAccessedAt: null,
+    });
+    const oldId = seededRefId();
+    // Seed a pre-existing link so the clear path has something to erase.
+    db.prepare("UPDATE memory_v2_records SET superseded_by = ? WHERE ref_id = ?").run(
+      "refs:stale",
+      oldId,
+    );
+
+    const outcome = writeSidecarSupersede(db, oldId, null);
+
+    expect(outcome).toEqual({ refId: oldId, found: true, supersededBy: null });
+    const row = db
+      .prepare("SELECT superseded_by, status FROM memory_v2_records WHERE ref_id = ?")
+      .get(oldId) as { superseded_by: string | null; status: string };
+    expect(row.superseded_by).toBeNull();
+    // Status is not auto-reverted either.
+    expect(row.status).toBe("superseded");
+  });
+
+  it("reports found=false without throwing or inserting when the old ref id is unknown", () => {
+    const outcome = writeSidecarSupersede(
+      db,
+      "refs:memory:does-not-exist:0-0:abc",
+      "refs:whatever",
+    );
+
+    expect(outcome.found).toBe(false);
+    expect(outcome.supersededBy).toBe("refs:whatever");
+    expect(outcome.refId).toBe("refs:memory:does-not-exist:0-0:abc");
+
+    const total = db.prepare("SELECT COUNT(*) AS n FROM memory_v2_records").get() as { n: number };
+    expect(total.n).toBe(0);
+  });
+
+  it("produces a stable JSON shape (refId, found, supersededBy) for --json callers", () => {
+    seedActive();
+    const oldId = seededRefId();
+
+    const outcome = writeSidecarSupersede(db, oldId, "refs:new-target");
+
+    expect(Object.keys(outcome).toSorted()).toEqual(["found", "refId", "supersededBy"]);
+    expect(JSON.parse(JSON.stringify(outcome))).toEqual({
+      refId: oldId,
+      found: true,
+      supersededBy: "refs:new-target",
+    });
+
+    // Clear-path JSON shape: supersededBy serializes as null, not the string "clear".
+    const cleared = writeSidecarSupersede(db, oldId, null);
+    expect(JSON.parse(JSON.stringify(cleared))).toEqual({
+      refId: oldId,
+      found: true,
+      supersededBy: null,
+    });
+  });
+});
+
+describe("formatSupersedeLine", () => {
+  it("renders link / clear / not-found text shapes from the outcome", () => {
+    expect(
+      formatSupersedeLine({
+        refId: "refs:old",
+        found: true,
+        supersededBy: "refs:new",
+      }),
+    ).toBe("supersede=refs:new refs:old");
+    expect(formatSupersedeLine({ refId: "refs:old", found: true, supersededBy: null })).toBe(
+      "supersede=clear refs:old",
+    );
+    expect(
+      formatSupersedeLine({
+        refId: "refs:missing",
+        found: false,
+        supersededBy: "refs:any",
+      }),
+    ).toBe("ref-id not found: refs:missing");
   });
 });

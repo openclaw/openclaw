@@ -238,6 +238,21 @@ export function setSalience(db: DatabaseSync, refId: string, salience: number | 
   return Number(result.changes) > 0;
 }
 
+// Writes only the `superseded_by` link. Does not touch the `status` column —
+// callers who want the common "A superseded by B, and A.status=superseded"
+// combination must run two writes. Keeps the one-column-per-writer
+// invariant of the other setters. `null` unlinks.
+export function setSupersededBy(
+  db: DatabaseSync,
+  refId: string,
+  supersededBy: string | null,
+): boolean {
+  const result = db
+    .prepare(`UPDATE memory_v2_records SET superseded_by = ? WHERE ref_id = ?`)
+    .run(supersededBy, refId);
+  return Number(result.changes) > 0;
+}
+
 export type RefIdResolution =
   | { kind: "match"; refId: string }
   | { kind: "ambiguous"; input: string; candidates: readonly string[]; hasMore: boolean }

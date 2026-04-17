@@ -1,5 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
-import { markStatus, setPinned, setSalience, type SidecarStatus } from "../sidecar-repo.js";
+import {
+  markStatus,
+  setPinned,
+  setSalience,
+  setSupersededBy,
+  type SidecarStatus,
+} from "../sidecar-repo.js";
 
 export type { SidecarStatus };
 
@@ -262,6 +268,56 @@ export function formatSalienceLine(outcome: SidecarSalienceOutcome): string {
     return `salience=clear ${outcome.refId}`;
   }
   return `salience=${outcome.salience} ${outcome.refId}`;
+}
+
+// Discriminated union so the runner can tell "link to a specific new ref"
+// apart from "clear the link". The literal `clear` sentinel takes priority
+// over ref-id resolution so a row whose actual ref id happens to be "clear"
+// cannot be addressed via this command (addressing it via `pin` / `status`
+// still works).
+export type SidecarSupersedeArg = { kind: "link"; rawNewRefId: string } | { kind: "clear" };
+
+// Returns null for empty-after-trim. Non-clear, non-empty input is returned
+// as a link payload that the caller must still resolve via
+// resolveRefIdByPrefix before writing.
+export function parseSidecarSupersedeArg(raw: string): SidecarSupersedeArg | null {
+  const trimmed = raw.trim();
+  if (trimmed === "clear") {
+    return { kind: "clear" };
+  }
+  if (trimmed.length === 0) {
+    return null;
+  }
+  return { kind: "link", rawNewRefId: trimmed };
+}
+
+export type SidecarSupersedeOutcome = {
+  refId: string;
+  found: boolean;
+  supersededBy: string | null;
+};
+
+// Admin-level supersession-link write by full ref id. Reuses the existing
+// setSupersededBy repo primitive; does not touch the status column (callers
+// who want the combined effect must run `status` separately). `null` clears
+// the link.
+export function writeSidecarSupersede(
+  db: DatabaseSync,
+  oldRefId: string,
+  supersededBy: string | null,
+): SidecarSupersedeOutcome {
+  const found = setSupersededBy(db, oldRefId, supersededBy);
+  return { refId: oldRefId, found, supersededBy };
+}
+
+export function formatSupersedeLine(outcome: SidecarSupersedeOutcome): string {
+  if (!outcome.found) {
+    return `ref-id not found: ${outcome.refId}`;
+  }
+  if (outcome.supersededBy === null) {
+    return `supersede=clear ${outcome.refId}`;
+  }
+  return `supersede=${outcome.supersededBy} ${outcome.refId}`;
 }
 
 function formatTs(ts: number | null): string {

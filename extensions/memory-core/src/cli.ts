@@ -15,6 +15,7 @@ import type {
   MemorySidecarPinCommandOptions,
   MemorySidecarSalienceCommandOptions,
   MemorySidecarStatusCommandOptions,
+  MemorySidecarSupersedeCommandOptions,
 } from "./cli.types.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
@@ -103,6 +104,15 @@ async function runMemorySidecarSalience(
 ) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemorySidecarSalience(refIdArg, salienceArg, opts);
+}
+
+async function runMemorySidecarSupersede(
+  oldRefIdArg: string | undefined,
+  newRefIdArg: string | undefined,
+  opts: MemorySidecarSupersedeCommandOptions,
+) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemorySidecarSupersede(oldRefIdArg, newRefIdArg, opts);
 }
 
 export function registerMemoryCli(program: Command) {
@@ -342,6 +352,29 @@ export function registerMemoryCli(program: Command) {
         opts: MemorySidecarSalienceCommandOptions,
       ) => {
         await runMemorySidecarSalience(refIdArg, valueArg, opts);
+      },
+    );
+
+  sidecar
+    .command("supersede")
+    .description(
+      "Link a sidecar record to the ref that supersedes it (does not flip `status`; run `status` separately if needed)",
+    )
+    .argument("<old-ref-id>", "The record being superseded — full sidecar ref id or unique prefix")
+    .argument(
+      "<new-ref-id-or-clear>",
+      "The record that supersedes it — full id, unique prefix, or the literal `clear` to unlink",
+    )
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--json", "Print JSON")
+    .option("--verbose", "Verbose logging", false)
+    .action(
+      async (
+        oldRefIdArg: string | undefined,
+        newRefIdArg: string | undefined,
+        opts: MemorySidecarSupersedeCommandOptions,
+      ) => {
+        await runMemorySidecarSupersede(oldRefIdArg, newRefIdArg, opts);
       },
     );
 }
