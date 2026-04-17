@@ -181,6 +181,20 @@ function buildMemorySection(params: {
   });
 }
 
+export function buildAgentUserPromptPrefix(params: {
+  bootstrapPending?: boolean;
+}): string | undefined {
+  if (!params.bootstrapPending) {
+    return undefined;
+  }
+  return [
+    "[Bootstrap pending]",
+    "Before producing any user-visible reply, you MUST read BOOTSTRAP.md from the workspace and follow it.",
+    "Do not greet the user, offer help, answer the message, or reply normally until after you have read and are following BOOTSTRAP.md.",
+    "Your first user-visible reply for a bootstrap-pending workspace must follow BOOTSTRAP.md, not a generic greeting.",
+  ].join("\n");
+}
+
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
   if (!ownerLine || isMinimal) {
     return [];

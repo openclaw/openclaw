@@ -50,6 +50,7 @@ import {
 import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
+  isWorkspaceBootstrapPending,
   makeBootstrapWarn,
   resolveBootstrapContextForRun,
   resolveContextInjectionMode,
@@ -114,6 +115,7 @@ import {
 import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { buildAgentUserPromptPrefix } from "../../system-prompt.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import {
@@ -448,14 +450,16 @@ export async function runEmbeddedAttempt(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config);
+    const workspaceBootstrapPending = await isWorkspaceBootstrapPending(effectiveWorkspace);
     const {
       bootstrapFiles: hookAdjustedBootstrapFiles,
-      contextFiles,
+      contextFiles: resolvedContextFiles,
       shouldRecordCompletedBootstrapTurn,
     } = await resolveAttemptBootstrapContext({
       contextInjectionMode,
       bootstrapContextMode: params.bootstrapContextMode,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
+      workspaceBootstrapPending,
       sessionFile: params.sessionFile,
       hasCompletedBootstrapTurn,
       resolveBootstrapContextForRun: async () =>
@@ -473,11 +477,17 @@ export async function runEmbeddedAttempt(
           runKind: params.bootstrapContextRunKind,
         }),
     });
+    const contextFiles = resolvedContextFiles.filter(
+      (file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()),
+    );
+    const bootstrapFilesForInjectionStats = hookAdjustedBootstrapFiles.filter(
+      (file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME,
+    );
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({
       files: buildBootstrapInjectionStats({
-        bootstrapFiles: hookAdjustedBootstrapFiles,
+        bootstrapFiles: bootstrapFilesForInjectionStats,
         injectedFiles: contextFiles,
       }),
       bootstrapMaxChars,
@@ -493,10 +503,7 @@ export async function runEmbeddedAttempt(
     const workspaceNotes = hookAdjustedBootstrapFiles.some(
       (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
     )
-      ? [
-          "If BOOTSTRAP.md is present in Project Context, it overrides the normal first greeting. Read it and follow its instructions first, then update or delete it when complete.",
-          "Reminder: commit your changes in this workspace after edits.",
-        ]
+      ? ["Reminder: commit your changes in this workspace after edits."]
       : undefined;
 
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
@@ -869,6 +876,9 @@ export async function runEmbeddedAttempt(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
+    const userPromptPrefixText = buildAgentUserPromptPrefix({
+      bootstrapPending: workspaceBootstrapPending,
+    });
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
@@ -1756,6 +1766,9 @@ export async function runEmbeddedAttempt(
             preserveExactPrompt: heartbeatPrompt,
           },
         );
+        if (userPromptPrefixText) {
+          effectivePrompt = `${userPromptPrefixText}\n\n${effectivePrompt}`;
+        }
         const hookCtx = {
           runId: params.runId,
           agentId: hookAgentId,

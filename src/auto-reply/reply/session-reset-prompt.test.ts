@@ -14,6 +14,17 @@ describe("buildBareSessionResetPrompt", () => {
     );
   });
 
+  it("uses bootstrap-specific wording when bootstrap is still pending", () => {
+    const prompt = buildBareSessionResetPrompt(undefined, undefined, true);
+
+    expect(prompt).toContain("while bootstrap is still pending for this workspace");
+    expect(prompt).toContain(
+      "Before producing any user-visible reply, you MUST read BOOTSTRAP.md from the workspace now",
+    );
+    expect(prompt).toContain("Your first user-visible reply must follow BOOTSTRAP.md");
+    expect(prompt).not.toContain("Then greet the user in your configured persona");
+  });
+
   it("appends current time line so agents know the date", () => {
     const cfg = {
       agents: { defaults: { userTimezone: "America/New_York", timeFormat: "12" } },

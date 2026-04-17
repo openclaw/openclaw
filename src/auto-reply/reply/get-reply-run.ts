@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
+import { isWorkspaceBootstrapPending } from "../../agents/workspace.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
@@ -320,15 +321,19 @@ export async function runPreparedReply(
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
   const startupAction = /^\/reset(?:\s|$)/.test(normalizedCommandBody) ? "reset" : "new";
+  const bootstrapPending =
+    isBareSessionReset && workspaceDir ? await isWorkspaceBootstrapPending(workspaceDir) : false;
   const startupContextPrelude =
-    isBareSessionReset && shouldApplyStartupContext({ cfg, action: startupAction })
+    isBareSessionReset &&
+    !bootstrapPending &&
+    shouldApplyStartupContext({ cfg, action: startupAction })
       ? await buildSessionStartupContextPrelude({
           workspaceDir,
           cfg,
         })
       : null;
   const baseBodyFinal = isBareSessionReset
-    ? buildBareSessionResetPrompt(cfg)
+    ? buildBareSessionResetPrompt(cfg, undefined, bootstrapPending)
     : stripPromptThinkingDirectives(baseBody);
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
   const inboundUserContext = buildInboundUserContextPrefix(

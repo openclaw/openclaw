@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
-import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
+import {
+  buildAgentSystemPrompt,
+  buildAgentUserPromptPrefix,
+  buildRuntimeLine,
+} from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
   it("formats owner section for plain, hash, and missing owner lists", () => {
@@ -409,17 +413,30 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Reminder: commit your changes in this workspace after edits.");
   });
 
-  it("includes BOOTSTRAP override guidance in workspace notes when provided", () => {
+  it("keeps bootstrap instructions out of the privileged system prompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      workspaceNotes: [
-        "If BOOTSTRAP.md is present in Project Context, it overrides the normal first greeting. Read it and follow its instructions first, then update or delete it when complete.",
-      ],
+      workspaceNotes: ["Reminder: commit your changes in this workspace after edits."],
     });
 
-    expect(prompt).toContain("BOOTSTRAP.md is present in Project Context");
-    expect(prompt).toContain("it overrides the normal first greeting");
-    expect(prompt).toContain("Read it and follow its instructions first");
+    expect(prompt).not.toContain("## Bootstrap");
+    expect(prompt).not.toContain("Bootstrap is pending for this workspace.");
+    expect(prompt).not.toContain("BOOTSTRAP.md is present in Project Context");
+  });
+
+  it("adds bootstrap-specific prelude text to the user prompt prefix when bootstrap is pending", () => {
+    const promptPrefix = buildAgentUserPromptPrefix({ bootstrapPending: true });
+
+    expect(promptPrefix).toContain("[Bootstrap pending]");
+    expect(promptPrefix).toContain(
+      "Before producing any user-visible reply, you MUST read BOOTSTRAP.md from the workspace",
+    );
+    expect(promptPrefix).toContain(
+      "Do not greet the user, offer help, answer the message, or reply normally",
+    );
+    expect(promptPrefix).toContain(
+      "Your first user-visible reply for a bootstrap-pending workspace must follow BOOTSTRAP.md",
+    );
   });
 
   it("shows timezone section for 12h, 24h, and timezone-only modes", () => {
