@@ -50,7 +50,6 @@ services:
         "${OPENCLAW_GATEWAY_BIND:-lan}",
         "--port",
         "18789",
-        "--force",
       ]
 
   openclaw-310798523454980098:
@@ -74,5 +73,4 @@ services:
         "${OPENCLAW_GATEWAY_BIND:-lan}",
         "--port",
         "18789",
-        "--force",
       ]
