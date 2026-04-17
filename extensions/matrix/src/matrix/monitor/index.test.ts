@@ -390,12 +390,27 @@ describe("monitorMatrixProvider", () => {
     ({ monitorMatrixProvider } = await import("./index.js"));
   });
 
+  async function flushUntil(predicate: () => boolean, message: string): Promise<void> {
+    for (let i = 0; i < 20; i++) {
+      if (predicate()) {
+        return;
+      }
+      await Promise.resolve();
+    }
+    throw new Error(message);
+  }
+
+  async function waitForCallOrderEntry(entry: string): Promise<void> {
+    await flushUntil(
+      () => hoisted.callOrder.includes(entry),
+      `expected call order to include ${entry}`,
+    );
+  }
+
   async function startMonitorAndAbortAfterStartup(): Promise<void> {
     const abortController = new AbortController();
     const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
-    await vi.waitFor(() => {
-      expect(hoisted.callOrder).toContain("start-client");
-    });
+    await waitForCallOrderEntry("start-client");
     abortController.abort();
     await monitorPromise;
   }
@@ -471,9 +486,7 @@ describe("monitorMatrixProvider", () => {
       setStatus: hoisted.setStatus,
     });
 
-    await vi.waitFor(() => {
-      expect(hoisted.callOrder).toContain("start-client");
-    });
+    await waitForCallOrderEntry("start-client");
 
     expect(hoisted.setStatus).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -486,16 +499,14 @@ describe("monitorMatrixProvider", () => {
 
     hoisted.client.emit("sync.state", "SYNCING", "RECONNECTING", undefined);
 
-    await vi.waitFor(() => {
-      expect(hoisted.setStatus).toHaveBeenCalledWith(
-        expect.objectContaining({
-          accountId: "default",
-          connected: true,
-          healthState: "healthy",
-          lastError: null,
-        }),
-      );
-    });
+    expect(hoisted.setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        connected: true,
+        healthState: "healthy",
+        lastError: null,
+      }),
+    );
 
     abortController.abort();
     await expect(monitorPromise).resolves.toBeUndefined();
@@ -511,9 +522,7 @@ describe("monitorMatrixProvider", () => {
         setStatus: hoisted.setStatus,
       });
 
-      await vi.waitFor(() => {
-        expect(hoisted.callOrder).toContain("start-client");
-      });
+      await waitForCallOrderEntry("start-client");
 
       const getHealthySyncSinceMs = hoisted.registeredHealthySyncGetter;
       if (!getHealthySyncSinceMs) {
@@ -569,9 +578,7 @@ describe("monitorMatrixProvider", () => {
     process.on("unhandledRejection", onUnhandled);
     try {
       const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
-      await vi.waitFor(() => {
-        expect(hoisted.callOrder).toContain("start-client");
-      });
+      await waitForCallOrderEntry("start-client");
 
       const onRoomMessage = hoisted.registeredOnRoomMessage;
       if (!onRoomMessage) {
@@ -604,9 +611,7 @@ describe("monitorMatrixProvider", () => {
       setStatus: hoisted.setStatus,
     });
 
-    await vi.waitFor(() => {
-      expect(hoisted.callOrder).toContain("start-client");
-    });
+    await waitForCallOrderEntry("start-client");
 
     hoisted.client.emit("sync.unexpected_error", new Error("sync exploded"));
 
@@ -696,9 +701,7 @@ describe("monitorMatrixProvider", () => {
 
     const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
 
-    await vi.waitFor(() => {
-      expect(hoisted.callOrder).toContain("start-client");
-    });
+    await waitForCallOrderEntry("start-client");
 
     abortController.abort();
 
@@ -726,9 +729,10 @@ describe("monitorMatrixProvider", () => {
 
     const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
 
-    await vi.waitFor(() => {
-      expect(hoisted.runMatrixStartupMaintenance).toHaveBeenCalledTimes(1);
-    });
+    await flushUntil(
+      () => hoisted.runMatrixStartupMaintenance.mock.calls.length === 1,
+      "expected startup maintenance to run",
+    );
 
     abortController.abort();
 
@@ -767,10 +771,8 @@ describe("monitorMatrixProvider", () => {
     const abortController = new AbortController();
     const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
 
-    await vi.waitFor(() => {
-      expect(hoisted.callOrder).toContain("start-client");
-      expect(hoisted.backfillMatrixAuthDeviceIdAfterStartup).toHaveBeenCalledTimes(1);
-    });
+    await waitForCallOrderEntry("start-client");
+    expect(hoisted.backfillMatrixAuthDeviceIdAfterStartup).toHaveBeenCalledTimes(1);
     expect(hoisted.backfillMatrixAuthDeviceIdAfterStartup).toHaveBeenCalledWith(
       expect.objectContaining({
         abortSignal: abortController.signal,
@@ -837,9 +839,7 @@ describe("monitorMatrixProvider", () => {
     });
 
     const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
-    await vi.waitFor(() => {
-      expect(hoisted.callOrder).toContain("start-client");
-    });
+    await waitForCallOrderEntry("start-client");
     const onRoomMessage = hoisted.registeredOnRoomMessage;
     if (!onRoomMessage) {
       throw new Error("expected room message handler to be registered");
@@ -847,9 +847,7 @@ describe("monitorMatrixProvider", () => {
 
     const roomMessagePromise = onRoomMessage("!room:example.org", { event_id: "$event" });
     abortController.abort();
-    await vi.waitFor(() => {
-      expect(hoisted.callOrder).toContain("pause-client");
-    });
+    await waitForCallOrderEntry("pause-client");
     expect(hoisted.callOrder).not.toContain("stop-deduper");
 
     if (resolveHandler === null) {
