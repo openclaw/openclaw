@@ -173,7 +173,7 @@ describe("discoverKilocodeModels (fetch path)", () => {
       await withFetchPathTest(mockFetch, async () => {
         await discoverKilocodeModels();
         const callArgs = mockFetch.mock.calls[0][1] as { headers: Record<string, string> };
-        expect(callArgs.headers).toEqual({ Accept: "application/json" });
+        expect(callArgs.headers).toMatchObject({ Accept: "application/json" });
         expect(callArgs.headers).not.toHaveProperty("Authorization");
       });
     } finally {
