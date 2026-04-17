@@ -98,6 +98,7 @@ async function readTextFileStreaming(
     let totalChars = 0;
     let collectedChars = 0;
     let isTruncated = false;
+    let isRangeComplete = false;
     
     const startLine = Math.max(0, offset - 1);
     const endLine = limit !== undefined ? startLine + limit : undefined;
@@ -121,8 +122,13 @@ async function readTextFileStreaming(
       totalLines++;
       
       // Check if we've reached the requested range
-      if (currentLineNumber >= startLine && (endLine === undefined || currentLineNumber < endLine)) {
-        const lineWithNewline = currentLineNumber === totalLines - 1 ? line : line + "\n";
+      const isInRange = currentLineNumber >= startLine && (endLine === undefined || currentLineNumber < endLine);
+      
+      if (isInRange) {
+        // Always add newline except for the last line we're collecting
+        // Since we don't know if this is the last line until we've processed all lines,
+        // we'll add newline to all collected lines and strip trailing newline at the end
+        const lineWithNewline = line + "\n";
         const lineChars = lineWithNewline.length;
         
         // Check if adding this line would exceed maxChars
@@ -137,16 +143,25 @@ async function readTextFileStreaming(
           isTruncated = true;
           rl.close();
           readStream.destroy();
-        } else {
-          lines.push(lineWithNewline);
-          collectedChars += lineChars;
-          totalChars += line.length;
+          return;
         }
+        
+        lines.push(lineWithNewline);
+        collectedChars += lineChars;
+        totalChars += line.length;
       }
       
       currentLineNumber++;
       
-      // Stop if we've collected enough lines and have truncation
+      // Stop if we've collected the requested range
+      if (endLine !== undefined && currentLineNumber >= endLine) {
+        isRangeComplete = true;
+        rl.close();
+        readStream.destroy();
+        return;
+      }
+      
+      // Stop if we've reached truncation limit
       if (isTruncated) {
         rl.close();
         readStream.destroy();
@@ -156,14 +171,26 @@ async function readTextFileStreaming(
     rl.on("close", () => {
       let content = lines.join("");
       
+      // Remove trailing newline if present (since we added newline to all lines)
+      if (content.endsWith("\n")) {
+        content = content.slice(0, -1);
+      }
+      
       // Apply final truncation if needed (for cases where we didn't hit the line limit)
       if (content.length > maxChars) {
         content = content.slice(0, maxChars);
         isTruncated = true;
       }
       
+      // Add truncation notice
       if (isTruncated) {
         content += `\n\n... [Content truncated to ${maxChars} chars]`;
+      }
+      
+      // Add notice if range was limited
+      if (!isRangeComplete && endLine !== undefined && !isTruncated && limit !== undefined) {
+        // This means we stopped because we reached the end of file before completing the range
+        // No need to add notice, it's normal behavior
       }
       
       resolve({
@@ -1001,7 +1028,7 @@ export function createOpenClawReadTool(
 
           // Use streaming for host mode, fallback to full read for bridge mode
           if (useBridge) {
-            const result = await readTextFileBridge(
+            const bridgeResult = await readTextFileBridge(
               options.bridge!,
               inputPath,
               rootDirResolved,
@@ -1010,18 +1037,18 @@ export function createOpenClawReadTool(
               maxChars,
               signal,
             );
-            text = result.content;
-            truncated = result.truncated;
+            text = bridgeResult.content;
+            truncated = bridgeResult.truncated;
           } else {
-            const result = await readTextFileStreaming(
+            const streamResult = await readTextFileStreaming(
               inputPath,
               offset,
               limit,
               maxChars,
               signal,
             );
-            text = result.content;
-            truncated = result.truncated;
+            text = streamResult.content;
+            truncated = streamResult.truncated;
           }
 
           result = {
