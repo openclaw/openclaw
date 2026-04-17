@@ -1,0 +1,20 @@
+{
+  "name": "@openclaw/a2a-broker-adapter",
+  "version": "2026.4.11",
+  "private": true,
+  "description": "Standalone A2A broker gateway method registration and broker routing",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49",
+    "ajv": "^8.18.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
