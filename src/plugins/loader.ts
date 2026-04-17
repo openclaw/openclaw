@@ -933,11 +933,34 @@ function recordPluginError(params: {
     typeof params.error.stack === "string"
       ? params.error.stack
       : String(params.error);
+  const missingModuleSpecifier = (() => {
+    const moduleMatch = errorText.match(/Cannot find module '([^']+)'/);
+    if (moduleMatch?.[1]) {
+      return moduleMatch[1];
+    }
+    const packageMatch = errorText.match(/Cannot find package '([^']+)'/);
+    return packageMatch?.[1] ?? null;
+  })();
+  const missingBarePackageSpecifier =
+    missingModuleSpecifier &&
+    !missingModuleSpecifier.startsWith(".") &&
+    !missingModuleSpecifier.startsWith("/") &&
+    !missingModuleSpecifier.startsWith("file:") &&
+    !missingModuleSpecifier.startsWith("node:") &&
+    !/^[A-Za-z]:[\\/]/.test(missingModuleSpecifier) &&
+    !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(missingModuleSpecifier)
+      ? missingModuleSpecifier
+      : null;
+  const missingBundledDependencyHint =
+    params.record.origin === "bundled" && missingBarePackageSpecifier
+      ? `bundled plugin runtime dependency "${missingBarePackageSpecifier}" appears to be missing; if this is a packaged install run "openclaw doctor --fix", and if this is a Docker source build rebuild with OPENCLAW_EXTENSIONS including "${params.record.id}"`
+      : null;
   const deprecatedApiHint =
     errorText.includes("api.registerHttpHandler") && errorText.includes("is not a function")
       ? "deprecated api.registerHttpHandler(...) was removed; use api.registerHttpRoute(...) for plugin-owned routes or registerPluginHttpRoute(...) for dynamic lifecycle routes"
       : null;
-  const displayError = deprecatedApiHint ? `${deprecatedApiHint} (${errorText})` : errorText;
+  const hint = deprecatedApiHint ?? missingBundledDependencyHint;
+  const displayError = hint ? `${hint} (${errorText})` : errorText;
   params.logger.error(`${params.logPrefix}${displayError}`);
   params.record.status = "error";
   params.record.error = displayError;

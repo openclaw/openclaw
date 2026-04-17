@@ -3731,6 +3731,102 @@ module.exports = {
     expect(diagnostic!.message).toContain("failed to load setup entry");
   });
 
+  it("adds actionable guidance when a bundled plugin load fails due to a missing runtime dependency", () => {
+    const missingDep = "definitely-missing-pkg-openclaw";
+    const { bundledDir } = writeBundledPlugin({
+      id: "telegram",
+      filename: "index.cjs",
+      body: `require(${JSON.stringify(missingDep)});
+module.exports = { id: "telegram", register() {} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: bundledDir,
+      onlyPluginIds: ["telegram"],
+      config: {
+        plugins: {
+          entries: {
+            telegram: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    const diagnostic = registry.diagnostics.find(
+      (entry) => entry.pluginId === "telegram" && entry.level === "error",
+    );
+    expect(diagnostic).toBeDefined();
+    expect(diagnostic?.message).toContain("failed to load plugin:");
+    expect(diagnostic?.message).toContain(
+      `bundled plugin runtime dependency "${missingDep}" appears to be missing; if this is a packaged install run "openclaw doctor --fix", and if this is a Docker source build rebuild with OPENCLAW_EXTENSIONS including "telegram"`,
+    );
+    expect(diagnostic?.message).toContain(`Cannot find module '${missingDep}'`);
+  });
+
+  it("does not add bundled-runtime guidance for missing relative files inside bundled plugins", () => {
+    const missingFile = "./missing-local-file.cjs";
+    const { bundledDir } = writeBundledPlugin({
+      id: "telegram",
+      filename: "index.cjs",
+      body: `require(${JSON.stringify(missingFile)});
+module.exports = { id: "telegram", register() {} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: bundledDir,
+      onlyPluginIds: ["telegram"],
+      config: {
+        plugins: {
+          entries: {
+            telegram: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    const diagnostic = registry.diagnostics.find(
+      (entry) => entry.pluginId === "telegram" && entry.level === "error",
+    );
+    expect(diagnostic).toBeDefined();
+    expect(diagnostic?.message).toContain(`Cannot find module '${missingFile}'`);
+    expect(diagnostic?.message).not.toContain(
+      "bundled plugin runtime dependency appears to be missing",
+    );
+  });
+
+  it("does not add bundled-runtime guidance for non-bundled plugin load failures", () => {
+    useNoBundledPlugins();
+    const missingDep = "definitely-missing-pkg-openclaw";
+    const plugin = writePlugin({
+      id: "missing-dep-local",
+      filename: "missing-dep-local.cjs",
+      body: `require(${JSON.stringify(missingDep)});
+module.exports = { id: "missing-dep-local", register() {} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["missing-dep-local"],
+      },
+    });
+
+    const diagnostic = registry.diagnostics.find(
+      (entry) => entry.pluginId === "missing-dep-local" && entry.level === "error",
+    );
+    expect(diagnostic).toBeDefined();
+    expect(diagnostic?.message).toContain(`Cannot find module '${missingDep}'`);
+    expect(diagnostic?.message).not.toContain(
+      "bundled plugin runtime dependency appears to be missing",
+    );
+  });
+
   it("keeps healthy sibling channel plugins loadable when a setup entry throws", () => {
     useNoBundledPlugins();
     const brokenDir = makeTempDir();
