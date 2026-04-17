@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
 
 const mocks = vi.hoisted(() => ({
   sendMessageMatrix: vi.fn(),
@@ -29,6 +29,16 @@ describe("matrixOutbound cfg threading", () => {
     mocks.sendPollMatrix.mockReset();
     mocks.sendMessageMatrix.mockResolvedValue({ messageId: "evt-1", roomId: "!room:example" });
     mocks.sendPollMatrix.mockResolvedValue({ eventId: "$poll", roomId: "!room:example" });
+  });
+
+  it("chunks outbound text without requiring Matrix runtime initialization", () => {
+    const chunker = matrixOutbound.chunker;
+    if (!chunker) {
+      throw new Error("matrixOutbound.chunker missing");
+    }
+
+    expect(() => chunker("hello world", 5)).not.toThrow();
+    expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
   });
 
   it("passes resolved cfg to sendMessageMatrix for text sends", async () => {
@@ -75,7 +85,9 @@ describe("matrixOutbound cfg threading", () => {
       to: "room:!room:example",
       text: "caption",
       mediaUrl: "file:///tmp/cat.png",
+      mediaLocalRoots: ["/tmp/openclaw"],
       accountId: "default",
+      audioAsVoice: true,
     });
 
     expect(mocks.sendMessageMatrix).toHaveBeenCalledWith(
@@ -84,11 +96,13 @@ describe("matrixOutbound cfg threading", () => {
       expect.objectContaining({
         cfg,
         mediaUrl: "file:///tmp/cat.png",
+        mediaLocalRoots: ["/tmp/openclaw"],
+        audioAsVoice: true,
       }),
     );
   });
 
-  it("passes resolved cfg through injected deps.sendMatrix", async () => {
+  it("passes resolved cfg through injected deps.matrix", async () => {
     const cfg = {
       channels: {
         matrix: {
@@ -96,7 +110,7 @@ describe("matrixOutbound cfg threading", () => {
         },
       },
     } as OpenClawConfig;
-    const sendMatrix = vi.fn(async () => ({
+    const matrix = vi.fn(async () => ({
       messageId: "evt-injected",
       roomId: "!room:example",
     }));
@@ -105,13 +119,13 @@ describe("matrixOutbound cfg threading", () => {
       cfg,
       to: "room:!room:example",
       text: "hello via deps",
-      deps: { sendMatrix },
+      deps: { matrix },
       accountId: "default",
       threadId: "$thread",
       replyToId: "$reply",
     });
 
-    expect(sendMatrix).toHaveBeenCalledWith(
+    expect(matrix).toHaveBeenCalledWith(
       "room:!room:example",
       "hello via deps",
       expect.objectContaining({

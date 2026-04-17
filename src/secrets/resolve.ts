@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ExecSecretProviderConfig,
   FileSecretProviderConfig,
@@ -9,22 +9,21 @@ import type {
   SecretRef,
   SecretRefSource,
 } from "../config/types.secrets.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { readJsonPointer } from "./json-pointer.js";
 import {
+  formatExecSecretRefIdValidationMessage,
+  isValidExecSecretRefId,
   SINGLE_VALUE_FILE_REF_ID,
   resolveDefaultSecretProviderAlias,
   secretRefKey,
 } from "./ref-contract.js";
-import {
-  describeUnknownError,
-  isNonEmptyString,
-  isRecord,
-  normalizePositiveInt,
-} from "./shared.js";
+import type { SecretRefResolveCache } from "./resolve-types.js";
+import { isNonEmptyString, isRecord, normalizePositiveInt } from "./shared.js";
 
 const DEFAULT_PROVIDER_CONCURRENCY = 4;
 const DEFAULT_MAX_REFS_PER_PROVIDER = 512;
@@ -36,10 +35,7 @@ const DEFAULT_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
-export type SecretRefResolveCache = {
-  resolvedByRefKey?: Map<string, Promise<unknown>>;
-  filePayloadByProvider?: Map<string, Promise<unknown>>;
-};
+export type { SecretRefResolveCache } from "./resolve-types.js";
 
 type ResolveSecretRefOptions = {
   config: OpenClawConfig;
@@ -127,6 +123,33 @@ function refResolutionError(params: {
   return new SecretRefResolutionError(params);
 }
 
+function throwUnknownProviderResolutionError(params: {
+  source: SecretRefSource;
+  provider: string;
+  err: unknown;
+}): never {
+  if (isSecretResolutionError(params.err)) {
+    throw params.err;
+  }
+  throw providerResolutionError({
+    source: params.source,
+    provider: params.provider,
+    message: formatErrorMessage(params.err),
+    cause: params.err,
+  });
+}
+
+async function readFileStatOrThrow(pathname: string, label: string) {
+  const stat = await safeStat(pathname);
+  if (!stat.ok) {
+    throw new Error(`${label} is not readable: ${pathname}`);
+  }
+  if (stat.isDir) {
+    throw new Error(`${label} must be a file: ${pathname}`);
+  }
+  return stat;
+}
+
 function isAbsolutePathname(value: string): boolean {
   return (
     path.isAbsolute(value) ||
@@ -189,13 +212,7 @@ async function assertSecurePath(params: {
   }
 
   let effectivePath = params.targetPath;
-  let stat = await safeStat(effectivePath);
-  if (!stat.ok) {
-    throw new Error(`${params.label} is not readable: ${effectivePath}`);
-  }
-  if (stat.isDir) {
-    throw new Error(`${params.label} must be a file: ${effectivePath}`);
-  }
+  let stat = await readFileStatOrThrow(effectivePath, params.label);
   if (stat.isSymlink) {
     if (!params.allowSymlinkPath) {
       throw new Error(`${params.label} must not be a symlink: ${effectivePath}`);
@@ -208,13 +225,7 @@ async function assertSecurePath(params: {
     if (!isAbsolutePathname(effectivePath)) {
       throw new Error(`${params.label} resolved symlink target must be an absolute path.`);
     }
-    stat = await safeStat(effectivePath);
-    if (!stat.ok) {
-      throw new Error(`${params.label} is not readable: ${effectivePath}`);
-    }
-    if (stat.isDir) {
-      throw new Error(`${params.label} must be a file: ${effectivePath}`);
-    }
+    stat = await readFileStatOrThrow(effectivePath, params.label);
     if (stat.isSymlink) {
       throw new Error(`${params.label} symlink target must not be a symlink: ${effectivePath}`);
     }
@@ -265,8 +276,9 @@ async function readFileProviderPayload(params: {
 }): Promise<unknown> {
   const cacheKey = params.providerName;
   const cache = params.cache;
-  if (cache?.filePayloadByProvider?.has(cacheKey)) {
-    return await (cache.filePayloadByProvider.get(cacheKey) as Promise<unknown>);
+  const cachedFilePayload = cache?.filePayloadByProvider?.get(cacheKey);
+  if (cachedFilePayload) {
+    return await cachedFilePayload;
   }
 
   const filePath = resolveUserPath(params.providerConfig.path);
@@ -372,14 +384,10 @@ async function resolveFileRefs(params: {
       cache: params.cache,
     });
   } catch (err) {
-    if (isSecretResolutionError(err)) {
-      throw err;
-    }
-    throw providerResolutionError({
+    throwUnknownProviderResolutionError({
       source: "file",
       provider: params.providerName,
-      message: describeUnknownError(err),
-      cause: err,
+      err,
     });
   }
   const mode = params.providerConfig.mode ?? "json";
@@ -406,7 +414,7 @@ async function resolveFileRefs(params: {
         source: "file",
         provider: params.providerName,
         refId: ref.id,
-        message: describeUnknownError(err),
+        message: formatErrorMessage(err),
         cause: err,
       });
     }
@@ -664,14 +672,10 @@ async function resolveExecRefs(params: {
       allowSymlinkPath: params.providerConfig.allowSymlinkCommand,
     });
   } catch (err) {
-    if (isSecretResolutionError(err)) {
-      throw err;
-    }
-    throw providerResolutionError({
+    throwUnknownProviderResolutionError({
       source: "exec",
       provider: params.providerName,
-      message: describeUnknownError(err),
-      cause: err,
+      err,
     });
   }
 
@@ -724,14 +728,10 @@ async function resolveExecRefs(params: {
       maxOutputBytes,
     });
   } catch (err) {
-    if (isSecretResolutionError(err)) {
-      throw err;
-    }
-    throw providerResolutionError({
+    throwUnknownProviderResolutionError({
       source: "exec",
       provider: params.providerName,
-      message: describeUnknownError(err),
-      cause: err,
+      err,
     });
   }
   if (result.termination === "timeout") {
@@ -765,14 +765,10 @@ async function resolveExecRefs(params: {
       jsonOnly,
     });
   } catch (err) {
-    if (isSecretResolutionError(err)) {
-      throw err;
-    }
-    throw providerResolutionError({
+    throwUnknownProviderResolutionError({
       source: "exec",
       provider: params.providerName,
-      message: describeUnknownError(err),
-      cause: err,
+      err,
     });
   }
   const resolved = new Map<string, unknown>();
@@ -822,14 +818,10 @@ async function resolveProviderRefs(params: {
       message: `Unsupported secret provider source "${String((params.providerConfig as { source?: unknown }).source)}".`,
     });
   } catch (err) {
-    if (isSecretResolutionError(err)) {
-      throw err;
-    }
-    throw providerResolutionError({
+    return throwUnknownProviderResolutionError({
       source: params.source,
       provider: params.providerName,
-      message: describeUnknownError(err),
-      cause: err,
+      err,
     });
   }
 }
@@ -847,6 +839,11 @@ export async function resolveSecretRefValues(
     const id = ref.id.trim();
     if (!id) {
       throw new Error("Secret reference id is empty.");
+    }
+    if (ref.source === "exec" && !isValidExecSecretRefId(id)) {
+      throw new Error(
+        `${formatExecSecretRefIdValidationMessage()} (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
     }
     uniqueRefs.set(secretRefKey(ref), { ...ref, id });
   }
@@ -919,8 +916,9 @@ export async function resolveSecretRefValue(
 ): Promise<unknown> {
   const cache = options.cache;
   const key = secretRefKey(ref);
-  if (cache?.resolvedByRefKey?.has(key)) {
-    return await (cache.resolvedByRefKey.get(key) as Promise<unknown>);
+  const cachedResolvedValue = cache?.resolvedByRefKey?.get(key);
+  if (cachedResolvedValue) {
+    return await cachedResolvedValue;
   }
 
   const promise = (async () => {

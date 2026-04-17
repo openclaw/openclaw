@@ -14,7 +14,7 @@ This guide covers the necessary steps to build and run the OpenClaw macOS applic
 Before building the app, ensure you have the following installed:
 
 1. **Xcode 26.2+**: Required for Swift development.
-2. **Node.js 22+ & pnpm**: Required for the gateway, CLI, and packaging scripts.
+2. **Node.js 24 & pnpm**: Recommended for the gateway, CLI, and packaging scripts. Node 22 LTS, currently `22.14+`, remains supported for compatibility.
 
 ## 1. Install Dependencies
 
@@ -54,6 +54,9 @@ Alternatively, install it manually:
 ```bash
 npm install -g openclaw@<version>
 ```
+
+`pnpm add -g openclaw@<version>` and `bun add -g openclaw@<version>` also work.
+For the Gateway runtime, Node remains the recommended path.
 
 ## Troubleshooting
 
@@ -97,7 +100,7 @@ If the gateway status stays on "Starting...", check if a zombie process is holdi
 openclaw gateway status
 openclaw gateway stop
 
-# If you’re not using a LaunchAgent (dev mode / manual runs), find the listener:
+# If you're not using a LaunchAgent (dev mode / manual runs), find the listener:
 lsof -nP -iTCP:18789 -sTCP:LISTEN
 ```
 

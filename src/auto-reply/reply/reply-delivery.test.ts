@@ -1,0 +1,200 @@
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
+import {
+  createBlockReplyDeliveryHandler,
+  normalizeReplyPayloadDirectives,
+} from "./reply-delivery.js";
+import type { TypingSignaler } from "./typing-mode.js";
+
+type BlockReplyPipelineLike = NonNullable<
+  Parameters<typeof createBlockReplyDeliveryHandler>[0]["blockReplyPipeline"]
+>;
+
+describe("createBlockReplyDeliveryHandler", () => {
+  it("sends media-bearing block replies even when block streaming is disabled", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const normalizeStreamingText = vi.fn((payload: { text?: string }) => ({
+      text: payload.text,
+      skip: false,
+    }));
+    const directlySentBlockKeys = new Set<string>();
+    const typingSignals = {
+      signalTextDelta: vi.fn(async () => {}),
+    } as unknown as TypingSignaler;
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText,
+      applyReplyToMode: (payload) => payload,
+      typingSignals,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+    });
+
+    await handler({
+      text: "here's the vibe",
+      mediaUrls: ["/tmp/generated.png"],
+      replyToCurrent: true,
+    });
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: undefined,
+      mediaUrl: "/tmp/generated.png",
+      mediaUrls: ["/tmp/generated.png"],
+      replyToCurrent: true,
+      replyToId: undefined,
+      replyToTag: undefined,
+      audioAsVoice: false,
+    });
+    expect(directlySentBlockKeys).toEqual(
+      new Set([
+        createBlockReplyContentKey({
+          text: "here's the vibe",
+          mediaUrls: ["/tmp/generated.png"],
+          replyToCurrent: true,
+        }),
+      ]),
+    );
+    expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("here's the vibe");
+  });
+
+  it("keeps text-only block replies buffered when block streaming is disabled", async () => {
+    const onBlockReply = vi.fn(async () => {});
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys: new Set(),
+    });
+
+    await handler({ text: "text only" });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("trims leading whitespace in block-streamed replies", async () => {
+    const blockReplyPipeline = {
+      enqueue: vi.fn(),
+    } as unknown as BlockReplyPipelineLike;
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: vi.fn(async () => {}),
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline,
+      directlySentBlockKeys: new Set(),
+    });
+
+    await handler({ text: "\n\n  Hello from stream" });
+
+    expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
+      text: "Hello from stream",
+      mediaUrl: undefined,
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: undefined,
+      audioAsVoice: false,
+      mediaUrls: undefined,
+    });
+  });
+
+  it("parses media directives in block replies before path normalization", () => {
+    const normalized = normalizeReplyPayloadDirectives({
+      payload: { text: "Result\nMEDIA: ./image.png" },
+      trimLeadingWhitespace: true,
+      parseMode: "auto",
+    });
+
+    expect(normalized.payload).toMatchObject({
+      text: "Result",
+      mediaUrl: "./image.png",
+      mediaUrls: ["./image.png"],
+    });
+  });
+
+  it("passes normalized media block replies through media path normalization", async () => {
+    const blockReplyPipeline = {
+      enqueue: vi.fn(),
+    } as unknown as BlockReplyPipelineLike;
+    const absPath = path.join("/tmp/home", "openclaw", "image.png");
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: vi.fn(async () => {}),
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      normalizeMediaPaths: async (payload) => ({
+        ...payload,
+        mediaUrl: absPath,
+        mediaUrls: [absPath],
+      }),
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline,
+      directlySentBlockKeys: new Set(),
+    });
+
+    await handler({ text: "Result\nMEDIA: ./image.png" });
+
+    expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
+      text: "Result",
+      mediaUrl: absPath,
+      mediaUrls: [absPath],
+      replyToId: undefined,
+      replyToCurrent: false,
+      replyToTag: false,
+      audioAsVoice: false,
+    });
+  });
+
+  it("preserves reply payload metadata across block-reply normalization", async () => {
+    const enqueue = vi.fn();
+    const blockReplyPipeline = {
+      enqueue,
+    } as unknown as BlockReplyPipelineLike;
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: vi.fn(async () => {}),
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => ({ ...payload, replyToTag: true }),
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline,
+      directlySentBlockKeys: new Set(),
+    });
+
+    const payload = setReplyPayloadMetadata({ text: "Alpha" }, { assistantMessageIndex: 7 });
+
+    await handler(payload);
+
+    const enqueuedPayload = enqueue.mock.calls[0]?.[0];
+    expect(enqueuedPayload).toEqual({
+      text: "Alpha",
+      mediaUrl: undefined,
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: true,
+      audioAsVoice: false,
+      mediaUrls: undefined,
+    });
+    expect(getReplyPayloadMetadata(enqueuedPayload)).toEqual({
+      assistantMessageIndex: 7,
+    });
+  });
+});

@@ -21,7 +21,7 @@ capabilities to the agent as a node.
 - Exposes macOS‑only tools (Canvas, Camera, Screen Recording, `system.run`).
 - Starts the local node host service in **remote** mode (launchd), and stops it in **local** mode.
 - Optionally hosts **PeekabooBridge** for UI automation.
-- Installs the global CLI (`openclaw`) via npm/pnpm on request (bun not recommended for the Gateway runtime).
+- Installs the global CLI (`openclaw`) on request via npm, pnpm, or bun (the app prefers npm, then pnpm, then bun; Node remains the recommended Gateway runtime).
 
 ## Local vs remote mode
 
@@ -31,6 +31,8 @@ capabilities to the agent as a node.
   a local process.
   The app starts the local **node host service** so the remote Gateway can reach this Mac.
   The app does not spawn the Gateway as a child process.
+  Gateway discovery now prefers Tailscale MagicDNS names over raw tailnet IPs,
+  so the Mac app recovers more reliably when tailnet IPs change.
 
 ## Launchd control
 
@@ -53,7 +55,7 @@ The macOS app presents itself as a node. Common commands:
 
 - Canvas: `canvas.present`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`
 - Camera: `camera.snap`, `camera.clip`
-- Screen: `screen.record`
+- Screen: `screen.snapshot`, `screen.record`
 - System: `system.run`, `system.notify`
 
 The node reports a `permissions` map so agents can decide what’s allowed.
@@ -194,7 +196,8 @@ Discovery options:
 - `--json`: structured output for diffing
 
 Tip: compare against `openclaw gateway discover --json` to see whether the
-macOS app’s discovery pipeline (NWBrowser + tailnet DNS‑SD fallback) differs from
+macOS app’s discovery pipeline (`local.` plus the configured wide-area domain, with
+wide-area and Tailscale Serve fallbacks) differs from
 the Node CLI’s `dns-sd` based discovery.
 
 ## Remote connection plumbing (SSH tunnels)

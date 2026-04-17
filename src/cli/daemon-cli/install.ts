@@ -1,38 +1,46 @@
+import { resolveNodeStartupTlsEnvironment } from "../../bootstrap/node-startup-env.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   isGatewayDaemonRuntime,
 } from "../../commands/daemon-runtime.js";
-import { randomToken } from "../../commands/onboard-helpers.js";
-import {
-  loadConfig,
-  readConfigFileSnapshot,
-  resolveGatewayPort,
-  writeConfigFile,
-} from "../../config/config.js";
-import { resolveIsNixMode } from "../../config/paths.js";
+import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
+import { readConfigFileSnapshotForWrite } from "../../config/io.js";
+import { resolveGatewayPort } from "../../config/paths.js";
 import { resolveGatewayService } from "../../daemon/service.js";
-import { resolveGatewayAuth } from "../../gateway/auth.js";
+import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
+import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
 import {
-  buildDaemonServiceSnapshot,
-  createDaemonActionContext,
-  installDaemonServiceAndEmit,
-} from "./response.js";
-import { parsePort } from "./shared.js";
+  createDaemonInstallActionContext,
+  failIfNixDaemonInstallMode,
+  parsePort,
+} from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
 
-export async function runDaemonInstall(opts: DaemonInstallOptions) {
-  const json = Boolean(opts.json);
-  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "install", json });
+function mergeInstallInvocationEnv(params: {
+  env: NodeJS.ProcessEnv;
+  existingServiceEnv?: Record<string, string>;
+}): NodeJS.ProcessEnv {
+  if (!params.existingServiceEnv || Object.keys(params.existingServiceEnv).length === 0) {
+    return params.env;
+  }
+  return {
+    ...params.existingServiceEnv,
+    ...params.env,
+  };
+}
 
-  if (resolveIsNixMode(process.env)) {
-    fail("Nix mode detected; service install is disabled.");
+export async function runDaemonInstall(opts: DaemonInstallOptions) {
+  const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
+  if (failIfNixDaemonInstallMode(fail)) {
     return;
   }
 
-  const cfg = loadConfig();
+  const { snapshot: configSnapshot, writeOptions: configWriteOptions } =
+    await readConfigFileSnapshotForWrite();
+  const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     fail("Invalid port");
@@ -43,7 +51,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail("Invalid port");
     return;
   }
-  const runtimeRaw = opts.runtime ? String(opts.runtime) : DEFAULT_GATEWAY_DAEMON_RUNTIME;
+  const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
     fail('Invalid --runtime (use "node" or "bun")');
     return;
@@ -51,103 +59,77 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const service = resolveGatewayService();
   let loaded = false;
+  let existingServiceEnv: Record<string, string> | undefined;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
-    fail(`Gateway service check failed: ${String(err)}`);
-    return;
-  }
-  if (loaded) {
-    if (!opts.force) {
-      emit({
-        ok: true,
-        result: "already-installed",
-        message: `Gateway service already ${service.loadedText}.`,
-        service: buildDaemonServiceSnapshot(service, loaded),
-      });
-      if (!json) {
-        defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
-        defaultRuntime.log(
-          `Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`,
-        );
-      }
+    if (isNonFatalSystemdInstallProbeError(err)) {
+      loaded = false;
+    } else {
+      fail(`Gateway service check failed: ${String(err)}`);
       return;
     }
   }
-
-  // Resolve effective auth mode to determine if token auto-generation is needed.
-  // Password-mode and Tailscale-only installs do not need a token.
-  const resolvedAuth = resolveGatewayAuth({
-    authConfig: cfg.gateway?.auth,
-    tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
+  if (loaded) {
+    existingServiceEnv = (await service.readCommand(process.env).catch(() => null))?.environment;
+  }
+  const installEnv = mergeInstallInvocationEnv({
+    env: process.env,
+    existingServiceEnv,
   });
-  const needsToken =
-    resolvedAuth.mode === "token" && !resolvedAuth.token && !resolvedAuth.allowTailscale;
-
-  let token: string | undefined =
-    opts.token ||
-    cfg.gateway?.auth?.token ||
-    process.env.OPENCLAW_GATEWAY_TOKEN ||
-    process.env.CLAWDBOT_GATEWAY_TOKEN;
-
-  if (!token && needsToken) {
-    token = randomToken();
-    const warnMsg = "No gateway token found. Auto-generated one and saving to config.";
-    if (json) {
-      warnings.push(warnMsg);
-    } else {
-      defaultRuntime.log(warnMsg);
-    }
-
-    // Persist to config file so the gateway reads it at runtime
-    // (launchd does not inherit shell env vars, and CLI tools also
-    // read gateway.auth.token from config for gateway calls).
-    try {
-      const snapshot = await readConfigFileSnapshot();
-      if (snapshot.exists && !snapshot.valid) {
-        // Config file exists but is corrupt/unparseable — don't risk overwriting.
-        // Token is still embedded in the plist EnvironmentVariables.
-        const msg = "Warning: config file exists but is invalid; skipping token persistence.";
+  if (loaded) {
+    if (!opts.force) {
+      if (await gatewayServiceNeedsAutoNodeExtraCaCertsRefresh({ service, env: process.env })) {
+        const message = "Gateway service is missing the nvm TLS CA bundle; refreshing the install.";
         if (json) {
-          warnings.push(msg);
+          warnings.push(message);
         } else {
-          defaultRuntime.log(msg);
+          defaultRuntime.log(message);
         }
       } else {
-        const baseConfig = snapshot.exists ? snapshot.config : {};
-        if (!baseConfig.gateway?.auth?.token) {
-          await writeConfigFile({
-            ...baseConfig,
-            gateway: {
-              ...baseConfig.gateway,
-              auth: {
-                ...baseConfig.gateway?.auth,
-                mode: baseConfig.gateway?.auth?.mode ?? "token",
-                token,
-              },
-            },
-          });
-        } else {
-          // Another process wrote a token between loadConfig() and now.
-          token = baseConfig.gateway.auth.token;
+        emit({
+          ok: true,
+          result: "already-installed",
+          message: `Gateway service already ${service.loadedText}.`,
+          service: buildDaemonServiceSnapshot(service, loaded),
+        });
+        if (!json) {
+          defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
+          defaultRuntime.log(
+            `Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`,
+          );
         }
+        return;
       }
-    } catch (err) {
-      // Non-fatal: token is still embedded in the plist EnvironmentVariables.
-      const msg = `Warning: could not persist token to config: ${String(err)}`;
-      if (json) {
-        warnings.push(msg);
-      } else {
-        defaultRuntime.log(msg);
-      }
+    }
+  }
+
+  const tokenResolution = await resolveGatewayInstallToken({
+    config: cfg,
+    configSnapshot,
+    configWriteOptions,
+    env: installEnv,
+    explicitToken: opts.token,
+    autoGenerateWhenMissing: true,
+    persistGeneratedToken: true,
+  });
+  if (tokenResolution.unavailableReason) {
+    fail(`Gateway install blocked: ${tokenResolution.unavailableReason}`);
+    return;
+  }
+  for (const warning of tokenResolution.warnings) {
+    if (json) {
+      warnings.push(warning);
+    } else {
+      defaultRuntime.log(warning);
     }
   }
 
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: process.env,
+    env: installEnv,
     port,
-    token,
     runtime: runtimeRaw,
+    existingEnvironment: existingServiceEnv,
     warn: (message) => {
       if (json) {
         warnings.push(message);
@@ -166,7 +148,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail,
     install: async () => {
       await service.install({
-        env: process.env,
+        env: installEnv,
         stdout,
         programArguments,
         workingDirectory,
@@ -174,4 +156,37 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       });
     },
   });
+}
+
+async function gatewayServiceNeedsAutoNodeExtraCaCertsRefresh(params: {
+  service: ReturnType<typeof resolveGatewayService>;
+  env: Record<string, string | undefined>;
+}): Promise<boolean> {
+  try {
+    const currentCommand = await params.service.readCommand(params.env);
+    if (!currentCommand) {
+      return false;
+    }
+    const currentExecPath = currentCommand.programArguments[0]?.trim();
+    if (!currentExecPath) {
+      return false;
+    }
+    const currentEnvironment = currentCommand.environment ?? {};
+    const currentNodeExtraCaCerts = currentEnvironment.NODE_EXTRA_CA_CERTS?.trim();
+    const expectedNodeExtraCaCerts = resolveNodeStartupTlsEnvironment({
+      env: {
+        ...params.env,
+        ...currentEnvironment,
+        NODE_EXTRA_CA_CERTS: undefined,
+      },
+      execPath: currentExecPath,
+      includeDarwinDefaults: false,
+    }).NODE_EXTRA_CA_CERTS;
+    if (!expectedNodeExtraCaCerts) {
+      return false;
+    }
+    return currentNodeExtraCaCerts !== expectedNodeExtraCaCerts;
+  } catch {
+    return false;
+  }
 }

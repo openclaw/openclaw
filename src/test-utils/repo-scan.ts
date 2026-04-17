@@ -73,7 +73,7 @@ export async function listRepoFiles(
         pending.push({ absolutePath });
       }
     } catch {
-      // Skip missing roots. Useful when extensions/ is absent.
+      // Skip missing roots. Useful when the bundled plugin tree is absent.
     }
   }
 

@@ -15,6 +15,10 @@ const verifyClient = new OAuth2Client();
 
 let cachedCerts: { fetchedAt: number; certs: Record<string, string> } | null = null;
 
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
 function buildAuthKey(account: ResolvedGoogleChatAccount): string {
   if (account.credentialsFile) {
     return `file:${account.credentialsFile}`;
@@ -94,6 +98,7 @@ export async function verifyGoogleChatRequest(params: {
   bearer?: string | null;
   audienceType?: GoogleChatAudienceType | null;
   audience?: string | null;
+  expectedAddOnPrincipal?: string | null;
 }): Promise<{ ok: boolean; reason?: string }> {
   const bearer = params.bearer?.trim();
   if (!bearer) {
@@ -112,10 +117,30 @@ export async function verifyGoogleChatRequest(params: {
         audience,
       });
       const payload = ticket.getPayload();
-      const email = payload?.email ?? "";
-      const ok =
-        payload?.email_verified && (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
-      return ok ? { ok: true } : { ok: false, reason: `invalid issuer: ${email}` };
+      const email = normalizeLowercaseStringOrEmpty(payload?.email ?? "");
+      if (!payload?.email_verified) {
+        return { ok: false, reason: "email not verified" };
+      }
+      if (email === CHAT_ISSUER) {
+        return { ok: true };
+      }
+      if (!ADDON_ISSUER_PATTERN.test(email)) {
+        return { ok: false, reason: `invalid issuer: ${email}` };
+      }
+      const expectedAddOnPrincipal = normalizeLowercaseStringOrEmpty(
+        params.expectedAddOnPrincipal ?? "",
+      );
+      if (!expectedAddOnPrincipal) {
+        return { ok: false, reason: "missing add-on principal binding" };
+      }
+      const tokenPrincipal = normalizeLowercaseStringOrEmpty(payload?.sub ?? "");
+      if (!tokenPrincipal || tokenPrincipal !== expectedAddOnPrincipal) {
+        return {
+          ok: false,
+          reason: `unexpected add-on principal: ${tokenPrincipal || "<missing>"}`,
+        };
+      }
+      return { ok: true };
     } catch (err) {
       return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };
     }

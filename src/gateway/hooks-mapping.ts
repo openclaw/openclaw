@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
+import { CONFIG_PATH } from "../config/paths.js";
+import type { HookMappingConfig, HooksConfig } from "../config/types.hooks.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
-import type { HookMessageChannel } from "./hooks.js";
+import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
+import type { HookMessageChannel } from "./hooks.types.js";
 
 export type HookMappingResolved = {
   id: string;
@@ -187,7 +189,7 @@ function normalizeHookMapping(
   index: number,
   transformsDir: string,
 ): HookMappingResolved {
-  const id = mapping.id?.trim() || `mapping-${index + 1}`;
+  const id = normalizeOptionalString(mapping.id) || `mapping-${index + 1}`;
   const matchPath = normalizeMatchPath(mapping.match?.path);
   const matchSource = mapping.match?.source?.trim();
   const action = mapping.action ?? "agent";
@@ -195,7 +197,7 @@ function normalizeHookMapping(
   const transform = mapping.transform
     ? {
         modulePath: resolveContainedPath(transformsDir, mapping.transform.module, "Hook transform"),
-        exportName: mapping.transform.export?.trim() || undefined,
+        exportName: normalizeOptionalString(mapping.transform.export),
       }
     : undefined;
 
@@ -206,7 +208,7 @@ function normalizeHookMapping(
     action,
     wakeMode,
     name: mapping.name,
-    agentId: mapping.agentId?.trim() || undefined,
+    agentId: normalizeOptionalString(mapping.agentId),
     sessionKey: mapping.sessionKey,
     messageTemplate: mapping.messageTemplate,
     textTemplate: mapping.textTemplate,
@@ -228,7 +230,7 @@ function mappingMatches(mapping: HookMappingResolved, ctx: HookMappingContext) {
     }
   }
   if (mapping.matchSource) {
-    const source = typeof ctx.payload.source === "string" ? ctx.payload.source : undefined;
+    const source = readStringValue(ctx.payload.source);
     if (!source || source !== mapping.matchSource) {
       return false;
     }

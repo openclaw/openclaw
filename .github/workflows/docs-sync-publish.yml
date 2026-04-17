@@ -1,0 +1,70 @@
+name: Docs Sync Publish Repo
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docs/**
+      - scripts/docs-sync-publish.mjs
+      - .github/workflows/docs-sync-publish.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync-publish-repo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.18.0"
+
+      - name: Clone publish repo
+        env:
+          OPENCLAW_DOCS_SYNC_TOKEN: ${{ secrets.OPENCLAW_DOCS_SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone \
+            "https://x-access-token:${OPENCLAW_DOCS_SYNC_TOKEN}@github.com/openclaw/docs.git" \
+            publish
+
+      - name: Sync docs into publish repo
+        run: |
+          node scripts/docs-sync-publish.mjs \
+            --target "$GITHUB_WORKSPACE/publish" \
+            --source-repo "$GITHUB_REPOSITORY" \
+            --source-sha "$GITHUB_SHA"
+
+      - name: Commit publish repo sync
+        working-directory: publish
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- docs .openclaw-sync; then
+            echo "No publish-repo changes."
+            exit 0
+          fi
+
+          git config user.name "openclaw-docs-sync[bot]"
+          git config user.email "openclaw-docs-sync[bot]@users.noreply.github.com"
+          git add docs .openclaw-sync
+          git commit -m "chore(sync): mirror docs from $GITHUB_REPOSITORY@$GITHUB_SHA"
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git rebase origin/main
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "Push attempt ${attempt} failed; retrying."
+            sleep $((attempt * 2))
+          done
+
+          echo "Failed to push publish-repo sync after retries."
+          exit 1
