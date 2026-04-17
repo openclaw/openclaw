@@ -84,15 +84,21 @@ export function buildStatusCommandOverviewRows(params: {
     warn: params.warn,
     muted: params.muted,
   });
-  const hasA2AContributor = contributorRows.some(
+  const a2aFallbackRows = contributorRows.some(
     (row) => row.id.trim().toLowerCase() === "a2a" || row.label.trim().toLowerCase() === "a2a",
-  );
-  const a2aValue = buildStatusA2AValue({
-    summary: params.summary,
-    ok: params.ok,
-    warn: params.warn,
-    muted: params.muted,
-  });
+  )
+    ? []
+    : [
+        {
+          Item: "A2A",
+          Value: buildStatusA2AValue({
+            summary: params.summary,
+            ok: params.ok,
+            warn: params.warn,
+            muted: params.muted,
+          }),
+        },
+      ];
   const probesValue = buildStatusProbesValue({
     health: params.health,
     ok: params.ok,
@@ -138,7 +144,7 @@ export function buildStatusCommandOverviewRows(params: {
       { Item: "Probes", Value: probesValue },
       { Item: "Events", Value: eventsValue },
       ...contributorRows.map((row) => ({ Item: row.label, Value: row.value })),
-      ...(hasA2AContributor ? [] : [{ Item: "A2A", Value: a2aValue }]),
+      ...a2aFallbackRows,
       { Item: "Tasks", Value: tasksValue },
       { Item: "Heartbeat", Value: heartbeatValue },
       ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),

@@ -510,7 +510,8 @@ export async function getStatusSummary(
   const recent = allSessions.slice(0, 10);
   const totalSessions = allSessions.length;
 
-  const contributors: StatusContributorSummary[] = [buildA2AStatusContributor(a2a)];
+  const contributors: StatusContributorSummary[] = [];
+  contributors.push(buildA2AStatusContributor(a2a));
 
   const summary: StatusSummary = {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),

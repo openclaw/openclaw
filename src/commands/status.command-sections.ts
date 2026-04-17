@@ -101,6 +101,93 @@ function decorateStatusContributorSummary(params: {
   return params.muted(summary);
 }
 
+function listStatusContributorDetails(contributor: StatusContributorSummary): string[] {
+  return Array.isArray(contributor.details)
+    ? contributor.details
+        .filter((detail): detail is string => typeof detail === "string" && detail.trim().length > 0)
+        .map((detail) => detail.trim())
+    : [];
+}
+
+function buildStatusContributorOverviewValue(params: {
+  contributor: StatusContributorSummary;
+  ok: (value: string) => string;
+  warn: (value: string) => string;
+  muted: (value: string) => string;
+}) {
+  const summary = decorateStatusContributorSummary({
+    contributor: params.contributor,
+    ok: params.ok,
+    warn: params.warn,
+    muted: params.muted,
+  });
+  return [summary, ...listStatusContributorDetails(params.contributor)].filter(Boolean).join(" · ");
+}
+
+function buildStatusA2AFallbackContributor(params: {
+  summary: Pick<SummaryLike, "a2a">;
+  warn: (value: string) => string;
+  muted: (value: string) => string;
+}): StatusContributorSummary {
+  const a2a = params.summary.a2a;
+  const state: StatusContributorSummary["state"] =
+    a2a.state === "ok"
+      ? "ok"
+      : a2a.state === "delayed" || a2a.state === "waiting_external"
+        ? "warn"
+        : a2a.state === "failed" || a2a.state === "config_error"
+          ? "error"
+          : "info";
+  const labelByState: Record<A2AStatusSummary["state"], string> = {
+    ok: "ok",
+    delayed: "delayed",
+    waiting_external: "waiting external",
+    failed: "failed",
+    config_error: "config error",
+  };
+  const details = [`broker ${a2a.broker.adapterEnabled ? "on" : "off"}`];
+  if (a2a.tasks.active > 0) {
+    details.push(`${a2a.tasks.active} active`);
+  } else {
+    details.push(params.muted("no active"));
+  }
+  if (a2a.tasks.waitingExternal > 0) {
+    details.push(`${a2a.tasks.waitingExternal} waiting external`);
+  }
+  if (a2a.tasks.delayed > 0) {
+    details.push(`${a2a.tasks.delayed} delayed`);
+  }
+  if (a2a.tasks.failed > 0) {
+    details.push(params.warn(`${a2a.tasks.failed} failed`));
+  }
+  if (a2a.state === "config_error") {
+    const configHints: string[] = [];
+    if (!a2a.broker.baseUrlPresent) {
+      configHints.push("baseUrl missing");
+    }
+    if (!a2a.broker.methodScopesOk) {
+      configHints.push("scope map missing");
+    }
+    if (configHints.length > 0) {
+      details.push(configHints.join(", "));
+    }
+  } else if (a2a.tasks.latestFailed) {
+    const detail =
+      a2a.tasks.latestFailed.errorMessage ??
+      a2a.tasks.latestFailed.errorCode ??
+      a2a.tasks.latestFailed.summary ??
+      a2a.tasks.latestFailed.taskId;
+    details.push(`latest ${detail}`);
+  }
+  return {
+    id: "a2a",
+    label: "A2A",
+    state,
+    summary: labelByState[a2a.state],
+    details,
+  };
+}
+
 export function buildStatusContributorOverviewRows(params: {
   summary: Pick<SummaryLike, "contributors">;
   ok: (value: string) => string;
@@ -113,25 +200,19 @@ export function buildStatusContributorOverviewRows(params: {
   return contributors
     .map((contributor) => {
       const label = contributor.label.trim();
-      const summary = decorateStatusContributorSummary({
+      const value = buildStatusContributorOverviewValue({
         contributor,
         ok: params.ok,
         warn: params.warn,
         muted: params.muted,
       });
-      const details = Array.isArray(contributor.details)
-        ? contributor.details
-            .filter((detail): detail is string => typeof detail === "string" && detail.trim().length > 0)
-            .map((detail) => detail.trim())
-        : [];
-      const parts = [summary, ...details].filter(Boolean);
-      if (!label || parts.length === 0) {
+      if (!label || !value) {
         return null;
       }
       return {
         id: contributor.id,
         label,
-        value: parts.join(" · "),
+        value,
       } satisfies StatusContributorOverviewRow;
     })
     .filter((row): row is StatusContributorOverviewRow => row !== null);
@@ -143,67 +224,16 @@ export function buildStatusA2AValue(params: {
   warn: (value: string) => string;
   muted: (value: string) => string;
 }) {
-  const a2a = params.summary.a2a;
-  const decorateState = (value: string) => {
-    if (a2a.state === "ok") {
-      return params.ok(value);
-    }
-    if (a2a.state === "delayed") {
-      return params.warn(value);
-    }
-    if (a2a.state === "waiting_external") {
-      return params.warn(value);
-    }
-    if (a2a.state === "failed" || a2a.state === "config_error") {
-      return params.warn(value);
-    }
-    return value;
-  };
-
-  const labelByState: Record<A2AStatusSummary["state"], string> = {
-    ok: "ok",
-    delayed: "delayed",
-    waiting_external: "waiting external",
-    failed: "failed",
-    config_error: "config error",
-  };
-
-  const parts = [decorateState(labelByState[a2a.state])];
-  parts.push(`broker ${a2a.broker.adapterEnabled ? "on" : "off"}`);
-  if (a2a.tasks.active > 0) {
-    parts.push(`${a2a.tasks.active} active`);
-  } else {
-    parts.push(params.muted("no active"));
-  }
-  if (a2a.tasks.waitingExternal > 0) {
-    parts.push(`${a2a.tasks.waitingExternal} waiting external`);
-  }
-  if (a2a.tasks.delayed > 0) {
-    parts.push(`${a2a.tasks.delayed} delayed`);
-  }
-  if (a2a.tasks.failed > 0) {
-    parts.push(params.warn(`${a2a.tasks.failed} failed`));
-  }
-  if (a2a.state === "config_error") {
-    const configHints: string[] = [];
-    if (!a2a.broker.baseUrlPresent) {
-      configHints.push("baseUrl missing");
-    }
-    if (!a2a.broker.methodScopesOk) {
-      configHints.push("scope map missing");
-    }
-    if (configHints.length > 0) {
-      parts.push(configHints.join(", "));
-    }
-  } else if (a2a.tasks.latestFailed) {
-    const detail =
-      a2a.tasks.latestFailed.errorMessage ??
-      a2a.tasks.latestFailed.errorCode ??
-      a2a.tasks.latestFailed.summary ??
-      a2a.tasks.latestFailed.taskId;
-    parts.push(`latest ${detail}`);
-  }
-  return parts.join(" · ");
+  return buildStatusContributorOverviewValue({
+    contributor: buildStatusA2AFallbackContributor({
+      summary: params.summary,
+      warn: params.warn,
+      muted: params.muted,
+    }),
+    ok: params.ok,
+    warn: params.warn,
+    muted: params.muted,
+  });
 }
 
 export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "heartbeat"> }) {
