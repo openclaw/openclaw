@@ -74,6 +74,31 @@ describe("buildAgentSystemPrompt", () => {
     expect(promptPrefix).toBeUndefined();
   });
 
+  it("keeps bootstrap instructions out of the privileged prompt when bootstrap is pending", () => {
+    const channels = buildAgentPromptChannels({
+      workspaceDir: "/tmp/openclaw",
+      bootstrapPending: true,
+    });
+
+    expect(channels.systemPrompt).not.toContain("## Bootstrap");
+    expect(channels.systemPrompt).not.toContain("Bootstrap is pending for this workspace.");
+  });
+
+  it("adds bootstrap-specific prelude text to the user prompt prefix when bootstrap is pending", () => {
+    const promptPrefix = buildAgentUserPromptPrefix({ bootstrapPending: true });
+
+    expect(promptPrefix).toContain("[Bootstrap pending]");
+    expect(promptPrefix).toContain(
+      "Before producing any user-visible reply, you MUST read BOOTSTRAP.md from the workspace",
+    );
+    expect(promptPrefix).toContain(
+      "Do not greet the user, offer help, answer the message, or reply normally",
+    );
+    expect(promptPrefix).toContain(
+      "Your first user-visible reply for a bootstrap-pending workspace must follow BOOTSTRAP.md",
+    );
+  });
+
   it("routes developer and user context when a routing contribution is applied", () => {
     registerMemoryPromptSection(() => ["## Memory Recall", "Use memory carefully.", ""]);
     const channels = buildAgentPromptChannels({

@@ -19,6 +19,7 @@ export async function resolveAttemptBootstrapContext<
   contextInjectionMode: "always" | "continuation-skip";
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: string;
+  workspaceBootstrapPending?: boolean;
   sessionFile: string;
   hasCompletedBootstrapTurn: (sessionFile: string) => Promise<boolean>;
   resolveBootstrapContextForRun: () => Promise<TContext>;
@@ -29,6 +30,7 @@ export async function resolveAttemptBootstrapContext<
   }
 > {
   const isContinuationTurn =
+    !params.workspaceBootstrapPending &&
     params.contextInjectionMode === "continuation-skip" &&
     params.bootstrapContextRunKind !== "heartbeat" &&
     (await params.hasCompletedBootstrapTurn(params.sessionFile));

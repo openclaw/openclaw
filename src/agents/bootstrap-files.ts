@@ -15,6 +15,7 @@ import {
 import {
   DEFAULT_HEARTBEAT_FILENAME,
   filterBootstrapFilesForSession,
+  isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
@@ -240,3 +241,5 @@ export async function resolveBootstrapContextForRun(params: {
   });
   return { bootstrapFiles, contextFiles };
 }
+
+export { isWorkspaceBootstrapPending };

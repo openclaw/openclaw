@@ -15,6 +15,7 @@ async function resolveBootstrapContext(params: {
   contextInjectionMode?: "always" | "continuation-skip";
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: string;
+  workspaceBootstrapPending?: boolean;
   completed?: boolean;
   resolver?: () => Promise<{ bootstrapFiles: unknown[]; contextFiles: unknown[] }>;
 }) {
@@ -30,6 +31,7 @@ async function resolveBootstrapContext(params: {
     contextInjectionMode: params.contextInjectionMode ?? "always",
     bootstrapContextMode: params.bootstrapContextMode ?? "full",
     bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
+    workspaceBootstrapPending: params.workspaceBootstrapPending ?? false,
     sessionFile: "/tmp/session.jsonl",
     hasCompletedBootstrapTurn,
     resolveBootstrapContextForRun,
@@ -72,6 +74,25 @@ describe("embedded attempt context injection", () => {
     expect(result.isContinuationTurn).toBe(false);
     expect(result.bootstrapFiles).toEqual([{ name: "AGENTS.md" }]);
     expect(result.contextFiles).toEqual([{ path: "AGENTS.md" }]);
+    expect(resolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let stale session markers suppress pending workspace bootstrap", async () => {
+    const resolver = vi.fn(async () => ({
+      bootstrapFiles: [{ name: "AGENTS.md" }, { name: "BOOTSTRAP.md" }],
+      contextFiles: [{ path: "AGENTS.md" }],
+    }));
+
+    const { result, hasCompletedBootstrapTurn } = await resolveBootstrapContext({
+      contextInjectionMode: "continuation-skip",
+      workspaceBootstrapPending: true,
+      completed: true,
+      resolver,
+    });
+
+    expect(result.isContinuationTurn).toBe(false);
+    expect(hasCompletedBootstrapTurn).not.toHaveBeenCalled();
+    expect(result.bootstrapFiles).toEqual([{ name: "AGENTS.md" }, { name: "BOOTSTRAP.md" }]);
     expect(resolver).toHaveBeenCalledTimes(1);
   });
 

@@ -49,6 +49,7 @@ import {
 import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
+  isWorkspaceBootstrapPending,
   makeBootstrapWarn,
   resolveBootstrapContextForRun,
   resolveContextInjectionMode,
@@ -441,14 +442,16 @@ export async function runEmbeddedAttempt(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config);
+    const workspaceBootstrapPending = await isWorkspaceBootstrapPending(effectiveWorkspace);
     const {
       bootstrapFiles: hookAdjustedBootstrapFiles,
-      contextFiles,
+      contextFiles: resolvedContextFiles,
       shouldRecordCompletedBootstrapTurn,
     } = await resolveAttemptBootstrapContext({
       contextInjectionMode,
       bootstrapContextMode: params.bootstrapContextMode,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
+      workspaceBootstrapPending,
       sessionFile: params.sessionFile,
       hasCompletedBootstrapTurn,
       resolveBootstrapContextForRun: async () =>
@@ -462,11 +465,17 @@ export async function runEmbeddedAttempt(
           runKind: params.bootstrapContextRunKind,
         }),
     });
+    const contextFiles = resolvedContextFiles.filter(
+      (file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()),
+    );
+    const bootstrapFilesForInjectionStats = hookAdjustedBootstrapFiles.filter(
+      (file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME,
+    );
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({
       files: buildBootstrapInjectionStats({
-        bootstrapFiles: hookAdjustedBootstrapFiles,
+        bootstrapFiles: bootstrapFilesForInjectionStats,
         injectedFiles: contextFiles,
       }),
       bootstrapMaxChars,
@@ -865,6 +874,7 @@ export async function runEmbeddedAttempt(
       toolNames: effectiveTools.map((tool) => tool.name),
       memoryCitationsMode: params.config?.memory?.citations,
       contextFiles,
+      bootstrapPending: workspaceBootstrapPending,
       routing: promptChannelRouting,
     });
     const privilegedPromptState: {

@@ -166,6 +166,15 @@ type WorkspaceSetupState = {
   setupCompletedAt?: string;
 };
 
+export type WorkspaceBootstrapPhase = "pending" | "complete";
+
+export type WorkspaceBootstrapStatus = {
+  phase: WorkspaceBootstrapPhase;
+  bootstrapExists: boolean;
+  bootstrapSeededAt?: string;
+  setupCompletedAt?: string;
+};
+
 /** Set of recognized bootstrap filenames for runtime validation */
 const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_AGENTS_FILENAME,
@@ -261,6 +270,30 @@ async function readWorkspaceSetupStateForDir(dir: string): Promise<WorkspaceSetu
 export async function isWorkspaceSetupCompleted(dir: string): Promise<boolean> {
   const state = await readWorkspaceSetupStateForDir(dir);
   return typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0;
+}
+
+export async function resolveWorkspaceBootstrapStatus(
+  dir: string,
+): Promise<WorkspaceBootstrapStatus> {
+  const resolvedDir = resolveUserPath(dir);
+  const [state, bootstrapExists] = await Promise.all([
+    readWorkspaceSetupStateForDir(resolvedDir),
+    fileExists(path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME)),
+  ]);
+  const setupCompletedAt =
+    typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0
+      ? state.setupCompletedAt
+      : undefined;
+  return {
+    phase: setupCompletedAt ? "complete" : bootstrapExists ? "pending" : "complete",
+    bootstrapExists,
+    bootstrapSeededAt: state.bootstrapSeededAt,
+    setupCompletedAt,
+  };
+}
+
+export async function isWorkspaceBootstrapPending(dir: string): Promise<boolean> {
+  return (await resolveWorkspaceBootstrapStatus(dir)).phase === "pending";
 }
 
 async function writeWorkspaceSetupState(

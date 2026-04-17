@@ -4,6 +4,7 @@ import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
+import { isWorkspaceBootstrapPending } from "../../agents/workspace.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   resolveSessionFilePath,
@@ -43,7 +44,10 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptBodies } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
-import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
+import {
+  buildBareSessionResetBootstrapPendingPrompt,
+  buildBareSessionResetPrompt,
+} from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
@@ -320,15 +324,23 @@ export async function runPreparedReply(
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
   const startupAction = /^\/reset(?:\s|$)/.test(normalizedCommandBody) ? "reset" : "new";
+  const workspaceBootstrapPending =
+    isBareSessionReset || isFirstTurnInSession
+      ? await isWorkspaceBootstrapPending(workspaceDir)
+      : false;
   const startupContextPrelude =
-    isBareSessionReset && shouldApplyStartupContext({ cfg, action: startupAction })
+    isBareSessionReset &&
+    !workspaceBootstrapPending &&
+    shouldApplyStartupContext({ cfg, action: startupAction })
       ? await buildSessionStartupContextPrelude({
           workspaceDir,
           cfg,
         })
       : null;
   const baseBodyFinal = isBareSessionReset
-    ? buildBareSessionResetPrompt(cfg)
+    ? workspaceBootstrapPending
+      ? buildBareSessionResetBootstrapPendingPrompt(cfg)
+      : buildBareSessionResetPrompt(cfg)
     : stripPromptThinkingDirectives(baseBody);
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
   const inboundUserContext = buildInboundUserContextPrefix(

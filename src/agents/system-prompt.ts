@@ -258,6 +258,7 @@ export function buildAgentUserPromptPrefix(params: {
   toolNames?: string[];
   memoryCitationsMode?: MemoryCitationsMode;
   contextFiles?: EmbeddedContextFile[];
+  bootstrapPending?: boolean;
   routing?: PromptChannelRoutingResult;
 }): string | undefined {
   const promptMode = params.promptMode ?? "full";
@@ -279,6 +280,15 @@ export function buildAgentUserPromptPrefix(params: {
     (file) => routeMap[normalizeContextFilePath(file.path)] === "user",
   );
   const text = [
+    ...(params.bootstrapPending
+      ? [
+          "[Bootstrap pending]",
+          "Before producing any user-visible reply, you MUST read BOOTSTRAP.md from the workspace and follow it.",
+          "Do not greet the user, offer help, answer the message, or reply normally until after you have read and are following BOOTSTRAP.md.",
+          "Your first user-visible reply for a bootstrap-pending workspace must follow BOOTSTRAP.md, not a generic greeting.",
+          "",
+        ]
+      : []),
     ...splitPromptAdditionLines(params.routing?.userAdditions),
     ...memorySection,
     ...buildUserContextSection(userContextFiles),

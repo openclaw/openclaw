@@ -14,7 +14,9 @@ import {
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
   filterBootstrapFilesForSession,
+  isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
+  resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
@@ -172,6 +174,50 @@ describe("ensureAgentWorkspace", () => {
       "utf-8",
     );
     expect(persisted).toContain('"setupCompletedAt": "2026-03-15T02:30:00.000Z"');
+  });
+
+  it("reports bootstrap pending while BOOTSTRAP.md exists and completion is unset", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(true);
+    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toMatchObject({
+      phase: "pending",
+      bootstrapExists: true,
+    });
+  });
+
+  it("reports bootstrap complete after BOOTSTRAP.md deletion sets setupCompletedAt", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await fs.unlink(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toMatchObject({
+      phase: "complete",
+      bootstrapExists: false,
+    });
+  });
+
+  it("does not reopen bootstrap when BOOTSTRAP.md is restored after completion", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await fs.unlink(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_BOOTSTRAP_FILENAME,
+      content: "# restored bootstrap",
+    });
+
+    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toMatchObject({
+      phase: "complete",
+      bootstrapExists: true,
+    });
   });
 
   it("writes the current fenced HEARTBEAT template body into new workspaces", async () => {
