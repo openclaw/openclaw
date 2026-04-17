@@ -202,12 +202,11 @@ function adoptNewerMainOAuthCredential(params: {
       mainCred.provider === params.cred.provider &&
       Number.isFinite(mainCred.expires) &&
       (!Number.isFinite(params.cred.expires) || mainCred.expires > params.cred.expires) &&
-      // Defense-in-depth: the same CWE-284 identity gate used on the mirror
-      // path. Provider-only matches are not sufficient because a misconfigured
-      // multi-user setup could have two agents sharing a profileId/provider
-      // but with different account owners; silently adopting a foreign
-      // credential into the sub-agent store would leak access.
-      isSameOAuthIdentity(params.cred, mainCred)
+      // Defense-in-depth against cross-account leaks: refuse on positive
+      // identity mismatch, but tolerate the upgrade case where the sub
+      // has no identity metadata yet (pre-capture) and main does.
+      // Strict symmetry is reserved for the mirror direction.
+      isOAuthIdentityCompatible(params.cred, mainCred)
     ) {
       params.store.profiles[params.profileId] = { ...mainCred };
       saveAuthProfileStore(params.store, params.agentDir);
@@ -389,6 +388,43 @@ export function isSameOAuthIdentity(
   return true;
 }
 
+/**
+ * Relaxed identity compatibility check, used for credential ADOPTION
+ * (main -> sub) — refuses only when both sides expose identity AND it
+ * positively mismatches. Tolerates the upgrade case where a sub-agent's
+ * older credential predates accountId/email capture but the main
+ * credential it would adopt has identity metadata.
+ *
+ * Mirror writes (sub -> main, the credential-poisoning direction) still
+ * use the strict `isSameOAuthIdentity`; this relaxed form is strictly
+ * for the direction where main is the authoritative source.
+ *
+ * Design note: this is deliberately weaker than `isSameOAuthIdentity` so
+ * that fresh-install installations that pre-date accountId capture can
+ * still benefit from the #26322 coordination fix. It is still strict
+ * enough to block the CWE-284 cross-account-leak scenario
+ * (`accountId(main)` != `accountId(sub)`), because that case trips the
+ * positive-mismatch branch.
+ */
+export function isOAuthIdentityCompatible(
+  existing: Pick<OAuthCredential, "accountId" | "email">,
+  incoming: Pick<OAuthCredential, "accountId" | "email">,
+): boolean {
+  const aAcct = normalizeAuthIdentityToken(existing.accountId);
+  const bAcct = normalizeAuthIdentityToken(incoming.accountId);
+  if (aAcct !== undefined && bAcct !== undefined) {
+    return aAcct === bAcct;
+  }
+  const aEmail = normalizeAuthEmailToken(existing.email);
+  const bEmail = normalizeAuthEmailToken(incoming.email);
+  if (aEmail !== undefined && bEmail !== undefined) {
+    return aEmail === bEmail;
+  }
+  // No shared comparable field — no positive mismatch evidence.
+  // Adoption is safe under the main-as-authoritative assumption.
+  return true;
+}
+
 async function mirrorRefreshedCredentialIntoMainStore(params: {
   profileId: string;
   refreshed: OAuthCredential;
@@ -494,8 +530,10 @@ async function doRefreshOAuthTokenWithLock(params: {
             mainCred.provider === cred.provider &&
             Number.isFinite(mainCred.expires) &&
             Date.now() < mainCred.expires &&
-            // Defense-in-depth identity gate — see mirror path for rationale.
-            isSameOAuthIdentity(cred, mainCred)
+            // Defense-in-depth identity gate — relaxed variant: refuse only
+            // on positive mismatch. Upgrade tolerance for credentials that
+            // predate accountId/email capture.
+            isOAuthIdentityCompatible(cred, mainCred)
           ) {
             store.profiles[params.profileId] = { ...mainCred };
             saveAuthProfileStore(store, params.agentDir);
@@ -513,9 +551,9 @@ async function doRefreshOAuthTokenWithLock(params: {
             mainCred.provider === cred.provider &&
             Number.isFinite(mainCred.expires) &&
             Date.now() < mainCred.expires &&
-            !isSameOAuthIdentity(cred, mainCred)
+            !isOAuthIdentityCompatible(cred, mainCred)
           ) {
-            // Main has fresh creds but they belong to a different account —
+            // Main has fresh creds but they belong to a DIFFERENT account —
             // record the refusal so operators can diagnose, then proceed to
             // our own refresh rather than leaking credentials.
             log.warn("refused to adopt fresh main-store OAuth credential: identity mismatch", {
@@ -944,8 +982,9 @@ export async function resolveApiKeyForProfile(
           mainCred.provider === cred.provider &&
           Date.now() < mainCred.expires &&
           // Defense-in-depth identity gate — refuse to inherit credentials
-          // from a different account even under refresh failure.
-          isSameOAuthIdentity(cred, mainCred)
+          // from a different account even under refresh failure. Relaxed
+          // variant tolerates pre-capture credentials.
+          isOAuthIdentityCompatible(cred, mainCred)
         ) {
           // Main agent has fresh credentials - copy them to this agent and use them
           refreshedStore.profiles[profileId] = { ...mainCred };

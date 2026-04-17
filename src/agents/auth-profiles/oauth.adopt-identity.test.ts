@@ -234,6 +234,178 @@ describe("OAuth credential adoption is identity-gated", () => {
     });
   });
 
+  it("adoptNewerMainOAuthCredential still adopts when sub has no identity but main does (upgrade tolerance)", async () => {
+    // Scenario: sub-agent stored its cred before accountId/email were
+    // captured. Main has fresh cred with accountId. Under the STRICT rule
+    // this would refuse (asymmetric). Under the relaxed rule used for
+    // adoption it must allow — otherwise #26322 breaks for existing
+    // installs on upgrade.
+    const profileId = "openai-codex:default";
+    const provider = "openai-codex";
+    const subExpiry = Date.now() + 10 * 60 * 1000;
+    const mainFresher = Date.now() + 60 * 60 * 1000;
+
+    const subAgentDir = path.join(tempRoot, "agents", "sub-upgrade", "agent");
+    await fs.mkdir(subAgentDir, { recursive: true });
+    saveAuthProfileStore(
+      storeWith(
+        profileId,
+        oauthCred({
+          provider,
+          access: "sub-own-access",
+          refresh: "sub-own-refresh",
+          expires: subExpiry,
+          // no accountId / email — pre-capture state
+        }),
+      ),
+      subAgentDir,
+    );
+    saveAuthProfileStore(
+      storeWith(
+        profileId,
+        oauthCred({
+          provider,
+          access: "main-fresher-access",
+          refresh: "main-fresher-refresh",
+          expires: mainFresher,
+          accountId: "acct-main",
+        }),
+      ),
+      mainAgentDir,
+    );
+
+    const result = await resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(subAgentDir),
+      profileId,
+      agentDir: subAgentDir,
+    });
+
+    // Sub must have adopted main's fresher credential.
+    expect(result?.apiKey).toBe("main-fresher-access");
+
+    const subRaw = JSON.parse(
+      await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(subRaw.profiles[profileId]).toMatchObject({
+      access: "main-fresher-access",
+      accountId: "acct-main",
+    });
+  });
+
+  it("inside-the-lock adopt tolerates sub-no-identity / main-has-identity (upgrade case)", async () => {
+    // Same upgrade scenario but entering via the inside-lock adopt path:
+    // sub cred is EXPIRED (forces entry into refreshOAuthTokenWithLock),
+    // main has FRESH cred with accountId, sub has no identity.
+    const profileId = "openai-codex:default";
+    const provider = "openai-codex";
+    const freshExpiry = Date.now() + 60 * 60 * 1000;
+
+    const subAgentDir = path.join(tempRoot, "agents", "sub-insidelock-upgrade", "agent");
+    await fs.mkdir(subAgentDir, { recursive: true });
+    saveAuthProfileStore(
+      storeWith(
+        profileId,
+        oauthCred({
+          provider,
+          access: "sub-stale-access",
+          refresh: "sub-stale-refresh",
+          expires: Date.now() - 60_000,
+          // no identity metadata
+        }),
+      ),
+      subAgentDir,
+    );
+    saveAuthProfileStore(
+      storeWith(
+        profileId,
+        oauthCred({
+          provider,
+          access: "main-fresh-access",
+          refresh: "main-fresh-refresh",
+          expires: freshExpiry,
+          accountId: "acct-main",
+        }),
+      ),
+      mainAgentDir,
+    );
+
+    // Plugin refresh must NOT be called — sub should adopt main's fresh
+    // cred rather than performing its own refresh.
+    const result = await resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(subAgentDir),
+      profileId,
+      agentDir: subAgentDir,
+    });
+
+    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
+    expect(result?.apiKey).toBe("main-fresh-access");
+  });
+
+  it("catch-block main-inherit tolerates sub-no-identity / main-has-identity (upgrade case)", async () => {
+    // Upgrade scenario hitting the catch-block fallback: sub refresh
+    // throws, main later carries fresh cred with identity. Sub must
+    // inherit rather than surface the error to the caller.
+    const profileId = "openai-codex:default";
+    const provider = "openai-codex";
+    const freshExpiry = Date.now() + 60 * 60 * 1000;
+
+    const subAgentDir = path.join(tempRoot, "agents", "sub-catch-upgrade", "agent");
+    await fs.mkdir(subAgentDir, { recursive: true });
+    saveAuthProfileStore(
+      storeWith(
+        profileId,
+        oauthCred({
+          provider,
+          access: "sub-stale-access",
+          refresh: "sub-stale-refresh",
+          expires: Date.now() - 60_000,
+          // no identity metadata
+        }),
+      ),
+      subAgentDir,
+    );
+    saveAuthProfileStore(
+      storeWith(
+        profileId,
+        oauthCred({
+          provider,
+          access: "main-stale-access",
+          refresh: "main-stale-refresh",
+          expires: Date.now() - 60_000,
+          accountId: "acct-main",
+        }),
+      ),
+      mainAgentDir,
+    );
+
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+      // Another process refreshes main while our refresh is in flight.
+      saveAuthProfileStore(
+        storeWith(
+          profileId,
+          oauthCred({
+            provider,
+            access: "main-refreshed-access",
+            refresh: "main-refreshed-refresh",
+            expires: freshExpiry,
+            accountId: "acct-main",
+          }),
+        ),
+        mainAgentDir,
+      );
+      throw new Error("upstream 503 service unavailable");
+    });
+
+    const result = await resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(subAgentDir),
+      profileId,
+      agentDir: subAgentDir,
+    });
+
+    // Sub inherited main's fresh cred via the catch-block fallback.
+    expect(result?.apiKey).toBe("main-refreshed-access");
+  });
+
   it("catch-block main-inherit refuses across accountId mismatch and surfaces the original error", async () => {
     // Scenario: sub-agent refresh throws a non-refresh_token_reused error.
     // Main has fresh creds for a DIFFERENT account. The catch-block

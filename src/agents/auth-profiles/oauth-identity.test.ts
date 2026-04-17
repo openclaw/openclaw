@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isOAuthIdentityCompatible,
   isSameOAuthIdentity,
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
@@ -197,6 +198,193 @@ function randomString(rng: () => number, maxLen: number): string {
 function maybe<T>(rng: () => number, value: T): T | undefined {
   return rng() < 0.5 ? value : undefined;
 }
+
+describe("isOAuthIdentityCompatible (relaxed rule, used for adoption)", () => {
+  describe("positive matches", () => {
+    it("accepts matching accountIds", () => {
+      expect(isOAuthIdentityCompatible({ accountId: "x" }, { accountId: "x" })).toBe(true);
+    });
+
+    it("accepts matching emails (case-insensitive)", () => {
+      expect(
+        isOAuthIdentityCompatible({ email: "u@example.com" }, { email: "U@Example.com" }),
+      ).toBe(true);
+    });
+
+    it("accepts when both sides expose identical identity across accountId + email", () => {
+      expect(
+        isOAuthIdentityCompatible(
+          { accountId: "x", email: "u@example.com" },
+          { accountId: "x", email: "u@example.com" },
+        ),
+      ).toBe(true);
+    });
+
+    it("accepts when one side has accountId and the other has only email (no shared positive-mismatch field)", () => {
+      // Relaxed rule: with no COMPARABLE shared field there is no positive
+      // evidence of mismatch, so adoption is allowed. This is the case the
+      // strict rule refuses.
+      expect(isOAuthIdentityCompatible({ accountId: "x" }, { email: "u@example.com" })).toBe(true);
+    });
+  });
+
+  describe("upgrade tolerance (primary motivator)", () => {
+    it("accepts sub-with-no-identity adopting main-with-accountId", () => {
+      // The #26322 upgrade case: sub cred predates accountId capture,
+      // main has it. Must allow or the fix regresses on existing installs.
+      expect(isOAuthIdentityCompatible({}, { accountId: "x" })).toBe(true);
+    });
+
+    it("accepts sub-with-no-identity adopting main-with-email", () => {
+      expect(isOAuthIdentityCompatible({}, { email: "u@example.com" })).toBe(true);
+    });
+
+    it("accepts main-with-no-identity (unlikely but symmetric)", () => {
+      expect(isOAuthIdentityCompatible({ accountId: "x" }, {})).toBe(true);
+    });
+
+    it("accepts when both sides lack identity metadata", () => {
+      expect(isOAuthIdentityCompatible({}, {})).toBe(true);
+    });
+  });
+
+  describe("positive mismatch still refuses (CWE-284 protection)", () => {
+    it("refuses mismatching accountIds even when emails match", () => {
+      expect(
+        isOAuthIdentityCompatible(
+          { accountId: "a", email: "u@example.com" },
+          { accountId: "b", email: "u@example.com" },
+        ),
+      ).toBe(false);
+    });
+
+    it("refuses mismatching emails when both sides expose only email", () => {
+      expect(
+        isOAuthIdentityCompatible({ email: "a@example.com" }, { email: "b@example.com" }),
+      ).toBe(false);
+    });
+
+    it("accountId is case-sensitive", () => {
+      expect(isOAuthIdentityCompatible({ accountId: "X" }, { accountId: "x" })).toBe(false);
+    });
+  });
+
+  describe("normalization", () => {
+    it("ignores surrounding whitespace on accountId", () => {
+      expect(isOAuthIdentityCompatible({ accountId: "  acct-1  " }, { accountId: "acct-1" })).toBe(
+        true,
+      );
+    });
+
+    it("ignores email case and whitespace", () => {
+      expect(
+        isOAuthIdentityCompatible({ email: "  U@Example.com  " }, { email: "u@example.com" }),
+      ).toBe(true);
+    });
+
+    it("treats empty/whitespace-only identity as absent (allowed to adopt)", () => {
+      expect(
+        isOAuthIdentityCompatible({ accountId: "   ", email: "" }, { accountId: "acct-main" }),
+      ).toBe(true);
+    });
+  });
+
+  describe("reflexivity and symmetry", () => {
+    it("is reflexive", () => {
+      const a = { accountId: "acct-1", email: "u@example.com" };
+      expect(isOAuthIdentityCompatible(a, a)).toBe(true);
+    });
+
+    it("is symmetric", () => {
+      const a = { accountId: "acct-1" };
+      const b = { accountId: "acct-2" };
+      expect(isOAuthIdentityCompatible(a, b)).toBe(isOAuthIdentityCompatible(b, a));
+    });
+  });
+});
+
+describe("isOAuthIdentityCompatible fuzz", () => {
+  function makeSeededRandom(seed: number): () => number {
+    let t = seed >>> 0;
+    return () => {
+      t = (t + 0x6d2b79f5) >>> 0;
+      let r = t;
+      r = Math.imul(r ^ (r >>> 15), r | 1);
+      r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
+      return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function randomString(rng: () => number, maxLen: number): string {
+    const len = Math.floor(rng() * maxLen);
+    const chars: string[] = [];
+    for (let i = 0; i < len; i += 1) {
+      chars.push(String.fromCodePoint(32 + Math.floor(rng() * 95)));
+    }
+    return chars.join("");
+  }
+
+  function maybe<T>(rng: () => number, value: T): T | undefined {
+    return rng() < 0.5 ? value : undefined;
+  }
+
+  it("is always symmetric", () => {
+    const rng = makeSeededRandom(0x17_00_00_17);
+    for (let i = 0; i < 1000; i += 1) {
+      const a = {
+        accountId: maybe(rng, randomString(rng, 64)),
+        email: maybe(rng, randomString(rng, 64)),
+      };
+      const b = {
+        accountId: maybe(rng, randomString(rng, 64)),
+        email: maybe(rng, randomString(rng, 64)),
+      };
+      expect(isOAuthIdentityCompatible(a, b)).toBe(isOAuthIdentityCompatible(b, a));
+    }
+  });
+
+  it("is always reflexive", () => {
+    const rng = makeSeededRandom(0xdeadbeef);
+    for (let i = 0; i < 1000; i += 1) {
+      const a = {
+        accountId: maybe(rng, randomString(rng, 64)),
+        email: maybe(rng, randomString(rng, 64)),
+      };
+      expect(isOAuthIdentityCompatible(a, a)).toBe(true);
+    }
+  });
+
+  it("always refuses distinct non-empty accountIds regardless of email", () => {
+    const rng = makeSeededRandom(0xfaceb00c);
+    for (let i = 0; i < 500; i += 1) {
+      const idA = `A-${randomString(rng, 32) || "x"}`;
+      const idB = `B-${randomString(rng, 32) || "y"}`;
+      const email = `${randomString(rng, 16) || "u"}@example.com`;
+      expect(isOAuthIdentityCompatible({ accountId: idA, email }, { accountId: idB, email })).toBe(
+        false,
+      );
+    }
+  });
+
+  it("is at least as permissive as isSameOAuthIdentity (relaxed is weaker)", () => {
+    // Property: if the strict rule accepts, the relaxed rule must also
+    // accept. Never the other way around. Fuzz over random input pairs.
+    const rng = makeSeededRandom(0x7777_7777);
+    for (let i = 0; i < 1000; i += 1) {
+      const a = {
+        accountId: maybe(rng, randomString(rng, 32)),
+        email: maybe(rng, randomString(rng, 32)),
+      };
+      const b = {
+        accountId: maybe(rng, randomString(rng, 32)),
+        email: maybe(rng, randomString(rng, 32)),
+      };
+      if (isSameOAuthIdentity(a, b)) {
+        expect(isOAuthIdentityCompatible(a, b)).toBe(true);
+      }
+    }
+  });
+});
 
 describe("isSameOAuthIdentity fuzz", () => {
   it("is always symmetric regardless of input shape", () => {
