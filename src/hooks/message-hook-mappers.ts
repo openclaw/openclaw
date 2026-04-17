@@ -162,13 +162,20 @@ export function buildCanonicalSentMessageHookContext(params: {
   };
 }
 
+export function normalizeMessagingConversationId(
+  channelId: string,
+  conversationId: string | undefined,
+): string | undefined {
+  return stripChannelPrefix(conversationId, channelId);
+}
+
 export function toPluginMessageContext(
   canonical: CanonicalInboundMessageHookContext | CanonicalSentMessageHookContext,
 ): PluginHookMessageContext {
   return {
     channelId: canonical.channelId,
     accountId: canonical.accountId,
-    conversationId: canonical.conversationId,
+    conversationId: normalizeMessagingConversationId(canonical.channelId, canonical.conversationId),
   };
 }
 
