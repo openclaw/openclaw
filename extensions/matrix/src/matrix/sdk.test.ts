@@ -1404,6 +1404,26 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(logger?.getChild).toBeTypeOf("function");
   });
 
+  it("passes a custom sync filter to matrix-js-sdk startup", async () => {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      userId: "@bot:example.org",
+      syncFilter: { room: { ephemeral: { not_types: ["m.receipt"] } } },
+    });
+
+    await client.start();
+
+    const startOpts = matrixJsClient.startClient.mock.calls[0]?.[0] as
+      | { filter?: { getDefinition?: () => unknown } }
+      | undefined;
+    expect(startOpts?.filter?.getDefinition?.()).toEqual({
+      room: {
+        ephemeral: {
+          not_types: ["m.receipt"],
+        },
+      },
+    });
+  });
+
   it("schedules periodic crypto snapshot persistence with fake timers", async () => {
     vi.useFakeTimers();
     const databasesSpy = vi.spyOn(indexedDB, "databases").mockResolvedValue([]);
