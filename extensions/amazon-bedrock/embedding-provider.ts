@@ -1,7 +1,10 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
-import { debugEmbeddingsLog } from "./embeddings-debug.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
+import {
+  debugEmbeddingsLog,
+  sanitizeAndNormalizeEmbedding,
+  type MemoryEmbeddingProvider,
+  type MemoryEmbeddingProviderCreateOptions,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 // ---------------------------------------------------------------------------
 // Types & constants
@@ -254,8 +257,8 @@ function parseCohereBatch(family: Family, raw: string): number[][] {
 // ---------------------------------------------------------------------------
 
 export async function createBedrockEmbeddingProvider(
-  options: EmbeddingProviderOptions,
-): Promise<{ provider: EmbeddingProvider; client: BedrockEmbeddingClient }> {
+  options: MemoryEmbeddingProviderCreateOptions,
+): Promise<{ provider: MemoryEmbeddingProvider; client: BedrockEmbeddingClient }> {
   const client = resolveBedrockEmbeddingClient(options);
   const { BedrockRuntimeClient, InvokeModelCommand } = await loadSdk();
   const sdk = new BedrockRuntimeClient({ region: client.region });
@@ -333,7 +336,7 @@ export async function createBedrockEmbeddingProvider(
 // ---------------------------------------------------------------------------
 
 export function resolveBedrockEmbeddingClient(
-  options: EmbeddingProviderOptions,
+  options: MemoryEmbeddingProviderCreateOptions,
 ): BedrockEmbeddingClient {
   const model = normalizeBedrockEmbeddingModel(options.model);
   const spec = resolveSpec(model);

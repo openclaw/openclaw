@@ -1,10 +1,11 @@
-import type { SsrFPolicy } from "../../../../src/infra/net/ssrf.js";
-import { normalizeEmbeddingModelWithPrefixes } from "./embeddings-model-normalize.js";
 import {
   createRemoteEmbeddingProvider,
+  normalizeEmbeddingModelWithPrefixes,
   resolveRemoteEmbeddingClient,
-} from "./embeddings-remote-provider.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
+  type MemoryEmbeddingProvider,
+  type MemoryEmbeddingProviderCreateOptions,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type MistralEmbeddingClient = {
   baseUrl: string;
@@ -25,8 +26,8 @@ export function normalizeMistralModel(model: string): string {
 }
 
 export async function createMistralEmbeddingProvider(
-  options: EmbeddingProviderOptions,
-): Promise<{ provider: EmbeddingProvider; client: MistralEmbeddingClient }> {
+  options: MemoryEmbeddingProviderCreateOptions,
+): Promise<{ provider: MemoryEmbeddingProvider; client: MistralEmbeddingClient }> {
   const client = await resolveMistralEmbeddingClient(options);
 
   return {
@@ -40,7 +41,7 @@ export async function createMistralEmbeddingProvider(
 }
 
 export async function resolveMistralEmbeddingClient(
-  options: EmbeddingProviderOptions,
+  options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<MistralEmbeddingClient> {
   return await resolveRemoteEmbeddingClient({
     provider: "mistral",

@@ -362,6 +362,12 @@ importers:
       '@aws-sdk/client-bedrock':
         specifier: 3.1028.0
         version: 3.1028.0
+      '@aws-sdk/client-bedrock-runtime':
+        specifier: 3.1028.0
+        version: 3.1028.0
+      '@aws-sdk/credential-provider-node':
+        specifier: 3.972.30
+        version: 3.972.30
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -989,6 +995,9 @@ importers:
 
   extensions/qa-lab:
     dependencies:
+      '@copilotkit/aimock':
+        specifier: 1.13.0
+        version: 1.13.0
       playwright-core:
         specifier: 1.59.1
         version: 1.59.1
@@ -1220,6 +1229,12 @@ importers:
         version: link:../..
 
   extensions/volcengine:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/voyage:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

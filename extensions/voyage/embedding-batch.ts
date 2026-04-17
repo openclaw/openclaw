@@ -19,8 +19,8 @@ import {
   type ProviderBatchOutputLine,
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
-} from "./batch-embedding-common.js";
-import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { VoyageEmbeddingClient } from "./embedding-provider.js";
 
 /**
  * Voyage Batch API Input Line format.
