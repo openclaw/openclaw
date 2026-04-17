@@ -69,7 +69,9 @@ const formatDurationParts = (ms: number): string => {
   return parts.join(" ");
 };
 
-function normalizeAgentHeartbeatSummary(heartbeat: AgentHeartbeatSummary): AgentHeartbeatSummary {
+function normalizeAgentHeartbeatSummary(
+  heartbeat: AgentHealthSummary["heartbeat"],
+): AgentHealthSummary["heartbeat"] {
   if (typeof heartbeat.everyMs === "number" && heartbeat.everyMs > 0) {
     return heartbeat;
   }
