@@ -92,6 +92,69 @@ describe("resolveNonInteractiveApiKey", () => {
     }
   });
 
+  it("returns explicit env fallback keys when provider env discovery misses", async () => {
+    const runtime = createRuntime();
+    resolveEnvApiKey.mockReturnValue(null);
+    const previousCustomApiKey = process.env.CUSTOM_API_KEY;
+    process.env.CUSTOM_API_KEY = "custom-env-key"; // pragma: allowlist secret
+
+    try {
+      const result = await resolveNonInteractiveApiKey({
+        provider: "custom-models-custom-local",
+        cfg: {},
+        flagName: "--custom-api-key",
+        envVar: "CUSTOM_API_KEY",
+        envVarName: "CUSTOM_API_KEY",
+        runtime: runtime as never,
+      });
+
+      expect(result).toEqual({
+        key: "custom-env-key",
+        source: "env",
+        envVarName: "CUSTOM_API_KEY",
+      });
+      expect(runtime.exit).not.toHaveBeenCalled();
+    } finally {
+      if (previousCustomApiKey === undefined) {
+        delete process.env.CUSTOM_API_KEY;
+      } else {
+        process.env.CUSTOM_API_KEY = previousCustomApiKey;
+      }
+    }
+  });
+
+  it("returns explicit env fallback refs in secret-ref mode", async () => {
+    const runtime = createRuntime();
+    resolveEnvApiKey.mockReturnValue(null);
+    const previousCustomApiKey = process.env.CUSTOM_API_KEY;
+    process.env.CUSTOM_API_KEY = "custom-env-key"; // pragma: allowlist secret
+
+    try {
+      const result = await resolveNonInteractiveApiKey({
+        provider: "custom-models-custom-local",
+        cfg: {},
+        flagName: "--custom-api-key",
+        envVar: "CUSTOM_API_KEY",
+        envVarName: "CUSTOM_API_KEY",
+        runtime: runtime as never,
+        secretInputMode: "ref",
+      });
+
+      expect(result).toEqual({
+        key: "custom-env-key",
+        source: "env",
+        envVarName: "CUSTOM_API_KEY",
+      });
+      expect(runtime.exit).not.toHaveBeenCalled();
+    } finally {
+      if (previousCustomApiKey === undefined) {
+        delete process.env.CUSTOM_API_KEY;
+      } else {
+        process.env.CUSTOM_API_KEY = previousCustomApiKey;
+      }
+    }
+  });
+
   it("falls back to a matching API-key profile after flag and env are absent", async () => {
     const runtime = createRuntime();
     authStore.profiles["custom-models-custom-local:default"] = {

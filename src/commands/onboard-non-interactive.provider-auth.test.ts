@@ -1132,7 +1132,6 @@ async function runOnboardingAndReadConfig(
 
 const CUSTOM_LOCAL_BASE_URL = "https://models.custom.local/v1";
 const CUSTOM_LOCAL_MODEL_ID = "local-large";
-const CUSTOM_LOCAL_PROVIDER_ID = "custom-models-custom-local";
 
 async function runCustomLocalNonInteractive(
   runtime: NonInteractiveRuntime,
@@ -1145,19 +1144,6 @@ async function runCustomLocalNonInteractive(
     skipSkills: true,
     ...overrides,
   });
-}
-
-async function readCustomLocalProviderApiKey(configPath: string): Promise<string | undefined> {
-  const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
-  const apiKey = cfg.models?.providers?.[CUSTOM_LOCAL_PROVIDER_ID]?.apiKey;
-  return typeof apiKey === "string" ? apiKey : undefined;
-}
-
-async function readCustomLocalProviderApiKeyInput(
-  configPath: string,
-): Promise<string | { source?: string; id?: string } | undefined> {
-  const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
-  return cfg.models?.providers?.[CUSTOM_LOCAL_PROVIDER_ID]?.apiKey;
 }
 
 async function expectApiKeyProfile(params: {
@@ -1576,34 +1562,6 @@ describe("onboard (non-interactive): provider auth", () => {
           "openai-completions",
         );
         expect(cfg.agents?.defaults?.model?.primary).toBe("custom-models-custom-local/local-large");
-      },
-    );
-  });
-
-  it("uses CUSTOM_API_KEY env fallback for non-interactive custom provider auth", async () => {
-    await withOnboardEnv(
-      "openclaw-onboard-custom-provider-env-fallback-",
-      async ({ configPath, runtime }) => {
-        process.env.CUSTOM_API_KEY = "custom-env-key"; // pragma: allowlist secret
-        await runCustomLocalNonInteractive(runtime);
-        expect(await readCustomLocalProviderApiKey(configPath)).toBe("custom-env-key");
-      },
-    );
-  });
-
-  it("stores CUSTOM_API_KEY env ref for non-interactive custom provider auth in ref mode", async () => {
-    await withOnboardEnv(
-      "openclaw-onboard-custom-provider-env-ref-",
-      async ({ configPath, runtime }) => {
-        process.env.CUSTOM_API_KEY = "custom-env-key"; // pragma: allowlist secret
-        await runCustomLocalNonInteractive(runtime, {
-          secretInputMode: "ref", // pragma: allowlist secret
-        });
-        expect(await readCustomLocalProviderApiKeyInput(configPath)).toEqual({
-          source: "env",
-          provider: "default",
-          id: "CUSTOM_API_KEY",
-        });
       },
     );
   });
