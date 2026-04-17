@@ -235,6 +235,9 @@ export const SessionsPatchParamsSchema = Type.Object(
             step: NonEmptyString,
             status: NonEmptyString,
             activeForm: Type.Optional(NonEmptyString),
+            // PR-9 Wave B1 — closure-gate fields (optional, backwards-compatible).
+            acceptanceCriteria: Type.Optional(Type.Array(NonEmptyString)),
+            verifiedCriteria: Type.Optional(Type.Array(NonEmptyString)),
           },
           { additionalProperties: false },
         ),

@@ -216,9 +216,20 @@ const PLAN_VIEW_PLACEHOLDER_MARKDOWN =
  * persisted `SessionEntry.planMode.lastPlanSteps` when the page mounts).
  * Keeps both surfaces byte-identical so the toggle's identity check
  * (`sidebarContent.content === latestPlanMarkdown`) works after either.
+ *
+ * PR-9 Wave A2: derive "Plan complete" header automatically when every
+ * step is terminal — the runtime auto-flips planMode to "normal" via
+ * the gateway-side persister, and the sidebar reflects that visually
+ * without the user having to compare statuses by eye.
  */
 function buildPlanViewMarkdown(
-  plan: ReadonlyArray<{ step: string; status: string; activeForm?: string }>,
+  plan: ReadonlyArray<{
+    step: string;
+    status: string;
+    activeForm?: string;
+    acceptanceCriteria?: string[];
+    verifiedCriteria?: string[];
+  }>,
   summary?: string,
 ): string {
   const stepLines = plan
@@ -227,10 +238,25 @@ function buildPlanViewMarkdown(
         step.status === "completed" ? "[x]" : step.status === "cancelled" ? "[ ] ~~" : "[ ]";
       const close = step.status === "cancelled" ? "~~" : "";
       const label = step.status === "in_progress" && step.activeForm ? step.activeForm : step.step;
-      return `${i + 1}. ${marker} ${label}${close}`;
+      const lines = [`${i + 1}. ${marker} ${label}${close}`];
+      // PR-9 Wave B1: render acceptance criteria as a nested checklist
+      // beneath each step. Verified criteria render as `[x]`, unverified
+      // as `[ ]`. Skipped entirely when no criteria are declared so
+      // existing simple plans render unchanged.
+      if (step.acceptanceCriteria && step.acceptanceCriteria.length > 0) {
+        const verifiedSet = new Set(step.verifiedCriteria ?? []);
+        for (const criterion of step.acceptanceCriteria) {
+          const cMarker = verifiedSet.has(criterion) ? "[x]" : "[ ]";
+          lines.push(`    - ${cMarker} ${criterion}`);
+        }
+      }
+      return lines.join("\n");
     })
     .join("\n");
-  return `# ${summary || "Active plan"}\n\n${stepLines}\n`;
+  const allTerminal =
+    plan.length > 0 && plan.every((s) => s.status === "completed" || s.status === "cancelled");
+  const header = summary ?? (allTerminal ? "Plan complete \u2713" : "Active plan");
+  return `# ${header}\n\n${stepLines}\n`;
 }
 
 @customElement("openclaw-app")

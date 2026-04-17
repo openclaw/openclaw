@@ -202,14 +202,29 @@ export type SessionEntry = {
      * mount. Deliberately persisted at the SessionEntry layer rather than
      * in a separate store because it's session-scoped and follows the
      * session's lifecycle.
+     *
+     * PR-9 Wave B1: optional `acceptanceCriteria` + `verifiedCriteria`
+     * carry the closure-gate state per step (see
+     * `src/agents/tools/update-plan-tool.ts` for the gate semantics).
+     * Both are optional and backwards-compatible.
      */
     lastPlanSteps?: Array<{
       step: string;
       status: string;
       activeForm?: string;
+      acceptanceCriteria?: string[];
+      verifiedCriteria?: string[];
     }>;
     /** Unix ms timestamp of the last `lastPlanSteps` write. */
     lastPlanUpdatedAt?: number;
+    /**
+     * PR-9 Wave B3: cron job ids scheduled when this session entered
+     * plan mode, used to nudge the agent to keep working the plan. The
+     * exit-plan-mode handler (and the close-on-complete persister) call
+     * `cron.remove` on each id during cleanup so nudges stop firing
+     * once the plan resolves.
+     */
+    nudgeJobIds?: string[];
   };
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;

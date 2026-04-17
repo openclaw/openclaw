@@ -271,4 +271,86 @@ describe("HTML escaping", () => {
     expect(html).toContain("&amp;");
     expect(html).toContain("&lt;tag&gt;");
   });
+
+  // PR-9 Wave B1: closure-gate rendering — acceptance criteria appear
+  // as a nested checklist beneath each step.
+  describe("closure-gate criteria rendering (Wave B1)", () => {
+    const STEP_WITH_CRITERIA: PlanStepForRender = {
+      step: "Provision VM",
+      status: "in_progress",
+      acceptanceCriteria: ["VM is reachable via SSH", "cortex_owner is set"],
+      verifiedCriteria: ["VM is reachable via SSH"],
+    };
+
+    it("markdown: renders verified as [x] and unverified as [ ] under the step", () => {
+      const out = renderPlanChecklist([STEP_WITH_CRITERIA], "markdown");
+      expect(out).toContain("- [x] VM is reachable via SSH");
+      expect(out).toContain("- [ ] cortex\\_owner is set"); // markdown escape on _
+    });
+
+    it("plaintext: renders verified [x] and unverified [ ] under the step", () => {
+      const out = renderPlanChecklist([STEP_WITH_CRITERIA], "plaintext");
+      const lines = out.split("\n");
+      expect(lines.some((l) => l.includes("[x] VM is reachable via SSH"))).toBe(true);
+      expect(lines.some((l) => l.includes("[ ] cortex_owner is set"))).toBe(true);
+    });
+
+    it("html: renders verified ✓ and unverified ◻ under the step", () => {
+      const out = renderPlanChecklist([STEP_WITH_CRITERIA], "html");
+      expect(out).toContain("✓ VM is reachable via SSH");
+      expect(out).toContain("◻ cortex_owner is set");
+    });
+
+    it("slack-mrkdwn: renders verified ✓ and unverified ◻", () => {
+      const out = renderPlanChecklist([STEP_WITH_CRITERIA], "slack-mrkdwn");
+      expect(out).toContain("✓ VM is reachable via SSH");
+      // Slack escapes `_` → fullwidth `＿` (avoid italic interpretation).
+      expect(out).toMatch(/◻ cortex.owner is set/);
+    });
+
+    it("empty acceptanceCriteria → no nested lines (backwards-compat)", () => {
+      const step: PlanStepForRender = {
+        step: "Simple step",
+        status: "completed",
+        acceptanceCriteria: [],
+      };
+      const out = renderPlanChecklist([step], "markdown");
+      expect(out.split("\n")).toHaveLength(1);
+    });
+
+    it("undefined verifiedCriteria → all entries render as unverified", () => {
+      const step: PlanStepForRender = {
+        step: "X",
+        status: "in_progress",
+        acceptanceCriteria: ["a", "b", "c"],
+      };
+      const out = renderPlanChecklist([step], "markdown");
+      expect(out).toContain("- [ ] a");
+      expect(out).toContain("- [ ] b");
+      expect(out).toContain("- [ ] c");
+      expect(out).not.toContain("- [x]");
+    });
+
+    it("criteria text with newlines is collapsed to space", () => {
+      const step: PlanStepForRender = {
+        step: "X",
+        status: "in_progress",
+        acceptanceCriteria: ["line1\nline2\rline3"],
+      };
+      const out = renderPlanChecklist([step], "markdown");
+      expect(out).toContain("line1 line2 line3");
+      expect(out).not.toContain("\nline2");
+    });
+
+    it("html criteria escapes user content", () => {
+      const step: PlanStepForRender = {
+        step: "X",
+        status: "in_progress",
+        acceptanceCriteria: [`<tag>"quoted"`],
+      };
+      const out = renderPlanChecklist([step], "html");
+      expect(out).toContain("&lt;tag&gt;");
+      expect(out).toContain("&quot;quoted&quot;");
+    });
+  });
 });
