@@ -10,7 +10,6 @@ describe("memory vector degradation warnings", () => {
       vectorReady: false,
       chunkCount: 3,
       warningShown: false,
-      path: "MEMORY.md",
       loadError: "load failed",
       warn,
     });
@@ -19,7 +18,6 @@ describe("memory vector degradation warnings", () => {
       vectorReady: false,
       chunkCount: 2,
       warningShown: first,
-      path: "memory/2026-04-16.md",
       loadError: "load failed",
       warn,
     });
@@ -28,7 +26,7 @@ describe("memory vector degradation warnings", () => {
     expect(second).toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
-      "chunks written for MEMORY.md without vector embeddings — chunks_vec not updated (sqlite-vec unavailable: load failed). Vector recall degraded; suppressing duplicate per-file warnings for this manager.",
+      "chunks_vec not updated — sqlite-vec unavailable: load failed. Vector recall degraded. Further duplicate warnings suppressed.",
     );
   });
 

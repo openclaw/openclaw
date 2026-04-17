@@ -574,7 +574,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       vectorReady,
       chunkCount: chunks.length,
       warningShown: this.vectorDegradedWriteWarningShown,
-      path: entry.path,
       loadError: this.vector.loadError,
       warn: (message) => log.warn(message),
     });

@@ -3,7 +3,6 @@ export function logMemoryVectorDegradedWrite(params: {
   vectorReady: boolean;
   chunkCount: number;
   warningShown: boolean;
-  path: string;
   loadError?: string;
   warn: (message: string) => void;
 }): boolean {
@@ -17,7 +16,7 @@ export function logMemoryVectorDegradedWrite(params: {
   }
   const errDetail = params.loadError ? `: ${params.loadError}` : "";
   params.warn(
-    `chunks written for ${params.path} without vector embeddings — chunks_vec not updated (sqlite-vec unavailable${errDetail}). Vector recall degraded; suppressing duplicate per-file warnings for this manager.`,
+    `chunks_vec not updated — sqlite-vec unavailable${errDetail}. Vector recall degraded. Further duplicate warnings suppressed.`,
   );
   return true;
 }
