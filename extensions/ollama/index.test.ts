@@ -1,6 +1,45 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import plugin from "./index.js";
+
+const OLLAMA_PLUGIN_MANIFEST_PATH = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "openclaw.plugin.json",
+);
+
+describe("ollama plugin manifest", () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(OLLAMA_PLUGIN_MANIFEST_PATH, "utf8"),
+  ) as {
+    configSchema?: {
+      additionalProperties?: boolean;
+      properties?: Record<string, unknown>;
+    };
+  };
+
+  it("configSchema accepts baseUrl so remote Ollama endpoints can be configured (#68260)", () => {
+    // Runtime code in `extensions/ollama/provider-discovery.ts` + `index.ts`
+    // already reads `providerConfig.baseUrl` / `explicit.baseUrl`. The schema
+    // must allow the same field, otherwise `openclaw config set
+    // plugins.entries.ollama.config.baseUrl <url>` is rejected at validation
+    // and the config is stripped to `{}` at startup, leaving the provider
+    // stuck on the default `http://127.0.0.1:11434`.
+    expect(manifest.configSchema?.properties).toHaveProperty("baseUrl");
+    expect(manifest.configSchema?.properties?.baseUrl).toMatchObject({
+      type: "string",
+    });
+  });
+
+  it("configSchema keeps additionalProperties: false so unknown keys still error", () => {
+    // Guardrail against a future change flipping the schema back to permissive
+    // — the fix for #68260 is to extend the allowed property set, not to drop
+    // the allowlist entirely.
+    expect(manifest.configSchema?.additionalProperties).toBe(false);
+  });
+});
 
 const promptAndConfigureOllamaMock = vi.hoisted(() =>
   vi.fn(async () => ({

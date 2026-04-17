@@ -26,6 +26,7 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "baseUrl": { "type": "string" },
       "discovery": {
         "type": "object",
         "additionalProperties": false,
@@ -36,6 +37,10 @@
     }
   },
   "uiHints": {
+    "baseUrl": {
+      "label": "Ollama Server URL",
+      "help": "Base URL of the Ollama HTTP API (e.g. http://127.0.0.1:11434 for local, or http://<host>:11434 for a remote/Tailscale-reachable server). Leave empty to use the Ollama default of http://127.0.0.1:11434."
+    },
     "discovery": {
       "label": "Model Discovery",
       "help": "Plugin-owned controls for Ollama model auto-discovery."
