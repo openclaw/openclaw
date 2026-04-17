@@ -28,6 +28,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   computeBackoff: computeBackoffMock,
   formatDurationPrecise: vi.fn((ms: number) => `${ms}ms`),
   sleepWithAbort: sleepWithAbortMock,
+  logVerbose: vi.fn(),
 }));
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;

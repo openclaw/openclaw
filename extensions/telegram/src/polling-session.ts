@@ -429,6 +429,10 @@ export class TelegramPollingSession {
               this.opts.log(
                 `[telegram] Health check failed (stale connection detected): ${formatErrorMessage(err)}; restarting polling...`,
               );
+              // Force transport rebuild: a stuck proxy/agent socket inside the
+              // current dispatcher would otherwise be reused on the next cycle
+              // and keep failing the same way.
+              this.#transportState.markDirty();
               void stopRunner();
               // Arm the forced-cycle fallback so runner.task() cannot hang
               // indefinitely if a slow/hung update handler blocks runner.stop().
