@@ -10,6 +10,7 @@ import {
   type ChannelSetupWizard,
   type OpenClawConfig,
   type WizardPrompter,
+  normalizeAccountId,
 } from "openclaw/plugin-sdk/setup";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -26,11 +27,11 @@ const channel = "twitch" as const;
 function resolveSetupAccountId(cfg: OpenClawConfig, requestedAccountId?: string): string {
   const requested = requestedAccountId?.trim();
   if (requested) {
-    return requested;
+    return normalizeAccountId(requested);
   }
 
   const preferred = cfg.channels?.twitch?.defaultAccount?.trim();
-  return preferred || resolveDefaultTwitchAccountId(cfg);
+  return preferred ? normalizeAccountId(preferred) : resolveDefaultTwitchAccountId(cfg);
 }
 
 export function setTwitchAccount(
@@ -38,7 +39,8 @@ export function setTwitchAccount(
   account: Partial<TwitchAccountConfig>,
   accountId: string = resolveSetupAccountId(cfg),
 ): OpenClawConfig {
-  const existing = getAccountConfig(cfg, accountId);
+  const resolvedAccountId = normalizeAccountId(accountId);
+  const existing = getAccountConfig(cfg, resolvedAccountId);
   const merged: TwitchAccountConfig = {
     username: account.username ?? existing?.username ?? "",
     accessToken: account.accessToken ?? existing?.accessToken ?? "",
@@ -67,7 +69,7 @@ export function setTwitchAccount(
           ...((
             (cfg.channels as Record<string, unknown>)?.twitch as Record<string, unknown> | undefined
           )?.accounts as Record<string, unknown> | undefined),
-          [accountId]: merged,
+          [resolvedAccountId]: merged,
         },
       },
     },

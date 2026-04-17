@@ -20,6 +20,7 @@ import {
   promptRefreshTokenSetup,
   promptToken,
   promptUsername,
+  setTwitchAccount,
   twitchSetupPlugin,
   twitchSetupWizard,
 } from "./setup-surface.js";
@@ -315,6 +316,29 @@ describe("setup surface helpers", () => {
   });
 
   describe("setup wizard account routing", () => {
+    it("normalizes account ids before using them as config keys", () => {
+      const cfg = setTwitchAccount(
+        {} as Parameters<typeof setTwitchAccount>[0],
+        {
+          username: "normalized-bot",
+          accessToken: "oauth:normalized",
+          clientId: "normalized-client",
+          channel: "#normalized",
+        },
+        "__proto__",
+      );
+
+      expect(cfg.channels?.twitch?.accounts?.default?.username).toBe("normalized-bot");
+      expect(Object.prototype).not.toHaveProperty("username");
+      expect(
+        twitchSetupWizard.status?.resolveStatusLines?.({
+          cfg: {},
+          accountId: "Alerts\r\n\u001b[31m",
+          configured: false,
+        } as never),
+      ).toEqual(["Twitch (alerts-31m): needs username, token, and clientId"]);
+    });
+
     it("reports account-scoped DM policy config keys", () => {
       expect(
         twitchSetupWizard.dmPolicy?.resolveConfigKeys?.(
