@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
-import { isSenderAllowed } from "./monitor.js";
+import { isSenderAllowed } from "./sender-allow.js";
 import {
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
@@ -18,10 +18,8 @@ const mocks = vi.hoisted(() => ({
   getGoogleChatAccessToken: vi.fn().mockResolvedValue("token"),
 }));
 
-vi.mock("../runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("../runtime-api.js")>("../runtime-api.js");
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => {
   return {
-    ...actual,
     fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
   };
 });
