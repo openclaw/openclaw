@@ -183,7 +183,9 @@ export async function modelsCustomTestCommand(
                 error:
                   result.error instanceof Error
                     ? result.error.message
-                    : String(result.error),
+                    : typeof result.error === "string"
+                      ? result.error
+                      : JSON.stringify(result.error),
               }
             : {}),
           latencyMs: result.ok ? latencyMs : undefined,
