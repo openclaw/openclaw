@@ -92,7 +92,58 @@ describe("heartbeat runner skips when target session lane is busy", () => {
     });
   });
 
-  it("proceeds normally when session lane is idle", async () => {
+  it("returns requests-in-flight when reply run is active for session", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            heartbeat: { every: "30m" },
+            model: { primary: "test/model" },
+          },
+        },
+        channels: {
+          telegram: {
+            enabled: true,
+            token: "fake",
+            allowFrom: ["123"],
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "123",
+      });
+
+      enqueueSystemEvent("Exec completed (test-id, code 0) :: test output", {
+        sessionKey,
+      });
+
+      // Both lanes idle (0), but reply run is active
+      const getQueueSize = vi.fn((_lane?: string) => 0);
+      const isReplyRunActive = vi.fn((key: string) => key === sessionKey);
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getQueueSize,
+          isReplyRunActive,
+          nowMs: () => Date.now(),
+          getReplyFromConfig: replySpy,
+        } as HeartbeatDeps,
+      });
+
+      expect(result.status).toBe("skipped");
+      if (result.status === "skipped") {
+        expect(result.reason).toBe("requests-in-flight");
+      }
+      expect(isReplyRunActive).toHaveBeenCalledWith(sessionKey);
+      expect(replySpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("proceeds normally when session lane is idle and no active reply", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -118,6 +169,7 @@ describe("heartbeat runner skips when target session lane is busy", () => {
 
       // Both lanes idle
       const getQueueSize = vi.fn((_lane?: string) => 0);
+      const isReplyRunActive = vi.fn((_key: string) => false);
 
       replySpy.mockResolvedValue({
         text: "HEARTBEAT_OK",
@@ -127,6 +179,7 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         cfg,
         deps: {
           getQueueSize,
+          isReplyRunActive,
           nowMs: () => Date.now(),
           getReplyFromConfig: replySpy,
         } as HeartbeatDeps,

@@ -15,6 +15,7 @@ import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
+import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   isHeartbeatContentEffectivelyEmpty,
@@ -108,6 +109,7 @@ export type HeartbeatDeps = OutboundSendDeps &
     getReplyFromConfig?: typeof import("./heartbeat-runner.runtime.js").getReplyFromConfig;
     runtime?: RuntimeEnv;
     getQueueSize?: (lane?: string) => number;
+    isReplyRunActive?: (sessionKey: string) => boolean;
     nowMs?: () => number;
   };
 
@@ -756,6 +758,22 @@ export async function runHeartbeatOnce(opts: {
   const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey);
   const sessionLaneSize = (opts.deps?.getQueueSize ?? getQueueSize)(sessionLaneKey);
   if (sessionLaneSize > 0) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: "requests-in-flight",
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: "requests-in-flight" };
+  }
+
+  // Check if there's an active reply operation for this session.
+  // Queue size may be 0 even when a reply is actively streaming (work
+  // has been dequeued but not yet delivered). This prevents heartbeat
+  // output from preempting an in-progress user-facing reply.
+  // See #68182.
+  const isReplyActive =
+    (opts.deps?.isReplyRunActive ?? replyRunRegistry.isActive)(sessionKey);
+  if (isReplyActive) {
     emitHeartbeatEvent({
       status: "skipped",
       reason: "requests-in-flight",
