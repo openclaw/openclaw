@@ -258,7 +258,7 @@ export async function runEmbeddedPiAgent(
       });
       const resolvedWorkspace = workspaceResolution.workspaceDir;
       const canonicalWorkspace = resolveUserPath(
-        resolveAgentWorkspaceDir(params.config, workspaceResolution.agentId),
+        resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
       );
       const isCanonicalWorkspace = canonicalWorkspace === resolvedWorkspace;
       const redactedSessionId = redactRunIdentifier(params.sessionId);
