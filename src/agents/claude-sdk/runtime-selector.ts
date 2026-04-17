@@ -1,13 +1,17 @@
 // Read the active agent's configured runtime driver. Returns
-// `"claude-sdk"` by default (the active production runtime as of Phase 3
-// of the agent-runtime migration), unless the agent has explicitly
-// opted in to the legacy `"embedded"` or `"acp"` path via
-// `agents.list[<agentId>].runtime.type`.
+// `"claude-sdk"` only when the agent has explicitly opted in via
+// `agents.list[<agentId>].runtime.type: "claude-sdk"`. All other shapes
+// (missing agent, missing runtime, `embedded`, `acp`) fall back to
+// `"default"`, which preserves the legacy pi-embedded code path.
 //
-// The legacy pi-embedded path is kept alive through the compat window
-// so the default flip can be reverted per-agent by setting
-// `runtime.type: "embedded"`. Full removal happens in Phase 4 once
-// real user traffic confirms the claude-sdk default is stable.
+// NOTE ON THE PHASE 3 FLIP: an earlier revision of this file defaulted
+// to `"claude-sdk"` for agents that omit `runtime.type`. That flip was
+// reverted because the auto-reply test harness mocks
+// `runEmbeddedPiAgent`, and routing through `runClaudeSdkAgent` by
+// default bypassed those mocks and regressed ~24 tests. The opt-in
+// driver remains available; flipping the default is deferred until the
+// test harness is updated to mock the unified `runAgent` dispatch seam
+// (tracked under Phase 4 preparation).
 
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -20,25 +24,17 @@ export function selectAgentRuntime(
   agentId: string | undefined,
 ): ClaudeSdkRuntimeSelection {
   if (!agentId) {
-    // No agent id means we have no per-agent override to consult. Use
-    // the default runtime.
-    return "claude-sdk";
+    return "default";
   }
   // Normalize both sides. Elsewhere in the codebase, agent IDs are
   // lowercased/sanitized via normalizeAgentId before routing, so an
   // entry declared as `id: "MyAgent"` resolves and runs at "myagent".
-  // A raw `===` match here would miss that casing difference and
-  // silently route to the wrong runtime.
+  // If we did a raw `===` match here, the same agent would silently
+  // fall back to the embedded runtime instead of hitting the claude-sdk
+  // path the user configured.
   const normalizedTarget = normalizeAgentId(agentId);
   const entry = listAgentEntries(cfg).find(
     (e) => normalizeAgentId(e.id) === normalizedTarget,
   );
-  const explicit = entry?.runtime?.type;
-  // Explicit legacy opt-ins keep the legacy (pi-embedded / acp) path.
-  // Everything else -- missing agent, missing runtime field, or explicit
-  // `claude-sdk` -- uses the Claude Agent SDK.
-  if (explicit === "embedded" || explicit === "acp") {
-    return "default";
-  }
-  return "claude-sdk";
+  return entry?.runtime?.type === "claude-sdk" ? "claude-sdk" : "default";
 }
