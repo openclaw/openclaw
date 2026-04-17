@@ -1,4 +1,3 @@
-export { createIMessageTestPlugin } from "./src/test-plugin.js";
 export {
   resolveIMessageAttachmentRoots as resolveInboundAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots as resolveRemoteInboundAttachmentRoots,
@@ -8,3 +7,7 @@ export {
   resolveIMessageAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
 } from "./src/media-contract.js";
+export {
+  __testing as imessageConversationBindingTesting,
+  createIMessageConversationBindingManager,
+} from "./src/conversation-bindings.js";

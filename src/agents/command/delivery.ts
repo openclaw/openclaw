@@ -1,11 +1,11 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -14,10 +14,11 @@ import { resolveMessageChannelSelection } from "../../infra/outbound/channel-sel
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { buildOutboundResultEnvelope } from "../../infra/outbound/envelope.js";
 import {
+  createOutboundPayloadPlan,
   formatOutboundPayloadLog,
   type NormalizedOutboundPayload,
-  normalizeOutboundPayloads,
-  normalizeOutboundPayloadsForJson,
+  projectOutboundPayloadPlanForJson,
+  projectOutboundPayloadPlanForOutbound,
 } from "../../infra/outbound/payloads.js";
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -87,7 +88,8 @@ export function normalizeAgentCommandReplyPayloads(params: {
   if (!channel) {
     return payloads as ReplyPayload[];
   }
-  const deliveryPlugin = getChannelPlugin(channel);
+  const applyChannelTransforms = params.applyChannelTransforms ?? true;
+  const deliveryPlugin = applyChannelTransforms ? getChannelPlugin(channel) : undefined;
 
   const sessionKey = params.outboundSession?.key ?? params.opts.sessionKey;
   const agentId =
@@ -112,7 +114,6 @@ export function normalizeAgentCommandReplyPayloads(params: {
     });
   }
   const responsePrefixContext = replyPrefix.responsePrefixContextProvider();
-  const applyChannelTransforms = params.applyChannelTransforms ?? true;
   const transformReplyPayload = deliveryPlugin?.messaging?.transformReplyPayload
     ? (payload: ReplyPayload) =>
         deliveryPlugin.messaging?.transformReplyPayload?.({
@@ -185,9 +186,10 @@ export async function deliverAgentCommandResult(params: {
           resolvedChannel: deliveryChannel,
         };
   // Channel docking: delivery channels are resolved via plugin registry.
-  const deliveryPlugin = !isInternalMessageChannel(deliveryChannel)
-    ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
-    : undefined;
+  const deliveryPlugin =
+    deliver && !isInternalMessageChannel(deliveryChannel)
+      ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
+      : undefined;
 
   const isDeliveryChannelKnown =
     isInternalMessageChannel(deliveryChannel) || Boolean(deliveryPlugin);
@@ -266,7 +268,8 @@ export async function deliverAgentCommandResult(params: {
     accountId: resolvedAccountId,
     applyChannelTransforms: deliver,
   });
-  const normalizedPayloads = normalizeOutboundPayloadsForJson(normalizedReplyPayloads);
+  const outboundPayloadPlan = createOutboundPayloadPlan(normalizedReplyPayloads);
+  const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
   if (opts.json) {
     runtime.log(
       JSON.stringify(
@@ -288,7 +291,7 @@ export async function deliverAgentCommandResult(params: {
     return { payloads: [], meta: result.meta };
   }
 
-  const deliveryPayloads = normalizeOutboundPayloads(normalizedReplyPayloads);
+  const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) {
       return;

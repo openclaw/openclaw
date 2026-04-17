@@ -40,6 +40,8 @@ type MemorySearchResult = {
   score: number;
 };
 
+type LegacyBeforeAgentStartContext = { prependContext: string } | undefined;
+
 // ============================================================================
 // LanceDB Provider
 // ============================================================================
@@ -54,6 +56,7 @@ class MemoryDB {
   constructor(
     private readonly dbPath: string,
     private readonly vectorDim: number,
+    private readonly storageOptions?: Record<string, string>,
   ) {}
 
   private async ensureInitialized(): Promise<void> {
@@ -70,7 +73,10 @@ class MemoryDB {
 
   private async doInitialize(): Promise<void> {
     const lancedb = await loadLanceDbModule();
-    this.db = await lancedb.connect(this.dbPath);
+    const connectionOptions: LanceDB.ConnectionOptions = this.storageOptions
+      ? { storageOptions: this.storageOptions }
+      : {};
+    this.db = await lancedb.connect(this.dbPath, connectionOptions);
     const tables = await this.db.tableNames();
 
     if (tables.includes(TABLE_NAME)) {
@@ -289,11 +295,12 @@ export default definePluginEntry({
 
   register(api: OpenClawPluginApi) {
     const cfg = memoryConfigSchema.parse(api.pluginConfig);
-    const resolvedDbPath = api.resolvePath(cfg.dbPath!);
+    const dbPath = cfg.dbPath!;
+    const resolvedDbPath = dbPath.includes("://") ? dbPath : api.resolvePath(dbPath);
     const { model, dimensions, apiKey, baseUrl } = cfg.embedding;
 
     const vectorDim = dimensions ?? vectorDimsForModel(model);
-    const db = new MemoryDB(resolvedDbPath, vectorDim);
+    const db = new MemoryDB(resolvedDbPath, vectorDim, cfg.storageOptions);
     const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions);
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
@@ -536,9 +543,9 @@ export default definePluginEntry({
 
     // Auto-recall: inject relevant memories before agent starts
     if (cfg.autoRecall) {
-      api.on("before_agent_start", async (event) => {
+      api.on("before_agent_start", async (event): Promise<LegacyBeforeAgentStartContext> => {
         if (!event.prompt || event.prompt.length < 5) {
-          return;
+          return undefined;
         }
 
         try {
@@ -546,7 +553,7 @@ export default definePluginEntry({
           const results = await db.search(vector, 3, 0.3);
 
           if (results.length === 0) {
-            return;
+            return undefined;
           }
 
           api.logger.info?.(`memory-lancedb: injecting ${results.length} memories into context`);
@@ -559,6 +566,7 @@ export default definePluginEntry({
         } catch (err) {
           api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
         }
+        return undefined;
       });
     }
 

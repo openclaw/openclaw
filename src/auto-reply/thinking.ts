@@ -12,6 +12,7 @@ export {
   normalizeFastMode,
   normalizeNoticeLevel,
   normalizeReasoningLevel,
+  normalizeTraceLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
   normalizeVerboseLevel,
@@ -23,6 +24,7 @@ export type {
   ElevatedMode,
   NoticeLevel,
   ReasoningLevel,
+  TraceLevel,
   ThinkLevel,
   ThinkingCatalogEntry,
   UsageDisplayLevel,
@@ -91,6 +93,9 @@ export function listThinkingLevels(provider?: string | null, model?: string | nu
 export function listThinkingLevelLabels(provider?: string | null, model?: string | null): string[] {
   if (isBinaryThinkingProvider(provider, model)) {
     return ["off", "on"];
+  }
+  if (supportsXHighThinking(provider, model)) {
+    return listThinkingLevels(provider, model);
   }
   return listThinkingLevelLabelsFallback(provider, model);
 }

@@ -20,15 +20,22 @@ installGatewayTestHooks({ scope: "suite" });
 
 const cleanupDirs: string[] = [];
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
+let subscribedOperatorWs:
+  | Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>
+  | undefined;
 let previousMinimalGateway: string | undefined;
 
 beforeAll(async () => {
   previousMinimalGateway = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
   delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
   harness = await createGatewaySuiteHarness();
+  subscribedOperatorWs = await harness.openWs();
+  await connectOk(subscribedOperatorWs, { scopes: ["operator.read"] });
+  await rpcReq(subscribedOperatorWs, "sessions.subscribe");
 });
 
 afterAll(async () => {
+  subscribedOperatorWs?.close();
   await harness.close();
   if (previousMinimalGateway === undefined) {
     delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
@@ -52,17 +59,12 @@ async function createSessionStoreFile(): Promise<string> {
 }
 
 async function withOperatorSessionSubscriber<T>(
-  harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>,
-  run: (ws: Awaited<ReturnType<typeof harness.openWs>>) => Promise<T>,
+  run: (ws: NonNullable<typeof subscribedOperatorWs>) => Promise<T>,
 ) {
-  const ws = await harness.openWs();
-  try {
-    await connectOk(ws, { scopes: ["operator.read"] });
-    await rpcReq(ws, "sessions.subscribe");
-    return await run(ws);
-  } finally {
-    ws.close();
+  if (!subscribedOperatorWs) {
+    throw new Error("subscribed operator websocket is not ready");
   }
+  return await run(subscribedOperatorWs);
 }
 
 function waitForSessionMessageEvent(
@@ -76,6 +78,45 @@ function waitForSessionMessageEvent(
       message.event === "session.message" &&
       (message.payload as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
   );
+}
+
+function waitForSessionsChangedMessagePhase(
+  ws: Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>,
+  sessionKey: string,
+) {
+  return onceMessage(
+    ws,
+    (message) =>
+      message.type === "event" &&
+      message.event === "sessions.changed" &&
+      (message.payload as { phase?: string; sessionKey?: string } | undefined)?.phase ===
+        "message" &&
+      (message.payload as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
+  );
+}
+
+async function emitTranscriptUpdateAndCollectEvents(params: {
+  ws: Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>;
+  sessionKey: string;
+  sessionFile: string;
+  message: Record<string, unknown>;
+  messageId: string;
+}) {
+  const messageEventPromise = waitForSessionMessageEvent(params.ws, params.sessionKey);
+  const changedEventPromise = waitForSessionsChangedMessagePhase(params.ws, params.sessionKey);
+
+  emitSessionTranscriptUpdate({
+    sessionFile: params.sessionFile,
+    sessionKey: params.sessionKey,
+    message: params.message,
+    messageId: params.messageId,
+  });
+
+  const [messageEvent, changedEvent] = await Promise.all([
+    messageEventPromise,
+    changedEventPromise,
+  ]);
+  return { messageEvent, changedEvent };
 }
 
 async function expectNoMessageWithin(params: {
@@ -118,7 +159,7 @@ describe("session.message websocket events", () => {
       storePath,
     });
 
-    await withOperatorSessionSubscriber(harness, async (ws) => {
+    await withOperatorSessionSubscriber(async (ws) => {
       const changedEvent = onceMessage(
         ws,
         (message) =>
@@ -288,30 +329,14 @@ describe("session.message websocket events", () => {
       "utf-8",
     );
 
-    await withOperatorSessionSubscriber(harness, async (ws) => {
-      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
-      const changedEventPromise = onceMessage(
+    await withOperatorSessionSubscriber(async (ws) => {
+      const { messageEvent, changedEvent } = await emitTranscriptUpdateAndCollectEvents({
         ws,
-        (message) =>
-          message.type === "event" &&
-          message.event === "sessions.changed" &&
-          (message.payload as { phase?: string; sessionKey?: string } | undefined)?.phase ===
-            "message" &&
-          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-            "agent:main:main",
-      );
-
-      emitSessionTranscriptUpdate({
-        sessionFile: transcriptPath,
         sessionKey: "agent:main:main",
+        sessionFile: transcriptPath,
         message: transcriptMessage,
         messageId: "msg-usage",
       });
-
-      const [messageEvent, changedEvent] = await Promise.all([
-        messageEventPromise,
-        changedEventPromise,
-      ]);
       expect(messageEvent.payload).toMatchObject({
         sessionKey: "agent:main:main",
         messageId: "msg-usage",
@@ -464,30 +489,14 @@ describe("session.message websocket events", () => {
       "utf-8",
     );
 
-    await withOperatorSessionSubscriber(harness, async (ws) => {
-      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
-      const changedEventPromise = onceMessage(
+    await withOperatorSessionSubscriber(async (ws) => {
+      const { messageEvent, changedEvent } = await emitTranscriptUpdateAndCollectEvents({
         ws,
-        (message) =>
-          message.type === "event" &&
-          message.event === "sessions.changed" &&
-          (message.payload as { phase?: string; sessionKey?: string } | undefined)?.phase ===
-            "message" &&
-          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-            "agent:main:main",
-      );
-
-      emitSessionTranscriptUpdate({
-        sessionFile: transcriptPath,
         sessionKey: "agent:main:main",
+        sessionFile: transcriptPath,
         message: transcriptMessage,
         messageId: "msg-thread",
       });
-
-      const [messageEvent, changedEvent] = await Promise.all([
-        messageEventPromise,
-        changedEventPromise,
-      ]);
       expect(messageEvent.payload).toMatchObject({
         sessionKey: "agent:main:main",
         lastChannel: "telegram",
@@ -629,7 +638,7 @@ describe("session.message websocket events", () => {
       "utf-8",
     );
 
-    await withOperatorSessionSubscriber(harness, async (ws) => {
+    await withOperatorSessionSubscriber(async (ws) => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:newer");
 
       emitSessionTranscriptUpdate({

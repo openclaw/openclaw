@@ -19,7 +19,6 @@ const allowedNonExtensionTests = new Set<string>([
   "src/commands/onboard-channels.e2e.test.ts",
   "src/gateway/hooks.test.ts",
   "src/infra/outbound/deliver.test.ts",
-  "src/media-generation/provider-capabilities.contract.test.ts",
   "src/plugins/interactive.test.ts",
   "src/plugins/contracts/discovery.contract.test.ts",
   "src/plugin-sdk/telegram-command-config.test.ts",
@@ -174,6 +173,7 @@ describe("non-extension test boundaries", () => {
   it("keeps bundled plugin public-surface imports on an explicit core allowlist", () => {
     const allowed = new Set([
       "src/auto-reply/reply.triggers.trigger-handling.test-harness.ts",
+      "src/agents/models-config.providers.ollama.test.ts",
       "src/commands/channel-test-registry.ts",
       "src/plugin-sdk/testing.ts",
     ]);

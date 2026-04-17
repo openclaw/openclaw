@@ -576,6 +576,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                       return@addOnSuccessListener
                     }
                     setupCode = scannedSetupCode.setupCode
+                    viewModel.resetGatewaySetupAuth()
                     gatewayInputMode = GatewayInputMode.SetupCode
                     gatewayError = null
                     attemptedConnect = false
@@ -737,6 +738,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             )
           OnboardingStep.FinalCheck ->
             FinalStep(
+              viewModel = viewModel,
               parsedGateway = parseGatewayEndpoint(gatewayUrl),
               statusText = statusText,
               isConnected = canFinishOnboarding,
@@ -812,6 +814,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                       )
                     return@Button
                   }
+                  viewModel.resetGatewaySetupAuth()
                   gatewayUrl = parsedSetup.url
                   viewModel.setGatewayBootstrapToken(parsedSetup.bootstrapToken.orEmpty())
                   val sharedToken = parsedSetup.token.orEmpty().trim()
@@ -887,6 +890,12 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                   }
                   val token = persistedGatewayToken.trim()
                   val password = gatewayPassword.trim()
+                  val bootstrapToken =
+                    if (gatewayInputMode == GatewayInputMode.SetupCode) {
+                      decodeGatewaySetupCode(setupCode)?.bootstrapToken?.trim()?.ifEmpty { null }
+                    } else {
+                      null
+                    }
                   attemptedConnect = true
                   viewModel.setManualEnabled(true)
                   viewModel.setManualHost(parsed.config.host)
@@ -894,6 +903,9 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                   viewModel.setManualTls(parsed.config.tls)
                   if (gatewayInputMode == GatewayInputMode.Manual) {
                     viewModel.setGatewayBootstrapToken("")
+                  } else {
+                    viewModel.resetGatewaySetupAuth()
+                    viewModel.setGatewayBootstrapToken(bootstrapToken.orEmpty())
                   }
                   if (token.isNotEmpty()) {
                     viewModel.setGatewayToken(token)
@@ -904,12 +916,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                   viewModel.connect(
                     GatewayEndpoint.manual(host = parsed.config.host, port = parsed.config.port),
                     token = token.ifEmpty { null },
-                    bootstrapToken =
-                      if (gatewayInputMode == GatewayInputMode.SetupCode) {
-                        decodeGatewaySetupCode(setupCode)?.bootstrapToken?.trim()?.ifEmpty { null }
-                      } else {
-                        null
-                      },
+                    bootstrapToken = bootstrapToken,
                     password = password.ifEmpty { null },
                   )
                 },
@@ -1566,6 +1573,7 @@ private fun PermissionToggleRow(
 
 @Composable
 private fun FinalStep(
+  viewModel: MainViewModel,
   parsedGateway: GatewayEndpointConfig?,
   statusText: String,
   isConnected: Boolean,
@@ -1580,6 +1588,10 @@ private fun FinalStep(
   val statusLabel = gatewayStatusForDisplay(statusText)
   val showDiagnostics = gatewayStatusHasDiagnostics(statusText)
   val pairingRequired = gatewayStatusLooksLikePairing(statusText)
+
+  PairingAutoRetryEffect(enabled = pairingRequired && attemptedConnect) {
+    viewModel.refreshGatewayConnection()
+  }
 
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     Text("Review", style = onboardingTitle1Style, color = onboardingText)
@@ -1761,7 +1773,11 @@ private fun FinalStep(
           if (pairingRequired) {
             CommandBlock("openclaw devices list")
             CommandBlock("openclaw devices approve <requestId>")
-            Text("Then tap Connect again.", style = onboardingCalloutStyle, color = onboardingTextSecondary)
+            Text(
+              "OpenClaw retries automatically while this screen stays open.",
+              style = onboardingCalloutStyle,
+              color = onboardingTextSecondary,
+            )
           }
         }
       }

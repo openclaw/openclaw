@@ -79,7 +79,8 @@ function shouldCopyRuntimeFile(sourcePath) {
     relativePath.endsWith("/openclaw.plugin.json") ||
     relativePath.endsWith("/.codex-plugin/plugin.json") ||
     relativePath.endsWith("/.claude-plugin/plugin.json") ||
-    relativePath.endsWith("/.cursor-plugin/plugin.json")
+    relativePath.endsWith("/.cursor-plugin/plugin.json") ||
+    relativePath.endsWith("/SKILL.md")
   );
 }
 

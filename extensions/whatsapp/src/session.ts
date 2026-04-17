@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import type { Agent } from "node:https";
+import path from "node:path";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import { resolveAmbientNodeProxyAgent } from "openclaw/plugin-sdk/extension-shared";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
-import qrcode from "qrcode-terminal";
 import {
   maybeRestoreCredsFromBackup,
   readCredsJsonRaw,
@@ -17,6 +18,7 @@ import {
 } from "./auth-store.js";
 import { formatError, getStatusCode } from "./session-errors.js";
 import {
+  BufferJSON,
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
@@ -36,6 +38,30 @@ export {
 } from "./auth-store.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+
+async function loadQrTerminal() {
+  const mod = await import("qrcode-terminal");
+  return mod.default ?? mod;
+}
+
+export async function writeCredsJsonAtomically(
+  authDir: string,
+  creds: unknown,
+): Promise<void> {
+  const credsPath = resolveWebCredsPath(authDir);
+  const tempPath = path.join(authDir, `.creds.${process.pid}.${Date.now()}.tmp`);
+  try {
+    await fs.writeFile(tempPath, JSON.stringify(creds, BufferJSON.replacer), { mode: 0o600 });
+    await fs.rename(tempPath, credsPath);
+  } catch (err) {
+    try {
+      await fs.rm(tempPath, { force: true });
+    } catch {
+      // best-effort cleanup
+    }
+    throw err;
+  }
+}
 
 // Per-authDir queues so multi-account creds saves don't block each other.
 const credsSaveQueues = new Map<string, Promise<void>>();
@@ -88,11 +114,6 @@ async function safeSaveCreds(
   }
   try {
     await Promise.resolve(saveCreds());
-    try {
-      fsSync.chmodSync(resolveWebCredsPath(authDir), 0o600);
-    } catch {
-      // best-effort on platforms that support it
-    }
   } catch (err) {
     logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
   }
@@ -118,9 +139,13 @@ export async function createWaSocket(
   await ensureDir(authDir);
   const sessionLogger = getChildLogger({ module: "web-session" });
   maybeRestoreCredsFromBackup(authDir);
-  const { state, saveCreds } = await useMultiFileAuthState(authDir);
+  const { state } = await useMultiFileAuthState(authDir);
+  const saveCreds = async () => {
+    await writeCredsJsonAtomically(authDir, state.creds);
+  };
   const { version } = await fetchLatestBaileysVersion();
   const agent = await resolveEnvProxyAgent(sessionLogger);
+  const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, agent);
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
@@ -133,19 +158,22 @@ export async function createWaSocket(
     syncFullHistory: false,
     markOnlineOnConnect: false,
     agent,
-    fetchAgent: agent,
+    // Baileys types still model `fetchAgent` as a Node agent even though the
+    // runtime path accepts an undici dispatcher for upload fetches.
+    fetchAgent: fetchAgent as Agent | undefined,
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
   sock.ev.on(
     "connection.update",
-    (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
+    async (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
       try {
         const { connection, lastDisconnect, qr } = update;
         if (qr) {
           opts.onQr?.(qr);
           if (printQr) {
             console.log("Scan this QR in WhatsApp (Linked Devices):");
+            const qrcode = await loadQrTerminal();
             qrcode.generate(qr, { small: true });
           }
         }
@@ -192,6 +220,58 @@ async function resolveEnvProxyAgent(
       logger.info("Using ambient env proxy for WhatsApp WebSocket connection");
     },
   });
+}
+
+async function resolveEnvFetchDispatcher(
+  logger: ReturnType<typeof getChildLogger>,
+  agent?: unknown,
+): Promise<unknown> {
+  const proxyUrl = resolveProxyUrlFromAgent(agent);
+  const envProxyUrl = resolveEnvHttpsProxyUrl();
+  if (!proxyUrl && !envProxyUrl) {
+    return undefined;
+  }
+  try {
+    const { EnvHttpProxyAgent, ProxyAgent } = await import("undici");
+    return proxyUrl
+      ? new ProxyAgent({ allowH2: false, uri: proxyUrl })
+      : new EnvHttpProxyAgent({ allowH2: false });
+  } catch (error) {
+    logger.warn(
+      { error: String(error) },
+      "Failed to initialize env proxy dispatcher for WhatsApp media uploads",
+    );
+    return undefined;
+  }
+}
+
+function resolveProxyUrlFromAgent(agent: unknown): string | undefined {
+  if (typeof agent !== "object" || agent === null || !("proxy" in agent)) {
+    return undefined;
+  }
+  const proxy = (agent as { proxy?: unknown }).proxy;
+  if (proxy instanceof URL) {
+    return proxy.toString();
+  }
+  return typeof proxy === "string" && proxy.length > 0 ? proxy : undefined;
+}
+
+function resolveEnvHttpsProxyUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const lowerHttpsProxy = normalizeEnvProxyValue(env.https_proxy);
+  const lowerHttpProxy = normalizeEnvProxyValue(env.http_proxy);
+  const httpsProxy =
+    lowerHttpsProxy !== undefined ? lowerHttpsProxy : normalizeEnvProxyValue(env.HTTPS_PROXY);
+  const httpProxy =
+    lowerHttpProxy !== undefined ? lowerHttpProxy : normalizeEnvProxyValue(env.HTTP_PROXY);
+  return httpsProxy ?? httpProxy ?? undefined;
+}
+
+function normalizeEnvProxyValue(value: string | undefined): string | null | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>) {

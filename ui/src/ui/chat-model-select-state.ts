@@ -1,7 +1,8 @@
 import type { AppViewState } from "./app-view-state.ts";
 import {
-  buildChatModelOption,
-  formatChatModelDisplay,
+  buildCatalogDisplayLookup,
+  buildChatModelOptionFromLookup,
+  formatCatalogChatModelDisplayFromLookup,
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
 } from "./chat-model-ref.ts";
@@ -56,6 +57,7 @@ function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
 
 function buildChatModelOptions(
   catalog: ModelCatalogEntry[],
+  displayLookup: ReturnType<typeof buildCatalogDisplayLookup>,
   currentOverride: string,
   defaultModel: string,
 ): ChatModelSelectOption[] {
@@ -76,15 +78,18 @@ function buildChatModelOptions(
   };
 
   for (const entry of catalog) {
-    const option = buildChatModelOption(entry);
+    const option = buildChatModelOptionFromLookup(entry, displayLookup);
     addOption(option.value, option.label);
   }
 
   if (currentOverride) {
-    addOption(currentOverride);
+    addOption(
+      currentOverride,
+      formatCatalogChatModelDisplayFromLookup(currentOverride, displayLookup),
+    );
   }
   if (defaultModel) {
-    addOption(defaultModel);
+    addOption(defaultModel, formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup));
   }
   return options;
 }
@@ -92,15 +97,17 @@ function buildChatModelOptions(
 export function resolveChatModelSelectState(
   state: ChatModelSelectStateInput,
 ): ChatModelSelectState {
+  const catalog = state.chatModelCatalog ?? [];
+  const displayLookup = buildCatalogDisplayLookup(catalog);
   const currentOverride = resolveChatModelOverrideValue(state);
   const defaultModel = resolveDefaultModelValue(state);
-  const defaultDisplay = formatChatModelDisplay(defaultModel);
+  const defaultDisplay = formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup);
 
   return {
     currentOverride,
     defaultModel,
     defaultDisplay,
     defaultLabel: defaultModel ? `Default (${defaultDisplay})` : "Default model",
-    options: buildChatModelOptions(state.chatModelCatalog ?? [], currentOverride, defaultModel),
+    options: buildChatModelOptions(catalog, displayLookup, currentOverride, defaultModel),
   };
 }

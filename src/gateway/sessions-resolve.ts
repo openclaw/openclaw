@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
@@ -152,7 +152,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
         ),
       };
     }
-    return { ok: true, key: String(matches[0]?.key ?? "") };
+    return { ok: true, key: matches[0].key };
   }
 
   const parsedLabel = parseSessionLabel(p.label);
@@ -197,5 +197,5 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  return { ok: true, key: String(list.sessions[0]?.key ?? "") };
+  return { ok: true, key: list.sessions[0].key };
 }

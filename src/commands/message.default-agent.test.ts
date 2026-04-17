@@ -140,4 +140,41 @@ describe("messageCommand agent routing", () => {
       }),
     );
   });
+
+  it.each([
+    {
+      name: "defaults senderIsOwner to true for local message runs",
+      opts: {},
+      expected: true,
+    },
+    {
+      name: "honors explicit senderIsOwner override",
+      opts: { senderIsOwner: false },
+      expected: false,
+    },
+  ])("$name", async ({ opts, expected }) => {
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    await messageCommand(
+      {
+        action: "send",
+        channel: "telegram",
+        target: "123456",
+        message: "hi",
+        json: true,
+        ...opts,
+      },
+      {} as CliDeps,
+      runtime,
+    );
+
+    expect(runMessageAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderIsOwner: expected,
+      }),
+    );
+  });
 });

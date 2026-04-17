@@ -45,7 +45,7 @@ export function isSenderAllowed(
   const normalizedSenderId = normalizeUserId(senderId);
   const normalizedEmail = normalizeLowercaseStringOrEmpty(senderEmail ?? "");
   return allowFrom.some((entry) => {
-    const normalized = normalizeLowercaseStringOrEmpty(String(entry));
+    const normalized = normalizeLowercaseStringOrEmpty(entry);
     if (!normalized) {
       return false;
     }
@@ -138,7 +138,7 @@ function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, 
   }
   const key = deprecated
     .map((v) => normalizeLowercaseStringOrEmpty(v))
-    .toSorted()
+    .toSorted((a, b) => a.localeCompare(b))
     .join(",");
   if (warnedDeprecatedUsersEmailAllowFrom.has(key)) {
     return;
@@ -161,7 +161,7 @@ function warnMutableGroupKeysConfigured(
   }
   const warningKey = mutableKeys
     .map((key) => normalizeLowercaseStringOrEmpty(key))
-    .toSorted()
+    .toSorted((a, b) => a.localeCompare(b))
     .join(",");
   if (warnedMutableGroupKeys.has(warningKey)) {
     return;

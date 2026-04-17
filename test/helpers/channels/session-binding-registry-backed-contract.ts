@@ -1,15 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { bluebubblesPlugin } from "../../../extensions/bluebubbles/api.js";
-import {
-  discordPlugin,
-  discordThreadBindingTesting,
-} from "../../../extensions/discord/test-api.js";
-import { feishuPlugin, feishuThreadBindingTesting } from "../../../extensions/feishu/api.js";
-import { imessagePlugin } from "../../../extensions/imessage/api.js";
-import { matrixPlugin, setMatrixRuntime } from "../../../extensions/matrix/test-api.js";
-import { telegramPlugin } from "../../../extensions/telegram/api.js";
-import { resetTelegramThreadBindingsForTests } from "../../../extensions/telegram/test-api.js";
-import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -20,61 +9,7 @@ import {
   type SessionBindingRecord,
 } from "../../../src/infra/outbound/session-binding-service.js";
 import { resetPluginRuntimeStateForTest } from "../../../src/plugins/runtime.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
-import type { PluginRuntime } from "../../../src/plugins/runtime/index.js";
-import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
 import { getSessionBindingContractRegistry } from "./registry-session-binding.js";
-
-type DiscordThreadBindingTesting = {
-  resetThreadBindingsForTests: () => void;
-};
-
-type ResetTelegramThreadBindingsForTests = () => Promise<void>;
-
-function getBluebubblesPlugin(): ChannelPlugin {
-  return bluebubblesPlugin as unknown as ChannelPlugin;
-}
-
-function getDiscordPlugin(): ChannelPlugin {
-  return discordPlugin as unknown as ChannelPlugin;
-}
-
-function getFeishuPlugin(): ChannelPlugin {
-  return feishuPlugin as unknown as ChannelPlugin;
-}
-
-function getIMessagePlugin(): ChannelPlugin {
-  return imessagePlugin as unknown as ChannelPlugin;
-}
-
-function getMatrixPlugin(): ChannelPlugin {
-  return matrixPlugin as unknown as ChannelPlugin;
-}
-
-function getSetMatrixRuntime(): (runtime: PluginRuntime) => void {
-  return setMatrixRuntime;
-}
-
-function getTelegramPlugin(): ChannelPlugin {
-  return telegramPlugin as unknown as ChannelPlugin;
-}
-
-function getDiscordThreadBindingTesting(): DiscordThreadBindingTesting {
-  return discordThreadBindingTesting;
-}
-
-function getResetTelegramThreadBindingsForTests(): ResetTelegramThreadBindingsForTests {
-  return resetTelegramThreadBindingsForTests;
-}
-
-async function getFeishuThreadBindingTesting() {
-  return feishuThreadBindingTesting;
-}
-
-async function getResetMatrixThreadBindingsForTests() {
-  const matrixApi = await import("../../../extensions/matrix/api.js");
-  return matrixApi.resetMatrixThreadBindingsForTests;
-}
 
 function resolveSessionBindingContractRuntimeConfig(id: string) {
   if (id !== "discord" && id !== "matrix") {
@@ -89,29 +24,6 @@ function resolveSessionBindingContractRuntimeConfig(id: string) {
       },
     },
   };
-}
-
-function setSessionBindingPluginRegistryForTests(): void {
-  getSetMatrixRuntime()({
-    state: {
-      resolveStateDir: (_env, homeDir) => (homeDir ?? (() => "/tmp"))(),
-    },
-  } as PluginRuntime);
-
-  const channels = [
-    getBluebubblesPlugin(),
-    getDiscordPlugin(),
-    getFeishuPlugin(),
-    getIMessagePlugin(),
-    getMatrixPlugin(),
-    getTelegramPlugin(),
-  ].map((plugin) => ({
-    pluginId: plugin.id,
-    plugin,
-    source: "test" as const,
-  })) as Parameters<typeof createTestRegistry>[0];
-
-  setActivePluginRegistry(createTestRegistry(channels));
 }
 
 function installSessionBindingContractSuite(params: {
@@ -165,14 +77,8 @@ export function describeSessionBindingRegistryBackedContract(id: string) {
       // These registry-backed contract suites intentionally exercise bundled runtime facades.
       // Opt the bundled-runtime cases in so the activation boundary behaves like real runtime usage.
       setRuntimeConfigSnapshot(runtimeConfig);
-      // These suites only exercise the session-binding channels, so avoid the broader
-      // default registry helper and seed only the six plugins this contract lane needs.
-      setSessionBindingPluginRegistryForTests();
       sessionBindingTesting.resetSessionBindingAdaptersForTests();
-      getDiscordThreadBindingTesting().resetThreadBindingsForTests();
-      (await getFeishuThreadBindingTesting()).resetFeishuThreadBindingsForTests();
-      (await getResetMatrixThreadBindingsForTests())();
-      await getResetTelegramThreadBindingsForTests()();
+      await entry.beforeEach?.();
     });
     afterEach(() => {
       clearRuntimeConfigSnapshot();

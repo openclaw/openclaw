@@ -65,6 +65,63 @@ export function parseMSTeamsConversationId(raw: string): string | null {
   return id;
 }
 
+/**
+ * Detect whether a raw target string looks like a Microsoft Teams conversation
+ * or user id that cron announce delivery and other explicit-target paths can
+ * forward verbatim to the channel adapter.
+ *
+ * Accepts both prefixed and bare formats:
+ * - `conversation:<id>` — explicit conversation prefix
+ * - `user:<aad-guid>`   — user id (16+ hex chars, UUID-like)
+ * - `19:abc@thread.tacv2` / `19:abc@thread.skype` — channel / legacy group
+ * - `19:{userId}_{appId}@unq.gbl.spaces` — Graph 1:1 chat thread format
+ * - `a:1xxx` — Bot Framework personal (1:1) chat id
+ * - `8:orgid:xxx` — Bot Framework org-scoped personal chat id
+ * - `29:xxx` — Bot Framework user id
+ *
+ * Display-name user targets such as `user:John Smith` intentionally return
+ * false so that the Graph API directory lookup still runs for them.
+ */
+export function looksLikeMSTeamsTargetId(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (/^conversation:/i.test(trimmed)) {
+    return true;
+  }
+  if (/^user:/i.test(trimmed)) {
+    // Only treat as an id when the value after `user:` looks like a UUID;
+    // display names must fall through to directory lookup.
+    const id = trimmed.slice("user:".length).trim();
+    return /^[0-9a-fA-F-]{16,}$/.test(id);
+  }
+  // Bare Bot Framework / Graph conversation id formats.
+  // Channel / group ids always start with `19:` and include an `@thread.*`
+  // suffix (`@thread.tacv2` or the legacy `@thread.skype`). Personal chat
+  // ids come in three shapes: `a:1...` (Bot Framework), `8:orgid:...`
+  // (org-scoped Bot Framework), and `19:{userId}_{appId}@unq.gbl.spaces`
+  // (Graph API 1:1 chat thread). Bot Framework user ids use `29:...`.
+  if (/^19:.+@thread\.(tacv2|skype)$/i.test(trimmed)) {
+    return true;
+  }
+  if (/^19:.+@unq\.gbl\.spaces$/i.test(trimmed)) {
+    return true;
+  }
+  if (/^a:1[A-Za-z0-9_-]+$/i.test(trimmed)) {
+    return true;
+  }
+  if (/^8:orgid:[A-Za-z0-9-]+$/i.test(trimmed)) {
+    return true;
+  }
+  if (/^29:[A-Za-z0-9_-]+$/i.test(trimmed)) {
+    return true;
+  }
+  // Fallback: anything containing @thread is still treated as a conversation
+  // id so the current matches for tenant-specific suffixes remain accepted.
+  return /@thread\b/i.test(trimmed);
+}
+
 function normalizeMSTeamsTeamKey(raw: string): string | undefined {
   const trimmed = stripProviderPrefix(raw)
     .replace(/^team:/i, "")

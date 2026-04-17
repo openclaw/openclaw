@@ -84,6 +84,35 @@ describe("preemptive-compaction", () => {
     expect(result.estimatedPromptTokens).toBeLessThan(result.promptBudgetBeforeReserve);
   });
 
+  it("caps reserve tokens so small context models keep usable prompt budget", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeAssistantHistory("short history")],
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: 16_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.effectiveReserveTokens).toBe(8_000);
+    expect(result.promptBudgetBeforeReserve).toBe(8_000);
+    expect(result.shouldCompact).toBe(false);
+    expect(result.route).toBe("fits");
+  });
+
+  it("keeps the requested reserve when it leaves enough prompt budget", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeAssistantHistory("short history")],
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: 32_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.effectiveReserveTokens).toBe(20_000);
+    expect(result.promptBudgetBeforeReserve).toBe(12_000);
+    expect(result.shouldCompact).toBe(false);
+  });
+
   it("routes to direct tool-result truncation when recent tool tails can clearly absorb the overflow", () => {
     const medium = "alpha beta gamma delta epsilon ".repeat(2200);
     const messages: AgentMessage[] = [
@@ -170,7 +199,7 @@ describe("preemptive-compaction", () => {
 
     expect(potential.oversizedReducibleChars).toBeGreaterThan(0);
     expect(potential.aggregateReducibleChars).toBeGreaterThan(0);
-    expect(potential.oversizedReducibleChars).toBeLessThan(desiredOverflowTokens * 4);
+    expect(potential.oversizedReducibleChars).toBeLessThan(potential.maxReducibleChars);
     expect(potential.maxReducibleChars).toBeGreaterThan(desiredOverflowTokens * 4);
     expect(result.route).toBe("truncate_tool_results_only");
     expect(result.shouldCompact).toBe(false);

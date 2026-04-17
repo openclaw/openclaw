@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
@@ -6,7 +6,7 @@ import {
 } from "./bundled-compat.js";
 import { resolveRuntimePluginRegistry } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginRegistry } from "./registry.js";
+import type { PluginRegistry } from "./registry-types.js";
 
 type CapabilityProviderRegistryKey =
   | "memoryEmbeddingProviders"
@@ -84,13 +84,29 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
 }): CapabilityProviderForKey<K>[] {
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
-  if (activeProviders.length > 0) {
+  if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders") {
     return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }
   const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });
   const loadOptions = compatConfig === undefined ? undefined : { config: compatConfig };
   const registry = resolveRuntimePluginRegistry(loadOptions);
-  return (registry?.[params.key] ?? []).map(
-    (entry) => entry.provider,
-  ) as CapabilityProviderForKey<K>[];
+  if (params.key !== "memoryEmbeddingProviders") {
+    return (registry?.[params.key] ?? []).map(
+      (entry) => entry.provider,
+    ) as CapabilityProviderForKey<K>[];
+  }
+  const merged = new Map<string, CapabilityProviderForKey<K>>();
+  for (const entry of activeProviders) {
+    const provider = entry.provider as CapabilityProviderForKey<K> & { id?: string };
+    if (provider.id) {
+      merged.set(provider.id, provider);
+    }
+  }
+  for (const entry of registry?.[params.key] ?? []) {
+    const provider = entry.provider as CapabilityProviderForKey<K> & { id?: string };
+    if (provider.id && !merged.has(provider.id)) {
+      merged.set(provider.id, provider);
+    }
+  }
+  return [...merged.values()];
 }

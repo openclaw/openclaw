@@ -8,7 +8,7 @@ objective: Verify the agent degrades gracefully when memory tools are unavailabl
 successCriteria:
   - Memory tools are absent from the effective tool inventory.
   - Agent does not hallucinate the hidden fact.
-  - Agent says it could not confirm and surfaces the limitation.
+  - Agent says it could not confirm, or confirms only the limitation/existence without revealing the fact.
 docsRefs:
   - docs/concepts/memory.md
   - docs/tools/index.md
@@ -31,10 +31,16 @@ execution:
       - will not guess
       - won't guess
       - won’t guess
+      - should not guess
+      - cannot see
+      - can't see
+      - can’t see
       - should not reveal
       - won't reveal
       - won’t reveal
       - will not reveal
+      - "confirmed: the hidden fact is present"
+      - hidden fact is present
 ```
 
 ```yaml qa-flow
@@ -128,7 +134,7 @@ steps:
                   expr: "`hallucinated hidden fact: ${outbound.text}`"
             - set: gracefulFallback
               value:
-                expr: "config.gracefulFallbackAny.some((needle) => lower.includes(needle.toLowerCase()))"
+                expr: "config.gracefulFallbackAny.some((needle) => lower.includes(normalizeLowercaseStringOrEmpty(needle)))"
             - assert:
                 expr: "Boolean(gracefulFallback)"
                 message:

@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  resetSessionStoreLockRuntimeForTests,
+  setSessionWriteLockAcquirerForTests,
+} from "../config/sessions/store.js";
 import {
   autoMigrateLegacyStateDir,
   autoMigrateLegacyState,
@@ -13,6 +17,147 @@ import {
 } from "./doctor-state-migrations.js";
 
 let tempRoot: string | null = null;
+
+vi.mock("../channels/plugins/bundled.js", () => {
+  function fileExists(filePath: string): boolean {
+    try {
+      return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+    } catch {
+      return false;
+    }
+  }
+
+  function resolveTelegramAccountId(cfg: OpenClawConfig): string {
+    const defaultAgentId = cfg.agents?.list?.find((agent) => agent.default)?.id ?? "main";
+    const boundAccountId = cfg.bindings?.find(
+      (binding) =>
+        binding.agentId === defaultAgentId &&
+        binding.match?.channel === "telegram" &&
+        typeof binding.match.accountId === "string",
+    )?.match.accountId;
+    return boundAccountId ?? cfg.channels?.telegram?.defaultAccount ?? "default";
+  }
+
+  function detectTelegramAllowFromMigration(params: {
+    cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+  }) {
+    const root = params.env.OPENCLAW_STATE_DIR;
+    if (!root) {
+      return [];
+    }
+    const legacyPath = path.join(root, "credentials", "telegram-allowFrom.json");
+    if (!fileExists(legacyPath)) {
+      return [];
+    }
+    const targetPath = path.join(
+      root,
+      "credentials",
+      `telegram-${resolveTelegramAccountId(params.cfg)}-allowFrom.json`,
+    );
+    return fileExists(targetPath)
+      ? []
+      : [
+          {
+            kind: "copy" as const,
+            label: "Telegram pairing allowFrom",
+            sourcePath: legacyPath,
+            targetPath,
+          },
+        ];
+  }
+
+  function detectWhatsAppLegacyStateMigrations(params: { oauthDir: string }) {
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs.readdirSync(params.oauthDir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    return entries.flatMap((entry) => {
+      const isLegacyAuthFile =
+        entry.name === "creds.json" ||
+        entry.name === "creds.json.bak" ||
+        (/^(app-state-sync|session|sender-key|pre-key)-/.test(entry.name) &&
+          entry.name.endsWith(".json"));
+      if (!entry.isFile() || entry.name === "oauth.json" || !isLegacyAuthFile) {
+        return [];
+      }
+      const sourcePath = path.join(params.oauthDir, entry.name);
+      const targetPath = path.join(params.oauthDir, "whatsapp", "default", entry.name);
+      return fileExists(targetPath)
+        ? []
+        : [{ kind: "move" as const, label: `WhatsApp auth ${entry.name}`, sourcePath, targetPath }];
+    });
+  }
+
+  return {
+    listBundledChannelSetupPluginsByFeature: vi.fn((feature: string) => {
+      if (feature === "legacySessionSurfaces") {
+        return [
+          {
+            id: "whatsapp",
+            messaging: {
+              isLegacyGroupSessionKey: (key: string) => /^group:.+@g\.us$/i.test(key.trim()),
+              canonicalizeLegacySessionKey: ({ key, agentId }: { key: string; agentId: string }) =>
+                /^group:.+@g\.us$/i.test(key.trim())
+                  ? `agent:${agentId}:whatsapp:${key.trim().toLowerCase()}`
+                  : null,
+            },
+          },
+        ];
+      }
+      if (feature === "legacyStateMigrations") {
+        return [
+          {
+            id: "whatsapp",
+            lifecycle: {
+              detectLegacyStateMigrations: ({ oauthDir }: { oauthDir: string }) =>
+                detectWhatsAppLegacyStateMigrations({ oauthDir }),
+            },
+          },
+          {
+            id: "telegram",
+            lifecycle: {
+              detectLegacyStateMigrations: ({
+                cfg,
+                env,
+              }: {
+                cfg: OpenClawConfig;
+                env: NodeJS.ProcessEnv;
+              }) => detectTelegramAllowFromMigration({ cfg, env }),
+            },
+          },
+        ];
+      }
+      return [];
+    }),
+  };
+});
+
+vi.mock("../infra/json-files.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../infra/json-files.js")>("../infra/json-files.js");
+  return {
+    ...actual,
+    writeTextAtomic: async (
+      filePath: string,
+      content: string,
+      options?: { mode?: number; ensureDirMode?: number; appendTrailingNewline?: boolean },
+    ) => {
+      const payload =
+        options?.appendTrailingNewline && !content.endsWith("\n") ? `${content}\n` : content;
+      await fs.promises.mkdir(path.dirname(filePath), {
+        recursive: true,
+        ...(typeof options?.ensureDirMode === "number" ? { mode: options.ensureDirMode } : {}),
+      });
+      await fs.promises.writeFile(filePath, payload, {
+        encoding: "utf8",
+        mode: options?.mode ?? 0o600,
+      });
+    },
+  };
+});
 
 async function makeTempRoot() {
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-"));
@@ -52,9 +197,16 @@ async function runTelegramAllowFromMigration(params: { root: string; cfg: OpenCl
   return { oauthDir, detected, result };
 }
 
+beforeEach(() => {
+  setSessionWriteLockAcquirerForTests(async () => ({
+    release: async () => undefined,
+  }));
+});
+
 afterEach(async () => {
   resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
+  resetSessionStoreLockRuntimeForTests();
   if (!tempRoot) {
     return;
   }

@@ -12,8 +12,8 @@ Use this skill for `qa-lab` / `qa-channel` work. Repo-local QA only.
 - `docs/concepts/qa-e2e-automation.md`
 - `docs/help/testing.md`
 - `docs/channels/qa-channel.md`
-- `qa/QA_KICKOFF_TASK.md`
-- `qa/seed-scenarios.json`
+- `qa/README.md`
+- `qa/scenarios/index.md`
 - `extensions/qa-lab/src/suite.ts`
 - `extensions/qa-lab/src/character-eval.ts`
 
@@ -28,24 +28,24 @@ Use this skill for `qa-lab` / `qa-channel` work. Repo-local QA only.
 
 ## Default workflow
 
-1. Read the seed plan and current suite implementation.
+1. Read the scenario pack and current suite implementation.
 2. Decide lane:
    - mock/dev: `mock-openai`
-   - real validation: `live-openai`
+   - real validation: `live-frontier`
 3. For live OpenAI, use:
 
 ```bash
 OPENCLAW_LIVE_OPENAI_KEY="${OPENAI_API_KEY}" \
 pnpm openclaw qa suite \
-  --provider-mode live-openai \
+  --provider-mode live-frontier \
   --model openai/gpt-5.4 \
   --alt-model openai/gpt-5.4 \
-  --output-dir .artifacts/qa-e2e/run-all-live-openai-<tag>
+  --output-dir .artifacts/qa-e2e/run-all-live-frontier-<tag>
 ```
 
 4. Watch outputs:
-   - summary: `.artifacts/qa-e2e/run-all-live-openai-<tag>/qa-suite-summary.json`
-   - report: `.artifacts/qa-e2e/run-all-live-openai-<tag>/qa-suite-report.md`
+   - summary: `.artifacts/qa-e2e/run-all-live-frontier-<tag>/qa-suite-summary.json`
+   - report: `.artifacts/qa-e2e/run-all-live-frontier-<tag>/qa-suite-report.md`
 5. If the user wants to watch the live UI, find the current `openclaw-qa` listen port and report `http://127.0.0.1:<port>`.
 6. If a scenario fails, fix the product or harness root cause, then rerun the full lane.
 
@@ -55,20 +55,34 @@ Use `qa character-eval` for style/persona/vibe checks across multiple live model
 
 ```bash
 pnpm openclaw qa character-eval \
-  --model openai/gpt-5.4 \
-  --model anthropic/claude-opus-4-6 \
-  --model codex-cli/<codex-model> \
-  --judge-model openai/gpt-5.4 \
+  --model openai/gpt-5.4,thinking=xhigh \
+  --model openai/gpt-5.2,thinking=xhigh \
+  --model openai/gpt-5,thinking=xhigh \
+  --model anthropic/claude-opus-4-6,thinking=high \
+  --model anthropic/claude-sonnet-4-6,thinking=high \
+  --model zai/glm-5.1,thinking=high \
+  --model moonshot/kimi-k2.5,thinking=high \
+  --model google/gemini-3.1-pro-preview,thinking=high \
+  --judge-model openai/gpt-5.4,thinking=xhigh,fast \
+  --judge-model anthropic/claude-opus-4-6,thinking=high \
+  --concurrency 16 \
+  --judge-concurrency 16 \
   --output-dir .artifacts/qa-e2e/character-eval-<tag>
 ```
 
 - Runs local QA gateway child processes, not Docker.
-- Defaults to candidate models `openai/gpt-5.4` and `anthropic/claude-opus-4-6` when no `--model` is passed.
-- Judge defaults to `openai/gpt-5.4`, fast mode on, `xhigh` thinking.
-- Report includes judge ranking, run stats, and full transcripts; do not include raw judge replies.
+- Preferred model spec syntax is `provider/model,thinking=<level>[,fast|,no-fast|,fast=<bool>]` for both `--model` and `--judge-model`.
+- Do not add new examples with separate `--model-thinking`; keep that flag as legacy compatibility only.
+- Defaults to candidate models `openai/gpt-5.4`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-6`, `anthropic/claude-sonnet-4-6`, `zai/glm-5.1`, `moonshot/kimi-k2.5`, and `google/gemini-3.1-pro-preview` when no `--model` is passed.
+- Candidate thinking defaults to `high`, with `xhigh` for OpenAI models that support it. Prefer inline `--model provider/model,thinking=<level>`; `--thinking <level>` and `--model-thinking <provider/model=level>` remain compatibility shims.
+- OpenAI candidate refs default to fast mode so priority processing is used where supported. Use inline `,fast`, `,no-fast`, or `,fast=false` for one model; use `--fast` only to force fast mode for every candidate.
+- Judges default to `openai/gpt-5.4,thinking=xhigh,fast` and `anthropic/claude-opus-4-6,thinking=high`.
+- Report includes judge ranking, run stats, durations, and full transcripts; do not include raw judge replies. Duration is benchmark context, not a grading signal.
+- Candidate and judge concurrency default to 16. Use `--concurrency <n>` and `--judge-concurrency <n>` to override when local gateways or provider limits need a gentler lane.
 - Scenario source should stay markdown-driven under `qa/scenarios/`.
 - For isolated character/persona evals, write the persona into `SOUL.md` and blank `IDENTITY.md` in the scenario flow. Use `SOUL.md + IDENTITY.md` only when intentionally testing how the normal OpenClaw identity combines with the character.
-- Keep prompts self-contained improv prompts. Avoid repo paths or file names unless the eval intentionally measures tool use; otherwise models may inspect files instead of chatting.
+- Keep prompts natural and task-shaped. The candidate model should receive character setup through `SOUL.md`, then normal user turns such as chat, workspace help, and small file tasks; do not ask "how would you react?" or tell the model it is in an eval.
+- Prefer at least one real task, such as creating or editing a tiny workspace artifact, so the transcript captures character under normal tool use instead of pure roleplay.
 
 ## Codex CLI model lane
 
@@ -127,8 +141,8 @@ pnpm openclaw qa manual \
 
 ## When adding scenarios
 
-- Add scenario metadata to `qa/seed-scenarios.json`
-- Keep kickoff expectations in `qa/QA_KICKOFF_TASK.md` aligned
+- Add or update scenario markdown under `qa/scenarios/`
+- Keep kickoff expectations in `qa/scenarios/index.md` aligned
 - Add executable coverage in `extensions/qa-lab/src/suite.ts`
 - Prefer end-to-end assertions over mock-only checks
 - Save outputs under `.artifacts/qa-e2e/`

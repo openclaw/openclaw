@@ -72,6 +72,7 @@ export const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unk
 export const runGatewayUpdate = vi
   .fn()
   .mockResolvedValue(createGatewayUpdateResult()) as unknown as MockFn;
+export const collectRelevantDoctorPluginIds = vi.fn(() => []) as unknown as MockFn;
 export const listPluginDoctorLegacyConfigRules = vi.fn(() => []) as unknown as MockFn;
 export const runDoctorHealthContributions = vi.fn(
   defaultRunDoctorHealthContributions,
@@ -249,7 +250,9 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 
 vi.mock("../plugins/loader.js", () => ({
+  isPluginRegistryLoadInFlight: () => false,
   loadOpenClawPlugins: () => createEmptyPluginRegistry(),
+  resolveRuntimePluginRegistry: () => null,
 }));
 
 vi.mock("../config/config.js", async () => {
@@ -261,6 +264,16 @@ vi.mock("../config/config.js", async () => {
     readConfigFileSnapshot,
     writeConfigFile,
     migrateLegacyConfig,
+  };
+});
+
+vi.mock("../config/io.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+  return {
+    ...actual,
+    createConfigIO,
+    readConfigFileSnapshot,
+    writeConfigFile,
   };
 });
 
@@ -351,7 +364,20 @@ vi.mock("./doctor-memory-search.js", () => ({
 }));
 
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
+  applyPluginDoctorCompatibilityMigrations: (config: unknown) => ({
+    config,
+    changes: [],
+  }),
+  collectRelevantDoctorPluginIds,
   listPluginDoctorLegacyConfigRules,
+}));
+
+vi.mock("../channels/plugins/doctor-contract-api.js", () => ({
+  loadBundledChannelDoctorContractApi: vi.fn(() => undefined),
+}));
+
+vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
+  getBootstrapChannelPlugin: vi.fn(() => undefined),
 }));
 
 vi.mock("./doctor-bundled-plugin-runtime-deps.js", () => ({

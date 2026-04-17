@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeStateDirDotEnv } from "../config/test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
+  hasAnyAuthProfileStoreSource: vi.fn(() => true),
   loadAuthProfileStoreForSecretsRuntime: vi.fn(),
   resolvePreferredNodePath: vi.fn(),
   resolveGatewayProgramArguments: vi.fn(),
@@ -13,7 +14,11 @@ const mocks = vi.hoisted(() => ({
   buildServiceEnvironment: vi.fn(),
 }));
 
-vi.mock("../agents/auth-profiles.js", () => ({
+vi.mock("./daemon-install-auth-profiles-source.runtime.js", () => ({
+  hasAnyAuthProfileStoreSource: mocks.hasAnyAuthProfileStoreSource,
+}));
+
+vi.mock("./daemon-install-auth-profiles-store.runtime.js", () => ({
   loadAuthProfileStoreForSecretsRuntime: mocks.loadAuthProfileStoreForSecretsRuntime,
 }));
 
@@ -95,6 +100,10 @@ describe("buildGatewayInstallPlan", () => {
   afterEach(() => {
     fs.rmSync(isolatedHome, { recursive: true, force: true });
   });
+  const isolatedPlanEnv = (env: Record<string, string | undefined> = {}) => ({
+    HOME: isolatedHome,
+    ...env,
+  });
 
   it("uses provided nodePath and returns plan", async () => {
     mockNodeGatewayPlanFixture();
@@ -147,7 +156,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     await buildGatewayInstallPlan({
-      env: {},
+      env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
       warn,
@@ -166,7 +175,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
       config: {
@@ -182,6 +191,7 @@ describe("buildGatewayInstallPlan", () => {
     // Config env vars should be present
     expect(plan.environment.GOOGLE_API_KEY).toBe("test-key");
     expect(plan.environment.CUSTOM_VAR).toBe("custom-value");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("CUSTOM_VAR,GOOGLE_API_KEY");
     // Service environment vars should take precedence
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
     expect(plan.environment.HOME).toBe("/Users/me");
@@ -195,7 +205,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
       config: {
@@ -216,7 +226,7 @@ describe("buildGatewayInstallPlan", () => {
     mockNodeGatewayPlanFixture();
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
       config: {
@@ -237,7 +247,7 @@ describe("buildGatewayInstallPlan", () => {
     mockNodeGatewayPlanFixture({ serviceEnvironment: {} });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
       config: {
@@ -263,7 +273,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
       config: {
@@ -278,6 +288,54 @@ describe("buildGatewayInstallPlan", () => {
 
     expect(plan.environment.HOME).toBe("/Users/service");
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+  });
+
+  it("skips auth-profile store load when no auth-profile source exists", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+    mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv(),
+      port: 3000,
+      runtime: "node",
+    });
+
+    expect(mocks.loadAuthProfileStoreForSecretsRuntime).not.toHaveBeenCalled();
+    expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+  });
+
+  it("uses the provided authStore without probing auth-profile runtime", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OPENAI_API_KEY: "sk-openai-test",
+      }),
+      port: 3000,
+      runtime: "node",
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
+    expect(mocks.hasAnyAuthProfileStoreSource).not.toHaveBeenCalled();
+    expect(mocks.loadAuthProfileStoreForSecretsRuntime).not.toHaveBeenCalled();
   });
 
   it("merges env-backed auth-profile refs into the service environment", async () => {
@@ -303,10 +361,10 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {
+      env: isolatedPlanEnv({
         OPENAI_API_KEY: "sk-openai-test", // pragma: allowlist secret
         ANTHROPIC_TOKEN: "ant-test-token",
-      },
+      }),
       port: 3000,
       runtime: "node",
     });
@@ -344,11 +402,11 @@ describe("buildGatewayInstallPlan", () => {
 
     const warn = vi.fn();
     const plan = await buildGatewayInstallPlan({
-      env: {
+      env: isolatedPlanEnv({
         NODE_OPTIONS: "--require ./pwn.js",
         GIT_ASKPASS: "/tmp/askpass.sh",
         OPENAI_API_KEY: "sk-openai-test", // pragma: allowlist secret
-      },
+      }),
       port: 3000,
       runtime: "node",
       warn,
@@ -379,9 +437,9 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {
+      env: isolatedPlanEnv({
         "BAD KEY": "should-not-pass",
-      },
+      }),
       port: 3000,
       runtime: "node",
     });
@@ -407,7 +465,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
     });
@@ -481,6 +539,88 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     });
 
     expect(plan.environment.HOME).toBe("/from-service");
+  });
+
+  it("preserves safe custom vars from an existing service env and merges PATH", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+        PATH: "/managed/bin:/usr/bin",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      existingEnvironment: {
+        PATH: "/custom/go/bin:/usr/bin",
+        GOBIN: "/Users/test/.local/gopath/bin",
+        BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
+        NODE_OPTIONS: "--require /tmp/evil.js",
+        GOPATH: "/Users/test/.local/gopath",
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+      },
+    });
+
+    expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
+    expect(plan.environment.GOBIN).toBe("/Users/test/.local/gopath/bin");
+    expect(plan.environment.BLOGWATCHER_HOME).toBe("/Users/test/.blogwatcher");
+    expect(plan.environment.NODE_OPTIONS).toBeUndefined();
+    expect(plan.environment.GOPATH).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MARKER).toBeUndefined();
+  });
+
+  it("drops non-absolute and temp PATH entries from an existing service env", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+        PATH: "/managed/bin:/usr/bin",
+        TMPDIR: "/tmp",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      existingEnvironment: {
+        PATH: ".:/tmp/evil:/custom/go/bin:/usr/bin",
+      },
+    });
+
+    expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
+  });
+
+  it("drops keys that were previously tracked as managed service env", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+        PATH: "/managed/bin:/usr/bin",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      existingEnvironment: {
+        PATH: "/custom/go/bin:/usr/bin",
+        GOBIN: "/Users/test/.local/gopath/bin",
+        BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
+        GOPATH: "/Users/test/.local/gopath",
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "GOBIN,GOPATH",
+      },
+    });
+
+    expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
+    expect(plan.environment.GOBIN).toBeUndefined();
+    expect(plan.environment.BLOGWATCHER_HOME).toBe("/Users/test/.blogwatcher");
+    expect(plan.environment.GOPATH).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
   });
 
   it("works when .env file does not exist", async () => {

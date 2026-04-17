@@ -1,6 +1,8 @@
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -46,6 +48,70 @@ let waitForGatewayReachableMock:
     }>)
   | undefined;
 
+function resolveTestConfigPath() {
+  const override = process.env.OPENCLAW_CONFIG_PATH?.trim();
+  if (override) {
+    return override;
+  }
+  const stateDir = process.env.OPENCLAW_STATE_DIR?.trim();
+  if (!stateDir) {
+    throw new Error("OPENCLAW_STATE_DIR must be set before config IO in this test");
+  }
+  return path.join(stateDir, "openclaw.json");
+}
+
+vi.mock("../config/io.js", () => ({
+  createConfigIO: () => ({
+    configPath: resolveTestConfigPath(),
+  }),
+  loadConfig: () => {
+    try {
+      return JSON.parse(nodeFs.readFileSync(resolveTestConfigPath(), "utf-8"));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return {};
+      }
+      throw err;
+    }
+  },
+  readConfigFileSnapshot: async () => {
+    const configPath = resolveTestConfigPath();
+    try {
+      const raw = await fs.readFile(configPath, "utf-8");
+      const config = JSON.parse(raw);
+      return {
+        exists: true,
+        valid: true,
+        config,
+        sourceConfig: config,
+        raw,
+        hash: "test-config-hash",
+      };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+      return {
+        exists: false,
+        valid: true,
+        config: {},
+        sourceConfig: {},
+        raw: null,
+        hash: undefined,
+      };
+    }
+  },
+}));
+
+vi.mock("../config/config.js", () => ({
+  replaceConfigFile: async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
+    const configPath = resolveTestConfigPath();
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf-8");
+  },
+  resolveGatewayPort: (cfg: OpenClawConfig) => cfg.gateway?.port ?? 18789,
+}));
+
 vi.mock("../gateway/client.js", () => ({
   GatewayClient: class {
     params: {
@@ -73,16 +139,31 @@ vi.mock("../gateway/client.js", () => ({
   },
 }));
 
-vi.mock("./onboard-helpers.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./onboard-helpers.js")>("./onboard-helpers.js");
+vi.mock("./onboard-helpers.js", () => {
+  const normalizeGatewayTokenInput = (value: unknown): string => {
+    if (typeof value !== "string") {
+      return "";
+    }
+    const trimmed = value.trim();
+    return trimmed === "undefined" || trimmed === "null" ? "" : trimmed;
+  };
   return {
-    ...actual,
+    DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
+    applyWizardMetadata: (cfg: unknown) => cfg,
     ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
-    waitForGatewayReachable: (...args: Parameters<typeof actual.waitForGatewayReachable>) =>
-      waitForGatewayReachableMock
-        ? waitForGatewayReachableMock(args[0])
-        : actual.waitForGatewayReachable(...args),
+    normalizeGatewayTokenInput,
+    randomToken: () => "tok_generated_gateway_test_token",
+    resolveControlUiLinks: ({ port }: { port: number }) => ({
+      httpUrl: `http://127.0.0.1:${port}`,
+      wsUrl: `ws://127.0.0.1:${port}`,
+    }),
+    waitForGatewayReachable: (params: {
+      url: string;
+      token?: string;
+      password?: string;
+      deadlineMs?: number;
+      probeTimeoutMs?: number;
+    }) => waitForGatewayReachableMock?.(params) ?? Promise.resolve({ ok: true }),
   };
 });
 
@@ -104,15 +185,17 @@ vi.mock("../daemon/diagnostics.js", () => ({
 
 let runNonInteractiveSetup: typeof import("./onboard-non-interactive.js").runNonInteractiveSetup;
 let resolveStateConfigPath: typeof import("../config/paths.js").resolveConfigPath;
-let resolveConfigPath: typeof import("../config/config.js").resolveConfigPath;
-let callGateway: typeof import("../gateway/call.js").callGateway;
+let callGateway: typeof import("../gateway/call.js").callGateway | undefined;
 
 async function loadGatewayOnboardModules(): Promise<void> {
   vi.resetModules();
   ({ runNonInteractiveSetup } = await import("./onboard-non-interactive.js"));
   ({ resolveConfigPath: resolveStateConfigPath } = await import("../config/paths.js"));
-  ({ resolveConfigPath } = await import("../config/config.js"));
-  ({ callGateway } = await import("../gateway/call.js"));
+}
+
+async function loadCallGateway(): Promise<typeof import("../gateway/call.js").callGateway> {
+  callGateway ??= (await import("../gateway/call.js")).callGateway;
+  return callGateway;
 }
 
 function getPseudoPort(base: number): number {
@@ -171,6 +254,58 @@ async function expectLocalJsonSetupFailure(stateDir: string, runtimeWithCapture:
       runtimeWithCapture,
     ),
   ).rejects.toThrow("exit should not be reached after runtime.error");
+}
+
+function createLocalDaemonSetupOptions(stateDir: string) {
+  return {
+    nonInteractive: true,
+    mode: "local" as const,
+    workspace: path.join(stateDir, "openclaw"),
+    authChoice: "skip" as const,
+    skipSkills: true,
+    skipHealth: false,
+    installDaemon: true,
+    gatewayBind: "loopback" as const,
+  };
+}
+
+async function runLocalDaemonSetup(stateDir: string, runtimeEnv: RuntimeEnv = runtime) {
+  await runNonInteractiveSetup(createLocalDaemonSetupOptions(stateDir), runtimeEnv);
+}
+
+async function withMockedPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T>): Promise<T> {
+  const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  try {
+    return await run();
+  } finally {
+    platformSpy.mockRestore();
+  }
+}
+
+function mockGatewayReachableWithCapturedTimeouts() {
+  let capturedDeadlineMs: number | undefined;
+  let capturedProbeTimeoutMs: number | undefined;
+  waitForGatewayReachableMock = vi.fn(
+    async (params: {
+      url: string;
+      token?: string;
+      password?: string;
+      deadlineMs?: number;
+      probeTimeoutMs?: number;
+    }) => {
+      capturedDeadlineMs = params.deadlineMs;
+      capturedProbeTimeoutMs = params.probeTimeoutMs;
+      return { ok: true };
+    },
+  );
+  return {
+    get deadlineMs() {
+      return capturedDeadlineMs;
+    },
+    get probeTimeoutMs() {
+      return capturedProbeTimeoutMs;
+    },
+  };
 }
 
 describe("onboard (non-interactive): gateway and remote auth", () => {
@@ -429,7 +564,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   }, 60_000);
 
   it("writes gateway.remote url/token and callGateway uses them", async () => {
-    await withStateDir("state-remote-", async () => {
+    await withStateDir("state-remote-", async (stateDir) => {
       const port = getPseudoPort(30_000);
       const token = "tok_remote_123";
       await runNonInteractiveSetup(
@@ -446,14 +581,14 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       const cfg = await readJsonFile<{
         gateway?: { mode?: string; remote?: { url?: string; token?: string } };
-      }>(resolveConfigPath());
+      }>(resolveStateConfigPath(process.env, stateDir));
 
       expect(cfg.gateway?.mode).toBe("remote");
       expect(cfg.gateway?.remote?.url).toBe(`ws://127.0.0.1:${port}`);
       expect(cfg.gateway?.remote?.token).toBe(token);
 
       gatewayClientCalls.length = 0;
-      const health = await callGateway<{ ok?: boolean }>({ method: "health" });
+      const health = await (await loadCallGateway())({ method: "health" });
       expect(health?.ok).toBe(true);
       const lastCall = gatewayClientCalls[gatewayClientCalls.length - 1];
       expect(lastCall?.url).toBe(`ws://127.0.0.1:${port}`);
@@ -490,82 +625,27 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it("uses a longer health deadline when daemon install was requested", async () => {
     await withStateDir("state-local-daemon-health-", async (stateDir) => {
-      let capturedDeadlineMs: number | undefined;
-      let capturedProbeTimeoutMs: number | undefined;
-      waitForGatewayReachableMock = vi.fn(
-        async (params: {
-          url: string;
-          token?: string;
-          password?: string;
-          deadlineMs?: number;
-          probeTimeoutMs?: number;
-        }) => {
-          capturedDeadlineMs = params.deadlineMs;
-          capturedProbeTimeoutMs = params.probeTimeoutMs;
-          return { ok: true };
-        },
-      );
+      const captured = mockGatewayReachableWithCapturedTimeouts();
 
-      await runNonInteractiveSetup(
-        {
-          nonInteractive: true,
-          mode: "local",
-          workspace: path.join(stateDir, "openclaw"),
-          authChoice: "skip",
-          skipSkills: true,
-          skipHealth: false,
-          installDaemon: true,
-          gatewayBind: "loopback",
-        },
-        runtime,
-      );
+      await runLocalDaemonSetup(stateDir);
 
       expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
-      expect(capturedDeadlineMs).toBe(45_000);
-      expect(capturedProbeTimeoutMs).toBe(10_000);
+      expect(captured.deadlineMs).toBe(45_000);
+      expect(captured.probeTimeoutMs).toBe(10_000);
     });
   }, 60_000);
 
   it("uses a longer Windows health deadline when daemon install was requested", async () => {
     await withStateDir("state-local-daemon-health-win-", async (stateDir) => {
-      let capturedDeadlineMs: number | undefined;
-      let capturedProbeTimeoutMs: number | undefined;
-      waitForGatewayReachableMock = vi.fn(
-        async (params: {
-          url: string;
-          token?: string;
-          password?: string;
-          deadlineMs?: number;
-          probeTimeoutMs?: number;
-        }) => {
-          capturedDeadlineMs = params.deadlineMs;
-          capturedProbeTimeoutMs = params.probeTimeoutMs;
-          return { ok: true };
-        },
-      );
+      const captured = mockGatewayReachableWithCapturedTimeouts();
 
-      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      try {
-        await runNonInteractiveSetup(
-          {
-            nonInteractive: true,
-            mode: "local",
-            workspace: path.join(stateDir, "openclaw"),
-            authChoice: "skip",
-            skipSkills: true,
-            skipHealth: false,
-            installDaemon: true,
-            gatewayBind: "loopback",
-          },
-          runtime,
-        );
-      } finally {
-        platformSpy.mockRestore();
-      }
+      await withMockedPlatform("win32", async () => {
+        await runLocalDaemonSetup(stateDir);
+      });
 
       expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
-      expect(capturedDeadlineMs).toBe(90_000);
-      expect(capturedProbeTimeoutMs).toBe(15_000);
+      expect(captured.deadlineMs).toBe(90_000);
+      expect(captured.probeTimeoutMs).toBe(15_000);
     });
   }, 60_000);
 
@@ -573,24 +653,9 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     await withStateDir("state-local-daemon-health-command-win-", async (stateDir) => {
       waitForGatewayReachableMock = vi.fn(async () => ({ ok: true }));
 
-      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      try {
-        await runNonInteractiveSetup(
-          {
-            nonInteractive: true,
-            mode: "local",
-            workspace: path.join(stateDir, "openclaw"),
-            authChoice: "skip",
-            skipSkills: true,
-            skipHealth: false,
-            installDaemon: true,
-            gatewayBind: "loopback",
-          },
-          runtime,
-        );
-      } finally {
-        platformSpy.mockRestore();
-      }
+      await withMockedPlatform("win32", async () => {
+        await runLocalDaemonSetup(stateDir);
+      });
 
       expect(healthCommandMock).toHaveBeenCalledTimes(1);
       expect(healthCommandMock).toHaveBeenCalledWith(

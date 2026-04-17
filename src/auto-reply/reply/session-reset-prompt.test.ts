@@ -3,10 +3,15 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 
 describe("buildBareSessionResetPrompt", () => {
-  it("includes the core session startup instruction", () => {
+  it("includes the explicit Session Startup instruction for bare /new and /reset", () => {
     const prompt = buildBareSessionResetPrompt();
-    expect(prompt).toContain("Run your Session Startup sequence");
+    expect(prompt).toContain("Execute your Session Startup sequence now");
     expect(prompt).toContain("read the required files before responding to the user");
+    expect(prompt).toContain("If BOOTSTRAP.md exists in the provided Project Context");
+    expect(prompt).toContain("read it and follow its instructions first");
+    expect(prompt).not.toContain(
+      "If runtime-provided startup context is included for this first turn",
+    );
   });
 
   it("appends current time line so agents know the date", () => {

@@ -1,9 +1,14 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { GoogleGenAI } from "@google/genai";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  createProviderOperationDeadline,
+  resolveProviderOperationTimeoutMs,
+  waitProviderOperationPollInterval,
+} from "openclaw/plugin-sdk/provider-http";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
@@ -124,7 +129,9 @@ async function downloadGeneratedVideo(params: {
   file: unknown;
   index: number;
 }): Promise<GeneratedVideoAsset> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-video-"));
+  const tempDir = await mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-google-video-"),
+  );
   const downloadPath = path.join(tempDir, `video-${params.index + 1}.mp4`);
   try {
     await params.client.files.download({
@@ -223,11 +230,18 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
 
       const configuredBaseUrl = resolveConfiguredGoogleVideoBaseUrl(req);
       const durationSeconds = resolveDurationSeconds(req.durationSeconds);
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs,
+        label: "Google video generation",
+      });
       const client = new GoogleGenAI({
         apiKey: auth.apiKey,
         httpOptions: {
           ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
-          timeout: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+          timeout: resolveProviderOperationTimeoutMs({
+            deadline,
+            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+          }),
         },
       });
       let operation = await client.models.generateVideos({
@@ -236,7 +250,6 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         image: resolveInputImage(req),
         video: resolveInputVideo(req),
         config: {
-          numberOfVideos: 1,
           ...(typeof durationSeconds === "number" ? { durationSeconds } : {}),
           ...(resolveAspectRatio({ aspectRatio: req.aspectRatio, size: req.size })
             ? { aspectRatio: resolveAspectRatio({ aspectRatio: req.aspectRatio, size: req.size }) }
@@ -252,7 +265,8 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         if (attempt >= MAX_POLL_ATTEMPTS) {
           throw new Error("Google video generation did not finish in time");
         }
-        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+        await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
+        resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: DEFAULT_TIMEOUT_MS });
         operation = await client.operations.getVideosOperation({ operation });
       }
       if (operation.error) {

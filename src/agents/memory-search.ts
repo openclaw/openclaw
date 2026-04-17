@@ -6,7 +6,6 @@ import type { SecretInput } from "../config/types.secrets.js";
 import {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
-  supportsMemoryMultimodalEmbeddings,
   type MemoryMultimodalSettings,
 } from "../memory-host-sdk/multimodal.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
@@ -320,24 +319,24 @@ function mergeConfig(
       ...query,
       minScore,
       hybrid: {
-        enabled: Boolean(hybrid.enabled),
+        enabled: hybrid.enabled,
         vectorWeight: normalizedVectorWeight,
         textWeight: normalizedTextWeight,
         candidateMultiplier,
         mmr: {
-          enabled: Boolean(hybrid.mmr.enabled),
+          enabled: hybrid.mmr.enabled,
           lambda: Number.isFinite(hybrid.mmr.lambda)
             ? Math.max(0, Math.min(1, hybrid.mmr.lambda))
             : DEFAULT_MMR_LAMBDA,
         },
         temporalDecay: {
-          enabled: Boolean(hybrid.temporalDecay.enabled),
+          enabled: hybrid.temporalDecay.enabled,
           halfLifeDays: temporalDecayHalfLifeDays,
         },
       },
     },
     cache: {
-      enabled: Boolean(cache.enabled),
+      enabled: cache.enabled,
       maxEntries:
         typeof cache.maxEntries === "number" && Number.isFinite(cache.maxEntries)
           ? Math.max(1, Math.floor(cache.maxEntries))
@@ -389,24 +388,9 @@ export function resolveMemorySearchConfig(
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
   const multimodalProvider =
     resolved.provider === "auto" ? undefined : getMemoryEmbeddingProvider(resolved.provider);
-  const builtinMultimodalSupport =
-    resolved.provider === "auto"
-      ? false
-      : supportsMemoryMultimodalEmbeddings({
-          provider: resolved.provider,
-          model: resolved.model,
-        });
   if (
     multimodalActive &&
-    !(
-      // Fall back to the built-in helper when the provider is not registered yet
-      // or when a registered adapter does not implement multimodal capability checks.
-      (
-        multimodalProvider?.supportsMultimodalEmbeddings?.({
-          model: resolved.model,
-        }) ?? builtinMultimodalSupport
-      )
-    )
+    !(multimodalProvider?.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)
   ) {
     throw new Error(
       "agents.*.memorySearch.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",
