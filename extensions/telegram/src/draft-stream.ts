@@ -1,5 +1,8 @@
 import type { Bot } from "grammy";
-import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
+import {
+  clearFinalizableDraftMessage,
+  createFinalizableDraftStreamControlsForState,
+} from "openclaw/plugin-sdk/channel-lifecycle";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
@@ -96,6 +99,11 @@ export type TelegramDraftStream = {
   lastDeliveredText?: () => string;
   clear: () => Promise<void>;
   stop: () => Promise<void>;
+  /**
+   * Stop the stream without a final flush or delete.
+   * Used when a newer dispatch supersedes this preview.
+   */
+  discard?: () => Promise<void>;
   /** Convert the current draft preview into a permanent message (sendMessage). */
   materialize?: () => Promise<number | undefined>;
   /** Reset internal state so the next update creates a new message instead of editing. */
@@ -368,25 +376,35 @@ export function createTelegramDraftStream(params: {
     }
   };
 
-  const { loop, update, stop, clear } = createFinalizableDraftLifecycle({
+  const { loop, update, stop, stopForClear } = createFinalizableDraftStreamControlsForState({
     throttleMs,
     state: streamState,
     sendOrEditStreamMessage,
-    readMessageId: () => streamMessageId,
-    clearMessageId: () => {
-      streamMessageId = undefined;
-    },
-    isValidMessageId: (value): value is number =>
-      typeof value === "number" && Number.isFinite(value),
-    deleteMessage: async (messageId) => {
-      await params.api.deleteMessage(chatId, messageId);
-    },
-    onDeleteSuccess: (messageId) => {
-      params.log?.(`telegram stream preview deleted (chat=${chatId}, message=${messageId})`);
-    },
-    warn: params.warn,
-    warnPrefix: "telegram stream preview cleanup failed",
   });
+
+  const clear = async () => {
+    await clearFinalizableDraftMessage({
+      stopForClear,
+      readMessageId: () => streamMessageId,
+      clearMessageId: () => {
+        streamMessageId = undefined;
+      },
+      isValidMessageId: (value): value is number =>
+        typeof value === "number" && Number.isFinite(value),
+      deleteMessage: async (messageId) => {
+        await params.api.deleteMessage(chatId, messageId);
+      },
+      onDeleteSuccess: (messageId) => {
+        params.log?.(`telegram stream preview deleted (chat=${chatId}, message=${messageId})`);
+      },
+      warn: params.warn,
+      warnPrefix: "telegram stream preview cleanup failed",
+    });
+  };
+
+  const discard = async () => {
+    await stopForClear();
+  };
 
   const forceNewMessage = () => {
     // Boundary rotation may call stop() to finalize the previous draft.
@@ -466,6 +484,7 @@ export function createTelegramDraftStream(params: {
     lastDeliveredText: () => lastDeliveredText,
     clear,
     stop,
+    discard,
     materialize,
     forceNewMessage,
     sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",

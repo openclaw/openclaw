@@ -1052,6 +1052,16 @@ export const dispatchTelegramMessage = async ({
         existing.shouldClear = existing.shouldClear && shouldClear;
       }
       for (const [stream, cleanupState] of streamCleanupStates) {
+        if (isDispatchSuperseded()) {
+          // A superseded dispatch must not final-flush a hidden short partial
+          // into a brand-new preview after the abort confirmation lands.
+          if (typeof stream.discard === "function") {
+            await stream.discard();
+          } else {
+            await stream.stop();
+          }
+          continue;
+        }
         await stream.stop();
         if (cleanupState.shouldClear && !isDispatchSuperseded()) {
           await stream.clear();

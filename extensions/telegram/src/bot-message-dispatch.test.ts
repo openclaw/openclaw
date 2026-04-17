@@ -2804,6 +2804,85 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(firstAnswerDraft.clear).not.toHaveBeenCalled();
   });
 
+  it("discards hidden short partials instead of flushing a stale preview after abort", async () => {
+    let releaseFirstCleanup!: () => void;
+    const firstCleanupGate = new Promise<void>((resolve) => {
+      releaseFirstCleanup = resolve;
+    });
+    let resolveShortPartialQueued!: () => void;
+    const shortPartialQueued = new Promise<void>((resolve) => {
+      resolveShortPartialQueued = resolve;
+    });
+
+    const firstAnswerDraft = createTestDraftStream({
+      onUpdate: (text) => {
+        if (text === "tiny") {
+          resolveShortPartialQueued();
+        }
+      },
+      onStop: () => {
+        throw new Error("superseded cleanup should discard instead of stop");
+      },
+    });
+    const firstReasoningDraft = createDraftStream();
+    const abortAnswerDraft = createDraftStream();
+    const abortReasoningDraft = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => firstAnswerDraft)
+      .mockImplementationOnce(() => firstReasoningDraft)
+      .mockImplementationOnce(() => abortAnswerDraft)
+      .mockImplementationOnce(() => abortReasoningDraft);
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "tiny" });
+        await firstCleanupGate;
+        return { queuedFinal: false };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const firstPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "earlier request",
+          RawBody: "earlier request",
+        } as never,
+      }),
+    });
+
+    await shortPartialQueued;
+
+    const abortPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "abort",
+          RawBody: "abort",
+          CommandBody: "abort",
+        } as never,
+      }),
+    });
+
+    await vi.waitFor(() => {
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [{ text: "⚙️ Agent was aborted." }],
+        }),
+      );
+    });
+
+    releaseFirstCleanup();
+    await Promise.all([firstPromise, abortPromise]);
+
+    expect(firstAnswerDraft.discard).toHaveBeenCalledTimes(1);
+    expect(firstAnswerDraft.stop).not.toHaveBeenCalled();
+    expect(firstAnswerDraft.clear).not.toHaveBeenCalled();
+  });
+
   it("suppresses stale replies when abort lands during async pre-dispatch work", async () => {
     let releaseCatalogLoad!: () => void;
     const catalogLoadGate = new Promise<Record<string, never>>((resolve) => {

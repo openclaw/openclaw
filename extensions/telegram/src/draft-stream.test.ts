@@ -630,6 +630,18 @@ describe("draft stream initial message debounce", () => {
       expect(api.sendMessage).not.toHaveBeenCalled();
     });
 
+    it("does not send a first message when discard() supersedes a short partial", async () => {
+      const api = createMockApi();
+      const stream = createDebouncedStream(api);
+
+      stream.update("Processing"); // 10 chars, below 30
+      await stream.discard?.();
+      await stream.flush();
+
+      expect(api.sendMessage).not.toHaveBeenCalled();
+      expect(api.editMessageText).not.toHaveBeenCalled();
+    });
+
     it("sends first message when reaching threshold", async () => {
       const api = createMockApi();
       const stream = createDebouncedStream(api);
