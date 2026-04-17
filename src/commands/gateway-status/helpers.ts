@@ -2,7 +2,10 @@ import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
-import { resolveGatewayProbeSurfaceAuth } from "../../gateway/auth-surface-resolution.js";
+import {
+  resolveGatewayInteractiveSurfaceAuth,
+  resolveGatewayProbeSurfaceAuth,
+} from "../../gateway/auth-surface-resolution.js";
 import { isLoopbackHost } from "../../gateway/net.js";
 import { type GatewayProbeCapability, type GatewayProbeResult } from "../../gateway/probe.js";
 import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
@@ -163,17 +166,29 @@ export async function resolveAuthForTarget(
   cfg: OpenClawConfig,
   target: GatewayStatusTarget,
   overrides: { token?: string; password?: string },
-): Promise<{ token?: string; password?: string; diagnostics?: string[] }> {
+): Promise<{ token?: string; password?: string; diagnostics?: string[]; failureReason?: string }> {
   const tokenOverride = normalizeOptionalString(overrides.token);
   const passwordOverride = normalizeOptionalString(overrides.password);
   if (tokenOverride || passwordOverride) {
     return { token: tokenOverride, password: passwordOverride };
   }
 
-  return resolveGatewayProbeSurfaceAuth({
+  const surface =
+    target.kind === "configRemote" || target.kind === "sshTunnel" ? "remote" : "local";
+  const auth = await resolveGatewayProbeSurfaceAuth({
     config: cfg,
-    surface: target.kind === "configRemote" || target.kind === "sshTunnel" ? "remote" : "local",
+    surface,
   });
+  if (surface === "local" && isLoopbackProbeTarget(target) && !auth.token && !auth.password) {
+    const interactive = await resolveGatewayInteractiveSurfaceAuth({
+      config: cfg,
+      surface: "local",
+    });
+    if (interactive.failureReason) {
+      return { ...auth, failureReason: interactive.failureReason };
+    }
+  }
+  return auth;
 }
 
 export { pickGatewaySelfPresence };
