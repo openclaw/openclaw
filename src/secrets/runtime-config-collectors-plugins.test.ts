@@ -224,7 +224,7 @@ describe("collectPluginConfigAssignments", () => {
     expect(context.assignments).toHaveLength(0);
   });
 
-  it("skips assignments when plugins.enabled is false", () => {
+  it("collects assignments for explicitly enabled plugins even when plugins.enabled is false", () => {
     const config = asConfig({
       plugins: {
         enabled: false,
@@ -249,10 +249,7 @@ describe("collectPluginConfigAssignments", () => {
       loadablePluginOrigins: loadablePluginOrigins([["acpx", "bundled"]]),
     });
 
-    expect(context.assignments).toHaveLength(0);
-    expect(context.warnings.some((w) => w.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE")).toBe(
-      true,
-    );
+    expect(context.assignments).toHaveLength(1);
   });
 
   it("skips assignments when entry.enabled is false", () => {
