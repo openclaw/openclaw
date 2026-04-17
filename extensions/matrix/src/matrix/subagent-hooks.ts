@@ -12,6 +12,7 @@ import {
   listAllBindings,
   listBindingsForAccount,
   removeBindingRecord,
+  resolveBindingKey,
 } from "./thread-bindings-shared.js";
 
 type MatrixSubagentSpawningEvent = {
@@ -31,6 +32,8 @@ type MatrixSubagentEndedEvent = {
   targetSessionKey: string;
   targetKind: string;
   accountId?: string;
+  reason?: string;
+  sendFarewell?: boolean;
 };
 
 type MatrixSubagentDeliveryTargetEvent = {
@@ -219,8 +222,24 @@ export async function handleMatrixSubagentEnded(event: MatrixSubagentEndedEvent)
   const matching = candidates.filter(
     (entry) => entry.targetSessionKey === event.targetSessionKey && entry.targetKind === "subagent",
   );
+  const removedBindingKeys = new Set<string>();
+  if (event.sendFarewell) {
+    const bindingService = getSessionBindingService();
+    const reason = normalizeOptionalString(event.reason) || "subagent-ended";
+    for (const binding of matching) {
+      const bindingId = resolveBindingKey(binding);
+      const removed = await bindingService.unbind({ bindingId, reason });
+      if (removed.some((entry) => entry.bindingId === bindingId)) {
+        removedBindingKeys.add(bindingId);
+      }
+    }
+  }
+
   const affectedAccountIds = new Set<string>();
   for (const binding of matching) {
+    if (removedBindingKeys.has(resolveBindingKey(binding))) {
+      continue;
+    }
     if (removeBindingRecord(binding)) {
       affectedAccountIds.add(binding.accountId);
     }

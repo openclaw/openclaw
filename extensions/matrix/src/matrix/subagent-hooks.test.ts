@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Hoisted stubs referenced in vi.mock factories below
 const bindMock = vi.hoisted(() => vi.fn());
+const unbindMock = vi.hoisted(() => vi.fn());
 const getManagerMock = vi.hoisted(() => vi.fn());
 const listAllBindingsMock = vi.hoisted(() => vi.fn((): any[] => []));
 const listBindingsForAccountMock = vi.hoisted(() => vi.fn((): any[] => []));
@@ -10,7 +11,7 @@ const resolveMatrixBaseConfigMock = vi.hoisted(() => vi.fn((): any => ({})));
 const findMatrixAccountConfigMock = vi.hoisted(() => vi.fn((): any => undefined));
 
 vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", () => ({
-  getSessionBindingService: () => ({ bind: bindMock }),
+  getSessionBindingService: () => ({ bind: bindMock, unbind: unbindMock }),
 }));
 
 vi.mock("./account-config.js", () => ({
@@ -23,6 +24,12 @@ vi.mock("./thread-bindings-shared.js", () => ({
   listAllBindings: listAllBindingsMock,
   listBindingsForAccount: listBindingsForAccountMock,
   removeBindingRecord: removeBindingRecordMock,
+  resolveBindingKey: (params: {
+    accountId: string;
+    conversationId: string;
+    parentConversationId?: string;
+  }) =>
+    `${params.accountId}:${params.parentConversationId?.trim() || "-"}:${params.conversationId}`,
 }));
 
 import {
@@ -280,6 +287,7 @@ describe("handleMatrixSubagentEnded", () => {
     listAllBindingsMock.mockReset();
     listBindingsForAccountMock.mockReset();
     removeBindingRecordMock.mockReset();
+    unbindMock.mockReset();
     mockManager.persist.mockReset();
   });
 
@@ -317,6 +325,49 @@ describe("handleMatrixSubagentEnded", () => {
     expect(removeBindingRecordMock).toHaveBeenCalledWith(binding);
     expect(getManagerMock).toHaveBeenCalledWith("ops");
     expect(mockManager.persist).toHaveBeenCalled();
+  });
+
+  it("sends farewell through the binding service when requested", async () => {
+    const binding = {
+      targetSessionKey: "agent:ops:subagent:child",
+      targetKind: "subagent",
+      accountId: "ops",
+      conversationId: "$thread",
+      parentConversationId: "!room:example",
+      boundAt: 0,
+      lastActivityAt: 0,
+    };
+    listBindingsForAccountMock.mockReturnValue([binding]);
+    unbindMock.mockResolvedValue([
+      {
+        bindingId: "ops:!room:example:$thread",
+        targetSessionKey: "agent:ops:subagent:child",
+        targetKind: "subagent",
+        conversation: {
+          channel: "matrix",
+          accountId: "ops",
+          conversationId: "$thread",
+          parentConversationId: "!room:example",
+        },
+        status: "active",
+        boundAt: 0,
+      },
+    ]);
+
+    await handleMatrixSubagentEnded({
+      targetSessionKey: "agent:ops:subagent:child",
+      targetKind: "subagent",
+      accountId: "ops",
+      reason: "spawn-failed",
+      sendFarewell: true,
+    });
+
+    expect(unbindMock).toHaveBeenCalledWith({
+      bindingId: "ops:!room:example:$thread",
+      reason: "spawn-failed",
+    });
+    expect(removeBindingRecordMock).not.toHaveBeenCalled();
+    expect(getManagerMock).not.toHaveBeenCalled();
   });
 
   it("skips persist when removeBindingRecord returns false (binding not found in store)", async () => {
