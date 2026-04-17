@@ -213,6 +213,7 @@ export function createComputedAccountStatusAdapter<
 ): ChannelStatusAdapter<ResolvedAccount, Probe, Audit> {
   return {
     defaultRuntime: options.defaultRuntime,
+    skipStaleSocketHealthCheck: options.skipStaleSocketHealthCheck,
     buildChannelSummary: options.buildChannelSummary,
     probeAccount: options.probeAccount,
     formatCapabilitiesProbe: options.formatCapabilitiesProbe,
@@ -255,6 +256,7 @@ export function createAsyncComputedAccountStatusAdapter<
 ): ChannelStatusAdapter<ResolvedAccount, Probe, Audit> {
   return {
     defaultRuntime: options.defaultRuntime,
+    skipStaleSocketHealthCheck: options.skipStaleSocketHealthCheck,
     buildChannelSummary: options.buildChannelSummary,
     probeAccount: options.probeAccount,
     formatCapabilitiesProbe: options.formatCapabilitiesProbe,

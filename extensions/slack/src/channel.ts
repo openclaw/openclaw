@@ -431,6 +431,17 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     }),
     status: createComputedAccountStatusAdapter<ResolvedSlackAccount, SlackProbe>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+      // Slack Socket Mode provides its own liveness deadman: the @slack/socket-mode
+      // client tracks server pings and auto-reconnects on pong timeouts (default
+      // clientPingTimeoutMS=5000, serverPingTimeoutMS=30000). Real disconnects
+      // surface through the "connected === false" branch of evaluateChannelHealth,
+      // which still restarts the channel. Opting out of the stale-socket heuristic
+      // here avoids spurious ~30-minute restart cycles on quiet bots: `lastEventAt`
+      // only advances on user-facing Slack events (messages, reactions, mentions),
+      // so an idle DM bot trips channelStaleEventThresholdMinutes (default 30) even
+      // though Socket Mode is still healthy and server pings are flowing.
+      // See #61072, #64009, #58540.
+      skipStaleSocketHealthCheck: true,
       buildChannelSummary: ({ snapshot }) =>
         buildPassiveProbedChannelStatusSummary(snapshot, {
           botTokenSource: snapshot.botTokenSource ?? "none",

@@ -295,6 +295,52 @@ describe("computed account status adapters", () => {
       ).resolves.toEqual(expectedAdapterAccountSnapshot());
     },
   );
+
+  it.each([
+    {
+      name: "sync",
+      build: () =>
+        createComputedAccountStatusAdapter<{ accountId: string }, unknown>({
+          defaultRuntime: createDefaultChannelRuntimeState("default"),
+          skipStaleSocketHealthCheck: true,
+          resolveAccountSnapshot: ({ account }) => ({
+            accountId: account.accountId,
+            configured: true,
+          }),
+        }),
+    },
+    {
+      name: "async",
+      build: () =>
+        createAsyncComputedAccountStatusAdapter<{ accountId: string }, unknown>({
+          defaultRuntime: createDefaultChannelRuntimeState("default"),
+          skipStaleSocketHealthCheck: true,
+          resolveAccountSnapshot: async ({ account }) => ({
+            accountId: account.accountId,
+            configured: true,
+          }),
+        }),
+    },
+  ])(
+    "forwards skipStaleSocketHealthCheck from options onto the $name adapter",
+    ({ build }) => {
+      // Regression: the channel-health-monitor reads this flag via
+      // `getChannelPlugin(channelId)?.status?.skipStaleSocketHealthCheck` — it must
+      // survive the adapter factory, otherwise plugin opt-outs (e.g. Slack, Telegram)
+      // are silently ignored.
+      expect(build().skipStaleSocketHealthCheck).toBe(true);
+    },
+  );
+
+  it.each([
+    { name: "sync", build: () => createComputedStatusAdapter() },
+    { name: "async", build: () => createAsyncStatusAdapter() },
+  ])(
+    "leaves skipStaleSocketHealthCheck undefined on $name adapters when not opted in",
+    ({ build }) => {
+      expect(build().skipStaleSocketHealthCheck).toBeUndefined();
+    },
+  );
 });
 
 describe("buildRuntimeAccountStatusSnapshot", () => {
