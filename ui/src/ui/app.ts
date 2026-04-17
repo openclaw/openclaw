@@ -152,9 +152,16 @@ function buildPlanDecisionUserMessage(
       return [
         `[PLAN_DECISION] decision: approved${summaryClause}`,
         "",
-        "The plan you proposed via exit_plan_mode is approved. Plan mode is now OFF and mutating tools (write, edit, exec, bash, apply_patch) are unlocked.",
+        "The plan you proposed via exit_plan_mode is approved. Plan mode is OFF and mutating tools (write, edit, exec, bash, apply_patch) are unlocked.",
         "",
-        "Execute the plan now. Begin with the first step — do NOT re-propose, do NOT call exit_plan_mode again.",
+        "Begin executing now and continue through EVERY step in the plan without stopping for status updates between steps. Use update_plan to mark each step in_progress / completed as you go — that's the user-visible progress signal, not chat-text checkpoints.",
+        "",
+        "Only stop when ONE of these is true:",
+        "- the plan is complete (all steps marked completed or cancelled)",
+        "- you hit a real blocker that genuinely requires user input to proceed",
+        "- you would take a destructive/irreversible action (rm -rf, force-push, irreversible API call, money movement) — those still require explicit user confirmation",
+        "",
+        "Do NOT pause to summarize after step 1, 2, or any individual step. Do NOT respond with a 'progress so far' message between tool calls. The user can see your tool calls live.",
       ].join("\n");
     case "edit":
       return [
@@ -164,9 +171,15 @@ function buildPlanDecisionUserMessage(
         "- you MAY make minor edits during execution if you are >95% confident in the change",
         "- if a deviation requires <95% confidence, use read-only tools / spawn a focused subagent to research and validate the new path until you reach 95% confidence",
         "- when you do deviate, call update_plan to record the new step before executing it",
-        "- continue autonomously through the plan until: (a) plan completion, (b) you hit a real blocker that needs user input, or (c) you would take a destructive/dangerous action (rm -rf, force-push, irreversible API call, money movement) — those still require explicit user confirmation",
         "",
-        "Plan mode is now OFF and mutating tools are unlocked. Execute the first step now.",
+        "Plan mode is OFF and mutating tools are unlocked. Begin executing now and continue through EVERY step without stopping for status updates between steps. Use update_plan to mark progress — that's the user-visible signal.",
+        "",
+        "Only stop when ONE of these is true:",
+        "- the plan is complete",
+        "- a real blocker requires user input",
+        "- you would take a destructive/irreversible action (rm -rf, force-push, irreversible API call, money movement)",
+        "",
+        "Do NOT pause to summarize after step 1, 2, or any individual step. Do NOT respond with a 'progress so far' message between tool calls.",
       ].join("\n");
     case "reject":
       return [
