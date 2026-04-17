@@ -35,11 +35,14 @@ export function buildCronEventPrompt(
     "A scheduled reminder has been triggered. The cron content is below.\n\n" +
     eventText +
     "\n\nFollow the instructions above exactly. If they list steps to execute, execute them with the " +
-    "available tools. If they ask you to send a user-facing message, send it. " +
+    "available tools. If they ask you to send a user-facing message, send exactly that message with no " +
+    `${HEARTBEAT_TOKEN} suffix — the user-facing message is itself the reply. Otherwise, reply ` +
     // WHY: heartbeat runner strips HEARTBEAT_OK (including with a configured responsePrefix);
     // asking for NO_REPLY here would leak "<prefix> NO_REPLY" to users since the heartbeat
-    // path does not recognize the silent-reply token.
-    `Reply ${HEARTBEAT_TOKEN} when done unless the instructions say otherwise.`
+    // path does not recognize the silent-reply token. We also must not ask the model to
+    // append HEARTBEAT_OK to user-facing text: normalizeHeartbeatReply will strip+drop the
+    // whole reply if the remainder is short enough to look like an ack (<= ackMaxChars).
+    `${HEARTBEAT_TOKEN} when done unless the instructions say otherwise.`
   );
 }
 

@@ -16,7 +16,8 @@ describe("heartbeat event prompts", () => {
         "scheduled reminder has been triggered",
         "Follow the instructions above exactly",
         "execute them with the",
-        "Reply HEARTBEAT_OK when done",
+        "no HEARTBEAT_OK suffix",
+        "reply HEARTBEAT_OK when done",
       ],
       unexpected: [
         "Handle this reminder internally",
