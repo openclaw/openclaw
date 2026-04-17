@@ -120,7 +120,7 @@ import {
   resolveTranscriptPolicy,
   shouldAllowProviderOwnedThinkingReplay,
 } from "../../transcript-policy.js";
-import { derivePromptTokens, normalizeUsage, type NormalizedUsage } from "../../usage.js";
+import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
@@ -180,6 +180,7 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
   assembleAttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -192,6 +193,7 @@ import {
 } from "./attempt.context-engine-helpers.js";
 import {
   buildAfterTurnRuntimeContext,
+  buildAfterTurnRuntimeContextFromUsage,
   mergeOrphanedTrailingUserPrompt,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
@@ -255,6 +257,7 @@ export {
 } from "./attempt.thread-helpers.js";
 export {
   buildAfterTurnRuntimeContext,
+  buildAfterTurnRuntimeContextFromUsage,
   mergeOrphanedTrailingUserPrompt,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
@@ -464,7 +467,11 @@ export async function runEmbeddedAttempt(
           config: params.config,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
-          warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+          warn: makeBootstrapWarn({
+            sessionLabel,
+            workspaceDir: effectiveWorkspace,
+            warn: (message) => log.warn(message),
+          }),
           contextMode: params.bootstrapContextMode,
           runKind: params.bootstrapContextRunKind,
         }),
@@ -2284,13 +2291,12 @@ export async function runEmbeddedAttempt(
 
         // Let the active context engine run its post-turn lifecycle.
         if (params.contextEngine) {
-          const runtimeCurrentTokenCount = derivePromptTokens(lastCallUsage);
-          const afterTurnRuntimeContext = buildAfterTurnRuntimeContext({
+          const afterTurnRuntimeContext = buildAfterTurnRuntimeContextFromUsage({
             attempt: params,
             workspaceDir: effectiveWorkspace,
             agentDir,
             tokenBudget: params.contextTokenBudget,
-            currentTokenCount: runtimeCurrentTokenCount,
+            lastCallUsage,
             promptCache,
           });
           await finalizeAttemptContextEngineTurn({
