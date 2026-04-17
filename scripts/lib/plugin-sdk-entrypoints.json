@@ -257,6 +257,7 @@
   "param-readers",
   "provider-zai-endpoint",
   "secret-input",
+  "secret-input-runtime",
   "channel-status",
   "status-helpers",
   "speech",
