@@ -1116,8 +1116,7 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (statusReactionController) {
-    void statusReactionController
-      .setDone()
+    void Promise.resolve(statusReactionController.setDone())
       .catch((err: unknown) => {
         logVerbose(`telegram: status reaction done failed: ${String(err)}`);
       })
