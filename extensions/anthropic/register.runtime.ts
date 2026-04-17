@@ -63,12 +63,19 @@ const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
 const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet-4.5"] as const;
 const ANTHROPIC_MODERN_MODEL_PREFIXES = [
   "claude-opus-4-7",
+  "claude-opus-4.7",
   "claude-sonnet-4-7",
+  "claude-sonnet-4.7",
   "claude-opus-4-6",
+  "claude-opus-4.6",
   "claude-sonnet-4-6",
+  "claude-sonnet-4.6",
   "claude-opus-4-5",
+  "claude-opus-4.5",
   "claude-sonnet-4-5",
+  "claude-sonnet-4.5",
   "claude-haiku-4-5",
+  "claude-haiku-4.5",
 ] as const;
 const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
   "Anthropic setup-token auth is supported in OpenClaw.",

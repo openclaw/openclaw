@@ -124,7 +124,7 @@ function mapThinkingLevelToEffort(level: ThinkingLevel, modelId: string): Anthro
         return "max";
       }
       // Opus 4.7+ supports native xhigh effort.
-      return modelId.includes("opus-4") ? "xhigh" : "high";
+      return /opus-4[.-]([7-9]|\d{2,})/.test(modelId) ? "xhigh" : "high";
     default:
       return "high";
   }
