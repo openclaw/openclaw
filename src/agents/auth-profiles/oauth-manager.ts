@@ -59,7 +59,13 @@ export class OAuthManagerRefreshError extends Error {
   }
 }
 
-function areOAuthCredentialsEquivalent(
+export type RuntimeExternalOAuthProfile = {
+  profileId: string;
+  credential: OAuthCredential;
+  persistence?: "runtime-only" | "persisted";
+};
+
+export function areOAuthCredentialsEquivalent(
   a: OAuthCredential | undefined,
   b: OAuthCredential,
 ): boolean {
@@ -90,7 +96,7 @@ function hasNewerStoredOAuthCredential(
   );
 }
 
-function shouldReplaceStoredOAuthCredential(
+export function shouldReplaceStoredOAuthCredential(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
 ): boolean {
@@ -103,7 +109,7 @@ function shouldReplaceStoredOAuthCredential(
   return !hasNewerStoredOAuthCredential(existing, incoming);
 }
 
-function hasUsableOAuthCredential(
+export function hasUsableOAuthCredential(
   credential: OAuthCredential | undefined,
   now = Date.now(),
 ): boolean {
@@ -116,7 +122,7 @@ function hasUsableOAuthCredential(
   return resolveTokenExpiryState(credential.expires, now) === "valid";
 }
 
-function shouldBootstrapFromExternalCliCredential(params: {
+export function shouldBootstrapFromExternalCliCredential(params: {
   existing: OAuthCredential | undefined;
   imported: OAuthCredential;
   now?: number;
@@ -126,6 +132,38 @@ function shouldBootstrapFromExternalCliCredential(params: {
     return false;
   }
   return hasUsableOAuthCredential(params.imported, now);
+}
+
+export function overlayRuntimeExternalOAuthProfiles(
+  store: AuthProfileStore,
+  profiles: Iterable<RuntimeExternalOAuthProfile>,
+): AuthProfileStore {
+  const externalProfiles = Array.from(profiles);
+  if (externalProfiles.length === 0) {
+    return store;
+  }
+  const next = structuredClone(store);
+  for (const profile of externalProfiles) {
+    next.profiles[profile.profileId] = profile.credential;
+  }
+  return next;
+}
+
+export function shouldPersistRuntimeExternalOAuthProfile(params: {
+  profileId: string;
+  credential: OAuthCredential;
+  profiles: Iterable<RuntimeExternalOAuthProfile>;
+}): boolean {
+  for (const profile of params.profiles) {
+    if (profile.profileId !== params.profileId) {
+      continue;
+    }
+    if (profile.persistence === "persisted") {
+      return true;
+    }
+    return !areOAuthCredentialsEquivalent(profile.credential, params.credential);
+  }
+  return true;
 }
 
 function hasOAuthCredentialChanged(
