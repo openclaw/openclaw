@@ -573,22 +573,47 @@ export async function assertVisibleInThread(params: {
   const minCount = Math.max(1, params.minCount ?? 1);
   const startedAt = Date.now();
   let lastMessages: APIMessage[] = [];
+  let lastNonWebhookMatches: APIMessage[] = [];
+  const byTimestamp = (a: APIMessage, b: APIMessage) => (a.timestamp < b.timestamp ? -1 : 1);
+  // Poll until we find a webhook-authored match (the canonical child reply)
+  // or the timeout expires. Prefer webhook-authored matches over bot/user
+  // matches because the harness posts the user's task message containing the
+  // marker BEFORE the child's webhook reply; timestamp-only sort would return
+  // the user echo and cause identity assertions to fail. If the timeout
+  // expires with only non-webhook matches, fall back to the earliest of those
+  // so callers that don't care about authorship (e.g. simple visibility
+  // checks without assertAuthorIdentity) still get a useful result.
   while (Date.now() - startedAt < timeoutMs) {
     lastMessages = await withDiscordRetry(() =>
       readThreadMessages(params.env, params.threadId, 50),
     );
     const matches = lastMessages.filter((msg) => msg.content?.includes(params.marker));
-    if (matches.length >= minCount) {
-      // Return the earliest matching message so callers can assert identity.
-      const ordered = matches.toSorted((a, b) => (a.timestamp < b.timestamp ? -1 : 1));
+    const webhookMatches = matches.filter((msg) => msg.webhook_id != null);
+    if (webhookMatches.length >= minCount) {
+      const ordered = webhookMatches.toSorted(byTimestamp);
       const first = ordered[0];
       if (!first) {
-        throw new Error("matches list empty after sort");
+        throw new Error("webhook matches list empty after sort");
       }
       return first;
     }
+    // Remember non-webhook matches so we can fall back on timeout without an
+    // extra REST round-trip.
+    if (matches.length >= minCount) {
+      lastNonWebhookMatches = matches;
+    }
     const jitter = 250 + Math.floor(Math.random() * 500);
     await sleep(1_000 + jitter);
+  }
+  // Timeout reached without a webhook match. If any non-webhook match was
+  // seen, return the earliest one (preserves pre-fix behavior for callers
+  // that don't assert authorship).
+  if (lastNonWebhookMatches.length >= minCount) {
+    const ordered = lastNonWebhookMatches.toSorted(byTimestamp);
+    const first = ordered[0];
+    if (first) {
+      return first;
+    }
   }
   throw new Error(
     `assertVisibleInThread: marker ${JSON.stringify(params.marker)} not seen in thread ${

@@ -49,6 +49,7 @@ import {
   assertContentScrubbed,
   assertNoForbiddenChatter,
   assertNoLeaksInThread,
+  assertVisibleInThread,
   isDiscordE2EEnabled,
   listActiveThreadsInParent,
   nudgeBoundSession,
@@ -931,6 +932,157 @@ describe("waitForMarkerInNewThread", () => {
       timeoutMs: 10_000,
     });
     expect(result.newThreadId).toBe("thread-ok");
+  });
+});
+
+describe("assertVisibleInThread", () => {
+  const env = {
+    botToken: "tok",
+    guildId: "g",
+    parentChannelId: "c",
+    accountId: "default",
+  };
+
+  it("falls back to earliest user/bot match on timeout when no webhook-authored match exists", async () => {
+    // Two user/bot-authored messages containing the marker. No webhook match
+    // will ever arrive, so the helper should wait out the short timeout and
+    // then fall back to returning the EARLIEST non-webhook match by timestamp.
+    restHandlers.get.mockImplementation(async () => [
+      {
+        id: "m-late",
+        content: "hello MARKER-x world",
+        author: { id: "u1", username: "openclaw-e2e", bot: true },
+        timestamp: "2026-04-17T00:00:10Z",
+      },
+      {
+        id: "m-early",
+        content: "hello MARKER-x earlier",
+        author: { id: "u1", username: "openclaw-e2e", bot: true },
+        timestamp: "2026-04-17T00:00:01Z",
+      },
+    ]);
+    const msg = await assertVisibleInThread({
+      threadId: "t",
+      env,
+      marker: "MARKER-x",
+      timeoutMs: 200,
+    });
+    expect(msg.id).toBe("m-early");
+  });
+
+  it("returns earliest webhook match when only webhook-authored matches exist", async () => {
+    restHandlers.get.mockImplementation(async () => [
+      {
+        id: "wh-late",
+        content: "MARKER-y later",
+        author: { id: "a", username: "⚙ claude", bot: true },
+        webhook_id: "wh-1",
+        timestamp: "2026-04-17T00:00:20Z",
+      },
+      {
+        id: "wh-early",
+        content: "MARKER-y earlier",
+        author: { id: "a", username: "⚙ claude", bot: true },
+        webhook_id: "wh-1",
+        timestamp: "2026-04-17T00:00:05Z",
+      },
+    ]);
+    const msg = await assertVisibleInThread({
+      threadId: "t",
+      env,
+      marker: "MARKER-y",
+      timeoutMs: 2_000,
+    });
+    expect(msg.id).toBe("wh-early");
+  });
+
+  it("prefers webhook-authored match over earlier user/bot-authored match (no wait)", async () => {
+    // This is the canonical harness scenario: the harness posts the user's
+    // task message containing the marker BEFORE the child's webhook reply.
+    // The webhook reply arrives later (larger timestamp). Both are already
+    // present when the helper polls, so the helper must return the webhook
+    // reply immediately (not wait for timeout).
+    restHandlers.get.mockImplementation(async () => [
+      {
+        id: "user-echo",
+        content: "your task: do thing MARKER-z",
+        author: { id: "u", username: "openclaw-e2e", bot: true },
+        // No webhook_id — bot-authored.
+        timestamp: "2026-04-17T00:00:01Z",
+      },
+      {
+        id: "child-reply",
+        content: "done MARKER-z",
+        author: { id: "a", username: "⚙ claude", bot: true },
+        webhook_id: "wh-1",
+        timestamp: "2026-04-17T00:00:30Z",
+      },
+    ]);
+    const msg = await assertVisibleInThread({
+      threadId: "t",
+      env,
+      marker: "MARKER-z",
+      timeoutMs: 10_000,
+    });
+    expect(msg.id).toBe("child-reply");
+    expect((msg as { webhook_id?: string }).webhook_id).toBe("wh-1");
+  });
+
+  it("waits out initial user-only echo and returns webhook reply once it arrives", async () => {
+    // First poll: only the user/bot echo is visible. Second poll: the webhook
+    // reply has appeared. The helper must NOT return the user echo on poll 1;
+    // it must keep polling and return the webhook reply on poll 2.
+    let callCount = 0;
+    restHandlers.get.mockImplementation(async () => {
+      callCount += 1;
+      const userEcho = {
+        id: "user-echo",
+        content: "task: MARKER-w please",
+        author: { id: "u", username: "openclaw-e2e", bot: true },
+        timestamp: "2026-04-17T00:00:01Z",
+      };
+      if (callCount === 1) {
+        return [userEcho];
+      }
+      return [
+        userEcho,
+        {
+          id: "child-reply",
+          content: "MARKER-w done",
+          author: { id: "a", username: "⚙ claude", bot: true },
+          webhook_id: "wh-7",
+          timestamp: "2026-04-17T00:00:30Z",
+        },
+      ];
+    });
+    const msg = await assertVisibleInThread({
+      threadId: "t",
+      env,
+      marker: "MARKER-w",
+      timeoutMs: 10_000,
+    });
+    expect(msg.id).toBe("child-reply");
+    expect((msg as { webhook_id?: string }).webhook_id).toBe("wh-7");
+    expect(callCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it("throws when no matches appear before timeout", async () => {
+    restHandlers.get.mockImplementation(async () => [
+      {
+        id: "m-other",
+        content: "no marker here",
+        author: { id: "u", username: "openclaw-e2e", bot: true },
+        timestamp: "2026-04-17T00:00:00Z",
+      },
+    ]);
+    await expect(
+      assertVisibleInThread({
+        threadId: "t",
+        env,
+        marker: "NEVER-SEEN",
+        timeoutMs: 200,
+      }),
+    ).rejects.toThrow(/not seen in thread/);
   });
 });
 
