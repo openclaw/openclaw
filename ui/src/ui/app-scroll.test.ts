@@ -320,6 +320,22 @@ describe("scheduleChatScroll", () => {
     expect(host.chatFollowLocked).toBe(true);
   });
 
+  it("preserves the wheel-intent lock for small upward deltas that still land within the bottom threshold", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 2000,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatLastScrollTop = 1600;
+
+    handleChatWheelIntent(host, createWheelEvent(-5, 2000, 400));
+    handleChatScroll(host, createScrollEvent(2000, 1592, 400));
+
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(true);
+  });
+
   it("re-enables follow once the user actually returns to the bottom", () => {
     const { host } = createScrollHost({
       scrollHeight: 2000,

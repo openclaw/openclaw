@@ -169,7 +169,7 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   ) {
     host.chatUserNearBottom = false;
     host.chatFollowLocked = true;
-  } else if (backAtBottom) {
+  } else if (backAtBottom && (!host.chatFollowLocked || !scrollingUp)) {
     host.chatUserNearBottom = true;
     host.chatFollowLocked = false;
   } else if (!host.chatFollowLocked && nearBottom) {
