@@ -1,3 +1,4 @@
+import { parseDaemonEnvEntries } from "../../commands/daemon-install-helpers.js";
 import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
 import {
   DEFAULT_NODE_DAEMON_RUNTIME,
@@ -44,6 +45,7 @@ type NodeDaemonInstallOptions = {
   displayName?: string;
   runtime?: string;
   force?: boolean;
+  daemonEnv?: string[];
   json?: boolean;
 };
 
@@ -150,6 +152,19 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       },
     });
 
+  // Merge any extra --daemon-env KEY=VALUE entries into the environment dict.
+  const extraEnv = parseDaemonEnvEntries(
+    Array.isArray(opts.daemonEnv) ? opts.daemonEnv : undefined,
+    (msg) => {
+      if (json) {
+        warnings.push(msg);
+      } else {
+        defaultRuntime.log(msg);
+      }
+    },
+  );
+  const mergedEnvironment = { ...environment, ...extraEnv };
+
   await installDaemonServiceAndEmit({
     serviceNoun: "Node",
     service,
@@ -162,7 +177,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         stdout,
         programArguments,
         workingDirectory,
-        environment,
+        environment: mergedEnvironment,
         description,
       });
     },
