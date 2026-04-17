@@ -285,10 +285,14 @@ export function buildGatewayCronService(params: {
         agentId,
         requestedSessionKey: opts?.sessionKey,
       });
+      // Cron awareness events contain model-generated output that must never
+      // be injected as trusted content when promoted into the main session.
+      // Force trusted: false at the gateway boundary regardless of what the
+      // caller passes — matching the delivery-dispatch fix in f61896b.
       enqueueSystemEvent(text, {
         sessionKey,
         contextKey: opts?.contextKey,
-        trusted: opts?.trusted,
+        trusted: opts?.trusted === true ? false : opts?.trusted,
       });
     },
     requestHeartbeatNow: (opts) => {
