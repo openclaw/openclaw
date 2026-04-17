@@ -2,7 +2,11 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  resolveMemoryDreamingConfig,
+  resolveMemoryLightDreamingConfig,
+  resolveMemoryRemDreamingConfig,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
@@ -211,12 +215,31 @@ async function listWorkspaceDailyFiles(workspaceDir: string, limit: number): Pro
 
 function formatDreamingSummary(cfg: OpenClawConfig): string {
   const pluginConfig = resolveMemoryPluginConfig(cfg);
-  const dreaming = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
-  if (!dreaming.enabled) {
+  const dreaming = resolveMemoryDreamingConfig({ pluginConfig, cfg });
+  const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg });
+  const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg });
+  const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+  if (!light.enabled && !rem.enabled && !deep.enabled) {
     return "off";
   }
   const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
-  return `${dreaming.cron}${timezone} · limit=${dreaming.limit} · minScore=${dreaming.minScore} · minRecallCount=${dreaming.minRecallCount} · minUniqueQueries=${dreaming.minUniqueQueries} · recencyHalfLifeDays=${dreaming.recencyHalfLifeDays} · maxAgeDays=${dreaming.maxAgeDays ?? "none"}`;
+  const details = [`cron=${dreaming.frequency}${timezone}`];
+  if (deep.enabled) {
+    details.push(
+      `limit=${deep.limit}`,
+      `minScore=${deep.minScore}`,
+      `minRecallCount=${deep.minRecallCount}`,
+      `minUniqueQueries=${deep.minUniqueQueries}`,
+      `recencyHalfLifeDays=${deep.recencyHalfLifeDays}`,
+      `maxAgeDays=${deep.maxAgeDays ?? "none"}`,
+    );
+  }
+  return [
+    `light=${light.enabled ? "on" : "off"}`,
+    `REM=${rem.enabled ? "on" : "off"}`,
+    `deep=${deep.enabled ? "on" : "off"}`,
+    ...details,
+  ].join(" · ");
 }
 
 function formatAuditCounts(audit: ShortTermAuditSummary): string {

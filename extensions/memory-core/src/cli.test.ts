@@ -384,6 +384,50 @@ describe("memory cli", () => {
     });
   });
 
+  it("reports light-only dreaming status during status", async () => {
+    const close = vi.fn(async () => {});
+    loadConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                frequency: "0 3 * * *",
+                timezone: "America/Sao_Paulo",
+                phases: {
+                  light: {
+                    enabled: true,
+                    lookbackDays: 7,
+                    limit: 20,
+                  },
+                  deep: {
+                    enabled: false,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus({ files: 1, chunks: 1 }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: light=on"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("REM=on"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("deep=off"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("cron=0 3 * * *"));
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Dreaming: off"));
+    expect(close).toHaveBeenCalled();
+  });
+
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
