@@ -7,37 +7,33 @@ const mocks = vi.hoisted(() => ({
   withRemoteHttpResponse: vi.fn(
     async (params: { url: string; onResponse: (res: Response) => Promise<unknown> }) => {
       if (params.url.endsWith("/files/file_out/content")) {
-        return await params.onResponse(
-          new Response(
-            [
-              JSON.stringify({
-                custom_id: "0",
-                response: {
-                  status_code: 200,
-                  body: { data: [{ embedding: [1, 0, 0], index: 0 }] },
-                },
-              }),
-              JSON.stringify({
-                custom_id: "1",
-                response: {
-                  status_code: 200,
-                  body: { data: [{ embedding: [2, 0, 0], index: 0 }] },
-                },
-              }),
-            ].join("\n"),
-            { status: 200, headers: { "Content-Type": "application/jsonl" } },
-          ),
-        );
+        const content = [
+          JSON.stringify({
+            custom_id: "0",
+            response: {
+              status_code: 200,
+              body: { data: [{ embedding: [1, 0, 0], index: 0 }] },
+            },
+          }),
+          JSON.stringify({
+            custom_id: "1",
+            response: {
+              status_code: 200,
+              body: { data: [{ embedding: [2, 0, 0], index: 0 }] },
+            },
+          }),
+        ].join("\n");
+        return await params.onResponse({
+          ok: true,
+          status: 200,
+          text: async () => content,
+        } as Response);
       }
-      return await params.onResponse(
-        new Response(
-          JSON.stringify({ id: "batch_1", status: "completed", output_file_id: "file_out" }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-      );
+      return await params.onResponse({
+        ok: true,
+        status: 200,
+        json: async () => ({ id: "batch_1", status: "completed", output_file_id: "file_out" }),
+      } as Response);
     },
   ),
 }));
