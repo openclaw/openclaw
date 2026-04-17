@@ -82,12 +82,15 @@ function isRetryableStartupUnavailable(err: unknown, method: string): err is Gat
   if (err.gatewayCode !== "UNAVAILABLE") {
     return false;
   }
-  const message = err.message;
-  // Some gateway builds omit retryable/retryAfterMs during early startup.
-  // This message is a known transient and safe to retry.
-  const messageImpliesRetryableStartup = message.includes("during gateway startup");
-
-  if (!err.retryable && !messageImpliesRetryableStartup) {
+  if (err.retryable === true) {
+    const details = err.details;
+    if (!details || typeof details !== "object") {
+      return true;
+    }
+    const detailMethod = (details as { method?: unknown }).method;
+    return typeof detailMethod !== "string" || detailMethod === method;
+  }
+  if (err.retryable !== undefined || !err.message.includes("during gateway startup")) {
     return false;
   }
   const details = err.details;

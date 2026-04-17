@@ -765,6 +765,29 @@ describe("loadChatHistory", () => {
     }
   });
 
+  it("does not retry startup unavailability when retryable is explicitly false", async () => {
+    const request = vi.fn().mockRejectedValue(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "chat.history unavailable during gateway startup",
+        details: { method: "chat.history" },
+        retryable: false,
+      }),
+    );
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatThinkingLevel).toBeNull();
+    expect(state.chatLoading).toBe(false);
+    expect(state.lastError).toContain("chat.history unavailable during gateway startup");
+  });
+
   it("filters assistant NO_REPLY messages and keeps user NO_REPLY messages", async () => {
     const request = vi.fn().mockResolvedValue({
       messages: [

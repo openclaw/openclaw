@@ -47,7 +47,7 @@ export type GatewayErrorInfo = {
 export class GatewayRequestError extends Error {
   readonly gatewayCode: string;
   readonly details?: unknown;
-  readonly retryable: boolean;
+  readonly retryable?: boolean;
   readonly retryAfterMs?: number;
 
   constructor(error: GatewayErrorInfo) {
@@ -55,7 +55,7 @@ export class GatewayRequestError extends Error {
     this.name = "GatewayRequestError";
     this.gatewayCode = error.code;
     this.details = error.details;
-    this.retryable = error.retryable === true;
+    this.retryable = error.retryable;
     this.retryAfterMs = error.retryAfterMs;
   }
 }
