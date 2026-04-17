@@ -705,22 +705,23 @@ export async function onTimer(state: CronServiceState) {
       const dueCheckNow = state.deps.nowMs();
 
       // Detect and clear zombie running markers.  If a job has been in
-      // "running" state for longer than its configured timeout (or a
-      // hard cap of 2× MAX_TIMER_DELAY_MS), the previous execution is
-      // presumed dead and the marker is cleared so the job can run again.
-      // See: https://github.com/openclaw/openclaw/issues/59056
-      const zombieHardCapMs = MAX_TIMER_DELAY_MS * 2;
+      // "running" state for longer than twice its resolved timeout, the
+      // previous execution is presumed dead and the marker is cleared so
+      // the job can run again.
+      // Jobs with no configured timeout (timeoutSeconds <= 0) are exempt —
+      // they are intentionally unbounded and should never be treated as
+      // zombies.  See: https://github.com/openclaw/openclaw/issues/59056
       let clearedZombies = false;
       for (const job of state.store?.jobs ?? []) {
         if (typeof job.state.runningAtMs !== "number") {
           continue;
         }
-        const elapsed = dueCheckNow - job.state.runningAtMs;
         const jobTimeoutMs = resolveCronJobTimeoutMs(job);
-        const threshold =
-          typeof jobTimeoutMs === "number" && jobTimeoutMs > 0
-            ? jobTimeoutMs * 2
-            : zombieHardCapMs;
+        if (typeof jobTimeoutMs !== "number" || jobTimeoutMs <= 0) {
+          continue; // no timeout configured → never treat as zombie
+        }
+        const elapsed = dueCheckNow - job.state.runningAtMs;
+        const threshold = jobTimeoutMs * 2;
         if (elapsed > threshold) {
           state.deps.log.warn(
             { jobId: job.id, jobName: job.name, elapsed, threshold },
