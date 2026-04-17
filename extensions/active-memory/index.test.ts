@@ -668,6 +668,61 @@ describe("active-memory plugin", () => {
     expect(result).toBeUndefined();
   });
 
+  it("skips direct-chat sessions whose conversation id is not in allowedChatIds", async () => {
+    // Documents the cross-type narrowing behaviour: allowedChatIds, when
+    // non-empty, filters every allowed chat type at once, including direct
+    // chats. An operator who wants 'all directs + only specific groups' must
+    // either drop direct from allowedChatTypes or include the direct session
+    // ids (e.g. the user's open_id) in allowedChatIds explicitly.
+    api.pluginConfig = {
+      agents: ["main"],
+      allowedChatTypes: ["direct", "group"],
+      allowedChatIds: ["oc_allowed_group"],
+    };
+    await plugin.register(api as unknown as OpenClawPluginApi);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "hi", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:feishu:direct:ou_some_direct_user",
+        messageProvider: "feishu",
+        channelId: "feishu",
+      },
+    );
+
+    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    expect(result).toBeUndefined();
+  });
+
+  it("runs for direct-chat sessions whose conversation id is explicitly in allowedChatIds", async () => {
+    // Companion to the previous test: the 'all directs + only specific groups'
+    // pattern is still available by listing the direct session ids themselves
+    // in allowedChatIds. This makes the cross-type narrowing behaviour usable
+    // rather than a hard wall.
+    api.pluginConfig = {
+      agents: ["main"],
+      allowedChatTypes: ["direct", "group"],
+      allowedChatIds: ["oc_allowed_group", "ou_allowed_direct_user"],
+    };
+    await plugin.register(api as unknown as OpenClawPluginApi);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "hi", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:feishu:direct:ou_allowed_direct_user",
+        messageProvider: "feishu",
+        channelId: "feishu",
+      },
+    );
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+    expect(result).toBeDefined();
+  });
+
   it("injects system context on a successful recall hit", async () => {
     const result = await hooks.before_prompt_build(
       {
