@@ -626,12 +626,18 @@ export async function runAgentTurnWithFallback(params: {
   const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
   const shouldNotifyUserAboutCompaction =
     runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
-  const sendCompactionNotice = async (phase: "start" | "end") => {
+  const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
     if (!params.opts?.onBlockReply) {
       return;
     }
+    const text =
+      phase === "start"
+        ? "🧹 Compacting context..."
+        : phase === "end"
+          ? "🧹 Compaction complete"
+          : "🧹 Compaction incomplete";
     const noticePayload = params.applyReplyToMode({
-      text: phase === "start" ? "🧹 Compacting context..." : "🧹 Compaction complete",
+      text,
       replyToId: currentMessageId,
       replyToCurrent: true,
       isCompactionNotice: true,
@@ -1172,13 +1178,17 @@ export async function runAgentTurnWithFallback(params: {
                         await sendCompactionNotice("start");
                       }
                     }
-                    const completed = evt.data?.completed === true;
-                    if (phase === "end" && completed) {
-                      attemptCompactionCount += 1;
-                      if (params.opts?.onCompactionEnd) {
-                        await params.opts.onCompactionEnd();
+                    if (phase === "end") {
+                      const completed = evt.data?.completed === true;
+                      if (completed) {
+                        attemptCompactionCount += 1;
+                        if (params.opts?.onCompactionEnd) {
+                          await params.opts.onCompactionEnd();
+                        } else if (shouldNotifyUserAboutCompaction) {
+                          await sendCompactionNotice("end");
+                        }
                       } else if (shouldNotifyUserAboutCompaction) {
-                        await sendCompactionNotice("end");
+                        await sendCompactionNotice("incomplete");
                       }
                     }
                   }
