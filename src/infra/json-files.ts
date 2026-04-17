@@ -116,17 +116,36 @@ export async function writeTextAtomic(
 
 export function createAsyncLock() {
   let lock: Promise<void> = Promise.resolve();
-  return async function withLock<T>(fn: () => Promise<T>): Promise<T> {
+  return async function withLock<T>(fn: () => Promise<T>, options?: { timeoutMs?: number }): Promise<T> {
     const prev = lock;
     let release: (() => void) | undefined;
     lock = new Promise<void>((resolve) => {
       release = resolve;
     });
-    await prev;
+    const timeoutMs = options?.timeoutMs ?? 30_000;
+    let timedOut = false;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        timedOut = true;
+        reject(new AsyncLockTimeoutError(timeoutMs));
+      }, timeoutMs);
+    });
+    await Promise.race([prev, timeoutPromise]);
+    if (timedOut) {
+      release?.();
+      throw new AsyncLockTimeoutError(timeoutMs);
+    }
     try {
       return await fn();
     } finally {
       release?.();
     }
   };
+}
+
+export class AsyncLockTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Async lock timed out after ${timeoutMs}ms`);
+    this.name = "AsyncLockTimeoutError";
+  }
 }

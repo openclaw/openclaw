@@ -23,12 +23,16 @@ export async function startGatewayDiscovery(params: {
 }) {
   let bonjourStop: (() => Promise<void>) | null = null;
   const mdnsMode = params.mdnsMode ?? "minimal";
-  // Local discovery can be disabled via config (mdnsMode: off) or env var.
-  const localDiscoveryEnabled =
+  // mDNS can be disabled via config (mdnsMode: off) or env var.
+  // On Windows, bonjour is disabled by default due to stability issues with @homebridge/ciao
+  // causing memory leaks from repeated watchdog restarts when services fail to announce.
+  const bonjourEnabled =
     mdnsMode !== "off" &&
     !isTruthyEnvValue(process.env.OPENCLAW_DISABLE_BONJOUR) &&
     process.env.NODE_ENV !== "test" &&
-    !process.env.VITEST;
+    !process.env.VITEST &&
+    process.platform !== "win32";
+  const localDiscoveryEnabled = bonjourEnabled;
   const mdnsMinimal = mdnsMode !== "full";
   const tailscaleEnabled = params.tailscaleMode !== "off";
   const needsTailnetDns = localDiscoveryEnabled || params.wideAreaDiscoveryEnabled;

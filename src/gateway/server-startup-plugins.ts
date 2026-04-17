@@ -38,23 +38,19 @@ export async function prepareGatewayPluginBootstrap(params: {
   const shouldRunStartupMaintenance =
     !params.minimalTestGateway || startupMaintenanceConfig.channels !== undefined;
   if (shouldRunStartupMaintenance) {
-    const startupTasks = [
+    // Run channel maintenance and session migration in parallel since they are independent.
+    await Promise.all([
       runChannelPluginStartupMaintenance({
         cfg: startupMaintenanceConfig,
         env: process.env,
         log: params.log,
       }),
-    ];
-    if (!params.minimalTestGateway) {
-      startupTasks.push(
-        runStartupSessionMigration({
-          cfg: params.cfgAtStart,
-          env: process.env,
-          log: params.log,
-        }),
-      );
-    }
-    await Promise.all(startupTasks);
+      runStartupSessionMigration({
+        cfg: params.cfgAtStart,
+        env: process.env,
+        log: params.log,
+      }),
+    ]);
   }
 
   initSubagentRegistry();
