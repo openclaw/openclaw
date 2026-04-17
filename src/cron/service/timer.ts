@@ -89,6 +89,9 @@ export async function executeJobCoreWithTimeout(
   const jobPromise = executeJobCore(state, job, runAbortController.signal);
 
   return await new Promise<Awaited<ReturnType<typeof executeJobCore>>>((resolve, reject) => {
+    // Settle immediately when the job finishes before the timeout fires.
+    jobPromise.then(resolve).catch(reject);
+
     let graceExpired = false;
     timeoutId = setTimeout(() => {
       // The timeout fired, but the job may have completed cleanly just before
