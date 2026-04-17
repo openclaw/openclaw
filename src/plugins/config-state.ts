@@ -264,7 +264,7 @@ export function resolvePluginActivationState(params: {
     rootConfig: activationSource.rootConfig,
   });
 
-  if (!params.config.enabled) {
+  if (!params.config.enabled && !explicitSelection.explicitlyEnabled) {
     return toPluginActivationState({
       enabled: false,
       activated: false,
