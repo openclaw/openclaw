@@ -13,6 +13,7 @@ import {
   type CronDeliveryPlan,
   resolveCronDeliveryPlan,
 } from "./delivery-plan.js";
+import { cronJobDefaultsToOperatorOnly } from "./isolated-agent/delivery-dispatch.js";
 import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
 import type { CronMessageChannel } from "./types.js";
 
@@ -63,6 +64,11 @@ export async function sendFailureNotificationAnnounce(
   }, FAILURE_NOTIFICATION_TIMEOUT_MS);
 
   try {
+    // Phase 4 Discord Surface Overhaul: mirror the direct-delivery path —
+    // failure notifications for watchdog / completion-reporter jobs reroute
+    // to the operator channel (or suppress when unset) instead of posting to
+    // user-facing surfaces.
+    const operatorOnly = cronJobDefaultsToOperatorOnly(jobId);
     await deliverOutboundPayloads({
       cfg,
       channel: resolvedTarget.channel,
@@ -75,6 +81,8 @@ export async function sendFailureNotificationAnnounce(
       bestEffort: false,
       deps: createOutboundSendDeps(deps),
       abortSignal: abortController.signal,
+      messageClass: operatorOnly ? "progress" : undefined,
+      notifyPolicy: operatorOnly ? "operator_only" : undefined,
     });
   } catch (err) {
     cronDeliveryLogger.warn(

@@ -379,6 +379,23 @@ describe("scheduleRestartSentinelWake", () => {
     );
   });
 
+  // Phase 4 Discord Surface Overhaul: restart sentinel notices are boot-class
+  // operator signals. `deliverRestartSentinelNotice` must tag the outbound
+  // send with `messageClass: "boot"` so the delivery policy gate at
+  // `deliverOutboundPayloads` can suppress (no operator channel) or reroute
+  // (operator channel configured) the notice. Without the tag, the notice
+  // would post into user-facing Discord threads on every gateway restart.
+  it("tags the outbound restart notice with messageClass: 'boot'", async () => {
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageClass: "boot",
+        skipQueue: true,
+      }),
+    );
+  });
+
   it("merges base session routing into partial thread metadata", async () => {
     mocks.consumeRestartSentinel.mockResolvedValue({
       payload: {

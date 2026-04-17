@@ -98,6 +98,11 @@ async function deliverRestartSentinelNotice(params: {
         deps: params.deps,
         bestEffort: false,
         skipQueue: true,
+        // Phase 4 Discord Surface Overhaul: restart sentinel notices are
+        // boot-class operator signals. Delivery policy reroutes them to the
+        // configured operator channel (or suppresses when unset) instead of
+        // posting into user-facing threads.
+        messageClass: "boot",
       });
       if (results.length > 0) {
         if (queueId) {

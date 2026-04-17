@@ -61,7 +61,7 @@ const USER_VISIBLE_ACP_STREAMS = new Set<string>(["assistant", "lifecycle"]);
 
 // Boot-session key prefix. Any sessionKey that starts with these prefixes is
 // treated as a boot/resume operator signal, not a user-facing message.
-const BOOT_SESSION_KEY_PREFIXES = ["boot-", "boot:"] as const;
+export const BOOT_SESSION_KEY_PREFIXES = ["boot-", "boot:"] as const;
 
 // Patterns that indicate the message represents an agent asking the user for
 // input ("blocked" in the Blocked-Child Protocol sense). Detection is
@@ -89,7 +89,7 @@ function detectBlocked(text: string | undefined): boolean {
   return false;
 }
 
-function isBootSessionKey(sessionKey: string): boolean {
+export function isBootSessionKey(sessionKey: string): boolean {
   for (const prefix of BOOT_SESSION_KEY_PREFIXES) {
     if (sessionKey.startsWith(prefix)) {
       return true;

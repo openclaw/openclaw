@@ -26,12 +26,15 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { TaskNotifyPolicy } from "../../tasks/task-registry.types.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
+import type { MessageClass } from "./message-class.js";
 import type { DeliveryMirror } from "./mirror.js";
+import { resolveOperatorChannel } from "./operator-channel.js";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
@@ -41,6 +44,7 @@ import {
 } from "./payloads.js";
 import { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
+import { planDelivery } from "./surface-policy.js";
 import type { OutboundChannel } from "./targets.js";
 
 export type { OutboundDeliveryResult } from "./deliver-types.js";
@@ -289,6 +293,31 @@ type DeliverOutboundPayloadsCoreParams = {
   mirror?: DeliveryMirror;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  /**
+   * Classification of this delivery (Phase 4 Discord Surface Overhaul).
+   *
+   * When set, `deliverOutboundPayloads` applies `planDelivery` BEFORE
+   * enqueuing for transport and can:
+   * - suppress the send entirely (e.g. boot/resume with no operator channel
+   *   configured, or `notifyPolicy === "silent"`),
+   * - reroute to the configured operator channel (e.g. boot/resume with an
+   *   operator channel set, or `notifyPolicy === "operator_only"`).
+   *
+   * Absent = legacy behavior: no pre-send policy evaluation. Existing call
+   * sites that already classified upstream (ACP parent-stream fast path) do
+   * not need to change.
+   */
+  messageClass?: MessageClass;
+  /**
+   * Task notify policy for this delivery (Phase 4 Discord Surface Overhaul).
+   *
+   * Required companion to `messageClass` for cron-originated traffic where
+   * `"operator_only"` means "route internal ops chatter (watchdog,
+   * completion reporter) to the operator channel, or suppress when unset".
+   * `"silent"` means "never emit". Only honored when `messageClass` is also
+   * provided.
+   */
+  notifyPolicy?: TaskNotifyPolicy;
 };
 
 function collectPayloadMediaSources(plan: readonly OutboundPayloadPlan[]): string[] {
@@ -487,28 +516,105 @@ async function applyMessageSendingHook(params: {
   }
 }
 
+/**
+ * Evaluate the Phase 4 delivery policy for a tagged outbound send.
+ *
+ * Returns `"suppress"` when the policy says the send must be dropped entirely
+ * (no queue write, no adapter call, zero user-visible trace). Returns a new
+ * params object when the policy says "reroute to operator channel" (channel,
+ * to, accountId, and threadId are rewritten). Returns the original params
+ * unchanged when no `messageClass` was provided or the policy says "deliver".
+ *
+ * Callers MUST use the returned value as the single source of truth for
+ * subsequent steps (queue write, adapter handler creation) to avoid splitting
+ * routing between pre-policy and post-policy values.
+ */
+function applyMessageClassGate(
+  params: DeliverOutboundPayloadsParams,
+): DeliverOutboundPayloadsParams | "suppress" {
+  if (!params.messageClass) {
+    return params;
+  }
+  const operatorChannel = resolveOperatorChannel(params.cfg);
+  const decision = planDelivery({
+    messageClass: params.messageClass,
+    surface: {
+      channel: params.channel,
+      to: params.to,
+      accountId: params.accountId,
+      threadId: params.threadId ?? undefined,
+    },
+    operatorChannel,
+    notifyPolicy: params.notifyPolicy,
+  });
+  if (decision.outcome === "deliver") {
+    return params;
+  }
+  if (decision.outcome === "suppress") {
+    log.debug("deliverOutboundPayloads suppressed by delivery policy", {
+      channel: params.channel,
+      to: params.to,
+      messageClass: params.messageClass,
+      reason: decision.reason,
+    });
+    return "suppress";
+  }
+  // reroute: rewrite routing to the operator channel target. threadId on
+  // ResolvedSurfaceTarget is string|number, but DeliverOutboundPayloadsParams
+  // allows null as well — pass through as-is.
+  log.info("deliverOutboundPayloads rerouted to operator channel", {
+    fromChannel: params.channel,
+    fromTo: params.to,
+    toChannel: decision.target.channel,
+    toTo: decision.target.to,
+    messageClass: params.messageClass,
+    reason: decision.reason,
+  });
+  // Reroute casts through Exclude<OutboundChannel, "none"> because the plan
+  // step is a pure string but we trust the caller's config to configure the
+  // operator channel against a valid channel plugin id.
+  const rerouted: DeliverOutboundPayloadsParams = {
+    ...params,
+    channel: decision.target.channel as Exclude<OutboundChannel, "none">,
+    to: decision.target.to,
+    accountId: decision.target.accountId,
+    threadId: decision.target.threadId ?? undefined,
+  };
+  return rerouted;
+}
+
 export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
-  const { channel, to, payloads } = params;
+  // Phase 4 Discord Surface Overhaul: if the caller tagged this delivery with
+  // a `messageClass`, consult `planDelivery` BEFORE touching the write-ahead
+  // queue or transport layer. This short-circuits boot/resume/operator-only
+  // traffic (suppress or reroute) at the single outbound chokepoint, so every
+  // path that flows through here inherits the policy.
+  const gatedParams = applyMessageClassGate(params);
+  if (gatedParams === "suppress") {
+    return [];
+  }
+
+  const { channel, to, payloads } = gatedParams;
 
   // Write-ahead delivery queue: persist before sending, remove after success.
-  const queueId = params.skipQueue
+  const queueId = gatedParams.skipQueue
     ? null
     : await enqueueDelivery({
         channel,
         to,
-        accountId: params.accountId,
+        accountId: gatedParams.accountId,
         payloads,
-        threadId: params.threadId,
-        replyToId: params.replyToId,
-        bestEffort: params.bestEffort,
-        gifPlayback: params.gifPlayback,
-        forceDocument: params.forceDocument,
-        silent: params.silent,
-        mirror: params.mirror,
-        session: params.session,
-        gatewayClientScopes: params.gatewayClientScopes,
+        threadId: gatedParams.threadId,
+        replyToId: gatedParams.replyToId,
+        bestEffort: gatedParams.bestEffort,
+        gifPlayback: gatedParams.gifPlayback,
+        forceDocument: gatedParams.forceDocument,
+        silent: gatedParams.silent,
+        mirror: gatedParams.mirror,
+        session: gatedParams.session,
+        gatewayClientScopes: gatedParams.gatewayClientScopes,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
   // Wrap onError to detect partial failures under bestEffort mode.
@@ -516,15 +622,15 @@ export async function deliverOutboundPayloads(
   // without throwing — so the outer try/catch never fires. We track whether any
   // payload failed so we can call failDelivery instead of ackDelivery.
   let hadPartialFailure = false;
-  const wrappedParams = params.onError
+  const wrappedParams = gatedParams.onError
     ? {
-        ...params,
+        ...gatedParams,
         onError: (err: unknown, payload: NormalizedOutboundPayload) => {
           hadPartialFailure = true;
-          params.onError!(err, payload);
+          gatedParams.onError!(err, payload);
         },
       }
-    : params;
+    : gatedParams;
 
   try {
     const results = await deliverOutboundPayloadsCore(wrappedParams);

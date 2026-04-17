@@ -1580,6 +1580,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow Mattermost to write config in response to channel events/commands (default: true).",
   "channels.modelByChannel":
     "Map provider -> channel id -> model override (values are provider/model or aliases).",
+  "channels.operator":
+    "Operator-visibility channel target for boot/resume and cron operator-only signals (Phase 4 Discord Surface Overhaul). When set, those signals reroute here instead of posting to user-facing surfaces; when unset they are suppressed entirely.",
+  "channels.operator.channel":
+    "Channel plugin id (e.g. `discord`, `telegram`) that owns the operator-visibility surface.",
+  "channels.operator.to":
+    "Target address on the operator channel (channel id / chat id / conversation id).",
+  "channels.operator.accountId":
+    "Optional account id on the operator channel for multi-account setups (e.g. multiple Discord bots).",
+  "channels.operator.threadId":
+    "Optional thread / topic id for operator-channel platforms that support threading.",
   "messages.suppressToolErrors":
     "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",

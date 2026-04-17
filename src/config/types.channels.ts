@@ -26,6 +26,28 @@ export type ChannelDefaultsConfig = {
 
 export type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
 
+/**
+ * Operator-visibility channel target for boot/resume/cron operator-only signals.
+ *
+ * When configured, boot/resume-class messages and `notifyPolicy: "operator_only"`
+ * cron emissions are rerouted here instead of being suppressed. When unset,
+ * those messages are suppressed entirely (never surfaced on user channels).
+ *
+ * Shape matches `ResolvedSurfaceTarget` at
+ * `src/infra/outbound/surface-policy.ts` so callers can feed this value
+ * directly into `planDelivery`.
+ */
+export type ChannelOperatorTarget = {
+  /** Channel plugin id (e.g. "discord", "telegram"). */
+  channel: string;
+  /** Target address resolved for that channel (e.g. channel id, chat id). */
+  to: string;
+  /** Optional account id for multi-account setups. */
+  accountId?: string;
+  /** Optional thread/topic id for channels that support threading. */
+  threadId?: string | number;
+};
+
 export type ExtensionNestedPolicyConfig = {
   policy?: string;
   allowFrom?: Array<string | number> | ReadonlyArray<string | number>;
@@ -70,6 +92,14 @@ export interface ChannelsConfig {
   defaults?: ChannelDefaultsConfig;
   /** Map provider -> channel id -> model override. */
   modelByChannel?: ChannelModelByChannelConfig;
+  /**
+   * Operator-visibility channel target for boot/resume/cron operator-only signals.
+   *
+   * When configured, boot/resume-class messages and cron jobs with
+   * `notifyPolicy: "operator_only"` are rerouted here instead of posting to
+   * user-facing surfaces. When unset, those signals are suppressed entirely.
+   */
+  operator?: ChannelOperatorTarget;
   /**
    * Channel sections are plugin-owned and keyed by arbitrary channel ids.
    * Keep the lookup permissive so augmented channel configs remain ergonomic at call sites.

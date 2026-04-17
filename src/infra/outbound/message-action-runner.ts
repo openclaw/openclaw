@@ -58,6 +58,7 @@ import {
   prepareOutboundMirrorRoute,
   resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
+import { isBootSessionKey, type MessageClass } from "./message-class.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import {
   applyCrossContextDecoration,
@@ -583,6 +584,13 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   });
   const mirrorMediaUrls =
     mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;
+  // Phase 4 Discord Surface Overhaul: auto-tag sends originating from a
+  // boot-session key (e.g. `boot-main-...`) as `messageClass: "boot"`. That
+  // makes the delivery policy reroute them to the operator channel or
+  // suppress them entirely instead of posting "Back online, resuming..."
+  // style chatter into user-facing Discord threads.
+  const inferredMessageClass: MessageClass | undefined =
+    input.sessionKey && isBootSessionKey(input.sessionKey) ? "boot" : undefined;
   throwIfAborted(abortSignal);
   const send = await executeSendAction({
     ctx: {
@@ -615,6 +623,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
           : undefined,
       abortSignal,
       silent: silent ?? undefined,
+      messageClass: inferredMessageClass,
     },
     to,
     message,

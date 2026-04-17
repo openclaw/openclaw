@@ -14,6 +14,7 @@ import {
   type OutboundDeliveryResult,
   type OutboundSendDeps,
 } from "./deliver.js";
+import type { MessageClass } from "./message-class.js";
 import type { OutboundMirror } from "./mirror.js";
 import {
   createOutboundPayloadPlan,
@@ -81,6 +82,13 @@ type MessageSendParams = {
   mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
+  /**
+   * Classification of this send for Phase 4 Discord Surface Overhaul
+   * delivery-policy gating. When set, `deliverOutboundPayloads` applies
+   * `planDelivery` BEFORE transport (may suppress or reroute to the
+   * operator channel). Omit for ordinary user-facing sends.
+   */
+  messageClass?: MessageClass;
 };
 
 export type MessageSendResult = {
@@ -299,6 +307,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       bestEffort: params.bestEffort,
       abortSignal: params.abortSignal,
       silent: params.silent,
+      messageClass: params.messageClass,
       mirror: params.mirror
         ? {
             ...params.mirror,

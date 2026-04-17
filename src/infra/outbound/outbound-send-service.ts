@@ -11,6 +11,7 @@ import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capabili
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundSendDeps } from "./deliver.js";
+import type { MessageClass } from "./message-class.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
@@ -49,6 +50,13 @@ export type OutboundSendContext = {
   mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
+  /**
+   * Phase 4 Discord Surface Overhaul: optional classification tag for the
+   * underlying send. When set, propagates to `sendMessage` →
+   * `deliverOutboundPayloads` where the delivery policy decides
+   * deliver/suppress/reroute.
+   */
+  messageClass?: MessageClass;
 };
 
 type PluginHandledResult = {
@@ -192,6 +200,7 @@ export async function executeSendAction(params: {
     mirror: params.ctx.mirror,
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,
+    messageClass: params.ctx.messageClass,
   });
 
   return {
