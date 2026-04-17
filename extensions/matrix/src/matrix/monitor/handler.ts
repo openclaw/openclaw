@@ -169,6 +169,14 @@ function resolveMatrixMentionPrecheckText(params: {
   return "";
 }
 
+function hasBundledMatrixReplacementRelation(event: MatrixRawEvent) {
+  const relations = event.unsigned?.["m.relations"];
+  if (!relations || typeof relations !== "object") {
+    return false;
+  }
+  return relations[RelationType.Replace] !== undefined;
+}
+
 function resolveMatrixInboundBodyText(params: {
   rawBody: string;
   filename?: string;
@@ -500,6 +508,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         if (relates && "rel_type" in relates && relates.rel_type === RelationType.Replace) {
           return undefined;
         }
+        if (hasBundledMatrixReplacementRelation(event)) {
+          return undefined;
+        }
         if (eventId && inboundDeduper) {
           claimedInboundEvent = inboundDeduper.claimEvent({ roomId, eventId });
           if (!claimedInboundEvent) {
@@ -586,7 +597,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           senderNamePromise ??= getMemberDisplayName(roomId, senderId).catch(() => senderId);
           return await senderNamePromise;
         };
-        const storeAllowFrom = await readStoreAllowFrom();
+        const storeAllowFrom = isDirectMessage ? await readStoreAllowFrom() : [];
         const roomUsers = roomConfig?.users ?? [];
         const accessState = resolveMatrixMonitorAccessState({
           allowFrom,

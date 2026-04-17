@@ -32,6 +32,7 @@ import {
 
 const MATRIX_HELPER_API = bundledDistPluginFile("matrix", "helper-api.js");
 const QA_CHANNEL_RUNTIME_API = bundledDistPluginFile("qa-channel", "runtime-api.js");
+const QA_LAB_RUNTIME_API = bundledDistPluginFile("qa-lab", "runtime-api.js");
 
 describe("update global helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -427,6 +428,12 @@ describe("update global helpers", () => {
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
         `missing bundled runtime sidecar ${QA_CHANNEL_RUNTIME_API}`,
       );
+      await fs.writeFile(path.join(packageRoot, QA_CHANNEL_RUNTIME_API), "export {};\n", "utf-8");
+
+      await fs.rm(path.join(packageRoot, QA_LAB_RUNTIME_API));
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
+        `missing bundled runtime sidecar ${QA_LAB_RUNTIME_API}`,
+      );
     });
   });
 
@@ -530,6 +537,40 @@ describe("update global helpers", () => {
         await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
           `missing bundled runtime sidecar ${MATRIX_HELPER_API}`,
         );
+      },
+    );
+  });
+
+  it("ignores stale metadata for non-packaged private QA plugins during inventory verify", async () => {
+    await withTempDir(
+      { prefix: "openclaw-update-global-stale-private-qa-" },
+      async (packageRoot) => {
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.4.15" }),
+          "utf-8",
+        );
+        for (const relativePath of NPM_UPDATE_COMPAT_SIDECAR_PATHS) {
+          const absolutePath = path.join(packageRoot, relativePath);
+          await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+          await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+        }
+        const staleQaLabPackageJson = path.join(
+          packageRoot,
+          "dist",
+          "extensions",
+          "qa-lab",
+          "package.json",
+        );
+        await fs.mkdir(path.dirname(staleQaLabPackageJson), { recursive: true });
+        await fs.writeFile(
+          staleQaLabPackageJson,
+          JSON.stringify({ name: "@openclaw/qa-lab" }),
+          "utf-8",
+        );
+        await writePackageDistInventory(packageRoot);
+
+        await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
       },
     );
   });
