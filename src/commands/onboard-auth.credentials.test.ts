@@ -1,10 +1,60 @@
-import { afterEach, describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { upsertApiKeyProfile } from "../plugins/provider-auth-helpers.js";
-import {
-  createAuthTestLifecycle,
-  readAuthProfilesForAgent,
-  setupAuthTestEnv,
-} from "./test-wizard-helpers.js";
+import { captureEnv } from "../test-utils/env.js";
+
+const providerEnvVarsById: Record<string, readonly string[]> = {
+  "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
+  byteplus: ["BYTEPLUS_API_KEY"],
+  moonshot: ["MOONSHOT_API_KEY"],
+  openai: ["OPENAI_API_KEY"],
+  opencode: ["OPENCODE_API_KEY"],
+  "opencode-go": ["OPENCODE_API_KEY"],
+  volcengine: ["VOLCANO_ENGINE_API_KEY"],
+};
+
+vi.mock("../secrets/provider-env-vars.js", () => ({
+  getProviderEnvVars: vi.fn((provider: string) => providerEnvVarsById[provider] ?? []),
+}));
+
+type AuthTestEnv = {
+  stateDir: string;
+  agentDir: string;
+};
+
+async function setupAuthTestEnv(prefix: string): Promise<AuthTestEnv> {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const agentDir = path.join(stateDir, "agent");
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  process.env.OPENCLAW_AGENT_DIR = agentDir;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  await fs.mkdir(agentDir, { recursive: true });
+  return { stateDir, agentDir };
+}
+
+function createAuthTestLifecycle(envKeys: string[]) {
+  const envSnapshot = captureEnv(envKeys);
+  let stateDir: string | null = null;
+  return {
+    setStateDir(nextStateDir: string) {
+      stateDir = nextStateDir;
+    },
+    async cleanup() {
+      if (stateDir) {
+        await fs.rm(stateDir, { recursive: true, force: true });
+        stateDir = null;
+      }
+      envSnapshot.restore();
+    },
+  };
+}
+
+async function readAuthProfilesForAgent<T>(agentDir: string): Promise<T> {
+  const raw = await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8");
+  return JSON.parse(raw) as T;
+}
 
 describe("onboard auth credentials secret refs", () => {
   const lifecycle = createAuthTestLifecycle([
@@ -66,40 +116,57 @@ describe("onboard auth credentials secret refs", () => {
     });
   }
 
-  it("keeps env-backed moonshot key as plaintext by default", async () => {
-    await expectStoredAuthKey({
-      prefix: "openclaw-onboard-auth-credentials-",
-      envVar: "MOONSHOT_API_KEY",
-      envValue: "sk-moonshot-env",
-      profileId: "moonshot:default",
-      apply: async () => {
-        upsertApiKeyProfile({ provider: "moonshot", input: "sk-moonshot-env" });
-      },
-      expected: {
-        key: "sk-moonshot-env",
-      },
-      absent: ["keyRef"],
+  it("keeps env-backed provider keys as plaintext by default", async () => {
+    await withAuthEnv("openclaw-onboard-auth-credentials-", async (env) => {
+      process.env.MOONSHOT_API_KEY = "sk-moonshot-env";
+      process.env.OPENAI_API_KEY = "sk-openai-env";
+
+      upsertApiKeyProfile({
+        provider: "moonshot",
+        input: "sk-moonshot-env",
+        agentDir: env.agentDir,
+      });
+      upsertApiKeyProfile({ provider: "openai", input: "sk-openai-env", agentDir: env.agentDir });
+
+      const parsed = await readAuthProfilesForAgent<{
+        profiles?: Record<string, AuthProfileEntry>;
+      }>(env.agentDir);
+      expect(parsed.profiles?.["moonshot:default"]).toMatchObject({ key: "sk-moonshot-env" });
+      expect(parsed.profiles?.["moonshot:default"]?.keyRef).toBeUndefined();
+      expect(parsed.profiles?.["openai:default"]).toMatchObject({ key: "sk-openai-env" });
+      expect(parsed.profiles?.["openai:default"]?.keyRef).toBeUndefined();
     });
   });
 
-  it("stores env-backed moonshot key as keyRef when secret-input-mode=ref", async () => {
-    await expectStoredAuthKey({
-      prefix: "openclaw-onboard-auth-credentials-ref-",
-      envVar: "MOONSHOT_API_KEY",
-      envValue: "sk-moonshot-env",
-      profileId: "moonshot:default",
-      apply: async (agentDir) => {
-        upsertApiKeyProfile({
-          provider: "moonshot",
-          input: "sk-moonshot-env",
-          agentDir,
-          options: { secretInputMode: "ref" }, // pragma: allowlist secret
-        });
-      },
-      expected: {
+  it("stores env-backed provider keys as keyRef in ref mode", async () => {
+    await withAuthEnv("openclaw-onboard-auth-credentials-ref-", async (env) => {
+      process.env.MOONSHOT_API_KEY = "sk-moonshot-env";
+      process.env.OPENAI_API_KEY = "sk-openai-env";
+
+      upsertApiKeyProfile({
+        provider: "moonshot",
+        input: "sk-moonshot-env",
+        agentDir: env.agentDir,
+        options: { secretInputMode: "ref" }, // pragma: allowlist secret
+      });
+      upsertApiKeyProfile({
+        provider: "openai",
+        input: "sk-openai-env",
+        agentDir: env.agentDir,
+        options: { secretInputMode: "ref" }, // pragma: allowlist secret
+      });
+
+      const parsed = await readAuthProfilesForAgent<{
+        profiles?: Record<string, AuthProfileEntry>;
+      }>(env.agentDir);
+      expect(parsed.profiles?.["moonshot:default"]).toMatchObject({
         keyRef: { source: "env", provider: "default", id: "MOONSHOT_API_KEY" },
-      },
-      absent: ["key"],
+      });
+      expect(parsed.profiles?.["moonshot:default"]?.key).toBeUndefined();
+      expect(parsed.profiles?.["openai:default"]).toMatchObject({
+        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      });
+      expect(parsed.profiles?.["openai:default"]?.key).toBeUndefined();
     });
   });
 
@@ -157,43 +224,6 @@ describe("onboard auth credentials secret refs", () => {
       metadata: { accountId: "account-1", gatewayId: "gateway-1" },
     });
     expect(parsed.profiles?.["cloudflare-ai-gateway:default"]?.key).toBeUndefined();
-  });
-
-  it("keeps env-backed openai key as plaintext by default", async () => {
-    await expectStoredAuthKey({
-      prefix: "openclaw-onboard-auth-credentials-openai-",
-      envVar: "OPENAI_API_KEY",
-      envValue: "sk-openai-env",
-      profileId: "openai:default",
-      apply: async () => {
-        upsertApiKeyProfile({ provider: "openai", input: "sk-openai-env" });
-      },
-      expected: {
-        key: "sk-openai-env",
-      },
-      absent: ["keyRef"],
-    });
-  });
-
-  it("stores env-backed openai key as keyRef in ref mode", async () => {
-    await expectStoredAuthKey({
-      prefix: "openclaw-onboard-auth-credentials-openai-ref-",
-      envVar: "OPENAI_API_KEY",
-      envValue: "sk-openai-env",
-      profileId: "openai:default",
-      apply: async (agentDir) => {
-        upsertApiKeyProfile({
-          provider: "openai",
-          input: "sk-openai-env",
-          agentDir,
-          options: { secretInputMode: "ref" }, // pragma: allowlist secret
-        });
-      },
-      expected: {
-        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-      },
-      absent: ["key"],
-    });
   });
 
   it("stores env-backed volcengine and byteplus keys as keyRef in ref mode", async () => {

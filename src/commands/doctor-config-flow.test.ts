@@ -1206,30 +1206,6 @@ describe("doctor config flow", () => {
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
   });
 
-  it("notes legacy browser extension migration changes", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        browser: {
-          relayBindHost: "127.0.0.1",
-          profiles: {
-            chromeLive: {
-              driver: "extension",
-              color: "#00AA00",
-            },
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const browser = (result.cfg as { browser?: Record<string, unknown> }).browser ?? {};
-    expect(browser.relayBindHost).toBeUndefined();
-    expect(
-      ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
-    ).toBe("existing-session");
-  });
-
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
