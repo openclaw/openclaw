@@ -128,11 +128,11 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
 
   try {
     const headers: Record<string, string> = { Accept: "application/json" };
-    const apiKey = process.env.KILOCODE_API_KEY;
+    const apiKey = process.env.KILOCODE_API_KEY?.trim();
     if (apiKey) {
       headers["Authorization"] = `Bearer ${apiKey}`;
     }
-    const orgId = process.env.KILOCODE_ORGANIZATION_ID;
+    const orgId = process.env.KILOCODE_ORGANIZATION_ID?.trim();
     if (orgId) {
       headers["X-KiloCode-OrganizationId"] = orgId;
     }
