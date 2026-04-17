@@ -1562,6 +1562,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const {
       registry,
       createApi,
+      rollbackPluginGlobalSideEffects,
       registerReload,
       registerNodeHostCommand,
       registerSecurityAuditCollector,
@@ -2236,6 +2237,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         registry.plugins.push(record);
         seenIds.set(pluginId, candidate.origin);
       } catch (err) {
+        rollbackPluginGlobalSideEffects(record.id);
         restorePluginRegistry(registry, registrySnapshot);
         restoreRegisteredAgentHarnesses(previousAgentHarnesses);
         restoreRegisteredCompactionProviders(previousCompactionProviders);
