@@ -33,6 +33,12 @@ type BootstrapContext = {
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
 };
+
+function normalizeMockProviderId(providerId?: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(providerId);
+  return normalized === "z.ai" || normalized === "z-ai" ? "zai" : normalized;
+}
+
 type SessionManagerMocks = {
   getLeafEntry: UnknownMock;
   branch: UnknownMock;
@@ -411,7 +417,19 @@ vi.mock("../../../image-generation/runtime.js", () => ({
 }));
 
 vi.mock("../../model-selection.js", () => ({
-  normalizeProviderId: (providerId?: string) => normalizeLowercaseStringOrEmpty(providerId),
+  findNormalizedProviderValue: <T>(entries: Record<string, T> | undefined, provider: string) => {
+    if (!entries) {
+      return undefined;
+    }
+    const providerKey = normalizeMockProviderId(provider);
+    for (const [key, value] of Object.entries(entries)) {
+      if (normalizeMockProviderId(key) === providerKey) {
+        return value;
+      }
+    }
+    return undefined;
+  },
+  normalizeProviderId: normalizeMockProviderId,
   resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-test" }),
 }));
 
@@ -453,17 +471,17 @@ vi.mock("../../sandbox/runtime-status.js", () => ({
   }),
 }));
 
-vi.mock("../../tool-call-id.js", () => ({
-  sanitizeToolCallIdsForCloudCodeAssist: <T>(messages: T) => messages,
-}));
+vi.mock("../../tool-call-id.js", async (importOriginal) => {
+  return await importOriginal<typeof import("../../tool-call-id.js")>();
+});
 
 vi.mock("../../tool-fs-policy.js", () => ({
   resolveEffectiveToolFsWorkspaceOnly: () => false,
 }));
 
-vi.mock("../../tool-policy.js", () => ({
-  normalizeToolName: (name: string) => name,
-}));
+vi.mock("../../tool-policy.js", async (importOriginal) => {
+  return await importOriginal<typeof import("../../tool-policy.js")>();
+});
 
 vi.mock("../../transcript-policy.js", () => ({
   resolveTranscriptPolicy: () => ({

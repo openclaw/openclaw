@@ -260,7 +260,9 @@ describe("gateway server hooks", () => {
         messages: [{ id: "msg-1", from: "Ada", subject: "Hello", snippet: "Hi", body: "Body" }],
       });
       expect(response.status).toBe(200);
-      await waitForSystemEvent();
+      await expect
+        .poll(() => cronIsolatedRun.mock.calls.length, { timeout: 2_000, interval: 10 })
+        .toBe(1);
 
       const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         sessionKey?: string;
@@ -288,7 +290,7 @@ describe("gateway server hooks", () => {
     await withGatewayServer(async ({ port }) => {
       const direct = await postHook(port, "/hooks/wake", { text: "Direct wake" });
       expect(direct.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       expect(peekSystemEventEntries(resolveMainKey())).toEqual([
         expect.objectContaining({
           text: "Direct wake",
@@ -299,7 +301,7 @@ describe("gateway server hooks", () => {
 
       const mapped = await postHook(port, "/hooks/mapped-wake", { subject: "Email" });
       expect(mapped.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       expect(peekSystemEventEntries(resolveMainKey())).toEqual([
         expect.objectContaining({
           text: "Mapped wake: Email",
