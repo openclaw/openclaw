@@ -10,7 +10,6 @@ services:
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       TZ: ${OPENCLAW_TZ:-UTC}
-      GATEWAY_CONTROLUI_DANGEROUSLYALLLOWHOSTHEADERORIGINFALLBACK: "true"
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace

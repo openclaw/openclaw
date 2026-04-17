@@ -118,7 +118,7 @@ sync_gateway_config() {
     current_allowed_origins="${current_allowed_origins//$'\r'/}"
   fi
 
-  batch_json="$(printf '[{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"%s"}' "$OPENCLAW_GATEWAY_BIND")"
+  batch_json="$(printf '[{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"%s"},{"path":"gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback","value":true}' "$OPENCLAW_GATEWAY_BIND")"
   if [[ -n "$allowed_origin_json" ]]; then
     if [[ -n "$current_allowed_origins" && "$current_allowed_origins" != "null" && "$current_allowed_origins" != "[]" ]]; then
       echo "Control UI allowlist already configured; leaving gateway.controlUi.allowedOrigins unchanged."
