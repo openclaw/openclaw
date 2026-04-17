@@ -448,7 +448,19 @@ jobs:
           if [[ -n "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_GUILD_ID}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_CHANNEL_ID}" ]]; then
             DISCORD_ARGS+=(--run-discord-roundtrip true)
           fi
-          node --disable-warning=ExperimentalWarning scripts/openclaw-cross-os-release-checks.ts             --candidate-tgz "${CHECK_CANDIDATE_TGZ}"             --candidate-version "${CHECK_CANDIDATE_VERSION}"             --source-sha "${CHECK_SOURCE_SHA}"             --baseline-spec "${CHECK_BASELINE_SPEC}"             --previous-version "${CHECK_PREVIOUS_VERSION}"             --baseline-tgz "${CHECK_BASELINE_TGZ}"             --provider "${CHECK_PROVIDER}"             --mode "${CHECK_MODE}"             --suite "${CHECK_SUITE}"             --ref "${CHECK_REF}"             "${DISCORD_ARGS[@]}"             --output-dir "${CHECK_OUTPUT_DIR}"
+          node --disable-warning=ExperimentalWarning workflow/scripts/openclaw-cross-os-release-checks.ts \
+            --candidate-tgz "${CHECK_CANDIDATE_TGZ}" \
+            --candidate-version "${CHECK_CANDIDATE_VERSION}" \
+            --source-sha "${CHECK_SOURCE_SHA}" \
+            --baseline-spec "${CHECK_BASELINE_SPEC}" \
+            --previous-version "${CHECK_PREVIOUS_VERSION}" \
+            --baseline-tgz "${CHECK_BASELINE_TGZ}" \
+            --provider "${CHECK_PROVIDER}" \
+            --mode "${CHECK_MODE}" \
+            --suite "${CHECK_SUITE}" \
+            --ref "${CHECK_REF}" \
+            "${DISCORD_ARGS[@]}" \
+            --output-dir "${CHECK_OUTPUT_DIR}"
       - name: Summarize release checks
         if: always()
         shell: bash
