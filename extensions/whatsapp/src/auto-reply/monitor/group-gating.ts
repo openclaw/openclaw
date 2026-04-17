@@ -157,11 +157,13 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
     "quoted_bot",
     !implicitReplyToSelf && identitiesOverlap(self, replyContext?.sender),
   );
+  const hasAnyMention = ((params.msg.mentions ?? params.msg.mentionedJids)?.length ?? 0) > 0;
   const mentionDecision = resolveInboundMentionDecision({
     facts: {
       canDetectMention: true,
       wasMentioned,
       implicitMentionKinds,
+      hasAnyMention,
     },
     policy: {
       isGroup: true,
@@ -174,7 +176,11 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned || shouldBypassMention;
   params.msg.wasMentioned = effectiveWasMentioned;
-  if (!shouldBypassMention && requireMention && mentionDecision.shouldSkip) {
+  if (
+    !shouldBypassMention &&
+    (mentionDecision.suppressedByOtherAgentMention ||
+      (requireMention && mentionDecision.shouldSkip))
+  ) {
     return skipGroupMessageAndStoreHistory(
       params,
       `Group message stored for context (no mention detected) in ${params.conversationId}: ${params.msg.body}`,

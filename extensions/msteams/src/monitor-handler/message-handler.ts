@@ -505,11 +505,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       channelConfig,
     });
     const timestamp = parseMSTeamsActivityTimestamp(activity.timestamp);
+    const hasAnyMention =
+      !isDirectMessage &&
+      (activity.entities?.some((e) => (e as { type?: string }).type === "mention") ?? false);
     const mentionDecision = resolveInboundMentionDecision({
       facts: {
         canDetectMention: true,
         wasMentioned: params.wasMentioned,
         implicitMentionKinds: params.implicitMentionKinds,
+        hasAnyMention,
       },
       policy: {
         isGroup: !isDirectMessage,
@@ -523,7 +527,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     if (!isDirectMessage) {
       const mentioned = mentionDecision.effectiveWasMentioned;
-      if (requireMention && mentionDecision.shouldSkip) {
+      if (
+        mentionDecision.suppressedByOtherAgentMention ||
+        (requireMention && mentionDecision.shouldSkip)
+      ) {
         log.debug?.("skipping message (mention required)", {
           teamId,
           channelId,

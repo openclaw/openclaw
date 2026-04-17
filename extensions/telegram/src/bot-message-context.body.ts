@@ -274,7 +274,11 @@ export async function resolveTelegramInboundBody(params: {
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
-  if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
+  if (
+    isGroup &&
+    (mentionDecision.suppressedByOtherAgentMention ||
+      (requireMention && canDetectMention && mentionDecision.shouldSkip))
+  ) {
     logger.info({ chatId, reason: "no-mention" }, "skipping group message");
     recordPendingHistoryEntryIfEnabled({
       historyMap: groupHistories,

@@ -994,6 +994,14 @@ export async function preflightDiscordMessage(
     }
   }
 
+  if (isGuildMessage && mentionDecision.suppressedByOtherAgentMention) {
+    logDebug(`[discord-preflight] drop: suppressed-by-other-agent-mention`);
+    logVerbose(
+      `discord: drop guild message (suppressed, other agent mentioned, channel=${messageChannelId})`,
+    );
+    return null;
+  }
+
   if (author.bot && !sender.isPluralKit && allowBotsMode === "mentions") {
     const botMentioned = isDirectMessage || wasMentioned || mentionDecision.implicitMention;
     if (!botMentioned) {

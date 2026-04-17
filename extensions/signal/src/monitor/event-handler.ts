@@ -674,7 +674,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       facts: {
         canDetectMention,
         wasMentioned,
-        hasAnyMention: false,
+        hasAnyMention: isGroup && (dataMessage?.mentions?.length ?? 0) > 0,
         implicitMentionKinds: [],
       },
       policy: {
@@ -687,7 +687,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
     const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
-    if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
+    if (
+      isGroup &&
+      (mentionDecision.suppressedByOtherAgentMention ||
+        (requireMention && canDetectMention && mentionDecision.shouldSkip))
+    ) {
       logInboundDrop({
         log: logVerbose,
         channel: "signal",
