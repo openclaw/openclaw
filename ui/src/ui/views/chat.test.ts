@@ -143,6 +143,8 @@ describe("chat view", () => {
 
   it("renders the context notice only for fresh high current usage", () => {
     const container = document.createElement("div");
+    document.documentElement.style.setProperty("--warn", "rgb(1, 2, 3)");
+    document.documentElement.style.setProperty("--danger", "tomato");
 
     const renderWithSession = (session: NonNullable<ChatProps["sessions"]>["sessions"][number]) =>
       render(
@@ -182,6 +184,22 @@ describe("chat view", () => {
     expect(container.textContent).toContain("95% context used");
     expect(container.textContent).toContain("190k / 200k");
     expect(container.textContent).not.toContain("757.3k / 200k");
+    const notice = container.querySelector<HTMLElement>(".context-notice");
+    expect(notice).not.toBeNull();
+    expect(notice?.style.getPropertyValue("--ctx-color")).toContain("rgb(");
+    expect(notice?.style.getPropertyValue("--ctx-color")).not.toContain("NaN");
+    expect(notice?.style.getPropertyValue("--ctx-bg")).not.toContain("NaN");
+
+    const icon = container.querySelector<SVGElement>(".context-notice__icon");
+    expect(icon).not.toBeNull();
+    expect(icon?.tagName.toLowerCase()).toBe("svg");
+    expect(icon?.classList.contains("context-notice__icon")).toBe(true);
+    expect(icon?.getAttribute("width")).toBe("16");
+    expect(icon?.getAttribute("height")).toBe("16");
+    expect(icon?.querySelector("path")).not.toBeNull();
+
+    document.documentElement.style.removeProperty("--warn");
+    document.documentElement.style.removeProperty("--danger");
 
     renderWithSession({
       key: "main",
