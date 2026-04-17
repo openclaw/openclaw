@@ -106,6 +106,8 @@ export type AgentRunLoopResult =
       autoCompactionCount: number;
       /** Payload keys sent directly (not via pipeline) during tool flush. */
       directlySentBlockKeys?: Set<string>;
+      /** Media path normalizer used during block delivery — reuse for final payloads to avoid duplicate persistence. */
+      normalizeReplyMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
     }
   | { kind: "final"; payload: ReplyPayload };
 
@@ -1587,5 +1589,6 @@ export async function runAgentTurnWithFallback(params: {
     didLogHeartbeatStrip,
     autoCompactionCount,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
+    normalizeReplyMediaPaths: directlySentBlockKeys.size > 0 ? normalizeReplyMediaPaths : undefined,
   };
 }

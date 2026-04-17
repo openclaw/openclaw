@@ -267,6 +267,71 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("deduplicates final media payloads against block keys when sharing the same normalizer", async () => {
+    // Regression test for #68056: when block streaming is disabled but media is sent
+    // via a direct block reply, the final payload must be deduplicated using the same
+    // normalizer instance so persisted media paths match.
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>();
+    const sharedNormalizer = async (payload: { mediaUrl?: string; mediaUrls?: string[] }) => ({
+      ...payload,
+      mediaUrl: "/persisted/chart.png",
+      mediaUrls: ["/persisted/chart.png"],
+    });
+    // Simulate block delivery: normalize and record key
+    const blockNormalized = await sharedNormalizer({ mediaUrl: "/tmp/chart.png" });
+    directlySentBlockKeys.add(
+      createBlockReplyContentKey({ text: "Here is your chart", ...blockNormalized }),
+    );
+
+    // Final payload with same original media, normalized by same instance → same key
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+      replyToMode: "off",
+      payloads: [{ text: "Here is your chart", mediaUrl: "/tmp/chart.png" }],
+      normalizeMediaPaths: sharedNormalizer,
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("fails to deduplicate when block and final use different normalizer instances (pre-fix behavior)", async () => {
+    // Demonstrates the #68056 regression: separate normalizer instances produce
+    // different persisted paths, so the content key doesn't match.
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>();
+    // Block normalizer persists to path A
+    const blockNormalized = {
+      mediaUrl: "/persisted/a/chart.png",
+      mediaUrls: ["/persisted/a/chart.png"],
+    };
+    directlySentBlockKeys.add(
+      createBlockReplyContentKey({ text: "Here is your chart", ...blockNormalized }),
+    );
+    // Final normalizer persists to path B (different instance)
+    const finalNormalizer = async (payload: { mediaUrl?: string; mediaUrls?: string[] }) => ({
+      ...payload,
+      mediaUrl: "/persisted/b/chart.png",
+      mediaUrls: ["/persisted/b/chart.png"],
+    });
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+      replyToMode: "off",
+      payloads: [{ text: "Here is your chart", mediaUrl: "/tmp/chart.png" }],
+      normalizeMediaPaths: finalNormalizer,
+    });
+
+    // With different normalizers, dedup fails → payload leaks through (the bug)
+    expect(replyPayloads).toHaveLength(1);
+  });
+
   it("does not suppress same-target replies when accountId differs", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
