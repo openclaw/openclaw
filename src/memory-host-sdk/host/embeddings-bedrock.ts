@@ -382,12 +382,14 @@ const CREDENTIAL_ENV_VARS = [
 // (SSO refresh, delayed IMDS) to be picked up on the next interval.
 let _cachedResult: boolean | undefined;
 let _cacheTimestamp: number | undefined;
+let _inflightProbe: Promise<boolean> | undefined;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /** @internal Visible for testing – resets the memoized credential probe state. */
 export function _resetCredentialCache(): void {
   _cachedResult = undefined;
   _cacheTimestamp = undefined;
+  _inflightProbe = undefined;
 }
 
 export async function hasAwsCredentials(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
@@ -404,7 +406,14 @@ export async function hasAwsCredentials(env: NodeJS.ProcessEnv = process.env): P
     if (_cachedResult !== undefined && Date.now() - _cacheTimestamp! < CACHE_TTL_MS) {
       return _cachedResult;
     }
-    const result = await probeAwsCredentials();
+    // Coalesce concurrent probes into a single request to avoid IMDS burst
+    // traffic during parallel provider initialization.
+    if (!_inflightProbe) {
+      _inflightProbe = probeAwsCredentials().finally(() => {
+        _inflightProbe = undefined;
+      });
+    }
+    const result = await _inflightProbe;
     _cachedResult = result;
     _cacheTimestamp = Date.now();
     return result;
