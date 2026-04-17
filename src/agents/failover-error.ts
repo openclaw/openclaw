@@ -239,21 +239,7 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   }
 
   const code = (getErrorCode(err) ?? "").toUpperCase();
-  if (
-    [
-      "ETIMEDOUT",
-      "ESOCKETTIMEDOUT",
-      "ECONNRESET",
-      "ECONNABORTED",
-      "ECONNREFUSED",
-      "ENETUNREACH",
-      "EHOSTUNREACH",
-      "EHOSTDOWN",
-      "ENETRESET",
-      "EPIPE",
-      "EAI_AGAIN",
-    ].includes(code)
-  ) {
+  if (["ETIMEDOUT", "ESOCKETTIMEDOUT"].includes(code)) {
     return "timeout";
   }
   // Walk into error cause chain *before* timeout heuristics so that a specific

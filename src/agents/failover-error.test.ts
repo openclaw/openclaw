@@ -317,11 +317,12 @@ describe("failover-error", () => {
     ).toBe("format");
   });
 
-  it("infers timeout from common node error codes", () => {
+  it("infers timeout only from actual timeout node error codes", () => {
     expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ code: "EHOSTDOWN" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ code: "EPIPE" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ESOCKETTIMEDOUT" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBeNull();
+    expect(resolveFailoverReasonFromError({ code: "EHOSTDOWN" })).toBeNull();
+    expect(resolveFailoverReasonFromError({ code: "EPIPE" })).toBeNull();
   });
 
   it("infers timeout from abort/error stop-reason messages", () => {
@@ -340,19 +341,19 @@ describe("failover-error", () => {
     ).toBe("timeout");
   });
 
-  it("infers timeout from connection/network error messages", () => {
-    expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
+  it("does not misclassify generic connection/network errors as timeout", () => {
+    expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBeNull();
+    expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBeNull();
     expect(resolveFailoverReasonFromError({ message: "Network error: ECONNREFUSED" })).toBe(
-      "timeout",
+      null,
     );
     expect(
       resolveFailoverReasonFromError({
         message: "dial tcp: lookup api.example.com: no such host (ENOTFOUND)",
       }),
-    ).toBe("timeout");
+    ).toBeNull();
     expect(resolveFailoverReasonFromError({ message: "temporary dns failure EAI_AGAIN" })).toBe(
-      "timeout",
+      null,
     );
   });
 

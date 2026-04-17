@@ -566,7 +566,6 @@ describe("isFailoverErrorMessage", () => {
       "429 rate limit exceeded",
       "Your credit balance is too low",
       "request timed out",
-      "Connection error.",
       "invalid request format",
     ];
     for (const sample of samples) {
@@ -593,16 +592,23 @@ describe("isFailoverErrorMessage", () => {
     ]);
   });
 
-  it("matches network errno codes in serialized error messages", () => {
+  it("matches only actual timeout errno codes in serialized error messages", () => {
     expectTimeoutFailoverSamples([
       "Error: connect ETIMEDOUT 10.0.0.1:443",
       "Error: connect ESOCKETTIMEDOUT 10.0.0.1:443",
+    ]);
+
+    for (const sample of [
       "Error: connect EHOSTUNREACH 10.0.0.1:443",
       "Error: connect ENETUNREACH 10.0.0.1:443",
       "Error: write EPIPE",
       "Error: read ENETRESET",
       "Error: connect EHOSTDOWN 192.168.1.1:443",
-    ]);
+    ]) {
+      expect(isTimeoutErrorMessage(sample)).toBe(false);
+      expect(classifyFailoverReason(sample)).toBe(null);
+      expect(isFailoverErrorMessage(sample)).toBe(false);
+    }
   });
 
   it("matches z.ai network_error stop reason as timeout", () => {
@@ -781,13 +787,13 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason(INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
-    expect(classifyFailoverReason("Connection error.")).toBe("timeout");
-    expect(classifyFailoverReason("fetch failed")).toBe("timeout");
-    expect(classifyFailoverReason("network error: ECONNREFUSED")).toBe("timeout");
+    expect(classifyFailoverReason("Connection error.")).toBeNull();
+    expect(classifyFailoverReason("fetch failed")).toBeNull();
+    expect(classifyFailoverReason("network error: ECONNREFUSED")).toBeNull();
     expect(
       classifyFailoverReason("dial tcp: lookup api.example.com: no such host (ENOTFOUND)"),
-    ).toBe("timeout");
-    expect(classifyFailoverReason("temporary dns failure EAI_AGAIN")).toBe("timeout");
+    ).toBeNull();
+    expect(classifyFailoverReason("temporary dns failure EAI_AGAIN")).toBeNull();
     expect(
       classifyFailoverReason(
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
