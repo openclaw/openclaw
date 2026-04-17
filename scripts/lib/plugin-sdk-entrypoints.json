@@ -146,6 +146,7 @@
   "channel-mention-gating",
   "channel-lifecycle",
   "channel-pairing",
+  "channel-pairing-paths",
   "channel-policy",
   "channel-send-result",
   "channel-targets",

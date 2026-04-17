@@ -640,6 +640,10 @@
       "types": "./dist/plugin-sdk/channel-pairing.d.ts",
       "default": "./dist/plugin-sdk/channel-pairing.js"
     },
+    "./plugin-sdk/channel-pairing-paths": {
+      "types": "./dist/plugin-sdk/channel-pairing-paths.d.ts",
+      "default": "./dist/plugin-sdk/channel-pairing-paths.js"
+    },
     "./plugin-sdk/channel-policy": {
       "types": "./dist/plugin-sdk/channel-policy.d.ts",
       "default": "./dist/plugin-sdk/channel-policy.js"
