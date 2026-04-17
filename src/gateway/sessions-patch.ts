@@ -397,6 +397,23 @@ export async function applySessionsPatchToStore(params: {
     // "normal" / null clears state — always allowed (prevents getting
     // stranded in plan mode if the operator turns the feature off).
     if (raw === null || raw === "normal") {
+      // PR-9 Wave B3: capture nudge job ids BEFORE deleting so the
+      // cleanup helper can remove the corresponding crons. Fire-and-
+      // forget — cleanup failures degrade to no-op (the nudges fire
+      // into a normal-mode session and A1's `buildActivePlanNudge`
+      // returns null).
+      const previousNudgeIds = next.planMode?.nudgeJobIds;
+      if (previousNudgeIds && previousNudgeIds.length > 0) {
+        const ids = [...previousNudgeIds];
+        void (async () => {
+          try {
+            const { cleanupPlanNudges } = await import("../agents/plan-mode/plan-nudge-crons.js");
+            await cleanupPlanNudges({ jobIds: ids });
+          } catch {
+            /* best-effort */
+          }
+        })();
+      }
       delete next.planMode;
     } else if (raw === "plan") {
       if (!planModeEnabled) {
@@ -496,6 +513,9 @@ export async function applySessionsPatchToStore(params: {
         step: s.step,
         status: s.status,
         ...(s.activeForm !== undefined ? { activeForm: s.activeForm } : {}),
+        // PR-9 Wave B1 — persist optional closure-gate fields per step.
+        ...(s.acceptanceCriteria !== undefined ? { acceptanceCriteria: s.acceptanceCriteria } : {}),
+        ...(s.verifiedCriteria !== undefined ? { verifiedCriteria: s.verifiedCriteria } : {}),
       })),
       lastPlanUpdatedAt: now,
     };

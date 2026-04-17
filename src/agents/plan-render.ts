@@ -14,6 +14,14 @@ export interface PlanStepForRender {
   step: string;
   status: "pending" | "in_progress" | "completed" | "cancelled";
   activeForm?: string;
+  /**
+   * PR-9 Wave B1 — closure-gate fields. Optional; when present, the
+   * channel renderer surfaces acceptance criteria as a nested checklist
+   * under each step (verified vs not). Backwards-compatible: omit both
+   * fields and rendering is unchanged.
+   */
+  acceptanceCriteria?: string[];
+  verifiedCriteria?: string[];
 }
 
 /**
@@ -35,76 +43,119 @@ export function renderPlanChecklist(steps: PlanStepForRender[], format: PlanRend
     const rawLabel = s.status === "in_progress" && hasUsableActiveForm ? s.activeForm! : s.step;
     // Strip newlines from model-generated step text to prevent broken checklists.
     const label = rawLabel.replace(/[\n\r]+/g, " ").trim();
-
-    switch (format) {
-      case "html": {
-        const esc = escapeHtml(label);
-        if (s.status === "completed") {
-          return `✅ ${esc}`;
-        }
-        if (s.status === "in_progress") {
-          return `⏳ <b>${esc}</b>`;
-        }
-        if (s.status === "cancelled") {
-          return `❌ <s>${esc}</s>`;
-        }
-        return `⬚ ${esc}`;
-      }
-
-      case "markdown": {
-        // Escape user-controlled text to prevent markdown injection
-        // (links, code spans, emphasis, headings).
-        const md = escapeMarkdown(label);
-        if (s.status === "completed") {
-          return `- [x] ${md}`;
-        }
-        if (s.status === "in_progress") {
-          return `- [>] **${md}**`;
-        }
-        if (s.status === "cancelled") {
-          return `- [~] ~~${md}~~`;
-        }
-        return `- [ ] ${md}`;
-      }
-
-      case "plaintext": {
-        // Neutralize @channel/@here/@everyone mention triggers even in
-        // plaintext (some clients still parse them).
-        const safe = neutralizeMentions(label);
-        const markers: Record<PlanStepForRender["status"], string> = {
-          completed: "[x]",
-          in_progress: "[>]",
-          cancelled: "[~]",
-          pending: "[ ]",
-        };
-        if (!Object.hasOwn(markers, s.status)) {
-          warnUnknownStatus(s.status);
-        }
-        return `${markers[s.status] ?? "[ ]"} ${safe}`;
-      }
-
-      case "slack-mrkdwn": {
-        const escaped = escapeSlackMrkdwn(label);
-        if (s.status === "completed") {
-          return `✅ ${escaped}`;
-        }
-        if (s.status === "in_progress") {
-          return `⏳ *${escaped}*`;
-        }
-        if (s.status === "cancelled") {
-          return `❌ ~${escaped}~`;
-        }
-        return `⬚ ${escaped}`;
-      }
-
-      default: {
-        const _exhaustive: never = format;
-        return `[ ] ${label}`;
-      }
-    }
+    const stepLine = renderStepLine(s.status, label, format);
+    const criteriaLines = renderAcceptanceCriteria(s, format);
+    return criteriaLines.length > 0 ? [stepLine, ...criteriaLines].join("\n") : stepLine;
   });
 
   return lines.join("\n");
+}
+
+function renderStepLine(
+  status: PlanStepForRender["status"],
+  label: string,
+  format: PlanRenderFormat,
+): string {
+  switch (format) {
+    case "html": {
+      const esc = escapeHtml(label);
+      if (status === "completed") {
+        return `✅ ${esc}`;
+      }
+      if (status === "in_progress") {
+        return `⏳ <b>${esc}</b>`;
+      }
+      if (status === "cancelled") {
+        return `❌ <s>${esc}</s>`;
+      }
+      return `⬚ ${esc}`;
+    }
+    case "markdown": {
+      const md = escapeMarkdown(label);
+      if (status === "completed") {
+        return `- [x] ${md}`;
+      }
+      if (status === "in_progress") {
+        return `- [>] **${md}**`;
+      }
+      if (status === "cancelled") {
+        return `- [~] ~~${md}~~`;
+      }
+      return `- [ ] ${md}`;
+    }
+    case "plaintext": {
+      const safe = neutralizeMentions(label);
+      const markers: Record<PlanStepForRender["status"], string> = {
+        completed: "[x]",
+        in_progress: "[>]",
+        cancelled: "[~]",
+        pending: "[ ]",
+      };
+      if (!Object.hasOwn(markers, status)) {
+        warnUnknownStatus(status);
+      }
+      return `${markers[status] ?? "[ ]"} ${safe}`;
+    }
+    case "slack-mrkdwn": {
+      const escaped = escapeSlackMrkdwn(label);
+      if (status === "completed") {
+        return `✅ ${escaped}`;
+      }
+      if (status === "in_progress") {
+        return `⏳ *${escaped}*`;
+      }
+      if (status === "cancelled") {
+        return `❌ ~${escaped}~`;
+      }
+      return `⬚ ${escaped}`;
+    }
+    default: {
+      const _exhaustive: never = format;
+      return `[ ] ${label}`;
+    }
+  }
+}
+
+/**
+ * PR-9 Wave B1: render a step's acceptance criteria as a nested
+ * checklist beneath the step line. Indentation + marker style matches
+ * the parent format's conventions. Returns `[]` (no lines) when no
+ * criteria are declared so existing simple plans render unchanged.
+ *
+ * Each criterion uses the same content sanitization as the parent
+ * step label so injection vectors are equivalent across both layers.
+ */
+function renderAcceptanceCriteria(step: PlanStepForRender, format: PlanRenderFormat): string[] {
+  const criteria = step.acceptanceCriteria;
+  if (!criteria || criteria.length === 0) {
+    return [];
+  }
+  const verified = new Set(step.verifiedCriteria ?? []);
+  return criteria.map((rawCriterion) => {
+    const criterion = rawCriterion.replace(/[\n\r]+/g, " ").trim();
+    const isVerified = verified.has(rawCriterion);
+    switch (format) {
+      case "html": {
+        const esc = escapeHtml(criterion);
+        return isVerified ? `   ✓ ${esc}` : `   ◻ ${esc}`;
+      }
+      case "markdown": {
+        const md = escapeMarkdown(criterion);
+        return isVerified ? `    - [x] ${md}` : `    - [ ] ${md}`;
+      }
+      case "plaintext": {
+        const safe = neutralizeMentions(criterion);
+        return isVerified ? `   [x] ${safe}` : `   [ ] ${safe}`;
+      }
+      case "slack-mrkdwn": {
+        const escaped = escapeSlackMrkdwn(criterion);
+        return isVerified ? `   ✓ ${escaped}` : `   ◻ ${escaped}`;
+      }
+      default: {
+        return `   [ ] ${criterion}`;
+      }
+    }
+  });
 }
 
 /**
