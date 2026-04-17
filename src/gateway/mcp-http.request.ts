@@ -3,7 +3,6 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
@@ -125,15 +124,16 @@ export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,
 ): McpRequestContext {
-  const senderIsOwnerRaw = normalizeOptionalLowercaseString(
-    getHeader(req, "x-openclaw-sender-is-owner"),
-  );
+  // The MCP loopback server authenticates callers via a random shared-secret
+  // bearer token, making all callers equivalent to full operators (admin scope).
+  // Owner status is derived from the auth context, not from the untrusted
+  // `x-openclaw-sender-is-owner` header — matching the gateway WS hardening
+  // in 0e7a992 where only admin-scoped callers can assert ownership.
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
-    senderIsOwner:
-      senderIsOwnerRaw === "true" ? true : senderIsOwnerRaw === "false" ? false : undefined,
+    senderIsOwner: true,
   };
 }
