@@ -132,7 +132,9 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       }),
     );
 
-    const names = commands.map((entry) => entry.name).toSorted();
+    const names = commands
+      .map((entry) => entry.name)
+      .toSorted((left, right) => left.localeCompare(right));
     expect(names).toEqual(["hello_world", "hello_world_2", "help_2"]);
     expect(commands.find((entry) => entry.skillName === "hidden-skill")).toBeUndefined();
   });
@@ -234,16 +236,18 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       "utf-8",
     );
 
-    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
-      ...resolveTestSkillDirs(workspaceDir),
-      config: {
-        plugins: {
-          entries: {
-            "compound-bundle": { enabled: true },
+    const commands = withPathResolutionEnv(tempHome!.home, { PATH: "" }, () =>
+      buildWorkspaceSkillCommandSpecs(workspaceDir, {
+        ...resolveTestSkillDirs(workspaceDir),
+        config: {
+          plugins: {
+            entries: {
+              "compound-bundle": { enabled: true },
+            },
           },
         },
-      },
-    });
+      }),
+    );
 
     expect(commands).toEqual(
       expect.arrayContaining([
