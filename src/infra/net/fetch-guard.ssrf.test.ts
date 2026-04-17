@@ -450,6 +450,39 @@ describe("fetchWithSsrFGuard hardening", () => {
     }
   });
 
+  it("forces HTTP/1 dispatcher when DNS pinning is disabled with no explicit policy", async () => {
+    // Regression for openclaw#68104: without this, pinDns:false + no
+    // dispatcherPolicy would leave requests on the ambient global dispatcher,
+    // and undici 8's default ALPN HTTP/2 path could trip
+    // `HTTP/2: "stream timeout after ..."` before the caller's own timeout.
+    const lookupFn = createPublicLookup();
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn,
+      pinDns: false,
+    });
+
+    expect(agentCtor).toHaveBeenCalledWith({ allowH2: false });
+    expect(envHttpProxyAgentCtor).not.toHaveBeenCalled();
+    expect(proxyAgentCtor).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://public.example/resource",
+      expect.objectContaining({
+        dispatcher: expect.any(Object),
+      }),
+    );
+    await result.release();
+  });
+
   it("keeps explicit proxy transport policy when DNS pinning is disabled", async () => {
     const lookupFn = createPublicLookup();
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {

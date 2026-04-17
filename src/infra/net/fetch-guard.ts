@@ -127,7 +127,15 @@ function createPolicyDispatcherWithoutPinnedDns(
   dispatcherPolicy?: PinnedDispatcherPolicy,
 ): Dispatcher | null {
   if (!dispatcherPolicy) {
-    return null;
+    // Without a caller-supplied policy we would otherwise fall through to the
+    // ambient global dispatcher. Undici 8 negotiates HTTP/2 via ALPN by
+    // default, and the resulting h2 stream timeout (InformationalError
+    // `HTTP/2: "stream timeout after ..."` from undici's client-h2) has been
+    // observed to abort long provider responses before the caller's own
+    // timeout fires (openclaw#68104). Keep this path on HTTP/1.1 so the
+    // pinDns-disabled branch still matches the HTTP/1-only posture used by
+    // the pinned and explicit-proxy branches.
+    return createHttp1Agent();
   }
 
   if (dispatcherPolicy.mode === "direct") {

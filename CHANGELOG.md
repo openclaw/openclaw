@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/streaming: clear the compaction replay guard after visible non-final boundaries so a post-tool assistant reply rotates to a fresh preview instead of editing the pre-compaction message. (#67993) Thanks @obviyus.
 - Matrix: fix `sessions_spawn --thread` subagent session spawning — thread binding creation, cleanup on session end, and completion-message delivery target resolution now work end-to-end. (#67643) Thanks @eejohnso-ops and @gumadeiras.
 - macOS/webchat: enable Undo and Redo in the composer text input by turning on the native `NSTextView` undo manager. (#34962) Thanks @tylerbittner.
+- Infra/fetch-guard: keep guarded provider HTTP requests on HTTP/1.1 even when DNS pinning is disabled and no custom dispatcher policy is set, so undici 8's default ALPN HTTP/2 path no longer trips `HTTP/2: "stream timeout after ..."` aborts before the caller's own timeout fires on long-running Google Gemini `image_generate` calls. (#68104)
 
 ## 2026.4.15
 
