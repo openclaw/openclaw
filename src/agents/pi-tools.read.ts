@@ -98,7 +98,6 @@ async function readTextFileStreaming(
     let totalChars = 0;
     let collectedChars = 0;
     let isTruncated = false;
-    let isRangeComplete = false;
     
     const startLine = Math.max(0, offset - 1);
     const endLine = limit !== undefined ? startLine + limit : undefined;
@@ -155,7 +154,6 @@ async function readTextFileStreaming(
       
       // Stop if we've collected the requested range
       if (endLine !== undefined && currentLineNumber >= endLine) {
-        isRangeComplete = true;
         rl.close();
         readStream.destroy();
         return;
@@ -897,19 +895,30 @@ export function createOpenClawReadTool(
           }
 
           let mimeType = getImageMimeType(ext);
+          let sanitizationFailed = false;
 
           if (options?.imageSanitization) {
             try {
               const maxDimensionPx = options.imageSanitization.maxDimensionPx || 3840;
               const maxBytes = options.imageSanitization.maxBytes || 5 * 1024 * 1024;
 
-              const meta = await getImageMetadata(fileBuffer);
-              if (meta?.width && meta?.height) {
-                if (
-                  meta.width > maxDimensionPx ||
-                  meta.height > maxDimensionPx ||
-                  fileBuffer.length > maxBytes
-                ) {
+              // Always check byte size first, regardless of metadata availability
+              const needsByteSizeSanitization = fileBuffer.length > maxBytes;
+
+              let meta = null;
+              try {
+                meta = await getImageMetadata(fileBuffer);
+              } catch (metaError) {
+                console.warn(`Image metadata extraction failed for ${fileName}:`, metaError);
+                // Continue with sanitization even if metadata extraction fails
+              }
+
+              const needsDimensionSanitization = meta?.width && meta?.height && 
+                (meta.width > maxDimensionPx || meta.height > maxDimensionPx);
+
+              // Apply sanitization if either condition is met
+              if (needsByteSizeSanitization || needsDimensionSanitization) {
+                try {
                   const resized = await resizeToJpeg({
                     buffer: fileBuffer,
                     maxSide: maxDimensionPx,
@@ -918,28 +927,47 @@ export function createOpenClawReadTool(
                   });
                   fileBuffer = Buffer.from(resized);
                   mimeType = "image/jpeg";
+                } catch (resizeError) {
+                  console.error(`Image resize failed for ${fileName}:`, resizeError);
+                  sanitizationFailed = true;
+                  // Don't rethrow - we'll handle the failure by returning a text error
                 }
               }
             } catch (sanitizeError) {
-              console.warn(`Image sanitization failed for ${fileName}:`, sanitizeError);
+              console.error(`Image sanitization failed for ${fileName}:`, sanitizeError);
+              sanitizationFailed = true;
             }
           }
 
-          result = {
-            toolCallId,
-            content: [
-              {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: mimeType,
-                  data: fileBuffer.toString("base64"),
+          // If sanitization failed, return error text instead of potentially invalid image data
+          if (sanitizationFailed) {
+            result = {
+              toolCallId,
+              content: [
+                { 
+                  type: "text", 
+                  text: `Error: Unable to process image file '${fileName}'. The file may be corrupted, malformed, or too large to handle.` 
                 },
-              } as any,
-              { type: "text", text: `${fileName}` },
-            ],
-            details: { path: inputPath, size: fileBuffer.length },
-          } as AgentToolResult;
+              ],
+              details: { path: inputPath, error: "Image sanitization failed" },
+            } as AgentToolResult;
+          } else {
+            result = {
+              toolCallId,
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: mimeType,
+                    data: fileBuffer.toString("base64"),
+                  },
+                } as any,
+                { type: "text", text: `${fileName}` },
+              ],
+              details: { path: inputPath, size: fileBuffer.length },
+            } as AgentToolResult;
+          }
         } else if (AUDIO_EXTENSIONS.has(ext)) {
           const mimeType = getAudioMimeType(ext);
 
