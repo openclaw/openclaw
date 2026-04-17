@@ -44,7 +44,6 @@ function rememberBootstrapWarning(key: string): boolean {
   return true;
 }
 
-/** @internal Reset the bootstrap warning cache. Exported for tests only. */
 export function _resetBootstrapWarningCacheForTest(): void {
   seenBootstrapWarnings.clear();
   bootstrapWarningOrder.length = 0;
@@ -130,15 +129,17 @@ export function makeBootstrapWarn(params: {
   workspaceDir?: string;
   warn?: (message: string) => void;
 }): ((message: string) => void) | undefined {
-  if (!params.warn) {
+  const warn = params.warn;
+  if (!warn) {
     return undefined;
   }
+  const workspacePrefix = params.workspaceDir ?? "";
   return (message: string) => {
-    const key = `${params.workspaceDir ?? ""}\u0000${params.sessionLabel}\u0000${message}`;
+    const key = `${workspacePrefix}\u0000${params.sessionLabel}\u0000${message}`;
     if (!rememberBootstrapWarning(key)) {
       return;
     }
-    params.warn?.(`${message} (sessionKey=${params.sessionLabel})`);
+    warn(`${message} (sessionKey=${params.sessionLabel})`);
   };
 }
 
