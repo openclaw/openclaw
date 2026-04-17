@@ -37,7 +37,7 @@ function resolveInstallerVersionCases(params: {
   const output = execFileSync(
     "bash",
     [
-      "-lc",
+      "-c",
       `source "${installerPath}" >/dev/null 2>&1
 for openclaw_bin in "\${@:3}"; do
   OPENCLAW_BIN="$openclaw_bin"
