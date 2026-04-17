@@ -8,6 +8,7 @@ import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/sessio
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
+import { purgeSubagentRunsForSessionKey } from "../agents/subagent-registry.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../auto-reply/reply/queue.js";
 import {
@@ -443,12 +444,27 @@ export async function cleanupSessionBeforeMutation(params: {
   if (cleanupError) {
     return cleanupError;
   }
-  return await closeAcpRuntimeForSession({
+  const acpCloseError = await closeAcpRuntimeForSession({
     cfg: params.cfg,
     sessionKey: params.legacyKey ?? params.canonicalKey ?? params.target.canonicalKey ?? params.key,
     entry: params.entry,
     reason: params.reason,
   });
+  if (acpCloseError) {
+    return acpCloseError;
+  }
+  for (const sessionKey of new Set(
+    [params.legacyKey, params.canonicalKey, params.target.canonicalKey, params.key].filter(
+      (value): value is string => typeof value === "string" && value.length > 0,
+    ),
+  )) {
+    try {
+      purgeSubagentRunsForSessionKey(sessionKey);
+    } catch {
+      // Best-effort: failure here should not block the mutation flow.
+    }
+  }
+  return undefined;
 }
 
 function emitGatewayBeforeResetPluginHook(params: {

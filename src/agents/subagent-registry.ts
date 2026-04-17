@@ -851,6 +851,40 @@ export function markSubagentRunTerminated(params: {
   return subagentRunManager.markSubagentRunTerminated(params);
 }
 
+// Invoked when a gateway session is deleted or reset. Purges session-mode run
+// records tied to the child session key so entries sitting in COMPLETE (kept
+// alive across rounds by the sweep policy) do not leak after their underlying
+// session is gone. Run-mode entries are left to the regular TTL sweep to avoid
+// racing with in-flight subagent runs.
+export function purgeSubagentRunsForSessionKey(childSessionKey: string): number {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return 0;
+  }
+  const runIds = findRunIdsByChildSessionKey(key);
+  if (runIds.length === 0) {
+    return 0;
+  }
+  let removed = 0;
+  for (const runId of runIds) {
+    const entry = subagentRuns.get(runId);
+    if (!entry || entry.spawnMode !== "session") {
+      continue;
+    }
+    clearPendingLifecycleError(runId);
+    if (!entry.retainAttachmentsOnKeep) {
+      void safeRemoveAttachmentsDir(entry);
+    }
+    if (subagentRuns.delete(runId)) {
+      removed += 1;
+    }
+  }
+  if (removed > 0) {
+    persistSubagentRuns();
+  }
+  return removed;
+}
+
 export function listSubagentRunsForRequester(
   requesterSessionKey: string,
   options?: { requesterRunId?: string },
