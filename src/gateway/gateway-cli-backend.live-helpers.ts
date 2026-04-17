@@ -34,8 +34,8 @@ import { extractPayloadText } from "./test-helpers.agent-results.js";
 const CLI_GATEWAY_CONNECT_TIMEOUT_MS = 60_000;
 // CI Docker live lanes can see repeated cancelled cron tool calls before a job
 // finally sticks, and the created job may take extra time to surface via the CLI.
-const CLI_CRON_MCP_PROBE_MAX_ATTEMPTS = 7;
-const CLI_CRON_MCP_PROBE_VERIFY_POLLS = 15;
+const CLI_CRON_MCP_PROBE_MAX_ATTEMPTS = 10;
+const CLI_CRON_MCP_PROBE_VERIFY_POLLS = 20;
 const CLI_CRON_MCP_PROBE_VERIFY_POLL_MS = 2_000;
 
 export type BootstrapWorkspaceContext = {

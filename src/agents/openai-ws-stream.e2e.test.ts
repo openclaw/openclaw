@@ -292,7 +292,9 @@ describe("OpenAI WebSocket e2e", () => {
 
       expect(assistantText(secondDone)).toMatch(/TOOL_OK/);
     },
-    60_000,
+    // Live CI can spend more than a minute waiting for a stable follow-up turn
+    // when websocket reuse and tool callbacks contend with other provider lanes.
+    120_000,
   );
 
   testFn(
@@ -392,8 +394,8 @@ describe("OpenAI WebSocket e2e", () => {
       }
     },
     // The first websocket warm-up turn is the most latency-sensitive live case
-    // in this suite and can exceed two minutes on loaded CI runners.
-    180_000,
+    // in this suite and can exceed three minutes on loaded CI runners.
+    300_000,
   );
 
   testFn(
