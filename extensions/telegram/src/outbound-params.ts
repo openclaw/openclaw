@@ -8,13 +8,18 @@ function parseIntegerId(value: string): number | undefined {
 
 export function normalizeTelegramReplyToMessageId(value: unknown): number | undefined {
   if (typeof value === "number") {
-    return Number.isFinite(value) ? Math.trunc(value) : undefined;
+    const truncated = Number.isFinite(value) ? Math.trunc(value) : undefined;
+    return truncated != null && truncated > 0 ? truncated : undefined;
   }
   if (typeof value !== "string") {
     return undefined;
   }
   const trimmed = value.trim();
-  return trimmed ? parseIntegerId(trimmed) : undefined;
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = parseIntegerId(trimmed);
+  return parsed != null && parsed > 0 ? parsed : undefined;
 }
 
 export function parseTelegramReplyToMessageId(replyToId?: string | null): number | undefined {
