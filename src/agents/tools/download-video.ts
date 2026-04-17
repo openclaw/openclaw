@@ -524,18 +524,20 @@ function sanitizeFilename(title: string): string {
 }
 
 /**
- * Builds a media URL from gateway origin or falls back to localhost
+ * Builds a media URL from workspace root or falls back to local path
+ * Uses the existing __openclaw__/assistant-media route pattern for serving media
  */
 function buildMediaUrl(workspaceRoot: string, filePath: string, gatewayOrigin?: string): string {
   const relativePath = path.relative(workspaceRoot, filePath);
   const posixPath = relativePath.split(path.sep).join('/');
   const encodedPath = posixPath.split('/').map(encodeURIComponent).join('/');
   
-  // If gateway origin is provided (e.g., from environment or request context), use it
+  // If gateway origin is provided (e.g., from environment or request context), use the existing media route
   if (gatewayOrigin) {
     // Remove trailing slash if present
     const baseOrigin = gatewayOrigin.replace(/\/$/, '');
-    return `${baseOrigin}/api/media/${encodedPath}`;
+    // Use the standard __openclaw__/assistant-media route pattern
+    return `${baseOrigin}/__openclaw__/assistant-media/${encodedPath}`;
   }
   
   // Fallback to localhost for development/local deployments

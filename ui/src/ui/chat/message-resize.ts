@@ -1,15 +1,10 @@
-// message-resize.ts
 import { getSafeLocalStorage } from "../../local-storage.ts";
-
 export type ResizeDirection = 'bottom-right' | 'bottom-left';
-
 export interface ResizeState {
   width: number | null;
   height: number | null;
 }
-
 const RESIZE_STORAGE_KEY = 'chat:message_sizes';
-
 export function getStoredMessageSize(messageId: string): ResizeState | null {
   try {
     const storage = getSafeLocalStorage();
@@ -20,7 +15,6 @@ export function getStoredMessageSize(messageId: string): ResizeState | null {
     return null;
   }
 }
-
 export function storeMessageSize(messageId: string, size: ResizeState) {
   try {
     const storage = getSafeLocalStorage();
