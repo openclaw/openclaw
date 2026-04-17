@@ -920,7 +920,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   for (const runtime of ["bun", "deno", "tsx", "jiti"] as const) {
-    it(`denies approval-based execution when a ${runtime} script operand changes after approval`, async () => {
+    it(`validates approved ${runtime} script operand stability`, async () => {
       await withFakeRuntimeOnPath({
         runtime,
         run: async () => {
@@ -959,23 +959,15 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           } finally {
             fs.rmSync(tmp, { recursive: true, force: true });
           }
-        },
-      });
-    });
-
-    it(`keeps approved ${runtime} script execution working when the script is unchanged`, async () => {
-      await withFakeRuntimeOnPath({
-        runtime,
-        run: async () => {
-          const tmp = fs.mkdtempSync(
+          const stableTmp = fs.mkdtempSync(
             path.join(os.tmpdir(), `openclaw-approval-${runtime}-script-stable-`),
           );
-          const fixture = createRuntimeScriptOperandFixture({ tmp, runtime });
-          fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+          const stableFixture = createRuntimeScriptOperandFixture({ tmp: stableTmp, runtime });
+          fs.writeFileSync(stableFixture.scriptPath, stableFixture.initialBody);
           try {
             const prepared = buildSystemRunApprovalPlan({
-              command: fixture.command,
-              cwd: tmp,
+              command: stableFixture.command,
+              cwd: stableTmp,
             });
             expect(prepared.ok).toBe(true);
             if (!prepared.ok) {
@@ -987,7 +979,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
               command: prepared.plan.argv,
               rawCommand: prepared.plan.commandText,
               systemRunPlan: prepared.plan,
-              cwd: prepared.plan.cwd ?? tmp,
+              cwd: prepared.plan.cwd ?? stableTmp,
               approved: true,
               security: "full",
               ask: "off",
@@ -996,7 +988,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             expect(runCommand).toHaveBeenCalledTimes(1);
             expectInvokeOk(sendInvokeResult);
           } finally {
-            fs.rmSync(tmp, { recursive: true, force: true });
+            fs.rmSync(stableTmp, { recursive: true, force: true });
           }
         },
       });
@@ -1310,32 +1302,33 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
-  it.each([
-    {
-      command: ["python3", "-c", "print('hi')"],
-      expected: "python3 -c requires explicit approval in strictInlineEval mode",
-    },
-    {
-      command: ["awk", 'BEGIN{system("id")}', "/dev/null"],
-      expected: "awk inline program requires explicit approval in strictInlineEval mode",
-    },
-    {
-      command: ["find", ".", "-exec", "id", "{}", ";"],
-      expected: "find -exec requires explicit approval in strictInlineEval mode",
-    },
-    {
-      command: ["xargs", "id"],
-      expected: "xargs inline command requires explicit approval in strictInlineEval mode",
-    },
-    {
-      command: ["make", "-f", "evil.mk"],
-      expected: "make -f requires explicit approval in strictInlineEval mode",
-    },
-    {
-      command: ["sed", "s/.*/id/e", "/dev/null"],
-      expected: "sed inline program requires explicit approval in strictInlineEval mode",
-    },
-  ] as const)("requires explicit approval for strict inline-eval carrier %j", async (testCase) => {
+  it("requires explicit approval for strict inline-eval carriers", async () => {
+    const cases = [
+      {
+        command: ["python3", "-c", "print('hi')"],
+        expected: "python3 -c requires explicit approval in strictInlineEval mode",
+      },
+      {
+        command: ["awk", 'BEGIN{system("id")}', "/dev/null"],
+        expected: "awk inline program requires explicit approval in strictInlineEval mode",
+      },
+      {
+        command: ["find", ".", "-exec", "id", "{}", ";"],
+        expected: "find -exec requires explicit approval in strictInlineEval mode",
+      },
+      {
+        command: ["xargs", "id"],
+        expected: "xargs inline command requires explicit approval in strictInlineEval mode",
+      },
+      {
+        command: ["make", "-f", "evil.mk"],
+        expected: "make -f requires explicit approval in strictInlineEval mode",
+      },
+      {
+        command: ["sed", "s/.*/id/e", "/dev/null"],
+        expected: "sed inline program requires explicit approval in strictInlineEval mode",
+      },
+    ] as const;
     setRuntimeConfigSnapshot({
       tools: {
         exec: {
@@ -1344,22 +1337,24 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       },
     });
     try {
-      const { runCommand, sendInvokeResult, sendNodeEvent } = await runSystemInvoke({
-        preferMacAppExecHost: false,
-        command: [...testCase.command],
-        security: "full",
-        ask: "off",
-      });
+      for (const testCase of cases) {
+        const { runCommand, sendInvokeResult, sendNodeEvent } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: [...testCase.command],
+          security: "full",
+          ask: "off",
+        });
 
-      expect(runCommand).not.toHaveBeenCalled();
-      expect(sendNodeEvent).toHaveBeenCalledWith(
-        expect.anything(),
-        "exec.denied",
-        expect.objectContaining({ reason: "approval-required" }),
-      );
-      expectInvokeErrorMessage(sendInvokeResult, {
-        message: testCase.expected,
-      });
+        expect(runCommand, testCase.command.join(" ")).not.toHaveBeenCalled();
+        expect(sendNodeEvent, testCase.command.join(" ")).toHaveBeenCalledWith(
+          expect.anything(),
+          "exec.denied",
+          expect.objectContaining({ reason: "approval-required" }),
+        );
+        expectInvokeErrorMessage(sendInvokeResult, {
+          message: testCase.expected,
+        });
+      }
     } finally {
       clearRuntimeConfigSnapshot();
     }
@@ -1395,26 +1390,26 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
-  it.each([
-    { executable: "python3", args: ["-c", "print('hi')"] },
-    { executable: "awk", args: ['BEGIN{system("id")}', "/dev/null"] },
-    { executable: "find", args: [".", "-exec", "id", "{}", ";"] },
-    { executable: "xargs", args: ["id"] },
-    { executable: "sed", args: ["s/.*/id/e", "/dev/null"] },
-  ] as const)(
-    "does not persist allow-always approvals for strict inline-eval carrier %j",
-    async (testCase) => {
-      setRuntimeConfigSnapshot({
-        tools: {
-          exec: {
-            strictInlineEval: true,
-          },
+  it("does not persist allow-always approvals for strict inline-eval carriers", async () => {
+    const cases = [
+      { executable: "python3", args: ["-c", "print('hi')"] },
+      { executable: "awk", args: ['BEGIN{system("id")}', "/dev/null"] },
+      { executable: "find", args: [".", "-exec", "id", "{}", ";"] },
+      { executable: "xargs", args: ["id"] },
+      { executable: "sed", args: ["s/.*/id/e", "/dev/null"] },
+    ] as const;
+    setRuntimeConfigSnapshot({
+      tools: {
+        exec: {
+          strictInlineEval: true,
         },
-      });
-      try {
-        await withTempApprovalsHome({
-          approvals: createAllowlistOnMissApprovals(),
-          run: async () => {
+      },
+    });
+    try {
+      await withTempApprovalsHome({
+        approvals: createAllowlistOnMissApprovals(),
+        run: async () => {
+          for (const testCase of cases) {
             const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-inline-eval-bin-"));
             try {
               const executablePath = createTempExecutable({
@@ -1437,13 +1432,13 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             } finally {
               fs.rmSync(tempDir, { recursive: true, force: true });
             }
-          },
-        });
-      } finally {
-        clearRuntimeConfigSnapshot();
-      }
-    },
-  );
+          }
+        },
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
 
   it("persists benign awk allow-always approvals in strict inline-eval mode without reopening inline carriers", async () => {
     setRuntimeConfigSnapshot({
