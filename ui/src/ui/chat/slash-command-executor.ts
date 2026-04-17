@@ -122,8 +122,57 @@ export async function executeSlashCommand(
       return await executeSteer(client, sessionKey, args, context);
     case "redirect":
       return await executeRedirect(client, sessionKey, args, context);
+    case "plan":
+      return await executePlan(client, sessionKey, args);
     default:
       return { content: `Unknown command: \`/${commandName}\`` };
+  }
+}
+
+/**
+ * `/plan on|off|status` — toggle the session into or out of plan mode.
+ * Routes through `setSessionPlanMode` (sessions.patch with `planMode`)
+ * which the gateway's PR-8 handler validates against the
+ * `agents.defaults.planMode.enabled` opt-in gate.
+ */
+async function executePlan(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+): Promise<SlashCommandResult> {
+  const raw = normalizeLowercaseStringOrEmpty(args);
+  if (!raw || raw === "status") {
+    return {
+      content: formatDirectiveOptions(
+        "Usage: `/plan on` to enter plan mode, `/plan off` to exit.",
+        "on, off, status",
+      ),
+    };
+  }
+  if (raw !== "on" && raw !== "off") {
+    return {
+      content: `Unrecognized plan-mode value "${args.trim()}". Valid: on, off, status.`,
+    };
+  }
+  const mode: "plan" | "normal" = raw === "on" ? "plan" : "normal";
+  try {
+    await setSessionPlanMode(client, sessionKey, mode);
+    return {
+      content:
+        mode === "plan"
+          ? "Plan mode **enabled** — write/edit/exec tools blocked until plan approved."
+          : "Plan mode **disabled** — mutations unblocked.",
+      action: "refresh",
+    };
+  } catch (err) {
+    const msg = String(err);
+    if (msg.includes("plan mode is disabled")) {
+      return {
+        content:
+          "Plan mode is disabled at the config level. Set `agents.defaults.planMode.enabled: true` and restart the gateway.",
+      };
+    }
+    return { content: `Failed to set plan mode: ${msg}` };
   }
 }
 

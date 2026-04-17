@@ -284,7 +284,6 @@ export function renderModeSwitcher(params: {
                       onSelectMode(mode);
                     }}
                   >
-                    ${mode.icon}
                     <span class="agent-chat__mode-menu__label">${mode.label}</span>
                     <kbd class="agent-chat__mode-menu__shortcut">Ctrl+${mode.shortcut}</kbd>
                   </button>
