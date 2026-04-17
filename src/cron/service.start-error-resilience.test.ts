@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
 import { start } from "./service/ops.js";
-import { onTimer } from "./service/timer.js";
+import { clearZombieRunningMarkers } from "./service/timer.js";
+import type { CronJob } from "./types.js";
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
   prefix: "openclaw-cron-start-",
@@ -141,132 +142,106 @@ describe("CronService start() error resilience", () => {
   });
 });
 
-describe("CronService onTimer() zombie detection", () => {
-  /**
-   * Write the current in-memory store state to disk so that
-   * `ensureLoaded({ forceReload: true })` inside `onTimer` picks it up.
-   */
-  async function flushStoreToDisk(statePath: string, store: { version: number; jobs: any[] }) {
-    await fs.writeFile(statePath, JSON.stringify(store, null, 2), "utf-8");
+describe("clearZombieRunningMarkers", () => {
+  function makeJob(overrides: Partial<CronJob> & { timeoutSeconds?: number } = {}): CronJob {
+    const timeoutSeconds = overrides.timeoutSeconds ?? 60;
+    return {
+      id: "test-job",
+      name: "test-job",
+      enabled: true,
+      createdAtMs: Date.now() - 60_000,
+      updatedAtMs: Date.now(),
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() - 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick", timeoutSeconds },
+      state: {
+        nextRunAtMs: Date.now() - 10_000,
+        runningAtMs: undefined,
+      },
+      ...overrides,
+    } as CronJob;
   }
 
-  it("clears zombie runningAtMs markers for jobs that exceeded their timeout", async () => {
-    const { storePath, cleanup } = await makeStorePath();
-
-    // A job that has been "running" for 2 hours with a 60s timeout
-    const zombieRunningAtMs = Date.now() - 7_200_000; // 2 hours ago
-    const overdueNextRunAtMs = Date.now() - 300_000; // 5 min overdue
-
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    const storeData = {
-      version: 1,
-      jobs: [
-        {
-          id: "zombie-job",
-          name: "zombie-job",
-          enabled: true,
-          createdAtMs: overdueNextRunAtMs - 60_000,
-          updatedAtMs: overdueNextRunAtMs,
-          schedule: { kind: "every", everyMs: 60_000, anchorMs: overdueNextRunAtMs - 60_000 },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: "tick", timeoutSeconds: 60 },
-          state: {
-            nextRunAtMs: overdueNextRunAtMs,
-            runningAtMs: zombieRunningAtMs,
-          },
-        },
-      ],
-    };
-    await fs.writeFile(storePath, JSON.stringify(storeData, null, 2), "utf-8");
+  it("clears runningAtMs for jobs that exceeded their timeout", () => {
+    const now = Date.now();
+    const job = makeJob({ timeoutSeconds: 60 }); // 60s timeout → zombie threshold = 120s
+    job.state.runningAtMs = now - 300_000; // 5 min ago, way past 120s threshold
 
     const state = createCronServiceState({
-      storePath,
+      storePath: "/tmp/fake",
       cronEnabled: true,
       log: noopLogger,
-      enqueueSystemEvent: vi.fn().mockResolvedValue(undefined) as never,
+      enqueueSystemEvent: vi.fn() as never,
       requestHeartbeatNow: vi.fn() as never,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,
     });
+    state.store = { version: 1, jobs: [job] };
 
-    try {
-      // start() will clear the stale runningAtMs marker — that's the
-      // existing startup cleanup path, not what we're testing here.
-      // After start, re-inject a zombie marker and write it to disk so
-      // onTimer's forceReload will see it.
-      await start(state);
+    const result = clearZombieRunningMarkers(state);
 
-      state.store!.jobs[0].state.runningAtMs = zombieRunningAtMs;
-      state.store!.jobs[0].state.nextRunAtMs = Date.now() - 1000;
-      state.running = false;
-      await flushStoreToDisk(storePath, state.store!);
-
-      await onTimer(state);
-
-      // The zombie marker should have been cleared (not the stale value)
-      // and the job should have been picked up as due and executed
-      expect(state.store!.jobs[0].state.runningAtMs).not.toBe(zombieRunningAtMs);
-      // The runningAtMs should now be set to a recent timestamp (the new run)
-      expect(typeof state.store!.jobs[0].state.runningAtMs).toBe("number");
-      expect(state.store!.jobs[0].state.runningAtMs).toBeGreaterThan(zombieRunningAtMs);
-    } finally {
-      await cleanup();
-    }
+    expect(result).toBe(true);
+    expect(job.state.runningAtMs).toBeUndefined();
   });
 
-  it("does NOT clear runningAtMs for unlimited-timeout jobs", async () => {
-    const { storePath, cleanup } = await makeStorePath();
-
-    // A job with timeoutSeconds: 0 (unlimited) that has been running for 2 hours
-    const longRunningMs = Date.now() - 7_200_000;
-
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    const storeData = {
-      version: 1,
-      jobs: [
-        {
-          id: "unlimited-job",
-          name: "unlimited-timeout-job",
-          enabled: true,
-          createdAtMs: longRunningMs - 60_000,
-          updatedAtMs: longRunningMs,
-          schedule: { kind: "cron", expr: "0 * * * *" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: "tick", timeoutSeconds: 0 },
-          state: {
-            nextRunAtMs: Date.now() + 60_000,
-            runningAtMs: longRunningMs,
-          },
-        },
-      ],
-    };
-    await fs.writeFile(storePath, JSON.stringify(storeData, null, 2), "utf-8");
+  it("does NOT clear runningAtMs for jobs still within their timeout", () => {
+    const now = Date.now();
+    const job = makeJob({ timeoutSeconds: 600 }); // 10 min timeout → zombie threshold = 20 min
+    job.state.runningAtMs = now - 300_000; // 5 min ago, within 20 min threshold
 
     const state = createCronServiceState({
-      storePath,
+      storePath: "/tmp/fake",
       cronEnabled: true,
       log: noopLogger,
-      enqueueSystemEvent: vi.fn().mockResolvedValue(undefined) as never,
+      enqueueSystemEvent: vi.fn() as never,
       requestHeartbeatNow: vi.fn() as never,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,
     });
+    state.store = { version: 1, jobs: [job] };
 
-    try {
-      // start() clears the stale marker — that's fine, we re-inject
-      // after start and flush to disk so onTimer sees it.
-      await start(state);
+    const result = clearZombieRunningMarkers(state);
 
-      state.store!.jobs[0].state.runningAtMs = longRunningMs;
-      state.running = false;
-      await flushStoreToDisk(storePath, state.store!);
+    expect(result).toBe(false);
+    expect(job.state.runningAtMs).toBe(now - 300_000);
+  });
 
-      await onTimer(state);
+  it("does NOT clear runningAtMs for unlimited-timeout jobs (timeoutSeconds <= 0)", () => {
+    const now = Date.now();
+    const job = makeJob({ timeoutSeconds: 0 }); // unlimited
+    job.state.runningAtMs = now - 7_200_000; // 2 hours ago
 
-      // The unlimited-timeout job should NOT have its marker cleared
-      expect(state.store!.jobs[0].state.runningAtMs).toBe(longRunningMs);
-    } finally {
-      await cleanup();
-    }
+    const state = createCronServiceState({
+      storePath: "/tmp/fake",
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn() as never,
+      requestHeartbeatNow: vi.fn() as never,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,
+    });
+    state.store = { version: 1, jobs: [job] };
+
+    const result = clearZombieRunningMarkers(state);
+
+    expect(result).toBe(false);
+    expect(job.state.runningAtMs).toBe(now - 7_200_000);
+  });
+
+  it("skips jobs without a runningAtMs marker", () => {
+    const job = makeJob({ timeoutSeconds: 60 });
+    // runningAtMs is undefined by default
+
+    const state = createCronServiceState({
+      storePath: "/tmp/fake",
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn() as never,
+      requestHeartbeatNow: vi.fn() as never,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,
+    });
+    state.store = { version: 1, jobs: [job] };
+
+    const result = clearZombieRunningMarkers(state);
+
+    expect(result).toBe(false);
   });
 });
