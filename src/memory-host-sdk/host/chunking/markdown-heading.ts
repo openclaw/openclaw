@@ -1,8 +1,8 @@
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../utils/cjk-chars.js";
 import { buildTextEmbeddingInput } from "../embedding-inputs.js";
-import type { MemoryChunk } from "../internal.js";
-import { hashText } from "./hash.js";
 import { chunkFixedSize } from "./fixed-size.js";
+import { hashText } from "./hash.js";
+import type { MemoryChunk } from "./types.js";
 import type { ChunkingStrategy, ChunkingConfig } from "./types.js";
 
 /** Default maximum heading depth to split on. */

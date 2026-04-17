@@ -1,7 +1,7 @@
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../utils/cjk-chars.js";
 import { buildTextEmbeddingInput } from "../embedding-inputs.js";
-import type { MemoryChunk } from "../internal.js";
 import { hashText } from "./hash.js";
+import type { MemoryChunk } from "./types.js";
 import type { ChunkingStrategy, LlmCompletionFn, ChunkingConfig } from "./types.js";
 
 /** Default token threshold per paragraph group (from LumberChunker paper, θ=550). */

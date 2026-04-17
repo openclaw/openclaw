@@ -1,4 +1,12 @@
-import type { MemoryChunk } from "../internal.js";
+import { type EmbeddingInput } from "../embedding-inputs.js";
+
+export type MemoryChunk = {
+  startLine: number;
+  endLine: number;
+  text: string;
+  hash: string;
+  embeddingInput?: EmbeddingInput;
+};
 
 /** Supported chunking strategy names. */
 export type ChunkingStrategyName =
@@ -29,7 +37,7 @@ export type ChunkingConfig = {
   lineMaxLen?: number | undefined;
   maxLevel?: number | undefined;
   recurrentType?: number | undefined;
-}
+};
 
 /** Unified chunking strategy interface. All strategies implement this. */
 export interface ChunkingStrategy {

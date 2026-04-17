@@ -1,7 +1,7 @@
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../utils/cjk-chars.js";
 import { buildTextEmbeddingInput } from "../embedding-inputs.js";
-import type { MemoryChunk } from "../internal.js";
 import { hashText } from "./hash.js";
+import type { MemoryChunk } from "./types.js";
 import type { ChunkingStrategy, ChunkingConfig } from "./types.js";
 
 /** Default target token count per chunk. */
@@ -20,8 +20,7 @@ export const DEFAULT_OVERLAP_SENTENCES = 1;
  * Does NOT match a lone ASCII dot followed by a lowercase letter or digit
  * (abbreviation / decimal guard).
  */
-export const SENTENCE_TERMINATOR_RE = 
-/([.!?。！？；;…]+[\])）」』〉》】»›"'"']*)/g;
+export const SENTENCE_TERMINATOR_RE = /([.!?。！？；;…]+[\])）」』〉》】»›"'"']*)/g;
 
 /**
  * Full sentence-boundary detector used in splitIntoSentences().
@@ -157,7 +156,8 @@ export function splitIntoSentences(content: string): SentenceEntry[] {
 
       const sentenceText = line.slice(lastEnd, terminatorEnd).trim();
       const terminator = match[1] ?? "";
-      if (/^\.+$/.test(terminator) && sentenceText.length <= 10) {   // skip short sentences and special cases like "1. xxx", "a. xxx"
+      if (/^\.+$/.test(terminator) && sentenceText.length <= 10) {
+        // skip short sentences and special cases like "1. xxx", "a. xxx"
         continue;
       }
       if (sentenceText.length > 0) {

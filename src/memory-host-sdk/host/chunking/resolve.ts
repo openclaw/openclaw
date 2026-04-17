@@ -1,11 +1,11 @@
+import { type EmbeddingProvider } from "../embeddings.js";
 import { FixedSizeStrategy } from "./fixed-size.js";
 import { HiChunkStrategy } from "./hichunk.js";
 import { LumberChunkerStrategy } from "./lumber.js";
 import { MarkdownHeadingStrategy } from "./markdown-heading.js";
-import { SentenceStrategy } from "./sentence.js";
 import { SemanticStrategy } from "./semantic.js";
+import { SentenceStrategy } from "./sentence.js";
 import type { ChunkingStrategy, LlmCompletionFn, ChunkingConfig } from "./types.js";
-import { type EmbeddingProvider } from "../embeddings.js";
 
 /**
  * Create a chunking strategy instance from a resolved configuration.
@@ -38,6 +38,6 @@ export function resolveChunkingStrategy(
       }
       return new HiChunkStrategy(config, completionFn);
     default:
-      throw new Error(`Unknown chunking strategy: ${config.strategy}`);
+      throw new Error(`Unknown chunking strategy: ${config.strategy as string}`);
   }
 }

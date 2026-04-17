@@ -1,10 +1,10 @@
-import { cosineSimilarity } from "../internal.js";
-import type { MemoryChunk } from "../internal.js";
-import { hashText } from "./hash.js";
-import type { ChunkingStrategy, ChunkingConfig } from "./types.js";
-import { type EmbeddingProvider } from "../embeddings.js";
 import { buildTextEmbeddingInput } from "../embedding-inputs.js";
+import { type EmbeddingProvider } from "../embeddings.js";
+import { cosineSimilarity } from "../internal.js";
+import { hashText } from "./hash.js";
 import { splitIntoSentences } from "./sentence.js";
+import type { MemoryChunk } from "./types.js";
+import type { ChunkingStrategy, ChunkingConfig } from "./types.js";
 
 /** Default buffer size for combining sentences. */
 export const DEFAULT_BUFFER_SIZE = 1;
@@ -154,7 +154,8 @@ export class SemanticStrategy implements ChunkingStrategy {
   constructor(config: ChunkingConfig, provider: EmbeddingProvider) {
     this.config = config;
     this.bufferSize = config.bufferSize ?? DEFAULT_BUFFER_SIZE;
-    this.breakpointPercentileThreshold = config.breakpointPercentileThreshold ?? DEFAULT_BREAKPOINT_PERCENTILE_THRESHOLD;
+    this.breakpointPercentileThreshold =
+      config.breakpointPercentileThreshold ?? DEFAULT_BREAKPOINT_PERCENTILE_THRESHOLD;
     this.provider = provider;
   }
 
@@ -166,13 +167,15 @@ export class SemanticStrategy implements ChunkingStrategy {
     }
     if (rawSentences.length === 1) {
       // Single sentence, no need for semantic chunking.
-      return [{
+      return [
+        {
           startLine: rawSentences[0].startLine,
           endLine: rawSentences[0].endLine,
           text: content,
           hash: hashText(content),
           embeddingInput: buildTextEmbeddingInput(content),
-        }];
+        },
+      ];
     }
 
     // 2. Combine adjacent sentences into context windows.

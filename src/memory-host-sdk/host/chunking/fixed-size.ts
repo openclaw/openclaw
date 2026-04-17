@@ -1,8 +1,7 @@
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../utils/cjk-chars.js";
 import { buildTextEmbeddingInput } from "../embedding-inputs.js";
-import type { MemoryChunk } from "../internal.js";
 import { hashText } from "./hash.js";
-import type { ChunkingStrategy, ChunkingConfig } from "./types.js";
+import type { MemoryChunk, ChunkingStrategy, ChunkingConfig } from "./types.js";
 
 /** Default chunk size in tokens. */
 export const DEFAULT_CHUNK_TOKENS = 400;
