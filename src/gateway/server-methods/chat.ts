@@ -163,6 +163,134 @@ const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
 ]);
 const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
+const STARTUP_CONTEXT_PREFIX = "[Startup context loaded by runtime]";
+const SYSTEM_EVENT_LINE_RE = /^System(?: \(untrusted\))?: \[/;
+
+function extractUserMessageText(
+  entry: Record<string, unknown>,
+): { text: string; field: "content-array" | "content-string" | "text" } | null {
+  if (Array.isArray(entry.content)) {
+    for (const item of entry.content) {
+      if (item && typeof item === "object") {
+        const block = item as Record<string, unknown>;
+        if (block.type === "text" && typeof block.text === "string") {
+          return { text: block.text, field: "content-array" };
+        }
+      }
+    }
+    return null;
+  }
+  if (typeof entry.content === "string") {
+    return { text: entry.content, field: "content-string" };
+  }
+  if (typeof entry.text === "string") {
+    return { text: entry.text, field: "text" };
+  }
+  return null;
+}
+
+function stripStartupContextBlock(text: string): string {
+  const startIdx = text.indexOf(STARTUP_CONTEXT_PREFIX);
+  if (startIdx < 0) {
+    return text;
+  }
+  return text.slice(0, startIdx).trim();
+}
+
+function stripSystemEventLines(text: string): string {
+  const lines = text.split("\n");
+  let firstUserLineIdx = -1;
+  let seenSystemLine = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (SYSTEM_EVENT_LINE_RE.test(lines[i])) {
+      seenSystemLine = true;
+      continue;
+    }
+    if (seenSystemLine && lines[i].trim() === "") {
+      continue;
+    }
+    if (seenSystemLine) {
+      firstUserLineIdx = i;
+      break;
+    }
+    break;
+  }
+  if (!seenSystemLine) {
+    return text;
+  }
+  if (firstUserLineIdx < 0) {
+    return "";
+  }
+  return lines.slice(firstUserLineIdx).join("\n");
+}
+
+function stripRuntimeContentFromText(text: string): string {
+  let result = stripSystemEventLines(text);
+  result = stripStartupContextBlock(result);
+  return result.trim();
+}
+
+function stripRuntimeContentFromMessage(
+  message: unknown,
+): { message: unknown; changed: boolean; empty: boolean } {
+  if (!message || typeof message !== "object") {
+    return { message, changed: false, empty: false };
+  }
+  const entry = message as Record<string, unknown>;
+  const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+  if (role !== "user") {
+    return { message, changed: false, empty: false };
+  }
+  const extracted = extractUserMessageText(entry);
+  if (!extracted) {
+    return { message, changed: false, empty: false };
+  }
+  const stripped = stripRuntimeContentFromText(extracted.text);
+  if (stripped === extracted.text) {
+    return { message, changed: false, empty: false };
+  }
+  if (!stripped) {
+    return { message, changed: true, empty: true };
+  }
+  const updated = { ...entry };
+  if (extracted.field === "content-array") {
+    updated.content = (entry.content as unknown[]).map((item) => {
+      if (item && typeof item === "object") {
+        const block = item as Record<string, unknown>;
+        if (block.type === "text" && typeof block.text === "string") {
+          return { ...block, text: stripped };
+        }
+      }
+      return item;
+    });
+  } else if (extracted.field === "content-string") {
+    updated.content = stripped;
+  } else {
+    updated.text = stripped;
+  }
+  return { message: updated, changed: true, empty: false };
+}
+
+export function stripRuntimeInjectedContent(messages: unknown[]): unknown[] {
+  if (messages.length === 0) {
+    return messages;
+  }
+  let changed = false;
+  const result: unknown[] = [];
+  for (const message of messages) {
+    const res = stripRuntimeContentFromMessage(message);
+    if (res.empty) {
+      changed = true;
+      continue;
+    }
+    if (res.changed) {
+      changed = true;
+    }
+    result.push(res.message);
+  }
+  return changed ? result : messages;
+}
+
 export function resolveEffectiveChatHistoryMaxChars(
   cfg: { gateway?: { webchat?: { chatHistoryMaxChars?: number } } },
   maxChars?: number,
@@ -1639,8 +1767,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
+    const withoutRuntimeContent = stripRuntimeInjectedContent(sanitized);
     const normalized = augmentChatHistoryWithCanvasBlocks(
-      sanitizeChatHistoryMessages(sanitized, effectiveMaxChars),
+      sanitizeChatHistoryMessages(withoutRuntimeContent, effectiveMaxChars),
     );
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
