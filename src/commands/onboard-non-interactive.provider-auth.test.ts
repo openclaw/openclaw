@@ -156,19 +156,54 @@ vi.mock("../agents/auth-profiles/upsert-with-lock.js", () => ({
 }));
 
 vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async () => {
-  const [
-    { resolveDefaultAgentId, resolveAgentDir, resolveAgentWorkspaceDir },
-    { resolveDefaultAgentWorkspaceDir },
-    { enablePluginInConfig },
-    { configureOpenAICompatibleSelfHostedProviderNonInteractive },
-    { detectZaiEndpoint },
-  ] = await Promise.all([
-    import("../agents/agent-scope.js"),
-    import("../agents/workspace.js"),
-    import("../plugins/enable.js"),
-    import("../plugins/provider-self-hosted-setup.js"),
-    import("../plugins/provider-zai-endpoint.js"),
-  ]);
+  function resolveDefaultAgentId(config: {
+    agents?: { list?: Array<{ id?: string; default?: boolean }> };
+  }): string {
+    return config.agents?.list?.find((agent) => agent.default)?.id?.trim() || "main";
+  }
+
+  function resolveAgentDir(_config: unknown, agentId: string): string {
+    return path.join(process.env.OPENCLAW_STATE_DIR || "/tmp/openclaw-test", "agents", agentId);
+  }
+
+  function resolveAgentWorkspaceDir(): string | undefined {
+    return undefined;
+  }
+
+  function resolveDefaultAgentWorkspaceDir(): string {
+    return "/tmp/openclaw-workspace";
+  }
+
+  function enablePluginInConfig(config: Record<string, unknown>): {
+    enabled: true;
+    config: Record<string, unknown>;
+  } {
+    return { enabled: true, config };
+  }
+
+  async function detectZaiEndpoint(params: {
+    apiKey: string;
+    endpoint?: "coding-global" | "coding-cn";
+  }): Promise<{ baseUrl: string; modelId: string } | null> {
+    const baseUrl =
+      params.endpoint === "coding-global"
+        ? ZAI_CODING_GLOBAL_BASE_URL
+        : params.endpoint === "coding-cn"
+          ? ZAI_CODING_CN_BASE_URL
+          : ZAI_GLOBAL_BASE_URL;
+    const modelIds = params.endpoint === "coding-cn" ? ["glm-5.1", "glm-4.7"] : ["glm-5.1"];
+    for (const modelId of modelIds) {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${params.apiKey}` },
+        body: JSON.stringify({ model: modelId }),
+      });
+      if (response.status === 200) {
+        return { baseUrl, modelId };
+      }
+    }
+    return null;
+  }
 
   const ZAI_FALLBACKS = {
     "zai-api-key": {
@@ -412,129 +447,6 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     };
   }
 
-  function createSelfHostedChoice(params: {
-    providerId: string;
-    label: string;
-    defaultBaseUrl: string;
-    defaultApiKeyEnvVar: string;
-    modelPlaceholder: string;
-  }): ChoiceHandler {
-    return {
-      providerId: params.providerId,
-      label: params.label,
-      runNonInteractive: async (ctx) =>
-        await configureOpenAICompatibleSelfHostedProviderNonInteractive({
-          ctx: ctx as never,
-          providerId: params.providerId,
-          providerLabel: params.label,
-          defaultBaseUrl: params.defaultBaseUrl,
-          defaultApiKeyEnvVar: params.defaultApiKeyEnvVar,
-          modelPlaceholder: params.modelPlaceholder,
-        }),
-    };
-  }
-
-  function resolveLmstudioDiscoveryUrl(baseUrl: string): string {
-    const normalized = baseUrl.trim().replace(/\/+$/u, "");
-    if (normalized.endsWith("/api/v1")) {
-      return `${normalized}/models`;
-    }
-    if (normalized.endsWith("/v1")) {
-      return `${normalized.slice(0, -"/v1".length)}/api/v1/models`;
-    }
-    return `${normalized}/api/v1/models`;
-  }
-
-  function extractLmstudioModelIds(payload: unknown): string[] {
-    if (!payload || typeof payload !== "object" || !("models" in payload)) {
-      return [];
-    }
-    const models = (payload as { models?: unknown }).models;
-    if (!Array.isArray(models)) {
-      return [];
-    }
-    return models
-      .map((entry) => {
-        if (!entry || typeof entry !== "object") {
-          return null;
-        }
-        const typedEntry = entry as { type?: unknown; key?: unknown };
-        return {
-          type: normalizeText(typedEntry.type),
-          key: normalizeText(typedEntry.key),
-        };
-      })
-      .filter((entry): entry is { type: string; key: string } => Boolean(entry))
-      .filter((entry) => entry.type.trim().toLowerCase() === "llm")
-      .map((entry) => entry.key.trim())
-      .filter(Boolean);
-  }
-
-  function createLmstudioChoice(): ChoiceHandler {
-    return {
-      providerId: "lmstudio",
-      label: "LM Studio",
-      runNonInteractive: async (ctx) => {
-        const baseUrl = normalizeText(ctx.opts.customBaseUrl) || "http://localhost:1234/v1";
-        const lmstudioApiKey = normalizeText(ctx.opts.lmstudioApiKey);
-        const customApiKey = normalizeText(ctx.opts.customApiKey);
-        const resolved = await ctx.resolveApiKey({
-          provider: "lmstudio",
-          flagValue: lmstudioApiKey || customApiKey,
-          flagName: lmstudioApiKey ? "--lmstudio-api-key" : "--custom-api-key",
-          envVar: "LM_API_TOKEN",
-          required: false,
-        });
-        const resolvedOrSynthetic = resolved ?? {
-          key: "lmstudio-local",
-          source: "flag" as const,
-        };
-        const credential = ctx.toApiKeyCredential({
-          provider: "lmstudio",
-          resolved: resolvedOrSynthetic,
-        });
-        if (!credential) {
-          return null;
-        }
-        upsertAuthProfile({
-          profileId: "lmstudio:default",
-          credential: credential as never,
-          agentDir: ctx.agentDir,
-        });
-
-        const response = await fetch(resolveLmstudioDiscoveryUrl(baseUrl));
-        const discoveredModelIds = extractLmstudioModelIds(await response.json());
-        if (discoveredModelIds.length === 0) {
-          ctx.runtime.error(`No LM Studio LLM models were found at ${baseUrl}.`);
-          ctx.runtime.exit(1);
-          return null;
-        }
-
-        const requestedModelId = normalizeText(ctx.opts.customModelId);
-        const selectedModelId = requestedModelId || discoveredModelIds[0];
-        if (!discoveredModelIds.includes(selectedModelId)) {
-          ctx.runtime.error(`LM Studio model ${selectedModelId} was not found at ${baseUrl}.`);
-          ctx.runtime.exit(1);
-          return null;
-        }
-
-        let next = applyAuthProfileConfig(ctx.config as never, {
-          profileId: "lmstudio:default",
-          provider: "lmstudio",
-          mode: "api_key",
-        });
-        next = withProviderConfig(next, "lmstudio", {
-          baseUrl,
-          api: "openai-completions",
-          auth: "api-key",
-          apiKey: resolved ? "LM_API_TOKEN" : "lmstudio-local",
-          models: discoveredModelIds.map((id) => buildTestProviderModel(id)),
-        });
-        return applyPrimaryModel(next as never, `lmstudio/${selectedModelId}`);
-      },
-    };
-  }
-
   function createZaiChoice(
     choiceId: "zai-api-key" | "zai-coding-cn" | "zai-coding-global",
   ): ChoiceHandler {
@@ -592,45 +504,6 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
       },
     };
   }
-
-  const cloudflareAiGatewayChoice: ChoiceHandler = {
-    providerId: "cloudflare-ai-gateway",
-    label: "Cloudflare AI Gateway",
-    runNonInteractive: async (ctx) => {
-      const accountId = normalizeText(ctx.opts.cloudflareAiGatewayAccountId);
-      const gatewayId = normalizeText(ctx.opts.cloudflareAiGatewayGatewayId);
-      const resolved = await ctx.resolveApiKey({
-        provider: "cloudflare-ai-gateway",
-        flagValue: normalizeText(ctx.opts.cloudflareAiGatewayApiKey),
-        flagName: "--cloudflare-ai-gateway-api-key",
-        envVar: "CLOUDFLARE_AI_GATEWAY_API_KEY",
-      });
-      if (!resolved) {
-        return null;
-      }
-      if (resolved.source !== "profile") {
-        const credential = ctx.toApiKeyCredential({
-          provider: "cloudflare-ai-gateway",
-          resolved,
-          metadata: { accountId, gatewayId },
-        });
-        if (!credential) {
-          return null;
-        }
-        upsertAuthProfile({
-          profileId: "cloudflare-ai-gateway:default",
-          credential: credential as never,
-          agentDir: ctx.agentDir,
-        });
-      }
-      const withProfile = applyAuthProfileConfig(ctx.config as never, {
-        profileId: "cloudflare-ai-gateway:default",
-        provider: "cloudflare-ai-gateway",
-        mode: "api_key",
-      });
-      return applyPrimaryModel(withProfile, "cloudflare-ai-gateway/claude-sonnet-4-5");
-    },
-  };
 
   const choiceMap = new Map<string, ChoiceHandler>([
     [
@@ -728,54 +601,6 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
       }),
     ],
     [
-      "mistral-api-key",
-      createApiKeyChoice({
-        providerId: "mistral",
-        label: "Mistral",
-        choiceId: "mistral-api-key",
-        optionKey: "mistralApiKey",
-        flagName: "--mistral-api-key",
-        envVar: "MISTRAL_API_KEY",
-        defaultModel: "mistral/mistral-large-latest",
-      }),
-    ],
-    [
-      "volcengine-api-key",
-      createApiKeyChoice({
-        providerId: "volcengine",
-        label: "Volcano Engine",
-        choiceId: "volcengine-api-key",
-        optionKey: "volcengineApiKey",
-        flagName: "--volcengine-api-key",
-        envVar: "VOLCANO_ENGINE_API_KEY",
-        defaultModel: "volcengine-plan/ark-code-latest",
-      }),
-    ],
-    [
-      "byteplus-api-key",
-      createApiKeyChoice({
-        providerId: "byteplus",
-        label: "BytePlus",
-        choiceId: "byteplus-api-key",
-        optionKey: "byteplusApiKey",
-        flagName: "--byteplus-api-key",
-        envVar: "BYTEPLUS_API_KEY",
-        defaultModel: "byteplus-plan/ark-code-latest",
-      }),
-    ],
-    [
-      "ai-gateway-api-key",
-      createApiKeyChoice({
-        providerId: "vercel-ai-gateway",
-        label: "Vercel AI Gateway",
-        choiceId: "ai-gateway-api-key",
-        optionKey: "aiGatewayApiKey",
-        flagName: "--ai-gateway-api-key",
-        envVar: "AI_GATEWAY_API_KEY",
-        defaultModel: "vercel-ai-gateway/anthropic/claude-opus-4.6",
-      }),
-    ],
-    [
       "openai-api-key",
       createApiKeyChoice({
         providerId: "openai",
@@ -785,17 +610,6 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
         flagName: "--openai-api-key",
         envVar: "OPENAI_API_KEY",
         defaultModel: OPENAI_DEFAULT_MODEL,
-      }),
-    ],
-    [
-      "openrouter-api-key",
-      createApiKeyChoice({
-        providerId: "openrouter",
-        label: "OpenRouter",
-        choiceId: "openrouter-api-key",
-        optionKey: "openrouterApiKey",
-        flagName: "--openrouter-api-key",
-        envVar: "OPENROUTER_API_KEY",
       }),
     ],
     [
@@ -809,64 +623,6 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
         envVar: "OPENCODE_ZEN_API_KEY",
         profileIds: ["opencode:default", "opencode-go:default"],
         defaultModel: "opencode/claude-opus-4-6",
-      }),
-    ],
-    [
-      "vllm",
-      createSelfHostedChoice({
-        providerId: "vllm",
-        label: "vLLM",
-        defaultBaseUrl: "http://127.0.0.1:8000/v1",
-        defaultApiKeyEnvVar: "VLLM_API_KEY",
-        modelPlaceholder: "Qwen/Qwen3-32B",
-      }),
-    ],
-    [
-      "sglang",
-      createSelfHostedChoice({
-        providerId: "sglang",
-        label: "SGLang",
-        defaultBaseUrl: "http://127.0.0.1:30000/v1",
-        defaultApiKeyEnvVar: "SGLANG_API_KEY",
-        modelPlaceholder: "Qwen/Qwen3-32B",
-      }),
-    ],
-    ["lmstudio", createLmstudioChoice()],
-    [
-      "litellm-api-key",
-      createApiKeyChoice({
-        providerId: "litellm",
-        label: "LiteLLM",
-        choiceId: "litellm-api-key",
-        optionKey: "litellmApiKey",
-        flagName: "--litellm-api-key",
-        envVar: "LITELLM_API_KEY",
-        defaultModel: "litellm/claude-opus-4-6",
-      }),
-    ],
-    ["cloudflare-ai-gateway-api-key", cloudflareAiGatewayChoice],
-    [
-      "together-api-key",
-      createApiKeyChoice({
-        providerId: "together",
-        label: "Together",
-        choiceId: "together-api-key",
-        optionKey: "togetherApiKey",
-        flagName: "--together-api-key",
-        envVar: "TOGETHER_API_KEY",
-        defaultModel: "together/moonshotai/Kimi-K2.5",
-      }),
-    ],
-    [
-      "qianfan-api-key",
-      createApiKeyChoice({
-        providerId: "qianfan",
-        label: "Qianfan",
-        choiceId: "qianfan-api-key",
-        optionKey: "qianfanApiKey",
-        flagName: "--qianfan-api-key",
-        envVar: "QIANFAN_API_KEY",
-        defaultModel: "qianfan/deepseek-v3.2",
       }),
     ],
     [
