@@ -177,6 +177,7 @@ function normalizeResolvedCardActionChatType(value: unknown): "p2p" | "group" | 
 
 const resolvedChatTypeCache = new Map<string, { value: "p2p" | "group"; expiresAt: number }>();
 const CHAT_TYPE_CACHE_TTL_MS = 30 * 60_000;
+const CHAT_TYPE_CACHE_MAX_SIZE = 5_000;
 
 function pruneChatTypeCache(now: number): void {
   for (const [key, entry] of resolvedChatTypeCache.entries()) {
@@ -184,6 +185,20 @@ function pruneChatTypeCache(now: number): void {
       resolvedChatTypeCache.delete(key);
     }
   }
+  if (resolvedChatTypeCache.size > CHAT_TYPE_CACHE_MAX_SIZE) {
+    const excess = resolvedChatTypeCache.size - CHAT_TYPE_CACHE_MAX_SIZE;
+    const iter = resolvedChatTypeCache.keys();
+    for (let i = 0; i < excess; i++) {
+      const key = iter.next().value;
+      if (key !== undefined) {
+        resolvedChatTypeCache.delete(key);
+      }
+    }
+  }
+}
+
+function sanitizeLogValue(v: string): string {
+  return v.replace(/[\r\n]/g, " ").slice(0, 500);
 }
 
 async function resolveCardActionChatType(params: {
@@ -202,9 +217,10 @@ async function resolveCardActionChatType(params: {
     return "p2p";
   }
 
+  const cacheKey = `${params.account.accountId}:${chatId}`;
   const now = Date.now();
   pruneChatTypeCache(now);
-  const cached = resolvedChatTypeCache.get(chatId);
+  const cached = resolvedChatTypeCache.get(cacheKey);
   if (cached) {
     return cached.value;
   }
@@ -218,7 +234,7 @@ async function resolveCardActionChatType(params: {
         normalizeResolvedCardActionChatType(response.data?.chat_mode) ??
         normalizeResolvedCardActionChatType(response.data?.chat_type);
       if (resolvedChatType) {
-        resolvedChatTypeCache.set(chatId, { value: resolvedChatType, expiresAt: now + CHAT_TYPE_CACHE_TTL_MS });
+        resolvedChatTypeCache.set(cacheKey, { value: resolvedChatType, expiresAt: now + CHAT_TYPE_CACHE_TTL_MS });
         return resolvedChatType;
       }
       params.log(
@@ -226,13 +242,13 @@ async function resolveCardActionChatType(params: {
       );
     } else {
       params.log(
-        `feishu[${params.account.accountId}]: failed to resolve chat type: ${response.msg ?? "unknown error"}; defaulting to p2p`,
+        `feishu[${params.account.accountId}]: failed to resolve chat type: ${sanitizeLogValue(response.msg ?? "unknown error")}; defaulting to p2p`,
       );
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown";
     params.log(
-      `feishu[${params.account.accountId}]: failed to resolve chat type: ${message}; defaulting to p2p`,
+      `feishu[${params.account.accountId}]: failed to resolve chat type: ${sanitizeLogValue(message)}; defaulting to p2p`,
     );
   }
 
