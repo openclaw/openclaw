@@ -9,12 +9,14 @@ type MockRegistryToolEntry = {
 
 const loadOpenClawPluginsMock = vi.fn();
 const resolveCompatibleRuntimePluginRegistryMock = vi.fn();
+const isPluginRegistryLoadInFlightMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
   resolveCompatibleRuntimePluginRegistry: (params: unknown) =>
     resolveCompatibleRuntimePluginRegistryMock(params),
+  isPluginRegistryLoadInFlight: (params: unknown) => isPluginRegistryLoadInFlightMock(params),
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -204,6 +206,8 @@ describe("resolvePluginTools optional tools", () => {
     loadOpenClawPluginsMock.mockReset();
     resolveCompatibleRuntimePluginRegistryMock.mockReset();
     resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(undefined);
+    isPluginRegistryLoadInFlightMock.mockReset();
+    isPluginRegistryLoadInFlightMock.mockReturnValue(false);
     applyPluginAutoEnableMock.mockReset();
     applyPluginAutoEnableMock.mockImplementation(({ config }: { config: unknown }) => ({
       config,
@@ -402,6 +406,20 @@ describe("resolvePluginTools optional tools", () => {
       activate: false,
       cache: false,
     });
+  });
+
+  it("degrades quietly when an equivalent plugin load is already in flight", () => {
+    setOptionalDemoRegistry();
+    isPluginRegistryLoadInFlightMock.mockReturnValue(true);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["optional_tool"],
+      }),
+    );
+
+    expect(tools).toEqual([]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("reloads when gateway binding would otherwise reuse a default-mode active registry", () => {

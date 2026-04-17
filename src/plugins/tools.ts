@@ -1,7 +1,11 @@
 import { normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
-import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
+import {
+  isPluginRegistryLoadInFlight,
+  loadOpenClawPlugins,
+  type PluginLoadOptions,
+} from "./loader.js";
 import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
@@ -49,15 +53,19 @@ function isOptionalToolAllowed(params: {
   return params.allowlist.has("group:plugins");
 }
 
-function resolvePluginToolRegistry(params: {
-  loadOptions: PluginLoadOptions;
-  allowGatewaySubagentBinding?: boolean;
-}) {
+function resolvePluginToolRegistry(params: { loadOptions: PluginLoadOptions }) {
   // Always perform a fresh non-activating plugin load for tool factories.
   // Long-lived agent/tool server processes can otherwise retain stale plugin
   // tool closures from an older active runtime registry across rebuilds or
   // gateway restarts, which makes live tool execution diverge from the current
   // code on disk.
+  //
+  // But if an equivalent plugin load is already in flight, preserve the old
+  // degrade-quietly behavior for helper/runtime callers instead of surfacing a
+  // hard reentry error from loadOpenClawPlugins().
+  if (isPluginRegistryLoadInFlight(params.loadOptions)) {
+    return undefined;
+  }
   return loadOpenClawPlugins({
     ...params.loadOptions,
     activate: false,
@@ -93,7 +101,6 @@ export function resolvePluginTools(params: {
   const loadOptions = buildPluginRuntimeLoadOptions(context, { runtimeOptions });
   const registry = resolvePluginToolRegistry({
     loadOptions,
-    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
   });
   if (!registry) {
     return [];
