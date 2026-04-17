@@ -216,16 +216,17 @@ describe("CronService start() error resilience", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,
     });
 
-    // Fail ALL cron-related writes after the first one.
-    // Write 1 (planStartupCatchup) succeeds.
-    // Write 2 (applyStartupCatchupOutcomes) fails -> runMissedJobs throws.
-    // Write 3 (repair persist in catch block) also fails.
-    // The timer must STILL be armed.
+    // Fail the FIRST cron-store write (planStartupCatchup persist).
+    // This means runningAtMs markers are set in memory but never persisted,
+    // so when runMissedJobs throws, the repair block WILL find dirty markers.
+    // Write 2 (repair persist in catch block) also fails.
+    // Write 3 (final locked block persist) must succeed so timer is armed.
     let writeCount = 0;
     const origWriteFile = fs.writeFile.bind(fs);
     const spy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, ...rest) => {
       writeCount++;
-      if (writeCount > 1 && typeof file === "string" && file.includes("cron")) {
+      // Fail writes 1 and 2 (planStartupCatchup + repair), allow write 3+ (final block)
+      if (writeCount <= 2 && typeof file === "string" && file.includes("cron")) {
         throw new Error("simulated total disk failure");
       }
       return origWriteFile(file as any, data as any, ...(rest as any[]));
