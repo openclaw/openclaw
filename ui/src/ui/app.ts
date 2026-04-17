@@ -1062,6 +1062,28 @@ export class OpenClawApp extends LitElement {
     this.sidebarOpen = true;
   }
 
+  /**
+   * PR-8 follow-up: render the proposed plan as markdown and open it
+   * in the right sidebar (read-only viewer, same path tool-output
+   * details use). Called both from the inline card's "Open plan"
+   * button AND auto-fired by handlePlanApprovalEvent when a fresh
+   * approval arrives so the user sees the full plan immediately.
+   */
+  openPlanInSidebar(request: import("./app-tool-stream.ts").PlanApprovalRequest): void {
+    const stepLines = request.plan
+      .map((step, i) => {
+        const marker =
+          step.status === "completed" ? "[x]" : step.status === "cancelled" ? "[ ] ~~" : "[ ]";
+        const close = step.status === "cancelled" ? "~~" : "";
+        const label =
+          step.status === "in_progress" && step.activeForm ? step.activeForm : step.step;
+        return `${i + 1}. ${marker} ${label}${close}`;
+      })
+      .join("\n");
+    const md = `# ${request.summary || "Proposed plan"}\n\n${stepLines}\n`;
+    this.handleOpenSidebar({ kind: "markdown", content: md });
+  }
+
   handleCloseSidebar() {
     this.sidebarOpen = false;
     // Clear content after transition

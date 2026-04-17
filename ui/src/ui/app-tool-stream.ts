@@ -465,6 +465,12 @@ export type PlanApprovalRequest = {
 
 type PlanApprovalHost = ToolStreamHost & {
   planApprovalRequest: PlanApprovalRequest | null;
+  /**
+   * Optional auto-open hook — when the runtime emits a fresh plan
+   * approval, also pop the full plan into the right sidebar so the
+   * user doesn't have to click "Open plan" first.
+   */
+  openPlanInSidebar?: (request: PlanApprovalRequest) => void;
 };
 
 function handlePlanApprovalEvent(host: PlanApprovalHost, payload: AgentEventPayload): void {
@@ -510,7 +516,7 @@ function handlePlanApprovalEvent(host: PlanApprovalHost, payload: AgentEventPayl
     typeof data.summary === "string" && data.summary.trim() ? data.summary : undefined;
   const toolCallId =
     typeof data.toolCallId === "string" && data.toolCallId.trim() ? data.toolCallId : undefined;
-  host.planApprovalRequest = {
+  const next: PlanApprovalRequest = {
     approvalId,
     sessionKey,
     title,
@@ -519,6 +525,15 @@ function handlePlanApprovalEvent(host: PlanApprovalHost, payload: AgentEventPayl
     ...(summary ? { summary } : {}),
     ...(toolCallId ? { toolCallId } : {}),
   };
+  host.planApprovalRequest = next;
+  // Auto-open the full plan in the right sidebar so the user can read
+  // it without clicking "Open plan" first. The card itself surfaces
+  // Accept/Edit/Reject; the sidebar shows the full markdown.
+  try {
+    host.openPlanInSidebar?.(next);
+  } catch {
+    // ignore — sidebar open is a best-effort affordance
+  }
 }
 
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
