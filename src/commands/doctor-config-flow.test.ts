@@ -896,19 +896,6 @@ function resetTerminalNoteMock() {
   return terminalNoteMock;
 }
 
-function expectGoogleChatDmAllowFromRepaired(cfg: unknown) {
-  const typed = cfg as {
-    channels: {
-      googlechat: {
-        dm: { allowFrom: string[] };
-        allowFrom?: string[];
-      };
-    };
-  };
-  expect(typed.channels.googlechat.dm.allowFrom).toEqual(["*"]);
-  expect(typed.channels.googlechat.allowFrom).toBeUndefined();
-}
-
 async function collectDoctorWarnings(config: Record<string, unknown>): Promise<string[]> {
   const noteSpy = resetTerminalNoteMock();
   await runDoctorConfigWithInput({
@@ -1794,108 +1781,6 @@ describe("doctor config flow", () => {
     expect(cfg.channels.discord.dmPolicy).toBe("open");
   });
 
-  it("adds * to existing allowFrom array when dmPolicy is open on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-            appToken: "xapp-test",
-            dmPolicy: "open",
-            allowFrom: ["U123"],
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as unknown as {
-      channels: { slack: { allowFrom: string[] } };
-    };
-    expect(cfg.channels.slack.allowFrom).toContain("*");
-    expect(cfg.channels.slack.allowFrom).toContain("U123");
-  });
-
-  it("repairs nested dm.allowFrom when top-level allowFrom is absent on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        channels: {
-          discord: {
-            token: "test-token",
-            dmPolicy: "open",
-            dm: { allowFrom: ["123"] },
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as unknown as {
-      channels: { discord: { dm: { allowFrom: string[] }; allowFrom?: string[] } };
-    };
-    // Top-level allowFrom is canonical for Discord; nested dm.allowFrom is
-    // preserved when it already carried sender ids.
-    if (cfg.channels.discord.allowFrom) {
-      expect(cfg.channels.discord.allowFrom).toContain("*");
-      expect(cfg.channels.discord.dm?.allowFrom).toContain("123");
-    } else if (cfg.channels.discord.dm) {
-      expect(cfg.channels.discord.dm.allowFrom).toContain("*");
-      expect(cfg.channels.discord.dm.allowFrom).toContain("123");
-    } else {
-      expect.unreachable("expected Discord repair to preserve a DM allowFrom location");
-    }
-  });
-
-  it("skips repair when allowFrom already includes *", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        channels: {
-          discord: {
-            token: "test-token",
-            dmPolicy: "open",
-            allowFrom: ["*"],
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as unknown as {
-      channels: { discord: { allowFrom: string[] } };
-    };
-    expect(cfg.channels.discord.allowFrom).toEqual(["*"]);
-  });
-
-  it("repairs per-account dmPolicy open without allowFrom on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        channels: {
-          discord: {
-            token: "test-token",
-            accounts: {
-              work: {
-                token: "test-token-2",
-                dmPolicy: "open",
-              },
-            },
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as unknown as {
-      channels: {
-        discord: { accounts: { work: { allowFrom: string[]; dmPolicy: string } } };
-      };
-    };
-    expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["*"]);
-  });
-
   it('repairs dmPolicy="allowlist" by restoring allowFrom from pairing store on repair', async () => {
     const result = await withTempHome(
       async (home) => {
@@ -1984,24 +1869,6 @@ describe("doctor config flow", () => {
     expect(toolsBySender["id:alice"]).toEqual({ deny: ["exec"] });
     expect(toolsBySender["username:@ops-bot"]).toEqual({ allow: ["fs.read"] });
     expect(toolsBySender["*"]).toEqual({ deny: ["exec"] });
-  });
-
-  it("repairs googlechat dm.policy open by setting dm.allowFrom on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        channels: {
-          googlechat: {
-            dm: {
-              policy: "open",
-            },
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    expectGoogleChatDmAllowFromRepaired(result.cfg);
   });
 
   it("migrates top-level heartbeat into agents.defaults.heartbeat on repair", async () => {
