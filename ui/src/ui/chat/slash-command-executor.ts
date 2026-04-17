@@ -46,6 +46,7 @@ export type SlashCommandResult = {
     | "stop"
     | "clear"
     | "toggle-focus"
+    | "toggle-plan-view"
     | "navigate-usage";
   /** Optional session-level directive changes that the caller should mirror locally. */
   sessionPatch?: {
@@ -141,17 +142,28 @@ async function executePlan(
   args: string,
 ): Promise<SlashCommandResult> {
   const raw = normalizeLowercaseStringOrEmpty(args);
+  // PR-8 follow-up: `/plan view` is a UI-only toggle that opens the
+  // plan-view sidebar with the most recent live plan (or a placeholder
+  // when none has been emitted yet). Mirrors the chat-controls Plan
+  // view button — handled by the host via the `toggle-plan-view`
+  // action; no gateway round-trip.
+  if (raw === "view") {
+    return {
+      content: "Toggling plan view sidebar.",
+      action: "toggle-plan-view",
+    };
+  }
   if (!raw || raw === "status") {
     return {
       content: formatDirectiveOptions(
-        "Usage: `/plan on` to enter plan mode, `/plan off` to exit.",
-        "on, off, status",
+        "Usage: `/plan on` to enter plan mode, `/plan off` to exit, `/plan view` to toggle the sidebar.",
+        "on, off, status, view",
       ),
     };
   }
   if (raw !== "on" && raw !== "off") {
     return {
-      content: `Unrecognized plan-mode value "${args.trim()}". Valid: on, off, status.`,
+      content: `Unrecognized plan-mode value "${args.trim()}". Valid: on, off, status, view.`,
     };
   }
   const mode: "plan" | "normal" = raw === "on" ? "plan" : "normal";

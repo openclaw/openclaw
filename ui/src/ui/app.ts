@@ -295,6 +295,12 @@ export class OpenClawApp extends LitElement {
   // host so the textarea survives chat re-renders.
   @state() planApprovalReviseOpen = false;
   @state() planApprovalReviseDraft = "";
+  // PR-8 follow-up: latest known plan content (rendered as markdown).
+  // Updated whenever the agent calls update_plan (regardless of whether
+  // the sidebar is open). The chat-controls "Plan view" button reads
+  // this to render the current plan on demand and the `/plan view`
+  // slash command opens the same content in the sidebar.
+  @state() latestPlanMarkdown: string | null = null;
   @state() pendingGatewayUrl: string | null = null;
   pendingGatewayToken: string | null = null;
 
@@ -623,6 +629,13 @@ export class OpenClawApp extends LitElement {
           break;
         case "export":
           exportChatMarkdown(this.chatMessages, this.assistantName);
+          break;
+        case "toggle-plan-view":
+          // PR-8 follow-up: `/plan view` slash command — mirrors the
+          // chat-controls Plan view button. Opens the sidebar with the
+          // latest live plan markdown (or a placeholder if none has
+          // been emitted yet), or closes it if already showing.
+          this.togglePlanViewSidebar();
           break;
         case "refresh-tools-effective": {
           void refreshVisibleToolsEffectiveForCurrentSessionInternal(this);
@@ -1007,9 +1020,6 @@ export class OpenClawApp extends LitElement {
     plan: import("./app-tool-stream.ts").PlanApprovalRequest["plan"],
     summary?: string,
   ): void {
-    if (!this.sidebarOpen || this.sidebarContent?.kind !== "markdown") {
-      return;
-    }
     const stepLines = plan
       .map((step, i) => {
         const marker =
@@ -1021,7 +1031,37 @@ export class OpenClawApp extends LitElement {
       })
       .join("\n");
     const md = `# ${summary || "Active plan"}\n\n${stepLines}\n`;
-    this.sidebarContent = { kind: "markdown", content: md };
+    // ALWAYS track latest plan so the chat-controls "Plan view" button
+    // and `/plan view` slash command can re-open the sidebar with current
+    // content. Sidebar content is only updated if it's already showing
+    // a markdown plan (don't yank focus from a different open view).
+    this.latestPlanMarkdown = md;
+    if (this.sidebarOpen && this.sidebarContent?.kind === "markdown") {
+      this.sidebarContent = { kind: "markdown", content: md };
+    }
+  }
+
+  /**
+   * PR-8 follow-up: open the most-recent active plan in the right
+   * sidebar. Used by both the chat-controls "Plan view" button and
+   * the `/plan view` slash command. If the sidebar is already showing
+   * the plan, toggle it closed. If no plan has been tracked yet,
+   * render a placeholder so the user knows the affordance exists.
+   */
+  togglePlanViewSidebar(): void {
+    const isShowingPlan =
+      this.sidebarOpen &&
+      this.sidebarContent?.kind === "markdown" &&
+      this.latestPlanMarkdown !== null &&
+      this.sidebarContent.content === this.latestPlanMarkdown;
+    if (isShowingPlan) {
+      this.handleCloseSidebar();
+      return;
+    }
+    const md =
+      this.latestPlanMarkdown ??
+      "# No active plan\n\nThe agent hasn't called `update_plan` yet on this session. Once it does, the current plan will render here and tick off live as the agent steps through.\n";
+    this.handleOpenSidebar({ kind: "markdown", content: md });
   }
 
   /**

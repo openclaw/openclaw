@@ -418,6 +418,10 @@ async function dispatchSlashCommand(
     await refreshChat(host);
   }
 
+  if (result.action === "toggle-plan-view") {
+    host.onSlashAction?.("toggle-plan-view");
+  }
+
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
 
