@@ -1596,6 +1596,13 @@ function broadcastChatError(params: {
   // Mark the run so the lifecycle error grace timer in server-chat.ts
   // skips the duplicate emitChatFinal call.
   params.context.chatTerminalSent.add(params.runId);
+  // Deferred cleanup: if chat.send fails before an agent run starts (pre-run
+  // failure), no lifecycle terminal event is emitted and finalizeLifecycleEvent
+  // never runs, so the marker would persist indefinitely.  Clean up after 30 s
+  // (matching the cleanup delay in server-chat.ts finalizeLifecycleEvent).
+  setTimeout(() => {
+    params.context.chatTerminalSent.delete(params.runId);
+  }, 30_000).unref?.();
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
   const payload = {
     runId: params.runId,
