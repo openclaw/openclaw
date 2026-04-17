@@ -150,3 +150,18 @@ export function resolveRelativeBundledPluginPublicModuleId(params: {
     .replaceAll(path.sep, "/");
   return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
 }
+
+export function resolveRelativeExtensionPublicModuleId(params: {
+  fromModuleUrl: string;
+  dirName: string;
+  artifactBasename: string;
+}): string {
+  const fromFilePath = fileURLToPath(params.fromModuleUrl);
+  const targetPath = resolveVitestSourceModulePath(
+    path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions", params.dirName, params.artifactBasename),
+  );
+  const relativePath = path
+    .relative(path.dirname(fromFilePath), targetPath)
+    .replaceAll(path.sep, "/");
+  return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
+}

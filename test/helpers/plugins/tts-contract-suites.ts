@@ -1,16 +1,22 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "../../../src/plugin-sdk/facade-loader.js";
 import { __testing as pluginLoaderTesting } from "../../../src/plugins/loader.js";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import type { SpeechProviderPlugin } from "../../../src/plugins/types.js";
+import { resolveRelativeExtensionPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { withEnv } from "../../../src/test-utils/env.js";
 import { summarizeText as summarizeTextCore } from "../../../src/tts/tts-core.js";
 import type { ResolvedTtsConfig } from "../../../src/tts/tts-types.js";
 
 type TtsRuntimeModule = typeof import("../../../src/tts/tts.js");
+
+const speechCoreRuntimeApiModuleId = resolveRelativeExtensionPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  dirName: "speech-core",
+  artifactBasename: "runtime-api.js",
+});
 
 let ttsRuntime: TtsRuntimeModule;
 let ttsRuntimePromise: Promise<TtsRuntimeModule> | null = null;
@@ -389,12 +395,7 @@ function buildTestGoogleSpeechProvider(): SpeechProviderPlugin {
 }
 
 async function loadTtsRuntime(): Promise<TtsRuntimeModule> {
-  ttsRuntimePromise ??= Promise.resolve(
-    loadBundledPluginPublicSurfaceModuleSync<TtsRuntimeModule>({
-      dirName: "speech-core",
-      artifactBasename: "runtime-api.js",
-    }),
-  );
+  ttsRuntimePromise ??= import(speechCoreRuntimeApiModuleId) as Promise<TtsRuntimeModule>;
   return await ttsRuntimePromise;
 }
 

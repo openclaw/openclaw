@@ -228,6 +228,42 @@ describe("plugin contract registry scoped retries", () => {
     expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
   });
 
+  it("uses web search public artifacts before falling back to the bundled runtime registry", async () => {
+    const loadBundledCapabilityRuntimeRegistry = vi.fn(() => {
+      throw new Error(
+        "web search contract vitest fast path should not hit bundled runtime registry",
+      );
+    });
+    const loadVitestWebSearchProviderContractRegistry = vi.fn(() => [
+      {
+        pluginId: "google",
+        provider: {
+          id: "gemini",
+          label: "Gemini",
+          credentialPath: "plugins.entries.google.config.webSearch.apiKey",
+        } as WebSearchProviderPlugin,
+        credentialValue: "AIzaSyDUMMY",
+      },
+    ]);
+
+    vi.doMock("../bundled-capability-runtime.js", () => ({
+      loadBundledCapabilityRuntimeRegistry,
+    }));
+    vi.doMock("./web-provider-vitest-registry.js", () => ({
+      loadVitestWebSearchProviderContractRegistry,
+    }));
+
+    const { resolveWebSearchProviderContractEntriesForPluginId } = await import("./registry.js");
+
+    expect(
+      resolveWebSearchProviderContractEntriesForPluginId("google").map(
+        (entry) => entry.provider.id,
+      ),
+    ).toEqual(["gemini"]);
+    expect(loadVitestWebSearchProviderContractRegistry).toHaveBeenCalledTimes(1);
+    expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
+  });
+
   it("retries web fetch provider loads after a transient plugin-scoped runtime error", async () => {
     const loadBundledCapabilityRuntimeRegistry = vi
       .fn()
