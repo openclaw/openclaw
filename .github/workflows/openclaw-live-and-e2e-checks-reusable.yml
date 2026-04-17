@@ -636,7 +636,13 @@ jobs:
               echo "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key" >> "$GITHUB_ENV"
               ;;
             live-acp-bind-docker)
-              echo "OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,gemini" >> "$GITHUB_ENV"
+              if [[ -n "${GEMINI_API_KEY:-}" ]]; then
+                echo "OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,gemini" >> "$GITHUB_ENV"
+              else
+                # Keep the full local default, but avoid a guaranteed CI failure
+                # when this lane is dispatched without a usable Gemini API key.
+                echo "OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex" >> "$GITHUB_ENV"
+              fi
               ;;
           esac
 
