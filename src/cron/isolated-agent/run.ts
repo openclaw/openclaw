@@ -528,6 +528,7 @@ async function finalizeCronRun(params: {
   const { prepared, execution } = params;
   const finalRunResult = execution.runResult;
   const payloads = finalRunResult.payloads ?? [];
+  const preRunTotalTokens = prepared.cronSession.sessionEntry.totalTokens;
   let telemetry: CronRunTelemetry | undefined;
 
   if (finalRunResult.meta?.systemPromptReport) {
@@ -551,10 +552,29 @@ async function finalizeCronRun(params: {
     resolvePositiveContextTokens(prepared.cronSession.sessionEntry.contextTokens) ??
     DEFAULT_CONTEXT_TOKENS;
 
+  const lastModel = prepared.cronSession.sessionEntry.model;
+  const lastProvider = prepared.cronSession.sessionEntry.modelProvider;
+  const modelChanged =
+    (lastModel !== undefined && lastModel !== modelUsed) ||
+    (lastProvider !== undefined && lastProvider !== providerUsed);
+
   setSessionRuntimeModel(prepared.cronSession.sessionEntry, {
     provider: providerUsed,
     model: modelUsed,
   });
+
+  if (modelChanged) {
+    prepared.cronSession.sessionEntry.totalTokens = undefined;
+    prepared.cronSession.sessionEntry.totalTokensFresh = false;
+    prepared.cronSession.sessionEntry.totalTokensEstimate = undefined;
+  } else if (
+    preRunTotalTokens !== undefined &&
+    prepared.cronSession.sessionEntry.totalTokensFresh !== false
+  ) {
+    // Always prefer a confirmed fresh total as the estimate baseline.
+    prepared.cronSession.sessionEntry.totalTokensEstimate = preRunTotalTokens;
+  }
+
   prepared.cronSession.sessionEntry.contextTokens = contextTokens;
   if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
     const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
@@ -563,18 +583,24 @@ async function finalizeCronRun(params: {
       setCliSessionId(prepared.cronSession.sessionEntry, providerUsed, cliSessionId);
     }
   }
-  if (hasNonzeroUsage(usage)) {
+  const lastCallUsage = finalRunResult.meta?.agentMeta?.lastCallUsage;
+  if (
+    hasNonzeroUsage(usage) ||
+    (typeof promptTokens === "number" && promptTokens >= 0) ||
+    lastCallUsage !== undefined
+  ) {
     const { estimateUsageCost, resolveModelCostConfig } = await loadUsageFormatRuntime();
-    const input = usage.input ?? 0;
-    const output = usage.output ?? 0;
+    const input = usage?.input;
+    const output = usage?.output;
     const totalTokens = deriveSessionTotalTokens({
-      usage,
+      usage: promptTokens ? undefined : (lastCallUsage ?? usage),
       contextTokens,
       promptTokens,
+      isExplicitSnapshot: lastCallUsage !== undefined || promptTokens !== undefined,
     });
     const runEstimatedCostUsd = resolveNonNegativeNumber(
       estimateUsageCost({
-        usage,
+        usage: usage ?? {},
         cost: resolveModelCostConfig({
           provider: providerUsed,
           model: modelUsed,
@@ -582,22 +608,46 @@ async function finalizeCronRun(params: {
         }),
       }),
     );
-    prepared.cronSession.sessionEntry.inputTokens = input;
-    prepared.cronSession.sessionEntry.outputTokens = output;
+    const hasCurrentUsage =
+      hasNonzeroUsage(usage) ||
+      lastCallUsage !== undefined ||
+      (typeof promptTokens === "number" && promptTokens >= 0);
+    const useFallback = !modelChanged && !hasCurrentUsage;
+    prepared.cronSession.sessionEntry.inputTokens =
+      input ?? (useFallback ? prepared.cronSession.sessionEntry.inputTokens : undefined);
+    prepared.cronSession.sessionEntry.outputTokens =
+      output ?? (useFallback ? prepared.cronSession.sessionEntry.outputTokens : undefined);
     const telemetryUsage: NonNullable<CronRunTelemetry["usage"]> = {
       input_tokens: input,
       output_tokens: output,
     };
-    if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+
+    const hasFreshContextSnapshot =
+      hasNonzeroUsage(lastCallUsage) || (typeof promptTokens === "number" && promptTokens >= 0);
+
+    if (
+      typeof totalTokens === "number" &&
+      Number.isFinite(totalTokens) &&
+      (totalTokens > 0 || (totalTokens === 0 && hasFreshContextSnapshot))
+    ) {
       prepared.cronSession.sessionEntry.totalTokens = totalTokens;
       prepared.cronSession.sessionEntry.totalTokensFresh = true;
+      prepared.cronSession.sessionEntry.totalTokensEstimate = totalTokens;
       telemetryUsage.total_tokens = totalTokens;
     } else {
       prepared.cronSession.sessionEntry.totalTokens = undefined;
       prepared.cronSession.sessionEntry.totalTokensFresh = false;
+      // Fixed: Addressing Greptile feedback - no-op else-if block was removed
+      // and replaced with this simple conditional reset for model changes.
+      if (modelChanged) {
+        prepared.cronSession.sessionEntry.totalTokensEstimate = undefined;
+      }
+      telemetryUsage.total_tokens = totalTokens === 0 ? 0 : undefined;
     }
-    prepared.cronSession.sessionEntry.cacheRead = usage.cacheRead ?? 0;
-    prepared.cronSession.sessionEntry.cacheWrite = usage.cacheWrite ?? 0;
+    prepared.cronSession.sessionEntry.cacheRead =
+      usage?.cacheRead ?? (useFallback ? prepared.cronSession.sessionEntry.cacheRead : undefined);
+    prepared.cronSession.sessionEntry.cacheWrite =
+      usage?.cacheWrite ?? (useFallback ? prepared.cronSession.sessionEntry.cacheWrite : undefined);
     if (runEstimatedCostUsd !== undefined) {
       prepared.cronSession.sessionEntry.estimatedCostUsd =
         (resolveNonNegativeNumber(prepared.cronSession.sessionEntry.estimatedCostUsd) ?? 0) +
@@ -609,6 +659,15 @@ async function finalizeCronRun(params: {
       usage: telemetryUsage,
     };
   } else {
+    if (modelChanged) {
+      prepared.cronSession.sessionEntry.inputTokens = undefined;
+      prepared.cronSession.sessionEntry.outputTokens = undefined;
+      prepared.cronSession.sessionEntry.totalTokens = undefined;
+      prepared.cronSession.sessionEntry.totalTokensFresh = false;
+      prepared.cronSession.sessionEntry.cacheRead = undefined;
+      prepared.cronSession.sessionEntry.cacheWrite = undefined;
+      prepared.cronSession.sessionEntry.totalTokensEstimate = undefined;
+    }
     telemetry = { model: modelUsed, provider: providerUsed };
   }
   await prepared.persistSessionEntry();

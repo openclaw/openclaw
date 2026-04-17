@@ -216,7 +216,7 @@ vi.mock("matrix-js-sdk/lib/matrix.js", async () => {
 });
 
 const { encodeRecoveryKey } = await import("matrix-js-sdk/lib/crypto-api/recovery-key.js");
-const { MatrixClient } = await import("./sdk.js");
+let { MatrixClient } = await import("./sdk.js");
 
 describe("MatrixClient request hardening", () => {
   beforeEach(() => {
@@ -569,9 +569,10 @@ describe("MatrixClient request hardening", () => {
 });
 
 describe("MatrixClient event bridge", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     matrixJsClient = createMatrixJsClientStub();
     lastCreateClientOpts = null;
+    ({ MatrixClient } = await import("./sdk.js"));
   });
 
   afterEach(() => {
@@ -1145,9 +1146,10 @@ describe("MatrixClient event bridge", () => {
 });
 
 describe("MatrixClient crypto bootstrapping", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     matrixJsClient = createMatrixJsClientStub();
     lastCreateClientOpts = null;
+    ({ MatrixClient } = await import("./sdk.js"));
   });
 
   afterEach(() => {

@@ -559,6 +559,7 @@ export function createAgentEventHandler({
       lastThreadId: row?.lastThreadId,
       totalTokens: row?.totalTokens,
       totalTokensFresh: row?.totalTokensFresh,
+      totalTokensEstimate: row?.totalTokensEstimate,
       contextTokens: row?.contextTokens,
       estimatedCostUsd: row?.estimatedCostUsd,
       responseUsage: row?.responseUsage,

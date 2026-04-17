@@ -28,7 +28,7 @@ export function applyNonInteractiveGatewayConfig(params: {
     return null;
   }
 
-  const port = hasGatewayPort ? (opts.gatewayPort as number) : params.defaultPort;
+  const port = opts.gatewayPort !== undefined ? opts.gatewayPort : params.defaultPort;
   let bind = opts.gatewayBind ?? "loopback";
   const authModeRaw = opts.gatewayAuth ?? "token";
   if (authModeRaw !== "token" && authModeRaw !== "password") {

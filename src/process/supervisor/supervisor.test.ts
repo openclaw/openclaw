@@ -152,13 +152,13 @@ describe("process supervisor", () => {
     const run = await spawnChild(supervisor, {
       sessionId: "s1",
       argv: createSilentIdleArgv(),
-      timeoutMs: 300,
-      noOutputTimeoutMs: 5,
+      timeoutMs: 3000,
+      noOutputTimeoutMs: 100,
       stdinMode: "pipe-closed",
     });
 
     const exitPromise = run.wait();
-    await vi.advanceTimersByTimeAsync(5);
+    await vi.advanceTimersByTimeAsync(150);
 
     const exit = await exitPromise;
     expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
@@ -181,7 +181,7 @@ describe("process supervisor", () => {
       sessionId: "s1",
       scopeKey: "scope:a",
       argv: [process.execPath, "-e", "setTimeout(() => {}, 80)"],
-      timeoutMs: 1_000,
+      timeoutMs: 5000,
       stdinMode: "pipe-open",
     });
 
@@ -190,7 +190,7 @@ describe("process supervisor", () => {
       scopeKey: "scope:a",
       replaceExistingScope: true,
       argv: createWriteStdoutArgv("new"),
-      timeoutMs: 1_000,
+      timeoutMs: 5000,
       stdinMode: "pipe-closed",
     });
 
@@ -218,19 +218,18 @@ describe("process supervisor", () => {
     const run = await spawnChild(supervisor, {
       sessionId: "s-timeout",
       argv: createSilentIdleArgv(),
-      timeoutMs: 1,
+      timeoutMs: 50,
       stdinMode: "pipe-closed",
     });
 
     const exitPromise = run.wait();
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(100);
 
     const exit = await exitPromise;
     expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
     expect(exit.reason).toBe("overall-timeout");
     expect(exit.timedOut).toBe(true);
   });
-
   it("can stream output without retaining it in RunExit payload", async () => {
     const adapter = createStubChildAdapter();
     createChildAdapterMock.mockResolvedValue(adapter);

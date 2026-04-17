@@ -15,6 +15,7 @@ import { normalizeToolName } from "../agents/tool-policy-shared.js";
 import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.types.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
+  resolveFreshSessionTotalTokens,
   resolveMainSessionKey,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
@@ -73,12 +74,10 @@ type QueueStatus = {
   showDetails?: boolean;
 };
 
-type StatusArgs = {
+export type StatusArgs = {
   config?: OpenClawConfig;
   agent: AgentConfig;
   agentId?: string;
-  runtimeContextTokens?: number;
-  explicitConfiguredContextTokens?: number;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   parentSessionKey?: string;
@@ -96,12 +95,17 @@ type StatusArgs = {
   timeLine?: string;
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
+  /** Explicitly configured context tokens from agent config/selection */
+  explicitConfiguredContextTokens?: number;
+  /** Actual runtime context tokens reported by the model */
+  runtimeContextTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
   subagentsLine?: string;
   taskLine?: string;
   includeTranscriptUsage?: boolean;
   now?: number;
 };
-
 type NormalizedAuthMode = "api-key" | "oauth" | "token" | "aws-sdk" | "mixed" | "unknown";
 
 function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
@@ -253,6 +257,7 @@ const readUsageFromSessionLog = (
       cacheWrite: number;
       promptTokens: number;
       total: number;
+      totalTokensFresh: boolean;
       model?: string;
     }
   | undefined => {
@@ -286,7 +291,6 @@ const readUsageFromSessionLog = (
     if (!snapshot) {
       return undefined;
     }
-
     const input = snapshot.inputTokens ?? 0;
     const output = snapshot.outputTokens ?? 0;
     const cacheRead = snapshot.cacheRead ?? 0;
@@ -309,6 +313,7 @@ const readUsageFromSessionLog = (
       cacheWrite,
       promptTokens,
       total,
+      totalTokensFresh: true,
       model,
     };
   } catch {
@@ -455,13 +460,30 @@ export function buildStatusMessage(args: StatusArgs): string {
     selectedModel,
     sessionEntry: entry,
   });
-  const initialFallbackState = resolveActiveFallbackState({
-    selectedModelRef: modelRefs.selected.label || "unknown",
-    activeModelRef: modelRefs.active.label || "unknown",
-    state: entry,
-  });
   let activeProvider = modelRefs.active.provider;
   let activeModel = modelRefs.active.model;
+
+  const selectedModelLabel = modelRefs.selected.label || "unknown";
+  let activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
+  let fallbackState = resolveActiveFallbackState({
+    selectedModelRef: selectedModelLabel,
+    activeModelRef: activeModelLabel,
+    state: entry,
+  });
+
+  let inputTokens = entry?.inputTokens;
+  let outputTokens = entry?.outputTokens;
+  let cacheRead = entry?.cacheRead;
+  let cacheWrite = entry?.cacheWrite;
+  const freshTotal = resolveFreshSessionTotalTokens(entry);
+  let totalTokens =
+    freshTotal ??
+    entry?.totalTokensEstimate ??
+    entry?.totalTokens ??
+    (args.inputTokens !== undefined && args.outputTokens !== undefined
+      ? args.inputTokens + args.outputTokens
+      : undefined);
+
   let contextLookupProvider: string | undefined = activeProvider;
   let contextLookupModel = activeModel;
   const runtimeModelRaw = normalizeOptionalString(entry?.model) ?? "";
@@ -471,8 +493,9 @@ export function buildStatusMessage(args: StatusArgs): string {
     const slashIndex = runtimeModelRaw.indexOf("/");
     const embeddedProvider =
       normalizeOptionalLowercaseString(runtimeModelRaw.slice(0, slashIndex)) ?? "";
+    // Fixed: Replacing stale initialFallbackState reference (Codex)
     const fallbackMatchesRuntimeModel =
-      initialFallbackState.active &&
+      fallbackState.active &&
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
         normalizeLowercaseStringOrEmpty(
           normalizeOptionalString(entry?.fallbackNoticeActiveModel ?? "") ?? "",
@@ -480,9 +503,9 @@ export function buildStatusMessage(args: StatusArgs): string {
     const runtimeMatchesSelectedModel =
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
       normalizeLowercaseStringOrEmpty(modelRefs.selected.label || "unknown");
+
     // Legacy fallback sessions can persist provider-qualified runtime ids
     // without a separate modelProvider field. Preserve provider-aware lookup
-    // when the stored slash id is the selected model or the active fallback
     // target; otherwise keep the raw model-only lookup for OpenRouter-style
     // slash ids.
     if (
@@ -497,12 +520,6 @@ export function buildStatusMessage(args: StatusArgs): string {
     }
   }
 
-  let inputTokens = entry?.inputTokens;
-  let outputTokens = entry?.outputTokens;
-  let cacheRead = entry?.cacheRead;
-  let cacheWrite = entry?.cacheWrite;
-  let totalTokens = entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
-
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
   if (args.includeTranscriptUsage) {
@@ -514,10 +531,13 @@ export function buildStatusMessage(args: StatusArgs): string {
       args.sessionStorePath,
     );
     if (logUsage) {
-      const candidate = logUsage.promptTokens || logUsage.total;
-      if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
+      const candidate = logUsage.promptTokens;
+
+      // Session transcript is authoritative — always prefer it over the store.
+      if (logUsage.totalTokensFresh) {
         totalTokens = candidate;
       }
+
       if (!entry?.model && logUsage.model) {
         const slashIndex = logUsage.model.indexOf("/");
         if (slashIndex > 0) {
@@ -534,9 +554,6 @@ export function buildStatusMessage(args: StatusArgs): string {
           }
         } else {
           activeModel = logUsage.model;
-          // Bare transcript model IDs should keep provider-aware lookup when the
-          // active provider is already known so shared model names still resolve
-          // to the correct provider-specific window.
           contextLookupProvider = activeProvider;
           contextLookupModel = logUsage.model;
         }
@@ -556,20 +573,29 @@ export function buildStatusMessage(args: StatusArgs): string {
     }
   }
 
-  const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
+  activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
   const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
+
+  fallbackState = resolveActiveFallbackState({
+    selectedModelRef: selectedModelLabel,
+    activeModelRef: activeModelLabel,
+    state: entry,
+  });
+
   const selectedContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
     provider: selectedProvider,
     model: selectedModel,
     allowAsyncLoad: false,
   });
+
   const activeContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
-    ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
+    provider: contextLookupProvider,
     model: contextLookupModel,
     allowAsyncLoad: false,
   });
+
   const persistedContextTokens =
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0
       ? entry.contextTokens
@@ -671,8 +697,9 @@ export function buildStatusMessage(args: StatusArgs): string {
     ? (args.groupActivation ?? entry?.groupActivation ?? "mention")
     : undefined;
 
+  const displayTotal = totalTokens;
   const contextLine = [
-    `Context: ${formatTokens(totalTokens, contextTokens ?? null)}`,
+    `Context: ${formatTokens(displayTotal, contextTokens ?? null)}`,
     `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
   ]
     .filter(Boolean)
@@ -682,9 +709,9 @@ export function buildStatusMessage(args: StatusArgs): string {
   const queueDetails = formatQueueDetails(args.queue);
   const verboseLabel =
     verboseLevel === "full" ? "verbose:full" : verboseLevel === "on" ? "verbose" : null;
-  const traceLevel = entry?.traceLevel === "raw" ? "raw" : entry?.traceLevel === "on" ? "on" : "off";
-  const traceLabel =
-    traceLevel === "raw" ? "trace:raw" : traceLevel === "on" ? "trace" : null;
+  const traceLevel =
+    entry?.traceLevel === "raw" ? "raw" : entry?.traceLevel === "on" ? "on" : "off";
+  const traceLabel = traceLevel === "raw" ? "trace:raw" : traceLevel === "on" ? "trace" : null;
   const pluginStatusLines = verboseLevel !== "off" ? resolveSessionPluginStatusLines(entry) : [];
   const pluginTraceLines =
     traceLevel === "on" || traceLevel === "raw" ? resolveSessionPluginTraceLines(entry) : [];
@@ -731,12 +758,6 @@ export function buildStatusMessage(args: StatusArgs): string {
   const activeAuthLabelValue =
     args.activeModelAuth ??
     (activeAuthMode && activeAuthMode !== "unknown" ? activeAuthMode : undefined);
-  const selectedModelLabel = modelRefs.selected.label || "unknown";
-  const fallbackState = resolveActiveFallbackState({
-    selectedModelRef: selectedModelLabel,
-    activeModelRef: activeModelLabel,
-    state: entry,
-  });
   const effectiveCostAuthMode = fallbackState.active
     ? activeAuthMode
     : (selectedAuthMode ?? activeAuthMode);

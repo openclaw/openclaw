@@ -193,6 +193,7 @@ function emitSessionsChanged(
             lastThreadId: sessionRow.lastThreadId,
             totalTokens: sessionRow.totalTokens,
             totalTokensFresh: sessionRow.totalTokensFresh,
+            totalTokensEstimate: sessionRow.totalTokensEstimate,
             contextTokens: sessionRow.contextTokens,
             estimatedCostUsd: sessionRow.estimatedCostUsd,
             responseUsage: sessionRow.responseUsage,
@@ -1575,9 +1576,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           ) {
             entryToUpdate.totalTokens = result.result.tokensAfter;
             entryToUpdate.totalTokensFresh = true;
+            entryToUpdate.totalTokensEstimate = result.result.tokensAfter;
           } else {
             delete entryToUpdate.totalTokens;
             delete entryToUpdate.totalTokensFresh;
+            delete entryToUpdate.totalTokensEstimate;
           }
         });
       }
@@ -1633,6 +1636,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       delete entryToUpdate.outputTokens;
       delete entryToUpdate.totalTokens;
       delete entryToUpdate.totalTokensFresh;
+      delete entryToUpdate.totalTokensEstimate;
       entryToUpdate.updatedAt = Date.now();
     });
 

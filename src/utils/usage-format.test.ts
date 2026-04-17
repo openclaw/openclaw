@@ -89,6 +89,11 @@ describe("usage-format", () => {
     expect(total).toBeCloseTo(0.003);
   });
 
+  it("returns zero cost for zero usage even if cost is missing", () => {
+    expect(estimateUsageCost({ usage: { input: 0, output: 0 } })).toBe(0);
+    expect(estimateUsageCost({ usage: { input: 0, output: 0 }, cost: undefined })).toBe(0);
+  });
+
   it("returns undefined when model pricing is not configured", () => {
     expect(
       resolveModelCostConfig({

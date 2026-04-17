@@ -380,7 +380,8 @@ export function resolveNpmCommandInvocation(
     platform?: NodeJS.Platform;
   } = {},
 ): { command: string; args: string[] } {
-  const npmExecPath = params.npmExecPath ?? process.env.npm_execpath;
+  const npmExecPath =
+    params.npmExecPath ?? (params.platform ? undefined : process.env.npm_execpath);
   const nodeExecPath = params.nodeExecPath ?? process.execPath;
   const npmCommand = (params.platform ?? process.platform) === "win32" ? "npm.cmd" : "npm";
 

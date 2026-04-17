@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -20,6 +20,10 @@ async function importAgentEventsModule(cacheBust: string): Promise<AgentEventsMo
 
 describe("agent-events sequencing", () => {
   beforeEach(() => {
+    resetAgentEventsForTest();
+  });
+
+  afterEach(() => {
     resetAgentEventsForTest();
   });
 

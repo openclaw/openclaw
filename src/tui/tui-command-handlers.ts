@@ -480,6 +480,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           state.sessionInfo.inputTokens = null;
           state.sessionInfo.outputTokens = null;
           state.sessionInfo.totalTokens = null;
+          state.sessionInfo.totalTokensEstimate = null;
           tui.requestRender();
 
           // Generate unique session key to isolate this TUI client (#39217)
@@ -498,6 +499,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           state.sessionInfo.inputTokens = null;
           state.sessionInfo.outputTokens = null;
           state.sessionInfo.totalTokens = null;
+          state.sessionInfo.totalTokensEstimate = null;
           tui.requestRender();
 
           await client.resetSession(state.currentSessionKey, name);

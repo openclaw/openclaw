@@ -1051,6 +1051,7 @@ describe("gateway agent handler", () => {
     await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
     expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
     const call = readLastAgentCommandCall();
+    console.log("DEBUG: Actual message received:", JSON.stringify(call?.message));
     // Message is now dynamically built with current date — check key substrings
     expect(call?.message).toContain("Execute your Session Startup sequence now");
     expect(call?.message).toContain("Current time:");

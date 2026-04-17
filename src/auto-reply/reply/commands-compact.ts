@@ -174,7 +174,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const totalTokens =
     tokensAfterCompaction ?? runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
   const contextSummary = runtime.formatContextUsageShort(
-    typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
+    typeof totalTokens === "number" && totalTokens >= 0 ? totalTokens : null,
     params.contextTokens ?? targetSessionEntry.contextTokens ?? null,
   );
   const reason = formatCompactionReason(result.reason);

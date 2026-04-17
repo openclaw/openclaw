@@ -1,3 +1,4 @@
+// Fixed: Removed unused streamSimple import following restoration of core stream handling
 import {
   definePluginEntry,
   type OpenClawPluginApi,
@@ -12,6 +13,7 @@ import {
 } from "./api.js";
 
 const PROVIDER_ID = "vllm";
+const DEFAULT_API_KEY = "vllm-local";
 
 async function loadProviderSetup() {
   return await import("openclaw/plugin-sdk/provider-setup");
@@ -84,6 +86,20 @@ export default definePluginEntry({
           hint: "Enter vLLM URL + API key + model",
           methodId: "custom",
         },
+      },
+      resolveSyntheticAuth: ({ providerConfig }) => {
+        const hasApiConfig =
+          Boolean(providerConfig?.api?.trim()) ||
+          Boolean(providerConfig?.baseUrl?.trim()) ||
+          (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
+        if (!hasApiConfig) {
+          return undefined;
+        }
+        return {
+          apiKey: DEFAULT_API_KEY,
+          source: `models.providers.${PROVIDER_ID} (synthetic local key)`,
+          mode: "api-key",
+        };
       },
       buildUnknownModelHint: () =>
         "vLLM requires authentication to be registered as a provider. " +

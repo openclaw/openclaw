@@ -253,10 +253,10 @@ function resolveEstimatedSessionCostUsd(params: {
   if (explicitCostUsd !== undefined) {
     return explicitCostUsd;
   }
-  const input = resolvePositiveNumber(params.entry?.inputTokens);
-  const output = resolvePositiveNumber(params.entry?.outputTokens);
-  const cacheRead = resolvePositiveNumber(params.entry?.cacheRead);
-  const cacheWrite = resolvePositiveNumber(params.entry?.cacheWrite);
+  const input = resolveNonNegativeNumber(params.entry?.inputTokens);
+  const output = resolveNonNegativeNumber(params.entry?.outputTokens);
+  const cacheRead = resolveNonNegativeNumber(params.entry?.cacheRead);
+  const cacheWrite = resolveNonNegativeNumber(params.entry?.cacheWrite);
   if (
     input === undefined &&
     output === undefined &&
@@ -384,7 +384,7 @@ function resolveTranscriptUsageFallback(params: {
   return {
     modelProvider,
     model,
-    totalTokens: resolvePositiveNumber(snapshot.totalTokens),
+    totalTokens: resolveNonNegativeNumber(snapshot.totalTokens),
     totalTokensFresh: snapshot.totalTokensFresh === true,
     contextTokens: resolvePositiveNumber(contextTokens),
     estimatedCostUsd,
@@ -1109,6 +1109,80 @@ export function resolveSessionModelIdentityRef(
   return { provider: resolved.provider, model: resolved.model };
 }
 
+/**
+ * Resolves the token total for a gateway session listing by following a
+ * priority-ordered fallback chain that handles vLLM zero-usage, stale store
+ * entries, and legacy total counters.
+ */
+function resolveGatewaySessionTotalTokens(params: {
+  freshTotal?: number;
+  estimate?: number;
+  transcriptTotal?: number;
+  transcriptFresh?: boolean;
+  legacyTotal?: number;
+  allowZero?: boolean;
+  totalTokensFreshFlag?: boolean;
+}): { totalTokens: number | undefined; fresh: boolean; usedEstimate: boolean } {
+  const {
+    freshTotal,
+    estimate,
+    transcriptTotal,
+    transcriptFresh,
+    legacyTotal,
+    allowZero,
+    totalTokensFreshFlag,
+  } = params;
+
+  // 1. Prefer an explicit fresh total from the session store.
+  if (freshTotal !== undefined) {
+    return { totalTokens: freshTotal, fresh: true, usedEstimate: false };
+  }
+
+  // 2. Fall back to a fresh transcript total. This ensures that authoritative
+  // context data is preferred over a stale zero estimate in the store.
+  // Updated per feedback: "zero-only transcript usage should be ignored in fallbacks".
+  if (transcriptFresh && transcriptTotal !== undefined && (transcriptTotal > 0 || allowZero)) {
+    return { totalTokens: transcriptTotal, fresh: true, usedEstimate: false };
+  }
+
+  // 3. Fall back to the display estimate if it is positive. This preserves the
+  // last known good count through provider-reported zero usage (the vLLM fix)
+  // and store-only updates like compaction.
+  if (estimate !== undefined && (estimate > 0 || allowZero)) {
+    return { totalTokens: estimate, fresh: false, usedEstimate: true };
+  }
+
+  // 4. Fall back to a positive legacy store total, but only if not explicitly stale.
+  if (
+    totalTokensFreshFlag !== false &&
+    typeof legacyTotal === "number" &&
+    (legacyTotal > 0 || allowZero)
+  ) {
+    return { totalTokens: legacyTotal, fresh: false, usedEstimate: false };
+  }
+
+  // 5. Fall back to any transcript total (even if stale) as a last resort.
+  // Updated per feedback: "zero-only transcript usage should be ignored in fallbacks".
+  if (transcriptTotal !== undefined && (transcriptTotal > 0 || allowZero)) {
+    return { totalTokens: transcriptTotal, fresh: false, usedEstimate: false };
+  }
+
+  // 6. Fall back to a zero display estimate.
+  if (estimate === 0) {
+    return { totalTokens: 0, fresh: false, usedEstimate: true };
+  }
+
+  // 7. Finally, use any legacy store total (if not explicitly stale).
+  const finalLegacy =
+    totalTokensFreshFlag !== false &&
+    typeof legacyTotal === "number" &&
+    Number.isFinite(legacyTotal) &&
+    (legacyTotal > 0 || (legacyTotal === 0 && allowZero))
+      ? legacyTotal
+      : undefined;
+  return { totalTokens: finalLegacy, fresh: false, usedEstimate: false };
+}
+
 export function buildGatewaySessionRow(params: {
   cfg: OpenClawConfig;
   storePath: string;
@@ -1204,13 +1278,25 @@ export function buildGatewaySessionRow(params: {
       }
     : resolvedModelIdentity;
   const { provider: modelProvider, model } = modelIdentity;
-  const totalTokens =
-    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
-    resolvePositiveNumber(transcriptUsage?.totalTokens);
-  const totalTokensFresh =
-    typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
-      ? true
-      : transcriptUsage?.totalTokensFresh === true;
+
+  const freshTotal = resolveFreshSessionTotalTokens(entry);
+  const transcriptTotal = resolveNonNegativeNumber(transcriptUsage?.totalTokens);
+  const transcriptFresh = transcriptUsage?.totalTokensFresh === true;
+
+  const freshTotalValue = resolveNonNegativeNumber(freshTotal);
+  const estimateValue = resolveNonNegativeNumber(entry?.totalTokensEstimate);
+  const allowZero =
+    entry?.status === "done" && entry?.totalTokens === 0 && entry?.totalTokensFresh === true;
+
+  const { totalTokens, fresh: totalTokensFresh } = resolveGatewaySessionTotalTokens({
+    freshTotal: freshTotalValue,
+    estimate: estimateValue,
+    transcriptTotal,
+    transcriptFresh,
+    legacyTotal: entry?.totalTokens,
+    allowZero,
+    totalTokensFreshFlag: entry?.totalTokensFresh,
+  });
   const childSessions = resolveChildSessionKeys(key, store);
   const latestCompactionCheckpoint = resolveLatestCompactionCheckpoint(entry);
   const estimatedCostUsd =
@@ -1280,10 +1366,11 @@ export function buildGatewaySessionRow(params: {
     reasoningLevel: entry?.reasoningLevel,
     elevatedLevel: entry?.elevatedLevel,
     sendPolicy: entry?.sendPolicy,
-    inputTokens: entry?.inputTokens,
-    outputTokens: entry?.outputTokens,
-    totalTokens,
-    totalTokensFresh,
+    inputTokens: entry?.inputTokens ?? null,
+    outputTokens: entry?.outputTokens ?? null,
+    totalTokens: totalTokens ?? undefined,
+    totalTokensFresh: totalTokensFresh ?? false,
+    totalTokensEstimate: entry?.totalTokensEstimate ?? null,
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
@@ -1294,7 +1381,7 @@ export function buildGatewaySessionRow(params: {
     responseUsage: entry?.responseUsage,
     modelProvider: selectedModel?.provider ?? modelProvider,
     model: selectedModel?.model ?? model,
-    contextTokens,
+    contextTokens: contextTokens ?? null,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
     lastTo: deliveryFields.lastTo ?? entry?.lastTo,

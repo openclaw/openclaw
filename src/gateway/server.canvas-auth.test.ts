@@ -1,4 +1,4 @@
-import type { Socket } from "node:net";
+import net, { type Socket } from "node:net";
 import { describe, expect, test } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "../canvas-host/a2ui.js";
@@ -10,6 +10,16 @@ import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-h
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { withTempConfig } from "./test-temp-config.js";
+
+async function isIpv6Supported(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once("error", () => resolve(false));
+    server.listen(0, "::1", () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
 
 const WS_REJECT_TIMEOUT_MS = 2_000;
 const WS_CONNECT_TIMEOUT_MS = 5_000;
@@ -460,6 +470,9 @@ describe("gateway canvas host auth", () => {
   }, 60_000);
 
   test("accepts capability-scoped paths over IPv6 loopback", async () => {
+    if (!(await isIpv6Supported())) {
+      return;
+    }
     await withTempConfig({
       cfg: {
         gateway: {

@@ -81,10 +81,27 @@ export async function updateSessionStoreAfterAgentRun(params: {
     updatedAt: Date.now(),
     contextTokens,
   };
+
+  const lastModel = entry.model;
+  const lastProvider = entry.modelProvider;
+  const modelChanged =
+    (lastModel !== undefined && lastModel !== modelUsed) ||
+    (lastProvider !== undefined && lastProvider !== providerUsed);
+
   setSessionRuntimeModel(next, {
     provider: providerUsed,
     model: modelUsed,
   });
+
+  if (modelChanged) {
+    next.totalTokens = undefined;
+    next.totalTokensFresh = false;
+    next.totalTokensEstimate = undefined;
+  } else if (entry.totalTokens !== undefined && entry.totalTokensFresh !== false) {
+    // Always prefer a confirmed fresh total as the estimate baseline.
+    next.totalTokensEstimate = entry.totalTokens;
+  }
+
   if (isCliProvider(providerUsed, cfg)) {
     const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;
     if (cliSessionBinding?.sessionId?.trim()) {
@@ -100,39 +117,74 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (result.meta.systemPromptReport) {
     next.systemPromptReport = result.meta.systemPromptReport;
   }
-  if (hasNonzeroUsage(usage)) {
+  const lastCallUsage = result.meta.agentMeta?.lastCallUsage;
+  if (
+    hasNonzeroUsage(usage) ||
+    (typeof promptTokens === "number" && promptTokens >= 0) ||
+    lastCallUsage !== undefined
+  ) {
     const { estimateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
-    const input = usage.input ?? 0;
-    const output = usage.output ?? 0;
+    const input = usage?.input;
+    const output = usage?.output;
     const totalTokens = deriveSessionTotalTokens({
-      usage: promptTokens ? undefined : usage,
+      usage: promptTokens ? undefined : (lastCallUsage ?? usage),
       contextTokens,
       promptTokens,
+      isExplicitSnapshot: lastCallUsage !== undefined || promptTokens !== undefined,
     });
-    const runEstimatedCostUsd = resolveNonNegativeNumber(
-      estimateUsageCost({
-        usage,
-        cost: resolveModelCostConfig({
-          provider: providerUsed,
-          model: modelUsed,
-          config: cfg,
-        }),
-      }),
-    );
-    next.inputTokens = input;
-    next.outputTokens = output;
-    if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+    const runEstimatedCostUsd = usage
+      ? resolveNonNegativeNumber(
+          estimateUsageCost({
+            usage,
+            cost: resolveModelCostConfig({
+              provider: providerUsed,
+              model: modelUsed,
+              config: cfg,
+            }),
+          }),
+        )
+      : undefined;
+    const hasCurrentUsage =
+      hasNonzeroUsage(usage) ||
+      lastCallUsage !== undefined ||
+      (typeof promptTokens === "number" && promptTokens >= 0);
+    const useFallback = !modelChanged && !hasCurrentUsage;
+    next.inputTokens = input ?? (useFallback ? entry.inputTokens : undefined);
+    next.outputTokens = output ?? (useFallback ? entry.outputTokens : undefined);
+
+    const hasFreshContextSnapshot =
+      hasNonzeroUsage(lastCallUsage) || (typeof promptTokens === "number" && promptTokens >= 0);
+
+    if (
+      typeof totalTokens === "number" &&
+      Number.isFinite(totalTokens) &&
+      (totalTokens > 0 || (totalTokens === 0 && hasFreshContextSnapshot))
+    ) {
       next.totalTokens = totalTokens;
       next.totalTokensFresh = true;
+      next.totalTokensEstimate = totalTokens;
     } else {
       next.totalTokens = undefined;
       next.totalTokensFresh = false;
+      if (modelChanged) {
+        next.totalTokensEstimate = undefined;
+      }
     }
-    next.cacheRead = usage.cacheRead ?? 0;
-    next.cacheWrite = usage.cacheWrite ?? 0;
+    next.cacheRead = usage?.cacheRead ?? (useFallback ? entry.cacheRead : undefined);
+    next.cacheWrite = usage?.cacheWrite ?? (useFallback ? entry.cacheWrite : undefined);
     if (runEstimatedCostUsd !== undefined) {
       next.estimatedCostUsd =
         (resolveNonNegativeNumber(entry.estimatedCostUsd) ?? 0) + runEstimatedCostUsd;
+    }
+  } else {
+    if (modelChanged) {
+      next.inputTokens = undefined;
+      next.outputTokens = undefined;
+      next.totalTokens = undefined;
+      next.totalTokensFresh = false;
+      next.cacheRead = undefined;
+      next.cacheWrite = undefined;
+      next.totalTokensEstimate = undefined;
     }
   }
   if (compactionsThisRun > 0) {

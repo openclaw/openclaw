@@ -42,6 +42,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { resolveTotalTokens } from "../../shared/subagents-format.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -648,7 +649,9 @@ export async function initSessionState(params: {
     sessionStore[parentSessionKey] &&
     !alreadyForked
   ) {
-    const parentTokens = sessionStore[parentSessionKey].totalTokens ?? 0;
+    const parentEntry = sessionStore[parentSessionKey];
+    const parentTokens =
+      resolveTotalTokens(parentEntry, { allowStaleEstimate: true, excludeIoTotals: true }) ?? 0;
     if (parentForkMaxTokens > 0 && parentTokens > parentForkMaxTokens) {
       // Parent context is too large — forking would create a thread session
       // that immediately overflows the model's context window. Start fresh
@@ -710,6 +713,8 @@ export async function initSessionState(params: {
     // Clear stale token metrics from previous session so /status doesn't
     // display the old session's context usage after /new or /reset.
     sessionEntry.totalTokens = undefined;
+    sessionEntry.totalTokensFresh = false;
+    sessionEntry.totalTokensEstimate = undefined;
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;

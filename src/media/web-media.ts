@@ -10,6 +10,7 @@ import { fetchRemoteMedia } from "./fetch.js";
 import {
   convertHeicToJpeg,
   hasAlphaChannel,
+  isSharpAvailable,
   optimizeImageToPng,
   resizeToJpeg,
 } from "./image-ops.js";
@@ -313,6 +314,18 @@ async function optimizeImageWithFallback(params: {
   meta?: { contentType?: string; fileName?: string };
 }): Promise<OptimizedImage> {
   const { buffer, cap, meta } = params;
+
+  if (!(await isSharpAvailable())) {
+    const isPng =
+      meta?.contentType === "image/png" || meta?.fileName?.toLowerCase().endsWith(".png");
+    return {
+      buffer,
+      optimizedSize: buffer.length,
+      resizeSide: 0,
+      format: isPng ? "png" : "jpeg",
+    };
+  }
+
   const isPng = meta?.contentType === "image/png" || meta?.fileName?.toLowerCase().endsWith(".png");
   const hasAlpha = isPng && (await hasAlphaChannel(buffer));
 

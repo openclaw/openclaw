@@ -41,6 +41,18 @@ async function loadSharp(): Promise<(buffer: Buffer) => ReturnType<Sharp>> {
     });
 }
 
+export async function isSharpAvailable(): Promise<boolean> {
+  if (prefersSips()) {
+    return true; // sips is always available on macOS
+  }
+  try {
+    await import("sharp");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function isPositiveImageDimension(value: number): boolean {
   return Number.isInteger(value) && value > 0;
 }
@@ -529,18 +541,22 @@ export async function resizeToJpeg(params: {
     });
   }
 
-  const sharp = await loadSharp();
-  // Use .rotate() BEFORE .resize() to auto-rotate based on EXIF orientation
-  return await sharp(params.buffer)
-    .rotate() // Auto-rotate based on EXIF before resizing
-    .resize({
-      width: params.maxSide,
-      height: params.maxSide,
-      fit: "inside",
-      withoutEnlargement: params.withoutEnlargement !== false,
-    })
-    .jpeg({ quality: params.quality, mozjpeg: true })
-    .toBuffer();
+  try {
+    const sharp = await loadSharp();
+    // Use .rotate() BEFORE .resize() to auto-rotate based on EXIF orientation
+    return await sharp(params.buffer)
+      .rotate() // Auto-rotate based on EXIF before resizing
+      .resize({
+        width: params.maxSide,
+        height: params.maxSide,
+        fit: "inside",
+        withoutEnlargement: params.withoutEnlargement !== false,
+      })
+      .jpeg({ quality: params.quality, mozjpeg: true })
+      .toBuffer();
+  } catch {
+    return params.buffer;
+  }
 }
 
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
@@ -549,8 +565,12 @@ export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
   if (prefersSips()) {
     return await sipsConvertToJpeg(buffer);
   }
-  const sharp = await loadSharp();
-  return await sharp(buffer).jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+  try {
+    const sharp = await loadSharp();
+    return await sharp(buffer).jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+  } catch {
+    return buffer;
+  }
 }
 
 /**
@@ -584,20 +604,24 @@ export async function resizeToPng(params: {
 }): Promise<Buffer> {
   await assertImagePixelLimit(params.buffer);
 
-  const sharp = await loadSharp();
-  // Compression level 6 is a good balance (0=fastest, 9=smallest)
-  const compressionLevel = params.compressionLevel ?? 6;
+  try {
+    const sharp = await loadSharp();
+    // Compression level 6 is a good balance (0=fastest, 9=smallest)
+    const compressionLevel = params.compressionLevel ?? 6;
 
-  return await sharp(params.buffer)
-    .rotate() // Auto-rotate based on EXIF if present
-    .resize({
-      width: params.maxSide,
-      height: params.maxSide,
-      fit: "inside",
-      withoutEnlargement: params.withoutEnlargement !== false,
-    })
-    .png({ compressionLevel })
-    .toBuffer();
+    return await sharp(params.buffer)
+      .rotate() // Auto-rotate based on EXIF if present
+      .resize({
+        width: params.maxSide,
+        height: params.maxSide,
+        fit: "inside",
+        withoutEnlargement: params.withoutEnlargement !== false,
+      })
+      .png({ compressionLevel })
+      .toBuffer();
+  } catch {
+    return params.buffer;
+  }
 }
 
 export async function optimizeImageToPng(

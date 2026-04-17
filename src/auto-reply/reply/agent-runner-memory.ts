@@ -624,6 +624,7 @@ export async function runMemoryFlushIfNeeded(params: {
       ...entry,
       totalTokens: transcriptPromptTokens,
       totalTokensFresh: true,
+      totalTokensEstimate: transcriptPromptTokens,
     };
     entry = nextEntry;
     if (params.sessionKey && params.sessionStore) {
@@ -634,7 +635,11 @@ export async function runMemoryFlushIfNeeded(params: {
         const updatedEntry = await updateSessionStoreEntry({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
-          update: async () => ({ totalTokens: transcriptPromptTokens, totalTokensFresh: true }),
+          update: async () => ({
+            totalTokens: transcriptPromptTokens,
+            totalTokensFresh: true,
+            totalTokensEstimate: transcriptPromptTokens,
+          }),
         });
         if (updatedEntry) {
           entry = updatedEntry;

@@ -73,15 +73,27 @@ export function applyModelOverrideToSessionEntry(params: {
     }
   }
 
-  // contextTokens are derived from the active session model. When the selected
-  // model changes (or runtime model is already stale), the cached window can
-  // pin the session to an older/smaller limit until another run refreshes it.
-  if (
-    entry.contextTokens !== undefined &&
-    (selectionUpdated || (runtimePresent && !runtimeAligned))
-  ) {
-    delete entry.contextTokens;
-    updated = true;
+  // Token metrics and contextTokens are derived from the active session model.
+  // When the selected model changes (or runtime model is already stale), the
+  // cached window or prompt snapshots can pin the session to an older/smaller
+  // limit until another run refreshes it.
+  const modelChanged = !runtimeAligned && (selectionUpdated || runtimePresent);
+  if (modelChanged) {
+    if (entry.contextTokens !== undefined) {
+      delete entry.contextTokens;
+      updated = true;
+    }
+    // We preserve totalTokens and other usage metrics as they are still valid
+    // cumulative session counts, even if the model target changed.
+    // Wiping them would cause /status to show 0 usage until the next turn.
+    if (entry.totalTokensFresh !== false) {
+      entry.totalTokensFresh = false;
+      updated = true;
+    }
+    if (entry.totalTokensEstimate !== undefined) {
+      delete entry.totalTokensEstimate;
+      updated = true;
+    }
   }
 
   if (profileOverride) {

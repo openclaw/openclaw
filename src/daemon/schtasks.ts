@@ -383,14 +383,14 @@ async function resolveScheduledTaskGatewayListenerPids(port: number): Promise<nu
     new Set(
       diagnostics.listeners
         .filter(
-          (listener) =>
+          (listener): listener is typeof listener & { pid: number } =>
             typeof listener.pid === "number" &&
-            listener.commandLine &&
+            listener.commandLine !== undefined &&
             isGatewayArgv(parseCmdScriptCommandLine(listener.commandLine), {
               allowGatewayBinary: true,
             }),
         )
-        .map((listener) => listener.pid as number),
+        .map((listener) => listener.pid),
     ),
   );
   if (matchedGatewayPids.length > 0) {

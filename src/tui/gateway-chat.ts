@@ -84,6 +84,7 @@ export type GatewaySessionList = {
       | "inputTokens"
       | "outputTokens"
       | "totalTokens"
+      | "totalTokensEstimate"
       | "modelProvider"
       | "displayName"
     > & {

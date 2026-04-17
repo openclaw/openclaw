@@ -257,6 +257,10 @@ export function createSessionsListTool(opts?: {
           model: readStringValue(entry.model),
           contextTokens: typeof entry.contextTokens === "number" ? entry.contextTokens : undefined,
           totalTokens: typeof entry.totalTokens === "number" ? entry.totalTokens : undefined,
+          totalTokensEstimate:
+            typeof entry.totalTokensEstimate === "number" ? entry.totalTokensEstimate : undefined,
+          totalTokensFresh:
+            typeof entry.totalTokensFresh === "boolean" ? entry.totalTokensFresh : undefined,
           estimatedCostUsd:
             typeof entry.estimatedCostUsd === "number" ? entry.estimatedCostUsd : undefined,
           status: readSessionRunStatus(entry.status),

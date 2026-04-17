@@ -1,14 +1,18 @@
 import { randomBytes } from "node:crypto";
-export {
+import {
   isExternalHookSession,
   mapHookExternalContentSource,
   resolveHookExternalContentSource,
   type HookExternalContentSource,
 } from "./external-content-source.js";
-import {
+
+export {
+  // Fixed: Re-exporting hook helpers to prevent API breakage in gateway and other consumers
+  isExternalHookSession,
   mapHookExternalContentSource,
   resolveHookExternalContentSource,
-} from "./external-content-source.js";
+  type HookExternalContentSource,
+};
 
 /**
  * Security utilities for handling untrusted external content.
@@ -350,10 +354,13 @@ export function buildSafeExternalPrompt(params: {
 }
 
 /**
- * Extracts the hook type from a session key.
+ * Extracts the hook type from a session key or explicit provenance.
  */
-export function getHookType(sessionKey: string): ExternalContentSource {
-  const source = resolveHookExternalContentSource(sessionKey);
+export function getHookType(
+  sessionKey: string,
+  explicitSource?: HookExternalContentSource,
+): ExternalContentSource {
+  const source = explicitSource ?? resolveHookExternalContentSource(sessionKey);
   return source ? mapHookExternalContentSource(source) : "unknown";
 }
 

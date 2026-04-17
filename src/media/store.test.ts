@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import { isSharpAvailable } from "./image-ops.js";
 
 describe("media store", () => {
   let store: typeof import("./store.js");
@@ -361,6 +362,9 @@ describe("media store", () => {
     {
       name: "saves jpeg buffers with the detected extension",
       bufferFactory: async () => {
+        if (!(await isSharpAvailable())) {
+          return null;
+        }
         return await sharp({
           create: { width: 2, height: 2, channels: 3, background: "#123456" },
         })
@@ -376,6 +380,9 @@ describe("media store", () => {
       "bufferFactory" in testCase && testCase.bufferFactory
         ? await testCase.bufferFactory()
         : testCase.buffer;
+    if (buffer === null) {
+      return;
+    }
     await expectSavedBufferCase({
       buffer,
       contentType: testCase.contentType,
@@ -517,6 +524,9 @@ describe("media store", () => {
       name: "renames media based on detected mime even when extension is wrong",
       relativeSourcePath: "image-wrong.bin",
       contentsFactory: async () => {
+        if (!(await isSharpAvailable())) {
+          return null;
+        }
         return await sharp({
           create: { width: 2, height: 2, channels: 3, background: "#00ff00" },
         })
@@ -554,6 +564,9 @@ describe("media store", () => {
       "contentsFactory" in testCase && testCase.contentsFactory
         ? await testCase.contentsFactory()
         : testCase.contents;
+    if (contents === null) {
+      return;
+    }
     await expectSavedSourceCase({
       relativeSourcePath: testCase.relativeSourcePath,
       contents,

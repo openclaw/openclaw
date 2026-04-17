@@ -17,10 +17,16 @@ export const formatDuration = (ms: number | null | undefined) => {
 export const formatTokensCompact = (
   sess: Pick<
     SessionStatus,
-    "inputTokens" | "totalTokens" | "contextTokens" | "percentUsed" | "cacheRead" | "cacheWrite"
+    | "inputTokens"
+    | "totalTokens"
+    | "totalTokensEstimate"
+    | "contextTokens"
+    | "percentUsed"
+    | "cacheRead"
+    | "cacheWrite"
   >,
 ) => {
-  const used = sess.totalTokens;
+  const used = sess.totalTokens ?? sess.totalTokensEstimate;
   const ctx = sess.contextTokens;
 
   let result = "";

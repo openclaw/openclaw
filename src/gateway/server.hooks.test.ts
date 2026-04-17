@@ -116,7 +116,7 @@ async function expectHookAgentSessionRouting(params: {
     sessionKey: params.requestSessionKey,
   });
   expect(resAgent.status).toBe(200);
-  await waitForSystemEvent();
+  await waitForSystemEvent(5_000);
 
   const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
     | { sessionKey?: string; job?: { agentId?: string } }
@@ -136,14 +136,14 @@ describe("gateway server hooks", () => {
 
       const resWake = await postHook(port, "/hooks/wake", { text: "Ping", mode: "next-heartbeat" });
       expect(resWake.status).toBe(200);
-      const wakeEvents = await waitForSystemEvent();
+      const wakeEvents = await waitForSystemEvent(5_000);
       expect(wakeEvents.some((e) => e.includes("Ping"))).toBe(true);
       drainSystemEvents(resolveMainKey());
 
       mockIsolatedRunOkOnce();
       const resAgent = await postHook(port, "/hooks/agent", { message: "Do it", name: "Email" });
       expect(resAgent.status).toBe(200);
-      const agentEvents = await waitForSystemEvent();
+      const agentEvents = await waitForSystemEvent(5_000);
       expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
       const firstCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         deliveryContract?: string;
@@ -160,7 +160,7 @@ describe("gateway server hooks", () => {
         model: "openai/gpt-4.1-mini",
       });
       expect(resAgentModel.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { payload?: { model?: string } };
       };
@@ -174,7 +174,7 @@ describe("gateway server hooks", () => {
         agentId: "hooks",
       });
       expect(resAgentWithId.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
@@ -188,7 +188,7 @@ describe("gateway server hooks", () => {
         agentId: "missing-agent",
       });
       expect(resAgentUnknown.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       const fallbackCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
@@ -217,7 +217,7 @@ describe("gateway server hooks", () => {
         { token: null, headers: { "x-openclaw-token": HOOK_TOKEN } },
       );
       expect(resHeader.status).toBe(200);
-      const headerEvents = await waitForSystemEvent();
+      const headerEvents = await waitForSystemEvent(5_000);
       expect(headerEvents.some((e) => e.includes("Header auth"))).toBe(true);
       drainSystemEvents(resolveMainKey());
 
@@ -360,7 +360,7 @@ describe("gateway server hooks", () => {
         body: JSON.stringify({ message: "No key" }),
       });
       expect(defaultRoute.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       const defaultCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
         | { sessionKey?: string }
         | undefined;
@@ -378,7 +378,7 @@ describe("gateway server hooks", () => {
         body: JSON.stringify({ subject: "hello", id: "42" }),
       });
       expect(mappedOk.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       const mappedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
         | { sessionKey?: string }
         | undefined;
@@ -525,7 +525,7 @@ describe("gateway server hooks", () => {
       mockIsolatedRunOk();
       await expectFirstHookDelivery(port, oversizedKey);
       await postAgentHookWithIdempotency(port, oversizedKey);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
 
       expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
     });
@@ -544,7 +544,7 @@ describe("gateway server hooks", () => {
 
       const firstBody = (await first.json()) as { runId?: string };
       expect(firstBody.runId).toBeTruthy();
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       drainSystemEvents(resolveMainKey());
 
       const secondNowSpy = vi.spyOn(Date, "now");
@@ -597,7 +597,7 @@ describe("gateway server hooks", () => {
       mockIsolatedRunOkOnce();
       const resNoAgent = await postHook(port, "/hooks/agent", { message: "No explicit agent" });
       expect(resNoAgent.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       const noAgentCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
@@ -610,7 +610,7 @@ describe("gateway server hooks", () => {
         agentId: "hooks",
       });
       expect(resAllowed.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       const allowedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
@@ -674,7 +674,7 @@ describe("gateway server hooks", () => {
 
       const allowed = await postHook(port, "/hooks/wake", { text: "auth reset" });
       expect(allowed.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       drainSystemEvents(resolveMainKey());
 
       const failAfterSuccess = await postHook(
@@ -702,7 +702,7 @@ describe("gateway server hooks", () => {
 
       const allowed = await postHook(port, "/hooks/wake", { text: "still works" });
       expect(allowed.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       drainSystemEvents(resolveMainKey());
     });
   });

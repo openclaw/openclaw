@@ -14,9 +14,14 @@ export function resolveWhatsAppOutboundTarget(params: {
   allowFrom: Array<string | number> | null | undefined;
   mode: string | null | undefined;
 }): WhatsAppOutboundTargetResolution {
-  const trimmed = params.to?.trim() ?? "";
+  const rawTo = params.to?.trim() ?? "";
+  const trimmed = rawTo.toLowerCase().startsWith("group:") ? rawTo.slice(6).trim() : rawTo;
+
   const allowListRaw = (params.allowFrom ?? [])
-    .map((entry) => String(entry).trim())
+    .map((entry) => {
+      const s = String(entry).trim();
+      return s.toLowerCase().startsWith("group:") ? s.slice(6).trim() : s;
+    })
     .filter(Boolean);
   const hasWildcard = allowListRaw.includes("*");
   const allowList = allowListRaw

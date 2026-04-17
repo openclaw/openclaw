@@ -49,6 +49,7 @@ export type SessionInfo = {
   inputTokens?: number | null;
   outputTokens?: number | null;
   totalTokens?: number | null;
+  totalTokensEstimate?: number | null;
   responseUsage?: ResponseUsageMode;
   updatedAt?: number | null;
   displayName?: string;
@@ -100,6 +101,7 @@ export type GatewayStatusSummary = {
       age?: number | null;
       model?: string | null;
       totalTokens?: number | null;
+      totalTokensEstimate?: number | null;
       contextTokens?: number | null;
       remainingTokens?: number | null;
       percentUsed?: number | null;

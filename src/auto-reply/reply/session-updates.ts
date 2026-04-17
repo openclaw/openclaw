@@ -207,6 +207,10 @@ export async function ensureSkillSnapshot(params: {
   return { sessionEntry: nextEntry, skillsSnapshot, systemSent };
 }
 
+/**
+ * Increment the compaction count for a session.
+ * Optionally updates session ID and token counts if provided.
+ */
 export async function incrementCompactionCount(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -217,7 +221,7 @@ export async function incrementCompactionCount(params: {
   amount?: number;
   /** Token count after compaction - if provided, updates session token counts */
   tokensAfter?: number;
-  /** Session id after compaction, when the runtime rotated transcripts. */
+  /** New session ID if the session was reset/replaced after compaction */
   newSessionId?: string;
 }): Promise<number | undefined> {
   const {
@@ -258,11 +262,24 @@ export async function incrementCompactionCount(params: {
   if (tokensAfter != null && tokensAfter > 0) {
     updates.totalTokens = tokensAfter;
     updates.totalTokensFresh = true;
+    updates.totalTokensEstimate = tokensAfter;
+
     // Clear input/output breakdown since we only have the total estimate after compaction
     updates.inputTokens = undefined;
     updates.outputTokens = undefined;
     updates.cacheRead = undefined;
     updates.cacheWrite = undefined;
+  } else if (tokensAfter === 0) {
+    // Fixed: Address Codex feedback - mark fresh total as stale when compaction reports 0
+    updates.totalTokens = undefined;
+    updates.totalTokensFresh = false;
+
+    const prevEstimate = entry.totalTokensEstimate;
+    const prevTotal = entry.totalTokens;
+    const fallback = prevEstimate ?? prevTotal;
+    if (fallback !== undefined && fallback > 0) {
+      updates.totalTokensEstimate = fallback;
+    }
   }
   sessionStore[sessionKey] = {
     ...entry,

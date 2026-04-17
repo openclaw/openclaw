@@ -99,10 +99,14 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   }
 
   const report = await resolveContextReport(params);
-  const cachedContextUsageTokens = resolveFreshSessionTotalTokens(targetSessionEntry);
+  // Fixed: Use totalTokens to replace the non-existent cachedContextUsageTokens property (ReferenceError)
+  const totalTokens =
+    resolveFreshSessionTotalTokens(targetSessionEntry) ?? targetSessionEntry?.totalTokensEstimate;
   const session = {
-    totalTokens: targetSessionEntry?.totalTokens ?? null,
-    totalTokensFresh: targetSessionEntry?.totalTokensFresh ?? null,
+    totalTokens: totalTokens ?? null,
+    totalTokensFresh:
+      targetSessionEntry?.totalTokensFresh ??
+      (typeof targetSessionEntry?.totalTokens === "number" && targetSessionEntry.totalTokens >= 0),
     inputTokens: targetSessionEntry?.inputTokens ?? null,
     outputTokens: targetSessionEntry?.outputTokens ?? null,
     contextTokens: params.contextTokens ?? null,
@@ -197,8 +201,8 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
 
   const contextWindowLabel = session.contextTokens != null ? formatInt(session.contextTokens) : "?";
   const totalsLine =
-    cachedContextUsageTokens != null
-      ? `Session tokens (cached): ${formatInt(cachedContextUsageTokens)} total / ctx=${contextWindowLabel}`
+    totalTokens != null
+      ? `Session tokens (cached): ${formatInt(totalTokens)} total / ctx=${contextWindowLabel}`
       : `Session tokens (cached): unknown / ctx=${contextWindowLabel}`;
   const sharedContextLines = [
     `Workspace: ${workspaceLabel}`,
@@ -239,13 +243,11 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     const trackedPromptChars = report.systemPrompt.chars + report.tools.schemaChars;
     const trackedPromptLine = `Tracked prompt estimate: ${formatCharsAndTokens(trackedPromptChars)}`;
     const actualContextLine =
-      cachedContextUsageTokens != null
-        ? `Actual context usage (cached): ${formatInt(cachedContextUsageTokens)} tok`
+      totalTokens != null
+        ? `Actual context usage (cached): ${formatInt(totalTokens)} tok`
         : "Actual context usage (cached): unavailable";
     const overheadTokens =
-      cachedContextUsageTokens != null
-        ? cachedContextUsageTokens - estimateTokensFromChars(trackedPromptChars)
-        : null;
+      totalTokens != null ? totalTokens - estimateTokensFromChars(trackedPromptChars) : null;
     const overheadLine =
       overheadTokens == null
         ? null

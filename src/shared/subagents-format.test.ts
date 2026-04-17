@@ -21,6 +21,7 @@ describe("shared/subagents-format", () => {
 
   it("formats token counts with integer, kilo, and million branches", () => {
     expect(formatTokenShort()).toBeUndefined();
+    expect(formatTokenShort(0)).toBe("0");
     expect(formatTokenShort(999.9)).toBe("999");
     expect(formatTokenShort(1_500)).toBe("1.5k");
     expect(formatTokenShort(10_000)).toBe("10k");
@@ -36,9 +37,33 @@ describe("shared/subagents-format", () => {
 
   it("resolves token totals and io breakdowns from valid numeric fields only", () => {
     expect(resolveTotalTokens()).toBeUndefined();
-    expect(resolveTotalTokens({ totalTokens: 42 })).toBe(42);
+    expect(resolveTotalTokens({ totalTokens: 0, totalTokensFresh: true })).toBe(0);
+    expect(resolveTotalTokens({ totalTokens: 42, totalTokensFresh: true })).toBe(42);
+    expect(resolveTotalTokens({ totalTokens: 42, totalTokensFresh: false })).toBeUndefined();
+    expect(
+      resolveTotalTokens(
+        { totalTokens: 42, totalTokensFresh: false, totalTokensEstimate: 100 },
+        { allowStaleEstimate: true },
+      ),
+    ).toBe(100);
+    expect(resolveTotalTokens({ totalTokensEstimate: 100 }, { allowStaleEstimate: true })).toBe(
+      100,
+    );
+    expect(resolveTotalTokens({ totalTokensEstimate: 100 })).toBeUndefined();
+    expect(
+      resolveTotalTokens(
+        { totalTokensEstimate: 100, inputTokens: 10, outputTokens: 5 },
+        { allowStaleEstimate: true },
+      ),
+    ).toBe(100);
     expect(resolveTotalTokens({ inputTokens: 10, outputTokens: 5 })).toBe(15);
-    expect(resolveTotalTokens({ inputTokens: Number.NaN, outputTokens: 5 })).toBeUndefined();
+    expect(
+      resolveTotalTokens({ inputTokens: 10, outputTokens: 5 }, { excludeIoTotals: true }),
+    ).toBeUndefined();
+    expect(resolveTotalTokens({ inputTokens: Number.NaN, outputTokens: 5 })).toBe(5);
+    expect(
+      resolveTotalTokens({ inputTokens: Number.NaN, outputTokens: Number.NaN }),
+    ).toBeUndefined();
 
     expect(resolveIoTokens({ inputTokens: 10, outputTokens: 5 })).toEqual({
       input: 10,
@@ -50,7 +75,16 @@ describe("shared/subagents-format", () => {
       output: 5,
       total: 5,
     });
-    expect(resolveIoTokens({ inputTokens: Number.NaN, outputTokens: 0 })).toBeUndefined();
+    expect(resolveIoTokens({ inputTokens: 0, outputTokens: 0 })).toEqual({
+      input: 0,
+      output: 0,
+      total: 0,
+    });
+    expect(resolveIoTokens({ inputTokens: Number.NaN, outputTokens: 0 })).toEqual({
+      input: 0,
+      output: 0,
+      total: 0,
+    });
   });
 
   it("formats io and prompt-cache usage displays with fallback branches", () => {
@@ -59,17 +93,28 @@ describe("shared/subagents-format", () => {
         inputTokens: 1_200,
         outputTokens: 300,
         totalTokens: 2_100,
+        totalTokensFresh: true,
       }),
     ).toBe("tokens 1.5k (in 1.2k / out 300), prompt/cache 2.1k");
 
-    expect(formatTokenUsageDisplay({ totalTokens: 500 })).toBe("tokens 500 prompt/cache");
+    expect(formatTokenUsageDisplay({ totalTokens: 500, totalTokensFresh: true })).toBe(
+      "tokens 500 prompt/cache",
+    );
     expect(
       formatTokenUsageDisplay({
         inputTokens: 1_200,
         outputTokens: 300,
         totalTokens: 1_500,
+        totalTokensFresh: true,
       }),
     ).toBe("tokens 1.5k (in 1.2k / out 300)");
-    expect(formatTokenUsageDisplay({ inputTokens: 0, outputTokens: 0, totalTokens: 0 })).toBe("");
+    expect(
+      formatTokenUsageDisplay({
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      }),
+    ).toBe("tokens 0 (in 0 / out 0)");
   });
 });

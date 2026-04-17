@@ -69,7 +69,7 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
       const ageLabel = typeof entry.age === "number" ? formatTimeAgo(entry.age) : "no activity";
       const model = entry.model ?? "unknown";
       const usage = formatContextUsageLine({
-        total: entry.totalTokens ?? null,
+        total: entry.totalTokens ?? entry.totalTokensEstimate ?? null,
         context: entry.contextTokens ?? null,
         remaining: entry.remainingTokens ?? null,
         percent: entry.percentUsed ?? null,

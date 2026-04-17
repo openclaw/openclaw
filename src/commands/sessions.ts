@@ -180,11 +180,12 @@ export async function sessionsCommand(
       sessions: await Promise.all(
         rows.map(async (r) => {
           const model = resolveSessionDisplayModel(cfg, r);
+          const freshTotal = resolveFreshSessionTotalTokens(r);
           return {
             ...r,
-            totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
+            totalTokens: freshTotal ?? r.totalTokensEstimate ?? null,
             totalTokensFresh:
-              typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
+              r.totalTokensFresh ?? (typeof r.totalTokens === "number" && r.totalTokens >= 0),
             contextTokens:
               r.contextTokens ??
               configuredContextTokens ??
@@ -236,7 +237,9 @@ export async function sessionsCommand(
       configuredContextTokens ??
       (await lookupContextTokensForDisplay(model)) ??
       configContextTokens;
-    const total = resolveFreshSessionTotalTokens(row);
+    const freshTotal = resolveFreshSessionTotalTokens(row);
+    // Fixed: Ensure totalTokensEstimate is used as a fallback when fresh total is unavailable
+    const total = freshTotal ?? row.totalTokensEstimate;
 
     const line = [
       ...(showAgentColumn

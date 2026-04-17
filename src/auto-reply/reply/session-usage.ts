@@ -98,12 +98,14 @@ export async function persistSessionUsageUpdate(params: {
   const label = params.logLabel ? `${params.logLabel} ` : "";
   const cfg = params.cfg ?? loadConfig();
   const hasUsage = hasNonzeroUsage(params.usage);
+  const hasLastCallUsage = hasNonzeroUsage(params.lastCallUsage);
   const hasPromptTokens =
+    // Fixed: Prompt tokens >= 0 (not > 0) to handle fresh 0-token snapshots (Codex)
     typeof params.promptTokens === "number" &&
     Number.isFinite(params.promptTokens) &&
-    params.promptTokens > 0;
+    params.promptTokens >= 0;
   const hasFreshContextSnapshot =
-    Boolean(params.lastCallUsage) || hasPromptTokens || params.usageIsContextSnapshot === true;
+    hasLastCallUsage || hasPromptTokens || (params.usageIsContextSnapshot === true && hasUsage);
 
   if (hasUsage || hasFreshContextSnapshot) {
     try {
@@ -124,6 +126,7 @@ export async function persistSessionUsageUpdate(params: {
                 usage: usageForContext,
                 contextTokens: resolvedContextTokens,
                 promptTokens: params.promptTokens,
+                isExplicitSnapshot: hasFreshContextSnapshot,
               })
             : undefined;
           const runEstimatedCostUsd = estimateSessionRunCostUsd({
@@ -133,31 +136,56 @@ export async function persistSessionUsageUpdate(params: {
             modelUsed: params.modelUsed ?? entry.model,
           });
           const existingEstimatedCostUsd = resolveNonNegativeNumber(entry.estimatedCostUsd) ?? 0;
+
+          const modelUsed = params.modelUsed ?? entry.model;
+          const providerUsed = params.providerUsed ?? entry.modelProvider;
+          const modelChanged =
+            (entry.model !== undefined && entry.model !== modelUsed) ||
+            (entry.modelProvider !== undefined && entry.modelProvider !== providerUsed);
+
           const patch: Partial<SessionEntry> = {
-            modelProvider: params.providerUsed ?? entry.modelProvider,
-            model: params.modelUsed ?? entry.model,
+            modelProvider: providerUsed,
+            model: modelUsed,
             contextTokens: resolvedContextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
-          if (hasUsage) {
-            patch.inputTokens = params.usage?.input ?? 0;
-            patch.outputTokens = params.usage?.output ?? 0;
+
+          if (
+            typeof totalTokens === "number" &&
+            Number.isFinite(totalTokens) &&
+            (totalTokens > 0 || (totalTokens === 0 && hasFreshContextSnapshot))
+          ) {
+            patch.totalTokens = totalTokens;
+            patch.totalTokensFresh = true;
+            patch.totalTokensEstimate = totalTokens;
+          } else {
+            patch.totalTokens = undefined;
+            patch.totalTokensFresh = false;
+            if (modelChanged) {
+              patch.totalTokensEstimate = undefined;
+            }
+          }
+          const hasCurrentUsage =
+            hasUsage ||
+            Boolean(params.lastCallUsage) ||
+            (typeof params.promptTokens === "number" && params.promptTokens >= 0);
+
+          if (hasCurrentUsage || hasFreshContextSnapshot) {
+            patch.inputTokens = params.usage?.input;
+            patch.outputTokens = params.usage?.output;
             // Cache counters should reflect the latest context snapshot when
             // available, not accumulated per-call totals across a whole run.
             const cacheUsage = params.lastCallUsage ?? params.usage;
-            patch.cacheRead = cacheUsage?.cacheRead ?? 0;
-            patch.cacheWrite = cacheUsage?.cacheWrite ?? 0;
+            patch.cacheRead = cacheUsage?.cacheRead;
+            patch.cacheWrite = cacheUsage?.cacheWrite;
           }
           if (runEstimatedCostUsd !== undefined) {
             patch.estimatedCostUsd = existingEstimatedCostUsd + runEstimatedCostUsd;
           } else if (entry.estimatedCostUsd !== undefined) {
             patch.estimatedCostUsd = entry.estimatedCostUsd;
           }
-          // Missing a last-call snapshot (and promptTokens fallback) means
-          // context utilization is stale/unknown.
-          patch.totalTokens = totalTokens;
-          patch.totalTokensFresh = typeof totalTokens === "number";
+
           return applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });
@@ -167,24 +195,50 @@ export async function persistSessionUsageUpdate(params: {
     return;
   }
 
-  if (params.modelUsed || params.contextTokensUsed) {
-    try {
-      await updateSessionStoreEntry({
-        storePath,
-        sessionKey,
-        update: async (entry) => {
-          const patch: Partial<SessionEntry> = {
-            modelProvider: params.providerUsed ?? entry.modelProvider,
-            model: params.modelUsed ?? entry.model,
-            contextTokens: params.contextTokensUsed ?? entry.contextTokens,
-            systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
-            updatedAt: Date.now(),
-          };
-          return applyCliSessionIdToSessionPatch(params, entry, patch);
-        },
-      });
-    } catch (err) {
-      logVerbose(`failed to persist ${label}model/context update: ${String(err)}`);
-    }
+  if (!params.modelUsed && !params.contextTokensUsed) {
+    return;
+  }
+
+  // A run completed with model/context info but no usage data at all (e.g.
+  // because the provider failed or the run was aborted before any API calls
+  // were made). Clear usage but preserve model/context if provided.
+  try {
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async (entry) => {
+        const modelUsed = params.modelUsed ?? entry.model;
+        const providerUsed = params.providerUsed ?? entry.modelProvider;
+        const modelChanged =
+          (entry.model !== undefined && entry.model !== modelUsed) ||
+          (entry.modelProvider !== undefined && entry.modelProvider !== providerUsed);
+
+        const patch: Partial<SessionEntry> = {
+          modelProvider: providerUsed,
+          model: modelUsed,
+          contextTokens: params.contextTokensUsed ?? entry.contextTokens,
+          systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+          updatedAt: Date.now(),
+        };
+
+        if (modelChanged) {
+          patch.inputTokens = undefined;
+          patch.outputTokens = undefined;
+          patch.totalTokens = undefined;
+          patch.totalTokensFresh = false;
+          patch.cacheRead = undefined;
+          patch.cacheWrite = undefined;
+          patch.totalTokensEstimate = undefined;
+        } else {
+          if (entry.totalTokens !== undefined && entry.totalTokensFresh !== false) {
+            // Always prefer a confirmed fresh total as the estimate baseline.
+            patch.totalTokensEstimate = entry.totalTokens;
+          }
+        }
+        return applyCliSessionIdToSessionPatch(params, entry, patch);
+      },
+    });
+  } catch (err) {
+    logVerbose(`failed to clear ${label}usage update: ${String(err)}`);
   }
 }

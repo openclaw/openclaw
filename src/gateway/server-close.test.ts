@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = {
   logWarn: vi.fn(),
@@ -76,8 +76,14 @@ function createGatewayCloseTestDeps(
 describe("createGatewayCloseHandler", () => {
   beforeEach(() => {
     vi.useRealTimers();
+    vi.clearAllTimers();
     mocks.logWarn.mockClear();
     mocks.disposeAgentHarnesses.mockClear();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   it("unsubscribes lifecycle listeners during shutdown", async () => {

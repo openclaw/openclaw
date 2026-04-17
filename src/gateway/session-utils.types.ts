@@ -45,11 +45,12 @@ export type GatewaySessionRow = {
   reasoningLevel?: string;
   elevatedLevel?: string;
   sendPolicy?: "allow" | "deny";
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  totalTokens?: number | null;
   totalTokensFresh?: boolean;
-  estimatedCostUsd?: number;
+  totalTokensEstimate?: number | null;
+  estimatedCostUsd?: number | null;
   status?: SessionRunStatus;
   startedAt?: number;
   endedAt?: number;
@@ -59,7 +60,7 @@ export type GatewaySessionRow = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;
-  contextTokens?: number;
+  contextTokens?: number | null;
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionEntry["lastChannel"];
   lastTo?: string;

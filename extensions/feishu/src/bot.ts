@@ -533,12 +533,18 @@ export async function handleFeishuMessage(params: {
             log(`feishu[${account.accountId}]: pairing request sender=${ctx.senderOpenId}`);
           },
           sendPairingReply: async (text) => {
-            await sendMessageFeishu({
-              cfg,
-              to: `chat:${ctx.chatId}`,
-              text,
-              accountId: account.accountId,
-            });
+            const parts = text
+              .split("\n\n")
+              .map((p) => p.trim())
+              .filter(Boolean);
+            for (const part of parts) {
+              await sendMessageFeishu({
+                cfg,
+                to: `chat:${ctx.chatId}`,
+                text: part,
+                accountId: account.accountId,
+              });
+            }
           },
           onReplyError: (err) => {
             log(

@@ -1,10 +1,13 @@
 export { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 
 export function formatTokenShort(value?: number) {
-  if (!value || !Number.isFinite(value) || value <= 0) {
+  if (value === undefined || !Number.isFinite(value) || value < 0) {
     return undefined;
   }
   const n = Math.floor(value);
+  if (n === 0) {
+    return "0";
+  }
   if (n < 1_000) {
     return `${n}`;
   }
@@ -26,39 +29,89 @@ export function truncateLine(value: string, maxLength: number) {
 
 export type TokenUsageLike = {
   totalTokens?: unknown;
+  totalTokensFresh?: unknown;
+  totalTokensEstimate?: unknown;
   inputTokens?: unknown;
   outputTokens?: unknown;
 };
 
-export function resolveTotalTokens(entry?: TokenUsageLike) {
+export function resolveTotalTokens(
+  entry?: TokenUsageLike,
+  options?: { allowStaleEstimate?: boolean; excludeIoTotals?: boolean },
+) {
   if (!entry || typeof entry !== "object") {
     return undefined;
   }
-  if (typeof entry.totalTokens === "number" && Number.isFinite(entry.totalTokens)) {
+  if (
+    (entry.totalTokensFresh === true || entry.totalTokensFresh === undefined) &&
+    typeof entry.totalTokens === "number" &&
+    Number.isFinite(entry.totalTokens) &&
+    entry.totalTokens >= 0
+  ) {
     return entry.totalTokens;
   }
-  const input = typeof entry.inputTokens === "number" ? entry.inputTokens : 0;
-  const output = typeof entry.outputTokens === "number" ? entry.outputTokens : 0;
+  if (
+    options?.allowStaleEstimate &&
+    typeof entry.totalTokensEstimate === "number" &&
+    Number.isFinite(entry.totalTokensEstimate) &&
+    entry.totalTokensEstimate >= 0
+  ) {
+    return entry.totalTokensEstimate;
+  }
+  if (
+    options?.allowStaleEstimate &&
+    typeof entry.totalTokens === "number" &&
+    Number.isFinite(entry.totalTokens) &&
+    entry.totalTokens >= 0
+  ) {
+    return entry.totalTokens;
+  }
+  if (options?.excludeIoTotals) {
+    return undefined;
+  }
+  const input: number =
+    typeof entry.inputTokens === "number" && Number.isFinite(entry.inputTokens)
+      ? entry.inputTokens
+      : 0;
+  const output: number =
+    typeof entry.outputTokens === "number" && Number.isFinite(entry.outputTokens)
+      ? entry.outputTokens
+      : 0;
   const total = input + output;
-  return total > 0 ? total : undefined;
+  if (
+    (typeof entry.inputTokens === "number" &&
+      Number.isFinite(entry.inputTokens) &&
+      entry.inputTokens > 0) ||
+    (typeof entry.outputTokens === "number" &&
+      Number.isFinite(entry.outputTokens) &&
+      entry.outputTokens > 0)
+  ) {
+    return total;
+  }
+  return undefined;
 }
 
 export function resolveIoTokens(entry?: TokenUsageLike) {
   if (!entry || typeof entry !== "object") {
     return undefined;
   }
-  const input =
-    typeof entry.inputTokens === "number" && Number.isFinite(entry.inputTokens)
-      ? entry.inputTokens
-      : 0;
-  const output =
-    typeof entry.outputTokens === "number" && Number.isFinite(entry.outputTokens)
-      ? entry.outputTokens
-      : 0;
-  const total = input + output;
-  if (total <= 0) {
+  if (
+    typeof entry.inputTokens !== "number" ||
+    !Number.isFinite(entry.inputTokens) ||
+    typeof entry.outputTokens !== "number" ||
+    !Number.isFinite(entry.outputTokens)
+  ) {
+    if (typeof entry.inputTokens === "number" && Number.isFinite(entry.inputTokens)) {
+      return { input: entry.inputTokens, output: 0, total: entry.inputTokens };
+    }
+    if (typeof entry.outputTokens === "number" && Number.isFinite(entry.outputTokens)) {
+      return { input: 0, output: entry.outputTokens, total: entry.outputTokens };
+    }
     return undefined;
   }
+  const input: number = entry.inputTokens;
+  const output: number = entry.outputTokens;
+  const total = input + output;
   return { input, output, total };
 }
 
@@ -70,10 +123,10 @@ export function formatTokenUsageDisplay(entry?: TokenUsageLike) {
     const input = formatTokenShort(io.input) ?? "0";
     const output = formatTokenShort(io.output) ?? "0";
     parts.push(`tokens ${formatTokenShort(io.total)} (in ${input} / out ${output})`);
-  } else if (typeof promptCache === "number" && promptCache > 0) {
+  } else if (promptCache !== undefined && promptCache > 0) {
     parts.push(`tokens ${formatTokenShort(promptCache)} prompt/cache`);
   }
-  if (typeof promptCache === "number" && io && promptCache > io.total) {
+  if (io && promptCache !== undefined && promptCache > io.total) {
     parts.push(`prompt/cache ${formatTokenShort(promptCache)}`);
   }
   return parts.join(", ");

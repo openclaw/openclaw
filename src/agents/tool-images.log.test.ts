@@ -1,5 +1,6 @@
 import sharp from "sharp";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { isSharpAvailable } from "../media/image-ops.js";
 
 const { infoMock, warnMock } = vi.hoisted(() => ({
   infoMock: vi.fn(),
@@ -35,7 +36,12 @@ async function createLargePng(): Promise<Buffer> {
     .toBuffer();
 }
 
-describe("tool-images log context", () => {
+describe("tool-images log context", async () => {
+  if (!(await isSharpAvailable())) {
+    it.skip("sharp is not available, skipping tests", () => {});
+    return;
+  }
+
   let png: Buffer;
 
   beforeAll(async () => {

@@ -84,6 +84,7 @@ describe("resolveBuildAllSteps", () => {
 
   it("uses a runtime-only profile for ci artifacts", () => {
     expect(resolveBuildAllSteps("ciArtifacts").map((step) => step.label)).toEqual([
+      "ui:build",
       "canvas:a2ui:bundle",
       "tsdown",
       "runtime-postbuild",
