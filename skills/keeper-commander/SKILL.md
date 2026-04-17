@@ -71,6 +71,6 @@ Kill the tmux session when the task is complete unless the user wants a persiste
 - Prefer `ksm` secret injection or narrowly scoped environment variables over writing secrets to files.
 - Do not store retrieved secrets in workspace files, git history, notes, or code comments unless the user explicitly asks.
 - If multiple records match, stop and disambiguate instead of guessing.
-- If login, MFA, or device approval is required, say so plainly and wait for that step.
+- If login, MFA, or device approval is required, say so plainly and send attached tmux session to user to manually complete and wait for that step.
 - If a command output may expose extra sensitive fields, summarize instead of pasting raw output.
 - If tmux is unavailable for interactive Keeper work, stop and say so rather than falling back to unsafe repeated direct calls.
