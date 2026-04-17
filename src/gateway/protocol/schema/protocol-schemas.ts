@@ -1,5 +1,11 @@
 import type { TSchema } from "@sinclair/typebox";
 import {
+  A2ATaskCancelParamsSchema,
+  A2ATaskRequestParamsSchema,
+  A2ATaskStatusParamsSchema,
+  A2ATaskUpdateParamsSchema,
+} from "./a2a.js";
+import {
   AgentEventSchema,
   AgentIdentityParamsSchema,
   AgentIdentityResultSchema,
@@ -214,6 +220,10 @@ export const ProtocolSchemas = {
   AgentIdentityResult: AgentIdentityResultSchema,
   AgentWaitParams: AgentWaitParamsSchema,
   WakeParams: WakeParamsSchema,
+  A2ATaskRequestParams: A2ATaskRequestParamsSchema,
+  A2ATaskUpdateParams: A2ATaskUpdateParamsSchema,
+  A2ATaskCancelParams: A2ATaskCancelParamsSchema,
+  A2ATaskStatusParams: A2ATaskStatusParamsSchema,
   NodePairRequestParams: NodePairRequestParamsSchema,
   NodePairListParams: NodePairListParamsSchema,
   NodePairApproveParams: NodePairApproveParamsSchema,

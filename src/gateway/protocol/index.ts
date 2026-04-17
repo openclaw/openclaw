@@ -1,6 +1,14 @@
 import AjvPkg, { type ErrorObject } from "ajv";
 import type { SessionsPatchResult } from "../session-utils.types.js";
 import {
+  type A2ATaskCancelParams,
+  A2ATaskCancelParamsSchema,
+  type A2ATaskRequestParams,
+  A2ATaskRequestParamsSchema,
+  type A2ATaskStatusParams,
+  A2ATaskStatusParamsSchema,
+  type A2ATaskUpdateParams,
+  A2ATaskUpdateParamsSchema,
   type AgentEvent,
   AgentEventSchema,
   type AgentIdentityParams,
@@ -316,6 +324,15 @@ export const validateAgentIdentityParams =
   ajv.compile<AgentIdentityParams>(AgentIdentityParamsSchema);
 export const validateAgentWaitParams = ajv.compile<AgentWaitParams>(AgentWaitParamsSchema);
 export const validateWakeParams = ajv.compile<WakeParams>(WakeParamsSchema);
+export const validateA2ATaskRequestParams = ajv.compile<A2ATaskRequestParams>(
+  A2ATaskRequestParamsSchema,
+);
+export const validateA2ATaskUpdateParams =
+  ajv.compile<A2ATaskUpdateParams>(A2ATaskUpdateParamsSchema);
+export const validateA2ATaskCancelParams =
+  ajv.compile<A2ATaskCancelParams>(A2ATaskCancelParamsSchema);
+export const validateA2ATaskStatusParams =
+  ajv.compile<A2ATaskStatusParams>(A2ATaskStatusParamsSchema);
 export const validateAgentsListParams = ajv.compile<AgentsListParams>(AgentsListParamsSchema);
 export const validateAgentsCreateParams = ajv.compile<AgentsCreateParams>(AgentsCreateParamsSchema);
 export const validateAgentsUpdateParams = ajv.compile<AgentsUpdateParams>(AgentsUpdateParamsSchema);
@@ -565,6 +582,10 @@ export {
   AgentIdentityParamsSchema,
   AgentIdentityResultSchema,
   WakeParamsSchema,
+  A2ATaskRequestParamsSchema,
+  A2ATaskUpdateParamsSchema,
+  A2ATaskCancelParamsSchema,
+  A2ATaskStatusParamsSchema,
   PushTestParamsSchema,
   PushTestResultSchema,
   NodePairRequestParamsSchema,
@@ -689,6 +710,10 @@ export type {
   AgentIdentityParams,
   AgentIdentityResult,
   AgentWaitParams,
+  A2ATaskRequestParams,
+  A2ATaskUpdateParams,
+  A2ATaskCancelParams,
+  A2ATaskStatusParams,
   ChatEvent,
   TickEvent,
   ShutdownEvent,
