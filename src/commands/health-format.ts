@@ -21,6 +21,36 @@ const formatKv = (line: string, rich: boolean) => {
   return `${colorize(rich, theme.muted, `${key}:`)} ${colorize(rich, valueColor, value)}`;
 };
 
+export function formatHealthCheckFailure(err: unknown, opts: { rich?: boolean } = {}): string {
+  const rich = opts.rich ?? isRich();
+  const raw = String(err);
+  const message = err instanceof Error ? err.message : raw;
+
+  if (!rich) {
+    return `Health check failed: ${raw}`;
+  }
+
+  const lines = message
+    .split("\n")
+    .map((l) => l.trimEnd())
+    .filter(Boolean);
+  const detailsIdx = lines.findIndex((l) => l.startsWith("Gateway target: "));
+
+  const summaryLines = (detailsIdx >= 0 ? lines.slice(0, detailsIdx) : lines)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const detailLines = detailsIdx >= 0 ? lines.slice(detailsIdx) : [];
+
+  const summary = summaryLines.length > 0 ? summaryLines.join(" ") : message;
+  const header = colorize(rich, theme.error.bold, "Health check failed");
+
+  const out: string[] = [`${header}: ${summary}`];
+  for (const line of detailLines) {
+    out.push(`  ${formatKv(line, rich)}`);
+  }
+  return out.join("\n");
+}
+
 const formatProbeLine = (probe: unknown, opts: { botUsernames?: string[] } = {}): string | null => {
   const record = asNullableRecord(probe);
   if (!record) {
@@ -133,12 +163,14 @@ export const formatHealthChannelLines = (
     const baseSummary =
       filteredSummaries && filteredSummaries.length > 0 ? filteredSummaries[0] : channelSummary;
     const botUsernames = listSummaries
-      .map((account) => {
-        const probeRecord = asNullableRecord(account.probe);
-        const bot = probeRecord ? asNullableRecord(probeRecord.bot) : null;
-        return bot && typeof bot.username === "string" ? bot.username : null;
-      })
-      .filter((value): value is string => Boolean(value));
+      ? listSummaries
+          .map((account) => {
+            const probeRecord = asNullableRecord(account.probe);
+            const bot = probeRecord ? asNullableRecord(probeRecord.bot) : null;
+            return bot && typeof bot.username === "string" ? bot.username : null;
+          })
+          .filter((value): value is string => Boolean(value))
+      : [];
     const linked = typeof baseSummary.linked === "boolean" ? baseSummary.linked : null;
     if (linked !== null) {
       if (linked) {
@@ -163,7 +195,7 @@ export const formatHealthChannelLines = (
             .map((account) => formatAccountProbeTiming(account))
             .filter((value): value is string => Boolean(value))
         : [];
-    const failedSummary = listSummaries.find((entry) => isProbeFailure(entry));
+    const failedSummary = listSummaries.find((summary) => isProbeFailure(summary));
     if (failedSummary) {
       const failureLine = formatProbeLine(failedSummary.probe, { botUsernames });
       if (failureLine) {
@@ -191,33 +223,3 @@ export const formatHealthChannelLines = (
   }
   return lines;
 };
-
-export function formatHealthCheckFailure(err: unknown, opts: { rich?: boolean } = {}): string {
-  const rich = opts.rich ?? isRich();
-  const raw = String(err);
-  const message = err instanceof Error ? err.message : raw;
-
-  if (!rich) {
-    return `Health check failed: ${raw}`;
-  }
-
-  const lines = message
-    .split("\n")
-    .map((l) => l.trimEnd())
-    .filter(Boolean);
-  const detailsIdx = lines.findIndex((l) => l.startsWith("Gateway target: "));
-
-  const summaryLines = (detailsIdx >= 0 ? lines.slice(0, detailsIdx) : lines)
-    .map((l) => l.trim())
-    .filter(Boolean);
-  const detailLines = detailsIdx >= 0 ? lines.slice(detailsIdx) : [];
-
-  const summary = summaryLines.length > 0 ? summaryLines.join(" ") : message;
-  const header = colorize(rich, theme.error.bold, "Health check failed");
-
-  const out: string[] = [`${header}: ${summary}`];
-  for (const line of detailLines) {
-    out.push(`  ${formatKv(line, rich)}`);
-  }
-  return out.join("\n");
-}
