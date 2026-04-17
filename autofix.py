@@ -1,0 +1,572 @@
+#!/usr/bin/env python3
+"""
+PR Review Autofix Pipeline (subscription edition)
+==================================================
+Reads unresolved review comments on a GitHub PR, uses Claude to generate
+targeted fixes, commits them to the PR branch, and posts a summary comment.
+
+Credentials:
+    Defaults to the operator's Claude.ai subscription via the Claude Agent
+    SDK CLI (`node_modules/@anthropic-ai/claude-agent-sdk/cli.js`). No
+    metered API billing; requests count against the operator's Pro/Max
+    quota. Same path OpenClaw's `runtime.type: "claude-sdk"` uses.
+
+    Set AUTOFIX_AUTH_MODE=api-key to use ANTHROPIC_API_KEY instead (legacy
+    path; metered).
+
+Usage:
+    python autofix.py --repo owner/repo --pr 123
+    python autofix.py --repo owner/repo --pr 123 --dry-run   # preview only
+
+Env vars:
+    GITHUB_TOKEN         - required; GitHub PAT with repo scope
+    AUTOFIX_AUTH_MODE    - optional; "subscription" (default) or "api-key"
+    ANTHROPIC_API_KEY    - required IFF AUTOFIX_AUTH_MODE=api-key
+    AUTOFIX_MODEL        - optional; default "claude-sonnet-4-5-20250929"
+    AUTOFIX_MAX_FILES    - optional; max files to patch per run (default 10)
+    AUTOFIX_VERIFY_CMD   - optional; shell command to run after patching
+                           (e.g. "pnpm check"). Non-zero exit => no push.
+    AUTOFIX_MAX_CONSEC   - optional; refuse to run if the last N commits
+                           on the branch are autofix commits (default 3).
+                           Stops runaway ping-pong between autofixer and
+                           review tools.
+"""
+
+import argparse
+import base64
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+GITHUB_API = "https://api.github.com"
+ANTHROPIC_API = "https://api.anthropic.com/v1/messages"
+DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+MODEL = os.getenv("AUTOFIX_MODEL", DEFAULT_MODEL)
+MAX_FILES = int(os.getenv("AUTOFIX_MAX_FILES", "10"))
+AUTH_MODE = os.getenv("AUTOFIX_AUTH_MODE", "subscription").strip().lower()
+VERIFY_CMD = os.getenv("AUTOFIX_VERIFY_CMD", "").strip()
+MAX_CONSEC = int(os.getenv("AUTOFIX_MAX_CONSEC", "3"))
+
+
+@dataclass
+class ReviewComment:
+    id: int
+    path: str
+    line: Optional[int]
+    side: str
+    body: str
+    user: str
+    diff_hunk: str
+    created_at: str
+    in_reply_to_id: Optional[int] = None
+
+
+@dataclass
+class FilePatch:
+    path: str
+    original: str
+    patched: str
+    comments_addressed: list = field(default_factory=list)
+    explanation: str = ""
+
+
+# ---------------------------------------------------------------------------
+# GitHub API
+# ---------------------------------------------------------------------------
+
+def gh_request(endpoint, method="GET", data=None, *, retries=3):
+    """GitHub API with retry on transient 5xx/429."""
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        sys.exit("ERROR: GITHUB_TOKEN env var is required")
+    url = f"{GITHUB_API}{endpoint}" if endpoint.startswith("/") else endpoint
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    body = json.dumps(data).encode() if data else None
+    if body:
+        headers["Content-Type"] = "application/json"
+    last_err = None
+    for attempt in range(retries):
+        req = urllib.request.Request(url, data=body, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 500, 502, 503, 504) and attempt < retries - 1:
+                time.sleep(2 ** attempt)
+                last_err = e
+                continue
+            print(f"GitHub API error {e.code} on {url}: {e.read().decode()}", file=sys.stderr)
+            raise
+        except urllib.error.URLError as e:
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)
+                last_err = e
+                continue
+            raise
+    raise last_err or RuntimeError("gh_request retries exhausted")
+
+
+def gh_paginate(endpoint):
+    results, page = [], 1
+    while True:
+        sep = "&" if "?" in endpoint else "?"
+        batch = gh_request(f"{endpoint}{sep}per_page=100&page={page}")
+        if not batch:
+            break
+        results.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    return results
+
+
+def fetch_review_comments(repo, pr):
+    raw = gh_paginate(f"/repos/{repo}/pulls/{pr}/comments")
+    return [
+        ReviewComment(
+            id=c["id"],
+            path=c["path"],
+            line=c.get("line") or c.get("original_line"),
+            side=c.get("side", "RIGHT"),
+            body=c["body"],
+            user=c["user"]["login"],
+            diff_hunk=c.get("diff_hunk", ""),
+            created_at=c["created_at"],
+            in_reply_to_id=c.get("in_reply_to_id"),
+        )
+        for c in raw
+    ]
+
+
+def fetch_pr_info(repo, pr):
+    return gh_request(f"/repos/{repo}/pulls/{pr}")
+
+
+def fetch_recent_commits(repo, branch, limit=10):
+    return gh_request(f"/repos/{repo}/commits?sha={branch}&per_page={limit}")
+
+
+def fetch_file_content(repo, ref, path):
+    data = gh_request(f"/repos/{repo}/contents/{path}?ref={ref}")
+    if data.get("encoding") == "base64":
+        return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+    return data.get("content", "")
+
+
+def post_pr_comment(repo, pr, body):
+    gh_request(f"/repos/{repo}/issues/{pr}/comments", method="POST", data={"body": body})
+
+
+def reply_to_review_comment(repo, pr, comment_id, body):
+    try:
+        gh_request(
+            f"/repos/{repo}/pulls/{pr}/comments/{comment_id}/replies",
+            method="POST",
+            data={"body": body},
+        )
+    except Exception as e:
+        print(f"(non-fatal) could not reply to comment {comment_id}: {e}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Claude call — subscription (default) or api-key
+# ---------------------------------------------------------------------------
+
+def call_claude(system: str, user_msg: str) -> str:
+    if AUTH_MODE == "api-key":
+        return _call_claude_api_key(system, user_msg)
+    return _call_claude_subscription(system, user_msg)
+
+
+def _call_claude_api_key(system: str, user_msg: str, *, retries: int = 4) -> str:
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        sys.exit("ERROR: ANTHROPIC_API_KEY required when AUTOFIX_AUTH_MODE=api-key")
+    payload = json.dumps(
+        {
+            "model": MODEL,
+            "max_tokens": 8192,
+            "system": system,
+            "messages": [{"role": "user", "content": user_msg}],
+        }
+    ).encode()
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    last_err = None
+    for attempt in range(retries):
+        req = urllib.request.Request(
+            ANTHROPIC_API, data=payload, headers=headers, method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                result = json.loads(resp.read().decode())
+            for block in result.get("content", []):
+                if block.get("type") == "text":
+                    return block.get("text", "")
+            return ""
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 529) and attempt < retries - 1:
+                wait = 2 ** attempt
+                print(
+                    f"Claude API {e.code}; retrying in {wait}s (attempt {attempt + 1}/{retries})",
+                    file=sys.stderr,
+                )
+                time.sleep(wait)
+                last_err = e
+                continue
+            print(f"Claude API error {e.code}: {e.read().decode()}", file=sys.stderr)
+            raise
+        except urllib.error.URLError as e:
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)
+                last_err = e
+                continue
+            raise
+    raise last_err or RuntimeError("_call_claude_api_key retries exhausted")
+
+
+def _call_claude_subscription(system: str, user_msg: str) -> str:
+    """Run Claude via the Agent SDK subprocess against the operator's
+    `claude login` session. Non-interactive: feeds the prompt on stdin
+    and collects stdout. No metered billing."""
+    sdk_cli = _resolve_sdk_cli()
+    prompt = f"{system}\n\n---\n\n{user_msg}"
+    try:
+        proc = subprocess.run(
+            [
+                "node",
+                sdk_cli,
+                "-p",
+                prompt,
+                "--model",
+                MODEL,
+                "--output-format",
+                "text",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except FileNotFoundError:
+        sys.exit(
+            "ERROR: `node` not on PATH; required for subscription-mode autofix. "
+            "Set AUTOFIX_AUTH_MODE=api-key to use the HTTP path instead."
+        )
+    if proc.returncode != 0:
+        print(f"Agent SDK subprocess exited {proc.returncode}", file=sys.stderr)
+        print(f"stderr: {proc.stderr[:2000]}", file=sys.stderr)
+        raise RuntimeError(f"Claude Agent SDK failed (exit {proc.returncode})")
+    return proc.stdout
+
+
+def _resolve_sdk_cli() -> str:
+    repo_candidate = Path("node_modules/@anthropic-ai/claude-agent-sdk/cli.js")
+    if repo_candidate.exists():
+        return str(repo_candidate.resolve())
+    home = Path.home()
+    for candidate in (
+        home / "AppData" / "Roaming" / "npm" / "node_modules" / "@anthropic-ai" / "claude-agent-sdk" / "cli.js",
+        Path("/usr/local/lib/node_modules/@anthropic-ai/claude-agent-sdk/cli.js"),
+        Path("/usr/lib/node_modules/@anthropic-ai/claude-agent-sdk/cli.js"),
+    ):
+        if candidate.exists():
+            return str(candidate)
+    sys.exit(
+        "ERROR: could not find @anthropic-ai/claude-agent-sdk/cli.js. "
+        "Run `pnpm install` in the repo (or install globally) first."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Patch generation
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT = (
+    "You are an expert code reviewer fix agent. You receive a source file "
+    "and review comments. Produce the MINIMAL corrected version. Only change "
+    "lines related to comments. Preserve existing style, indentation, and "
+    "whitespace. Respond with ONLY a JSON object in this exact shape — no "
+    "prose, no code fences, no markdown:\n\n"
+    "{\n"
+    '  "patched_file": "<complete file contents as a string>",\n'
+    '  "explanation": "<one-sentence summary of what changed>",\n'
+    '  "comments_addressed": [<list of comment id integers you addressed>]\n'
+    "}\n\n"
+    "If no change is needed, respond with exactly: "
+    '{"patched_file":null,"explanation":"no change needed","comments_addressed":[]}'
+)
+
+
+def generate_fix(path: str, original: str, comments: list[ReviewComment]) -> Optional[FilePatch]:
+    comment_block = "\n\n".join(
+        f"### Comment by @{c.user} (line {c.line}) id={c.id}\n"
+        f"Diff context:\n```\n{c.diff_hunk}\n```\n"
+        f"Comment:\n{c.body}"
+        for c in comments
+    )
+    user_msg = (
+        f"## File: `{path}`\n\n```\n{original}\n```\n\n"
+        f"## Review Comments\n\n{comment_block}\n\n"
+        f"Comment IDs: {[c.id for c in comments]}\n\n"
+        "Generate the fix now."
+    )
+    raw = call_claude(SYSTEM_PROMPT, user_msg)
+    parsed = _parse_fix_response(raw)
+    if parsed is None:
+        print(f"WARNING: could not parse Claude response for {path}", file=sys.stderr)
+        return None
+    patched = parsed.get("patched_file")
+    if not patched or not isinstance(patched, str):
+        return None
+    if patched.strip() == original.strip():
+        return None
+    return FilePatch(
+        path=path,
+        original=original,
+        patched=patched,
+        comments_addressed=[
+            cid for cid in parsed.get("comments_addressed", []) if isinstance(cid, int)
+        ] or [c.id for c in comments],
+        explanation=parsed.get("explanation", ""),
+    )
+
+
+def _parse_fix_response(raw: str) -> Optional[dict]:
+    """Parse Claude's JSON response, tolerant of prose and fences."""
+    text = raw.strip()
+    fence = re.match(r"^```(?:json)?\s*\n(.*?)\n```\s*$", text, re.DOTALL)
+    if fence:
+        text = fence.group(1).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Ping-pong safety: refuse to run if last N commits are all autofix
+# ---------------------------------------------------------------------------
+
+def check_autofix_loop(repo: str, branch: str) -> Optional[str]:
+    """Returns an error message if the last MAX_CONSEC commits are all
+    autofix commits (indicating a probable ping-pong with a reviewer).
+    Returns None if safe to proceed."""
+    if MAX_CONSEC <= 0:
+        return None
+    try:
+        commits = fetch_recent_commits(repo, branch, limit=MAX_CONSEC)
+    except Exception as e:
+        # Soft-fail: if we can't check, don't block.
+        print(f"autofix: could not check commit history: {e}", file=sys.stderr)
+        return None
+    if len(commits) < MAX_CONSEC:
+        return None
+    for commit in commits:
+        msg = (commit.get("commit") or {}).get("message", "")
+        if not msg.lower().startswith("autofix:"):
+            return None
+    return (
+        f"autofix: refusing to run — the last {MAX_CONSEC} commits on `{branch}` "
+        "are all autofix commits, which usually means the autofixer is caught "
+        "in a ping-pong with a reviewer. Human review required."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Apply, verify, push
+# ---------------------------------------------------------------------------
+
+def git(*args, cwd=None, check=False):
+    result = subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd)
+    if check and result.returncode != 0:
+        print(f"git {' '.join(args)} failed:\n{result.stderr}", file=sys.stderr)
+        raise RuntimeError(f"git {args[0]} failed")
+    return result
+
+
+def apply_patches(repo: str, branch: str, patches: list[FilePatch], dry_run: bool) -> bool:
+    if dry_run:
+        for p in patches:
+            print(f"\n--- {p.path} ---")
+            print(f"  {p.explanation}")
+            print(f"  comments_addressed: {p.comments_addressed}")
+        return True
+
+    work_dir = Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "autofix-work"
+    if work_dir.exists():
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+    token = os.environ["GITHUB_TOKEN"]
+    clone_result = git(
+        "clone",
+        "--depth=1",
+        "--branch",
+        branch,
+        f"https://x-access-token:{token}@github.com/{repo}.git",
+        str(work_dir),
+    )
+    if clone_result.returncode != 0:
+        print(f"git clone failed: {clone_result.stderr}", file=sys.stderr)
+        return False
+
+    for patch in patches:
+        fp = work_dir / patch.path
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_text(patch.patched, encoding="utf-8")
+        git("add", patch.path, cwd=str(work_dir), check=True)
+
+    diff_check = git("diff", "--cached", "--quiet", cwd=str(work_dir))
+    if diff_check.returncode == 0:
+        print("autofix: no effective diff after applying patches", file=sys.stderr)
+        return False
+
+    if VERIFY_CMD:
+        print(f"autofix: running verification command `{VERIFY_CMD}` before push...")
+        verify = subprocess.run(
+            VERIFY_CMD, shell=True, cwd=str(work_dir), capture_output=True, text=True
+        )
+        if verify.returncode != 0:
+            print(
+                f"autofix: verification failed (exit {verify.returncode}); "
+                "NOT pushing the fix.",
+                file=sys.stderr,
+            )
+            print(verify.stdout[-2000:], file=sys.stderr)
+            print(verify.stderr[-2000:], file=sys.stderr)
+            return False
+
+    msg = (
+        f"autofix: address {sum(len(p.comments_addressed) for p in patches)} "
+        f"review comments\n\nGenerated by PR Autofix Pipeline\n"
+        "Co-Authored-By: Claude <noreply@anthropic.com>"
+    )
+    commit = git("commit", "-m", msg, cwd=str(work_dir))
+    if commit.returncode != 0:
+        print(f"autofix: nothing to commit: {commit.stderr}", file=sys.stderr)
+        return False
+
+    push = git("push", "origin", branch, cwd=str(work_dir))
+    if push.returncode != 0:
+        print(f"autofix: push failed: {push.stderr}", file=sys.stderr)
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Pipeline
+# ---------------------------------------------------------------------------
+
+def run_pipeline(repo: str, pr: int, dry_run: bool = False) -> int:
+    pr_info = fetch_pr_info(repo, pr)
+    head_ref = pr_info["head"]["ref"]
+    head_sha = pr_info["head"]["sha"]
+    head_repo = pr_info["head"]["repo"]["full_name"]
+    if head_repo != repo and not dry_run:
+        print(
+            f"autofix: PR head is on a fork ({head_repo}), but autofix runs "
+            f"against {repo}. Cannot push back to the PR branch. Forcing dry-run.",
+            file=sys.stderr,
+        )
+        dry_run = True
+
+    loop_error = check_autofix_loop(repo, head_ref)
+    if loop_error:
+        print(loop_error, file=sys.stderr)
+        try:
+            post_pr_comment(repo, pr, f"## Autofix paused\n\n{loop_error}")
+        except Exception:
+            pass
+        return 0
+
+    comments = fetch_review_comments(repo, pr)
+    top_comments = [c for c in comments if c.in_reply_to_id is None]
+    if not top_comments:
+        print("autofix: no top-level review comments to fix.")
+        return 0
+
+    by_file: dict[str, list[ReviewComment]] = {}
+    for c in top_comments:
+        by_file.setdefault(c.path, []).append(c)
+
+    prioritized = sorted(by_file.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+    capped = prioritized[:MAX_FILES]
+
+    patches: list[FilePatch] = []
+    for path, fc in capped:
+        try:
+            original = fetch_file_content(repo, head_sha, path)
+        except Exception as e:
+            print(f"autofix: could not fetch {path}@{head_sha}: {e}", file=sys.stderr)
+            continue
+        try:
+            patch = generate_fix(path, original, fc)
+        except Exception as e:
+            print(f"autofix: generate_fix failed for {path}: {e}", file=sys.stderr)
+            continue
+        if patch:
+            patches.append(patch)
+
+    if not patches:
+        print("autofix: no patches generated.")
+        return 0
+
+    success = apply_patches(repo, head_ref, patches, dry_run)
+    if not success or dry_run:
+        return 0 if dry_run else 1
+
+    summary = (
+        "## Autofix Summary\n\n"
+        f"Addressed {sum(len(p.comments_addressed) for p in patches)} comments "
+        f"across {len(patches)} file(s).\n\n"
+        + "\n".join(f"- **{p.path}**: {p.explanation}" for p in patches)
+    )
+    try:
+        post_pr_comment(repo, pr, summary)
+    except Exception as e:
+        print(f"autofix: could not post summary: {e}", file=sys.stderr)
+
+    for p in patches:
+        for cid in p.comments_addressed:
+            reply_to_review_comment(repo, pr, cid, f"Autofix applied: {p.explanation}")
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description="PR review autofix pipeline")
+    parser.add_argument("--repo", required=True, help="owner/repo")
+    parser.add_argument("--pr", required=True, type=int, help="PR number")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Preview only (no commit, no push)"
+    )
+    args = parser.parse_args()
+    sys.exit(run_pipeline(args.repo, args.pr, args.dry_run))
+
+
+if __name__ == "__main__":
+    main()

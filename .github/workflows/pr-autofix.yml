@@ -1,0 +1,154 @@
+name: PR Review Autofix
+
+# Triggers:
+#   * pull_request_review_comment — fires on NEW review comments. Runs
+#     autofix against the PR the comment was left on. Skipped for bot
+#     comments whose bodies contain "Autofix applied" (prevents the
+#     autofixer from running on its own summary replies).
+#   * workflow_dispatch — manual trigger. Useful for testing a specific
+#     PR on demand or forcing a re-run after fixing the autofixer itself.
+#
+# IMPORTANT (fork-PR limitation):
+#   For PRs originating from a fork, GitHub does NOT expose repository
+#   secrets (including ANTHROPIC_API_KEY, if used) to the workflow, and
+#   the workflow's GITHUB_TOKEN is scoped to the upstream repo and
+#   cannot push to the fork's PR branch. So autofix on fork PRs will
+#   fall through to dry-run-only in `autofix.py` (the pipeline detects
+#   head.repo != repo and forces dry_run=True). To actually land fixes
+#   on a fork PR, either (a) the fork owner runs this workflow in THEIR
+#   fork against upstream PRs they authored, or (b) they run autofix.py
+#   locally with a PAT.
+
+on:
+  pull_request_review_comment:
+    types: [created]
+
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to fix"
+        required: true
+        type: number
+      dry_run:
+        description: "Preview only (no push)"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  # Queue per-PR so two reviewers landing comments in quick succession
+  # don't trigger parallel runs that race to push. cancel-in-progress:
+  # false means the second run waits for the first to finish rather
+  # than killing it mid-flight.
+  group: autofix-pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  autofix:
+    runs-on: ubuntu-latest
+
+    # Skip bot comments entirely, and skip any comment whose body
+    # contains "Autofix applied" (our own reply text) so the autofixer
+    # doesn't trigger itself.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request_review_comment' &&
+       !contains(github.event.comment.user.login, '[bot]') &&
+       !contains(github.event.comment.body, 'Autofix applied'))
+
+    steps:
+      - name: Determine PR number
+        id: pr
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "number=${{ inputs.pr_number }}" >> "$GITHUB_OUTPUT"
+            echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Debounce (coalesce review bursts)
+        if: github.event_name == 'pull_request_review_comment'
+        run: sleep 30
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        # Autofix.py shells out to `node node_modules/@anthropic-ai/claude-agent-sdk/cli.js`
+        # when AUTOFIX_AUTH_MODE=subscription. Node must be available.
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10.32.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies (for the Agent SDK CLI + verification)
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify autofix script exists
+        run: |
+          if [ ! -f "autofix.py" ]; then
+            echo "::error::autofix.py not found in repo root."
+            exit 1
+          fi
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name "PR Autofix Bot"
+          git config --global user.email "autofix-bot@users.noreply.github.com"
+
+      - name: Run autofix pipeline
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Credential path: subscription by default. In CI, the workflow
+          # runner does not have an interactive `claude login` session,
+          # so callers who want this workflow to land fixes must either:
+          #   (a) set AUTOFIX_AUTH_MODE=api-key in the repo secrets and
+          #       provide ANTHROPIC_API_KEY (metered), OR
+          #   (b) restrict the workflow to fork-side runs where a
+          #       persistent ~/.claude/ credential mount is available.
+          # For (a), uncomment the next two lines and set the secret.
+          # AUTOFIX_AUTH_MODE: api-key
+          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AUTOFIX_MODEL: "claude-sonnet-4-5-20250929"
+          AUTOFIX_MAX_FILES: "10"
+          # Verification gate: autofix will run this before pushing. If
+          # it exits non-zero, the fix is NOT pushed — prevents landing
+          # fixes that would immediately red-bar CI.
+          AUTOFIX_VERIFY_CMD: "pnpm check"
+          # Ping-pong safety: refuse to run if the last 3 commits on
+          # the branch are autofix commits.
+          AUTOFIX_MAX_CONSEC: "3"
+        run: |
+          DRY_RUN_FLAG=""
+          if [ "${{ steps.pr.outputs.dry_run }}" = "true" ]; then
+            DRY_RUN_FLAG="--dry-run"
+          fi
+
+          python autofix.py \
+            --repo "${{ github.repository }}" \
+            --pr "${{ steps.pr.outputs.number }}" \
+            $DRY_RUN_FLAG
+
+      - name: Job summary
+        if: always()
+        run: |
+          echo "### PR Autofix Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **PR:** #${{ steps.pr.outputs.number }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Trigger:** ${{ github.event_name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Dry run:** ${{ steps.pr.outputs.dry_run }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Model:** claude-sonnet-4-5-20250929" >> "$GITHUB_STEP_SUMMARY"
