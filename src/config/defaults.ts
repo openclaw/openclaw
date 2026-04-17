@@ -13,21 +13,28 @@ type WarnState = { warned: boolean };
 
 let defaultWarnState: WarnState = { warned: false };
 
-const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
-  // Anthropic (pi-ai catalog uses "latest" ids without date suffix)
-  opus: "anthropic/claude-opus-4-7",
-  sonnet: "anthropic/claude-sonnet-4-6",
+/**
+ * Returns the model alias map. Initialized lazily inside the function
+ * to avoid TDZ ReferenceError from circular imports that reference this
+ * module before _MODEL_ALIASES finishes evaluation.
+ */
+function getModelAliases(): Readonly<Record<string, string>> {
+  return {
+    // Anthropic (pi-ai catalog uses "latest" ids without date suffix)
+    opus: "anthropic/claude-opus-4-7",
+    sonnet: "anthropic/claude-sonnet-4-6",
 
-  // OpenAI
-  gpt: "openai/gpt-5.4",
-  "gpt-mini": "openai/gpt-5.4-mini",
-  "gpt-nano": "openai/gpt-5.4-nano",
+    // OpenAI
+    gpt: "openai/gpt-5.4",
+    "gpt-mini": "openai/gpt-5.4-mini",
+    "gpt-nano": "openai/gpt-5.4-nano",
 
-  // Google Gemini (3.x are preview ids in the catalog)
-  gemini: "google/gemini-3.1-pro-preview",
-  "gemini-flash": "google/gemini-3-flash-preview",
-  "gemini-flash-lite": "google/gemini-3.1-flash-lite-preview",
-};
+    // Google Gemini (3.x are preview ids in the catalog)
+    gemini: "google/gemini-3.1-pro-preview",
+    "gemini-flash": "google/gemini-3-flash-preview",
+    "gemini-flash-lite": "google/gemini-3.1-flash-lite-preview",
+  };
+}
 
 const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
   input: 0,
@@ -256,7 +263,7 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
     ...existingModels,
   };
 
-  for (const [alias, target] of Object.entries(DEFAULT_MODEL_ALIASES)) {
+  for (const [alias, target] of Object.entries(getModelAliases())) {
     const entry = nextModels[target];
     if (!entry) {
       continue;
