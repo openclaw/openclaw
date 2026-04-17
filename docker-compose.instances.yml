@@ -27,8 +27,10 @@ x-openclaw-base: &openclaw-base
     NODE_ENV: production
     # GPU disabled by default in containers (no CUDA support)
     OPENCLAW_LLAMA_GPU: "off"
-    # Channels handled by the discord-router on the host; containers only run agents
-    OPENCLAW_SKIP_CHANNELS: "1"
+    # Discord gateway handled by the discord-router on the host.
+    # Container config sets discord.enabled=false so the gateway WebSocket
+    # doesn't connect, but the channel plugin loads for REST API access
+    # (openclaw message send/read still work).
 
 services:
   openclaw-263176934089949194:
