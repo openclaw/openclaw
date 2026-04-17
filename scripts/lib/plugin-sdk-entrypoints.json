@@ -39,6 +39,7 @@
   "inbound-reply-dispatch",
   "inbound-envelope",
   "channel-reply-pipeline",
+  "channel-reply-options-runtime",
   "channel-runtime",
   "interactive-runtime",
   "outbound-media",
