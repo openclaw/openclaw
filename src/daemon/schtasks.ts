@@ -72,13 +72,7 @@ async function execPowerShell(script: string, timeoutMs = 15_000): Promise<Power
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk;
     });
-    child.on("close", (code) => {
-      resolve({ code: code ?? 1, stdout, stderr });
-    });
-    child.on("error", (err: Error) => {
-      resolve({ code: 1, stdout: "", stderr: String(err) });
-    });
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       try {
         child.kill();
       } catch {
@@ -86,6 +80,14 @@ async function execPowerShell(script: string, timeoutMs = 15_000): Promise<Power
       }
       resolve({ code: 124, stdout, stderr: "PowerShell timed out after 15s" });
     }, timeoutMs);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
+    child.on("error", (err: Error) => {
+      clearTimeout(timer);
+      resolve({ code: 1, stdout: "", stderr: String(err) });
+    });
   });
 }
 
@@ -1100,6 +1102,7 @@ export async function uninstallScheduledTask({
       const psRes = await execPowerShell(psScript);
       if (psRes.code === 0) {
         stdout.write(`${formatLine("Removed Scheduled Task (PowerShell)", taskName)}\n`);
+        return;
       }
     } catch {
       /* schtasks fallback */
@@ -1236,7 +1239,8 @@ export async function restartScheduledTask({
         () => {/* ignore stop errors */},
       );
     } catch {
-      /* fall through to schtasks End */
+      // PowerShell ScheduledTasks unavailable — fall back to schtasks
+      await execSchtasks(["/End", "/TN", taskName]).catch(() => {/* ignore */});
     }
   } else {
     await execSchtasks(["/End", "/TN", taskName]).catch(() => {/* ignore */});
@@ -1285,7 +1289,7 @@ export async function readScheduledTaskRuntime(
       const psScript = [
         `$task = Get-ScheduledTask -TaskName '${safeName}' -ErrorAction Stop`,
         `$info = Get-ScheduledTaskInfo -TaskName '${safeName}' -ErrorAction Stop`,
-        `@{$taskState=$task.State;$lastRunTime=$info.LastRunTime;$lastResult=$info.LastTaskResult;$nextRunTime=$info.NextRunTime} | ConvertTo-Json -Compress`,
+        `@{taskState=$task.State;lastRunTime=$info.LastRunTime;lastResult=$info.LastTaskResult;nextRunTime=$info.NextRunTime} | ConvertTo-Json -Compress`,
       ].join("; ");
       const res = await execPowerShell(psScript);
       if (res.code === 0 && res.stdout.trim()) {
@@ -1367,3 +1371,4 @@ export async function readScheduledTaskRuntime(
     ...(derived.detail ? { detail: derived.detail } : {}),
   };
 }
+
