@@ -1,3 +1,4 @@
+import path from "node:path";
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
@@ -30,7 +31,7 @@ import {
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
-import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
@@ -322,6 +323,34 @@ export function shouldStripBootstrapFromEmbeddedContext(_params: {
   return true;
 }
 
+export function isPrimaryBootstrapRun(sessionKey?: string): boolean {
+  return !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey);
+}
+
+export function remapInjectedContextFilesToWorkspace(params: {
+  files: EmbeddedContextFile[];
+  sourceWorkspaceDir: string;
+  targetWorkspaceDir: string;
+}): EmbeddedContextFile[] {
+  if (params.sourceWorkspaceDir === params.targetWorkspaceDir) {
+    return params.files;
+  }
+  return params.files.map((file) => {
+    const relative = path.relative(params.sourceWorkspaceDir, file.path);
+    const canRemap =
+      relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+    return canRemap
+      ? {
+          ...file,
+          path:
+            relative === ""
+              ? params.targetWorkspaceDir
+              : path.join(params.targetWorkspaceDir, relative),
+        }
+      : file;
+  });
+}
+
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -534,8 +563,9 @@ export async function runEmbeddedAttempt(
       bootstrapPending: workspaceBootstrapPending,
       runKind: bootstrapRunKind,
       isInteractiveUserFacing: params.trigger === "user" || params.trigger === "manual",
-      isPrimaryRun: !isSubagentSessionKey(params.sessionKey),
-      isCanonicalWorkspace: effectiveWorkspace === resolvedWorkspace,
+      isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
+      isCanonicalWorkspace:
+        (params.isCanonicalWorkspace ?? true) && effectiveWorkspace === resolvedWorkspace,
       hasBootstrapFileAccess: bootstrapHasFileAccess,
     });
     const shouldStripBootstrapFromContext = shouldStripBootstrapFromEmbeddedContext({
@@ -567,9 +597,14 @@ export async function runEmbeddedAttempt(
           runKind: params.bootstrapContextRunKind,
         }),
     });
+    const remappedContextFiles = remapInjectedContextFilesToWorkspace({
+      files: resolvedContextFiles,
+      sourceWorkspaceDir: resolvedWorkspace,
+      targetWorkspaceDir: effectiveWorkspace,
+    });
     const contextFiles = shouldStripBootstrapFromContext
-      ? resolvedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()))
-      : resolvedContextFiles;
+      ? remappedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()))
+      : remappedContextFiles;
     const bootstrapFilesForInjectionStats = shouldStripBootstrapFromContext
       ? hookAdjustedBootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME)
       : hookAdjustedBootstrapFiles;
