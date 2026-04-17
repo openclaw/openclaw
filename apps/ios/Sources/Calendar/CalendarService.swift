@@ -8,6 +8,13 @@ final class CalendarService: CalendarServicing {
         private var continuation: CheckedContinuation<Bool, Never>?
         private var hasResumed = false
 
+        /// Whether the continuation has already been resumed (by a result or cancellation).
+        var isResolved: Bool {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return self.hasResumed
+        }
+
         func install(_ continuation: CheckedContinuation<Bool, Never>) {
             self.lock.lock()
             if self.hasResumed {
@@ -170,6 +177,10 @@ final class CalendarService: CalendarServicing {
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 box.install(continuation)
+                /// If the task was already cancelled (onCancel raced ahead and
+                /// resumed the continuation with false), skip starting the OS
+                /// permission prompt entirely.
+                guard !box.isResolved else { return }
                 start { granted in
                     box.resume(granted)
                 }
@@ -178,6 +189,7 @@ final class CalendarService: CalendarServicing {
             box.resume(false)
         }
     }
+}
 
 #if DEBUG
 extension CalendarService {
