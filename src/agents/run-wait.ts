@@ -252,12 +252,16 @@ export async function compensateAfterWaitTimeout(params: {
 
   return {
     newReply: hasNewReply ? latestReply.text : undefined,
-    accepted: true,
+    // Only claim accepted=true when a new reply actually arrived — meaning the
+    // run was accepted and the agent produced output. When hasNewReply is false
+    // the run is still pending or stalled, so the caller should treat it as a
+    // hard timeout rather than "accepted with no reply yet".
+    accepted: hasNewReply,
     delivery: {
-      status: "accepted",
+      status: hasNewReply ? "accepted" : "pending",
       note: hasNewReply
         ? "reply arrived after timeout window"
-        : "run accepted, no reply within timeout",
+        : "run pending, no reply within timeout window",
     },
   };
 }
