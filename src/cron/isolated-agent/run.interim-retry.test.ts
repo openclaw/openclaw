@@ -90,4 +90,22 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     mockRunCronFallbackPassthrough();
     await runTurnAndExpectOk(1, 1);
   });
+
+  it("surfaces a fallback error payload when the embedded run ends with only run-level interruption metadata", async () => {
+    usePayloadTextExtraction();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        aborted: true,
+        error: { kind: "interrupted", message: "LLM request was interrupted before a response was generated." },
+        agentMeta: { usage: { input: 10, output: 20 } },
+      },
+    });
+
+    mockRunCronFallbackPassthrough();
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("cron isolated run returned an error payload");
+    expect(result.outputText).toContain("interrupted before a response was generated");
+  });
 });

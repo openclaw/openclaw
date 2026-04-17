@@ -608,7 +608,26 @@ export async function runCronIsolatedAgentTurn(params: {
     return withRunSession({ status: "error", error: "cron isolated run returned no result" });
   }
   const finalRunResult = runResult;
-  const payloads = finalRunResult.payloads ?? [];
+  const ensureTerminalPayloads = (
+    payloads: NonNullable<typeof finalRunResult.payloads> | undefined,
+  ) => {
+    if ((payloads?.length ?? 0) > 0) {
+      return payloads ?? [];
+    }
+    const runLevelErrorMessage =
+      typeof finalRunResult.meta?.error?.message === "string" && finalRunResult.meta.error.message.trim()
+        ? finalRunResult.meta.error.message.trim()
+        : undefined;
+    const fallbackText = isAborted()
+      ? abortReason()
+      : runLevelErrorMessage ??
+        (finalRunResult.meta?.aborted ? "LLM request was interrupted before a response was generated. Please try again." : undefined);
+    if (!fallbackText) {
+      return payloads ?? [];
+    }
+    return [{ text: fallbackText, isError: true }];
+  };
+  const payloads = ensureTerminalPayloads(finalRunResult.payloads);
 
   // Update token+model fields in the session store.
   // Also collect best-effort telemetry for the cron run log.
