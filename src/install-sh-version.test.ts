@@ -21,19 +21,34 @@ printf '%s\n' '${escapedOutput}'
   return { root, cliPath };
 }
 
-function resolveVersionsFromInstaller(cliPaths: string[]): string[] {
+function resolveInstallerVersionCases(params: {
+  cliPaths: string[];
+  stdinCliPath: string;
+  stdinCwd: string;
+}): string[] {
   const installerPath = path.join(process.cwd(), "scripts", "install.sh");
+  const installerSource = fs.readFileSync(installerPath, "utf-8");
   const output = execFileSync(
     "bash",
     [
       "-lc",
       `source "${installerPath}" >/dev/null 2>&1
-for openclaw_bin in "$@"; do
+for openclaw_bin in "\${@:3}"; do
   OPENCLAW_BIN="$openclaw_bin"
   resolve_openclaw_version
-done`,
+done
+(
+  cd "$2"
+  FAKE_OPENCLAW_BIN="\${@:1:1}" bash -s <<'OPENCLAW_STDIN_INSTALLER'
+${installerSource}
+OPENCLAW_BIN="$FAKE_OPENCLAW_BIN"
+resolve_openclaw_version
+OPENCLAW_STDIN_INSTALLER
+)`,
       "openclaw-version-test",
-      ...cliPaths,
+      params.stdinCliPath,
+      params.stdinCwd,
+      ...params.cliPaths,
     ],
     {
       cwd: process.cwd(),
@@ -47,44 +62,17 @@ done`,
   return output.trimEnd().split("\n");
 }
 
-function resolveVersionFromInstallerViaStdin(cliPath: string, cwd: string): string {
-  const installerPath = path.join(process.cwd(), "scripts", "install.sh");
-  const installerSource = fs.readFileSync(installerPath, "utf-8");
-  const output = execFileSync("bash", [], {
-    cwd,
-    encoding: "utf-8",
-    input: `${installerSource}
-OPENCLAW_BIN="$FAKE_OPENCLAW_BIN"
-resolve_openclaw_version
-`,
-    env: {
-      ...process.env,
-      FAKE_OPENCLAW_BIN: cliPath,
-      OPENCLAW_INSTALL_SH_NO_RUN: "1",
-    },
-  });
-  return output.trim();
-}
-
 describe("install.sh version resolution", () => {
   afterEach(() => {
     cleanupTempDirs(tempRoots);
   });
 
-  it.runIf(process.platform !== "win32")("parses decorated and raw CLI versions", () => {
-    const decorated = withFakeCli("OpenClaw 2026.3.10 (abcdef0)");
-    const raw = withFakeCli("OpenClaw dev's build");
-
-    expect(resolveVersionsFromInstaller([decorated.cliPath, raw.cliPath])).toEqual([
-      "2026.3.10",
-      "OpenClaw dev's build",
-    ]);
-  });
-
   it.runIf(process.platform !== "win32")(
-    "does not source version helpers from cwd when installer runs via stdin",
+    "parses CLI versions and keeps stdin helpers isolated from cwd",
     () => {
-      const fixture = withFakeCli("OpenClaw 2026.3.10 (abcdef0)");
+      const decorated = withFakeCli("OpenClaw 2026.3.10 (abcdef0)");
+      const raw = withFakeCli("OpenClaw dev's build");
+      const stdinFixture = withFakeCli("OpenClaw 2026.3.10 (abcdef0)");
 
       const hostileCwd = makeTempDir(tempRoots, "openclaw-install-stdin-");
       const hostileHelper = path.join(
@@ -104,7 +92,13 @@ extract_openclaw_semver() {
         "utf-8",
       );
 
-      expect(resolveVersionFromInstallerViaStdin(fixture.cliPath, hostileCwd)).toBe("2026.3.10");
+      expect(
+        resolveInstallerVersionCases({
+          cliPaths: [decorated.cliPath, raw.cliPath],
+          stdinCliPath: stdinFixture.cliPath,
+          stdinCwd: hostileCwd,
+        }),
+      ).toEqual(["2026.3.10", "OpenClaw dev's build", "2026.3.10"]);
     },
   );
 });
