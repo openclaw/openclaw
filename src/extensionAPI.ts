@@ -21,13 +21,21 @@ export { resolveAgentDir, resolveAgentWorkspaceDir } from "./agents/agent-scope.
 export { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./agents/defaults.js";
 export { resolveAgentIdentity } from "./agents/identity.js";
 export { resolveThinkingDefault } from "./agents/model-selection.js";
+/**
+ * @deprecated Use `runAgent` instead. The pi-embedded runtime is
+ * scheduled for removal once `claude-sdk` completes its production soak.
+ * `runAgent` auto-routes through the active driver via
+ * `agents.list[<id>].runtime.type`, and the return shape is stable, so
+ * callers migrate by renaming the call site.
+ */
 export { runEmbeddedPiAgent } from "./agents/pi-embedded.js";
 // Preferred agent entry point since the Phase 3 default flip: picks the
 // active runtime (claude-sdk by default, pi-embedded for agents that
 // still set `runtime.type: "embedded"`, acp for ACP-backed agents) and
-// dispatches. Return shape matches `EmbeddedPiRunResult` for either
-// driver.
+// dispatches. Return shape is stable (`RunAgentResult`) regardless of
+// which driver handled the call.
 export { runAgent } from "./agents/runtime-dispatch.js";
+export type { RunAgentParams, RunAgentResult } from "./agents/runtime-dispatch.js";
 export { resolveAgentTimeoutMs } from "./agents/timeout.js";
 export { ensureAgentWorkspace } from "./agents/workspace.js";
 export {
