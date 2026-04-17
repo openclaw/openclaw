@@ -263,6 +263,104 @@ function resolveBrewMissingFailure(spec: SkillInstallSpec): SkillInstallResult {
   return createInstallFailure({ message: `brew not installed — ${hint}` });
 }
 
+type AptInstallMessages = {
+  /** Shown when apt-get install itself fails. */
+  failure: string;
+  /** Shown when sudo binary is not available. */
+  noSudo: string;
+  /** Shown when passwordless sudo probe fails. */
+  sudoPassword: string;
+};
+
+/**
+ * Shared helper: attempt to install a package via apt-get on Linux.
+ * Handles root vs non-root (sudo) flows, apt-get update, and apt-get install.
+ *
+ * Returns `undefined` on success (package installed), or a failure result.
+ */
+async function installViaApt(
+  pkg: string,
+  messages: AptInstallMessages,
+  timeoutMs?: number,
+): Promise<SkillInstallResult | undefined> {
+  const effectiveTimeout = timeoutMs ?? 300_000;
+  const aptInstallArgv = ["apt-get", "install", "-y", pkg];
+  const aptUpdateArgv = ["apt-get", "update", "-qq"];
+
+  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+  if (isRoot) {
+    // Best effort: fresh containers often need package indexes populated.
+    await runBestEffortCommand(aptUpdateArgv, { timeoutMs: effectiveTimeout });
+    const aptResult = await runCommandSafely(aptInstallArgv, { timeoutMs: effectiveTimeout });
+    if (aptResult.code === 0) {
+      return undefined;
+    }
+    return createInstallFailure({
+      message: messages.failure,
+      ...aptResult,
+    });
+  }
+
+  if (!hasBinary("sudo")) {
+    return createInstallFailure({
+      message: messages.noSudo,
+    });
+  }
+
+  const sudoCheck = await runCommandSafely(["sudo", "-n", "true"], {
+    timeoutMs: 5_000,
+  });
+  if (sudoCheck.code !== 0) {
+    return createInstallFailure({
+      message: messages.sudoPassword,
+      ...sudoCheck,
+    });
+  }
+
+  // Best effort: fresh containers often need package indexes populated.
+  await runBestEffortCommand(["sudo", ...aptUpdateArgv], { timeoutMs: effectiveTimeout });
+  const aptResult = await runCommandSafely(["sudo", ...aptInstallArgv], {
+    timeoutMs: effectiveTimeout,
+  });
+  if (aptResult.code === 0) {
+    return undefined;
+  }
+
+  return createInstallFailure({
+    message: messages.failure,
+    ...aptResult,
+  });
+}
+
+/**
+ * Attempt to install a brew formula via apt-get on Linux when Homebrew is not
+ * available. Many brew formula names match their apt package counterpart, so
+ * this is a best-effort convenience for Docker / headless Linux environments.
+ *
+ * Returns `undefined` on success (package installed), or a failure result.
+ */
+async function installBrewFormulaViaApt(
+  formula: string,
+  timeoutMs: number,
+): Promise<SkillInstallResult | null | undefined> {
+  const trimmed = formula.trim();
+
+  // Tap-qualified brew formulas (e.g. "homebrew/cask/ffmpeg") have no apt equivalent
+  if (trimmed.includes("/")) {
+    return null;
+  }
+
+  return installViaApt(
+    trimmed,
+    {
+      failure: `brew not installed — automatic install of "${trimmed}" via apt failed. Install Homebrew from https://brew.sh or install "${trimmed}" manually using your system package manager.`,
+      noSudo: `brew not installed — apt-get is available but sudo is not installed. Install Homebrew from https://brew.sh or install "${trimmed}" manually.`,
+      sudoPassword: `brew not installed — apt-get is available but sudo requires a password. Install Homebrew from https://brew.sh or install "${trimmed}" manually.`,
+    },
+    timeoutMs,
+  );
+}
+
 async function ensureUvInstalled(params: {
   spec: SkillInstallSpec;
   brewExe?: string;
@@ -293,56 +391,18 @@ async function ensureUvInstalled(params: {
 }
 
 async function installGoViaApt(timeoutMs: number): Promise<SkillInstallResult | undefined> {
-  const aptInstallArgv = ["apt-get", "install", "-y", "golang-go"];
-  const aptUpdateArgv = ["apt-get", "update", "-qq"];
-  const aptFailureMessage =
-    "go not installed — automatic install via apt failed. Install manually: https://go.dev/doc/install";
-
-  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
-  if (isRoot) {
-    // Best effort: fresh containers often need package indexes populated.
-    await runBestEffortCommand(aptUpdateArgv, { timeoutMs });
-    const aptResult = await runCommandSafely(aptInstallArgv, { timeoutMs });
-    if (aptResult.code === 0) {
-      return undefined;
-    }
-    return createInstallFailure({
-      message: aptFailureMessage,
-      ...aptResult,
-    });
-  }
-
-  if (!hasBinary("sudo")) {
-    return createInstallFailure({
-      message:
+  return installViaApt(
+    "golang-go",
+    {
+      failure:
+        "go not installed — automatic install via apt failed. Install manually: https://go.dev/doc/install",
+      noSudo:
         "go not installed — apt-get is available but sudo is not installed. Install manually: https://go.dev/doc/install",
-    });
-  }
-
-  const sudoCheck = await runCommandSafely(["sudo", "-n", "true"], {
-    timeoutMs: 5_000,
-  });
-  if (sudoCheck.code !== 0) {
-    return createInstallFailure({
-      message:
+      sudoPassword:
         "go not installed — apt-get is available but sudo is not usable (missing or requires a password). Install manually: https://go.dev/doc/install",
-      ...sudoCheck,
-    });
-  }
-
-  // Best effort: fresh containers often need package indexes populated.
-  await runBestEffortCommand(["sudo", ...aptUpdateArgv], { timeoutMs });
-  const aptResult = await runCommandSafely(["sudo", ...aptInstallArgv], {
+    },
     timeoutMs,
-  });
-  if (aptResult.code === 0) {
-    return undefined;
-  }
-
-  return createInstallFailure({
-    message: aptFailureMessage,
-    ...aptResult,
-  });
+  );
 }
 
 async function ensureGoInstalled(params: {
@@ -483,6 +543,19 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
 
   const brewExe = hasBinary("brew") ? "brew" : resolveBrewExecutable();
   if (spec.kind === "brew" && !brewExe) {
+    // On Linux, attempt to install the formula via apt-get before giving up.
+    if (process.platform === "linux" && hasBinary("apt-get")) {
+      // formula is guaranteed non-empty here: buildInstallCommand already validated it.
+      const aptResult = await installBrewFormulaViaApt(spec.formula!, timeoutMs);
+      // null → tap-qualified formula, skip apt and fall through to brew-missing error
+      if (aptResult === null) {
+        /* fall through */
+      } else if (!aptResult) {
+        return withWarnings(createInstallSuccess({ code: 0, stdout: "", stderr: "" }), warnings);
+      } else {
+        return withWarnings(aptResult, warnings);
+      }
+    }
     return withWarnings(resolveBrewMissingFailure(spec), warnings);
   }
 
