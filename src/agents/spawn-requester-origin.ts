@@ -81,6 +81,7 @@ export function resolveRequesterOriginForChild(params: {
     params.requesterChannel,
     params.requesterTo,
   );
+  const rawPeerIdAlias = params.requesterTo?.trim();
   // Same-agent spawns must keep the caller's active inbound account, not
   // re-resolve via bindings that may select a different account for the same
   // agent/channel.
@@ -91,6 +92,8 @@ export function resolveRequesterOriginForChild(params: {
           channelId: params.requesterChannel,
           agentId: params.targetAgentId,
           peerId: normalizedPeerId,
+          peerIdAliases:
+            rawPeerIdAlias && rawPeerIdAlias !== normalizedPeerId ? [rawPeerIdAlias] : undefined,
           peerKind: inferredPeerKind,
         })
       : undefined;

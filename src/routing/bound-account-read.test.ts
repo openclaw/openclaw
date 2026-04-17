@@ -313,6 +313,39 @@ describe("resolveFirstBoundAccountId", () => {
     ).toBe("bot-alpha-room");
   });
 
+  it("matches exact canonical peer aliases before falling back to wildcard bindings", () => {
+    const cfg = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "qa-channel",
+          peer: { kind: "channel", id: "*" },
+          accountId: "bot-alpha-wildcard",
+        },
+      },
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "qa-channel",
+          peer: { kind: "channel", id: "channel:conversation-a" },
+          accountId: "bot-alpha-conversation",
+        },
+      },
+    ]);
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "qa-channel",
+        agentId: "bot-alpha",
+        peerId: "conversation-a",
+        peerIdAliases: ["channel:conversation-a"],
+        peerKind: "channel",
+      }),
+    ).toBe("bot-alpha-conversation");
+  });
+
   it("skips peer-specific bindings whose kind does not match the caller's peerKind", () => {
     const cfg = cfgWithBindings([
       {

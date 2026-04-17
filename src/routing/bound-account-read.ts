@@ -65,6 +65,7 @@ export function resolveFirstBoundAccountId(params: {
   channelId: string;
   agentId: string;
   peerId?: string;
+  peerIdAliases?: string[];
   peerKind?: ChatType;
 }): string | undefined {
   const normalizedChannel = normalizeBindingChannelId(params.channelId);
@@ -73,6 +74,12 @@ export function resolveFirstBoundAccountId(params: {
   }
   const normalizedAgentId = normalizeAgentId(params.agentId);
   const normalizedPeerId = params.peerId?.trim() || undefined;
+  const exactPeerIds = new Set(
+    [
+      normalizedPeerId,
+      ...(params.peerIdAliases ?? []).map((value) => value.trim()).filter(Boolean),
+    ].filter((value): value is string => Boolean(value)),
+  );
   const normalizedPeerKind = normalizeChatType(params.peerKind) ?? undefined;
   let wildcardPeerMatch: string | undefined;
   let channelOnlyFallback: string | undefined;
@@ -121,7 +128,7 @@ export function resolveFirstBoundAccountId(params: {
       ) {
         continue;
       }
-      if (normalizedPeerId && resolved.peerId === normalizedPeerId) {
+      if (exactPeerIds.has(resolved.peerId)) {
         return resolved.accountId;
       }
       if (!normalizedPeerId) {
