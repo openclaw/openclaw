@@ -75,12 +75,17 @@ vi.mock("./doctor.js", () => ({
   formatAuthDoctorHint: async () => undefined,
 }));
 
-vi.mock("./external-cli-sync.js", () => ({
-  resolveExternalCliAuthProfiles: () => [],
-  syncExternalCliCredentials: () => false,
-  readManagedExternalCliCredential: () => null,
-  areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
-}));
+vi.mock("./external-cli-sync.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./external-cli-sync.js")>("./external-cli-sync.js");
+  return {
+    ...actual,
+    syncExternalCliCredentials: () => false,
+    readManagedExternalCliCredential: () => null,
+    resolveExternalCliAuthProfiles: () => [],
+    areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
+  };
+});
 
 function createExpiredOauthStore(params: {
   profileId: string;

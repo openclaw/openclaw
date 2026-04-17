@@ -64,12 +64,17 @@ vi.mock("./doctor.js", () => ({
 // External-CLI sync does real I/O against the user's Codex/MiniMax CLI
 // credential files; it is slow and can pollute test state. Stub it to a no-op
 // so the suite only exercises in-repo auth-profile logic.
-vi.mock("./external-cli-sync.js", () => ({
-  resolveExternalCliAuthProfiles: () => [],
-  syncExternalCliCredentials: () => false,
-  readManagedExternalCliCredential: () => null,
-  areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
-}));
+vi.mock("./external-cli-sync.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./external-cli-sync.js")>("./external-cli-sync.js");
+  return {
+    ...actual,
+    syncExternalCliCredentials: () => false,
+    readManagedExternalCliCredential: () => null,
+    resolveExternalCliAuthProfiles: () => [],
+    areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
+  };
+});
 
 function createExpiredOauthStore(params: {
   profileId: string;
