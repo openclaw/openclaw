@@ -142,7 +142,11 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
             const instance = instances.get(authorId);
             if (!instance) {
               runtime.log(`[router] no instance for user ${authorId}`);
-              void discordSend(discordToken, channelId, "No agent is configured for your account.");
+              void discordSend(
+                discordToken,
+                channelId,
+                "*No agent is configured for your account.*",
+              );
               return;
             }
 
@@ -285,7 +289,11 @@ async function routeDM(params: {
     }
   } catch (err) {
     runtime.error(`[router] error for ${discordUserId}: ${formatErrorMessage(err)}`);
-    await discordSend(discordToken, channelId, "Sorry, something went wrong.").catch(() => {});
+    await discordSend(
+      discordToken,
+      channelId,
+      "*Sorry, something went wrong processing your message.*",
+    ).catch(() => {});
   } finally {
     inflight.delete(discordUserId);
   }

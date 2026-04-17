@@ -688,7 +688,7 @@ export function attachGatewayWsMessageHandler(params: {
               role,
               scopes,
               remoteIp: reportedClientIp,
-              silent: isLocalClient,
+              silent: isLocalClient || sharedAuthOk,
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
