@@ -50,14 +50,15 @@ RUN pnpm install --frozen-lockfile
 
 COPY . .
 
-# Explicitly install UI dependencies and build UI first (required for Control UI assets)
+# Build main application first (this clears dist/)
+RUN pnpm run build
+
+# Build UI after main build (dist/control-ui must exist)
 RUN pnpm install --frozen-lockfile --filter ./ui
 RUN pnpm ui:build
 
-# Verify UI assets were built before proceeding
+# Verify UI assets exist
 RUN test -f /app/dist/control-ui/index.html || (echo "ERROR: Control UI assets not found after ui:build" && exit 1)
-
-RUN pnpm run build
 
 FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS final
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
