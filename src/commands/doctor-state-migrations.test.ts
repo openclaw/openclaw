@@ -88,6 +88,20 @@ vi.mock("../channels/plugins/bundled.js", () => {
   }
 
   return {
+    listBundledChannelLegacySessionSurfaces: vi.fn(() => [
+      {
+        isLegacyGroupSessionKey: (key: string) => /^group:.+@g\.us$/i.test(key.trim()),
+        canonicalizeLegacySessionKey: ({ key, agentId }: { key: string; agentId: string }) =>
+          /^group:.+@g\.us$/i.test(key.trim())
+            ? `agent:${agentId}:whatsapp:${key.trim().toLowerCase()}`
+            : null,
+      },
+    ]),
+    listBundledChannelLegacyStateMigrationDetectors: vi.fn(() => [
+      ({ oauthDir }: { oauthDir: string }) => detectWhatsAppLegacyStateMigrations({ oauthDir }),
+      ({ cfg, env }: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv }) =>
+        detectTelegramAllowFromMigration({ cfg, env }),
+    ]),
     listBundledChannelSetupPluginsByFeature: vi.fn((feature: string) => {
       if (feature === "legacySessionSurfaces") {
         return [
