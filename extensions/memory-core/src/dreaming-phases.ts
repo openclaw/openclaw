@@ -14,6 +14,7 @@ import {
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   formatMemoryDreamingDay,
+  resolveMemoryCorePluginConfig,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
@@ -23,6 +24,10 @@ import {
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
 import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
+import {
+  readDreamingShadowTouchEnabled,
+  touchSidecarFromLightEntries,
+} from "./memory-v2/dreaming-wiring.js";
 import {
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
@@ -1548,6 +1553,10 @@ async function runLightDreaming(params: {
       timezone: params.config.timezone,
       logger: params.logger,
     });
+  }
+  const shadowPluginConfig = params.cfg ? resolveMemoryCorePluginConfig(params.cfg) : undefined;
+  if (readDreamingShadowTouchEnabled(shadowPluginConfig)) {
+    touchSidecarFromLightEntries({}, capped, params.workspaceDir);
   }
 }
 
