@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
+import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import {
   ensureBrowserControlAuth,
@@ -22,6 +22,13 @@ import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
 import type { SandboxContext, SandboxDockerConfig, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
+
+/**
+ * Timeout for sandbox initialization (Docker container start + browser setup).
+ * 60 s is generous enough for a warm container start but short enough to
+ * unblock the message pipeline when Docker is hung or unreachable.
+ */
+const SANDBOX_INIT_TIMEOUT_MS = 60_000;
 
 async function ensureSandboxWorkspaceLayout(params: {
   cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
@@ -131,9 +138,88 @@ export async function resolveSandboxContext(params: {
   if (!resolved) {
     return null;
   }
+
+  // Wrap sandbox initialization in a timeout to prevent a hung Docker daemon
+  // from blocking the entire message processing pipeline indefinitely.
+  // An AbortController is used to signal cooperative cancellation into
+  // resolveSandboxContextInner so that in-flight await points stop new work
+  // when the timeout fires, preventing zombie Docker child processes.
+  // The timer is cleared via .finally() so it cannot keep the event loop alive
+  // after initialization succeeds. timer.unref() allows the process to exit
+  // cleanly if the event loop is otherwise idle.
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(
+        `Sandbox initialization timed out after ${SANDBOX_INIT_TIMEOUT_MS / 1000}s (Docker may be unresponsive)`,
+      );
+      defaultRuntime.error?.(err.message);
+      // Abort the inner work so pending await points exit early.
+      // Reuse the same Error instance for both abort reason and rejection so
+      // the aborted-check path (throw abortSignal.reason) and the race-winning
+      // rejection surface the same Error identity.
+      controller.abort(err);
+      reject(err);
+    }, SANDBOX_INIT_TIMEOUT_MS);
+    timer.unref?.();
+  });
+
+  return Promise.race([
+    resolveSandboxContextInner(resolved, params, controller.signal),
+    timeoutPromise,
+  ]).finally(() => {
+    // Only clear the timer — do NOT abort the controller here.
+    // The signal is captured by onEnsureAttachTarget in ensureSandboxBrowser
+    // for future attach/restart paths; aborting it on success would
+    // permanently pre-abort those operations and break browser recovery.
+    // The controller is only aborted by the timeout handler on failure.
+    clearTimeout(timer);
+  });
+}
+
+/** Race a promise against an AbortSignal — resolves/rejects with whichever wins first. */
+function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return promise;
+  }
+  if (signal.aborted) {
+    const reason =
+      signal.reason instanceof Error ? signal.reason : new Error("Sandbox init aborted");
+    return Promise.reject(reason);
+  }
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      signal.addEventListener(
+        "abort",
+        () => {
+          const r =
+            signal.reason instanceof Error ? signal.reason : new Error("Sandbox init aborted");
+          reject(r);
+        },
+        { once: true },
+      );
+    }),
+  ]);
+}
+
+async function resolveSandboxContextInner(
+  resolved: NonNullable<ReturnType<typeof resolveSandboxSession>>,
+  params: { config?: OpenClawConfig; workspaceDir?: string },
+  abortSignal?: AbortSignal,
+): Promise<SandboxContext> {
   const { rawSessionKey, cfg, runtime } = resolved;
 
-  await maybePruneSandboxes(cfg);
+  // Check abort before each major async step to provide cooperative
+  // cancellation and prevent zombie Docker child processes on timeout.
+  if (abortSignal?.aborted) {
+    throw abortSignal.reason instanceof Error
+      ? abortSignal.reason
+      : new Error("Sandbox init aborted");
+  }
+
+  await raceAbort(maybePruneSandboxes(cfg), abortSignal);
 
   const { agentWorkspaceDir, scopeKey, workspaceDir } = await ensureSandboxWorkspaceLayout({
     cfg,
@@ -149,6 +235,12 @@ export async function resolveSandboxContext(params: {
   });
   const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
 
+  if (abortSignal?.aborted) {
+    throw abortSignal.reason instanceof Error
+      ? abortSignal.reason
+      : new Error("Sandbox init aborted");
+  }
+
   const backendFactory = requireSandboxBackendFactory(resolvedCfg.backend);
   const backend = await backendFactory({
     sessionKey: rawSessionKey,
@@ -156,6 +248,7 @@ export async function resolveSandboxContext(params: {
     workspaceDir,
     agentWorkspaceDir,
     cfg: resolvedCfg,
+    abortSignal,
   });
   await updateRegistry({
     containerName: backend.runtimeId,
@@ -167,6 +260,15 @@ export async function resolveSandboxContext(params: {
     image: backend.configLabel ?? resolvedCfg.docker.image,
     configLabelKind: backend.configLabelKind ?? "Image",
   });
+
+  // Abort before the browser setup phase — ensureSandboxBrowser involves
+  // multiple Docker operations (inspect, network create, container start,
+  // CDP wait loop) and is likely the longest remaining step.
+  if (abortSignal?.aborted) {
+    throw abortSignal.reason instanceof Error
+      ? abortSignal.reason
+      : new Error("Sandbox init aborted");
+  }
 
   const evaluateEnabled =
     params.config?.browser?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
@@ -187,6 +289,12 @@ export async function resolveSandboxContext(params: {
         return browserAuth;
       })()
     : undefined;
+  if (abortSignal?.aborted) {
+    throw abortSignal.reason instanceof Error
+      ? abortSignal.reason
+      : new Error("Sandbox init aborted");
+  }
+
   if (resolvedCfg.browser.enabled && backend.capabilities?.browser !== true) {
     throw new Error(
       `Sandbox backend "${resolvedCfg.backend}" does not support browser sandboxes yet.`,
@@ -201,6 +309,7 @@ export async function resolveSandboxContext(params: {
           cfg: resolvedCfg,
           evaluateEnabled,
           bridgeAuth,
+          abortSignal,
         })
       : null;
 

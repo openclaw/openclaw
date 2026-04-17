@@ -1,10 +1,10 @@
 import { buildDockerExecArgs } from "../bash-tools.shared.js";
-import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
-  SandboxBackendHandle,
   SandboxBackendManager,
-} from "./backend.types.js";
+  SandboxBackendCommandParams,
+  SandboxBackendHandle,
+} from "./backend.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   dockerContainerState,
