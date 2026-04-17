@@ -26,7 +26,7 @@ open models for free. Authenticate with an API key from
   </Step>
   <Step title="Set an NVIDIA model">
     ```bash
-    openclaw models set nvidia/nvidia/nemotron-3-super-120b-a12b
+    openclaw models set nvidia/nemotron-3-super-120b-a12b
     ```
   </Step>
 </Steps>
@@ -51,7 +51,7 @@ If you pass `--token` instead of the env var, the value lands in shell history a
   },
   agents: {
     defaults: {
-      model: { primary: "nvidia/nvidia/nemotron-3-super-120b-a12b" },
+      model: { primary: "nvidia/nemotron-3-super-120b-a12b" },
     },
   },
 }
@@ -59,12 +59,24 @@ If you pass `--token` instead of the env var, the value lands in shell history a
 
 ## Built-in catalog
 
-| Model ref                                  | Name                         | Context | Max output |
-| ------------------------------------------ | ---------------------------- | ------- | ---------- |
-| `nvidia/nvidia/nemotron-3-super-120b-a12b` | NVIDIA Nemotron 3 Super 120B | 262,144 | 8,192      |
-| `nvidia/moonshotai/kimi-k2.5`              | Kimi K2.5                    | 262,144 | 8,192      |
-| `nvidia/minimaxai/minimax-m2.5`            | Minimax M2.5                 | 196,608 | 8,192      |
-| `nvidia/z-ai/glm5`                         | GLM 5                        | 202,752 | 8,192      |
+| Model ref                                  | Name                             | Context | Max output | Multimodal | Reasoning |
+| ------------------------------------------ | -------------------------------- | ------- | ---------- | ---------- | --------- |
+| `nvidia/nemotron-3-super-120b-a12b`        | NVIDIA Nemotron 3 Super 120B     | 262,144 | 8,192      |            |           |
+| `nvidia/nemotron-3-8b-instruct`            | NVIDIA Nemotron 3 8B Instruct    | 131,072 | 8,192      |            |           |
+| `nvidia/nemotron-4-340b-instruct`          | NVIDIA Nemotron 4 340B Instruct  | 131,072 | 8,192      |            |           |
+| `nvidia/meta/llama-3.3-70b-instruct`       | Meta Llama 3.3 70B Instruct      | 131,072 | 8,192      |            |           |
+| `nvidia/meta/llama-4-maverick-17b-128e-instruct` | Meta Llama 4 Maverick 17B | 131,072 | 8,192      | ✓          |           |
+| `nvidia/meta/llama-4-scout-17b-16e-instruct` | Meta Llama 4 Scout 17B       | 131,072 | 8,192      | ✓          |           |
+| `nvidia/mistralai/mistral-small-3.2-24b-instruct` | Mistral Small 3.2 24B   | 131,072 | 8,192      |            |           |
+| `nvidia/mistralai/mixtral-8x22b-instruct-v0.1` | Mistral Mixtral 8x22B      | 65,536  | 8,192      |            |           |
+| `nvidia/google/gemma-3-27b-it`             | Google Gemma 3 27B               | 131,072 | 8,192      |            |           |
+| `nvidia/microsoft/phi-4`                   | Microsoft Phi-4                  | 16,384  | 8,192      |            |           |
+| `nvidia/moonshotai/kimi-k2.5`              | Kimi K2.5                        | 262,144 | 8,192      |            |           |
+| `nvidia/minimaxai/minimax-m2.5`            | Minimax M2.5                     | 196,608 | 8,192      |            |           |
+| `nvidia/z-ai/glm5`                         | GLM 5                            | 202,752 | 8,192      |            |           |
+| `nvidia/qwen/qwen3-235b-a22b-2507`         | Qwen3 235B A22B                  | 131,072 | 8,192      |            |           |
+| `nvidia/qwen/qwq-32b`                      | Qwen QWQ 32B                     | 131,072 | 8,192      |            | ✓         |
+| `nvidia/deepseek-ai/deepseek-r1-0528`      | DeepSeek R1 0528                 | 131,072 | 8,192      |            | ✓         |
 
 ## Advanced notes
 
