@@ -26,10 +26,21 @@ const LEGACY_UPDATE_COMPAT_PACKED_PATHS = [
   "dist/extensions/qa-channel/runtime-api.js",
   "dist/extensions/qa-lab/runtime-api.js",
 ] as const;
+
 const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ...LEGACY_UPDATE_COMPAT_PACKED_PATHS,
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
+  "dist/index.js",
+  "dist/entry.js",
+  "scripts/npm-runner.mjs",
+  "scripts/preinstall-package-manager-warning.mjs",
+  "scripts/postinstall-bundled-plugins.mjs",
+  "dist/plugin-sdk/compat.js",
+  "dist/plugin-sdk/root-alias.cjs",
+  "dist/build-info.json",
+  "dist/channel-catalog.json",
+  "dist/control-ui/index.html",
 ] as const;
 
 describe("parseReleaseVersion", () => {
