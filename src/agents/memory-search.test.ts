@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import * as memoryEmbeddingProviderRuntime from "../plugins/memory-embedding-provider-runtime.js";
 import {
   clearMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
@@ -543,5 +544,36 @@ describe("memory search config", () => {
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.sources).toContain("sessions");
+  });
+
+  it("threads cfg through provider lookups when resolving memory search config", () => {
+    const cfg = asConfig({
+      plugins: {
+        allow: [],
+        slots: {
+          memory: "none",
+        },
+        entries: {
+          "memory-core": {
+            enabled: false,
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+          },
+        },
+      },
+    });
+    const providerSpy = vi.spyOn(memoryEmbeddingProviderRuntime, "getMemoryEmbeddingProvider");
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.provider).toBe("openai");
+    expect(providerSpy.mock.calls.length).toBeGreaterThan(0);
+    expect(providerSpy.mock.calls.every((call) => call[1] === cfg)).toBe(true);
+    providerSpy.mockRestore();
   });
 });

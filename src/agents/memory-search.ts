@@ -142,6 +142,7 @@ function resolveStorePath(agentId: string, raw?: string): string {
 }
 
 function mergeConfig(
+  cfg: OpenClawConfig,
   defaults: MemorySearchConfig | undefined,
   overrides: MemorySearchConfig | undefined,
   agentId: string,
@@ -150,12 +151,13 @@ function mergeConfig(
   const sessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
   const provider = overrides?.provider ?? defaults?.provider ?? "auto";
-  const primaryAdapter = provider === "auto" ? undefined : getMemoryEmbeddingProvider(provider);
+  const primaryAdapter =
+    provider === "auto" ? undefined : getMemoryEmbeddingProvider(provider, cfg);
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
   const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
   const fallbackAdapter =
-    fallback && fallback !== "none" ? getMemoryEmbeddingProvider(fallback) : undefined;
+    fallback && fallback !== "none" ? getMemoryEmbeddingProvider(fallback, cfg) : undefined;
   const hasRemoteConfig = Boolean(
     overrideRemote?.baseUrl ||
     overrideRemote?.apiKey ||
@@ -381,13 +383,13 @@ export function resolveMemorySearchConfig(
 ): ResolvedMemorySearchConfig | null {
   const defaults = cfg.agents?.defaults?.memorySearch;
   const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
-  const resolved = mergeConfig(defaults, overrides, agentId);
+  const resolved = mergeConfig(cfg, defaults, overrides, agentId);
   if (!resolved.enabled) {
     return null;
   }
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
   const multimodalProvider =
-    resolved.provider === "auto" ? undefined : getMemoryEmbeddingProvider(resolved.provider);
+    resolved.provider === "auto" ? undefined : getMemoryEmbeddingProvider(resolved.provider, cfg);
   if (
     multimodalActive &&
     !(multimodalProvider?.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)
