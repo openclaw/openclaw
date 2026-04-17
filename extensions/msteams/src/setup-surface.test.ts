@@ -67,7 +67,15 @@ describe("msteams setup surface", () => {
     child.emit("exit", 0, null);
 
     await expect(result).resolves.toBeUndefined();
-    expect(spawn).toHaveBeenCalledWith(process.platform === "darwin" ? "open" : "xdg-open", [url], {
+    const expectedCmd =
+      process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+    const expectedArgs =
+      process.platform === "darwin"
+        ? [url]
+        : process.platform === "win32"
+          ? ["/c", "start", '""', url]
+          : [url];
+    expect(spawn).toHaveBeenCalledWith(expectedCmd, expectedArgs, {
       stdio: "ignore",
       shell: false,
     });
