@@ -10,6 +10,10 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { GatewayClient } from "./client.js";
 import {
+  EXPECTED_CODEX_MODELS_COMMAND_TEXT,
+  isExpectedCodexModelsCommandText,
+} from "./gateway-codex-harness.live-helpers.js";
+import {
   assertCronJobMatches,
   assertCronJobVisibleViaCli,
   assertLiveImageProbeReply,
@@ -515,81 +519,8 @@ describeLive("gateway live (Codex harness)", () => {
           client,
           sessionKey,
           command: "/codex models",
-          expectedText: [
-            "Codex models:",
-            "Available Codex models",
-            "Available agent target:",
-            "Available agent targets:",
-            "opened an interactive trust prompt",
-            "running as Codex on `codex/",
-            "currently running on `codex/",
-            "stdin is not a terminal",
-            "The local `codex models` entrypoint is interactive in this environment",
-            "`codex models` did not run in this environment.",
-            "`codex models` failed in this sandbox",
-            "`codex models` could not be run in this sandbox.",
-            "`codex models` is not runnable in this sandboxed session.",
-            "I couldn’t get a direct `codex models` CLI listing because the local sandbox blocked that command.",
-            "I couldn’t list all installed/available Codex models from the local CLI because the sandboxed `codex` command failed to start in this environment.",
-            "I couldn’t get `codex models` from the CLI because the sandbox blocks the namespace setup it needs",
-            "I can only see the current session model from this environment",
-            "Available in this session:",
-            "Available models in this session:",
-            "Available models in this environment:",
-            "Available models in this Codex environment:",
-            "Available agent models:",
-            "Current:",
-            "Current: `codex/",
-            "Current model:",
-            "Current model: `codex/",
-            "Current model is `codex/",
-            "Current session model: `codex/",
-            "Current session model is `codex/",
-            "The current session is using `codex/",
-            "Configured model from `~/.codex/config.toml`:",
-            "Configured models in this session:",
-            "Default model:",
-            "This harness is configured with a single Codex model: `codex/",
-            "Primary model: `codex/",
-            "Registered models: `codex/",
-            "Current OpenClaw session status reports the active model as:",
-          ],
-          isExpectedText: (text) => {
-            const normalized = text.toLowerCase();
-            const isSandboxFallback =
-              text.includes("`codex models`") &&
-              (text.includes("did not run") ||
-                text.includes("could not run") ||
-                text.includes("could not be run") ||
-                text.includes("failed in this sandbox") ||
-                text.includes("failed with:") ||
-                text.includes("repo-local fallback") ||
-                text.includes("sandbox blocks") ||
-                text.includes("interactive in this environment") ||
-                text.includes("sandboxed session") ||
-                text.includes("required user namespace"));
-            const mentionsConfiguredModels =
-              normalized.includes("configured model") ||
-              normalized.includes("configured codex model") ||
-              normalized.includes("configured models");
-            const mentionsSessionModel =
-              normalized.includes("current session is using") ||
-              normalized.includes("current session model") ||
-              normalized.includes("the current session is using");
-            const mentionsConfigSummary =
-              normalized.includes("default model") ||
-              normalized.includes("primary model") ||
-              normalized.includes("registered models") ||
-              normalized.includes("only listed model") ||
-              normalized.includes("single codex model") ||
-              normalized.includes("live openclaw config shows") ||
-              normalized.includes("current gateway config");
-            const isSessionConfigFallback =
-              text.includes("`codex/") &&
-              ((mentionsConfiguredModels && mentionsSessionModel) ||
-                (mentionsConfigSummary && (mentionsConfiguredModels || mentionsSessionModel)));
-            return isSandboxFallback || isSessionConfigFallback;
-          },
+          expectedText: [...EXPECTED_CODEX_MODELS_COMMAND_TEXT],
+          isExpectedText: isExpectedCodexModelsCommandText,
         });
         logCodexLiveStep("codex-models-command", { modelsText });
 
