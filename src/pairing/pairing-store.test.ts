@@ -7,6 +7,48 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { resolveOAuthDir } from "../config/paths.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { withEnvAsync } from "../test-utils/env.js";
+
+vi.mock("../channels/plugins/pairing.js", () => ({
+  getPairingAdapter: () => null,
+}));
+
+vi.mock("../infra/file-lock.js", () => ({
+  withFileLock: async (_path: string, _options: unknown, fn: () => unknown) => await fn(),
+}));
+
+vi.mock("../plugin-sdk/json-store.js", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+
+  return {
+    readJsonFileWithFallback: async <T>(filePath: string, fallback: T) => {
+      let raw: string;
+      try {
+        raw = await fs.readFile(filePath, "utf8");
+      } catch (err) {
+        if ((err as { code?: string }).code === "ENOENT") {
+          return { value: fallback, exists: false };
+        }
+        return { value: fallback, exists: false };
+      }
+      try {
+        const parsed = JSON.parse(raw) as T;
+        return {
+          value: parsed ?? fallback,
+          exists: true,
+        };
+      } catch {
+        return { value: fallback, exists: true };
+      }
+    },
+    writeJsonFileAtomically: async (filePath: string, value: unknown) => {
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    },
+  };
+});
+
+import * as jsonStore from "../plugin-sdk/json-store.js";
 import {
   addChannelAllowFromStoreEntry,
   clearPairingAllowFromReadCacheForTest,
@@ -552,7 +594,7 @@ describe("pairing store", () => {
     await withTempStateDir(async (stateDir) => {
       for (const variant of [
         {
-          createReadSpy: () => vi.spyOn(fs, "readFile"),
+          createReadSpy: () => vi.spyOn(jsonStore, "readJsonFileWithFallback"),
           readAllowFrom: () => readChannelAllowFromStore("telegram", process.env, "yy"),
         },
         {
