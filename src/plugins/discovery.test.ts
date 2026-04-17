@@ -258,6 +258,7 @@ async function expectRejectedPackageExtensionEntry(params: {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   clearPluginDiscoveryCache();
   cleanupTrackedTempDirs(tempDirs);
 });

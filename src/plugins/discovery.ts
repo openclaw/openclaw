@@ -102,8 +102,9 @@ function buildScopedDiscoveryCacheKey(params: {
     env: params.env,
   });
   const workspaceKey = roots.workspace ?? "";
+  const bundledRoot = roots.stock ?? "";
   const ownershipUid = params.ownershipUid ?? currentUid();
-  return `scoped::${workspaceKey}::${ownershipUid ?? "none"}::${JSON.stringify(loadPaths)}`;
+  return `scoped::${workspaceKey}::${bundledRoot}::${ownershipUid ?? "none"}::${JSON.stringify(loadPaths)}`;
 }
 
 function buildSharedDiscoveryCacheKey(params: {
