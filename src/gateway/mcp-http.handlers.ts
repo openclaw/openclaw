@@ -10,18 +10,31 @@ import {
 } from "./mcp-http.protocol.js";
 import type { McpLoopbackTool, McpToolSchemaEntry } from "./mcp-http.schema.js";
 
-type McpTextContent = {
-  type: "text";
-  text: string;
-};
+type McpContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string }
+  | { type: "audio"; data: string; mimeType: string }
+  | { type: "resource"; resource: { uri: string; mimeType?: string; text?: string; blob?: string } }
+  | { type: "resource_link"; uri: string; name?: string; mimeType?: string };
 
-function normalizeToolCallContent(result: unknown): McpTextContent[] {
+export function normalizeToolCallContent(result: unknown): McpContentBlock[] {
   const content = (result as { content?: unknown })?.content;
   if (Array.isArray(content)) {
-    return content.map((block: { type?: string; text?: string }) => ({
-      type: (block.type ?? "text") as "text",
-      text: block.text ?? (typeof block === "string" ? block : JSON.stringify(block)),
-    }));
+    return content.map((block: unknown) => {
+      // Pass through valid content blocks directly to preserve image/audio/resource fields
+      if (
+        block &&
+        typeof block === "object" &&
+        typeof (block as { type?: string }).type === "string"
+      ) {
+        return block as McpContentBlock;
+      }
+      // Fallback for string or malformed blocks
+      return {
+        type: "text",
+        text: typeof block === "string" ? block : JSON.stringify(block),
+      };
+    });
   }
   return [
     {
