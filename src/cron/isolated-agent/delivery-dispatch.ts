@@ -248,15 +248,16 @@ function pruneCompletedDirectCronDeliveries(now: number) {
   if (COMPLETED_DIRECT_CRON_DELIVERIES.size <= maxEntries) {
     return;
   }
-  // Map preserves insertion order, which is chronological for this cache.
-  // Evict from the front (oldest) instead of sorting all entries.
-  let toDelete = COMPLETED_DIRECT_CRON_DELIVERIES.size - maxEntries;
-  for (const key of COMPLETED_DIRECT_CRON_DELIVERIES.keys()) {
-    if (toDelete <= 0) {
+  const entries = [...COMPLETED_DIRECT_CRON_DELIVERIES.entries()].toSorted(
+    (a, b) => a[1].ts - b[1].ts,
+  );
+  const toDelete = COMPLETED_DIRECT_CRON_DELIVERIES.size - maxEntries;
+  for (let i = 0; i < toDelete; i += 1) {
+    const oldest = entries[i];
+    if (!oldest) {
       break;
     }
-    COMPLETED_DIRECT_CRON_DELIVERIES.delete(key);
-    toDelete -= 1;
+    COMPLETED_DIRECT_CRON_DELIVERIES.delete(oldest[0]);
   }
 }
 

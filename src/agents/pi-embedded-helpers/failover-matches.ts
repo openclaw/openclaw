@@ -98,10 +98,8 @@ const ERROR_PATTERNS = {
     "service unavailable",
     "deadline exceeded",
     "context deadline exceeded",
-    // Google Vertex AI transient errors: { "status": "INTERNAL", "code": 500 }.
-    // Negative lookahead excludes non-transient 500 bodies that happen to share the same shape.
-    /^(?![\s\S]*\b(?:invalid|not_found|permission_denied|deprecated|unauthorized)\b)(?=[\s\S]*\bgot status:\s*internal\b)(?=[\s\S]*\bcode["']?\s*[:=]\s*500\b)/i,
-    /^(?![\s\S]*\b(?:invalid|not_found|permission_denied|deprecated|unauthorized)\b)(?=[\s\S]*["']status["']\s*:\s*["']internal["'])(?=[\s\S]*["']code["']\s*:\s*500\b)/i,
+    /^(?=[\s\S]*\bgot status:\s*internal\b)(?=[\s\S]*\bcode["']?\s*[:=]\s*500\b)/i,
+    /^(?=[\s\S]*["']status["']\s*:\s*["']internal["'])(?=[\s\S]*["']code["']\s*:\s*500\b)/i,
     "connection error",
     "network error",
     "network request failed",
@@ -248,11 +246,5 @@ export function isServerErrorMessage(raw: string): boolean {
     return true;
   }
   const scrubbed = value.replace(STATUS_INTERNAL_SERVER_ERROR_RE, "").trim();
-  // If scrubbing removed content (i.e. the message contained "status: internal
-  // server error"), then the original message is itself a server error signal
-  // even when no other recognizable pattern remains.
-  if (scrubbed.length < value.length && scrubbed.length === 0) {
-    return true;
-  }
   return scrubbed.length > 0 && matchesErrorPatterns(scrubbed, ERROR_PATTERNS.serverError);
 }

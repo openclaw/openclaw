@@ -132,9 +132,18 @@ describe("mcp loopback server", () => {
     expect((await sendToolsList("true")).status).toBe(200);
     expect((await sendToolsList("false")).status).toBe(200);
 
-    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(1);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
     expect(resolveGatewayScopedToolsMock).toHaveBeenNthCalledWith(
       1,
+      expect.objectContaining({
+        sessionKey: "agent:main:matrix:dm:test",
+        messageProvider: "matrix",
+        senderIsOwner: true,
+        surface: "loopback",
+      }),
+    );
+    expect(resolveGatewayScopedToolsMock).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         sessionKey: "agent:main:matrix:dm:test",
         messageProvider: "matrix",
