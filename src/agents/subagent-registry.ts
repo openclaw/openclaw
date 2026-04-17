@@ -547,19 +547,18 @@ async function sweepSubagentRuns() {
     const now = Date.now();
     let mutated = false;
     for (const [runId, entry] of subagentRuns.entries()) {
-      // Session-mode runs have no archiveAtMs — apply absolute TTL after cleanup completes.
-      // Use cleanupCompletedAt (not endedAt) to avoid interrupting deferred cleanup flows.
       if (!entry.archiveAtMs) {
-        // Session-mode records must outlive the per-round TTL: the child session is
-        // still alive and downstream consumers (e.g. sessions.send's skipA2A check)
-        // rely on the record to suppress A2A transcript pollution. Only sweep once
-        // the session is truly terminated (KILLED/ERROR).
-        const sessionStillAlive =
-          entry.spawnMode === "session" &&
-          entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED &&
-          entry.endedReason !== SUBAGENT_ENDED_REASON_ERROR;
+        // Session-mode rows are bound to the child session key, not the run:
+        // killSubagentRun (src/agents/subagent-control.ts) marks the run
+        // terminated on KILLED/ERROR without deleting the session entry, so the
+        // child can still be reused via sessions.send and skipA2A must keep
+        // seeing spawnMode:"session". session-delete — routed through
+        // purgeSubagentRunsForSessionKey in cleanupSessionBeforeMutation — is
+        // the sole removal path; the per-round TTL does not apply here.
+        if (entry.spawnMode === "session") {
+          continue;
+        }
         if (
-          !sessionStillAlive &&
           typeof entry.cleanupCompletedAt === "number" &&
           now - entry.cleanupCompletedAt > SESSION_RUN_TTL_MS
         ) {
