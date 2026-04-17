@@ -2343,5 +2343,51 @@ describe("registerSlackInteractionEvents", () => {
     // Thread interactions must carry parentSessionKey for thread.inheritParent
     expect(ctxArg?.ParentSessionKey).toBe("test:session");
   });
+
+  it("skips DM auto-thread when replyToMode is off", async () => {
+    const { ctx, getHandler } = createContext({
+      resolveChannelName: async () => ({ name: "dm", type: "im" }),
+    });
+    (ctx as { replyToMode: string }).replyToMode = "off";
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "D1" },
+        container: { channel_id: "D1", message_ts: "200.300" },
+        message: {
+          ts: "200.300",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "reply_actions",
+        value: "OK",
+        text: { type: "plain_text", text: "OK" },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
+    });
+    const ctxArg = finalizeInboundContextMock.mock.calls[0]?.[0] as {
+      SessionKey?: string;
+    } | undefined;
+    // DM with replyToMode "off" should NOT auto-thread from messageTs
+    expect(ctxArg?.SessionKey).not.toContain(":thread:");
+  });
 });
 const selectedDateTimeEpoch = 1_771_632_300;

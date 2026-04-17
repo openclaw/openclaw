@@ -685,8 +685,10 @@ async function wakeSlackReplySession(params: {
 
   // Derive thread-scoped session key when the interaction came from a thread,
   // consistent with prepareSlackMessage's resolveThreadSessionKeys usage.
-  // For DMs, fall back to messageTs for auto-threading (matches resolveSlackThreadContext).
-  const threadId = parsed.threadTs ?? (isDirectMessage ? parsed.messageTs : undefined);
+  // For DMs, fall back to messageTs only when replyToMode is "all" (matches
+  // resolveSlackThreadContext: auto-threading is skipped for off/first/batched).
+  const dmAutoThread = isDirectMessage && ctx.replyToMode === "all";
+  const threadId = parsed.threadTs ?? (dmAutoThread ? parsed.messageTs : undefined);
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: route.sessionKey,
     threadId,
