@@ -204,6 +204,12 @@ function emitSessionsChanged(
             runtimeMs: sessionRow.runtimeMs,
             compactionCheckpointCount: sessionRow.compactionCheckpointCount,
             latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
+            // PR-8 / #67721: surface mode-state to the UI so the chat
+            // chip renders the current selection rather than always
+            // defaulting to Ask.
+            execSecurity: sessionRow.execSecurity,
+            execAsk: sessionRow.execAsk,
+            planMode: sessionRow.planMode,
           }
         : {}),
     },

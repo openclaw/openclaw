@@ -11,6 +11,7 @@ import {
   emitAgentEvent,
   emitAgentItemEvent,
   emitAgentPatchSummaryEvent,
+  type AgentApprovalPlanStep,
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
@@ -37,6 +38,7 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
+import { newPlanApprovalId } from "./plan-mode/index.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -187,6 +189,50 @@ function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
     ? summary.deleted.filter((entry): entry is string => typeof entry === "string")
     : [];
   return { added, modified, deleted };
+}
+
+/**
+ * Reads the `exit_plan_mode` tool result into a typed plan-proposal
+ * shape suitable for the approval event payload (PR-8 follow-up).
+ * Returns null if the tool result doesn't carry a plan (e.g. tool
+ * raised before producing one).
+ */
+function readPlanProposalDetails(
+  result: unknown,
+): { plan: AgentApprovalPlanStep[]; summary?: string } | null {
+  const details = readToolResultDetailsRecord(result);
+  if (!details || details.status !== "approval_requested") {
+    return null;
+  }
+  const rawPlan = details.plan;
+  if (!Array.isArray(rawPlan)) {
+    return null;
+  }
+  const plan: AgentApprovalPlanStep[] = [];
+  for (const entry of rawPlan) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const step = (entry as Record<string, unknown>).step;
+    const status = (entry as Record<string, unknown>).status;
+    const activeForm = (entry as Record<string, unknown>).activeForm;
+    if (typeof step !== "string" || typeof status !== "string") {
+      continue;
+    }
+    plan.push({
+      step,
+      status,
+      ...(typeof activeForm === "string" && activeForm.trim() ? { activeForm } : {}),
+    });
+  }
+  if (plan.length === 0) {
+    return null;
+  }
+  const rawSummary = details.summary;
+  return {
+    plan,
+    ...(typeof rawSummary === "string" && rawSummary.trim() ? { summary: rawSummary } : {}),
+  };
 }
 
 function buildPatchSummaryText(summary: ApplyPatchSummary): string {
@@ -1098,6 +1144,46 @@ export async function handleToolExecutionEnd(
       void ctx.params.onAgentEvent?.({
         stream: "patch",
         data: patchData,
+      });
+    }
+  }
+
+  // PR-8 follow-up: plan-mode tool dispatch.
+  //
+  // `exit_plan_mode` proposes a plan for user approval. The runtime
+  // emits a plugin-kind approval event with the plan payload + a fresh
+  // approvalId; UI surfaces (Control UI overlay, channel renderers) read
+  // this to render Approve/Reject/Edit buttons. The user-facing approval
+  // response flows back through `sessions.patch { planApproval }` which
+  // calls `resolvePlanApproval` to transition `SessionEntry.planMode`.
+  //
+  // `enter_plan_mode` is a transition signal — actual mode-state writes
+  // happen via the user-driven `sessions.patch { planMode: "plan" }`
+  // pathway. We don't auto-enter plan mode from a tool call alone (that
+  // would let the agent escape the user's opt-in gate).
+  if (toolName === "exit_plan_mode" && !isToolError) {
+    const details = readPlanProposalDetails(result);
+    if (details && details.plan.length > 0) {
+      const approvalId = newPlanApprovalId();
+      const approvalData: AgentApprovalEventData = {
+        phase: "requested",
+        kind: "plugin",
+        status: "pending",
+        title: details.summary ? `Plan approval — ${details.summary}` : "Plan approval requested",
+        itemId,
+        toolCallId,
+        approvalId,
+        plan: details.plan,
+        ...(details.summary ? { summary: details.summary } : {}),
+      };
+      emitAgentApprovalEvent({
+        runId: ctx.params.runId,
+        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        data: approvalData,
+      });
+      void ctx.params.onAgentEvent?.({
+        stream: "approval",
+        data: approvalData,
       });
     }
   }

@@ -56,6 +56,17 @@ export type AgentApprovalEventPhase = "requested" | "resolved";
 export type AgentApprovalEventStatus = "pending" | "unavailable" | "approved" | "denied" | "failed";
 export type AgentApprovalEventKind = "exec" | "plugin" | "unknown";
 
+/**
+ * Plan-step shape carried by plan-kind approval events (PR-8 follow-up).
+ * Mirrors the runtime `update_plan` step shape but kept independent so
+ * `agent-events.ts` doesn't depend on the agents layer.
+ */
+export type AgentApprovalPlanStep = {
+  step: string;
+  status: string;
+  activeForm?: string;
+};
+
 export type AgentApprovalEventData = {
   phase: AgentApprovalEventPhase;
   kind: AgentApprovalEventKind;
@@ -69,6 +80,14 @@ export type AgentApprovalEventData = {
   host?: string;
   reason?: string;
   message?: string;
+  /**
+   * Plan-mode approval payload (PR-8). Present only when `kind === "plugin"`
+   * and the underlying tool was `exit_plan_mode`. The UI/channel renderers
+   * use this to show the plan checklist with Approve/Reject/Edit buttons.
+   */
+  plan?: AgentApprovalPlanStep[];
+  /** One-line summary the agent included with the proposed plan. */
+  summary?: string;
 };
 
 export type AgentCommandOutputEventData = {

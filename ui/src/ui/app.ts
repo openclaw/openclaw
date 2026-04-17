@@ -214,6 +214,12 @@ export class OpenClawApp extends LitElement {
   @state() execApprovalQueue: ExecApprovalRequest[] = [];
   @state() execApprovalBusy = false;
   @state() execApprovalError: string | null = null;
+  // PR-8 / #67721: plan approval card state — populated by handleAgentEvent
+  // when the runtime emits an `approval` stream event with kind:"plugin"
+  // and a plan payload.
+  @state() planApprovalRequest: import("./app-tool-stream.ts").PlanApprovalRequest | null = null;
+  @state() planApprovalBusy = false;
+  @state() planApprovalError: string | null = null;
   @state() pendingGatewayUrl: string | null = null;
   pendingGatewayToken: string | null = null;
 
@@ -754,6 +760,43 @@ export class OpenClawApp extends LitElement {
       this.execApprovalError = `Approval failed: ${String(err)}`;
     } finally {
       this.execApprovalBusy = false;
+    }
+  }
+
+  /**
+   * PR-8 / #67721: resolve a pending plan-approval card. Sends the
+   * decision via `sessions.patch { planApproval: ... }` which routes
+   * through `resolvePlanApproval` server-side.
+   */
+  async handlePlanApprovalDecision(
+    decision: "approve" | "reject" | "edit",
+    feedback?: string,
+  ): Promise<void> {
+    const active = this.planApprovalRequest;
+    if (!active || !this.client || this.planApprovalBusy) {
+      return;
+    }
+    this.planApprovalBusy = true;
+    this.planApprovalError = null;
+    try {
+      const params: Record<string, unknown> = {
+        key: active.sessionKey,
+        planApproval: {
+          action: decision,
+          ...(active.approvalId ? { approvalId: active.approvalId } : {}),
+          ...(feedback && feedback.trim() ? { feedback: feedback.trim() } : {}),
+        },
+      };
+      await this.client.request("sessions.patch", params);
+      // Clear the active card so the overlay dismisses. The agent's
+      // next turn will pick up the resolution via the new session
+      // state (mode flipped to "normal" on approve/edit, or stays
+      // "plan" with rejectionCount++ on reject).
+      this.planApprovalRequest = null;
+    } catch (err) {
+      this.planApprovalError = `Plan approval failed: ${String(err)}`;
+    } finally {
+      this.planApprovalBusy = false;
     }
   }
 
