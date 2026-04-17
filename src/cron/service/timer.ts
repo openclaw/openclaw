@@ -766,10 +766,29 @@ export async function onTimer(state: CronServiceState) {
         // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs
         // values without execution. This prevents jobs from being silently skipped
         // when the timer wakes up but findDueJobs returns empty (see #13992).
-        const changed = recomputeNextRunsForMaintenance(state, {
+        let changed = recomputeNextRunsForMaintenance(state, {
           recomputeExpired: true,
           nowMs: dueCheckNow,
         });
+        // recomputeNextRunsForMaintenance may repopulate nextRunAtMs for
+        // one-shot jobs whose zombie markers were just cleared (kind=at
+        // jobs where lastStatus !== "ok" always return atMs). Re-clear
+        // them so interrupted one-shots aren't re-executed.
+        if (clearedZombies) {
+          for (const job of state.store?.jobs ?? []) {
+            if (
+              job.schedule.kind === "at" &&
+              typeof job.state.runningAtMs !== "number" &&
+              typeof job.state.nextRunAtMs === "number" &&
+              typeof job.state.lastRunAtMs !== "number"
+            ) {
+              // Skip if lastStatus === "ok" (legitimately re-scheduled)
+              if (job.state.lastStatus === "ok") continue;
+              job.state.nextRunAtMs = undefined;
+              changed = true;
+            }
+          }
+        }
         if (changed) {
           await persist(state);
         }
