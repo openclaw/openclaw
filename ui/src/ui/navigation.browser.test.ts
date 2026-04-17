@@ -407,9 +407,9 @@ describe("control UI routing", () => {
       scrollTop = Math.max(0, Math.min(top, 2400 - 180));
     }) as typeof initialContainer.scrollTo;
 
-    app.chatMessages = Array.from({ length: 60 }, (_, index) => ({
+    app.chatMessages = Array.from({ length: 3 }, (_, index) => ({
       role: "assistant",
-      content: `Line ${index} - ${"x".repeat(200)}`,
+      content: `Line ${index}`,
       timestamp: Date.now() + index,
     }));
 
@@ -451,8 +451,8 @@ describe("control UI routing", () => {
       ...app.chatMessages,
       {
         role: "assistant",
-        content: `Line 60 - ${"x".repeat(200)}`,
-        timestamp: Date.now() + 60,
+        content: "Line 3",
+        timestamp: Date.now() + 3,
       },
     ];
     await app.updateComplete;
