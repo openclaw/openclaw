@@ -15,8 +15,13 @@ describe("matrix observed event artifacts", () => {
             type: "m.room.message",
             body: "secret",
             formattedBody: "<p>secret</p>",
-            msgtype: "m.text",
+            msgtype: "m.image",
             originServerTs: 1_700_000_000_000,
+            attachment: {
+              kind: "image",
+              caption: "secret",
+              filename: "qa-lighthouse.png",
+            },
             relatesTo: {
               relType: "m.thread",
               eventId: "$root",
@@ -33,8 +38,12 @@ describe("matrix observed event artifacts", () => {
         eventId: "$event",
         sender: "@sut:matrix-qa.test",
         type: "m.room.message",
-        msgtype: "m.text",
+        msgtype: "m.image",
         originServerTs: 1_700_000_000_000,
+        attachment: {
+          kind: "image",
+          filename: "qa-lighthouse.png",
+        },
         relatesTo: {
           relType: "m.thread",
           eventId: "$root",
