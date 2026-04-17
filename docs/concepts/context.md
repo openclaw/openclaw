@@ -38,7 +38,7 @@ Values vary by model, provider, tool policy, and what’s in your workspace.
 ```
 🧠 Context breakdown
 Workspace: <workspaceDir>
-Bootstrap max/file: 20,000 chars
+Bootstrap max/file: 12,000 chars
 Sandbox: mode=non-main sandboxed=false
 System prompt (run): 38,412 chars (~9,603 tok) (Project Context 23,901 chars (~5,976 tok))
 
