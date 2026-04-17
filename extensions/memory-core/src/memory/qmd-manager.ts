@@ -16,6 +16,7 @@ import {
   writeFileWithinRoot,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { resolveAgentContextLimits } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
   deriveQmdScopeChannel,
@@ -47,7 +48,6 @@ import {
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resolveAgentContextLimits } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   localeLowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
@@ -1016,11 +1016,15 @@ export class QmdMemoryManager implements MemorySearchManager {
     let searchFallbackReason: string | undefined;
     const explicitSearchTool = this.qmd.searchTool;
     const mcporterEnabled = this.qmd.mcporter.enabled;
+    const shouldBypassMcporter =
+      mcporterEnabled &&
+      !explicitSearchTool &&
+      (qmdSearchCommand === "search" || qmdSearchCommand === "vsearch");
     const runSearchAttempt = async (
       allowMissingCollectionRepair: boolean,
     ): Promise<QmdQueryResult[]> => {
       try {
-        if (mcporterEnabled) {
+        if (mcporterEnabled && !shouldBypassMcporter) {
           const minScore = opts?.minScore ?? 0;
           if (explicitSearchTool) {
             if (collectionNames.length > 1) {
@@ -1945,8 +1949,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     from?: number,
     lines?: number,
   ): Promise<
-    | { missing: true }
-    | { missing: false; selectedLines: string[]; moreSourceLinesRemain: boolean }
+    { missing: true } | { missing: false; selectedLines: string[]; moreSourceLinesRemain: boolean }
   > {
     const start = Math.max(1, from ?? 1);
     const count = Math.max(1, lines ?? Number.POSITIVE_INFINITY);
