@@ -61,6 +61,37 @@ describe("doctor-contract-registry getJiti", () => {
     );
   });
 
+  it("enables native jiti loading on Linux for contract-api modules (#68282)", () => {
+    // Reporter measured ~15.7s first-call cost for `openclaw status` dominated
+    // by doctor contract loading on the default (non-native) jiti path, vs
+    // ~2.1s with `tryNative: true`. Assert the Linux path requests native
+    // loading explicitly so the default `dist/extensions/*` gate in
+    // `resolvePluginLoaderJitiTryNative` does not downgrade us.
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "contract-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
+      diagnostics: [],
+    });
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+
+    try {
+      listPluginDoctorLegacyConfigRules({
+        workspaceDir: pluginRoot,
+        env: {},
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+    expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        tryNative: true,
+      }),
+    );
+  });
+
   it("prefers doctor-contract-api over the broader contract-api surface", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(

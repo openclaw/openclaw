@@ -48,6 +48,18 @@ function getJiti(modulePath: string) {
     cache: jitiLoaders,
     modulePath,
     importerUrl: import.meta.url,
+    // Doctor-contract artifacts live under `dist/extensions/<plugin>/contract-api.js`
+    // in shipped builds — a pure built JS bundle. The default resolver gates
+    // `dist/extensions/*` to `tryNative: false` (see
+    // `resolvePluginLoaderJitiTryNative` in `sdk-alias.ts`), which adds ~14s
+    // of cold-start cost on first `openclaw status` / `openclaw doctor`
+    // invocation (measured: ~15.7s default vs ~2.1s with tryNative). Flip the
+    // gate to native where the platform supports it — jiti falls back to its
+    // transpile path on native-import failure, so aliased `openclaw/plugin-sdk/*`
+    // imports inside contract modules still resolve. Windows disables native
+    // jiti entirely (see `supportsNativeJitiRuntime`), so keep that platform
+    // on the slower-but-known path.
+    tryNative: process.platform !== "win32",
   });
 }
 
