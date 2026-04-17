@@ -5,7 +5,7 @@ import type {
   ResolvedMemoryWikiConfig,
   WikiGetResult,
   WikiSearchResult,
-} from "@openclaw/memory-wiki/api.js";
+} from "openclaw/extensions/memory-wiki/api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryPluginState,
@@ -32,7 +32,7 @@ const memoryWikiFallbackMocks = vi.hoisted(() => ({
   getMemoryWikiPage: vi.fn<(..._args: any[]) => Promise<WikiGetResult | null>>(async () => null),
 }));
 
-vi.mock("@openclaw/memory-wiki/api.js", () => ({
+vi.mock("openclaw/extensions/memory-wiki/api", () => ({
   resolveMemoryWikiConfig: memoryWikiFallbackMocks.resolveMemoryWikiConfig,
   searchMemoryWiki: memoryWikiFallbackMocks.searchMemoryWiki,
   getMemoryWikiPage: memoryWikiFallbackMocks.getMemoryWikiPage,

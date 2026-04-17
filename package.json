@@ -34,6 +34,7 @@
     "dist/extensions/qa-channel/runtime-api.js",
     "!dist/extensions/qa-lab/**",
     "dist/extensions/qa-lab/runtime-api.js",
+    "extensions/memory-wiki/api.d.ts",
     "!dist/extensions/qa-matrix/**",
     "!dist/plugin-sdk/extensions/qa-lab/**",
     "!dist/plugin-sdk/qa-lab.*",
@@ -55,6 +56,10 @@
     "./plugin-sdk": {
       "types": "./dist/plugin-sdk/index.d.ts",
       "default": "./dist/plugin-sdk/index.js"
+    },
+    "./extensions/memory-wiki/api": {
+      "types": "./extensions/memory-wiki/api.d.ts",
+      "default": "./dist/extensions/memory-wiki/api.js"
     },
     "./plugin-sdk/core": {
       "types": "./dist/plugin-sdk/core.d.ts",

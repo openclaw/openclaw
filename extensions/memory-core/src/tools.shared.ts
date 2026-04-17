@@ -1,5 +1,5 @@
-import type { MemoryWikiPluginConfig } from "@openclaw/memory-wiki/api.js";
 import { Type } from "@sinclair/typebox";
+import type { MemoryWikiPluginConfig } from "openclaw/extensions/memory-wiki/api";
 import {
   listMemoryCorpusSupplements,
   resolveMemorySearchConfig,
@@ -17,9 +17,9 @@ type MemorySearchManagerResult = Awaited<
 >;
 
 type MemoryWikiFallbackRuntime = {
-  resolveMemoryWikiConfig: (typeof import("@openclaw/memory-wiki/api.js"))["resolveMemoryWikiConfig"];
-  searchMemoryWiki: (typeof import("@openclaw/memory-wiki/api.js"))["searchMemoryWiki"];
-  getMemoryWikiPage: (typeof import("@openclaw/memory-wiki/api.js"))["getMemoryWikiPage"];
+  resolveMemoryWikiConfig: (typeof import("openclaw/extensions/memory-wiki/api"))["resolveMemoryWikiConfig"];
+  searchMemoryWiki: (typeof import("openclaw/extensions/memory-wiki/api"))["searchMemoryWiki"];
+  getMemoryWikiPage: (typeof import("openclaw/extensions/memory-wiki/api"))["getMemoryWikiPage"];
 };
 
 let memoryToolRuntimePromise: Promise<MemoryToolRuntime> | null = null;
@@ -31,7 +31,7 @@ export async function loadMemoryToolRuntime(): Promise<MemoryToolRuntime> {
 }
 
 async function loadMemoryWikiFallbackRuntime(): Promise<MemoryWikiFallbackRuntime> {
-  memoryWikiFallbackRuntimePromise ??= import("@openclaw/memory-wiki/api.js").then(
+  memoryWikiFallbackRuntimePromise ??= import("openclaw/extensions/memory-wiki/api").then(
     ({ resolveMemoryWikiConfig, searchMemoryWiki, getMemoryWikiPage }) => ({
       resolveMemoryWikiConfig,
       searchMemoryWiki,

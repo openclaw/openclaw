@@ -4,9 +4,6 @@
   "private": true,
   "description": "OpenClaw core memory search plugin",
   "type": "module",
-  "dependencies": {
-    "@openclaw/memory-wiki": "workspace:*"
-  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
