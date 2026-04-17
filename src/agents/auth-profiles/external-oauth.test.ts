@@ -10,6 +10,14 @@ import type { AuthProfileStore, OAuthCredential } from "./types.js";
 const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
   (params: unknown) => ProviderExternalAuthProfile[]
 >(() => []);
+const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
+  readCodexCliCredentialsCachedMock: vi.fn<() => OAuthCredential | null>(() => null),
+}));
+
+vi.mock("../cli-credentials.js", () => ({
+  readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
+  readMiniMaxCliCredentialsCached: () => null,
+}));
 
 function createStore(profiles: AuthProfileStore["profiles"] = {}): AuthProfileStore {
   return { version: 1, profiles };
@@ -30,6 +38,8 @@ describe("auth external oauth helpers", () => {
   beforeEach(() => {
     resolveExternalAuthProfilesWithPluginsMock.mockReset();
     resolveExternalAuthProfilesWithPluginsMock.mockReturnValue([]);
+    readCodexCliCredentialsCachedMock.mockReset();
+    readCodexCliCredentialsCachedMock.mockReturnValue(null);
     __testing.setResolveExternalAuthProfilesForTest(resolveExternalAuthProfilesWithPluginsMock);
   });
 
@@ -107,5 +117,39 @@ describe("auth external oauth helpers", () => {
     });
 
     expect(shouldPersist).toBe(true);
+  });
+
+  it("overlays fresher external CLI OAuth credentials without treating them as persisted store state", () => {
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({
+        access: "fresh-cli-access-token",
+        refresh: "fresh-cli-refresh-token",
+        expires: 456,
+      }),
+    );
+
+    const overlaid = overlayExternalOAuthProfiles(
+      createStore({
+        "openai-codex:default": createCredential({
+          access: "stale-store-access-token",
+          refresh: "stale-store-refresh-token",
+          expires: 123,
+        }),
+      }),
+    );
+
+    expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
+      access: "fresh-cli-access-token",
+      refresh: "fresh-cli-refresh-token",
+      expires: 456,
+    });
+
+    const shouldPersist = shouldPersistExternalOAuthProfile({
+      store: overlaid,
+      profileId: "openai-codex:default",
+      credential: overlaid.profiles["openai-codex:default"] as OAuthCredential,
+    });
+
+    expect(shouldPersist).toBe(false);
   });
 });

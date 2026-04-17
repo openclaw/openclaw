@@ -4,13 +4,41 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- macOS/gateway: add `screen.snapshot` support for macOS app nodes, including runtime plumbing, default macOS allowlisting, and docs for monitor preview flows. (#67954) Thanks @BunsDev.
+
 ### Fixes
 
+- Agents/bootstrap: resolve bootstrap from workspace truth instead of stale session transcript markers, keep embedded bootstrap instructions on a hidden user-context prelude, suppress normal `/new` and `/reset` greetings while `BOOTSTRAP.md` is still pending, and make the embedded runner read the bootstrap ritual before replying normally.
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.
+- Gateway/hello-ok: always report negotiated auth metadata for successful shared-auth handshakes, including control-ui bypass coverage when no device token is issued. (#67810) Thanks @BunsDev.
 - OpenAI Codex/Responses: unify native Responses API capability detection so Codex OAuth requests emit the required `store: false` field on the native Responses path. (#67918) Thanks @obviyus.
 - WhatsApp/setup: guard personal-phone and allowlist prompt values so setup fails with clear validation errors instead of crashing on undefined prompt text. (#67895) Thanks @lawrence3699.
 - Models/config: preserve an existing `models.json` provider `baseUrl` during merge-mode regeneration so custom endpoints do not get reset on restart. (#67893) Thanks @lawrence3699.
 - Plugins/discovery: reuse bundled and global plugin discovery results across workspace cache misses so Windows multi-workspace startup stops redoing the shared synchronous scan. (#67940) Thanks @obviyus.
+- Plugins/webhooks: enforce synchronous plugin registration with full rollback of failed plugin side effects, and cache SecretRef-backed webhook auth per route so plugin startup and inbound webhook auth stay deterministic. (#67941) Thanks @obviyus.
+- Telegram/ACP bindings: drop persisted DM bindings that still point at missing or failed ACP sessions on restart, while preserving plugin-owned bindings and uncertain store reads. (#67822) Thanks @chinar-amrutkar.
+- Telegram/streaming: keep a transient preview on the same Telegram message when auto-compaction retries an in-flight answer, so streamed replies no longer appear duplicated after compaction. (#66939) Thanks @rubencu.
+- Memory/sqlite-vec: emit the degraded sqlite-vec warning once per degraded episode instead of repeating it for every file write, while preserving the latch across safe-reindex rollback and resetting it when vector state is genuinely rebuilt. (#67898) Thanks @rubencu.
+- Reply/block streaming: preserve post-stream incomplete-turn error payloads after block streaming already emitted content, so users get the warning instead of silence. (#67991) Thanks @obviyus.
+- Telegram/streaming: clear the compaction replay guard after visible non-final boundaries so a post-tool assistant reply rotates to a fresh preview instead of editing the pre-compaction message. (#67993) Thanks @obviyus.
+- Matrix: fix `sessions_spawn --thread` subagent session spawning — thread binding creation, cleanup on session end, and completion-message delivery target resolution now work end-to-end. (#67643) Thanks @eejohnso-ops and @gumadeiras.
+- macOS/webchat: enable Undo and Redo in the composer text input by turning on the native `NSTextView` undo manager. (#34962) Thanks @tylerbittner.
+- macOS/remote SSH: require an already-trusted host key on the macOS remote command, gateway probe, port tunnel, and pairing probe paths by switching `StrictHostKeyChecking=accept-new` to `StrictHostKeyChecking=yes` and centralizing the shared SSH option fragments in `CommandResolver`, so first-time macOS remote connections no longer silently accept an unknown host key and must be trusted ahead of time via `~/.ssh/known_hosts`. (#68199)
+- CLI/configure: show the channel picker before probing statuses and let remove mode delete configured channel blocks directly from config. (#68007) Thanks @gumadeiras.
+- OpenAI Codex/OAuth: keep OpenClaw as the canonical owner for imported Codex CLI OAuth sessions, stop writing refreshed credentials back into `.codex`, and prefer fresher OpenClaw credentials over stale imported CLI state so refresh recovery stays stable. Thanks @vincentkoc.
+- OpenAI Codex/OAuth: treat the OpenAI TLS prerequisites probe as advisory instead of a hard blocker, so Codex sign-in can still proceed when the speculative Node/OpenSSL precheck fails but the real OAuth flow still works. Thanks @vincentkoc.
+- Models status/OAuth health: align OAuth health reporting with the same effective credential view runtime uses, so expired refreshable sessions stop showing healthy by default and fresher imported Codex CLI credentials surface correctly in `models status`, doctor, and gateway auth status. Thanks @vincentkoc.
+- OpenAI Codex/OAuth: keep external CLI OAuth imports runtime-only by overlaying fresher Codex CLI credentials without mutating `auth-profiles.json`, so `.codex` stays a bootstrap/runtime input instead of becoming durable OpenClaw state. Thanks @vincentkoc.
+- OpenAI Codex/OAuth: drop legacy CLI-manager routing from the remaining bootstrap path so Codex and MiniMax CLI imports are matched by their canonical OpenClaw profile ids instead of stale `managedBy` metadata. Thanks @vincentkoc.
+- Twitch/setup: load Twitch through the bundled setup-entry discovery path and keep setup/status account detection aligned with runtime config. (#68008) Thanks @gumadeiras.
+- Feishu/card actions: resolve card-action chat type from the Feishu chat API when stored context is missing, preferring `chat_mode` over `chat_type`, so DM-originated card actions no longer bypass `dmPolicy` by falling through to the group handling path. (#68201)
+- Cron/isolated-agent: preserve `trusted: false` on isolated cron awareness events mirrored into the main session, and forward the optional `trusted` flag through the gateway cron wrapper so explicit trust downgrades survive session-key scoping. (#68210)
+- Agents/fallback: recognize bare leading ZenMux `402 ...` quota-refresh errors without misclassifying plain numeric `402 ...` text, and keep the embedded fallback regression coverage stable. (#47579) Thanks @bwjoke.
+- Failover/google: only treat `INTERNAL` status payloads as retryable timeouts when they also carry a `500` code, so malformed non-500 payloads do not enter the retry path. (#68238) Thanks @altaywtf and @Openbling.
+- Agents/tools: filter bundled MCP/LSP tools through the final owner-only and tool-policy pipeline after merging them into the effective tool list, so existing allowlists, deny rules, sandbox policy, subagent policy, and owner-only restrictions apply to bundled tools the same way they apply to core tools. (#68195)
+- Gateway/assistant media: require `operator.read` scope for assistant-media file and metadata requests on identity-bearing HTTP auth paths so callers without a read scope can no longer access assistant media. (#68175) Thanks @eleqtrizit.
 
 ## 2026.4.15
 
@@ -117,6 +145,7 @@ Docs: https://docs.openclaw.ai
 - Webchat/security: reject remote-host `file://` URLs in the media embedding path. (#67293) Thanks @pgondhi987.
 - Dreaming/memory-core: use the ingestion day, not the source file day, for daily recall dedupe so repeat sweeps of the same daily note can increment `dailyCount` across days instead of stalling at `1`. (#67091) Thanks @Bartok9.
 - Node-host/tools.exec: let approval binding distinguish known native binaries from mutable shell payload files, while still fail-closing unknown or racy file probes so absolute-path node-host commands like `/usr/bin/whoami` no longer get rejected as unsafe interpreter/runtime commands. (#66731) Thanks @tmimmanuel.
+- Codex/gateway: fix gateway crash when the codex-acp subprocess terminates abruptly; an unhandled EPIPE on the child stdin stream now routes through graceful client shutdown, rejecting pending requests instead of propagating as an uncaught exception that crashes the entire gateway daemon and all connected channels. Fixes #67886. (#67947) thanks @openperf
 
 ## 2026.4.14
 
