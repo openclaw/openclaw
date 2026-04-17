@@ -126,6 +126,20 @@ export type AppViewState = {
   /** Inline-revise textarea state (no popup). */
   planApprovalReviseOpen: boolean;
   planApprovalReviseDraft: string;
+  /**
+   * PR-8 follow-up: most recent live-plan markdown rendered into the
+   * sidebar, kept in sync by `refreshLivePlanSidebar()`. Surfaced so the
+   * chat-controls "Plan view" button + `/plan view` slash command can
+   * re-open the sidebar with current content even if the user closed it.
+   * `null` until the agent calls `update_plan` at least once.
+   */
+  latestPlanMarkdown: string | null;
+  /**
+   * Toggle the plan-view sidebar — opens with the current `latestPlanMarkdown`
+   * (or a placeholder when no plan exists yet), closes if it's already showing.
+   * Used by the chat-controls Plan view button and `/plan view` slash command.
+   */
+  togglePlanViewSidebar: () => void;
   pendingGatewayUrl: string | null;
   configLoading: boolean;
   configRaw: string;

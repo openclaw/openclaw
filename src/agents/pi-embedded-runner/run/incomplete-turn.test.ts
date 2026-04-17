@@ -33,7 +33,7 @@ function makeAttempt(overrides: AttemptOverrides = {}) {
       typeof resolvePlanModeAckOnlyRetryInstruction
     >[0]["attempt"]["lastAssistant"],
     toolMetas: [] as Array<{ toolName: string; meta?: string }>,
-    replayMetadata: { hadPotentialSideEffects: false, replayInvalid: false },
+    replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     ...overrides,
   } as Parameters<typeof resolvePlanModeAckOnlyRetryInstruction>[0]["attempt"];
 }
@@ -191,7 +191,7 @@ describe("resolvePlanModeAckOnlyRetryInstruction", () => {
       aborted: false,
       timedOut: false,
       attempt: makeAttempt({
-        replayMetadata: { hadPotentialSideEffects: true, replayInvalid: false },
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
       }),
       retryAttemptIndex: 0,
     });
