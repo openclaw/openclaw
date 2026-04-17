@@ -35,6 +35,7 @@ import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildZaiModelDefinition } from "./model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from "./onboard.js";
+import { createZaiSessionIdHeaderWrapper } from "./stream.js";
 
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
@@ -133,26 +134,24 @@ function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
   let streamFn = createToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false);
   const preserveThinking = shouldPreserveZaiThinking(ctx.extraParams);
 
-  if (!isDisabledThinkingLevel(ctx.thinkingLevel) && !preserveThinking) {
-    return streamFn;
+  if (isDisabledThinkingLevel(ctx.thinkingLevel) || preserveThinking) {
+    streamFn = createPayloadPatchStreamWrapper(streamFn, ({ payload, model }) => {
+      if (model.api !== "openai-completions" || model.provider !== PROVIDER_ID) {
+        return;
+      }
+
+      if (isDisabledThinkingLevel(ctx.thinkingLevel)) {
+        payload.thinking = { type: "disabled" };
+        return;
+      }
+
+      if (preserveThinking) {
+        payload.thinking = { type: "enabled", clear_thinking: false };
+      }
+    });
   }
 
-  streamFn = createPayloadPatchStreamWrapper(streamFn, ({ payload, model }) => {
-    if (model.api !== "openai-completions" || model.provider !== PROVIDER_ID) {
-      return;
-    }
-
-    if (isDisabledThinkingLevel(ctx.thinkingLevel)) {
-      payload.thinking = { type: "disabled" };
-      return;
-    }
-
-    if (preserveThinking) {
-      payload.thinking = { type: "enabled", clear_thinking: false };
-    }
-  });
-
-  return streamFn;
+  return createZaiSessionIdHeaderWrapper(streamFn);
 }
 
 async function promptForZaiEndpoint(ctx: ProviderAuthContext): Promise<ZaiEndpointId> {
