@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+- Agents/ZAI: auto-inject an `X-Session-Id` request header on z.ai (GLM) provider calls from the agent `sessionId` so the z.ai load balancer keeps prefix-identical turns on the same inference node, raising prompt-cache hit rate for long sessions. Per ZhipuAI support team's recommended best practice for prompt cache stickiness; analogous to OpenAI's `prompt_cache_key` and xAI's `x-grok-conv-id`. No-ops for missing, empty, whitespace-only, or >256-char session ids.
+
 ## 2026.4.22
 
 ### Changes
@@ -366,7 +372,6 @@ Docs: https://docs.openclaw.ai
 - WhatsApp/multi-account: centralize named-account inbound policy, isolate per-account group activation and scoped session keys, preserve legacy activation backfill, and keep `accounts.default` shared defaults aligned across runtime, setup, and compat migration paths. Thanks @mcaxtr.
 - Cron/delivery: clean up isolated sessions after direct deliveries when `deleteAfterRun` is enabled, covering structured and threaded branches that previously bypassed cleanup. (#67807) Thanks @MonkeyLeeT.
 - Gateway/hello-ok: always report negotiated auth metadata and preserve scopes for reused device tokens on successful shared-auth handshakes, including control-ui bypass coverage when no device token is issued. (#67810, #68039) Thanks @BunsDev.
-- Agents/ZAI: auto-inject an `X-Session-Id` request header on z.ai (GLM) provider calls from the agent `sessionId` so the z.ai load balancer keeps prefix-identical turns on the same inference node, raising prompt-cache hit rate for long sessions. Per ZhipuAI support team's recommended best practice for prompt cache stickiness; analogous to OpenAI's `prompt_cache_key` and xAI's `x-grok-conv-id`. No-ops for missing, empty, whitespace-only, or >256-char session ids.
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.
 - OpenAI Codex/Responses: unify native Responses API capability detection so Codex OAuth requests emit the required `store: false` field on the native Responses path. (#67918) Thanks @obviyus.
 - WhatsApp/setup: guard personal-phone and allowlist prompt values so setup fails with clear validation errors instead of crashing on undefined prompt text. (#67895) Thanks @lawrence3699.
