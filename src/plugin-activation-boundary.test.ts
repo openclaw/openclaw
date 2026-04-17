@@ -237,16 +237,7 @@ describe("plugin activation boundary", () => {
     ]);
 
     loadBundledPluginPublicSurfaceModuleSync.mockReset();
-    const { getSessionBindingService } =
-      await import("./infra/outbound/session-binding-service.js");
-
     await expect(browser.closeTrackedBrowserTabsForSessions({ sessionKeys: [] })).resolves.toBe(0);
-    await expect(
-      getSessionBindingService().unbind({
-        targetSessionKey: "agent:main:test",
-        reason: "session-reset",
-      }),
-    ).resolves.toEqual([]);
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 });

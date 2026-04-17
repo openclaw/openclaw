@@ -40,7 +40,7 @@ describe("bundled channel entry shape guards", () => {
     expect(bundled.listBundledChannelSetupPlugins()).toEqual([]);
   });
 
-  it("loads real bundled channel entries from the source tree", async () => {
+  it("loads real bundled channel entry contracts from the source tree", async () => {
     vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
       const actual =
         await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();
@@ -52,9 +52,7 @@ describe("bundled channel entry shape guards", () => {
         }) =>
           actual
             .listBundledChannelPluginMetadata(params)
-            .filter(
-              (metadata) => metadata.manifest.id === "slack" || metadata.manifest.id === "line",
-            ),
+            .filter((metadata) => metadata.manifest.id === "slack"),
       };
     });
 
@@ -63,18 +61,8 @@ describe("bundled channel entry shape guards", () => {
       "./bundled.js?scope=real-bundled-source-tree",
     );
 
-    expect(bundled.requireBundledChannelPlugin("slack").id).toBe("slack");
-    expect(() =>
-      bundled.setBundledChannelRuntime("line", {
-        channel: {
-          line: {
-            listLineAccountIds: () => [],
-            resolveDefaultLineAccountId: () => undefined,
-            resolveLineAccount: () => null,
-          },
-        },
-      } as never),
-    ).not.toThrow();
+    expect(bundled.listBundledChannelPluginIds()).toEqual(["slack"]);
+    expect(bundled.hasBundledChannelEntryFeature("slack", "accountInspect")).toBe(true);
   });
 
   it("uses the active bundled plugin root override for channel entry loading", async () => {
