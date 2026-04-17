@@ -4,7 +4,8 @@ Seed QA assets for the private `qa-lab` extension.
 
 Files:
 
-- `scenarios.md` - canonical QA scenario pack, kickoff mission, and operator identity.
+- `scenarios/index.md` - canonical QA scenario pack, kickoff mission, and operator identity.
+- `scenarios/<theme>/*.md` - one runnable scenario per markdown file.
 - `frontier-harness-plan.md` - big-model bakeoff and tuning loop for harness work.
 - `convex-credential-broker/` - standalone Convex v1 lease broker for pooled live credentials.
 

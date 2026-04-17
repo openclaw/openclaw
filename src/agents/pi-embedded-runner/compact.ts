@@ -465,6 +465,7 @@ export async function compactEmbeddedPiSessionDirect(
       sessionId: params.sessionId,
       warn: makeBootstrapWarn({
         sessionLabel,
+        workspaceDir: effectiveWorkspace,
         warn: (message) => log.warn(message),
       }),
     });
@@ -773,6 +774,8 @@ export async function compactEmbeddedPiSessionDirect(
       const sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
+        config: params.config,
+        contextWindowTokens: ctxInfo.tokens,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
         allowedToolNames,
       });

@@ -137,6 +137,10 @@ const qaSeedScenarioSchema = z.object({
   id: z.string().trim().min(1),
   title: z.string().trim().min(1),
   surface: z.string().trim().min(1),
+  category: z.string().trim().min(1).optional(),
+  capabilities: z.array(z.string().trim().min(1)).optional(),
+  lane: z.record(z.string(), z.union([z.boolean(), z.string()])).optional(),
+  riskLevel: z.string().trim().min(1).optional(),
   objective: z.string().trim().min(1),
   successCriteria: z.array(z.string().trim().min(1)).min(1),
   plugins: z.array(z.string().trim().min(1)).optional(),
@@ -223,14 +227,6 @@ function readTextFile(relativePath: string): string {
     return "";
   }
   return fs.readFileSync(resolved, "utf8");
-}
-
-function readDirEntries(relativePath: string): string[] {
-  const resolved = resolveRepoPath(relativePath, "directory");
-  if (!resolved) {
-    return [];
-  }
-  return fs.readdirSync(resolved);
 }
 
 function extractQaPackYaml(content: string) {
@@ -324,6 +320,13 @@ export function readQaScenarioPack(): QaScenarioPack {
       } satisfies QaSeedScenarioWithSource;
     })(),
   );
+  const seenScenarioIds = new Set<string>();
+  for (const scenario of scenarios) {
+    if (seenScenarioIds.has(scenario.id)) {
+      throw new Error(`duplicate qa scenario id: ${scenario.id}`);
+    }
+    seenScenarioIds.add(scenario.id);
+  }
   return {
     ...parsedPack,
     scenarios,
@@ -331,10 +334,37 @@ export function readQaScenarioPack(): QaScenarioPack {
 }
 
 export function listQaScenarioMarkdownPaths(): string[] {
-  return readDirEntries(QA_SCENARIO_DIR_PATH)
-    .filter((entry) => entry.endsWith(".md") && entry !== "index.md")
-    .map((entry) => `${QA_SCENARIO_DIR_PATH}/${entry}`)
-    .toSorted();
+  const resolved = resolveRepoPath(QA_SCENARIO_DIR_PATH, "directory");
+  if (!resolved) {
+    return [];
+  }
+  return listQaScenarioMarkdownPathsInDirectory(resolved, QA_SCENARIO_DIR_PATH).toSorted();
+}
+
+function listQaScenarioMarkdownPathsInDirectory(
+  absoluteDir: string,
+  relativeDir: string,
+): string[] {
+  const paths: string[] = [];
+  const entries = fs
+    .readdirSync(absoluteDir, { withFileTypes: true })
+    .toSorted((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) {
+      continue;
+    }
+    const relativePath = `${relativeDir}/${entry.name}`;
+    if (entry.isDirectory()) {
+      paths.push(
+        ...listQaScenarioMarkdownPathsInDirectory(path.join(absoluteDir, entry.name), relativePath),
+      );
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith(".md") && entry.name !== "index.md") {
+      paths.push(relativePath);
+    }
+  }
+  return paths;
 }
 
 export function readQaScenarioOverviewMarkdown(): string {

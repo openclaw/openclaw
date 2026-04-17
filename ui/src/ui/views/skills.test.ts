@@ -98,34 +98,14 @@ describe("renderSkills", () => {
     }
   });
 
-  it("opens the skill detail dialog as a modal", async () => {
+  it("opens the skill detail dialog as a modal and routes close events", async () => {
     const container = document.createElement("div");
+    const onDetailClose = vi.fn();
     const showModal = vi.fn(function (this: HTMLDialogElement) {
       this.setAttribute("open", "");
     });
+
     installDialogMethod("showModal", showModal);
-
-    render(
-      renderSkills(
-        createProps({
-          detailKey: "repo-skill",
-        }),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    expect(showModal).toHaveBeenCalledTimes(1);
-    expect(container.querySelector("dialog")?.hasAttribute("open")).toBe(true);
-  });
-
-  it("closes the skill detail dialog through the dialog close event", async () => {
-    const container = document.createElement("div");
-    const onDetailClose = vi.fn();
-
-    installDialogMethod("showModal", function (this: HTMLDialogElement) {
-      this.setAttribute("open", "");
-    });
     installDialogMethod("close", function (this: HTMLDialogElement) {
       this.removeAttribute("open");
       this.dispatchEvent(new Event("close"));
@@ -141,6 +121,9 @@ describe("renderSkills", () => {
       container,
     );
     await Promise.resolve();
+
+    expect(showModal).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("dialog")?.hasAttribute("open")).toBe(true);
 
     container.querySelector<HTMLButtonElement>(".md-preview-dialog__header .btn")?.click();
 
