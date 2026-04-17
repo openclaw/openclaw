@@ -416,6 +416,120 @@ struct MacNodeRuntimeTests {
                 "UNAVAILABLE: screen snapshot payload too large; reduce maxWidth or use jpeg")
     }
 
+    @Test
+    func `handle invoke screen snapshot rejects frames whose serialized envelope exceeds transport ceiling`()
+        async throws
+    {
+        // 12 MiB of 0xFF bytes base64-encodes to a string composed entirely
+        // of `/` characters. This raw size comfortably passes the cheap
+        // pre-capture lower bound (~19.66 MiB), but the inner JSON + the
+        // outer `node.invoke.result` RequestFrame's JSON-string wrapping
+        // balloon the serialized WebSocket frame well past the 25 MiB
+        // transport ceiling — exactly the Codex "slash escape + envelope
+        // overhead" case. The old raw-byte-only guard would have let this
+        // through.
+        let payloadSize = 12 * 1024 * 1024
+
+        @MainActor
+        final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            let payload: Data
+
+            init(payloadSize: Int) {
+                self.payload = Data(repeating: 0xFF, count: payloadSize)
+            }
+
+            func snapshotScreen(
+                screenIndex: Int?,
+                maxWidth: Int?,
+                quality: Double?,
+                format: OpenClawScreenSnapshotFormat?) async throws
+                -> (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+            {
+                _ = screenIndex
+                _ = maxWidth
+                _ = quality
+                _ = format
+                return (payload, .png, 4000, 3000)
+            }
+
+            func recordScreen(
+                screenIndex: Int?,
+                durationMs: Int?,
+                fps: Double?,
+                includeAudio: Bool?,
+                outPath: String?) async throws -> (path: String, hasAudio: Bool)
+            {
+                let url = FileManager().temporaryDirectory
+                    .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")
+                try Data("ok".utf8).write(to: url)
+                return (path: url.path, hasAudio: false)
+            }
+
+            func locationAuthorizationStatus() -> CLAuthorizationStatus { .authorizedAlways }
+            func locationAccuracyAuthorization() -> CLAccuracyAuthorization { .fullAccuracy }
+            func currentLocation(
+                desiredAccuracy: OpenClawLocationAccuracy,
+                maxAgeMs: Int?,
+                timeoutMs: Int?) async throws -> CLLocation
+            {
+                _ = desiredAccuracy
+                _ = maxAgeMs
+                _ = timeoutMs
+                return CLLocation(latitude: 0, longitude: 0)
+            }
+        }
+
+        let runtime = MacNodeRuntime(
+            makeMainActorServices: { await MainActor.run { FakeMainActorServices(payloadSize: payloadSize) } })
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-screen-snapshot-frame-too-large",
+                command: MacNodeScreenCommand.snapshot.rawValue))
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .unavailable)
+        #expect(
+            response.error?.message ==
+                "UNAVAILABLE: screen snapshot payload too large; reduce maxWidth or use jpeg")
+    }
+
+    @Test func `projected outer frame bytes bounds real serialized node invoke result frame`() throws {
+        // Sanity check that `projectedOuterFrameBytes(forPayloadJSON:)` stays
+        // above the real serialized size of a `node.invoke.result`-shaped
+        // frame that wraps the inner payloadJSON as a JSON string. The inner
+        // payload is deliberately seeded with `"`, `\`, and `/` bytes so the
+        // outer encoder has to emit escapes — this is the regression case the
+        // Codex P1/P2 comments flagged, where raw-byte ceilings alone miss
+        // the JSON escape expansion applied at wrap time.
+        let inner = #"{"format":"png","base64":"///AAA\/\\","width":1,"height":1,"capturedAtMs":0}"#
+        let projected = MacNodeRuntime.projectedOuterFrameBytes(forPayloadJSON: inner)
+
+        struct Frame: Encodable {
+            let type: String
+            let id: String
+            let method: String
+            let params: Params
+            struct Params: Encodable {
+                let id: String
+                let nodeId: String
+                let ok: Bool
+                let payloadJSON: String
+            }
+        }
+        let frame = Frame(
+            type: "req",
+            id: UUID().uuidString,
+            method: "node.invoke.result",
+            params: Frame.Params(
+                id: UUID().uuidString,
+                nodeId: UUID().uuidString,
+                ok: true,
+                payloadJSON: inner))
+        let serialized = try JSONEncoder().encode(frame)
+
+        #expect(projected >= serialized.count)
+    }
+
     @Test func `handle invoke browser proxy uses injected request`() async {
         let runtime = MacNodeRuntime(browserProxyRequest: { paramsJSON in
             #expect(paramsJSON?.contains("/tabs") == true)

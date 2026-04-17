@@ -5,9 +5,21 @@ import OpenClawKit
 
 actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
-    private static let maxScreenSnapshotEnvelopeReserveBytes = 1024
-    private static let maxScreenSnapshotImageBytes =
-        ((maxGatewayPayloadBytes - maxScreenSnapshotEnvelopeReserveBytes) / 4) * 3
+    // Fixed budget reserved for the outer `node.invoke.result` RequestFrame
+    // envelope (type/id/method/params/id/nodeId/ok/payloadJSON keys, braces,
+    // quotes, and UUID-shaped values). Comfortably overestimates the ~350 B
+    // typical envelope so the precise post-encode check has slack for longer
+    // nodeId or error-object drift.
+    private static let maxScreenSnapshotOuterFrameReserveBytes = 1024
+    // Cheap lower-bound used to short-circuit obviously over-budget raw
+    // snapshots before we pay for base64 + JSON encoding. Anything at or above
+    // this threshold would overflow the 25 MiB transport ceiling from base64
+    // expansion alone, independent of any JSON escape overhead. Snapshots
+    // under this cap still need the precise post-encode check because JSON
+    // string escaping of `"`, `\`, and `/` in the inner payloadJSON adds
+    // further overhead when it is wrapped as a string in the outer frame.
+    private static let maxScreenSnapshotRawDataPrecheckBytes =
+        ((maxGatewayPayloadBytes - maxScreenSnapshotOuterFrameReserveBytes) / 4) * 3
     private let cameraCapture = CameraCaptureService()
     private let makeMainActorServices: () async -> any MacNodeRuntimeMainActorServices
     private let browserProxyRequest: @Sendable (String?) async throws -> String
@@ -387,7 +399,7 @@ actor MacNodeRuntime {
                 code: .unavailable,
                 message: "UNAVAILABLE: screen snapshot failed")
         }
-        if res.data.count > Self.maxScreenSnapshotImageBytes {
+        if res.data.count > Self.maxScreenSnapshotRawDataPrecheckBytes {
             return Self.errorResponse(
                 req,
                 code: .unavailable,
@@ -408,6 +420,12 @@ actor MacNodeRuntime {
             height: res.height,
             screenIndex: params.screenIndex,
             capturedAtMs: capturedAtMs))
+        if Self.projectedOuterFrameBytes(forPayloadJSON: payload) > Self.maxGatewayPayloadBytes {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "UNAVAILABLE: screen snapshot payload too large; reduce maxWidth or use jpeg")
+        }
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
@@ -1005,6 +1023,27 @@ extension MacNodeRuntime {
             ])
         }
         return json
+    }
+
+    // Project the serialized byte count of the outer `node.invoke.result`
+    // RequestFrame when `payload` is embedded as a JSON string in its
+    // `payloadJSON` field. The outer `JSONEncoder` escapes `"`, `\`, and `/`
+    // by default, so every such byte in `payload` consumes 2 outer bytes
+    // instead of 1. This captures both the JSON-string wrapping of the inner
+    // payload and any `\/` sequences the inner encoder already emitted for
+    // base64 `/` characters, so the result stays above the actual serialized
+    // WebSocket frame size regardless of per-platform JSONEncoder escape
+    // settings.
+    static func projectedOuterFrameBytes(forPayloadJSON payload: String) -> Int {
+        let utf8 = payload.utf8
+        var escapeOverhead = 0
+        for byte in utf8 where byte == UInt8(ascii: "\"")
+            || byte == UInt8(ascii: "\\")
+            || byte == UInt8(ascii: "/")
+        {
+            escapeOverhead += 1
+        }
+        return maxScreenSnapshotOuterFrameReserveBytes + utf8.count + escapeOverhead
     }
 
     private nonisolated static func canvasEnabled() -> Bool {
