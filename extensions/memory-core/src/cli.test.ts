@@ -384,6 +384,46 @@ describe("memory cli", () => {
     });
   });
 
+  it("reads dreaming config from the selected memory slot during status", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      loadConfig.mockReturnValue({
+        plugins: {
+          slots: { memory: "memory-lancedb-pro" },
+          entries: {
+            "memory-lancedb-pro": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  cron: "0 3 * * *",
+                },
+              },
+            },
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: false,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status"]);
+
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: 0 3 * * *"));
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");

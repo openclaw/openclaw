@@ -121,7 +121,9 @@ function emitMemorySecretResolveDiagnostics(
 }
 
 function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
-  const entry = asRecord(cfg.plugins?.entries?.["memory-core"]);
+  const configuredSlot = typeof cfg.plugins?.slots?.memory === "string" ? cfg.plugins.slots.memory.trim() : "";
+  const pluginId = configuredSlot || "memory-core";
+  const entry = asRecord(cfg.plugins?.entries?.[pluginId]);
   return asRecord(entry?.config) ?? {};
 }
 
