@@ -110,8 +110,6 @@ export function buildDynamicOpenRouterModel(modelId: string): ModelDefinitionCon
     id: modelId,
     name: caps?.name ?? modelId,
     api: "openai-completions",
-    provider: "openrouter",
-    baseUrl: OPENROUTER_BASE_URL,
     reasoning: caps?.reasoning ?? false,
     input: caps?.input ?? ["text"],
     cost: caps?.cost ?? OPENROUTER_DEFAULT_COST,
