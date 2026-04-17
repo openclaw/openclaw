@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import "../test-helpers/load-styles.ts";
 import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
 registerAppMountHooks();
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function mountApp(pathname: string) {
   return mountTestApp(pathname);
@@ -375,6 +379,10 @@ describe("control UI routing", () => {
   });
 
   it("auto-scrolls chat history to the latest message", async () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      queueMicrotask(() => callback(performance.now()));
+      return 1;
+    });
     const app = mountApp("/chat");
     await app.updateComplete;
 
@@ -407,9 +415,9 @@ describe("control UI routing", () => {
       scrollTop = Math.max(0, Math.min(top, 2400 - 180));
     }) as typeof initialContainer.scrollTo;
 
-    app.chatMessages = Array.from({ length: 60 }, (_, index) => ({
+    app.chatMessages = Array.from({ length: 3 }, (_, index) => ({
       role: "assistant",
-      content: `Line ${index} - ${"x".repeat(200)}`,
+      content: `Line ${index}`,
       timestamp: Date.now() + index,
     }));
 
@@ -451,8 +459,8 @@ describe("control UI routing", () => {
       ...app.chatMessages,
       {
         role: "assistant",
-        content: `Line 60 - ${"x".repeat(200)}`,
-        timestamp: Date.now() + 60,
+        content: "Line 3",
+        timestamp: Date.now() + 3,
       },
     ];
     await app.updateComplete;

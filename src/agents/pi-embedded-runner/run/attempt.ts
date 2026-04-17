@@ -1,6 +1,6 @@
-import path from "node:path";
 import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
@@ -52,7 +52,6 @@ import {
   resolveBootstrapContextForRun,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
-import { resolveBootstrapMode } from "../../bootstrap-mode.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   listChannelSupportedActions,
@@ -114,7 +113,6 @@ import {
 import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
-import { buildAgentUserPromptPrefix } from "../../system-prompt.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import {
@@ -182,6 +180,11 @@ import { splitSdkTools } from "../tool-split.js";
 import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
+import {
+  resolveAttemptWorkspaceBootstrapRouting,
+  shouldStripBootstrapFromEmbeddedContext,
+} from "./attempt-bootstrap-routing.js";
+export { shouldStripBootstrapFromEmbeddedContext } from "./attempt-bootstrap-routing.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import {
   assembleAttemptContextEngine,
@@ -318,12 +321,6 @@ export function resolveUnknownToolGuardThreshold(loopDetection?: {
   return UNKNOWN_TOOL_THRESHOLD;
 }
 
-export function shouldStripBootstrapFromEmbeddedContext(_params: {
-  bootstrapMode: "full" | "limited" | "none";
-}): boolean {
-  return true;
-}
-
 export function isPrimaryBootstrapRun(sessionKey?: string): boolean {
   return !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey);
 }
@@ -338,8 +335,7 @@ export function remapInjectedContextFilesToWorkspace(params: {
   }
   return params.files.map((file) => {
     const relative = path.relative(params.sourceWorkspaceDir, file.path);
-    const canRemap =
-      relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+    const canRemap = relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
     return canRemap
       ? {
           ...file,
@@ -484,8 +480,6 @@ export async function runEmbeddedAttempt(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config);
-    // Bootstrap lifecycle is owned by the canonical workspace, not a copied sandbox view.
-    const workspaceBootstrapPending = await isWorkspaceBootstrapPending(resolvedWorkspace);
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
     const toolsRaw = params.disableTools
       ? []
@@ -555,20 +549,20 @@ export async function runEmbeddedAttempt(
           return allTools;
         })();
     const toolsEnabled = supportsModelTools(params.model);
-    const bootstrapRunKind = params.bootstrapContextRunKind ?? "default";
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
-    const bootstrapMode = resolveBootstrapMode({
-      bootstrapPending: workspaceBootstrapPending,
-      runKind: bootstrapRunKind,
-      isInteractiveUserFacing: params.trigger === "user" || params.trigger === "manual",
+    const bootstrapRouting = await resolveAttemptWorkspaceBootstrapRouting({
+      isWorkspaceBootstrapPending,
+      bootstrapContextRunKind: params.bootstrapContextRunKind,
+      trigger: params.trigger,
+      sessionKey: params.sessionKey,
       isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
-      isCanonicalWorkspace:
-        (params.isCanonicalWorkspace ?? true) && effectiveWorkspace === resolvedWorkspace,
+      isCanonicalWorkspace: params.isCanonicalWorkspace,
+      effectiveWorkspace,
+      resolvedWorkspace,
       hasBootstrapFileAccess: bootstrapHasFileAccess,
     });
-    const shouldStripBootstrapFromContext = shouldStripBootstrapFromEmbeddedContext({
-      bootstrapMode,
-    });
+    const bootstrapMode = bootstrapRouting.bootstrapMode;
+    const shouldStripBootstrapFromContext = bootstrapRouting.shouldStripBootstrapFromContext;
     const {
       bootstrapFiles: hookAdjustedBootstrapFiles,
       contextFiles: resolvedContextFiles,
@@ -576,7 +570,7 @@ export async function runEmbeddedAttempt(
     } = await resolveAttemptBootstrapContext({
       contextInjectionMode,
       bootstrapContextMode: params.bootstrapContextMode,
-      bootstrapContextRunKind: bootstrapRunKind,
+      bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
       bootstrapMode,
       sessionFile: params.sessionFile,
       hasCompletedBootstrapTurn,
@@ -927,9 +921,7 @@ export async function runEmbeddedAttempt(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
-    const userPromptPrefixText = buildAgentUserPromptPrefix({
-      bootstrapMode,
-    });
+    const userPromptPrefixText = bootstrapRouting.userPromptPrefixText;
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;

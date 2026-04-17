@@ -3,5 +3,6 @@
 
 export {
   fetchWithRuntimeDispatcher,
+  isMockedFetch,
   type DispatcherAwareRequestInit,
 } from "../infra/net/runtime-fetch.js";
