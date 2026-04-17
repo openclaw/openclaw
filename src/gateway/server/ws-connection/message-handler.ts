@@ -1217,6 +1217,7 @@ export function attachGatewayWsMessageHandler(params: {
           canvasHostUrl && canvasCapability
             ? (buildCanvasScopedHostUrl(canvasHostUrl, canvasCapability) ?? canvasHostUrl)
             : canvasHostUrl;
+        const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
         const helloOk = {
           type: "hello-ok",
           protocol: PROTOCOL_VERSION,
@@ -1229,7 +1230,7 @@ export function attachGatewayWsMessageHandler(params: {
           canvasHostUrl: scopedCanvasHostUrl,
           auth: {
             role,
-            scopes,
+            scopes: helloOkAuthScopes,
             ...(deviceToken
               ? {
                   deviceToken: deviceToken.token,
