@@ -186,15 +186,25 @@ async fn get_metrics(state: State<'_, GatewayState>) -> Result<GatewayMetrics, S
     Ok(metrics)
 }
 
-fn drain_stream<R: std::io::Read + Send + 'static>(stream: R, prefix: &'static str) {
-    thread::spawn(move || {
-        let reader = BufReader::new(stream);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                log::info!("[OUT] {} {}", prefix, line);
+fn drain_stream<R: std::io::Read + Send + 'static>(stream: R, prefix: &'static str, is_error: bool) {
+    let thread_name = format!("drain-{}", prefix.to_lowercase().replace(':', ""));
+    let _ = thread::Builder::new()
+        .name(thread_name)
+        .spawn(move || {
+            let reader = BufReader::new(stream);
+            for line in reader.lines() {
+                match line {
+                    Ok(l) => {
+                        if is_error {
+                            log::warn!("[{}] {}", prefix, l);
+                        } else {
+                            log::info!("[{}] {}", prefix, l);
+                        }
+                    }
+                    Err(e) => log::trace!("Stream error for {}: {}", prefix, e),
+                }
             }
-        }
-    });
+        });
 }
 
 fn spawn_gateway(app: AppHandle, state: GatewayState) -> Result<String, String> {
@@ -215,10 +225,10 @@ fn spawn_gateway(app: AppHandle, state: GatewayState) -> Result<String, String> 
     let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn: {}", e))?;
     
     if let Some(stdout) = child.stdout.take() {
-        drain_stream(stdout, "STDOUT:");
+        drain_stream(stdout, "STDOUT:", false);
     }
     if let Some(stderr) = child.stderr.take() {
-        drain_stream(stderr, "STDERR:");
+        drain_stream(stderr, "STDERR:", true);
     }
 
     let mut process_guard = state.process.lock().map_err(|e| e.to_string())?;
@@ -268,46 +278,49 @@ fn watchdog_thread(app: AppHandle, state: GatewayState, session_id: u32) {
         let port = get_gateway_port();
         let _ = ureq::get(&format!("http://localhost:{}/health", port)).timeout(Duration::from_secs(2)).call();
         
-        let mut process_lock = match state.process.lock() {
-            Ok(guard) => guard,
-            Err(_) => break, // Poisoned
-        };
-        
-        if let Some(ref mut child) = *process_lock {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    // Process exited unexpectedly
-                    drop(process_lock);
-                    
-                    let count = state.restart_count.fetch_add(1, Ordering::SeqCst) + 1;
-                    
-                    if count > max_restarts {
-                        show_notification(&app, "OpenClaw Gateway", 
-                            "Critical error. Gateway crashed multiple times. Manual restart required.");
-                        if let Ok(mut final_lock) = state.process.lock() {
-                            let _ = final_lock.take();
-                        }
-                        break;
-                    }
-                    
-                    log::error!("Gateway exited with code {:?}. Restart attempt {}/{}", status.code(), count, max_restarts);
-                    
-                    // Exponential backoff
-                    thread::sleep(Duration::from_secs(5 * (1 << (count - 1))));
-                    last_start = Instant::now();
-                    if let Err(e) = spawn_gateway(app.clone(), state.clone()) {
-                        log::error!("Restart failed: {}", e);
-                        show_notification(&app, "Restart Error", &format!("Failed to restart gateway: {}", e));
-                        continue;
-                    }
-                    break; 
-                }
-                Ok(None) => {} // Still running
-                Err(_) => break,
+        let (needs_restart, exit_code) = {
+            let mut process_lock = match state.process.lock() {
+                Ok(guard) => guard,
+                Err(_) => break, // Poisoned
+            };
+
+            match *process_lock {
+                Some(ref mut child) => match child.try_wait() {
+                    Ok(Some(status)) => (true, status.code()),
+                    Ok(None) => (false, None),
+                    Err(_) => (true, None),
+                },
+                None => (true, None),
             }
-        } else {
-            // state.process is None, which means it was stopped manually
-            break; 
+        };
+
+        if needs_restart {
+            let count = state.restart_count.fetch_add(1, Ordering::SeqCst) + 1;
+
+            if count > max_restarts {
+                show_notification(&app, "OpenClaw Gateway",
+                    "Critical error. Gateway crashed multiple times. Manual restart required.");
+                if let Ok(mut final_lock) = state.process.lock() {
+                    let _ = final_lock.take();
+                }
+                break;
+            }
+
+            if let Some(code) = exit_code {
+                log::error!("Gateway exited with code {:?}. Restart attempt {}/{}", code, count, max_restarts);
+            } else {
+                log::error!("Gateway is not running. Restart attempt {}/{}", count, max_restarts);
+            }
+
+            // Exponential backoff
+            thread::sleep(Duration::from_secs(5 * (1 << (count - 1))));
+            last_start = Instant::now();
+            if let Err(e) = spawn_gateway(app.clone(), state.clone()) {
+                log::error!("Restart failed: {}", e);
+                show_notification(&app, "Restart Error", &format!("Failed to restart gateway: {}", e));
+                continue;
+            }
+            break; // New watchdog session created by spawn_gateway, this one can retire
         }
     }
 }
