@@ -6,10 +6,7 @@ import type {
 } from "../../../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { LineProbeResult } from "../../../src/plugin-sdk/line.js";
-import {
-  loadBundledPluginApiSync,
-  loadBundledPluginContractApiSync,
-} from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { loadBundledPluginContractApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { withEnvAsync } from "../../../src/test-utils/env.js";
 
 type DiscordContractApiSurface = Pick<
@@ -31,12 +28,15 @@ type TelegramContractApiSurface = Pick<
 >;
 type TelegramProbe = import("@openclaw/telegram/api.js").TelegramProbe;
 type TelegramTokenResolution = import("@openclaw/telegram/api.js").TelegramTokenResolution;
-type WhatsAppApiSurface = typeof import("@openclaw/whatsapp/api.js");
+type WhatsAppContractApiSurface = Pick<
+  typeof import("@openclaw/whatsapp/contract-api.js"),
+  "listWhatsAppDirectoryPeersFromConfig" | "listWhatsAppDirectoryGroupsFromConfig"
+>;
 
 let discordContractApi: DiscordContractApiSurface | undefined;
 let slackContractApi: SlackContractApiSurface | undefined;
 let telegramContractApi: TelegramContractApiSurface | undefined;
-let whatsappApi: WhatsAppApiSurface | undefined;
+let whatsappContractApi: WhatsAppContractApiSurface | undefined;
 
 function getDiscordContractApi(): DiscordContractApiSurface {
   discordContractApi ??= loadBundledPluginContractApiSync<DiscordContractApiSurface>("discord");
@@ -53,9 +53,9 @@ function getTelegramContractApi(): TelegramContractApiSurface {
   return telegramContractApi;
 }
 
-function getWhatsAppApi(): WhatsAppApiSurface {
-  whatsappApi ??= loadBundledPluginApiSync<WhatsAppApiSurface>("whatsapp");
-  return whatsappApi;
+function getWhatsAppContractApi(): WhatsAppContractApiSurface {
+  whatsappContractApi ??= loadBundledPluginContractApiSync<WhatsAppContractApiSurface>("whatsapp");
+  return whatsappContractApi;
 }
 
 type DirectoryListFn = (params: {
@@ -359,8 +359,8 @@ export function describeTelegramPluginsCoreExtensionContract() {
 
 export function describeWhatsAppPluginsCoreExtensionContract() {
   describe("whatsapp plugins-core extension contract", () => {
-    const listPeers = () => getWhatsAppApi().listWhatsAppDirectoryPeersFromConfig;
-    const listGroups = () => getWhatsAppApi().listWhatsAppDirectoryGroupsFromConfig;
+    const listPeers = () => getWhatsAppContractApi().listWhatsAppDirectoryPeersFromConfig;
+    const listGroups = () => getWhatsAppContractApi().listWhatsAppDirectoryGroupsFromConfig;
 
     it("lists peers/groups from config", async () => {
       const cfg = {
