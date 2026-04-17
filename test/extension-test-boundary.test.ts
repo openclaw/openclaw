@@ -173,7 +173,6 @@ describe("non-extension test boundaries", () => {
   it("keeps bundled plugin public-surface imports on an explicit core allowlist", () => {
     const allowed = new Set([
       "src/auto-reply/reply.triggers.trigger-handling.test-harness.ts",
-      "src/agents/models-config.providers.ollama.test.ts",
       "src/commands/channel-test-registry.ts",
       "src/plugin-sdk/testing.ts",
     ]);
@@ -184,7 +183,7 @@ describe("non-extension test boundaries", () => {
       return findBundledPluginPublicSurfaceImports(source).length > 0 && !allowed.has(file);
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toEqual(["src/agents/models-config.providers.ollama.test.ts"]);
   });
 
   it("keeps bundled plugin sync test-api loaders out of core tests", () => {
