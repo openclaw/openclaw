@@ -585,6 +585,7 @@ export async function runAgentTurnWithFallback(params: {
   activeSessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
+  normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
@@ -601,20 +602,22 @@ export async function runAgentTurnWithFallback(params: {
         };
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
-  const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
-    cfg: runtimeConfig,
-    sessionKey: params.sessionKey,
-    workspaceDir: params.followupRun.run.workspaceDir,
-    messageProvider: params.followupRun.run.messageProvider,
-    accountId: params.followupRun.originatingAccountId ?? params.followupRun.run.agentAccountId,
-    groupId: params.followupRun.run.groupId,
-    groupChannel: params.followupRun.run.groupChannel,
-    groupSpace: params.followupRun.run.groupSpace,
-    requesterSenderId: params.followupRun.run.senderId,
-    requesterSenderName: params.followupRun.run.senderName,
-    requesterSenderUsername: params.followupRun.run.senderUsername,
-    requesterSenderE164: params.followupRun.run.senderE164,
-  });
+  const normalizeReplyMediaPaths =
+    params.normalizeMediaPaths ??
+    createReplyMediaPathNormalizer({
+      cfg: runtimeConfig,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.followupRun.run.workspaceDir,
+      messageProvider: params.followupRun.run.messageProvider,
+      accountId: params.followupRun.originatingAccountId ?? params.followupRun.run.agentAccountId,
+      groupId: params.followupRun.run.groupId,
+      groupChannel: params.followupRun.run.groupChannel,
+      groupSpace: params.followupRun.run.groupSpace,
+      requesterSenderId: params.followupRun.run.senderId,
+      requesterSenderName: params.followupRun.run.senderName,
+      requesterSenderUsername: params.followupRun.run.senderUsername,
+      requesterSenderE164: params.followupRun.run.senderE164,
+    });
   let didNotifyAgentRunStart = false;
   const notifyAgentRunStart = () => {
     if (didNotifyAgentRunStart) {
