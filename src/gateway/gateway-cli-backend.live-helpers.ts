@@ -181,6 +181,7 @@ export function shouldRetryCliCronMcpProbeReply(text: string): boolean {
   const mentionsMissingJob =
     normalized.includes("job was not created") ||
     normalized.includes("job still was not created") ||
+    normalized.includes("nothing was created") ||
     normalized.includes("was not created");
   return mentionsCancellation && mentionsMissingJob;
 }

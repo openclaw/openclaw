@@ -137,6 +137,11 @@ describe("gateway cli backend live helpers", () => {
         "The cron tool call was cancelled again, so the job still was not created.",
       ),
     ).toBe(true);
+    expect(
+      shouldRetryCliCronMcpProbeReply(
+        "The cron tool call was cancelled again, so nothing was created.",
+      ),
+    ).toBe(true);
     expect(shouldRetryCliCronMcpProbeReply("live-mcp-abc123")).toBe(false);
   });
 });
