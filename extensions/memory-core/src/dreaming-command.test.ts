@@ -14,7 +14,8 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function resolveStoredDreaming(config: OpenClawConfig): Record<string, unknown> {
-  const pluginId = config.plugins?.slots?.memory || "memory-core";
+  const configuredSlot = config.plugins?.slots?.memory;
+  const pluginId = !configuredSlot || configuredSlot === "none" ? "memory-core" : configuredSlot;
   const entry = asRecord(config.plugins?.entries?.[pluginId]);
   const pluginConfig = asRecord(entry?.config);
   return asRecord(pluginConfig?.dreaming) ?? {};

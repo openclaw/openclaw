@@ -394,7 +394,7 @@ describe("memory cli", () => {
               config: {
                 dreaming: {
                   enabled: true,
-                  cron: "0 3 * * *",
+                  frequency: "0 3 * * *",
                 },
               },
             },
@@ -420,6 +420,39 @@ describe("memory cli", () => {
       await runMemoryCli(["status"]);
 
       expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: 0 3 * * *"));
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("falls back to memory-core dreaming config when the memory slot is none", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      loadConfig.mockReturnValue({
+        plugins: {
+          slots: { memory: "none" },
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 */8 * * *",
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status"]);
+
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: 15 */8 * * *"));
       expect(close).toHaveBeenCalled();
     });
   });
