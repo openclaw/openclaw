@@ -379,7 +379,7 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
           shouldDeleteBinary = true;
         }
       } catch (checksumError) {
-        // FIX: Don't fail closed when checksum fetch fails due to network issues
+        // Don't fail closed when checksum fetch fails due to network issues
         // Only delete binary on explicit hash mismatch, not on network errors
         console.warn('Could not verify existing yt-dlp binary (network/parsing issue):', checksumError);
         
@@ -466,18 +466,7 @@ async function ensureFfmpeg(): Promise<void> {
   }
 }
 
-/**
- * FIX: Use injected workspace root instead of heuristic findWorkspaceFolder()
- * This ensures the tool respects per-session workspace selection and sandbox boundaries
- */
-async function resolveWorkspaceRoot(injectedRoot?: string): Promise<string> {
-  // If workspace root is injected from context, use it directly
-  if (injectedRoot) {
-    await fs.mkdir(injectedRoot, { recursive: true });
-    return injectedRoot;
-  }
-  
-  // Fallback to heuristic detection only when no context provided
+async function findWorkspaceFolder(): Promise<string> {
   // Use session workspace when saving downloaded videos
   // First check if we're already in a workspace directory
   let currentPath = path.resolve(process.cwd());
@@ -559,25 +548,27 @@ function sanitizeFilename(title: string): string {
 }
 
 /**
- * FIX: Route gateway download URLs through assistant-media query API
- * The gateway media handler expects: /__openclaw__/assistant-media?source=<encodedPath>
+ * Builds a media URL from workspace root using absolute path for source parameter
+ * The gateway media handler expects: /__openclaw__/assistant-media?source=<absolutePath>
  */
 function buildMediaUrl(workspaceRoot: string, filePath: string, gatewayOrigin?: string): string {
-  const relativePath = path.relative(workspaceRoot, filePath);
-  const posixPath = relativePath.split(path.sep).join('/');
-  const encodedPath = posixPath.split('/').map(encodeURIComponent).join('/');
+  // Use absolute path for the source parameter to ensure the gateway can find the file
+  const absolutePath = path.resolve(filePath);
+  const encodedPath = encodeURIComponent(absolutePath);
   
-  // If gateway origin is provided (e.g., from environment or request context), use the correct media route
+  // If gateway origin is provided (e.g., from environment or request context), use the media route
   if (gatewayOrigin) {
     // Remove trailing slash if present
     const baseOrigin = gatewayOrigin.replace(/\/$/, '');
-    // FIX: Use query parameter format that matches gateway media handler
-    // The handler in src/gateway/control-ui.ts expects ?source= parameter
+    // Use query parameter format that matches gateway media handler with absolute path
     return `${baseOrigin}/__openclaw__/assistant-media?source=${encodedPath}`;
   }
   
-  // Fallback to localhost for development/local deployments
-  return `http://localhost:${MEDIA_SERVER_PORT}/${encodedPath}`;
+  // Fallback to localhost for development/local deployments using relative path
+  const relativePath = path.relative(workspaceRoot, filePath);
+  const posixPath = relativePath.split(path.sep).join('/');
+  const encodedRelativePath = posixPath.split('/').map(encodeURIComponent).join('/');
+  return `http://localhost:${MEDIA_SERVER_PORT}/${encodedRelativePath}`;
 }
 
 export const downloadVideoTool = {
@@ -614,13 +605,9 @@ export const downloadVideoTool = {
       
       await ensureFfmpeg();
       const ytDlpPath = await ensureYtDlp(abortController.signal);
-      
-      // FIX: Extract workspace root from context if provided
-      // This allows the tool to respect per-session workspace selection
-      const typedParams = params as Record<string, unknown>;
-      const injectedWorkspaceRoot = typedParams.workspaceRoot as string | undefined;
-      const workspaceRoot = await resolveWorkspaceRoot(injectedWorkspaceRoot);
+      const workspaceRoot = await findWorkspaceFolder();
 
+      const typedParams = params as Record<string, unknown>;
       let formatSelector = "bestvideo[height<=1080]+bestaudio/best[height<=1080]";
       if (typedParams.quality === "720") {
           formatSelector = "bestvideo[height<=720]+bestaudio/best[height<=720]";
