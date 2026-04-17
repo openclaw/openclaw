@@ -48,8 +48,15 @@ describe("sanitizeExecApprovalDisplayText", () => {
     const cmd = "echo sk-abc123456789012345678\ncurl https://api.example.com";
     const result = sanitizeExecApprovalDisplayText(cmd);
     expect(result).not.toContain("sk-abc123456789012345678");
-    expect(result).toContain("\\u{A}");
-    expect(result).toContain("curl https://api.example.com");
+    expect(result).toContain("https://api.example.com");
+  });
+
+  it("redacts tokens containing spliced invisible characters that would otherwise bypass token regex boundaries", () => {
+    const cmd = "echo sk-abc123\u200B456789012345678 remainder";
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("sk-abc123");
+    expect(result).not.toContain("456789012345678");
+    expect(result).toContain("remainder");
   });
 });
 

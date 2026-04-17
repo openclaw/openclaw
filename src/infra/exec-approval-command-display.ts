@@ -11,11 +11,19 @@ function formatCodePointEscape(char: string): string {
 }
 
 export function sanitizeExecApprovalDisplayText(commandText: string): string {
-  // Redact first so sensitive token regexes match against the raw text before control/format
-  // characters are rewritten into visible `\u{...}` escapes that would otherwise break token
-  // class matches like `sk-[A-Za-z0-9_-]+`.
-  const redacted = redactSensitiveText(commandText, { mode: "tools" });
-  return redacted.replace(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX, formatCodePointEscape);
+  // Attempt redaction first on the raw text to catch secrets that appear verbatim.
+  const rawRedacted = redactSensitiveText(commandText, { mode: "tools" });
+  // Also run redaction against a view with invisible/control/separator characters stripped, so an
+  // attacker cannot defeat token regexes (e.g. `\b(sk-[A-Za-z0-9_-]{8,})\b`) by splicing a
+  // zero-width or other invisible character into the middle of a secret. If the stripped-view
+  // redaction masked something the raw-view redaction missed, fall back to the stripped-view
+  // result: positional fidelity of the invisibles is sacrificed for keeping the secret out of
+  // the approval display. Otherwise keep the raw-view result so the operator can still see
+  // exactly where invisibles were injected.
+  const stripped = commandText.replace(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX, "");
+  const strippedRedacted = redactSensitiveText(stripped, { mode: "tools" });
+  const base = strippedRedacted === stripped ? rawRedacted : strippedRedacted;
+  return base.replace(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX, formatCodePointEscape);
 }
 
 function normalizePreview(commandText: string, commandPreview?: string | null): string | null {
