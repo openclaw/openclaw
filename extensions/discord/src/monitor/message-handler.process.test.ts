@@ -243,11 +243,21 @@ function getLastRouteUpdate():
 }
 
 function getLastDispatchCtx():
-  | { SessionKey?: string; MessageThreadId?: string | number }
+  | {
+      SessionKey?: string;
+      MessageThreadId?: string | number;
+      SkipConversationBindingLookup?: boolean;
+    }
   | undefined {
   const callArgs = dispatchInboundMessage.mock.calls.at(-1) as unknown[] | undefined;
   const params = callArgs?.[0] as
-    | { ctx?: { SessionKey?: string; MessageThreadId?: string | number } }
+    | {
+        ctx?: {
+          SessionKey?: string;
+          MessageThreadId?: string | number;
+          SkipConversationBindingLookup?: boolean;
+        };
+      }
     | undefined;
   return params?.ctx;
 }
@@ -688,6 +698,25 @@ describe("processDiscordMessage session routing", () => {
       channel: "discord",
       to: "channel:thread-1",
       accountId: "default",
+    });
+  });
+
+  it("propagates binding-skip context for main-mention escape hatches", async () => {
+    const ctx = await createBaseContext({
+      baseSessionKey: "agent:main:discord:channel:c1",
+      route: BASE_CHANNEL_ROUTE,
+      boundSessionKey: undefined,
+      skipConversationBindingLookup: true,
+      messageChannelId: "thread-1",
+      threadChannel: { id: "thread-1", name: "worker-thread" },
+    });
+
+    await processDiscordMessage(ctx as any);
+
+    expect(getLastDispatchCtx()).toMatchObject({
+      SessionKey: "agent:main:discord:channel:c1",
+      MessageThreadId: "thread-1",
+      SkipConversationBindingLookup: true,
     });
   });
 });

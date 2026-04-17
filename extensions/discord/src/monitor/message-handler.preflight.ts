@@ -833,6 +833,7 @@ export async function preflightDiscordMessage(
   const explicitlyMentionedMain = Boolean(
     botId && message.mentionedUsers?.some((user: User) => user.id === botId),
   );
+  const skipConversationBindingLookup = threadBinding != null && explicitlyMentionedMain;
   if (threadBinding != null && explicitlyMentionedMain) {
     logDebug(
       `[discord-preflight] main-mention escape hatch: overriding thread binding ${threadBinding.targetSessionKey} for message ${message.id} (reason=main-mention)`,
@@ -1297,6 +1298,7 @@ export async function preflightDiscordMessage(
     threadBinding,
     boundSessionKey: boundSessionKey || undefined,
     boundAgentId,
+    skipConversationBindingLookup: skipConversationBindingLookup || undefined,
     guildInfo,
     guildSlug,
     threadChannel,

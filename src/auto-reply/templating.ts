@@ -152,6 +152,8 @@ export type MsgContext = {
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;
+  /** Internal escape hatch: trust upstream routing and do not re-resolve conversation bindings. */
+  SkipConversationBindingLookup?: boolean;
   /**
    * Internal flag: command handling prepared trailing prompt text for ACP dispatch.
    * Used for `/new <prompt>` and `/reset <prompt>` on ACP-bound sessions.

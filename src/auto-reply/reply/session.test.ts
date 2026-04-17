@@ -2416,6 +2416,82 @@ describe("persistSessionUsageUpdate", () => {
   });
 });
 
+describe("initSessionState conversation binding bypass", () => {
+  it("honors SkipConversationBindingLookup for upstream escape hatches", async () => {
+    const storePath = await createStorePath("skip-conversation-binding-");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const mainSessionKey = "agent:main:discord:channel:c1";
+    const boundSessionKey = "agent:codex:acp:child";
+
+    setActivePluginRegistry(createSessionConversationTestRegistry());
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      capabilities: { bindSupported: false, unbindSupported: false, placements: ["current"] },
+      listBySession: () => [],
+      resolveByConversation: (ref) => {
+        if (ref.conversationId !== "thread-1") {
+          return null;
+        }
+        return {
+          bindingId: "discord:default:thread-1",
+          targetSessionKey: boundSessionKey,
+          targetKind: "session" as const,
+          conversation: {
+            channel: "discord",
+            accountId: "default",
+            conversationId: "thread-1",
+            parentConversationId: "c1",
+          },
+          status: "active" as const,
+          boundAt: Date.now(),
+        };
+      },
+    });
+
+    try {
+      const baseline = await initSessionState({
+        ctx: {
+          Body: "hello child",
+          SessionKey: mainSessionKey,
+          Provider: "discord",
+          Surface: "discord",
+          AccountId: "default",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:thread-1",
+          MessageThreadId: "thread-1",
+          ThreadParentId: "c1",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+      expect(baseline.sessionKey).toBe(boundSessionKey);
+
+      const bypassed = await initSessionState({
+        ctx: {
+          Body: "hello main",
+          SessionKey: mainSessionKey,
+          Provider: "discord",
+          Surface: "discord",
+          AccountId: "default",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:thread-1",
+          MessageThreadId: "thread-1",
+          ThreadParentId: "c1",
+          SkipConversationBindingLookup: true,
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+      expect(bypassed.sessionKey).toBe(mainSessionKey);
+    } finally {
+      sessionBindingTesting.resetSessionBindingAdaptersForTests();
+      resetPluginRuntimeStateForTest();
+    }
+  });
+});
+
 describe("initSessionState stale threadId fallback", () => {
   it("does not inherit lastThreadId from a previous thread interaction in non-thread sessions", async () => {
     const storePath = await createStorePath("stale-thread-");

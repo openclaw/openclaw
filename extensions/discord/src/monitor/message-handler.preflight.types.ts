@@ -62,6 +62,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   threadBinding?: SessionBindingRecord;
   boundSessionKey?: string;
   boundAgentId?: string;
+  skipConversationBindingLookup?: boolean;
 
   guildInfo: DiscordGuildEntryResolved | null;
   guildSlug: string;

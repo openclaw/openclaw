@@ -473,6 +473,7 @@ export async function processDiscordMessage(
     From: effectiveFrom,
     To: effectiveTo,
     SessionKey: boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey,
+    SkipConversationBindingLookup: ctx.skipConversationBindingLookup,
     AccountId: route.accountId,
     ChatType: isDirectMessage ? "direct" : "channel",
     ConversationLabel: fromLabel,

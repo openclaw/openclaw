@@ -253,6 +253,7 @@ describe("preflightDiscordMessage — Phase 11 inbound routing", () => {
       // Not routed to the bound ACP session.
       expect(result?.boundSessionKey).toBeUndefined();
       expect(result?.route.sessionKey).not.toBe(BOUND_SESSION_KEY);
+      expect(result?.skipConversationBindingLookup).toBe(true);
       // Respawn must not have been triggered for a main-mention bypass.
       expect(respawnMock).not.toHaveBeenCalled();
     });

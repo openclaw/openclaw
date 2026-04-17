@@ -261,11 +261,13 @@ export async function initSessionState(params: {
   // before any binding lookup so command-side mutations land on the intended session.
   const targetSessionKey =
     commandTargetSessionKey ??
-    resolveBoundConversationSessionKey({
-      cfg,
-      ctx,
-      bindingContext: conversationBindingContext,
-    });
+    (ctx.SkipConversationBindingLookup
+      ? undefined
+      : resolveBoundConversationSessionKey({
+          cfg,
+          ctx,
+          bindingContext: conversationBindingContext,
+        }));
   const sessionCtxForState =
     targetSessionKey && targetSessionKey !== ctx.SessionKey
       ? { ...ctx, SessionKey: targetSessionKey }
