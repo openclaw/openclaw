@@ -1,4 +1,4 @@
-import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
+import { fetchWithRuntimeDispatcher, isMockedFetch } from "openclaw/plugin-sdk/runtime-fetch";
 import {
   closeDispatcher,
   createPinnedDispatcher,
@@ -11,6 +11,7 @@ export {
   closeDispatcher,
   createPinnedDispatcher,
   fetchWithRuntimeDispatcher,
+  isMockedFetch,
   resolvePinnedHostnameWithPolicy,
   type PinnedDispatcherPolicy,
   type SsrFPolicy,

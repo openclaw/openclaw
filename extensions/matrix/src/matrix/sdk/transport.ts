@@ -5,6 +5,7 @@ import {
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
+  isMockedFetch,
   type SsrFPolicy,
   fetchWithRuntimeDispatcher,
   type PinnedDispatcherPolicy,
@@ -93,6 +94,9 @@ async function fetchWithMatrixDispatcher(params: {
   url: string;
   init: MatrixDispatcherRequestInit;
 }): Promise<Response> {
+  if (isMockedFetch(globalThis.fetch)) {
+    return await globalThis.fetch(params.url, params.init);
+  }
   // Keep this dispatcher-routing logic local to Matrix transport. Shared SSRF
   // fetches must stay fail-closed unless a retry path can preserve the
   // validated pinned-address binding. Route dispatcher-attached requests
