@@ -128,6 +128,60 @@ function unwrapMetadataFence(text: string): string {
   return (fencedMatch[1] ?? "").trim();
 }
 
+function hasJsonMetadataPayload(text: string): boolean {
+  const trimmed = unwrapMetadataFence(text);
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+    return false;
+  }
+  return JSON_METADATA_KEY_RE.test(trimmed);
+}
+
+function consumeSentinelWrappedJsonBlock(
+  lines: string[],
+  startIndex: number,
+): {
+  endIndex: number;
+  trailingText: string | null;
+} | null {
+  const line = (lines[startIndex] ?? "").trim();
+  const sentinel = METADATA_BLOCK_SENTINELS.find((candidate) => line.startsWith(candidate));
+  if (!sentinel) {
+    return null;
+  }
+
+  const remainder = line.slice(sentinel.length).trim();
+  let payloadStartIndex = -1;
+  if (remainder === "") {
+    if ((lines[startIndex + 1] ?? "").trim() !== "```json") {
+      return null;
+    }
+    payloadStartIndex = startIndex + 2;
+  } else if (remainder === "```json") {
+    payloadStartIndex = startIndex + 1;
+  } else {
+    return null;
+  }
+
+  let payloadEndIndex = payloadStartIndex;
+  while (payloadEndIndex < lines.length) {
+    const closingLine = (lines[payloadEndIndex] ?? "").trim();
+    if (closingLine.startsWith("```")) {
+      const payload = lines.slice(payloadStartIndex, payloadEndIndex).join("\n").trim();
+      if (payload && !isStandaloneMetadataText(payload) && !hasJsonMetadataPayload(payload)) {
+        return null;
+      }
+      const trailingText = closingLine.slice(3).trim();
+      return {
+        endIndex: payloadEndIndex,
+        trailingText: trailingText || null,
+      };
+    }
+    payloadEndIndex += 1;
+  }
+
+  return null;
+}
+
 function stripLeadingMetadataWrapper(text: string): string | null {
   const { body } = stripRolePrefix(text);
   const trimmed = body.trim();
@@ -143,13 +197,16 @@ function stripLeadingMetadataWrapper(text: string): string | null {
     if (fencedWithTailMatch) {
       const payload = (fencedWithTailMatch[1] ?? "").trim();
       const trailing = (fencedWithTailMatch[2] ?? "").trim();
-      if (!payload || !isStandaloneMetadataText(payload)) {
+      if (!payload) {
+        return trailing;
+      }
+      if (!isStandaloneMetadataText(payload) && !hasJsonMetadataPayload(payload)) {
         return null;
       }
       return trailing;
     }
     const unfenced = unwrapMetadataFence(rest);
-    if (isStandaloneMetadataText(unfenced)) {
+    if (isStandaloneMetadataText(unfenced) || hasJsonMetadataPayload(unfenced)) {
       return "";
     }
     return null;
@@ -169,20 +226,21 @@ export function sanitizeDreamingMetadataText(text: string): string {
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
     const trimmed = line.trim();
+    const consumedBlock = consumeSentinelWrappedJsonBlock(lines, index);
+    if (consumedBlock) {
+      if (consumedBlock.trailingText) {
+        result.push(consumedBlock.trailingText);
+      }
+      index = consumedBlock.endIndex;
+      continue;
+    }
+    if (isMetadataSentinelLine(trimmed)) {
+      continue;
+    }
     const strippedWrapper = stripLeadingMetadataWrapper(trimmed);
     if (strippedWrapper !== null) {
       if (strippedWrapper) {
         result.push(strippedWrapper);
-      }
-      continue;
-    }
-    if (isMetadataSentinelLine(trimmed)) {
-      if ((lines[index + 1] ?? "").trim() === "```json") {
-        index += 2;
-        while (index < lines.length && (lines[index] ?? "").trim() !== "```") {
-          index += 1;
-        }
-        continue;
       }
       continue;
     }

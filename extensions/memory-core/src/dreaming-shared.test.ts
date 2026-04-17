@@ -23,4 +23,33 @@ describe("memory-core dreaming shared helpers", () => {
       false,
     );
   });
+
+  it("strips sentinel-only wrappers that continue in a fenced JSON block", () => {
+    const snippet = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      "{",
+      '  "type": "message",',
+      '  "message_id": "5417",',
+      '  "sender_id": "289522496"',
+      "}",
+      "```",
+    ].join("\n");
+
+    expect(sanitizeDreamingMetadataText(snippet)).toBe("");
+    expect(isMetadataGarbageText(snippet)).toBe(true);
+  });
+
+  it("strips sentinel-wrapped pretty JSON and preserves trailing content", () => {
+    const snippet = [
+      "Conversation info (untrusted metadata): ```json",
+      "{",
+      '  "type": "message",',
+      '  "message_id": "5417"',
+      "}",
+      "``` Keep the follow-up note.",
+    ].join("\n");
+
+    expect(sanitizeDreamingMetadataText(snippet)).toBe("Keep the follow-up note.");
+  });
 });
