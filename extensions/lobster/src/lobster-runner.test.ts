@@ -323,6 +323,25 @@ describe("createEmbeddedLobsterRunner", () => {
     ).rejects.toThrow(/approve required/);
   });
 
+  it("throws a clear error when a file-like pipeline path does not exist", async () => {
+    const runner = createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue({
+        runToolRequest: vi.fn(),
+        resumeToolRequest: vi.fn(),
+      }),
+    });
+
+    await expect(
+      runner.run({
+        action: "run",
+        pipeline: "lobster/haiku-ppc64-hidden-alias-autofix-once.lobster",
+        cwd: process.cwd(),
+        timeoutMs: 2000,
+        maxStdoutBytes: 4096,
+      }),
+    ).rejects.toThrow();
+  });
+
   it("aborts long-running embedded work", async () => {
     const runtime = {
       runToolRequest: vi.fn(

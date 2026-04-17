@@ -190,6 +190,17 @@ async function resolveWorkflowFile(candidate: string, cwd: string) {
   return resolved;
 }
 
+const WORKFLOW_FILE_EXTENSIONS = new Set([".lobster", ".yaml", ".yml", ".json"]);
+
+function looksLikeWorkflowFileCandidate(candidate: string): boolean {
+  const ext = path.extname(candidate).toLowerCase();
+  return (
+    WORKFLOW_FILE_EXTENSIONS.has(ext) ||
+    candidate.includes("/") ||
+    candidate.includes(path.sep)
+  );
+}
+
 async function detectWorkflowFile(candidate: string, cwd: string) {
   const trimmed = candidate.trim();
   if (!trimmed || trimmed.includes("|")) {
@@ -197,7 +208,10 @@ async function detectWorkflowFile(candidate: string, cwd: string) {
   }
   try {
     return await resolveWorkflowFile(trimmed, cwd);
-  } catch {
+  } catch (err) {
+    if (looksLikeWorkflowFileCandidate(trimmed)) {
+      throw err;
+    }
     return null;
   }
 }
