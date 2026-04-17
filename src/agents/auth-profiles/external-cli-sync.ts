@@ -14,6 +14,11 @@ type ExternalCliSyncOptions = {
   log?: boolean;
 };
 
+export type ExternalCliResolvedProfile = {
+  profileId: string;
+  credential: OAuthCredential;
+};
+
 type ExternalCliSyncProvider = {
   profileId: string;
   provider: string;
@@ -94,6 +99,11 @@ function withExternalCliManager(
   };
 }
 
+function stripExternalCliManager(creds: OAuthCredential): OAuthCredential {
+  const { managedBy: _managedBy, ...runtimeCredential } = creds;
+  return runtimeCredential;
+}
+
 function resolveExternalCliSyncProvider(params: {
   profileId?: string;
   credential?: OAuthCredential;
@@ -131,6 +141,34 @@ export function readManagedExternalCliCredential(params: {
     return null;
   }
   return withExternalCliManager(creds, provider.managedBy);
+}
+
+export function resolveExternalCliAuthProfiles(
+  store: AuthProfileStore,
+): ExternalCliResolvedProfile[] {
+  const profiles: ExternalCliResolvedProfile[] = [];
+  for (const providerConfig of EXTERNAL_CLI_SYNC_PROVIDERS) {
+    const creds = providerConfig.readCredentials();
+    if (!creds) {
+      continue;
+    }
+    const runtimeCredential = stripExternalCliManager(
+      withExternalCliManager(creds, providerConfig.managedBy),
+    );
+    const existing = store.profiles[providerConfig.profileId];
+    const existingOAuth = existing?.type === "oauth" ? existing : undefined;
+    if (
+      !shouldReplaceStoredOAuthCredential(existingOAuth, runtimeCredential) &&
+      !areOAuthCredentialsEquivalent(existingOAuth, runtimeCredential)
+    ) {
+      continue;
+    }
+    profiles.push({
+      profileId: providerConfig.profileId,
+      credential: runtimeCredential,
+    });
+  }
+  return profiles;
 }
 
 /** Sync external CLI credentials into the store for a given provider. */
