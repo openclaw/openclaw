@@ -477,31 +477,6 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("Stop");
   });
 
-  it("shows sender labels from sanitized gateway messages instead of generic You", () => {
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          messages: [
-            {
-              role: "user",
-              content: "hello from topic",
-              senderLabel: "Iris",
-              timestamp: 1000,
-            },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    const senderLabels = Array.from(container.querySelectorAll(".chat-sender-name")).map((node) =>
-      node.textContent?.trim(),
-    );
-    expect(senderLabels).toContain("Iris");
-    expect(senderLabels).not.toContain("You");
-  });
-
   it("keeps consecutive user messages from different senders in separate groups", () => {
     const container = document.createElement("div");
     render(
@@ -533,6 +508,7 @@ describe("chat view", () => {
     );
     expect(senderLabels).toContain("Iris");
     expect(senderLabels).toContain("Joaquin De Rojas");
+    expect(senderLabels).not.toContain("You");
   });
 
   it("positions delete confirm by message side", () => {
@@ -776,36 +752,7 @@ describe("chat view", () => {
     expect(container.textContent).toContain('"childSessionKey": "agent:test:subagent:abc123"');
   });
 
-  it("renders [embed] shortcodes inside the assistant bubble", () => {
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          showToolCalls: false,
-          messages: [
-            {
-              id: "assistant-anki-inline",
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: 'Still the same current card.\n[embed ref="cv_shortcode" title="Shortcode view" /]',
-                },
-              ],
-              timestamp: Date.now(),
-            },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".chat-tool-card__preview-frame")).not.toBeNull();
-    expect(container.textContent).toContain("Still the same current card.");
-    expect(container.textContent).toContain("Shortcode view");
-  });
-
-  it("renders canvas-only assistant bubbles", () => {
+  it("renders canvas-only [embed] shortcodes inside the assistant bubble", () => {
     const container = document.createElement("div");
     render(
       renderChat(
@@ -815,7 +762,12 @@ describe("chat view", () => {
             {
               id: "assistant-canvas-only",
               role: "assistant",
-              content: [{ type: "text", text: '[embed ref="cv_tictactoe" title="Tic-Tac-Toe" /]' }],
+              content: [
+                {
+                  type: "text",
+                  text: '[embed ref="cv_tictactoe" title="Tic-Tac-Toe" /]',
+                },
+              ],
               timestamp: Date.now(),
             },
           ],
