@@ -307,9 +307,9 @@ describe("browser config", () => {
     });
   });
 
-  it("defaults browser SSRF policy to strict mode when unset", () => {
+  it("returns undefined browser SSRF policy when unset", () => {
     const resolved = resolveBrowserConfig({});
-    expect(resolved.ssrfPolicy).toEqual({});
+    expect(resolved.ssrfPolicy).toBeUndefined();
   });
 
   it("supports explicit strict mode by disabling private network access", () => {

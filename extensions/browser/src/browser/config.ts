@@ -143,9 +143,13 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
     !allowedHostnames &&
     !hostnameAllowlist
   ) {
-    // Keep the default policy object present so CDP guards still enforce
-    // fail-closed private-network checks on unconfigured installs.
-    return {};
+    // Return undefined when no ssrfPolicy is configured. The CDP fetch helpers
+    // treat undefined as "allow private network" (they default to
+    // { allowPrivateNetwork: true } via the `?? { allowPrivateNetwork: true }`
+    // fallback). Returning {} here instead causes assertCdpEndpointAllowed to
+    // run the SSRF check with an empty policy, which blocks private IPs such as
+    // those used in WSL→Windows remote CDP setups (e.g. 172.29.x.x).
+    return undefined;
   }
 
   return {
