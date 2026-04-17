@@ -36,4 +36,17 @@ describe("selectAgentRuntime", () => {
     const cfg = mkCfg([{ id: "a", runtime: { type: "claude-sdk" } }]);
     expect(selectAgentRuntime(cfg, "a")).toBe("claude-sdk");
   });
+
+  it("normalizes agent IDs on both sides so camelCase entries still match", () => {
+    // Config uses a camelCase id; selector is invoked with the
+    // lowercase normalized form (same shape agent routing uses
+    // elsewhere). The selector must match despite the string diff.
+    const cfg = mkCfg([{ id: "MyAgent", runtime: { type: "claude-sdk" } }]);
+    expect(selectAgentRuntime(cfg, "myagent")).toBe("claude-sdk");
+  });
+
+  it("normalizes agent IDs with inverse casing too", () => {
+    const cfg = mkCfg([{ id: "myagent", runtime: { type: "claude-sdk" } }]);
+    expect(selectAgentRuntime(cfg, "MyAgent")).toBe("claude-sdk");
+  });
 });
