@@ -1181,3 +1181,106 @@
   border-radius: 3px;
   background: var(--bg-hover);
 }
+
+/* PR-8 / #67721 inline plan approval card — sits ABOVE the chat input
+ * bar, mirrors Claude Code's "proposed a plan" affordance. Compact by
+ * default; the "Open plan" button pushes the full checklist into the
+ * right sidebar via the same path tool-output details use. */
+.plan-inline-card {
+  margin: 0 16px 8px 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-2));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plan-inline-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.plan-inline-card__title strong {
+  color: var(--text);
+}
+
+.plan-inline-card__summary {
+  color: var(--text-secondary);
+  margin-left: 6px;
+}
+
+.plan-inline-card__open {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+  text-decoration: underline;
+}
+
+.plan-inline-card__open:hover {
+  text-decoration: none;
+}
+
+.plan-inline-card__meta {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.plan-inline-card__error {
+  font-size: 12px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.plan-inline-card__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.plan-inline-card__btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 100ms ease;
+}
+
+.plan-inline-card__btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.plan-inline-card__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.plan-inline-card__btn--primary {
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  border-color: var(--accent);
+}
+
+.plan-inline-card__btn--primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 90%, #000);
+}
+
+.plan-inline-card__btn--danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+}
+
+.plan-inline-card__btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}

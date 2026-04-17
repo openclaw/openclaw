@@ -511,11 +511,32 @@ export async function runEmbeddedAttempt(
       seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
       previousSignature: params.bootstrapPromptWarningSignature,
     });
-    const workspaceNotes = hookAdjustedBootstrapFiles.some(
-      (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
-    )
-      ? ["Reminder: commit your changes in this workspace after edits."]
-      : undefined;
+    const workspaceNotesList: string[] = [];
+    if (
+      hookAdjustedBootstrapFiles.some(
+        (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
+      )
+    ) {
+      workspaceNotesList.push("Reminder: commit your changes in this workspace after edits.");
+    }
+    // PR-8 follow-up: when a session is in plan mode, the agent needs
+    // to know the rules — write/edit/exec are blocked, only read +
+    // update_plan + exit_plan_mode are usable. Without this note the
+    // agent will try mutating tools, get them blocked, and not
+    // understand why. enter_plan_mode/exit_plan_mode are the entry
+    // points; the user controls mode via the chip + /plan command.
+    if (params.planMode === "plan") {
+      workspaceNotesList.push(
+        [
+          "PLAN MODE ACTIVE.",
+          "Mutating tools (write, edit, exec, bash with mutating commands, apply_patch) are blocked.",
+          "Read-only tools (read, web_search, web_fetch, update_plan) are available.",
+          "Workflow: investigate with read-only tools, draft a plan with update_plan, then call exit_plan_mode with the proposed plan to request user approval.",
+          "After approval the runtime flips the session out of plan mode and you can execute. After rejection the user feedback comes via [PLAN_DECISION] in the next turn — revise and re-propose.",
+        ].join(" "),
+      );
+    }
+    const workspaceNotes = workspaceNotesList.length > 0 ? workspaceNotesList : undefined;
 
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
 
