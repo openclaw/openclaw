@@ -1,25 +1,21 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import "./agent-command.test-mocks.js";
-import "../cron/isolated-agent.mocks.js";
-import { __testing as agentCommandTesting } from "../agents/agent-command.js";
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import { resolveAgentRuntimeConfig } from "../agents/agent-runtime-config.js";
 import { resolveSession } from "../agents/command/session.js";
 import * as commandConfigResolutionRuntimeModule from "../cli/command-config-resolution.runtime.js";
 import * as configIoModule from "../config/io.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  mockSharedAgentCommandConfig,
-  resetSharedAgentCommandRuntimeState,
-  runtime,
-  withSharedAgentCommandTempHome,
-} from "./agent-runtime-config.test-support.js";
+import type { RuntimeEnv } from "../runtime.js";
 
-vi.mock("../agents/command/session-store.runtime.js", () => {
-  return {
-    updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
-  };
-});
+const runtime: RuntimeEnv = {
+  log: vi.fn(),
+  error: vi.fn(),
+  exit: vi.fn(() => {
+    throw new Error("exit");
+  }),
+};
 
 const configSpy = vi.spyOn(configIoModule, "loadConfig");
 const readConfigFileSnapshotForWriteSpy = vi.spyOn(
@@ -28,19 +24,31 @@ const readConfigFileSnapshotForWriteSpy = vi.spyOn(
 );
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withSharedAgentCommandTempHome("openclaw-agent-", fn);
+  return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
 }
 
-function mockConfig(
-  home: string,
-  storePath: string,
-  agentOverrides?: Parameters<typeof mockSharedAgentCommandConfig>[3],
-) {
-  return mockSharedAgentCommandConfig(configSpy, home, storePath, agentOverrides);
+function mockConfig(home: string, storePath: string): OpenClawConfig {
+  const cfg = {
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-opus-4-6" },
+        models: { "anthropic/claude-opus-4-6": {} },
+        workspace: path.join(home, "openclaw"),
+      },
+    },
+    session: { store: storePath, mainKey: "main" },
+  } as OpenClawConfig;
+  configSpy.mockReturnValue(cfg);
+  return cfg;
 }
 
 beforeEach(() => {
-  resetSharedAgentCommandRuntimeState(readConfigFileSnapshotForWriteSpy);
+  vi.clearAllMocks();
+  runtimeSnapshotModule.clearRuntimeConfigSnapshot();
+  readConfigFileSnapshotForWriteSpy.mockResolvedValue({
+    snapshot: { valid: false, resolved: {} as OpenClawConfig },
+    writeOptions: {},
+  } as Awaited<ReturnType<typeof configIoModule.readConfigFileSnapshotForWrite>>);
 });
 
 describe("agentCommand runtime config", () => {
@@ -109,7 +117,7 @@ describe("agentCommand runtime config", () => {
           diagnostics: [],
         });
 
-      const prepared = await agentCommandTesting.resolveAgentRuntimeConfig(runtime);
+      const prepared = await resolveAgentRuntimeConfig(runtime);
 
       expect(resolveConfigWithSecretsSpy).toHaveBeenCalledWith({
         config: loadedConfig,
@@ -144,7 +152,7 @@ describe("agentCommand runtime config", () => {
           diagnostics: [],
         });
 
-      await agentCommandTesting.resolveAgentRuntimeConfig(runtime, {
+      await resolveAgentRuntimeConfig(runtime, {
         runtimeTargetsChannelSecrets: true,
       });
 
@@ -162,7 +170,7 @@ describe("agentCommand runtime config", () => {
         "resolveCommandConfigWithSecrets",
       );
 
-      const prepared = await agentCommandTesting.resolveAgentRuntimeConfig(runtime);
+      const prepared = await resolveAgentRuntimeConfig(runtime);
 
       expect(resolveConfigWithSecretsSpy).not.toHaveBeenCalled();
       expect(prepared.cfg).toBe(loadedConfig);
