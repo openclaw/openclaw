@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { setConsoleSubsystemFilter } from "./console.js";
 import { resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
-import { createSubsystemLogger } from "./subsystem.js";
+import { createSubsystemLogger, shouldSuppressProbeConsoleLine } from "./subsystem.js";
 
 function installConsoleMethodSpy(method: "warn" | "error") {
   const spy = vi.fn();
@@ -163,5 +163,28 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
 
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not crash when subsystem is undefined at runtime (#68013)", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+
+    expect(() => {
+      shouldSuppressProbeConsoleLine({
+        level: "warn",
+        subsystem: undefined as unknown as string,
+        message: "some warning",
+      });
+    }).not.toThrow();
+  });
+
+  it("returns false for undefined subsystem", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+
+    const result = shouldSuppressProbeConsoleLine({
+      level: "warn",
+      subsystem: undefined as unknown as string,
+      message: "some warning",
+    });
+    expect(result).toBe(false);
   });
 });

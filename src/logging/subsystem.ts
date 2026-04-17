@@ -257,7 +257,8 @@ function writeConsoleLine(level: LogLevel, line: string) {
   }
 }
 
-function shouldSuppressProbeConsoleLine(params: {
+/** @internal exported for testing */
+export function shouldSuppressProbeConsoleLine(params: {
   level: LogLevel;
   subsystem: string;
   message: string;
@@ -271,9 +272,9 @@ function shouldSuppressProbeConsoleLine(params: {
   }
   const isProbeSuppressedSubsystem =
     params.subsystem === "agent/embedded" ||
-    params.subsystem.startsWith("agent/embedded/") ||
+    params.subsystem?.startsWith("agent/embedded/") ||
     params.subsystem === "model-fallback" ||
-    params.subsystem.startsWith("model-fallback/");
+    params.subsystem?.startsWith("model-fallback/");
   if (!isProbeSuppressedSubsystem) {
     return false;
   }
