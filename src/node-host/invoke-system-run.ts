@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
-import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
   addDurableCommandApproval,
@@ -171,7 +171,16 @@ export type HandleSystemRunInvokeOptions = {
   sendInvokeResult: (result: SystemRunInvokeResult) => Promise<void>;
   sendExecFinishedEvent: (params: ExecFinishedEventParams) => Promise<void>;
   preferMacAppExecHost: boolean;
+  loadConfig?: () => OpenClawConfig;
 };
+
+async function loadSystemRunConfig(opts: HandleSystemRunInvokeOptions): Promise<OpenClawConfig> {
+  if (opts.loadConfig) {
+    return opts.loadConfig();
+  }
+  const { loadConfig } = await import("../config/config.js");
+  return loadConfig();
+}
 
 async function sendSystemRunDenied(
   opts: Pick<
@@ -343,7 +352,7 @@ async function evaluateSystemRunPolicyPhase(
   opts: HandleSystemRunInvokeOptions,
   parsed: SystemRunParsePhase,
 ): Promise<SystemRunPolicyPhase | null> {
-  const cfg = loadConfig();
+  const cfg = await loadSystemRunConfig(opts);
   const agentExec = parsed.agentId
     ? resolveAgentConfig(cfg, parsed.agentId)?.tools?.exec
     : undefined;

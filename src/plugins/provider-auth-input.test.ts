@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
-  ensureApiKeyFromOptionEnvOrPrompt,
   ensureApiKeyFromEnvOrPrompt,
+  ensureApiKeyFromOptionEnvOrPrompt,
   maybeApplyApiKeyFromOption,
   normalizeTokenProviderInput,
-} from "./auth-choice.apply-helpers.js";
+} from "./provider-auth-input.js";
 
 const ORIGINAL_MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
 const ORIGINAL_MINIMAX_OAUTH_TOKEN = process.env.MINIMAX_OAUTH_TOKEN;
