@@ -27,6 +27,14 @@
           "enum": ["direct", "group", "channel"]
         }
       },
+      "allowedChatIds": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "deniedChatIds": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
       "thinking": {
         "type": "string",
         "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]
@@ -94,6 +102,14 @@
     "allowedChatTypes": {
       "label": "Allowed Chat Types",
       "help": "Choose which session types may run Active Memory. Defaults to direct-message style sessions only."
+    },
+    "allowedChatIds": {
+      "label": "Allowed Chat IDs",
+      "help": "Optional explicit allowlist of chat/user IDs (e.g. Feishu chat_id oc_xxx, open_id ou_xxx, Telegram chat id, Slack channel id). When non-empty, only sessions whose resolved conversation id matches the list will run Active Memory, even if the chat type is allowed. Leave empty to fall back to allowedChatTypes alone."
+    },
+    "deniedChatIds": {
+      "label": "Denied Chat IDs",
+      "help": "Optional explicit denylist of chat/user IDs. Sessions whose resolved conversation id matches the list are skipped even when the chat type is allowed. Applied after allowedChatIds."
     },
     "timeoutMs": {
       "label": "Timeout (ms)"

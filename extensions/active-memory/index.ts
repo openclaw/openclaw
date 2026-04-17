@@ -68,6 +68,8 @@ type ActiveRecallPluginConfig = {
   modelFallback?: string;
   modelFallbackPolicy?: "default-remote" | "resolved-only";
   allowedChatTypes?: Array<"direct" | "group" | "channel">;
+  allowedChatIds?: string[];
+  deniedChatIds?: string[];
   thinking?: ActiveMemoryThinkingLevel;
   promptStyle?:
     | "balanced"
@@ -103,6 +105,8 @@ type ResolvedActiveRecallPluginConfig = {
   modelFallback?: string;
   modelFallbackPolicy: "default-remote" | "resolved-only";
   allowedChatTypes: Array<"direct" | "group" | "channel">;
+  allowedChatIds: string[];
+  deniedChatIds: string[];
   thinking: ActiveMemoryThinkingLevel;
   promptStyle:
     | "balanced"
@@ -268,6 +272,29 @@ function normalizeTranscriptDir(value: unknown): string {
   const parts = normalized.split("/").map((part) => part.trim());
   const safeParts = parts.filter((part) => part.length > 0 && part !== "." && part !== "..");
   return safeParts.length > 0 ? path.join(...safeParts) : DEFAULT_TRANSCRIPT_DIR;
+}
+
+function normalizeChatIdList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim().toLowerCase();
+    if (!trimmed) {
+      continue;
+    }
+    if (seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
 }
 
 function normalizePromptConfigText(value: unknown): string | undefined {
@@ -631,6 +658,8 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
     modelFallbackPolicy:
       raw.modelFallbackPolicy === "resolved-only" ? "resolved-only" : "default-remote",
     allowedChatTypes: allowedChatTypes.length > 0 ? allowedChatTypes : ["direct"],
+    allowedChatIds: normalizeChatIdList(raw.allowedChatIds),
+    deniedChatIds: normalizeChatIdList(raw.deniedChatIds),
     thinking: resolveThinkingLevel(raw.thinking),
     promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
     promptOverride: normalizePromptConfigText(raw.promptOverride),
@@ -927,6 +956,84 @@ function isAllowedChatType(
     return false;
   }
   return config.allowedChatTypes.includes(chatType);
+}
+
+/**
+ * Extract the underlying conversation identifier from a canonical agent
+ * session key. Session keys follow the shape
+ *   agent:<agentId>:<provider>:<chatType>:<conversationId>
+ * for bound channels, and a special shape
+ *   agent:<agentId>:<mainKey|main>
+ * for the default agent session (webchat / direct entrypoint).
+ *
+ * Returns the lower-cased conversation id when it can be determined, or
+ * undefined when the session key has no chat identifier to match against.
+ * This id is what allowedChatIds / deniedChatIds are compared against.
+ */
+function resolveConversationId(ctx: {
+  sessionKey?: string;
+  messageProvider?: string;
+}): string | undefined {
+  const sessionKey = ctx.sessionKey?.trim().toLowerCase();
+  if (!sessionKey) {
+    return undefined;
+  }
+  const parts = sessionKey.split(":");
+  // Expected forms:
+  //   agent:<agentId>:<provider>:<chatType>:<conversationId...>
+  //   agent:<agentId>:<provider>:direct|dm|group|channel:<conversationId...>
+  if (parts.length >= 5 && parts[0] === "agent") {
+    const maybeType = parts[3];
+    if (
+      maybeType === "direct" ||
+      maybeType === "dm" ||
+      maybeType === "group" ||
+      maybeType === "channel"
+    ) {
+      // Join remaining segments in case the conversation id itself contains
+      // colons (safety net; current providers do not).
+      const tail = parts.slice(4).join(":").trim();
+      return tail || undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Apply allowedChatIds / deniedChatIds filters after the chat type check
+ * has already passed. Empty allowedChatIds means "no allowlist" and this
+ * function returns true for any conversation. Empty deniedChatIds is also
+ * a no-op.
+ *
+ * When allowedChatIds is non-empty but the session key does not expose a
+ * conversation id (e.g. webchat default session), the session is skipped
+ * to avoid accidentally running against an unknown conversation.
+ */
+function isAllowedChatId(
+  config: ResolvedActiveRecallPluginConfig,
+  ctx: {
+    sessionKey?: string;
+    messageProvider?: string;
+  },
+): boolean {
+  const hasAllowlist = config.allowedChatIds.length > 0;
+  const hasDenylist = config.deniedChatIds.length > 0;
+  if (!hasAllowlist && !hasDenylist) {
+    return true;
+  }
+  const conversationId = resolveConversationId(ctx);
+  if (hasAllowlist) {
+    if (!conversationId) {
+      return false;
+    }
+    if (!config.allowedChatIds.includes(conversationId)) {
+      return false;
+    }
+  }
+  if (hasDenylist && conversationId && config.deniedChatIds.includes(conversationId)) {
+    return false;
+  }
+  return true;
 }
 
 function buildCacheKey(params: {
@@ -2062,6 +2169,19 @@ export default definePluginEntry({
             ...ctx,
             sessionKey: resolvedSessionKey ?? ctx.sessionKey,
             mainKey: api.config.session?.mainKey,
+          })
+        ) {
+          await persistPluginStatusLines({
+            api,
+            agentId: effectiveAgentId,
+            sessionKey: resolvedSessionKey,
+          });
+          return undefined;
+        }
+        if (
+          !isAllowedChatId(config, {
+            sessionKey: resolvedSessionKey ?? ctx.sessionKey,
+            messageProvider: ctx.messageProvider,
           })
         ) {
           await persistPluginStatusLines({
