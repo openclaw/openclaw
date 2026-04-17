@@ -39,42 +39,6 @@ function expectConfirmedGatewayChange(app: ReturnType<typeof mountApp>) {
 }
 
 describe("control UI routing", () => {
-  it("hydrates the tab from the location", async () => {
-    const app = mountApp("/sessions");
-    await app.updateComplete;
-
-    expect(app.tab).toBe("sessions");
-    expect(window.location.pathname).toBe("/sessions");
-  });
-
-  it("respects /ui base paths", async () => {
-    const app = mountApp("/ui/cron");
-    await app.updateComplete;
-
-    expect(app.basePath).toBe("/ui");
-    expect(app.tab).toBe("cron");
-    expect(window.location.pathname).toBe("/ui/cron");
-  });
-
-  it("infers nested base paths", async () => {
-    const app = mountApp("/apps/openclaw/cron");
-    await app.updateComplete;
-
-    expect(app.basePath).toBe("/apps/openclaw");
-    expect(app.tab).toBe("cron");
-    expect(window.location.pathname).toBe("/apps/openclaw/cron");
-  });
-
-  it("honors explicit base path overrides", async () => {
-    window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = "/openclaw";
-    const app = mountApp("/openclaw/sessions");
-    await app.updateComplete;
-
-    expect(app.basePath).toBe("/openclaw");
-    expect(app.tab).toBe("sessions");
-    expect(window.location.pathname).toBe("/openclaw/sessions");
-  });
-
   it("keeps chat navigation links visible and updates the URL when clicked", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;

@@ -109,28 +109,7 @@ describe("cron view", () => {
     expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["ok"] });
   });
 
-  it("loads run history when clicking a job row", () => {
-    const container = document.createElement("div");
-    const onLoadRuns = vi.fn();
-    const job = createJob("job-1");
-    render(
-      renderCron(
-        createProps({
-          jobs: [job],
-          onLoadRuns,
-        }),
-      ),
-      container,
-    );
-
-    const row = container.querySelector(".list-item-clickable");
-    expect(row).not.toBeNull();
-    row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(onLoadRuns).toHaveBeenCalledWith("job-1");
-  });
-
-  it("marks the selected job and keeps History button to a single call", () => {
+  it("marks the selected job and routes row/history clicks to run history", () => {
     const container = document.createElement("div");
     const onLoadRuns = vi.fn();
     const job = createJob("job-1");
@@ -149,14 +128,20 @@ describe("cron view", () => {
     const selected = container.querySelector(".list-item-selected");
     expect(selected).not.toBeNull();
 
+    const row = container.querySelector(".list-item-clickable");
+    expect(row).not.toBeNull();
+    row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onLoadRuns).toHaveBeenCalledWith("job-1");
+
     const historyButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === "History",
     );
     expect(historyButton).not.toBeUndefined();
     historyButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    expect(onLoadRuns).toHaveBeenCalledTimes(1);
-    expect(onLoadRuns).toHaveBeenCalledWith("job-1");
+    expect(onLoadRuns).toHaveBeenCalledTimes(2);
+    expect(onLoadRuns).toHaveBeenNthCalledWith(1, "job-1");
+    expect(onLoadRuns).toHaveBeenNthCalledWith(2, "job-1");
   });
 
   it("shows selected job run history sorted newest first with chat links", () => {
@@ -528,25 +513,6 @@ describe("cron view", () => {
   it("wires job row actions and selects the row before acting", () => {
     const container = document.createElement("div");
     const onClone = vi.fn();
-    const onLoadRuns = vi.fn();
-    const job = createJob("job-clone");
-    render(
-      renderCron(
-        createProps({
-          jobs: [job],
-          onClone,
-          onLoadRuns,
-        }),
-      ),
-      container,
-    );
-
-    const cloneButton = getButtonByText(container, "Clone");
-    expect(cloneButton).not.toBeUndefined();
-    cloneButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onClone).toHaveBeenCalledWith(job);
-    expect(onLoadRuns).toHaveBeenCalledWith("job-clone");
-
     const onToggle = vi.fn();
     const onRun = vi.fn();
     const onRemove = vi.fn();
@@ -556,6 +522,7 @@ describe("cron view", () => {
       renderCron(
         createProps({
           jobs: [actionJob],
+          onClone,
           onToggle,
           onRun,
           onRemove,
@@ -565,6 +532,10 @@ describe("cron view", () => {
       container,
     );
 
+    const cloneButton = getButtonByText(container, "Clone");
+    expect(cloneButton).not.toBeUndefined();
+    cloneButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
     const enableButton = getButtonByText(container, "Disable");
     expect(enableButton).not.toBeUndefined();
     enableButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -573,35 +544,25 @@ describe("cron view", () => {
     expect(runButton).not.toBeUndefined();
     runButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    const removeButton = getButtonByText(container, "Remove");
-    expect(removeButton).not.toBeUndefined();
-    removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(onToggle).toHaveBeenCalledWith(actionJob, false);
-    expect(onRun).toHaveBeenCalledWith(actionJob, "force");
-    expect(onRemove).toHaveBeenCalledWith(actionJob);
-    expect(actionLoadRuns).toHaveBeenCalledTimes(3);
-    expect(actionLoadRuns).toHaveBeenNthCalledWith(1, "job-actions");
-    expect(actionLoadRuns).toHaveBeenNthCalledWith(2, "job-actions");
-    expect(actionLoadRuns).toHaveBeenNthCalledWith(3, "job-actions");
-
-    const onRunDue = vi.fn();
-    const dueJob = createJob("job-due");
-    render(
-      renderCron(
-        createProps({
-          jobs: [dueJob],
-          onRun: onRunDue,
-        }),
-      ),
-      container,
-    );
-
     const runDueButton = getButtonByText(container, "Run if due");
     expect(runDueButton).not.toBeUndefined();
     runDueButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    expect(onRunDue).toHaveBeenCalledWith(dueJob, "due");
+    const removeButton = getButtonByText(container, "Remove");
+    expect(removeButton).not.toBeUndefined();
+    removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onClone).toHaveBeenCalledWith(actionJob);
+    expect(onToggle).toHaveBeenCalledWith(actionJob, false);
+    expect(onRun).toHaveBeenNthCalledWith(1, actionJob, "force");
+    expect(onRun).toHaveBeenNthCalledWith(2, actionJob, "due");
+    expect(onRemove).toHaveBeenCalledWith(actionJob);
+    expect(actionLoadRuns).toHaveBeenCalledTimes(5);
+    expect(actionLoadRuns).toHaveBeenNthCalledWith(1, "job-actions");
+    expect(actionLoadRuns).toHaveBeenNthCalledWith(2, "job-actions");
+    expect(actionLoadRuns).toHaveBeenNthCalledWith(3, "job-actions");
+    expect(actionLoadRuns).toHaveBeenNthCalledWith(4, "job-actions");
+    expect(actionLoadRuns).toHaveBeenNthCalledWith(5, "job-actions");
   });
 
   it("renders suggestion datalists for agent/model/thinking/timezone", () => {
