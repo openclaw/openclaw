@@ -6,6 +6,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import {
   buildGatewayInstallPlan,
   gatewayInstallErrorHint,
+  parseDaemonEnvEntries,
 } from "../commands/daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
@@ -48,23 +49,6 @@ type FinalizeOnboardingOptions = {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
 };
-
-/**
- * Parses an array of "KEY=VALUE" strings (from --daemon-env) into a plain
- * object suitable for merging into the systemd unit environment dict.
- */
-function parseDaemonEnvEntries(entries: string[] | undefined): Record<string, string> {
-  if (!entries || entries.length === 0) return {};
-  const result: Record<string, string> = {};
-  for (const entry of entries) {
-    const eq = entry.indexOf("=");
-    if (eq === -1) continue;
-    const key = entry.slice(0, eq).trim();
-    const value = entry.slice(eq + 1);
-    if (key) result[key] = value;
-  }
-  return result;
-}
 
 export async function finalizeSetupWizard(
   options: FinalizeOnboardingOptions,
@@ -222,7 +206,9 @@ export async function finalizeSetupWizard(
           );
 
           // Merge any extra --daemon-env KEY=VALUE entries into the environment dict.
-          const extraEnv = parseDaemonEnvEntries(opts.daemonEnv);
+          const extraEnv = parseDaemonEnvEntries(opts.daemonEnv, (msg) =>
+            prompter.note(msg, "--daemon-env"),
+          );
           const mergedEnvironment = { ...environment, ...extraEnv };
 
           progress.update("Installing Gateway service…");

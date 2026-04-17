@@ -2,29 +2,11 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveGatewayService } from "../../../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../../../daemon/systemd.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "../../daemon-install-helpers.js";
+import { buildGatewayInstallPlan, gatewayInstallErrorHint, parseDaemonEnvEntries } from "../../daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, isGatewayDaemonRuntime } from "../../daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../gateway-install-token.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 import { ensureSystemdUserLingerNonInteractive } from "../../systemd-linger.js";
-
-/**
- * Parses an array of "KEY=VALUE" strings (from --daemon-env) into a plain
- * object suitable for merging into the systemd unit environment dict.
- * Entries that do not contain "=" are silently ignored.
- */
-function parseDaemonEnvEntries(entries: string[] | undefined): Record<string, string> {
-  if (!entries || entries.length === 0) return {};
-  const result: Record<string, string> = {};
-  for (const entry of entries) {
-    const eq = entry.indexOf("=");
-    if (eq === -1) continue;
-    const key = entry.slice(0, eq).trim();
-    const value = entry.slice(eq + 1);
-    if (key) result[key] = value;
-  }
-  return result;
-}
 
 export async function installGatewayDaemonNonInteractive(params: {
   nextConfig: OpenClawConfig;
@@ -89,7 +71,7 @@ export async function installGatewayDaemonNonInteractive(params: {
   });
 
   // Merge any extra --daemon-env KEY=VALUE entries into the environment dict.
-  const extraEnv = parseDaemonEnvEntries(opts.daemonEnv);
+  const extraEnv = parseDaemonEnvEntries(opts.daemonEnv, (msg) => runtime.log(msg));
   const mergedEnvironment = { ...environment, ...extraEnv };
 
   try {

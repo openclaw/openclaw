@@ -310,6 +310,31 @@ export async function buildGatewayInstallPlan(params: {
   };
 }
 
+/**
+ * Parses an array of "KEY=VALUE" strings (from --daemon-env) into a plain
+ * object suitable for merging into the systemd unit environment dict.
+ * Entries without "=" are skipped; the optional warn callback is called for
+ * each malformed entry so the caller can surface a diagnostic to the user.
+ */
+export function parseDaemonEnvEntries(
+  entries: string[] | undefined,
+  warn?: (msg: string) => void,
+): Record<string, string> {
+  if (!entries || entries.length === 0) return {};
+  const result: Record<string, string> = {};
+  for (const entry of entries) {
+    const eq = entry.indexOf("=");
+    if (eq === -1) {
+      warn?.(`--daemon-env: ignoring malformed entry ${JSON.stringify(entry)} (expected KEY=VALUE)`);
+      continue;
+    }
+    const key = entry.slice(0, eq).trim();
+    const value = entry.slice(eq + 1);
+    if (key) result[key] = value;
+  }
+  return result;
+}
+
 export function gatewayInstallErrorHint(platform = process.platform): string {
   return platform === "win32"
     ? "Tip: native Windows now falls back to a per-user Startup-folder login item when Scheduled Task creation is denied; if install still fails, rerun from an elevated PowerShell or skip service install."
