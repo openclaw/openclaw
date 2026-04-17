@@ -26,7 +26,7 @@ export const formatTokensCompact = (
     | "cacheWrite"
   >,
 ) => {
-  const used = sess.totalTokens ?? sess.totalTokensEstimate;
+  const used = sess.totalTokens || sess.totalTokensEstimate;
   const ctx = sess.contextTokens;
 
   let result = "";

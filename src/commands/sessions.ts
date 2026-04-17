@@ -183,7 +183,7 @@ export async function sessionsCommand(
           const freshTotal = resolveFreshSessionTotalTokens(r);
           return {
             ...r,
-            totalTokens: freshTotal ?? r.totalTokensEstimate ?? null,
+            totalTokens: freshTotal || r.totalTokensEstimate || null,
             totalTokensFresh:
               r.totalTokensFresh ?? (typeof r.totalTokens === "number" && r.totalTokens >= 0),
             contextTokens:
@@ -239,7 +239,7 @@ export async function sessionsCommand(
       configContextTokens;
     const freshTotal = resolveFreshSessionTotalTokens(row);
     // Fixed: Ensure totalTokensEstimate is used as a fallback when fresh total is unavailable
-    const total = freshTotal ?? row.totalTokensEstimate;
+    const total = freshTotal || row.totalTokensEstimate;
 
     const line = [
       ...(showAgentColumn

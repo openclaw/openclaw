@@ -198,7 +198,7 @@ export async function getStatusSummary(
             allowAsyncLoad: false,
           }) ?? null;
         const freshTotal = resolveFreshSessionTotalTokens(entry);
-        const total = freshTotal ?? entry?.totalTokensEstimate;
+        const total = freshTotal || entry?.totalTokensEstimate;
         const totalTokensFresh =
           typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
         const remaining =
@@ -229,7 +229,7 @@ export async function getStatusSummary(
           outputTokens: entry?.outputTokens,
           cacheRead: entry?.cacheRead,
           cacheWrite: entry?.cacheWrite,
-          totalTokens: freshTotal ?? null,
+          totalTokens: freshTotal || null,
           totalTokensFresh,
           totalTokensEstimate: entry?.totalTokensEstimate ?? null,
           remainingTokens: remaining,

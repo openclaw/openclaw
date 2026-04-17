@@ -101,7 +101,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const report = await resolveContextReport(params);
   // Fixed: Use totalTokens to replace the non-existent cachedContextUsageTokens property (ReferenceError)
   const totalTokens =
-    resolveFreshSessionTotalTokens(targetSessionEntry) ?? targetSessionEntry?.totalTokensEstimate;
+    resolveFreshSessionTotalTokens(targetSessionEntry) || targetSessionEntry?.totalTokensEstimate;
   const session = {
     totalTokens: totalTokens ?? null,
     totalTokensFresh:

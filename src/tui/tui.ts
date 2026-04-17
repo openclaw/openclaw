@@ -667,7 +667,7 @@ export async function runTui(opts: TuiOptions) {
         : sessionInfo.model
       : "unknown";
     const tokens = formatTokens(
-      sessionInfo.totalTokens ?? sessionInfo.totalTokensEstimate ?? null,
+      (sessionInfo.totalTokens || sessionInfo.totalTokensEstimate) ?? null,
       sessionInfo.contextTokens ?? null,
     );
     const think = sessionInfo.thinkingLevel ?? "off";

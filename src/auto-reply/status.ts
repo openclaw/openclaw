@@ -477,9 +477,9 @@ export function buildStatusMessage(args: StatusArgs): string {
   let cacheWrite = entry?.cacheWrite;
   const freshTotal = resolveFreshSessionTotalTokens(entry);
   let totalTokens =
-    freshTotal ??
-    entry?.totalTokensEstimate ??
-    entry?.totalTokens ??
+    freshTotal ||
+    entry?.totalTokensEstimate ||
+    entry?.totalTokens ||
     (args.inputTokens !== undefined && args.outputTokens !== undefined
       ? args.inputTokens + args.outputTokens
       : undefined);
@@ -533,8 +533,9 @@ export function buildStatusMessage(args: StatusArgs): string {
     if (logUsage) {
       const candidate = logUsage.promptTokens;
 
-      // Session transcript is authoritative — always prefer it over the store.
-      if (logUsage.totalTokensFresh) {
+      // Session transcript is authoritative — prefer it over the store when fresh.
+      // Fixed: Only overwrite if larger or currently missing to avoid regressing to 0 on vLLM.
+      if (logUsage.totalTokensFresh && (totalTokens === undefined || candidate > totalTokens)) {
         totalTokens = candidate;
       }
 
