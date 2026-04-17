@@ -560,7 +560,12 @@ export async function compactEmbeddedPiSessionDirect(
       config: params.config,
       sandboxToolPolicy: sandbox?.tools,
       sessionKey: sandboxSessionKey,
-      agentId: effectiveSkillAgentId,
+      // Intentionally omit explicit agentId: the core tools just built with
+      // createOpenClawCodingTools(...) also omit it, so both paths resolve
+      // agentId the same way via resolveAgentIdFromSessionKey(sessionKey).
+      // Passing effectiveSkillAgentId here would diverge from the core-tool
+      // policy for legacy/non-agent session keys where the two sources fall
+      // back to different ids.
       modelProvider: model.provider,
       modelId,
       messageProvider: resolvedMessageProvider,
