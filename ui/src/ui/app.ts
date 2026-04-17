@@ -149,13 +149,35 @@ function buildPlanDecisionUserMessage(
   const summaryClause = trimmedSummary ? ` (${trimmedSummary})` : "";
   switch (decision) {
     case "approve":
-      return `[PLAN_DECISION] decision: approved${summaryClause}\n\nThe plan you proposed via exit_plan_mode is approved. Plan mode is now off and mutating tools are unlocked. Execute the plan now without re-proposing.`;
+      return [
+        `[PLAN_DECISION] decision: approved${summaryClause}`,
+        "",
+        "The plan you proposed via exit_plan_mode is approved. Plan mode is now OFF and mutating tools (write, edit, exec, bash, apply_patch) are unlocked.",
+        "",
+        "Execute the plan now. Begin with the first step — do NOT re-propose, do NOT call exit_plan_mode again.",
+      ].join("\n");
     case "edit":
-      return `[PLAN_DECISION] decision: approved-with-edits${summaryClause}\n\nThe plan is approved with the understanding that you may make minor edits during execution if you discover something. Plan mode is now off and mutating tools are unlocked. Execute the plan now.`;
+      return [
+        `[PLAN_DECISION] decision: approved-with-edits${summaryClause}`,
+        "",
+        "The plan is approved with this gate for in-flight deviation:",
+        "- you MAY make minor edits during execution if you are >95% confident in the change",
+        "- if a deviation requires <95% confidence, use read-only tools / spawn a focused subagent to research and validate the new path until you reach 95% confidence",
+        "- when you do deviate, call update_plan to record the new step before executing it",
+        "- continue autonomously through the plan until: (a) plan completion, (b) you hit a real blocker that needs user input, or (c) you would take a destructive/dangerous action (rm -rf, force-push, irreversible API call, money movement) — those still require explicit user confirmation",
+        "",
+        "Plan mode is now OFF and mutating tools are unlocked. Execute the first step now.",
+      ].join("\n");
     case "reject":
-      return feedback?.trim()
-        ? `[PLAN_DECISION] decision: rejected${summaryClause}\n\nThe user wants you to revise the plan. Their feedback:\n\n${feedback.trim()}\n\nYou are still in plan mode. Update the plan and call exit_plan_mode again with the revised steps.`
-        : `[PLAN_DECISION] decision: rejected${summaryClause}\n\nThe user rejected the plan and did not provide specific feedback — ask them what they want changed, or revise based on what you think the gap was. You are still in plan mode; revise and call exit_plan_mode again.`;
+      return [
+        `[PLAN_DECISION] decision: rejected${summaryClause}`,
+        "",
+        feedback?.trim()
+          ? `The user wants you to revise. Their feedback:\n\n${feedback.trim()}`
+          : "The user rejected the plan without specific feedback — revise based on the most likely gap (more detail, different approach, smaller scope, etc.) or ask one targeted clarifying question if you genuinely can't infer.",
+        "",
+        "You are STILL in plan mode. Your next response MUST include an `exit_plan_mode` tool call with the revised plan steps. Do NOT just acknowledge with chat text — call the tool. Do NOT stop after a one-line 'Revising' message — that wastes a turn. The user is waiting on the revised approval card.",
+      ].join("\n");
     default: {
       const _exhaustive: never = decision;
       // _exhaustive is `never` — TS catches new variants at compile
@@ -845,6 +867,15 @@ export class OpenClawApp extends LitElement {
           ...(active.approvalId ? { approvalId: active.approvalId } : {}),
           ...(feedback && feedback.trim() ? { feedback: feedback.trim() } : {}),
         },
+        // After approve/edit, also CLEAR session-level permission
+        // overrides so the chip falls back to "Default permissions"
+        // (whatever's in agents.defaults / per-agent config). User
+        // feedback: post-plan-mode shouldn't lock into Ask just
+        // because Ask was active before. Reject leaves overrides
+        // alone (still in plan mode, no permission change needed).
+        ...(decision === "approve" || decision === "edit"
+          ? { execSecurity: null, execAsk: null }
+          : {}),
       };
       await this.client.request("sessions.patch", params);
       // Send a synthetic "decision" message so the agent gets a user
@@ -920,9 +951,64 @@ export class OpenClawApp extends LitElement {
       window.clearTimeout(this.sidebarCloseTimer);
       this.sidebarCloseTimer = null;
     }
+    // Capture the chat thread's scroll position before opening the
+    // sidebar — the layout reflow on .chat-main flex change otherwise
+    // resets the chat container scroll to top, yanking the user away
+    // from where they were reading. Restore on the next animation
+    // frame after Lit re-renders.
+    const threadEl = this.renderRoot?.querySelector?.(".chat-thread");
+    const savedScrollTop = threadEl instanceof HTMLElement ? threadEl.scrollTop : null;
+    const wasNearBottom =
+      threadEl instanceof HTMLElement
+        ? threadEl.scrollHeight - threadEl.scrollTop - threadEl.clientHeight < 60
+        : false;
     this.sidebarContent = content;
     this.sidebarError = null;
     this.sidebarOpen = true;
+    if (savedScrollTop !== null) {
+      // Defer to after the layout reflow completes.
+      requestAnimationFrame(() => {
+        const after = this.renderRoot?.querySelector?.(".chat-thread");
+        if (!(after instanceof HTMLElement)) {
+          return;
+        }
+        if (wasNearBottom) {
+          // Sticky bottom — pin to the new bottom after reflow.
+          after.scrollTop = after.scrollHeight;
+        } else {
+          after.scrollTop = savedScrollTop;
+        }
+      });
+    }
+  }
+
+  /**
+   * PR-8 follow-up: live update_plan refresh — every time the agent
+   * calls update_plan during execution, re-render the sidebar
+   * markdown so the user sees the latest checklist (boxes ticking off
+   * as the agent steps through). No-op if the sidebar isn't currently
+   * open with markdown content (don't yank focus from a different
+   * view the user is on).
+   */
+  refreshLivePlanSidebar(
+    plan: import("./app-tool-stream.ts").PlanApprovalRequest["plan"],
+    summary?: string,
+  ): void {
+    if (!this.sidebarOpen || this.sidebarContent?.kind !== "markdown") {
+      return;
+    }
+    const stepLines = plan
+      .map((step, i) => {
+        const marker =
+          step.status === "completed" ? "[x]" : step.status === "cancelled" ? "[ ] ~~" : "[ ]";
+        const close = step.status === "cancelled" ? "~~" : "";
+        const label =
+          step.status === "in_progress" && step.activeForm ? step.activeForm : step.step;
+        return `${i + 1}. ${marker} ${label}${close}`;
+      })
+      .join("\n");
+    const md = `# ${summary || "Active plan"}\n\n${stepLines}\n`;
+    this.sidebarContent = { kind: "markdown", content: md };
   }
 
   /**

@@ -46,8 +46,20 @@ export function createEnterPlanModeTool(_options?: CreateEnterPlanModeToolOption
     execute: async (_toolCallId, args, _signal) => {
       const params = args as Record<string, unknown>;
       const reason = typeof params.reason === "string" ? params.reason.trim() : undefined;
+      // Tool result content matters: returning an empty body lets the
+      // model treat the tool call as the entire turn and stop. The
+      // text below tells the agent — visibly in the tool result — that
+      // entering plan mode is just step 1 and exit_plan_mode is the
+      // next required action. Without this nudge agents commonly
+      // respond with "I'm opening a fresh plan cycle" then halt.
+      const text = [
+        "Plan mode is now active.",
+        "Next required step: investigate read-only if needed (read, web_search, web_fetch), then call `exit_plan_mode` with the proposed plan.",
+        "Do NOT stop after this tool call — the plan has not been submitted yet.",
+        "Do NOT respond with the plan as chat text — it must go through `exit_plan_mode` so the user gets Approve/Reject buttons.",
+      ].join(" ");
       return {
-        content: [],
+        content: [{ type: "text" as const, text }],
         details: {
           status: "entered" as const,
           mode: "plan" as const,
