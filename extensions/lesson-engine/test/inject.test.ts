@@ -31,7 +31,7 @@ describe("injectLessons", () => {
     }
   });
 
-  test("selects top-3 by severity + hitCount (no domainTags)", () => {
+  test("selects top-10 by severity + hitCount (no domainTags)", () => {
     const fx = makeFixture();
     try {
       const lessons = [
@@ -43,11 +43,14 @@ describe("injectLessons", () => {
       ];
       writeLessons(fx, "builder", makeFile(lessons));
       const result = injectLessons({ agent: "builder", root: fx.root, dryRun: true });
-      expect(result.selected).toHaveLength(3);
-      // Order: critical → high(8) → high(3)
+      // MAX_LESSONS=10 > fixture size (5), so all 5 are selected
+      expect(result.selected).toHaveLength(5);
+      // Priority order: critical → high(8) → high(3) → important → minor
       expect(result.selected[0].id).toBe("L2");
       expect(result.selected[1].id).toBe("L3");
       expect(result.selected[2].id).toBe("L4");
+      expect(result.selected[3].id).toBe("L5");
+      expect(result.selected[4].id).toBe("L1");
     } finally {
       fx.cleanup();
     }

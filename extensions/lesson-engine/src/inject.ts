@@ -8,7 +8,7 @@ import { agentDataRoot, lessonsFilePath, nowIso, readJson } from "./utils.js";
 export interface InjectOptions {
   agent: AgentName;
   domainTags?: string[];
-  maxTokens?: number; // default 600
+  maxTokens?: number; // default 2000
   now?: Date;
   root?: string;
   dryRun?: boolean;
@@ -34,8 +34,8 @@ export interface InjectResult {
 
 // ── Constants ──
 
-const DEFAULT_MAX_TOKENS = 600;
-const MAX_LESSONS = 3;
+const DEFAULT_MAX_TOKENS = 2000;
+const MAX_LESSONS = 10;
 
 const SEVERITY_ORDER: Record<Severity, number> = {
   critical: 0,
@@ -84,7 +84,7 @@ function renderMarkdown(
   );
   lines.push(`<!-- agent: ${agent} | generated: ${nowIso(now)} | tokens: ~${tokens} -->`);
   lines.push("");
-  lines.push("## 注入教训（Top 3 / Active）");
+  lines.push("## 注入教训（Top 10 / Active）");
   lines.push("");
 
   for (const item of selected) {
