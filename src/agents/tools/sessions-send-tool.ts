@@ -289,10 +289,13 @@ export function createSessionsSendTool(opts?: {
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
-      const delivery = { status: "pending", mode: "announce" as const };
+      const subagentEntry = getLatestSubagentRunByChildSessionKey(resolvedKey);
+      const skipA2A = subagentEntry?.spawnMode === "session";
+      const delivery = skipA2A
+        ? { status: "skipped" as const, mode: "announce" as const }
+        : { status: "pending" as const, mode: "announce" as const };
       const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
-        const subagentEntry = getLatestSubagentRunByChildSessionKey(resolvedKey);
-        if (subagentEntry?.spawnMode === "session") return;
+        if (skipA2A) return;
         void runSessionsSendA2AFlow({
           targetSessionKey: resolvedKey,
           displayKey,
