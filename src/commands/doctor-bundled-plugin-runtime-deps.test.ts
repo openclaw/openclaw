@@ -36,6 +36,7 @@ function createPrompter(overrides: Partial<DoctorPrompter> = {}): DoctorPrompter
       nonInteractive: false,
       shouldForce: false,
       shouldRepair: false,
+      updateInProgress: false,
     },
     ...overrides,
   } as unknown as DoctorPrompter;
@@ -91,20 +92,15 @@ describe("doctor bundled plugin runtime deps", () => {
     const result = scanBundledPluginRuntimeDeps({ packageRoot: root });
     const missing = result.missing.map((dep) => `${dep.name}@${dep.version}`);
 
-    expect(missing).toEqual(["@scope/dep-two@2.0.0", "dep-opt@3.0.0"]);
+    expect(missing).toEqual(["@scope/dep-two@2.0.0"]);
     expect(result.conflicts).toHaveLength(1);
     expect(result.conflicts[0]?.name).toBe("dep-conflict");
     expect(result.conflicts[0]?.versions).toEqual(["1.0.0", "2.0.0"]);
   });
 
-  it("ignores deps listed in pnpm.ignoredBuiltDependencies", () => {
+  it("ignores optional deps when scanning bundled runtime deps", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
-    writeJson(path.join(root, "package.json"), {
-      name: "openclaw",
-      pnpm: {
-        ignoredBuiltDependencies: ["@discordjs/opus"],
-      },
-    });
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
 
     writeJson(path.join(root, "dist", "extensions", "discord", "package.json"), {
       dependencies: {
@@ -122,39 +118,58 @@ describe("doctor bundled plugin runtime deps", () => {
 
     const result = scanBundledPluginRuntimeDeps({ packageRoot: root });
     expect(result.missing).toEqual([]);
+    expect(result.conflicts).toEqual([]);
   });
 
-  it("still reports required deps when ignored deps are filtered", () => {
+  it("ignores required deps listed in pnpm.ignoredBuiltDependencies", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), {
       name: "openclaw",
       pnpm: {
-        ignoredBuiltDependencies: ["dep-optional-native"],
+        ignoredBuiltDependencies: ["dep-ignored-native"],
       },
     });
 
-    writeJson(path.join(root, "dist", "extensions", "discord", "package.json"), {
+    writeJson(path.join(root, "dist", "extensions", "alpha", "package.json"), {
       dependencies: {
-        opusscript: "0.1.1",
-      },
-      optionalDependencies: {
-        "dep-optional-native": "2.0.0",
+        "dep-ignored-native": "1.0.0",
+        "dep-required": "2.0.0",
       },
     });
 
     const result = scanBundledPluginRuntimeDeps({ packageRoot: root });
     const missing = result.missing.map((dep) => `${dep.name}@${dep.version}`);
-    expect(missing).toEqual(["opusscript@0.1.1"]);
+
+    expect(missing).toEqual(["dep-required@2.0.0"]);
   });
 
-  it("does not install ignored deps during doctor repair", async () => {
+  it("hides ignored built dependency conflicts", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), {
       name: "openclaw",
       pnpm: {
-        ignoredBuiltDependencies: ["@discordjs/opus"],
+        ignoredBuiltDependencies: ["dep-ignored-native"],
       },
     });
+
+    writeJson(path.join(root, "dist", "extensions", "alpha", "package.json"), {
+      dependencies: {
+        "dep-ignored-native": "1.0.0",
+      },
+    });
+    writeJson(path.join(root, "dist", "extensions", "beta", "package.json"), {
+      dependencies: {
+        "dep-ignored-native": "2.0.0",
+      },
+    });
+
+    const result = scanBundledPluginRuntimeDeps({ packageRoot: root });
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("repairs only required deps for the Discord opus fallback case", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
 
     writeJson(path.join(root, "dist", "extensions", "discord", "package.json"), {
       dependencies: {
@@ -167,6 +182,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     const confirmAutoFix = vi.fn().mockResolvedValue(true);
     const installDeps = vi.fn();
+
     await maybeRepairBundledPluginRuntimeDeps({
       installDeps,
       packageRoot: root,
@@ -185,14 +201,9 @@ describe("doctor bundled plugin runtime deps", () => {
     });
   });
 
-  it("skips doctor repair when only ignored deps are missing", async () => {
+  it("skips repair when only optional deps are absent", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
-    writeJson(path.join(root, "package.json"), {
-      name: "openclaw",
-      pnpm: {
-        ignoredBuiltDependencies: ["@discordjs/opus"],
-      },
-    });
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
 
     writeJson(path.join(root, "dist", "extensions", "discord", "package.json"), {
       dependencies: {
@@ -210,6 +221,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     const confirmAutoFix = vi.fn().mockResolvedValue(true);
     const installDeps = vi.fn();
+
     await maybeRepairBundledPluginRuntimeDeps({
       installDeps,
       packageRoot: root,

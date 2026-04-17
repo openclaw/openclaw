@@ -31,10 +31,9 @@ function dependencySentinelPath(depName: string): string {
   return path.join("node_modules", ...depName.split("/"), "package.json");
 }
 
-function collectRuntimeDeps(packageJson: Record<string, unknown>): Record<string, unknown> {
+function collectRequiredRuntimeDeps(packageJson: Record<string, unknown>): Record<string, unknown> {
   return {
     ...(packageJson.dependencies as Record<string, unknown> | undefined),
-    ...(packageJson.optionalDependencies as Record<string, unknown> | undefined),
   };
 }
 
@@ -84,7 +83,7 @@ function collectBundledPluginRuntimeDeps(params: { extensionsDir: string }): {
         string,
         unknown
       >;
-      for (const [name, rawVersion] of Object.entries(collectRuntimeDeps(packageJson))) {
+      for (const [name, rawVersion] of Object.entries(collectRequiredRuntimeDeps(packageJson))) {
         if (typeof rawVersion !== "string" || rawVersion.trim() === "") {
           continue;
         }
@@ -155,10 +154,10 @@ export function scanBundledPluginRuntimeDeps(params: { packageRoot: string }): {
       !ignoredBuiltDependencies.has(dep.name) &&
       !fs.existsSync(path.join(params.packageRoot, dependencySentinelPath(dep.name))),
   );
-  const visibleConflicts = conflicts.filter(
-    (conflict) => !ignoredBuiltDependencies.has(conflict.name),
-  );
-  return { missing, conflicts: visibleConflicts };
+  return {
+    missing,
+    conflicts: conflicts.filter((conflict) => !ignoredBuiltDependencies.has(conflict.name)),
+  };
 }
 
 function createNestedNpmInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
