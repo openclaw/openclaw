@@ -1250,10 +1250,6 @@ select {
     background-size: 80px 80px;
   }
 }
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
-}
 
 /* Focus visible styles */
 :focus-visible {
