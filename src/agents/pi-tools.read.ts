@@ -187,12 +187,6 @@ async function readTextFileStreaming(
         content += `\n\n... [Content truncated to ${maxChars} chars]`;
       }
       
-      // Add notice if range was limited
-      if (!isRangeComplete && endLine !== undefined && !isTruncated && limit !== undefined) {
-        // This means we stopped because we reached the end of file before completing the range
-        // No need to add notice, it's normal behavior
-      }
-      
       resolve({
         content,
         truncated: isTruncated,
@@ -1065,10 +1059,22 @@ export function createOpenClawReadTool(
 
         return result;
       } catch (error) {
+        // Re-throw abort errors to maintain cancellation semantics
+        if (signal?.aborted || (error as Error).message === "Read operation aborted") {
+          throw error;
+        }
+        
+        // Check for abort signal related errors from the bridge or streaming
+        const err = error as Error & { code?: string };
+        if (err.name === "AbortError" || err.code === "ABORT_ERR") {
+          throw error;
+        }
+        
+        // For all other errors, return a friendly error message
         return {
           toolCallId,
           content: [
-            { type: "text", text: `Error reading path: ${(error as Error).message}` },
+            { type: "text", text: `Error reading path: ${err.message}` },
           ],
           details: { path: inputPath },
         } as AgentToolResult;
