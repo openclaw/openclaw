@@ -50,10 +50,17 @@ export type ChannelOutboundFormattedContext = ChannelOutboundContext & {
   abortSignal?: AbortSignal;
 };
 
+/** Payload types that require explicit channel opt-in via supportedPayloadTypes.
+ *  - core-managed types (interactive, channelData) are NOT listed here;
+ *    they are handled unconditionally by the pipeline.
+ *  - capability-managed types listed here require the channel adapter to
+ *    declare support explicitly. */
+export type SupportedPayloadType = "sticker";
+
 export type ChannelOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
   supportsStickerPayload?: boolean;
-  supportedPayloadTypes?: readonly string[];
+  supportedPayloadTypes?: readonly SupportedPayloadType[];
   chunker?: ((text: string, limit: number) => string[]) | null;
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
