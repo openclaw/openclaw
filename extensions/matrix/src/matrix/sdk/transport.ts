@@ -4,10 +4,9 @@ import {
   buildTimeoutAbortSignal,
   closeDispatcher,
   createPinnedDispatcher,
+  fetchWithRuntimeDispatcherOrMockedGlobal,
   resolvePinnedHostnameWithPolicy,
-  isMockedFetch,
   type SsrFPolicy,
-  fetchWithRuntimeDispatcher,
   type PinnedDispatcherPolicy,
 } from "./transport-runtime-api.js";
 
@@ -94,14 +93,11 @@ async function fetchWithMatrixDispatcher(params: {
   url: string;
   init: MatrixDispatcherRequestInit;
 }): Promise<Response> {
-  if (isMockedFetch(globalThis.fetch)) {
-    return await globalThis.fetch(params.url, params.init);
-  }
   // Keep this dispatcher-routing logic local to Matrix transport. Shared SSRF
   // fetches must stay fail-closed unless a retry path can preserve the
   // validated pinned-address binding. Route dispatcher-attached requests
   // through undici runtime fetch so the pinned dispatcher is preserved.
-  return await fetchWithRuntimeDispatcher(params.url, params.init);
+  return await fetchWithRuntimeDispatcherOrMockedGlobal(params.url, params.init);
 }
 
 async function fetchWithMatrixGuardedRedirects(params: {
