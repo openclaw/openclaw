@@ -1770,6 +1770,60 @@ module.exports = { id: "throws-after-import", register() {} };`,
     clearInternalHooks();
   });
 
+  it("rolls back global hook and command side effects when registration fails", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "failing-side-effects",
+      filename: "failing-side-effects.cjs",
+      body: `module.exports = {
+        id: "failing-side-effects",
+        register(api) {
+          api.registerHook(
+            "gateway:startup",
+            (event) => {
+              event.messages.push("should-not-run");
+            },
+            { name: "failing-side-effects-hook" },
+          );
+          api.registerCommand({
+            name: "failme",
+            description: "Fail me",
+            handler: async () => ({ text: "nope" }),
+          });
+          throw new Error("boom");
+        },
+      };`,
+    });
+
+    clearInternalHooks();
+    clearPluginCommands();
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["failing-side-effects"],
+        },
+      },
+      onlyPluginIds: ["failing-side-effects"],
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "failing-side-effects")?.status).toBe(
+      "error",
+    );
+    expect(getRegisteredEventKeys()).toEqual([]);
+    expect(getPluginCommandSpecs()).toEqual([]);
+
+    const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
+    await triggerInternalHook(event);
+    expect(event.messages).toEqual([]);
+
+    clearInternalHooks();
+    clearPluginCommands();
+  });
+
   it("can scope bundled provider loads to deepseek without hanging", () => {
     const scoped = loadOpenClawPlugins({
       cache: false,
