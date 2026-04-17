@@ -1795,6 +1795,18 @@ module.exports = { id: "throws-after-import", register() {} };`,
             description: "Fail me",
             handler: async () => ({ text: "nope" }),
           });
+          api.registerReload({
+            onConfigReload: async () => {},
+          });
+          api.registerNodeHostCommand({
+            command: "failme",
+            description: "failme",
+            run: async () => ({ ok: true }),
+          });
+          api.registerSecurityAuditCollector({
+            id: "failme",
+            collect: async () => [],
+          });
           api.registerInteractiveHandler({
             channel: "slack",
             namespace: "failme",
@@ -1831,6 +1843,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
     );
     expect(getRegisteredEventKeys()).toEqual([]);
     expect(getPluginCommandSpecs()).toEqual([]);
+    expect(registry.reloads).toEqual([]);
+    expect(registry.nodeHostCommands).toEqual([]);
+    expect(registry.securityAuditCollectors).toEqual([]);
     expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
     expect(getContextEngineFactory("failme-context")).toBeUndefined();
     expect(listContextEngineIds()).not.toContain("failme-context");
