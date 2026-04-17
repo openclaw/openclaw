@@ -9,7 +9,6 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { disposeSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
@@ -17,6 +16,7 @@ import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -35,6 +35,15 @@ import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
+
+type BundleMcpToolsRuntime = typeof import("../../agents/pi-bundle-mcp-tools.js");
+
+let bundleMcpToolsRuntimePromise: Promise<BundleMcpToolsRuntime> | undefined;
+
+async function loadBundleMcpToolsRuntime() {
+  bundleMcpToolsRuntimePromise ??= import("../../agents/pi-bundle-mcp-tools.js");
+  return await bundleMcpToolsRuntimePromise;
+}
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -149,6 +158,7 @@ export function createFollowupRunner(params: {
         ? queued
         : { ...queued, run: { ...queued.run, config: runtimeConfig } };
     const run = effectiveQueued.run;
+    const initialCleanupSessionId = run.sessionId;
     const replyOperation = createReplyOperation({
       sessionId: run.sessionId,
       sessionKey: replySessionKey ?? "",
@@ -399,11 +409,22 @@ export function createFollowupRunner(params: {
       await sendFollowupPayloads(finalPayloads, effectiveQueued);
     } finally {
       if (run.cleanupBundleMcpOnRunEnd === true) {
-        await disposeSessionMcpRuntime(run.sessionId).catch((error) => {
-          logVerbose(
-            `failed to dispose bundle MCP runtime for one-shot followup ${run.sessionId}: ${formatErrorMessage(error)}`,
-          );
-        });
+        const { disposeSessionMcpRuntime } = await loadBundleMcpToolsRuntime();
+        const sessionIds = new Set([
+          initialCleanupSessionId,
+          normalizeOptionalString(run.sessionId),
+          normalizeOptionalString(queued.run.sessionId),
+        ]);
+        for (const sessionId of sessionIds) {
+          if (!sessionId) {
+            continue;
+          }
+          await disposeSessionMcpRuntime(sessionId).catch((error) => {
+            logVerbose(
+              `failed to dispose bundle MCP runtime for one-shot followup ${sessionId}: ${formatErrorMessage(error)}`,
+            );
+          });
+        }
       }
       replyOperation.complete();
       // Both signals are required for the typing controller to clean up.

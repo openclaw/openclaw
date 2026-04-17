@@ -14,7 +14,6 @@ import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { disposeSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   isCompactionFailureError,
@@ -119,6 +118,15 @@ type FallbackSelectionState = Pick<
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
 >;
+
+type BundleMcpToolsRuntime = typeof import("../../agents/pi-bundle-mcp-tools.js");
+
+let bundleMcpToolsRuntimePromise: Promise<BundleMcpToolsRuntime> | undefined;
+
+async function loadBundleMcpToolsRuntime() {
+  bundleMcpToolsRuntimePromise ??= import("../../agents/pi-bundle-mcp-tools.js");
+  return await bundleMcpToolsRuntimePromise;
+}
 
 const FALLBACK_SELECTION_STATE_KEYS = [
   "providerOverride",
@@ -600,6 +608,7 @@ export async function runAgentTurnWithFallback(params: {
           ...params.followupRun.run,
           config: runtimeConfig,
         };
+  const initialCleanupSessionId = effectiveRun.sessionId;
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
@@ -1601,11 +1610,21 @@ export async function runAgentTurnWithFallback(params: {
     };
   } finally {
     if (effectiveRun.cleanupBundleMcpOnRunEnd === true) {
-      await disposeSessionMcpRuntime(effectiveRun.sessionId).catch((error) => {
-        logVerbose(
-          `failed to dispose bundle MCP runtime for one-shot run ${effectiveRun.sessionId}: ${formatErrorMessage(error)}`,
-        );
-      });
+      const { disposeSessionMcpRuntime } = await loadBundleMcpToolsRuntime();
+      const sessionIds = new Set([
+        initialCleanupSessionId,
+        normalizeOptionalString(params.followupRun.run.sessionId),
+      ]);
+      for (const sessionId of sessionIds) {
+        if (!sessionId) {
+          continue;
+        }
+        await disposeSessionMcpRuntime(sessionId).catch((error) => {
+          logVerbose(
+            `failed to dispose bundle MCP runtime for one-shot run ${sessionId}: ${formatErrorMessage(error)}`,
+          );
+        });
+      }
     }
   }
 }

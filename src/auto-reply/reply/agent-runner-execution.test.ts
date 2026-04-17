@@ -1743,13 +1743,15 @@ describe("runAgentTurnWithFallback", () => {
   });
 
   it("cleans up bundle MCP once after fallback selection completes", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: {},
-    });
-
     const followupRun = createFollowupRun();
     followupRun.run.cleanupBundleMcpOnRunEnd = true;
+    state.runEmbeddedPiAgentMock.mockImplementation(async () => {
+      followupRun.run.sessionId = "session-rotated";
+      return {
+        payloads: [{ text: "ok" }],
+        meta: {},
+      };
+    });
 
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -1789,8 +1791,11 @@ describe("runAgentTurnWithFallback", () => {
     expect(state.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).not.toHaveProperty(
       "cleanupBundleMcpOnRunEnd",
     );
-    expect(state.disposeSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
-    expect(state.disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session");
+    expect(state.disposeSessionMcpRuntimeMock).toHaveBeenCalledTimes(2);
+    expect(state.disposeSessionMcpRuntimeMock.mock.calls).toEqual([
+      ["session"],
+      ["session-rotated"],
+    ]);
   });
 
   it("does not persist fallback selection for legacy user overrides without modelOverrideSource", async () => {
