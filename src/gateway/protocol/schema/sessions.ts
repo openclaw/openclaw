@@ -186,6 +186,37 @@ export const SessionsPatchParamsSchema = Type.Object(
     planMode: Type.Optional(
       Type.Union([Type.Literal("plan"), Type.Literal("normal"), Type.Null()]),
     ),
+    /**
+     * PR-8 follow-up: resolve a pending plan approval emitted by
+     * `exit_plan_mode`. The action transitions
+     * `SessionEntry.planMode.approval` via `resolvePlanApproval` from
+     * the plan-mode lib (#67538):
+     *
+     * - `"approve"` / `"edit"` → mode flips to `"normal"`, mutations unlock.
+     * - `"reject"` → mode stays `"plan"`, rejectionCount++, optional
+     *   `feedback` is persisted for the agent's next-turn injection.
+     *
+     * `approvalId` is the version token the runtime emitted with the
+     * approval event; the server uses it to ignore stale clicks (e.g.
+     * the user clicking Approve on a plan that was already rejected on
+     * another surface). When omitted, the server still applies the
+     * action — surfaces that don't carry the version token (CLI prompts,
+     * legacy channels) get best-effort behavior.
+     */
+    planApproval: Type.Optional(
+      Type.Object(
+        {
+          action: Type.Union([
+            Type.Literal("approve"),
+            Type.Literal("reject"),
+            Type.Literal("edit"),
+          ]),
+          feedback: Type.Optional(NonEmptyString),
+          approvalId: Type.Optional(NonEmptyString),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );

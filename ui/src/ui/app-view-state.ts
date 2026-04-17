@@ -126,6 +126,15 @@ export type AppViewState = {
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalBusy: boolean;
   execApprovalError: string | null;
+  /**
+   * PR-8 / #67721: pending plan-approval request emitted by the runtime
+   * when the agent calls `exit_plan_mode`. Exactly one approval is
+   * tracked at a time per session — re-emits replace the prior request
+   * (the agent just minted a fresh approvalId so the old card is stale).
+   */
+  planApprovalRequest: import("./app-tool-stream.ts").PlanApprovalRequest | null;
+  planApprovalBusy: boolean;
+  planApprovalError: string | null;
   pendingGatewayUrl: string | null;
   configLoading: boolean;
   configRaw: string;
@@ -408,6 +417,11 @@ export type AppViewState = {
     handleNostrProfileImport: () => Promise<void>;
     handleNostrProfileToggleAdvanced: () => void;
     handleExecApprovalDecision: (decision: "allow-once" | "allow-always" | "deny") => Promise<void>;
+    /** PR-8 / #67721: resolve a pending plan-approval. */
+    handlePlanApprovalDecision: (
+      decision: "approve" | "reject" | "edit",
+      feedback?: string,
+    ) => Promise<void>;
     handleGatewayUrlConfirm: () => void;
     handleGatewayUrlCancel: () => void;
     handleConfigLoad: () => Promise<void>;

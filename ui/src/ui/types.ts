@@ -443,6 +443,22 @@ export type GatewaySessionRow = {
   contextTokens?: number;
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpoint;
+  // PR-8 / #67721: permission-mode + plan-mode fields exposed to the UI
+  // so the chat toolbar's mode chip can render the current session
+  // state. Backend writes these via `sessions.patch`; gateway includes
+  // them in `sessions.list` payloads when present on `SessionEntry`.
+  execSecurity?: "deny" | "allowlist" | "full";
+  execAsk?: "off" | "on-miss" | "always";
+  planMode?: {
+    mode: "plan" | "normal";
+    approval: "none" | "pending" | "approved" | "edited" | "rejected" | "timed_out";
+    approvalId?: string;
+    enteredAt?: number;
+    confirmedAt?: number;
+    updatedAt?: number;
+    feedback?: string;
+    rejectionCount?: number;
+  };
 };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;

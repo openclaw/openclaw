@@ -151,6 +151,7 @@ import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderLoginGate } from "./views/login-gate.ts";
 import { renderOverview } from "./views/overview.ts";
+import { renderPlanApprovalOverlay } from "./views/plan-approval.ts";
 
 // Lazy-loaded view modules – deferred so the initial bundle stays small.
 // Each loader resolves once; subsequent calls return the cached module.
@@ -2340,6 +2341,46 @@ export function renderApp(state: AppViewState) {
               allowExternalEmbedUrls: state.allowExternalEmbedUrls,
               assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
               basePath: state.basePath ?? "",
+              onSetMode: (mode) => {
+                // PR-8 / #67721: translate the chip selection into the
+                // appropriate sessions.patch call. Plan mode is its own
+                // dimension and does NOT touch execSecurity/execAsk; the
+                // permission modes (Ask/Accept/Bypass) toggle execSecurity
+                // + execAsk while leaving plan-mode state untouched. If
+                // the user picks anything-but-plan while a plan-mode
+                // session is active, also clear plan mode so the chip
+                // labels match the actual runtime state.
+                if (!state.client || !state.connected) {
+                  return;
+                }
+                const sessionKey = state.sessionKey;
+                const planAction: "plan" | "normal" | null =
+                  mode.planMode === "plan" ? "plan" : "normal";
+                const patch: Record<string, unknown> = { key: sessionKey };
+                if (mode.planMode === "plan") {
+                  patch.planMode = "plan";
+                } else {
+                  // Clear any active plan mode so the chip + backend agree.
+                  patch.planMode = "normal";
+                  if (mode.execSecurity !== undefined) {
+                    patch.execSecurity = mode.execSecurity;
+                  }
+                  if (mode.execAsk !== undefined) {
+                    patch.execAsk = mode.execAsk;
+                  }
+                }
+                void state.client.request("sessions.patch", patch).then(
+                  () => {
+                    state.lastError = null;
+                  },
+                  (err: unknown) => {
+                    state.lastError =
+                      planAction === "plan"
+                        ? `Failed to enter plan mode: ${String(err)}`
+                        : `Failed to set mode: ${String(err)}`;
+                  },
+                );
+              },
             })
           : nothing}
         ${renderConfigTabForActiveTab()}
@@ -2448,7 +2489,8 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
       </main>
-      ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)} ${nothing}
+      ${renderExecApprovalPrompt(state)} ${renderPlanApprovalOverlay(state)}
+      ${renderGatewayUrlConfirmation(state)} ${nothing}
     </div>
   `;
 }

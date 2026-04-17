@@ -17,6 +17,21 @@ import {
   resolveAssistantTextAvatar,
 } from "../chat/grouped-render.ts";
 import { InputHistory } from "../chat/input-history.ts";
+import { extractTextCached } from "../chat/message-extract.ts";
+import {
+  isToolResultMessage,
+  normalizeMessage,
+  normalizeRoleForGrouping,
+} from "../chat/message-normalizer.ts";
+import {
+  // handleModeShortcut TODO(PR-8 follow-up): wire Ctrl+1-4 keyboard
+  // shortcuts on the chat surface. Skipping in this iteration since the
+  // chip menu + /plan slash command already cover the path; the
+  // shortcut needs a window-level keydown listener wired in app.ts.
+  type ModeDefinition,
+  renderModeSwitcher,
+  resolveCurrentMode,
+} from "../chat/mode-switcher.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
@@ -122,6 +137,14 @@ export type ChatProps = {
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
   basePath?: string;
+  /**
+   * PR-8 / #67721: invoked when the user picks a mode from the chip menu
+   * (or hits the Ctrl+1-4 keyboard shortcut). The host translates the
+   * `ModeDefinition` into the appropriate `sessions.patch` calls
+   * (planMode for plan, execSecurity/execAsk for permission modes).
+   * Optional so existing callers that don't yet wire it stay compiling.
+   */
+  onSetMode?: (mode: ModeDefinition) => void;
 };
 
 // Persistent instances keyed by session
@@ -162,6 +185,8 @@ interface ChatEphemeralState {
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
+  /** PR-8 / #67721: mode-switcher chip menu open state. */
+  modeMenuOpen: boolean;
 }
 
 function createChatEphemeralState(): ChatEphemeralState {
@@ -178,6 +203,7 @@ function createChatEphemeralState(): ChatEphemeralState {
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
+    modeMenuOpen: false,
   };
 }
 
@@ -1341,6 +1367,34 @@ export function renderChat(props: ChatProps) {
                   </button>
                 `
               : nothing}
+            ${(() => {
+              // PR-8 / #67721: render the mode chip when the host wired
+              // `onSetMode`. Reads the current mode from the active
+              // session row (planMode wins; falls back to permission
+              // pair; falls back to a synthesized "Custom" chip when
+              // neither matches a preset).
+              if (!props.onSetMode) {
+                return nothing;
+              }
+              const currentMode = resolveCurrentMode(
+                activeSession?.execSecurity,
+                activeSession?.execAsk,
+                activeSession?.planMode?.mode,
+              );
+              return renderModeSwitcher({
+                currentMode,
+                menuOpen: vs.modeMenuOpen,
+                onToggleMenu: () => {
+                  vs.modeMenuOpen = !vs.modeMenuOpen;
+                  requestUpdate();
+                },
+                onSelectMode: (mode) => {
+                  vs.modeMenuOpen = false;
+                  props.onSetMode!(mode);
+                  requestUpdate();
+                },
+              });
+            })()}
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
           </div>
 

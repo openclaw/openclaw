@@ -1463,6 +1463,11 @@ export function buildGatewaySessionRow(params: {
     lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
     compactionCheckpointCount: entry?.compactionCheckpoints?.length,
     latestCompactionCheckpoint,
+    // PR-8 / #67721: surface permission-mode + plan-mode state on the
+    // session row so the UI mode chip can render the current state.
+    execSecurity: entry?.execSecurity,
+    execAsk: entry?.execAsk,
+    planMode: entry?.planMode,
   };
 }
 

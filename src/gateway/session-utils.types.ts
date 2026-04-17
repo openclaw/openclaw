@@ -82,6 +82,14 @@ export type GatewaySessionRow = {
   lastThreadId?: SessionEntry["lastThreadId"];
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpoint;
+  // PR-8 / #67721: surface mode-state on the session row so the UI
+  // mode chip can render the current selection rather than always
+  // defaulting to Ask. Backend writes these via `sessions.patch`;
+  // gateway includes them on `sessions.list` payloads.
+  execHost?: SessionEntry["execHost"];
+  execSecurity?: SessionEntry["execSecurity"];
+  execAsk?: SessionEntry["execAsk"];
+  planMode?: SessionEntry["planMode"];
 };
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
