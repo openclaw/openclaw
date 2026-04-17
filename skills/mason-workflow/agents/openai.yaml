@@ -1,4 +1,0 @@
-interface:
-  display_name: "Mason Workflow"
-  short_description: "Bootstrap clean worktree for bug/security/feature work"
-  default_prompt: "Use $mason-workflow to bootstrap a clean data-disk worktree from latest upstream/main, mount my_docs there as a symlink to /data/code/openclaw/oss-docs/openclaw-docs, scaffold a dated case folder, rely on the shared docs tree's .oxlintrc.json to keep my_docs out of oxlint, and start analysis from that worktree before implementation. Ensure the case README explains why the work matters, expected regression risk, and how maintainers/users can verify the result. Specify --type bug|security|feat to select the workflow template."
