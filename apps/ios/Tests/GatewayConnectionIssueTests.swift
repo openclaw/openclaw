@@ -67,7 +67,9 @@ import Testing
     }
 
     @Test func detectsOtherErrorsEvenWhenRequestIdPresentButNotPairing() {
-        // Even if text includes requestId-like text, pairing detection must win first
+        // `extractRequestId` is called only on the pairing branch. Even if the status
+        // text contains a requestId marker, it should be ignored when the issue resolves
+        // to something other than .pairingRequired.
         let issue = GatewayConnectionIssue.detect(from: "gateway error: unauthorized (requestId: should-be-ignored)")
         #expect(issue == .unauthorized)
         #expect(issue.requestId == nil)
