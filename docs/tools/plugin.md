@@ -94,7 +94,7 @@ and the [Plugin SDK Overview](/plugins/sdk-overview).
 
 <AccordionGroup>
   <Accordion title="Model providers (enabled by default)">
-    `anthropic`, `byteplus`, `cloudflare-ai-gateway`, `github-copilot`, `google`,
+    `abliteration`, `anthropic`, `byteplus`, `cloudflare-ai-gateway`, `github-copilot`, `google`,
     `huggingface`, `kilocode`, `kimi-coding`, `minimax`, `mistral`, `qwen`,
     `moonshot`, `nvidia`, `openai`, `opencode`, `opencode-go`, `openrouter`,
     `qianfan`, `synthetic`, `together`, `venice`,

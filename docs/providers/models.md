@@ -24,6 +24,7 @@ model as `provider/model`.
 
 ## Supported providers (starter set)
 
+- [Abliteration](/providers/abliteration)
 - [Alibaba Model Studio](/providers/alibaba)
 - [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [Amazon Bedrock](/providers/bedrock)

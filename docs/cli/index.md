@@ -523,7 +523,7 @@ Options:
 - `--mode <local|remote>`
 - `--flow <quickstart|advanced|manual>` (manual is an alias for advanced)
 - `--auth-choice <choice>` where `<choice>` is one of:
-  `chutes`, `deepseek-api-key`, `openai-codex`, `openai-api-key`,
+  `abliteration-api-key`, `chutes`, `deepseek-api-key`, `openai-codex`, `openai-api-key`,
   `openrouter-api-key`, `kilocode-api-key`, `litellm-api-key`, `ai-gateway-api-key`,
   `cloudflare-ai-gateway-api-key`, `moonshot-api-key`, `moonshot-api-key-cn`,
   `kimi-code-api-key`, `synthetic-api-key`, `venice-api-key`, `together-api-key`,

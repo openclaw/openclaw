@@ -430,6 +430,8 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - MiniMax onboarding/API-key setup writes explicit M2.7 model definitions with
   `input: ["text", "image"]`; the bundled provider catalog keeps the chat refs
   text-only until that provider config is materialized
+- Abliteration: `abliteration` (`ABLITERATION_API_KEY`)
+- Example model: `abliteration/abliterated-model`
 - Moonshot: `moonshot` (`MOONSHOT_API_KEY`)
 - Example model: `moonshot/kimi-k2.5`
 - Kimi Coding: `kimi` (`KIMI_API_KEY` or `KIMICODE_API_KEY`)
@@ -642,6 +644,34 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
         apiKey: "${SYNTHETIC_API_KEY}",
         api: "anthropic-messages",
         models: [{ id: "hf:MiniMaxAI/MiniMax-M2.5", name: "MiniMax M2.5" }],
+      },
+    },
+  },
+}
+```
+
+### Abliteration
+
+Abliteration ships as a bundled Anthropic-compatible provider:
+
+- Provider: `abliteration`
+- Auth: `ABLITERATION_API_KEY`
+- Example model: `abliteration/abliterated-model`
+- CLI: `openclaw onboard --auth-choice abliteration-api-key`
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "abliteration/abliterated-model" } },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      abliteration: {
+        baseUrl: "https://api.abliteration.ai",
+        apiKey: "${ABLITERATION_API_KEY}",
+        api: "anthropic-messages",
+        models: [{ id: "abliterated-model", name: "Abliterated Model" }],
       },
     },
   },

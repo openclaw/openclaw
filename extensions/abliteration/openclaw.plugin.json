@@ -1,0 +1,28 @@
+{
+  "id": "abliteration",
+  "enabledByDefault": true,
+  "providers": ["abliteration"],
+  "providerAuthEnvVars": {
+    "abliteration": ["ABLITERATION_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "abliteration",
+      "method": "api-key",
+      "choiceId": "abliteration-api-key",
+      "choiceLabel": "Abliteration API key",
+      "groupId": "abliteration",
+      "groupLabel": "Abliteration",
+      "groupHint": "Anthropic-compatible",
+      "optionKey": "abliterationApiKey",
+      "cliFlag": "--abliteration-api-key",
+      "cliOption": "--abliteration-api-key <key>",
+      "cliDescription": "Abliteration API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

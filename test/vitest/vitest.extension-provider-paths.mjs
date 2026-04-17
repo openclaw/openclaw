@@ -1,6 +1,7 @@
 import { bundledPluginRoot } from "../../scripts/lib/bundled-plugin-paths.mjs";
 
 export const providerExtensionIds = [
+  "abliteration",
   "amazon-bedrock",
   "amazon-bedrock-mantle",
   "anthropic",
