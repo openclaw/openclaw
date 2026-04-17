@@ -769,3 +769,7 @@ export const matrixOnboardingAdapter: ChannelSetupWizardAdapter = {
     },
   }),
 };
+
+export const __testing = {
+  promptMatrixAllowFrom,
+};
