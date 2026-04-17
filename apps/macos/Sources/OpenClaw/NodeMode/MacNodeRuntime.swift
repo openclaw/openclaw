@@ -4,6 +4,8 @@ import OpenClawIPC
 import OpenClawKit
 
 actor MacNodeRuntime {
+    private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
+    private static let maxScreenSnapshotImageBytes = (maxGatewayPayloadBytes / 4) * 3
     private let cameraCapture = CameraCaptureService()
     private let makeMainActorServices: () async -> any MacNodeRuntimeMainActorServices
     private let browserProxyRequest: @Sendable (String?) async throws -> String
@@ -355,15 +357,40 @@ actor MacNodeRuntime {
     }
 
     private func handleScreenSnapshotInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = (try? Self.decodeParams(MacNodeScreenSnapshotParams.self, from: req.paramsJSON)) ??
-            MacNodeScreenSnapshotParams()
+        let params: MacNodeScreenSnapshotParams
+        if let paramsJSON = req.paramsJSON {
+            do {
+                params = try Self.decodeParams(MacNodeScreenSnapshotParams.self, from: paramsJSON)
+            } catch {
+                return Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: invalid screen snapshot params")
+            }
+        } else {
+            params = MacNodeScreenSnapshotParams()
+        }
         let services = await self.mainActorServices()
         let capturedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let res = try await services.snapshotScreen(
-            screenIndex: params.screenIndex,
-            maxWidth: params.maxWidth,
-            quality: params.quality,
-            format: params.format)
+        let res: (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+        do {
+            res = try await services.snapshotScreen(
+                screenIndex: params.screenIndex,
+                maxWidth: params.maxWidth,
+                quality: params.quality,
+                format: params.format)
+        } catch {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "UNAVAILABLE: screen snapshot failed")
+        }
+        if res.data.count > Self.maxScreenSnapshotImageBytes {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "UNAVAILABLE: screen snapshot payload too large; reduce maxWidth or use jpeg")
+        }
         struct ScreenSnapshotPayload: Encodable {
             var format: String
             var base64: String

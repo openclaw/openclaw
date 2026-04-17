@@ -228,6 +228,194 @@ struct MacNodeRuntimeTests {
         #expect(payload.capturedAtMs <= snapshotCalledAtMs!)
     }
 
+    @Test func `handle invoke screen snapshot rejects malformed params`() async throws {
+        @MainActor
+        final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            var snapshotCallCount = 0
+
+            func snapshotScreen(
+                screenIndex: Int?,
+                maxWidth: Int?,
+                quality: Double?,
+                format: OpenClawScreenSnapshotFormat?) async throws
+                -> (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+            {
+                snapshotCallCount += 1
+                _ = screenIndex
+                _ = maxWidth
+                _ = quality
+                _ = format
+                return (Data("ok".utf8), .jpeg, 10, 10)
+            }
+
+            func recordScreen(
+                screenIndex: Int?,
+                durationMs: Int?,
+                fps: Double?,
+                includeAudio: Bool?,
+                outPath: String?) async throws -> (path: String, hasAudio: Bool)
+            {
+                let url = FileManager().temporaryDirectory
+                    .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")
+                try Data("ok".utf8).write(to: url)
+                return (path: url.path, hasAudio: false)
+            }
+
+            func locationAuthorizationStatus() -> CLAuthorizationStatus { .authorizedAlways }
+            func locationAccuracyAuthorization() -> CLAccuracyAuthorization { .fullAccuracy }
+            func currentLocation(
+                desiredAccuracy: OpenClawLocationAccuracy,
+                maxAgeMs: Int?,
+                timeoutMs: Int?) async throws -> CLLocation
+            {
+                _ = desiredAccuracy
+                _ = maxAgeMs
+                _ = timeoutMs
+                return CLLocation(latitude: 0, longitude: 0)
+            }
+        }
+
+        let services = await MainActor.run { FakeMainActorServices() }
+        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-screen-snapshot-invalid",
+                command: MacNodeScreenCommand.snapshot.rawValue,
+                paramsJSON: "{\"screenIndex\":"))
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .invalidRequest)
+        #expect(response.error?.message == "INVALID_REQUEST: invalid screen snapshot params")
+        let snapshotCallCount = await MainActor.run { services.snapshotCallCount }
+        #expect(snapshotCallCount == 0)
+    }
+
+    @Test func `handle invoke screen snapshot sanitizes capture failures`() async throws {
+        struct SensitiveError: LocalizedError {
+            let detail: String
+            var errorDescription: String? { detail }
+        }
+
+        @MainActor
+        final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            func snapshotScreen(
+                screenIndex: Int?,
+                maxWidth: Int?,
+                quality: Double?,
+                format: OpenClawScreenSnapshotFormat?) async throws
+                -> (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+            {
+                _ = screenIndex
+                _ = maxWidth
+                _ = quality
+                _ = format
+                throw SensitiveError(detail: "TCC_DENIED display-id=ABC123")
+            }
+
+            func recordScreen(
+                screenIndex: Int?,
+                durationMs: Int?,
+                fps: Double?,
+                includeAudio: Bool?,
+                outPath: String?) async throws -> (path: String, hasAudio: Bool)
+            {
+                let url = FileManager().temporaryDirectory
+                    .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")
+                try Data("ok".utf8).write(to: url)
+                return (path: url.path, hasAudio: false)
+            }
+
+            func locationAuthorizationStatus() -> CLAuthorizationStatus { .authorizedAlways }
+            func locationAccuracyAuthorization() -> CLAccuracyAuthorization { .fullAccuracy }
+            func currentLocation(
+                desiredAccuracy: OpenClawLocationAccuracy,
+                maxAgeMs: Int?,
+                timeoutMs: Int?) async throws -> CLLocation
+            {
+                _ = desiredAccuracy
+                _ = maxAgeMs
+                _ = timeoutMs
+                return CLLocation(latitude: 0, longitude: 0)
+            }
+        }
+
+        let runtime = MacNodeRuntime(makeMainActorServices: { await MainActor.run { FakeMainActorServices() } })
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-screen-snapshot-error",
+                command: MacNodeScreenCommand.snapshot.rawValue))
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .unavailable)
+        #expect(response.error?.message == "UNAVAILABLE: screen snapshot failed")
+    }
+
+    @Test func `handle invoke screen snapshot rejects oversized payloads`() async throws {
+        let payloadSize = 20_000_000
+
+        @MainActor
+        final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            let payload: Data
+
+            init(payloadSize: Int) {
+                self.payload = Data(repeating: 0x41, count: payloadSize)
+            }
+
+            func snapshotScreen(
+                screenIndex: Int?,
+                maxWidth: Int?,
+                quality: Double?,
+                format: OpenClawScreenSnapshotFormat?) async throws
+                -> (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+            {
+                _ = screenIndex
+                _ = maxWidth
+                _ = quality
+                _ = format
+                return (payload, .jpeg, 4000, 3000)
+            }
+
+            func recordScreen(
+                screenIndex: Int?,
+                durationMs: Int?,
+                fps: Double?,
+                includeAudio: Bool?,
+                outPath: String?) async throws -> (path: String, hasAudio: Bool)
+            {
+                let url = FileManager().temporaryDirectory
+                    .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")
+                try Data("ok".utf8).write(to: url)
+                return (path: url.path, hasAudio: false)
+            }
+
+            func locationAuthorizationStatus() -> CLAuthorizationStatus { .authorizedAlways }
+            func locationAccuracyAuthorization() -> CLAccuracyAuthorization { .fullAccuracy }
+            func currentLocation(
+                desiredAccuracy: OpenClawLocationAccuracy,
+                maxAgeMs: Int?,
+                timeoutMs: Int?) async throws -> CLLocation
+            {
+                _ = desiredAccuracy
+                _ = maxAgeMs
+                _ = timeoutMs
+                return CLLocation(latitude: 0, longitude: 0)
+            }
+        }
+
+        let runtime = MacNodeRuntime(
+            makeMainActorServices: { await MainActor.run { FakeMainActorServices(payloadSize: payloadSize) } })
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-screen-snapshot-too-large",
+                command: MacNodeScreenCommand.snapshot.rawValue))
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .unavailable)
+        #expect(
+            response.error?.message ==
+                "UNAVAILABLE: screen snapshot payload too large; reduce maxWidth or use jpeg")
+    }
+
     @Test func `handle invoke browser proxy uses injected request`() async {
         let runtime = MacNodeRuntime(browserProxyRequest: { paramsJSON in
             #expect(paramsJSON?.contains("/tabs") == true)
