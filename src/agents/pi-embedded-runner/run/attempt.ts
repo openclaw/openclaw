@@ -527,6 +527,7 @@ export async function runEmbeddedAttempt(
     // prompt and would otherwise never see the rules). Built once here
     // and prepended to the final appendPrompt below so it lands no
     // matter which branch produced the base prompt.
+    const planModeFeatureEnabled = params.config?.agents?.defaults?.planMode?.enabled === true;
     const planModeAppendPrompt =
       params.planMode === "plan"
         ? [
@@ -542,10 +543,27 @@ export async function runEmbeddedAttempt(
             "- Mutating tools (write, edit, exec, bash with side-effects, apply_patch) are BLOCKED by the runtime. Calling them returns a tool error and wastes a turn.",
             "- Do NOT write the plan as a markdown list in your reply text. Use the `exit_plan_mode` tool — that's how the user actually sees the plan with action buttons.",
             "- If the user asks for a plan, your response should be: a brief sentence acknowledging, followed by the `exit_plan_mode` tool call. Nothing else.",
+            "- Do NOT call `enter_plan_mode` again — you're already in plan mode. Calling it now is a no-op; just propose via `exit_plan_mode`.",
             "",
             "═════════════════════════",
           ].join("\n")
-        : "";
+        : planModeFeatureEnabled
+          ? [
+              "═══ PLAN MODE AVAILABLE ═══",
+              "",
+              "Plan mode is available on this session but not currently active. When the user asks for a NEW plan / debugging-plan / refactor-plan / 'next plan' / a plan-first workflow, call `enter_plan_mode` to start a fresh planning cycle. The runtime will arm the mutation gate and you should then:",
+              "",
+              "1. Investigate read-only (use update_plan for in-progress tracking).",
+              "2. Call `exit_plan_mode` with the proposed plan to surface Accept/Edit/Reject buttons to the user.",
+              "3. After approval, mutating tools unlock and you execute.",
+              "",
+              "If the user is already executing an approved plan and asks you to keep going, do NOT re-enter plan mode — just continue executing the work.",
+              "",
+              "If the user asks a simple question or for a quick non-planning answer, do NOT enter plan mode. Plan mode is for multi-step proposals that benefit from explicit user approval before mutations.",
+              "",
+              "═════════════════════════════",
+            ].join("\n")
+          : "";
 
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
 

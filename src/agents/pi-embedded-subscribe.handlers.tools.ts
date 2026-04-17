@@ -159,6 +159,80 @@ async function persistPlanApprovalRequest(
   }
 }
 
+/**
+ * Persist plan-mode entry on the session entry when the agent calls
+ * `enter_plan_mode`. Without this the tool is a pure no-op — the agent
+ * thinks it entered plan mode, the runtime never armed the gate, and
+ * the agent's next turn sits idle because nothing changed.
+ *
+ * Gated on the same `agents.defaults.planMode.enabled` opt-in as the
+ * user-driven path so the agent can't escape the operator's feature
+ * flag.
+ */
+async function persistPlanModeEnter(
+  sessionKey: string,
+  log: { warn?: (msg: string) => void } | undefined,
+): Promise<boolean> {
+  try {
+    const [
+      { updateSessionStoreEntry },
+      { loadConfig },
+      { resolveStorePath },
+      { parseAgentSessionKey },
+    ] = await Promise.all([
+      loadSessionStoreRuntime(),
+      loadConfigModule(),
+      loadSessionPaths(),
+      loadRouting(),
+    ]);
+    const cfg = loadConfig();
+    if (cfg.agents?.defaults?.planMode?.enabled !== true) {
+      // Feature gated off — refuse the transition. Agent will see the
+      // tool succeed but no state change; the workspaceNotes / tool
+      // description should explain plan mode is disabled.
+      return false;
+    }
+    const parsed = parseAgentSessionKey(sessionKey);
+    const storePath = resolveStorePath(
+      cfg.session?.store,
+      parsed?.agentId ? { agentId: parsed.agentId } : {},
+    );
+    const now = Date.now();
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async (entry) => {
+        const current = entry.planMode;
+        if (current?.mode === "plan") {
+          // Already in plan mode — refresh updatedAt only.
+          return {
+            planMode: {
+              ...current,
+              updatedAt: now,
+            },
+          };
+        }
+        // Fresh entry: clear any stale rejection history, reset to a
+        // clean pending-nothing state. Mirrors the sessions.patch
+        // { planMode: "plan" } user-driven path.
+        return {
+          planMode: {
+            mode: "plan",
+            approval: "none",
+            enteredAt: now,
+            updatedAt: now,
+            rejectionCount: 0,
+          },
+        };
+      },
+    });
+    return true;
+  } catch (err) {
+    log?.warn?.(`failed to persist plan-mode entry: ${String(err)}`);
+    return false;
+  }
+}
+
 type ToolStartRecord = {
   startTime: number;
   args: unknown;
@@ -1248,6 +1322,36 @@ export async function handleToolExecutionEnd(
   // happen via the user-driven `sessions.patch { planMode: "plan" }`
   // pathway. We don't auto-enter plan mode from a tool call alone (that
   // would let the agent escape the user's opt-in gate).
+  // PR-8 follow-up: agent-driven plan-mode entry. Without persisting
+  // the session.planMode change here, enter_plan_mode is a no-op and
+  // the agent gets stuck thinking plan mode is on when it isn't.
+  // Symptom: agent says "opening a fresh plan cycle" then stops, no
+  // exit_plan_mode call follows because the agent's prompt logic
+  // believes the user must propose work first in plan mode.
+  if (toolName === "enter_plan_mode" && !isToolError && ctx.params.sessionKey) {
+    const ok = await persistPlanModeEnter(ctx.params.sessionKey, ctx.log);
+    if (ok) {
+      const planEnterEvent: AgentApprovalEventData = {
+        phase: "requested",
+        kind: "plugin",
+        status: "pending",
+        title: "Plan mode entered",
+        itemId,
+        toolCallId,
+        plan: [],
+      };
+      // Emit a lightweight event so any UI surface that tracks
+      // mode-state transitions sees the change immediately. We
+      // intentionally use the approval channel so it shares the same
+      // delivery path; UI treats empty plan + status pending as the
+      // "mode-entered" signal.
+      void ctx.params.onAgentEvent?.({
+        stream: "approval",
+        data: planEnterEvent,
+      });
+    }
+  }
+
   if (toolName === "exit_plan_mode" && !isToolError) {
     const details = readPlanProposalDetails(result);
     if (details && details.plan.length > 0) {
