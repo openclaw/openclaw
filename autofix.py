@@ -273,37 +273,60 @@ def _call_claude_subscription(system: str, user_msg: str) -> str:
     """Run Claude via the Agent SDK subprocess against the operator's
     `claude login` session. Non-interactive: feeds the prompt on stdin
     and collects stdout. No metered billing."""
+    node_bin = _resolve_node_bin()
     sdk_cli = _resolve_sdk_cli()
     prompt = f"{system}\n\n---\n\n{user_msg}"
-    try:
-        proc = subprocess.run(
-            [
-                "node",
-                sdk_cli,
-                "-p",
-                prompt,
-                "--model",
-                MODEL,
-                "--output-format",
-                "text",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=300,
-            check=False,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except FileNotFoundError:
-        sys.exit(
-            "ERROR: `node` not on PATH; required for subscription-mode autofix. "
-            "Set AUTOFIX_AUTH_MODE=api-key to use the HTTP path instead."
-        )
+    proc = subprocess.run(
+        [
+            node_bin,
+            sdk_cli,
+            "-p",
+            prompt,
+            "--model",
+            MODEL,
+            "--output-format",
+            "text",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+        encoding="utf-8",
+        errors="replace",
+    )
     if proc.returncode != 0:
         print(f"Agent SDK subprocess exited {proc.returncode}", file=sys.stderr)
         print(f"stderr: {proc.stderr[:2000]}", file=sys.stderr)
         raise RuntimeError(f"Claude Agent SDK failed (exit {proc.returncode})")
     return proc.stdout
+
+
+def _resolve_node_bin() -> str:
+    """Resolve the full path to the `node` executable.
+
+    Relying on subprocess's PATH search is fragile on Windows:
+    Microsoft Store Python and other sandboxed builds can miss system
+    node.exe even when the parent shell finds it fine, because the
+    child process's PATH resolution differs. Resolving to an absolute
+    path via shutil.which first, then a short list of standard install
+    locations, removes that failure mode."""
+    resolved = shutil.which("node")
+    if resolved:
+        return resolved
+    for candidate in (
+        Path("C:/Program Files/nodejs/node.exe"),
+        Path("C:/Program Files (x86)/nodejs/node.exe"),
+        Path("/usr/local/bin/node"),
+        Path("/usr/bin/node"),
+        Path("/opt/homebrew/bin/node"),
+    ):
+        if candidate.exists():
+            return str(candidate)
+    sys.exit(
+        "ERROR: could not locate `node`. Install Node.js 22 LTS from "
+        "https://nodejs.org/en/download and restart your shell "
+        "(or set AUTOFIX_AUTH_MODE=api-key to use the metered HTTP path)."
+    )
 
 
 def _resolve_sdk_cli() -> str:
