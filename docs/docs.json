@@ -1051,6 +1051,7 @@
                   "concepts/architecture",
                   "concepts/agent",
                   "concepts/agent-loop",
+                  "concepts/claude-sdk-runtime",
                   "concepts/system-prompt",
                   "concepts/context",
                   "concepts/context-engine",
