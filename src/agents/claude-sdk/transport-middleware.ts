@@ -122,7 +122,7 @@ export async function resolveSdkCredential(
     : resolveAuthProfileOrder({ cfg, store, provider: "anthropic" });
 
   for (const profileId of candidateOrder) {
-    const resolved = await resolveApiKeyForProfile({ cfg, store, profileId });
+    const resolved = await resolveApiKeyForProfile({ cfg, store, profileId, agentDir });
     if (!resolved) {
       continue;
     }
