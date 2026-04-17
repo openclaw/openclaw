@@ -151,6 +151,7 @@ describe("chat view", () => {
           assistantName: "Assistant",
           assistantAvatar: "A",
           assistantAvatarUrl: null,
+          basePath: "/openclaw/",
         }),
       ),
       container,
@@ -160,42 +161,20 @@ describe("chat view", () => {
     );
     expect(container.querySelector<HTMLImageElement>(".agent-chat__welcome > img")).toBeNull();
     expect(logoImage).not.toBeNull();
-    expect(logoImage?.getAttribute("src")).toBe("favicon.svg");
-
-    render(
-      renderChat(
-        createProps({
-          assistantName: "Assistant",
-          assistantAvatar: "A",
-          assistantAvatarUrl: null,
-          basePath: "/openclaw/",
-        }),
-      ),
-      container,
-    );
     expect(
       container
         .querySelector<HTMLImageElement>(".agent-chat__welcome .agent-chat__avatar--logo img")
         ?.getAttribute("src"),
     ).toBe("/openclaw/favicon.svg");
 
-    render(
-      renderChat(
-        createProps({
-          assistantName: "Assistant",
-          assistantAvatar: "A",
-          assistantAvatarUrl: null,
-          basePath: "/openclaw/",
-          messages: [
-            {
-              role: "assistant",
-              content: "hello",
-              timestamp: 1000,
-            },
-          ],
-        }),
-      ),
+    renderAssistantMessage(
       container,
+      {
+        role: "assistant",
+        content: "hello",
+        timestamp: 1000,
+      },
+      { basePath: "/openclaw/" },
     );
     const groupedLogo = container.querySelector<HTMLImageElement>(
       ".chat-group.assistant .chat-avatar--logo",
