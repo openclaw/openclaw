@@ -1,5 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+type MockChannelSetupEntry = {
+  id: string;
+  pluginId?: string;
+  meta: {
+    id: string;
+    label: string;
+    selectionLabel?: string;
+    docsPath?: string;
+    docsLabel?: string;
+    blurb?: string;
+    selectionDocsPrefix?: string;
+    selectionExtras?: readonly string[];
+    exposure?: { setup?: boolean };
+    showInSetup?: boolean;
+    quickstartAllowFrom?: boolean;
+  };
+};
+
+type MockChannelSetupEntries = {
+  entries: MockChannelSetupEntry[];
+  installedCatalogEntries: MockChannelSetupEntry[];
+  installableCatalogEntries: MockChannelSetupEntry[];
+  installedCatalogById: Map<unknown, unknown>;
+  installableCatalogById: Map<unknown, unknown>;
+};
+
 const listChatChannels = vi.hoisted(() =>
   vi.fn(() => [
     { id: "discord", label: "Discord" },
@@ -7,21 +33,29 @@ const listChatChannels = vi.hoisted(() =>
   ]),
 );
 const resolveChannelSetupEntries = vi.hoisted(() =>
-  vi.fn(() => ({
-    entries: [],
-    installedCatalogEntries: [],
-    installableCatalogEntries: [],
-    installedCatalogById: new Map(),
-    installableCatalogById: new Map(),
-  })),
+  vi.fn(
+    (_params?: unknown): MockChannelSetupEntries => ({
+      entries: [],
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
+    }),
+  ),
 );
 const formatChannelPrimerLine = vi.hoisted(() =>
-  vi.fn((meta: { label: string; blurb: string }) => `${meta.label}: ${meta.blurb}`),
+  vi.fn((meta: unknown) => {
+    const channel = meta as { label: string; blurb: string };
+    return `${channel.label}: ${channel.blurb}`;
+  }),
 );
 const formatChannelSelectionLine = vi.hoisted(() =>
-  vi.fn((meta: { label: string; blurb: string }) => `${meta.label} — ${meta.blurb}`),
+  vi.fn((meta: unknown, _docsLink?: unknown) => {
+    const channel = meta as { label: string; blurb: string };
+    return `${channel.label} — ${channel.blurb}`;
+  }),
 );
-const isChannelConfigured = vi.hoisted(() => vi.fn(() => false));
+const isChannelConfigured = vi.hoisted(() => vi.fn((_cfg?: unknown, _channelId?: string) => false));
 
 vi.mock("../channels/chat-meta.js", () => ({
   listChatChannels: () => listChatChannels(),
@@ -64,12 +98,14 @@ describe("resolveChannelSetupSelectionContributions", () => {
       installedCatalogById: new Map(),
       installableCatalogById: new Map(),
     });
-    formatChannelPrimerLine.mockImplementation(
-      (meta: { label: string; blurb: string }) => `${meta.label}: ${meta.blurb}`,
-    );
-    formatChannelSelectionLine.mockImplementation(
-      (meta: { label: string; blurb: string }) => `${meta.label} — ${meta.blurb}`,
-    );
+    formatChannelPrimerLine.mockImplementation((meta: unknown) => {
+      const channel = meta as { label: string; blurb: string };
+      return `${channel.label}: ${channel.blurb}`;
+    });
+    formatChannelSelectionLine.mockImplementation((meta: unknown) => {
+      const channel = meta as { label: string; blurb: string };
+      return `${channel.label} — ${channel.blurb}`;
+    });
     isChannelConfigured.mockReturnValue(false);
   });
 

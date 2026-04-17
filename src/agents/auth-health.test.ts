@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CodexCliCredential } from "./cli-credentials.js";
 
 const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
-  readCodexCliCredentialsCachedMock: vi.fn(() => null),
+  readCodexCliCredentialsCachedMock: vi.fn((): CodexCliCredential | null => null),
 }));
 
 vi.mock("./cli-credentials.js", () => ({

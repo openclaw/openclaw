@@ -11,7 +11,14 @@ const getChannelSetupPlugin = vi.hoisted(() => vi.fn((_channel?: unknown) => und
 const listChannelSetupPlugins = vi.hoisted(() => vi.fn((): unknown[] => []));
 const listActiveChannelSetupPlugins = vi.hoisted(() => vi.fn((): unknown[] => []));
 const loadChannelSetupPluginRegistrySnapshotForChannel = vi.hoisted(() =>
-  vi.fn((_params?: unknown) => ({ channels: [], channelSetups: [] })),
+  vi.fn(
+    (
+      _params?: unknown,
+    ): {
+      channels: unknown[];
+      channelSetups: unknown[];
+    } => ({ channels: [], channelSetups: [] }),
+  ),
 );
 const resolveChannelSetupEntries = vi.hoisted(() =>
   vi.fn(
