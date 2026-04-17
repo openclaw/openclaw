@@ -1,10 +1,7 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
-import type { ChatType } from "../channels/chat-type.js";
-import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
-import { resolveFirstBoundAccountId } from "../routing/bound-account-read.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -30,6 +27,7 @@ export {
   SUBAGENT_SPAWN_ACCEPTED_NOTE,
   SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE,
 } from "./subagent-spawn-accepted-note.js";
+import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
@@ -285,113 +283,6 @@ function summarizeError(err: unknown): string {
     return err;
   }
   return "error";
-}
-
-// Delivery targets carry a channel-side prefix (e.g. Matrix uses `room:<roomId>`;
-// LINE uses `line:group:<id>`), but route bindings store raw peer ids on
-// `match.peer.id`. Peel the `<channel>:` namespace first, then loop over generic
-// target-kind prefixes so the raw peer id surfaces. Each kind prefix also
-// implies a ChatType — we capture it as a fallback when the channel plugin does
-// not implement `inferTargetChatType`, and as the authoritative source when the
-// target shape is `<channel>:<kind>:<id>`.
-const KIND_PREFIX_TO_CHAT_TYPE: Readonly<Record<string, ChatType>> = {
-  "room:": "channel",
-  "channel:": "channel",
-  "conversation:": "channel",
-  "chat:": "channel",
-  "thread:": "channel",
-  "topic:": "channel",
-  "group:": "group",
-  "team:": "group",
-  "user:": "direct",
-  "dm:": "direct",
-  "pm:": "direct",
-};
-
-// Matches any `<alpha-token>:` prefix. Real-world peer ids (Matrix `!`/`@`,
-// IRC `#`, Slack/Discord/LINE alphanumerics, numeric Telegram/WhatsApp, or
-// email-style `user@server`) never start with a lowercase-alpha token followed
-// by `:`, so this cleanly peels namespace and kind prefixes without risking
-// the raw id itself. When a peeled token maps to a known ChatType, we also
-// record it as an inferred peerKind.
-const GENERIC_PREFIX_PATTERN = /^[a-z][a-z0-9_-]*:/i;
-
-function extractRequesterPeer(
-  channelId: string | undefined,
-  requesterTo: string | undefined,
-): { peerId?: string; peerKind?: ChatType } {
-  if (!requesterTo) {
-    return {};
-  }
-  const raw = requesterTo.trim();
-  if (!raw) {
-    return {};
-  }
-  let inferredKind: ChatType | undefined;
-  if (channelId) {
-    const plugin = getChannelPlugin(channelId);
-    inferredKind = plugin?.messaging?.inferTargetChatType?.({ to: raw }) ?? undefined;
-  }
-  let value = raw;
-  while (true) {
-    const match = GENERIC_PREFIX_PATTERN.exec(value);
-    if (!match) {
-      break;
-    }
-    const prefix = match[0].toLowerCase();
-    if (prefix in KIND_PREFIX_TO_CHAT_TYPE) {
-      inferredKind ??= KIND_PREFIX_TO_CHAT_TYPE[prefix];
-    }
-    value = value.slice(prefix.length).trim();
-  }
-  if (value) {
-    // Id-embedded kind markers (Matrix `!`/`@`, IRC `#`) win over prefix-derived
-    // inference — channel-side wrappers can wrap either a room or a user id
-    // (e.g. Matrix thread delivery encodes per-user DM targets as
-    // `room:@user:server`), and the id itself is the authoritative signal for
-    // what the peer actually is.
-    if (value.startsWith("@")) {
-      inferredKind = "direct";
-    } else if (value.startsWith("!") || value.startsWith("#")) {
-      inferredKind = "channel";
-    }
-  }
-  return { peerId: value || undefined, peerKind: inferredKind };
-}
-
-function resolveRequesterOriginForChild(params: {
-  cfg: OpenClawConfig;
-  targetAgentId: string;
-  requesterAgentId: string;
-  requesterChannel?: string;
-  requesterAccountId?: string;
-  requesterTo?: string;
-  requesterThreadId?: string | number;
-}) {
-  // Same-agent spawns (a child of the same agent) must keep the caller's active
-  // inbound account, not re-resolve via bindings — the caller is already acting
-  // as that agent with a specific account, and a lookup could pick a different
-  // binding when the same agent has multiple accounts configured.
-  const { peerId: normalizedPeerId, peerKind: inferredPeerKind } = extractRequesterPeer(
-    params.requesterChannel,
-    params.requesterTo,
-  );
-  const boundAccountId =
-    params.requesterChannel && params.targetAgentId !== params.requesterAgentId
-      ? resolveFirstBoundAccountId({
-          cfg: params.cfg,
-          channelId: params.requesterChannel,
-          agentId: params.targetAgentId,
-          peerId: normalizedPeerId,
-          peerKind: inferredPeerKind,
-        })
-      : undefined;
-  return normalizeDeliveryContext({
-    channel: params.requesterChannel,
-    accountId: boundAccountId ?? params.requesterAccountId,
-    to: params.requesterTo,
-    threadId: params.requesterThreadId,
-  });
 }
 
 async function ensureThreadBindingForSubagentSpawn(params: {

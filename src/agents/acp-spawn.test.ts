@@ -1006,6 +1006,116 @@ describe("spawnAcpDirect", () => {
     expect(findAgentGatewayCall()?.params?.accountId).toBe("work");
   });
 
+  it("uses the target agent's bound account for cross-agent ACP thread spawns", async () => {
+    const boundRoom = "!room:example.org";
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        allowedAgents: ["codex", "bot-alpha"],
+      },
+      channels: {
+        ...hoisted.state.cfg.channels,
+        matrix: {
+          threadBindings: {
+            enabled: true,
+            spawnAcpSessions: true,
+          },
+          accounts: {
+            "bot-alpha": {
+              threadBindings: {
+                enabled: true,
+                spawnAcpSessions: true,
+              },
+            },
+          },
+        },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: {
+              kind: "channel",
+              id: boundRoom,
+            },
+            accountId: "bot-alpha",
+          },
+        },
+      ],
+    });
+    registerSessionBindingAdapter({
+      channel: "matrix",
+      accountId: "bot-alpha",
+      capabilities: createSessionBindingCapabilities(),
+      bind: async (input) => await hoisted.sessionBindingBindMock(input),
+      listBySession: (targetSessionKey) =>
+        hoisted.sessionBindingListBySessionMock(targetSessionKey),
+      resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),
+      unbind: async (input) => await hoisted.sessionBindingUnbindMock(input),
+    });
+    hoisted.sessionBindingBindMock.mockImplementationOnce(
+      async (input: {
+        targetSessionKey: string;
+        conversation: {
+          accountId: string;
+          conversationId: string;
+          parentConversationId?: string;
+        };
+        metadata?: Record<string, unknown>;
+      }) =>
+        createSessionBinding({
+          targetSessionKey: input.targetSessionKey,
+          conversation: {
+            channel: "matrix",
+            accountId: input.conversation.accountId,
+            conversationId: input.conversation.conversationId,
+            parentConversationId: input.conversation.parentConversationId,
+          },
+          metadata: {
+            boundBy:
+              typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
+            agentId: "bot-alpha",
+          },
+        }),
+    );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "bot-alpha",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:matrix:room:requester",
+        agentChannel: "matrix",
+        agentAccountId: "bot-beta",
+        agentTo: `room:${boundRoom}`,
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "child",
+        conversation: expect.objectContaining({
+          channel: "matrix",
+          accountId: "bot-alpha",
+          conversationId: boundRoom,
+        }),
+      }),
+    );
+    expect(findAgentGatewayCall()?.params).toMatchObject({
+      deliver: true,
+      channel: "matrix",
+      accountId: "bot-alpha",
+      to: `room:${boundRoom}`,
+    });
+  });
+
   it.each([
     {
       name: "canonical line target",
