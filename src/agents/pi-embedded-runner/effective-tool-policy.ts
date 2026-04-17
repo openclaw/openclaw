@@ -10,6 +10,7 @@ import {
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
+  type ToolPolicyPipelineStep,
 } from "../tool-policy-pipeline.js";
 import {
   applyOwnerOnlyToolPolicy,
@@ -137,27 +138,38 @@ export function applyFinalEffectiveToolPolicy(
       ? resolveSubagentToolPolicyForSession(params.config, params.sessionKey)
       : undefined;
   const ownerFiltered = applyOwnerOnlyToolPolicy(params.bundledTools, params.senderIsOwner === true);
+  // Suppress unavailable-core-tool warnings on every step of this pass.
+  // `applyToolPolicyPipeline` infers `coreToolNames` from the `tools` array
+  // it's filtering, and this pass only sees the bundled MCP/LSP subset.
+  // Normal core allowlist entries (e.g. `tools.allow: ["read", "exec"]`)
+  // would look "unknown" relative to that reduced set even though they are
+  // valid core names already resolved by `createOpenClawCodingTools()` in
+  // the first pass — keeping those warnings on would pollute logs and evict
+  // real diagnostics from the shared warning cache. Genuinely unknown
+  // entries (typos) still surface through the `otherEntries` path in
+  // `applyToolPolicyPipeline`.
+  const pipelineSteps: ToolPolicyPipelineStep[] = [
+    ...buildDefaultToolPolicyPipelineSteps({
+      profilePolicy: profilePolicyWithAlsoAllow,
+      profile,
+      profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
+      providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
+      providerProfile,
+      providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
+      globalPolicy,
+      globalProviderPolicy,
+      agentPolicy,
+      agentProviderPolicy,
+      groupPolicy,
+      agentId,
+    }),
+    { policy: params.sandboxToolPolicy, label: "sandbox tools.allow" },
+    { policy: subagentPolicy, label: "subagent tools.allow" },
+  ].map((step) => ({ ...step, suppressUnavailableCoreToolWarning: true }));
   return applyToolPolicyPipeline({
     tools: ownerFiltered,
     toolMeta: (tool) => getPluginToolMeta(tool),
     warn: params.warn,
-    steps: [
-      ...buildDefaultToolPolicyPipelineSteps({
-        profilePolicy: profilePolicyWithAlsoAllow,
-        profile,
-        profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
-        providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
-        providerProfile,
-        providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
-        globalPolicy,
-        globalProviderPolicy,
-        agentPolicy,
-        agentProviderPolicy,
-        groupPolicy,
-        agentId,
-      }),
-      { policy: params.sandboxToolPolicy, label: "sandbox tools.allow" },
-      { policy: subagentPolicy, label: "subagent tools.allow" },
-    ],
+    steps: pipelineSteps,
   });
 }

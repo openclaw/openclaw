@@ -92,4 +92,29 @@ describe("applyFinalEffectiveToolPolicy", () => {
       "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
     );
   });
+
+  it("does not emit unknown-entry warnings for core tool allowlists in the bundled pass", () => {
+    const warnings: string[] = [];
+    applyFinalEffectiveToolPolicy({
+      bundledTools: [makeTool("mcp__bundle__read")],
+      // Core tool names like `read` and `exec` are not in the bundled-only
+      // input here, but they are valid core tools resolved by the first
+      // pass. The bundled pass must not warn about them as "unknown".
+      config: { tools: { allow: ["read", "exec", "mcp__bundle__read"] } },
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings.some((w) => w.includes("unknown entries"))).toBe(false);
+  });
+
+  it("still warns on genuinely unknown entries in the bundled pass", () => {
+    const warnings: string[] = [];
+    applyFinalEffectiveToolPolicy({
+      bundledTools: [makeTool("mcp__bundle__read")],
+      config: { tools: { allow: ["mcp__bundle__read", "totally-made-up-tool"] } },
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings.some((w) => w.includes("totally-made-up-tool"))).toBe(true);
+  });
 });
