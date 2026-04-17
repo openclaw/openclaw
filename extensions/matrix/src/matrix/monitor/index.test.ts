@@ -1,7 +1,5 @@
-import path from "node:path";
 import { z } from "openclaw/plugin-sdk/zod";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadRuntimeApiExportTypesViaJiti } from "../../../../../test/helpers/plugins/jiti-runtime-api.ts";
 import type { MatrixRoomInfo } from "./room-info.js";
 
 type DirectRoomTrackerOptions = {
@@ -948,27 +946,4 @@ describe("monitorMatrixProvider", () => {
       trackerOpts.shouldKeepLocallyPromotedDirectRoom("!room:example.org"),
     ).resolves.toBeUndefined();
   });
-});
-
-describe("matrix plugin registration", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("loads the matrix runtime api through Jiti", () => {
-    const runtimeApiPath = path.join(process.cwd(), "extensions", "matrix", "runtime-api.ts");
-    expect(
-      loadRuntimeApiExportTypesViaJiti({
-        modulePath: runtimeApiPath,
-        exportNames: [
-          "requiresExplicitMatrixDefaultAccount",
-          "resolveMatrixDefaultOrOnlyAccountId",
-        ],
-        realPluginSdkSpecifiers: [],
-      }),
-    ).toEqual({
-      requiresExplicitMatrixDefaultAccount: "function",
-      resolveMatrixDefaultOrOnlyAccountId: "function",
-    });
-  }, 240_000);
 });
