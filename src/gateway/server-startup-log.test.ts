@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { logGatewayStartup } from "./server-startup-log.js";
+import { collectProxyEnvMismatch, logGatewayStartup } from "./server-startup-log.js";
+
+vi.mock("../infra/net/proxy-env.js", () => ({
+  hasProxyEnvConfigured: vi.fn(() => false),
+}));
 
 describe("gateway startup log", () => {
   afterEach(() => {
@@ -71,5 +75,87 @@ describe("gateway startup log", () => {
       .map((call) => call[0])
       .filter((message) => message.startsWith("ready ("));
     expect(readyMessages).toEqual(["ready (3 plugins: alpha, beta, delta; 16.0s)"]);
+  });
+
+  describe("proxy env mismatch warning", () => {
+    it("warns when proxy env is set but remote providers lack proxy config", async () => {
+      const { hasProxyEnvConfigured } = await import("../infra/net/proxy-env.js");
+      vi.mocked(hasProxyEnvConfigured).mockReturnValue(true);
+
+      const result = collectProxyEnvMismatch({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+            },
+            openrouter: {
+              baseUrl: "https://openrouter.ai/api/v1",
+              models: [],
+            },
+          },
+        },
+      });
+
+      expect(result).toContain("proxy env detected");
+      expect(result).toContain("openai");
+      expect(result).toContain("openrouter");
+      expect(result).toContain("env-proxy");
+    });
+
+    it("does not warn when all remote providers have proxy configured", async () => {
+      const { hasProxyEnvConfigured } = await import("../infra/net/proxy-env.js");
+      vi.mocked(hasProxyEnvConfigured).mockReturnValue(true);
+
+      const result = collectProxyEnvMismatch({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              request: { proxy: { mode: "env-proxy" } },
+              models: [],
+            },
+          },
+        },
+      });
+
+      expect(result).toBeNull();
+    });
+
+    it("does not warn when no proxy env is set", async () => {
+      const { hasProxyEnvConfigured } = await import("../infra/net/proxy-env.js");
+      vi.mocked(hasProxyEnvConfigured).mockReturnValue(false);
+
+      const result = collectProxyEnvMismatch({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+            },
+          },
+        },
+      });
+
+      expect(result).toBeNull();
+    });
+
+    it("does not warn for local providers", async () => {
+      const { hasProxyEnvConfigured } = await import("../infra/net/proxy-env.js");
+      vi.mocked(hasProxyEnvConfigured).mockReturnValue(true);
+
+      const result = collectProxyEnvMismatch({
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              models: [],
+            },
+          },
+        },
+      });
+
+      expect(result).toBeNull();
+    });
   });
 });

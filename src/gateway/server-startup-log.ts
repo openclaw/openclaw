@@ -2,6 +2,7 @@ import chalk from "chalk";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../security/dangerous-config-flags.js";
 
@@ -42,6 +43,53 @@ export function logGatewayStartup(params: {
       "Run `openclaw security audit`.";
     params.log.warn(warning);
   }
+
+  const proxyWarning = collectProxyEnvMismatch(params.cfg);
+  if (proxyWarning) {
+    params.log.warn(proxyWarning);
+  }
+}
+
+function isLocalProviderUrl(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "[::1]" ||
+      host === "::1" ||
+      host.endsWith(".local")
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function collectProxyEnvMismatch(cfg: OpenClawConfig): string | null {
+  if (!hasProxyEnvConfigured()) {
+    return null;
+  }
+
+  const providers = cfg.models?.providers ?? {};
+  const unconfigured: string[] = [];
+
+  for (const [name, provider] of Object.entries(providers)) {
+    if (isLocalProviderUrl(provider.baseUrl)) {
+      continue;
+    }
+    if (!provider.request?.proxy) {
+      unconfigured.push(name);
+    }
+  }
+
+  if (unconfigured.length === 0) {
+    return null;
+  }
+
+  return (
+    `proxy env detected (HTTP_PROXY/HTTPS_PROXY) but not used by providers: ${unconfigured.join(", ")}. ` +
+    `Consider setting models.providers.<name>.request.proxy.mode = "env-proxy"`
+  );
 }
 
 function formatReadyDetails(
