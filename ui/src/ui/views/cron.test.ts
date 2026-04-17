@@ -84,9 +84,10 @@ function getButtonByText(container: Element, text: string) {
 }
 
 describe("cron view", () => {
-  it("shows all-job history mode by default", () => {
+  it("shows all-job history mode and toggles the run status filter", () => {
     const container = document.createElement("div");
-    render(renderCron(createProps()), container);
+    const onRunsFiltersChange = vi.fn();
+    render(renderCron(createProps({ onRunsFiltersChange })), container);
 
     expect(container.textContent).toContain("Latest runs across all jobs.");
     expect(container.textContent).toContain("Status");
@@ -94,19 +95,6 @@ describe("cron view", () => {
     expect(container.textContent).toContain("Delivery");
     expect(container.textContent).toContain("All delivery");
     expect(container.textContent).not.toContain("multi-select");
-  });
-
-  it("toggles run status filter via dropdown checkboxes", () => {
-    const container = document.createElement("div");
-    const onRunsFiltersChange = vi.fn();
-    render(
-      renderCron(
-        createProps({
-          onRunsFiltersChange,
-        }),
-      ),
-      container,
-    );
 
     const statusOk = container.querySelector(
       '.cron-filter-dropdown[data-filter="status"] input[value="ok"]',
@@ -171,19 +159,23 @@ describe("cron view", () => {
     expect(onLoadRuns).toHaveBeenCalledWith("job-1");
   });
 
-  it("renders run chat links when session keys are present", () => {
+  it("shows selected job run history sorted newest first with chat links", () => {
     const container = document.createElement("div");
+    const job = createJob("job-1");
     render(
       renderCron(
         createProps({
           basePath: "/ui",
+          jobs: [job],
           runsJobId: "job-1",
+          runsScope: "job",
           runs: [
+            { ts: 1, jobId: "job-1", status: "ok", summary: "older run" },
             {
-              ts: Date.now(),
+              ts: 2,
               jobId: "job-1",
               status: "ok",
-              summary: "done",
+              summary: "newer run",
               sessionKey: "agent:main:cron:job-1:run:abc",
             },
           ],
@@ -196,25 +188,6 @@ describe("cron view", () => {
     expect(link).not.toBeNull();
     expect(link?.getAttribute("href")).toContain(
       "/ui/chat?session=agent%3Amain%3Acron%3Ajob-1%3Arun%3Aabc",
-    );
-  });
-
-  it("shows selected job name and sorts run history newest first", () => {
-    const container = document.createElement("div");
-    const job = createJob("job-1");
-    render(
-      renderCron(
-        createProps({
-          jobs: [job],
-          runsJobId: "job-1",
-          runsScope: "job",
-          runs: [
-            { ts: 1, jobId: "job-1", status: "ok", summary: "older run" },
-            { ts: 2, jobId: "job-1", status: "ok", summary: "newer run" },
-          ],
-        }),
-      ),
-      container,
     );
 
     expect(container.textContent).toContain("Latest runs for Daily ping.");
