@@ -43,8 +43,11 @@ vi.mock("@buape/carbon", () => {
 
 import {
   FORBIDDEN_CHATTER_DEFAULT,
+  LEAK_PATTERNS_DEFAULT,
   assertAuthorIdentity,
+  assertContentScrubbed,
   assertNoForbiddenChatter,
+  assertNoLeaksInThread,
   isDiscordE2EEnabled,
   resolveDiscordE2EEnv,
   withDiscordRetry,
@@ -374,6 +377,172 @@ describe("withDiscordRetry", () => {
     // Expect at least the retry-after seconds; bounded by jitter window.
     expect(elapsed).toBeGreaterThanOrEqual(15);
     expect(fn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("LEAK_PATTERNS_DEFAULT", () => {
+  it("matches canonical red-team leak shapes", () => {
+    const shouldMatch = [
+      "before /home/richard/tmp/SECRET_FILE.txt after",
+      "before /Users/alice/Documents/x.pdf after",
+      "before /root/secrets/creds.log after",
+      "before C:\\Users\\alice\\Downloads\\x.pdf after",
+      "Authorization: Bearer fake_abc123def456ghi789jkl here",
+      "ANTHROPIC_API_KEY=sk-ant-fake123",
+      "OPENAI_API_KEY=sk-fake456",
+      "token=ghp_fakegithubpat789",
+      "    at handler (/path/file.ts:42:17)",
+    ];
+    for (const sample of shouldMatch) {
+      const matched = LEAK_PATTERNS_DEFAULT.some((p) =>
+        typeof p === "string" ? sample.includes(p) : p.test(sample),
+      );
+      expect([sample, matched]).toEqual([sample, true]);
+    }
+  });
+
+  it("does not match sanitized forms", () => {
+    const shouldNotMatch = [
+      "I wrote ~/tmp/SECRET_FILE.txt OK",
+      "Authorization: Bearer [redacted]",
+      "ANTHROPIC_API_KEY=[redacted]",
+      "OPENAI_API_KEY=[redacted]",
+      "token=[redacted-github-pat]",
+      "Merged feat/x into main.",
+    ];
+    for (const sample of shouldNotMatch) {
+      const matched = LEAK_PATTERNS_DEFAULT.some((p) =>
+        typeof p === "string" ? sample.includes(p) : p.test(sample),
+      );
+      expect([sample, matched]).toEqual([sample, false]);
+    }
+  });
+});
+
+describe("assertContentScrubbed", () => {
+  it("passes when leak is absent", () => {
+    expect(() =>
+      assertContentScrubbed("Wrote ~/tmp/SECRET_FILE.txt", {
+        leak: "/home/richard/tmp/SECRET_FILE.txt",
+      }),
+    ).not.toThrow();
+  });
+
+  it("fails when leak is present", () => {
+    expect(() =>
+      assertContentScrubbed("I leaked /home/richard/tmp/SECRET_FILE.txt", {
+        leak: "/home/richard/tmp/SECRET_FILE.txt",
+        label: "posix-home",
+      }),
+    ).toThrow(/posix-home.*still present/);
+  });
+
+  it("supports regex leak patterns", () => {
+    expect(() =>
+      assertContentScrubbed("contains sk-fakeABCDEF", {
+        leak: /sk-[a-z]+[A-Z]+/,
+      }),
+    ).toThrow(/still present/);
+  });
+
+  it("passes when leak absent and scrubbed form present", () => {
+    expect(() =>
+      assertContentScrubbed("Wrote ~/tmp/SECRET_FILE.txt", {
+        leak: "/home/richard/tmp/SECRET_FILE.txt",
+        expectedScrubbedForm: "~/tmp/SECRET_FILE.txt",
+      }),
+    ).not.toThrow();
+  });
+
+  it("fails when leak absent but expected scrubbed form missing", () => {
+    expect(() =>
+      assertContentScrubbed("content without any path at all", {
+        leak: "/home/richard/tmp/SECRET_FILE.txt",
+        expectedScrubbedForm: "~/tmp/SECRET_FILE.txt",
+      }),
+    ).toThrow(/expected scrubbed form .* missing/);
+  });
+
+  it("supports regex expectedScrubbedForm", () => {
+    expect(() =>
+      assertContentScrubbed("Bearer [redacted] here", {
+        leak: "Bearer secret",
+        expectedScrubbedForm: /Bearer \[redacted\]/,
+      }),
+    ).not.toThrow();
+  });
+
+  it("truncates long content in the error message", () => {
+    const content = `${"x".repeat(2000)}LEAK${"y".repeat(2000)}`;
+    let captured: unknown;
+    try {
+      assertContentScrubbed(content, { leak: "LEAK" });
+    } catch (err) {
+      captured = err;
+    }
+    expect((captured as Error).message).toMatch(/still present/);
+    // Should have truncated rather than dumped the full 4000+ char content.
+    expect((captured as Error).message.length).toBeLessThan(1200);
+  });
+});
+
+describe("assertNoLeaksInThread", () => {
+  const env = {
+    botToken: "tok",
+    guildId: "g",
+    parentChannelId: "c",
+    accountId: "default",
+  };
+
+  it("passes when thread messages contain no leak patterns", async () => {
+    restHandlers.get.mockImplementation(async () => [
+      { id: "1", content: "All good. Wrote ~/tmp/x.txt.", author: {}, timestamp: "t" },
+      { id: "2", content: "Bearer [redacted]", author: {}, timestamp: "t" },
+    ]);
+    await expect(
+      assertNoLeaksInThread({
+        threadId: "thread-1",
+        env,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("flags each canonical leak shape when present", async () => {
+    const offenders = [
+      "Leaked /home/richard/tmp/SECRET_FILE.txt",
+      "Leaked /Users/bob/creds.txt",
+      "Leaked /root/envrc",
+      "Leaked C:\\Users\\carol\\secret.txt",
+      "Authorization: Bearer fake_abc123def456ghi789jkl",
+      "key=sk-ant-fake123abcdef",
+      "key=sk-fakeABCDEF123456",
+      "tok=ghp_fakegithubpat123abc",
+      "Trace:\n    at handler (/src/x.ts:10:5)",
+    ];
+    for (const content of offenders) {
+      restHandlers.get.mockImplementation(async () => [
+        { id: "m", content, author: {}, timestamp: "t" },
+      ]);
+      await expect(
+        assertNoLeaksInThread({
+          threadId: "t",
+          env,
+        }),
+      ).rejects.toThrow(/leak pattern hit/);
+    }
+  });
+
+  it("respects custom leak list overrides", async () => {
+    restHandlers.get.mockImplementation(async () => [
+      { id: "1", content: "/home/alice/foo", author: {}, timestamp: "t" },
+    ]);
+    await expect(
+      assertNoLeaksInThread({
+        threadId: "t",
+        env,
+        leaks: ["something-else"],
+      }),
+    ).resolves.toBeUndefined();
   });
 });
 

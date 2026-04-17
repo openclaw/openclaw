@@ -609,4 +609,105 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
       ).toContain("/home/alice/report.txt");
     });
   });
+
+  // Phase 7 P3 red-team: integration-level assertions that the progress
+  // sanitizer handles realistic multi-leak emissions (the kind that leak from
+  // a model rather than a single curated pattern). Each case mirrors a
+  // scenario from the canonical red-team plan; gaps discovered while writing
+  // these are reported in the Phase 7 P3 follow-up, not patched here.
+  describe("progress profile red-team (Phase 7 P3)", () => {
+    it("scrubs the canonical /home/richard/tmp/SECRET_FILE.txt leak", () => {
+      const input = "I wrote the file to /home/richard/tmp/SECRET_FILE.txt and locked it.";
+      const cleaned = sanitizeAssistantVisibleTextWithProfile(input, "progress");
+      expect(cleaned).not.toContain("/home/richard/tmp/SECRET_FILE.txt");
+      expect(cleaned).toContain("~/tmp/SECRET_FILE.txt");
+      expect(cleaned).toContain("locked it");
+    });
+
+    it("scrubs multiple absolute paths in the same emission", () => {
+      const input =
+        "Processed /home/alice/a.txt, /Users/bob/b.txt, /root/c.txt and C:\\Users\\carol\\d.txt";
+      const cleaned = sanitizeAssistantVisibleTextWithProfile(input, "progress");
+      for (const leak of ["/home/alice/", "/Users/bob/", "/root/", "C:\\Users\\carol"]) {
+        expect(cleaned).not.toContain(leak);
+      }
+      expect(cleaned).toContain("~/a.txt");
+      expect(cleaned).toContain("~/b.txt");
+      expect(cleaned).toContain("~/c.txt");
+      expect(cleaned).toContain("~/d.txt");
+    });
+
+    it("redacts multiple secret types chained in one message", () => {
+      // Realistic leak: model echoes an env dump.
+      const input = [
+        "Loaded secrets:",
+        "ANTHROPIC_API_KEY=sk-ant-fake123abcdef456",
+        "OPENAI_API_KEY=sk-fake4567890123456abcd",
+        "GITHUB_TOKEN=ghp_fakegithubpat12345abcde1234",
+        "Authorization: Bearer fake_abc123def456ghi789jkl",
+      ].join("\n");
+      const cleaned = sanitizeAssistantVisibleTextWithProfile(input, "progress");
+      expect(cleaned).toContain("ANTHROPIC_API_KEY=[redacted]");
+      expect(cleaned).toContain("OPENAI_API_KEY=[redacted]");
+      expect(cleaned).toContain("[redacted-github-pat]");
+      expect(cleaned).toContain("Bearer [redacted]");
+      // None of the raw secret tails should survive.
+      expect(cleaned).not.toContain("sk-ant-fake123abcdef456");
+      expect(cleaned).not.toContain("sk-fake4567890123456abcd");
+      expect(cleaned).not.toContain("ghp_fakegithubpat12345abcde1234");
+      expect(cleaned).not.toContain("fake_abc123def456ghi789jkl");
+    });
+
+    it("scrubs stack frames with parenthesised file:line:col format", () => {
+      const input = [
+        "Error: boom",
+        "    at handleRequest (/home/richard/src/server.ts:120:18)",
+        "    at Object.<anonymous> (/tmp/x.js:12:3)",
+        "    at processTicksAndRejections (node:internal/process/task_queues:96:5)",
+        "Continuing.",
+      ].join("\n");
+      const cleaned = sanitizeAssistantVisibleTextWithProfile(input, "progress");
+      expect(cleaned).not.toMatch(/^\s{2,}at\s+handleRequest/m);
+      expect(cleaned).not.toMatch(/^\s{2,}at\s+Object\.<anonymous>/m);
+      expect(cleaned).not.toMatch(/^\s{2,}at\s+processTicksAndRejections/m);
+      expect(cleaned).toContain("Error: boom");
+      expect(cleaned).toContain("Continuing.");
+    });
+
+    it("preserves prose markers that should reach the user", () => {
+      // The marker shape used by the E2E harness MUST survive sanitization
+      // because the harness relies on it for scenario identification.
+      const marker = "DISCORD-E2E-ABCDEF";
+      const input = `Starting work at /home/richard/tmp/log.txt — ${marker}`;
+      const cleaned = sanitizeAssistantVisibleTextWithProfile(input, "progress");
+      expect(cleaned).toContain(marker);
+      expect(cleaned).not.toContain("/home/richard/tmp/log.txt");
+    });
+
+    it("delivery profile preserves ALL leak forms (negative control)", () => {
+      // When a message is classified final_reply, the user explicitly asked
+      // about this content. Over-sanitizing it would answer a different
+      // question. This test guards against an accidental merge of the
+      // progress profile into the delivery profile.
+      const input = [
+        "Here is the file path you asked for: /home/alice/report.txt",
+        "And the bearer header the API needs: Authorization: Bearer user_supplied_token_12345",
+      ].join("\n");
+      const cleaned = sanitizeAssistantVisibleTextWithProfile(input, "delivery");
+      expect(cleaned).toContain("/home/alice/report.txt");
+      expect(cleaned).toContain("Bearer user_supplied_token_12345");
+    });
+
+    it("progress vs delivery profile produce divergent output for the same leak", () => {
+      // Direct A/B check: same input, different profiles, observable divergence.
+      const input = "Wrote key ANTHROPIC_API_KEY=sk-ant-api-foo-bar-xyz to /home/eve/envrc";
+      const progress = sanitizeAssistantVisibleTextWithProfile(input, "progress");
+      const delivery = sanitizeAssistantVisibleTextWithProfile(input, "delivery");
+      expect(progress).not.toBe(delivery);
+      expect(progress).toContain("[redacted]");
+      expect(progress).toContain("~/envrc");
+      expect(delivery).toContain("sk-ant-api-foo-bar-xyz");
+      expect(delivery).toContain("/home/eve/envrc");
+    });
+  });
 });
