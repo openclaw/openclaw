@@ -1833,7 +1833,7 @@ index 3ca3980403..dfc5e19a6c 100644
  
  vi.mock("../context-engine-maintenance.js", () => ({
 diff --git a/src/agents/pi-embedded-runner/run/attempt.ts b/src/agents/pi-embedded-runner/run/attempt.ts
-index 3c07668d5b..3bf5164361 100644
+index 3c07668d5b..08991072ba 100644
 --- a/src/agents/pi-embedded-runner/run/attempt.ts
 +++ b/src/agents/pi-embedded-runner/run/attempt.ts
 @@ -150,7 +150,7 @@ import {
@@ -1877,7 +1877,45 @@ index 3c07668d5b..3bf5164361 100644
      const skillsPrompt = resolveSkillsPromptForRun({
        skillsSnapshot: params.skillsSnapshot,
        entries: shouldLoadSkillEntries ? skillEntries : undefined,
-@@ -540,6 +565,10 @@ export async function runEmbeddedAttempt(
+@@ -486,11 +511,32 @@ export async function runEmbeddedAttempt(
+       seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
+       previousSignature: params.bootstrapPromptWarningSignature,
+     });
+-    const workspaceNotes = hookAdjustedBootstrapFiles.some(
+-      (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
+-    )
+-      ? ["Reminder: commit your changes in this workspace after edits."]
+-      : undefined;
++    const workspaceNotesList: string[] = [];
++    if (
++      hookAdjustedBootstrapFiles.some(
++        (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
++      )
++    ) {
++      workspaceNotesList.push("Reminder: commit your changes in this workspace after edits.");
++    }
++    // PR-8 follow-up: when a session is in plan mode, the agent needs
++    // to know the rules — write/edit/exec are blocked, only read +
++    // update_plan + exit_plan_mode are usable. Without this note the
++    // agent will try mutating tools, get them blocked, and not
++    // understand why. enter_plan_mode/exit_plan_mode are the entry
++    // points; the user controls mode via the chip + /plan command.
++    if (params.planMode === "plan") {
++      workspaceNotesList.push(
++        [
++          "PLAN MODE ACTIVE.",
++          "Mutating tools (write, edit, exec, bash with mutating commands, apply_patch) are blocked.",
++          "Read-only tools (read, web_search, web_fetch, update_plan) are available.",
++          "Workflow: investigate with read-only tools, draft a plan with update_plan, then call exit_plan_mode with the proposed plan to request user approval.",
++          "After approval the runtime flips the session out of plan mode and you can execute. After rejection the user feedback comes via [PLAN_DECISION] in the next turn — revise and re-propose.",
++        ].join(" "),
++      );
++    }
++    const workspaceNotes = workspaceNotesList.length > 0 ? workspaceNotesList : undefined;
+ 
+     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+ 
+@@ -540,6 +586,10 @@ export async function runEmbeddedAttempt(
              sessionKey: sandboxSessionKey,
              sessionId: params.sessionId,
              runId: params.runId,
@@ -2311,7 +2349,7 @@ index f93ef00f6f..6c61b8724a 100644
 +  };
 +}
 diff --git a/src/agents/pi-embedded-subscribe.handlers.tools.ts b/src/agents/pi-embedded-subscribe.handlers.tools.ts
-index 7f765fb5f0..1b4eeaee9a 100644
+index 7f765fb5f0..2b121a2fdb 100644
 --- a/src/agents/pi-embedded-subscribe.handlers.tools.ts
 +++ b/src/agents/pi-embedded-subscribe.handlers.tools.ts
 @@ -11,6 +11,7 @@ import {
@@ -2330,7 +2368,113 @@ index 7f765fb5f0..1b4eeaee9a 100644
  import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
  import { normalizeToolName } from "./tool-policy.js";
  
-@@ -189,6 +191,50 @@ function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
+@@ -44,11 +46,19 @@ type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
+ type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
+ type MediaParseModule = typeof import("../media/parse.js");
+ type BeforeToolCallModule = typeof import("./pi-tools.before-tool-call.js");
++type SessionStoreRuntimeModule = typeof import("../config/sessions/store.runtime.js");
++type ConfigModule = typeof import("../config/config.js");
++type SessionPathsModule = typeof import("../config/sessions/paths.js");
++type RoutingModule = typeof import("../routing/session-key.js");
+ 
+ let execApprovalReplyModulePromise: Promise<ExecApprovalReplyModule> | undefined;
+ let hookRunnerGlobalModulePromise: Promise<HookRunnerGlobalModule> | undefined;
+ let mediaParseModulePromise: Promise<MediaParseModule> | undefined;
+ let beforeToolCallModulePromise: Promise<BeforeToolCallModule> | undefined;
++let sessionStoreRuntimePromise: Promise<SessionStoreRuntimeModule> | undefined;
++let configModulePromise: Promise<ConfigModule> | undefined;
++let sessionPathsPromise: Promise<SessionPathsModule> | undefined;
++let routingPromise: Promise<RoutingModule> | undefined;
+ 
+ function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
+   execApprovalReplyModulePromise ??= import("../infra/exec-approval-reply.js");
+@@ -70,6 +80,85 @@ function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
+   return beforeToolCallModulePromise;
+ }
+ 
++function loadSessionStoreRuntime(): Promise<SessionStoreRuntimeModule> {
++  sessionStoreRuntimePromise ??= import("../config/sessions/store.runtime.js");
++  return sessionStoreRuntimePromise;
++}
++
++function loadConfigModule(): Promise<ConfigModule> {
++  configModulePromise ??= import("../config/config.js");
++  return configModulePromise;
++}
++
++function loadSessionPaths(): Promise<SessionPathsModule> {
++  sessionPathsPromise ??= import("../config/sessions/paths.js");
++  return sessionPathsPromise;
++}
++
++function loadRouting(): Promise<RoutingModule> {
++  routingPromise ??= import("../routing/session-key.js");
++  return routingPromise;
++}
++
++/**
++ * Persist plan-mode approval-pending state on the session entry so the
++ * `sessions.patch { planApproval }` flow can match the approvalId minted
++ * by the runtime when `exit_plan_mode` fires.
++ *
++ * Without this, the resolvePlanApproval guard rejects every approval
++ * click as "stale approvalId" because the on-disk state has
++ * `approvalId: undefined` while the UI sends the freshly-minted token.
++ */
++async function persistPlanApprovalRequest(
++  sessionKey: string,
++  approvalId: string,
++  log: { warn?: (msg: string) => void } | undefined,
++): Promise<void> {
++  try {
++    const [
++      { updateSessionStoreEntry },
++      { loadConfig },
++      { resolveStorePath },
++      { parseAgentSessionKey },
++    ] = await Promise.all([
++      loadSessionStoreRuntime(),
++      loadConfigModule(),
++      loadSessionPaths(),
++      loadRouting(),
++    ]);
++    const cfg = loadConfig();
++    const parsed = parseAgentSessionKey(sessionKey);
++    const storePath = resolveStorePath(
++      cfg.session?.store,
++      parsed?.agentId ? { agentId: parsed.agentId } : {},
++    );
++    const now = Date.now();
++    await updateSessionStoreEntry({
++      storePath,
++      sessionKey,
++      update: async (entry) => {
++        const current = entry.planMode;
++        // No active plan-mode session — agent called exit_plan_mode
++        // outside of plan mode (shouldn't happen in normal flow). Leave
++        // the entry untouched so we don't accidentally arm the gate.
++        if (!current || current.mode !== "plan") {
++          return null;
++        }
++        return {
++          planMode: {
++            ...current,
++            approval: "pending",
++            approvalId,
++            updatedAt: now,
++          },
++        };
++      },
++    });
++  } catch (err) {
++    log?.warn?.(`failed to persist plan-mode approvalId: ${String(err)}`);
++  }
++}
++
+ type ToolStartRecord = {
+   startTime: number;
+   args: unknown;
+@@ -189,6 +278,50 @@ function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
    return { added, modified, deleted };
  }
  
@@ -2381,7 +2525,7 @@ index 7f765fb5f0..1b4eeaee9a 100644
  function buildPatchSummaryText(summary: ApplyPatchSummary): string {
    const parts: string[] = [];
    if (summary.added.length > 0) {
-@@ -1102,6 +1148,46 @@ export async function handleToolExecutionEnd(
+@@ -1102,6 +1235,54 @@ export async function handleToolExecutionEnd(
      }
    }
  
@@ -2402,6 +2546,14 @@ index 7f765fb5f0..1b4eeaee9a 100644
 +    const details = readPlanProposalDetails(result);
 +    if (details && details.plan.length > 0) {
 +      const approvalId = newPlanApprovalId();
++      // Persist the approvalId to SessionEntry.planMode BEFORE emitting
++      // the event so the eventual sessions.patch { planApproval } can
++      // match it via resolvePlanApproval's stale-id guard. Without this
++      // the user clicks Approve and gets "stale approvalId" because the
++      // on-disk approvalId is still undefined.
++      if (ctx.params.sessionKey) {
++        await persistPlanApprovalRequest(ctx.params.sessionKey, approvalId, ctx.log);
++      }
 +      const approvalData: AgentApprovalEventData = {
 +        phase: "requested",
 +        kind: "plugin",
@@ -7271,10 +7423,10 @@ index 07d3b644a6..9c5c3ed9c5 100644
 +@import "./chat/plan-cards.css";
  @import "./chat/sidebar.css";
 diff --git a/ui/src/styles/chat/layout.css b/ui/src/styles/chat/layout.css
-index 392f18ff24..e05c329f32 100644
+index 392f18ff24..3cee87119e 100644
 --- a/ui/src/styles/chat/layout.css
 +++ b/ui/src/styles/chat/layout.css
-@@ -1097,3 +1097,87 @@
+@@ -1097,3 +1097,190 @@
  
  /* Mobile dropdown toggle — hidden on desktop */
  /* Mobile gear toggle + dropdown are hidden by default in layout.css */
@@ -7361,6 +7513,109 @@ index 392f18ff24..e05c329f32 100644
 +  border: 1px solid var(--border);
 +  border-radius: 3px;
 +  background: var(--bg-hover);
++}
++
++/* PR-8 / #67721 inline plan approval card — sits ABOVE the chat input
++ * bar, mirrors Claude Code's "proposed a plan" affordance. Compact by
++ * default; the "Open plan" button pushes the full checklist into the
++ * right sidebar via the same path tool-output details use. */
++.plan-inline-card {
++  margin: 0 16px 8px 16px;
++  padding: 12px 14px;
++  border: 1px solid var(--border);
++  border-radius: 8px;
++  background: color-mix(in srgb, var(--accent) 6%, var(--bg-2));
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++}
++
++.plan-inline-card__header {
++  display: flex;
++  justify-content: space-between;
++  align-items: baseline;
++  gap: 12px;
++}
++
++.plan-inline-card__title strong {
++  color: var(--text);
++}
++
++.plan-inline-card__summary {
++  color: var(--text-secondary);
++  margin-left: 6px;
++}
++
++.plan-inline-card__open {
++  background: none;
++  border: none;
++  color: var(--accent);
++  cursor: pointer;
++  padding: 0;
++  font-size: 12px;
++  text-decoration: underline;
++}
++
++.plan-inline-card__open:hover {
++  text-decoration: none;
++}
++
++.plan-inline-card__meta {
++  font-size: 12px;
++  color: var(--text-tertiary);
++}
++
++.plan-inline-card__error {
++  font-size: 12px;
++  color: var(--danger);
++  background: color-mix(in srgb, var(--danger) 8%, transparent);
++  border-radius: 4px;
++  padding: 6px 8px;
++}
++
++.plan-inline-card__actions {
++  display: flex;
++  gap: 8px;
++  flex-wrap: wrap;
++}
++
++.plan-inline-card__btn {
++  padding: 6px 12px;
++  border: 1px solid var(--border);
++  background: var(--bg-2);
++  color: var(--text);
++  border-radius: 6px;
++  cursor: pointer;
++  font-size: 13px;
++  transition: background 100ms ease;
++}
++
++.plan-inline-card__btn:hover:not(:disabled) {
++  background: var(--bg-hover);
++}
++
++.plan-inline-card__btn:disabled {
++  opacity: 0.5;
++  cursor: not-allowed;
++}
++
++.plan-inline-card__btn--primary {
++  background: var(--accent);
++  color: var(--accent-contrast, #fff);
++  border-color: var(--accent);
++}
++
++.plan-inline-card__btn--primary:hover:not(:disabled) {
++  background: color-mix(in srgb, var(--accent) 90%, #000);
++}
++
++.plan-inline-card__btn--danger {
++  color: var(--danger);
++  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
++}
++
++.plan-inline-card__btn--danger:hover:not(:disabled) {
++  background: color-mix(in srgb, var(--danger) 10%, transparent);
 +}
 diff --git a/ui/src/styles/chat/plan-cards.css b/ui/src/styles/chat/plan-cards.css
 new file mode 100644
@@ -7490,18 +7745,10 @@ index 0000000000..6edd452518
 +  font-size: 14px;
 +}
 diff --git a/ui/src/ui/app-render.ts b/ui/src/ui/app-render.ts
-index 8ac9cb457f..95ad33abd1 100644
+index 8ac9cb457f..b622be1781 100644
 --- a/ui/src/ui/app-render.ts
 +++ b/ui/src/ui/app-render.ts
-@@ -135,6 +135,7 @@ import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
- import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
- import { renderLoginGate } from "./views/login-gate.ts";
- import { renderOverview } from "./views/overview.ts";
-+import { renderPlanApprovalOverlay } from "./views/plan-approval.ts";
- 
- // Lazy-loaded view modules – deferred so the initial bundle stays small.
- // Each loader resolves once; subsequent calls return the cached module.
-@@ -1933,6 +1934,46 @@ export function renderApp(state: AppViewState) {
+@@ -1933,6 +1933,77 @@ export function renderApp(state: AppViewState) {
                allowExternalEmbedUrls: state.allowExternalEmbedUrls,
                assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
                basePath: state.basePath ?? "",
@@ -7545,19 +7792,40 @@ index 8ac9cb457f..95ad33abd1 100644
 +                  },
 +                );
 +              },
++              // PR-8 follow-up: inline plan approval card lives above
++              // the chat input. Replaces the modal overlay so the rest
++              // of the UI stays interactive while a plan is pending.
++              planApprovalRequest: state.planApprovalRequest,
++              planApprovalBusy: state.planApprovalBusy,
++              planApprovalError: state.planApprovalError,
++              onPlanApprovalDecision: (decision, feedback) =>
++                state.handlePlanApprovalDecision(decision, feedback),
++              onOpenPlanInSidebar: (request) => {
++                // Render the proposed plan as a markdown document and
++                // hand it to the existing markdown-sidebar viewer (same
++                // surface tool-output details use).
++                const stepLines = request.plan
++                  .map((step, i) => {
++                    const marker =
++                      step.status === "completed"
++                        ? "[x]"
++                        : step.status === "cancelled"
++                          ? "[ ] ~~"
++                          : "[ ]";
++                    const close = step.status === "cancelled" ? "~~" : "";
++                    const label =
++                      step.status === "in_progress" && step.activeForm
++                        ? step.activeForm
++                        : step.step;
++                    return `${i + 1}. ${marker} ${label}${close}`;
++                  })
++                  .join("\n");
++                const md = `# ${request.summary || "Proposed plan"}\n\n${stepLines}\n`;
++                state.handleOpenSidebar({ kind: "markdown", content: md });
++              },
              })
            : nothing}
          ${renderConfigTabForActiveTab()}
-@@ -2041,7 +2082,8 @@ export function renderApp(state: AppViewState) {
-             })
-           : nothing}
-       </main>
--      ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)} ${nothing}
-+      ${renderExecApprovalPrompt(state)} ${renderPlanApprovalOverlay(state)}
-+      ${renderGatewayUrlConfirmation(state)} ${nothing}
-     </div>
-   `;
- }
 diff --git a/ui/src/ui/app-tool-stream.ts b/ui/src/ui/app-tool-stream.ts
 index 6727b00d82..bbbfa229ea 100644
 --- a/ui/src/ui/app-tool-stream.ts
@@ -8105,10 +8373,10 @@ index 0000000000..264fd18997
 +});
 diff --git a/ui/src/ui/chat/mode-switcher.ts b/ui/src/ui/chat/mode-switcher.ts
 new file mode 100644
-index 0000000000..15f99a896b
+index 0000000000..eda94e6e15
 --- /dev/null
 +++ b/ui/src/ui/chat/mode-switcher.ts
-@@ -0,0 +1,360 @@
+@@ -0,0 +1,359 @@
 +/**
 + * Mode switcher for the chat input toolbar.
 + *
@@ -8395,7 +8663,6 @@ index 0000000000..15f99a896b
 +                      onSelectMode(mode);
 +                    }}
 +                  >
-+                    ${mode.icon}
 +                    <span class="agent-chat__mode-menu__label">${mode.label}</span>
 +                    <kbd class="agent-chat__mode-menu__shortcut">Ctrl+${mode.shortcut}</kbd>
 +                  </button>
@@ -8763,10 +9030,71 @@ index 0000000000..ec7c630420
 +  return lines.join("\n");
 +}
 diff --git a/ui/src/ui/chat/slash-command-executor.ts b/ui/src/ui/chat/slash-command-executor.ts
-index 9f3f2e271d..23434a62cc 100644
+index 9f3f2e271d..11315c6da5 100644
 --- a/ui/src/ui/chat/slash-command-executor.ts
 +++ b/ui/src/ui/chat/slash-command-executor.ts
-@@ -366,6 +366,28 @@ async function executeFast(
+@@ -122,11 +122,60 @@ export async function executeSlashCommand(
+       return await executeSteer(client, sessionKey, args, context);
+     case "redirect":
+       return await executeRedirect(client, sessionKey, args, context);
++    case "plan":
++      return await executePlan(client, sessionKey, args);
+     default:
+       return { content: `Unknown command: \`/${commandName}\`` };
+   }
+ }
+ 
++/**
++ * `/plan on|off|status` — toggle the session into or out of plan mode.
++ * Routes through `setSessionPlanMode` (sessions.patch with `planMode`)
++ * which the gateway's PR-8 handler validates against the
++ * `agents.defaults.planMode.enabled` opt-in gate.
++ */
++async function executePlan(
++  client: GatewayBrowserClient,
++  sessionKey: string,
++  args: string,
++): Promise<SlashCommandResult> {
++  const raw = normalizeLowercaseStringOrEmpty(args);
++  if (!raw || raw === "status") {
++    return {
++      content: formatDirectiveOptions(
++        "Usage: `/plan on` to enter plan mode, `/plan off` to exit.",
++        "on, off, status",
++      ),
++    };
++  }
++  if (raw !== "on" && raw !== "off") {
++    return {
++      content: `Unrecognized plan-mode value "${args.trim()}". Valid: on, off, status.`,
++    };
++  }
++  const mode: "plan" | "normal" = raw === "on" ? "plan" : "normal";
++  try {
++    await setSessionPlanMode(client, sessionKey, mode);
++    return {
++      content:
++        mode === "plan"
++          ? "Plan mode **enabled** — write/edit/exec tools blocked until plan approved."
++          : "Plan mode **disabled** — mutations unblocked.",
++      action: "refresh",
++    };
++  } catch (err) {
++    const msg = String(err);
++    if (msg.includes("plan mode is disabled")) {
++      return {
++        content:
++          "Plan mode is disabled at the config level. Set `agents.defaults.planMode.enabled: true` and restart the gateway.",
++      };
++    }
++    return { content: `Failed to set plan mode: ${msg}` };
++  }
++}
++
+ // ── Command Implementations ──
+ 
+ function executeHelp(): SlashCommandResult {
+@@ -366,6 +415,28 @@ async function executeFast(
    }
  }
  
@@ -8795,6 +9123,43 @@ index 9f3f2e271d..23434a62cc 100644
  async function executeUsage(
    client: GatewayBrowserClient,
    sessionKey: string,
+diff --git a/ui/src/ui/chat/slash-commands.ts b/ui/src/ui/chat/slash-commands.ts
+index 7ab50f28de..b7ec788ff2 100644
+--- a/ui/src/ui/chat/slash-commands.ts
++++ b/ui/src/ui/chat/slash-commands.ts
+@@ -91,6 +91,7 @@ const LOCAL_COMMANDS = new Set([
+   "kill",
+   "steer",
+   "redirect",
++  "plan",
+ ]);
+ 
+ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
+@@ -111,6 +112,16 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
+     category: "agents",
+     executeLocal: true,
+   },
++  {
++    key: "plan",
++    name: "plan",
++    description: "Toggle plan mode (blocks write/edit/exec until approved)",
++    args: "<on|off|status>",
++    icon: "book",
++    category: "session",
++    executeLocal: true,
++    argOptions: ["on", "off", "status"],
++  },
+ ];
+ 
+ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
+@@ -134,6 +145,7 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
+   compact: "session",
+   focus: "session",
+   unfocus: "session",
++  plan: "session",
+   model: "model",
+   models: "model",
+   think: "model",
 diff --git a/ui/src/ui/types.ts b/ui/src/ui/types.ts
 index defa2b6d81..08ce28bf8f 100644
 --- a/ui/src/ui/types.ts
@@ -8823,10 +9188,18 @@ index defa2b6d81..08ce28bf8f 100644
  
  export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
 diff --git a/ui/src/ui/views/chat.ts b/ui/src/ui/views/chat.ts
-index 4a4c46d7b3..f56a282cd6 100644
+index 4a4c46d7b3..ed3ba88671 100644
 --- a/ui/src/ui/views/chat.ts
 +++ b/ui/src/ui/views/chat.ts
-@@ -21,6 +21,15 @@ import {
+@@ -3,6 +3,7 @@ import { ref } from "lit/directives/ref.js";
+ import { repeat } from "lit/directives/repeat.js";
+ import { unsafeHTML } from "lit/directives/unsafe-html.js";
+ import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
++import type { PlanApprovalRequest } from "../app-tool-stream.ts";
+ import {
+   CHAT_ATTACHMENT_ACCEPT,
+   isSupportedChatAttachmentMimeType,
+@@ -21,6 +22,15 @@ import {
    normalizeMessage,
    normalizeRoleForGrouping,
  } from "../chat/message-normalizer.ts";
@@ -8842,7 +9215,15 @@ index 4a4c46d7b3..f56a282cd6 100644
  import { PinnedMessages } from "../chat/pinned-messages.ts";
  import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
  import { messageMatchesSearchQuery } from "../chat/search-match.ts";
-@@ -113,6 +122,14 @@ export type ChatProps = {
+@@ -45,6 +55,7 @@ import type { ChatItem, MessageGroup, ToolCard } from "../types/chat-types.ts";
+ import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
+ import { agentLogoUrl, resolveAgentAvatarUrl } from "./agents-utils.ts";
+ import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
++import { renderInlinePlanApproval } from "./plan-approval-inline.ts";
+ import "../components/resizable-divider.ts";
+ 
+ export type ChatProps = {
+@@ -113,6 +124,25 @@ export type ChatProps = {
    onSplitRatioChange?: (ratio: number) => void;
    onChatScroll?: (event: Event) => void;
    basePath?: string;
@@ -8854,10 +9235,21 @@ index 4a4c46d7b3..f56a282cd6 100644
 +   * Optional so existing callers that don't yet wire it stay compiling.
 +   */
 +  onSetMode?: (mode: ModeDefinition) => void;
++  // PR-8 follow-up: inline plan approval card wiring. Optional so non-
++  // plan-mode embeddings of renderChat (tests, alt apps) keep compiling.
++  planApprovalRequest?: PlanApprovalRequest | null;
++  planApprovalBusy?: boolean;
++  planApprovalError?: string | null;
++  onPlanApprovalDecision?: (
++    decision: "approve" | "reject" | "edit",
++    feedback?: string,
++  ) => void | Promise<void>;
++  /** Open the full plan content in the right sidebar (read-only viewer). */
++  onOpenPlanInSidebar?: (request: PlanApprovalRequest) => void;
  };
  
  const COMPACTION_TOAST_DURATION_MS = 5000;
-@@ -295,6 +312,8 @@ interface ChatEphemeralState {
+@@ -295,6 +325,8 @@ interface ChatEphemeralState {
    searchOpen: boolean;
    searchQuery: string;
    pinnedExpanded: boolean;
@@ -8866,7 +9258,7 @@ index 4a4c46d7b3..f56a282cd6 100644
  }
  
  function createChatEphemeralState(): ChatEphemeralState {
-@@ -310,6 +329,7 @@ function createChatEphemeralState(): ChatEphemeralState {
+@@ -310,6 +342,7 @@ function createChatEphemeralState(): ChatEphemeralState {
      searchOpen: false,
      searchQuery: "",
      pinnedExpanded: false,
@@ -8874,16 +9266,39 @@ index 4a4c46d7b3..f56a282cd6 100644
    };
  }
  
-@@ -1619,6 +1639,34 @@ export function renderChat(props: ChatProps) {
-                   </button>
-                 `
-               : nothing}
+@@ -1523,6 +1556,24 @@ export function renderChat(props: ChatProps) {
+             </button>
+           `
+         : nothing}
++      ${props.planApprovalRequest && props.onPlanApprovalDecision
++        ? renderInlinePlanApproval({
++            request: props.planApprovalRequest,
++            busy: props.planApprovalBusy ?? false,
++            error: props.planApprovalError ?? null,
++            onApprove: () => void props.onPlanApprovalDecision!("approve"),
++            onEdit: () => void props.onPlanApprovalDecision!("edit"),
++            onReject: () => {
++              const feedback = window.prompt("Feedback for revision (optional):") ?? undefined;
++              void props.onPlanApprovalDecision!("reject", feedback || undefined);
++            },
++            onOpenPlan: () => {
++              if (props.planApprovalRequest && props.onOpenPlanInSidebar) {
++                props.onOpenPlanInSidebar(props.planApprovalRequest);
++              }
++            },
++          })
++        : nothing}
+ 
+       <!-- Input bar -->
+       <div class="agent-chat__input">
+@@ -1554,6 +1605,32 @@ export function renderChat(props: ChatProps) {
+ 
+         <div class="agent-chat__toolbar">
+           <div class="agent-chat__toolbar-left">
 +            ${(() => {
-+              // PR-8 / #67721: render the mode chip when the host wired
-+              // `onSetMode`. Reads the current mode from the active
-+              // session row (planMode wins; falls back to permission
-+              // pair; falls back to a synthesized "Custom" chip when
-+              // neither matches a preset).
++              // PR-8 / #67721: mode chip lives at the LEFT edge of the
++              // toolbar (before paperclip) per user feedback — it's the
++              // most-frequently-touched control on the input row.
 +              if (!props.onSetMode) {
 +                return nothing;
 +              }
@@ -8906,101 +9321,99 @@ index 4a4c46d7b3..f56a282cd6 100644
 +                },
 +              });
 +            })()}
-             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
-           </div>
- 
-diff --git a/ui/src/ui/views/plan-approval.ts b/ui/src/ui/views/plan-approval.ts
+             <button
+               class="agent-chat__input-btn"
+               @click=${() => {
+diff --git a/ui/src/ui/views/plan-approval-inline.ts b/ui/src/ui/views/plan-approval-inline.ts
 new file mode 100644
-index 0000000000..67344adadb
+index 0000000000..eda8bc517f
 --- /dev/null
-+++ b/ui/src/ui/views/plan-approval.ts
-@@ -0,0 +1,90 @@
++++ b/ui/src/ui/views/plan-approval-inline.ts
+@@ -0,0 +1,88 @@
 +/**
-+ * Plan-approval overlay (PR-8 follow-up).
++ * Inline plan-approval card (PR-8 follow-up).
 + *
-+ * Rendered when the agent calls `exit_plan_mode`, surfacing the proposed
-+ * plan to the user with Approve / Reject / Edit buttons. Reuses the
-+ * exec-approval overlay shell + plan-cards renderer for visual
-+ * consistency.
++ * Renders ABOVE the chat input bar, mimicking Claude Code's
++ * "Claude proposed a plan" affordance: compact title strip + 3 buttons
++ * (Approve / Approve with edits / Reject) + an "Open plan" link that
++ * pops the full checklist into the right sidebar via the same path
++ * tool-output details use.
 + *
-+ * The decision flows back to the gateway via
-+ * `sessions.patch { planApproval: { action, feedback?, approvalId } }`,
-+ * which calls `resolvePlanApproval` from the plan-mode lib (#67538).
++ * This replaces the modal overlay design — modal blocked the rest of
++ * the UI and required Cmd+R to dismiss when stuck. Inline keeps the
++ * chat scrollable and the chip + slash command still operable.
 + */
-+import { html, nothing } from "lit";
-+import type { AppViewState } from "../app-view-state.ts";
-+import { renderPlanCard, type PlanCardStep } from "../chat/plan-cards.ts";
++import { html, nothing, type TemplateResult } from "lit";
++import type { PlanApprovalRequest } from "../app-tool-stream.ts";
 +
-+const PLAN_STEP_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
-+
-+function coercePlanStep(raw: { step: string; status: string; activeForm?: string }): PlanCardStep {
-+  const status = (PLAN_STEP_STATUSES as readonly string[]).includes(raw.status)
-+    ? (raw.status as PlanCardStep["status"])
-+    : "pending";
-+  return {
-+    text: raw.step,
-+    status,
-+    ...(raw.activeForm ? { activeForm: raw.activeForm } : {}),
-+  };
++export interface InlinePlanApprovalProps {
++  request: PlanApprovalRequest | null;
++  busy: boolean;
++  error: string | null;
++  onApprove: () => void;
++  onEdit: () => void;
++  onReject: () => void;
++  /** Pop the full plan into the right sidebar (read-only). */
++  onOpenPlan: () => void;
 +}
 +
-+export function renderPlanApprovalOverlay(state: AppViewState) {
-+  const active = state.planApprovalRequest;
-+  if (!active) {
++export function renderInlinePlanApproval(
++  props: InlinePlanApprovalProps,
++): TemplateResult | typeof nothing {
++  if (!props.request) {
 +    return nothing;
 +  }
-+  const planSteps = active.plan.map(coercePlanStep);
-+  const planTitle = active.summary || "Proposed plan";
++  const { request, busy, error } = props;
++  const stepCount = request.plan.length;
++  const stepLabel = stepCount === 1 ? "step" : "steps";
++  const summary = request.summary?.trim();
 +  return html`
-+    <div class="exec-approval-overlay" role="dialog" aria-live="polite">
-+      <div class="exec-approval-card">
-+        <div class="exec-approval-header">
-+          <div>
-+            <div class="exec-approval-title">${active.title}</div>
-+            <div class="exec-approval-sub">
-+              ${active.plan.length} ${active.plan.length === 1 ? "step" : "steps"} proposed
-+            </div>
-+          </div>
++    <div class="plan-inline-card" role="region" aria-label="Plan approval">
++      <div class="plan-inline-card__header">
++        <div class="plan-inline-card__title">
++          ${summary
++            ? html`<strong>Agent proposed a plan</strong>
++                <span class="plan-inline-card__summary">— ${summary}</span>`
++            : html`<strong>Agent proposed a plan</strong>`}
 +        </div>
-+        <div class="exec-approval-meta" style="margin-top: 8px;">
-+          ${renderPlanCard({
-+            title: planTitle,
-+            steps: planSteps,
-+            ...(active.summary ? { explanation: active.summary } : {}),
-+          })}
-+        </div>
-+        ${state.planApprovalError
-+          ? html`<div class="exec-approval-error">${state.planApprovalError}</div>`
-+          : nothing}
-+        <div class="exec-approval-actions">
-+          <button
-+            class="btn primary"
-+            ?disabled=${state.planApprovalBusy}
-+            @click=${() => state.handlePlanApprovalDecision("approve")}
-+            title="Execute the plan now"
-+          >
-+            Approve
-+          </button>
-+          <button
-+            class="btn"
-+            ?disabled=${state.planApprovalBusy}
-+            @click=${() => state.handlePlanApprovalDecision("edit")}
-+            title="Treat as approved with edits in mind"
-+          >
-+            Approve with edits
-+          </button>
-+          <button
-+            class="btn danger"
-+            ?disabled=${state.planApprovalBusy}
-+            @click=${async () => {
-+              const feedback = window.prompt("Reason for rejection (optional):") ?? undefined;
-+              await state.handlePlanApprovalDecision("reject", feedback || undefined);
-+            }}
-+            title="Send back for revision; agent stays in plan mode"
-+          >
-+            Reject
-+          </button>
-+        </div>
++        <button
++          class="plan-inline-card__open"
++          type="button"
++          @click=${props.onOpenPlan}
++          title="Open the full plan in the side panel"
++        >
++          Open plan
++        </button>
++      </div>
++      <div class="plan-inline-card__meta">${stepCount} ${stepLabel}</div>
++      ${error ? html`<div class="plan-inline-card__error">${error}</div>` : nothing}
++      <div class="plan-inline-card__actions">
++        <button
++          class="plan-inline-card__btn plan-inline-card__btn--primary"
++          type="button"
++          ?disabled=${busy}
++          @click=${props.onApprove}
++        >
++          Accept
++        </button>
++        <button
++          class="plan-inline-card__btn"
++          type="button"
++          ?disabled=${busy}
++          @click=${props.onEdit}
++          title="Treat as approved with edits in mind"
++        >
++          Accept, allow edits
++        </button>
++        <button
++          class="plan-inline-card__btn plan-inline-card__btn--danger"
++          type="button"
++          ?disabled=${busy}
++          @click=${props.onReject}
++          title="Send back for revision; agent stays in plan mode"
++        >
++          Revise
++        </button>
 +      </div>
 +    </div>
 +  `;
