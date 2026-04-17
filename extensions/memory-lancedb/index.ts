@@ -616,8 +616,8 @@ export default definePluginEntry({
 
           if (cfg.smartExtraction?.enabled) {
             const chatClient = new OpenAI({
-              apiKey: cfg.embedding.apiKey,
-              baseURL: cfg.embedding.baseUrl,
+              apiKey: cfg.smartExtraction.apiKey ?? cfg.embedding.apiKey,
+              baseURL: cfg.smartExtraction.baseUrl ?? cfg.embedding.baseUrl,
             });
             const existingTexts: string[] = [];
             try {

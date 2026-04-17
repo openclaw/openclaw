@@ -19,6 +19,8 @@ export type MemoryConfig = {
   smartExtraction?: {
     enabled: boolean;
     model?: string;
+    apiKey?: string;
+    baseUrl?: string;
   };
 };
 
@@ -98,6 +100,8 @@ function resolveEmbeddingModel(embedding: Record<string, unknown>): string {
 
 function resolveSmartExtraction(
   raw: unknown,
+  embeddingApiKey: string,
+  embeddingBaseUrl?: string,
 ): MemoryConfig["smartExtraction"] {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return undefined;
@@ -106,9 +110,13 @@ function resolveSmartExtraction(
   if (cfg.enabled !== true) {
     return undefined;
   }
+  const apiKey = typeof cfg.apiKey === "string" ? resolveEnvVars(cfg.apiKey) : embeddingApiKey;
+  const baseUrl = typeof cfg.baseUrl === "string" ? resolveEnvVars(cfg.baseUrl) : embeddingBaseUrl;
   return {
     enabled: true,
     model: typeof cfg.model === "string" ? cfg.model : DEFAULT_SMART_EXTRACTION_MODEL,
+    apiKey,
+    baseUrl,
   };
 }
 
@@ -189,7 +197,11 @@ export const memoryConfigSchema = {
       autoRecall: cfg.autoRecall !== false,
       captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
       ...(storageOptions ? { storageOptions } : {}),
-      smartExtraction: resolveSmartExtraction(cfg.smartExtraction),
+      smartExtraction: resolveSmartExtraction(
+        cfg.smartExtraction,
+        resolveEnvVars(embedding.apiKey),
+        typeof embedding.baseUrl === "string" ? resolveEnvVars(embedding.baseUrl) : undefined,
+      ),
     };
   },
   uiHints: {
@@ -250,6 +262,19 @@ export const memoryConfigSchema = {
       label: "Extraction Model",
       placeholder: DEFAULT_SMART_EXTRACTION_MODEL,
       help: "OpenAI-compatible chat model for memory extraction",
+      advanced: true,
+    },
+    "smartExtraction.apiKey": {
+      label: "Extraction API Key",
+      sensitive: true,
+      placeholder: "(uses embedding key)",
+      help: "API key for the extraction model. Falls back to embedding.apiKey if not set.",
+      advanced: true,
+    },
+    "smartExtraction.baseUrl": {
+      label: "Extraction Base URL",
+      placeholder: "(uses embedding base URL)",
+      help: "Base URL for the extraction model provider. Falls back to embedding.baseUrl if not set.",
       advanced: true,
     },
   },
