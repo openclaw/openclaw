@@ -173,9 +173,10 @@ export async function verifyGroupMembership(params: {
     cache.set(key, { result, timestamp: Date.now() });
     return result;
   } catch {
-    const result: MembershipResult = { trusted: false, reason: "api-error" };
-    cache.set(key, { result, timestamp: Date.now() });
-    return result;
+    // Do not cache api-error: a transient Telegram API outage would otherwise
+    // block every subsequent message in this chat for the full TTL even after
+    // the API recovers. Let the next inbound message retry.
+    return { trusted: false, reason: "api-error" };
   }
 }
 

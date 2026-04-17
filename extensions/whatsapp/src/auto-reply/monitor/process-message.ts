@@ -158,8 +158,16 @@ export async function processMessage(params: {
     accountId: account.accountId,
   });
   const configuredAllowFrom = account.allowFrom ?? [];
+  // Match the fallback chain used by inbound access control and command auth
+  // (channels.defaults.groupAllowFrom), otherwise allowed group senders lose
+  // quote/history context when contextVisibility is in an allowlist mode but
+  // the user only configured defaults.groupAllowFrom instead of the per-account
+  // field.
+  const defaultGroupAllowFrom = params.cfg.channels?.defaults?.groupAllowFrom;
   const configuredGroupAllowFrom =
-    account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
+    account.groupAllowFrom ??
+    defaultGroupAllowFrom ??
+    (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
   const groupAllowFrom = configuredGroupAllowFrom ?? [];
   // Normalize "members" to "open": WhatsApp has no group membership API.
   const groupPolicy = normalizeNonTelegramGroupPolicy(account.groupPolicy ?? "allowlist");
