@@ -6,56 +6,66 @@ import type {
 } from "../../../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { LineProbeResult } from "../../../src/plugin-sdk/line.js";
-import { loadBundledPluginContractApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { loadBundledPluginPublicSurfaceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { withEnvAsync } from "../../../src/test-utils/env.js";
 
-type DiscordContractApiSurface = Pick<
-  typeof import("@openclaw/discord/contract-api.js"),
+type DiscordDirectoryContractApiSurface = Pick<
+  typeof import("@openclaw/discord/directory-contract-api.js"),
   "listDiscordDirectoryPeersFromConfig" | "listDiscordDirectoryGroupsFromConfig"
 >;
 type DiscordProbe = import("@openclaw/discord/api.js").DiscordProbe;
 type DiscordTokenResolution = import("@openclaw/discord/api.js").DiscordTokenResolution;
 type IMessageProbe = import("@openclaw/imessage/runtime-api.js").IMessageProbe;
 type SignalProbe = import("@openclaw/signal/api.js").SignalProbe;
-type SlackContractApiSurface = Pick<
-  typeof import("@openclaw/slack/contract-api.js"),
+type SlackDirectoryContractApiSurface = Pick<
+  typeof import("@openclaw/slack/directory-contract-api.js"),
   "listSlackDirectoryPeersFromConfig" | "listSlackDirectoryGroupsFromConfig"
 >;
 type SlackProbe = import("@openclaw/slack/api.js").SlackProbe;
-type TelegramContractApiSurface = Pick<
-  typeof import("@openclaw/telegram/contract-api.js"),
+type TelegramDirectoryContractApiSurface = Pick<
+  typeof import("@openclaw/telegram/directory-contract-api.js"),
   "listTelegramDirectoryPeersFromConfig" | "listTelegramDirectoryGroupsFromConfig"
 >;
 type TelegramProbe = import("@openclaw/telegram/api.js").TelegramProbe;
 type TelegramTokenResolution = import("@openclaw/telegram/api.js").TelegramTokenResolution;
-type WhatsAppContractApiSurface = Pick<
-  typeof import("@openclaw/whatsapp/contract-api.js"),
+type WhatsAppDirectoryContractApiSurface = Pick<
+  typeof import("@openclaw/whatsapp/directory-contract-api.js"),
   "listWhatsAppDirectoryPeersFromConfig" | "listWhatsAppDirectoryGroupsFromConfig"
 >;
 
-let discordContractApi: DiscordContractApiSurface | undefined;
-let slackContractApi: SlackContractApiSurface | undefined;
-let telegramContractApi: TelegramContractApiSurface | undefined;
-let whatsappContractApi: WhatsAppContractApiSurface | undefined;
+let discordDirectoryContractApi: DiscordDirectoryContractApiSurface | undefined;
+let slackDirectoryContractApi: SlackDirectoryContractApiSurface | undefined;
+let telegramDirectoryContractApi: TelegramDirectoryContractApiSurface | undefined;
+let whatsappDirectoryContractApi: WhatsAppDirectoryContractApiSurface | undefined;
 
-function getDiscordContractApi(): DiscordContractApiSurface {
-  discordContractApi ??= loadBundledPluginContractApiSync<DiscordContractApiSurface>("discord");
-  return discordContractApi;
+function loadDirectoryContractApi<T extends object>(pluginId: string): T {
+  return loadBundledPluginPublicSurfaceSync<T>({
+    pluginId,
+    artifactBasename: "directory-contract-api.js",
+  });
 }
 
-function getSlackContractApi(): SlackContractApiSurface {
-  slackContractApi ??= loadBundledPluginContractApiSync<SlackContractApiSurface>("slack");
-  return slackContractApi;
+function getDiscordDirectoryContractApi(): DiscordDirectoryContractApiSurface {
+  discordDirectoryContractApi ??=
+    loadDirectoryContractApi<DiscordDirectoryContractApiSurface>("discord");
+  return discordDirectoryContractApi;
 }
 
-function getTelegramContractApi(): TelegramContractApiSurface {
-  telegramContractApi ??= loadBundledPluginContractApiSync<TelegramContractApiSurface>("telegram");
-  return telegramContractApi;
+function getSlackDirectoryContractApi(): SlackDirectoryContractApiSurface {
+  slackDirectoryContractApi ??= loadDirectoryContractApi<SlackDirectoryContractApiSurface>("slack");
+  return slackDirectoryContractApi;
 }
 
-function getWhatsAppContractApi(): WhatsAppContractApiSurface {
-  whatsappContractApi ??= loadBundledPluginContractApiSync<WhatsAppContractApiSurface>("whatsapp");
-  return whatsappContractApi;
+function getTelegramDirectoryContractApi(): TelegramDirectoryContractApiSurface {
+  telegramDirectoryContractApi ??=
+    loadDirectoryContractApi<TelegramDirectoryContractApiSurface>("telegram");
+  return telegramDirectoryContractApi;
+}
+
+function getWhatsAppDirectoryContractApi(): WhatsAppDirectoryContractApiSurface {
+  whatsappDirectoryContractApi ??=
+    loadDirectoryContractApi<WhatsAppDirectoryContractApiSurface>("whatsapp");
+  return whatsappDirectoryContractApi;
 }
 
 type DirectoryListFn = (params: {
@@ -87,8 +97,8 @@ async function expectDirectoryIds(
 
 export function describeDiscordPluginsCoreExtensionContract() {
   describe("discord plugins-core extension contract", () => {
-    const listPeers = () => getDiscordContractApi().listDiscordDirectoryPeersFromConfig;
-    const listGroups = () => getDiscordContractApi().listDiscordDirectoryGroupsFromConfig;
+    const listPeers = () => getDiscordDirectoryContractApi().listDiscordDirectoryPeersFromConfig;
+    const listGroups = () => getDiscordDirectoryContractApi().listDiscordDirectoryGroupsFromConfig;
 
     it("DiscordProbe satisfies BaseProbeResult", () => {
       expectTypeOf<DiscordProbe>().toMatchTypeOf<BaseProbeResult>();
@@ -188,8 +198,8 @@ export function describeDiscordPluginsCoreExtensionContract() {
 
 export function describeSlackPluginsCoreExtensionContract() {
   describe("slack plugins-core extension contract", () => {
-    const listPeers = () => getSlackContractApi().listSlackDirectoryPeersFromConfig;
-    const listGroups = () => getSlackContractApi().listSlackDirectoryGroupsFromConfig;
+    const listPeers = () => getSlackDirectoryContractApi().listSlackDirectoryPeersFromConfig;
+    const listGroups = () => getSlackDirectoryContractApi().listSlackDirectoryGroupsFromConfig;
 
     it("SlackProbe satisfies BaseProbeResult", () => {
       expectTypeOf<SlackProbe>().toMatchTypeOf<BaseProbeResult>();
@@ -264,8 +274,9 @@ export function describeSlackPluginsCoreExtensionContract() {
 
 export function describeTelegramPluginsCoreExtensionContract() {
   describe("telegram plugins-core extension contract", () => {
-    const listPeers = () => getTelegramContractApi().listTelegramDirectoryPeersFromConfig;
-    const listGroups = () => getTelegramContractApi().listTelegramDirectoryGroupsFromConfig;
+    const listPeers = () => getTelegramDirectoryContractApi().listTelegramDirectoryPeersFromConfig;
+    const listGroups = () =>
+      getTelegramDirectoryContractApi().listTelegramDirectoryGroupsFromConfig;
 
     it("TelegramProbe satisfies BaseProbeResult", () => {
       expectTypeOf<TelegramProbe>().toMatchTypeOf<BaseProbeResult>();
@@ -359,8 +370,9 @@ export function describeTelegramPluginsCoreExtensionContract() {
 
 export function describeWhatsAppPluginsCoreExtensionContract() {
   describe("whatsapp plugins-core extension contract", () => {
-    const listPeers = () => getWhatsAppContractApi().listWhatsAppDirectoryPeersFromConfig;
-    const listGroups = () => getWhatsAppContractApi().listWhatsAppDirectoryGroupsFromConfig;
+    const listPeers = () => getWhatsAppDirectoryContractApi().listWhatsAppDirectoryPeersFromConfig;
+    const listGroups = () =>
+      getWhatsAppDirectoryContractApi().listWhatsAppDirectoryGroupsFromConfig;
 
     it("lists peers/groups from config", async () => {
       const cfg = {
