@@ -1,15 +1,14 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createAnthropicBetaHeadersWrapper,
-  createAnthropicFastModeWrapper,
-  createAnthropicServiceTierWrapper,
-  resolveAnthropicBetas,
-  resolveAnthropicFastMode,
-  resolveAnthropicServiceTier,
-} from "../../test/helpers/providers/anthropic-contract.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
+
+const ANTHROPIC_DEFAULT_BETAS = [
+  "fine-grained-tool-streaming-2025-05-14",
+  "interleaved-thinking-2025-05-14",
+];
+const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
+const ANTHROPIC_OAUTH_BETAS = ["oauth-2025-04-20", "claude-code-20250219"];
 
 const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-3", "grok-3-fast"],
@@ -109,6 +108,87 @@ function createTestToolStreamWrapper(
       },
     });
   };
+}
+
+function resolveAnthropicBetas(
+  extraParams: Record<string, unknown> | undefined,
+  modelId: string,
+): string[] {
+  const configuredBetas = Array.isArray(extraParams?.anthropicBeta)
+    ? extraParams.anthropicBeta.filter((value): value is string => typeof value === "string")
+    : [];
+  if (!extraParams?.context1m || !/(opus|sonnet)/i.test(modelId)) {
+    return configuredBetas;
+  }
+  return [...ANTHROPIC_DEFAULT_BETAS, ...configuredBetas, ANTHROPIC_CONTEXT_1M_BETA];
+}
+
+function resolveAnthropicServiceTier(extraParams: Record<string, unknown> | undefined) {
+  const serviceTier = extraParams?.service_tier ?? extraParams?.serviceTier;
+  return serviceTier === "auto" || serviceTier === "standard_only" ? serviceTier : undefined;
+}
+
+function resolveAnthropicFastMode(extraParams: Record<string, unknown> | undefined) {
+  return typeof extraParams?.fastMode === "boolean" ? extraParams.fastMode : undefined;
+}
+
+function isAnthropicOauthApiKey(apiKey: unknown): boolean {
+  return typeof apiKey === "string" && apiKey.startsWith("sk-ant-oat");
+}
+
+function isDirectAnthropicModel(model: { provider?: string; baseUrl?: string }): boolean {
+  const baseUrl = typeof model.baseUrl === "string" ? model.baseUrl : "";
+  return model.provider === "anthropic" && (!baseUrl || baseUrl.includes("api.anthropic.com"));
+}
+
+function createAnthropicBetaHeadersWrapper(baseStreamFn: StreamFn | undefined, betas: string[]) {
+  const underlying = baseStreamFn ?? (() => ({}) as ReturnType<StreamFn>);
+  return ((model, context, options) => {
+    const nextBetas = isAnthropicOauthApiKey(options?.apiKey)
+      ? [...ANTHROPIC_OAUTH_BETAS, ...betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA)]
+      : betas;
+    const existingBeta =
+      typeof options?.headers?.["anthropic-beta"] === "string"
+        ? options.headers["anthropic-beta"]
+        : "";
+    const betaHeader = [...(existingBeta ? [existingBeta] : []), ...nextBetas].join(",");
+    return underlying(model, context, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
+      },
+    });
+  }) as StreamFn;
+}
+
+function createAnthropicServiceTierWrapper(
+  baseStreamFn: StreamFn | undefined,
+  serviceTier: string,
+) {
+  const underlying = baseStreamFn ?? (() => ({}) as ReturnType<StreamFn>);
+  return ((model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (
+          payload &&
+          typeof payload === "object" &&
+          isDirectAnthropicModel(model) &&
+          !isAnthropicOauthApiKey(options?.apiKey)
+        ) {
+          const payloadObj = payload as Record<string, unknown>;
+          payloadObj.service_tier ??= serviceTier;
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  }) as StreamFn;
+}
+
+function createAnthropicFastModeWrapper(baseStreamFn: StreamFn | undefined, fastMode: boolean) {
+  return createAnthropicServiceTierWrapper(baseStreamFn, fastMode ? "auto" : "standard_only");
 }
 
 import { createAnthropicToolPayloadCompatibilityWrapper } from "./pi-embedded-runner/anthropic-family-tool-payload-compat.js";
@@ -897,91 +977,95 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("keeps anthropic tool payloads native for Kimi", () => {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {
-        tools: [
-          {
-            name: "read",
-            description: "Read file",
-            input_schema: {
-              type: "object",
-              properties: { path: { type: "string" } },
-              required: ["path"],
+    withMinimalProviderRuntimeDepsForTest(() => {
+      const payloads: Record<string, unknown>[] = [];
+      const baseStreamFn: StreamFn = (_model, _context, options) => {
+        const payload: Record<string, unknown> = {
+          tools: [
+            {
+              name: "read",
+              description: "Read file",
+              input_schema: {
+                type: "object",
+                properties: { path: { type: "string" } },
+                required: ["path"],
+              },
             },
-          },
-        ],
-        tool_choice: { type: "tool", name: "read" },
+          ],
+          tool_choice: { type: "tool", name: "read" },
+        };
+        options?.onPayload?.(payload, _model);
+        payloads.push(payload);
+        return {} as ReturnType<StreamFn>;
       };
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
+      const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "kimi", "kimi-code", undefined, "low");
+      applyExtraParamsToAgent(agent, undefined, "kimi", "kimi-code", undefined, "low");
 
-    const model = {
-      api: "anthropic-messages",
-      provider: "kimi",
-      id: "kimi-code",
-      baseUrl: "https://api.kimi.com/coding/",
-    } as Model<"anthropic-messages">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
+      const model = {
+        api: "anthropic-messages",
+        provider: "kimi",
+        id: "kimi-code",
+        baseUrl: "https://api.kimi.com/coding/",
+      } as Model<"anthropic-messages">;
+      const context: Context = { messages: [] };
+      void agent.streamFn?.(model, context, {});
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.tools).toEqual([
-      {
-        name: "read",
-        description: "Read file",
-        input_schema: {
-          type: "object",
-          properties: { path: { type: "string" } },
-          required: ["path"],
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.tools).toEqual([
+        {
+          name: "read",
+          description: "Read file",
+          input_schema: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+          },
         },
-      },
-    ]);
-    expect(payloads[0]?.tool_choice).toEqual({ type: "tool", name: "read" });
+      ]);
+      expect(payloads[0]?.tool_choice).toEqual({ type: "tool", name: "read" });
+    });
   });
 
   it("does not rewrite anthropic tool schema for non-kimi endpoints", () => {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {
-        tools: [
-          {
-            name: "read",
-            description: "Read file",
-            input_schema: { type: "object", properties: {} },
-          },
-        ],
+    withMinimalProviderRuntimeDepsForTest(() => {
+      const payloads: Record<string, unknown>[] = [];
+      const baseStreamFn: StreamFn = (_model, _context, options) => {
+        const payload: Record<string, unknown> = {
+          tools: [
+            {
+              name: "read",
+              description: "Read file",
+              input_schema: { type: "object", properties: {} },
+            },
+          ],
+        };
+        options?.onPayload?.(payload, _model);
+        payloads.push(payload);
+        return {} as ReturnType<StreamFn>;
       };
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
+      const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", undefined, "low");
+      applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", undefined, "low");
 
-    const model = {
-      api: "anthropic-messages",
-      provider: "anthropic",
-      id: "claude-sonnet-4-6",
-      baseUrl: "https://api.anthropic.com",
-    } as Model<"anthropic-messages">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
+      const model = {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+        baseUrl: "https://api.anthropic.com",
+      } as Model<"anthropic-messages">;
+      const context: Context = { messages: [] };
+      void agent.streamFn?.(model, context, {});
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.tools).toEqual([
-      {
-        name: "read",
-        description: "Read file",
-        input_schema: { type: "object", properties: {} },
-      },
-    ]);
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.tools).toEqual([
+        {
+          name: "read",
+          description: "Read file",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]);
+    });
   });
 
   it("uses explicit compat metadata for anthropic tool payload normalization", () => {
