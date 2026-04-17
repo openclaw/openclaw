@@ -2,7 +2,17 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type Mock,
+  vi,
+} from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
@@ -32,12 +42,30 @@ describe("formatSystemRunAllowlistMissMessage", () => {
 });
 
 describe("handleSystemRunInvoke mac app exec host routing", () => {
+  let sharedFixtureRoot = "";
+  let sharedFixtureId = 0;
   let testOpenClawHome = "";
   let previousOpenClawHome: string | undefined;
 
+  beforeAll(() => {
+    sharedFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-host-fixtures-"));
+  });
+
+  afterAll(() => {
+    if (sharedFixtureRoot) {
+      fs.rmSync(sharedFixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  function createFixtureDir(prefix: string): string {
+    const dir = path.join(sharedFixtureRoot, `${prefix}${sharedFixtureId++}`);
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
   beforeEach(() => {
     previousOpenClawHome = process.env.OPENCLAW_HOME;
-    testOpenClawHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-host-home-"));
+    testOpenClawHome = createFixtureDir("openclaw-node-host-home-");
     process.env.OPENCLAW_HOME = testOpenClawHome;
     clearRuntimeConfigSnapshot();
   });
@@ -49,10 +77,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     } else {
       process.env.OPENCLAW_HOME = previousOpenClawHome;
     }
-    if (testOpenClawHome) {
-      fs.rmSync(testOpenClawHome, { recursive: true, force: true });
-      testOpenClawHome = "";
-    }
+    testOpenClawHome = "";
   });
 
   function createLocalRunResult(stdout = "local-ok") {
@@ -238,7 +263,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     approvals: Parameters<typeof saveExecApprovals>[0];
     run: (ctx: { tempHome: string }) => Promise<T>;
   }): Promise<T> {
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-"));
+    const tempHome = createFixtureDir("openclaw-exec-approvals-");
     const previousOpenClawHome = process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_HOME = tempHome;
     saveExecApprovals(params.approvals);
@@ -250,7 +275,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       } else {
         process.env.OPENCLAW_HOME = previousOpenClawHome;
       }
-      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   }
 
@@ -258,7 +282,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     tmpPrefix: string;
     run: (ctx: { link: string; expected: string }) => Promise<T>;
   }): Promise<T> {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), params.tmpPrefix));
+    const tmp = createFixtureDir(params.tmpPrefix);
     const binDir = path.join(tmp, "bin");
     fs.mkdirSync(binDir, { recursive: true });
     const link = path.join(binDir, "poccmd");
@@ -274,7 +298,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       } else {
         process.env.PATH = oldPath;
       }
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   }
 
@@ -282,7 +305,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     runtime: "bun" | "deno" | "jiti" | "tsx";
     run: () => Promise<T>;
   }): Promise<T> {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-${params.runtime}-path-`));
+    const tmp = createFixtureDir(`openclaw-${params.runtime}-path-`);
     const binDir = path.join(tmp, "bin");
     fs.mkdirSync(binDir, { recursive: true });
     const runtimePath =
@@ -305,7 +328,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       } else {
         process.env.PATH = oldPath;
       }
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   }
 
