@@ -63,7 +63,7 @@ describe("resolveFirstBoundAccountId", () => {
     ).toBe("bot-alpha-wildcard");
   });
 
-  it("prefers channel-only over wildcard peer binding when caller supplies no peerId", () => {
+  it("preserves first-match binding order for peerless callers", () => {
     const cfg = cfgWithBindings([
       {
         type: "route",
@@ -86,7 +86,7 @@ describe("resolveFirstBoundAccountId", () => {
         channelId: "matrix",
         agentId: "bot-alpha",
       }),
-    ).toBe("bot-alpha-default");
+    ).toBe("bot-alpha-wildcard");
   });
 
   it("falls back to peer-specific binding for peerless callers when no channel-only or wildcard binding exists", () => {

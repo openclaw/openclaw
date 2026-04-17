@@ -85,10 +85,10 @@ export function resolveFirstBoundAccountId(params: {
     peerId: normalizedPeerId,
     exactPeerIdAliases: params.exactPeerIdAliases,
   });
+  const hasPeerContext = exactPeerIds.size > 0;
   const normalizedPeerKind = normalizeChatType(params.peerKind) ?? undefined;
   let wildcardPeerMatch: string | undefined;
   let channelOnlyFallback: string | undefined;
-  let peerlessPeerSpecificFallback: string | undefined;
   for (const binding of listRouteBindings(params.cfg)) {
     const resolved = resolveNormalizedBindingMatch(binding);
     if (
@@ -98,28 +98,26 @@ export function resolveFirstBoundAccountId(params: {
     ) {
       continue;
     }
+    if (!hasPeerContext) {
+      // Cron and other peerless callers historically used the first matching
+      // agent/channel binding. Keep that fallback order unless the caller has
+      // enough peer context for the stricter exact/wildcard routing below.
+      return resolved.accountId;
+    }
     if (resolved.peerId === "*") {
-      if (!normalizedPeerId) {
-        // Peerless caller (for example cron delivery resolution). We have no
-        // peer context to apply kind safety against, so accept wildcards as a
-        // last-resort fallback — this preserves the pre-existing first-match
-        // semantics for configs that only declare wildcard peer bindings.
-        peerlessPeerSpecificFallback ??= resolved.accountId;
-      } else {
-        // Caller has a peer. Wildcard bindings are only safe when both sides
-        // declare a peer kind AND the kinds agree — a direct/* binding must
-        // never win for a channel caller (or vice versa), and we'd rather fall
-        // through to channel-only or the caller account than actively route to
-        // the wrong identity.
-        if (
-          !resolved.peerKind ||
-          !normalizedPeerKind ||
-          !peerKindMatches(resolved.peerKind, normalizedPeerKind)
-        ) {
-          continue;
-        }
-        wildcardPeerMatch ??= resolved.accountId;
+      // Caller has a peer. Wildcard bindings are only safe when both sides
+      // declare a peer kind AND the kinds agree — a direct/* binding must
+      // never win for a channel caller (or vice versa), and we'd rather fall
+      // through to channel-only or the caller account than actively route to
+      // the wrong identity.
+      if (
+        !resolved.peerKind ||
+        !normalizedPeerKind ||
+        !peerKindMatches(resolved.peerKind, normalizedPeerKind)
+      ) {
+        continue;
       }
+      wildcardPeerMatch ??= resolved.accountId;
     } else if (resolved.peerId) {
       // Exact peer id match: peer ids are channel-unique so id alone is
       // sufficient, but when both sides declare a kind they must still agree
@@ -136,15 +134,9 @@ export function resolveFirstBoundAccountId(params: {
       if (exactPeerIds.has(resolved.peerId)) {
         return resolved.accountId;
       }
-      if (!normalizedPeerId) {
-        // Preserves the pre-existing "first match wins" semantics for peerless
-        // callers (e.g. cron delivery resolution) whose only bindings are
-        // peer-specific; otherwise they would silently regress to undefined.
-        peerlessPeerSpecificFallback ??= resolved.accountId;
-      }
     } else {
       channelOnlyFallback ??= resolved.accountId;
     }
   }
-  return wildcardPeerMatch ?? channelOnlyFallback ?? peerlessPeerSpecificFallback;
+  return wildcardPeerMatch ?? channelOnlyFallback;
 }
