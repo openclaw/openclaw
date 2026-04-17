@@ -124,7 +124,8 @@ function normalizeAgentHeartbeatSummary(heartbeat: AgentHeartbeatSummary): Agent
 }
 
 function normalizeHealthSummary(summary: HealthSummary): HealthSummary {
-  const agents = summary.agents.map((agent) => ({
+  const rawAgents = Array.isArray(summary.agents) ? summary.agents : [];
+  const agents = rawAgents.map((agent) => ({
     ...agent,
     heartbeat: normalizeAgentHeartbeatSummary(agent.heartbeat),
   }));

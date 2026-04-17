@@ -97,6 +97,27 @@ describe("healthCommand", () => {
     expect(parsed.sessions.count).toBe(1);
   });
 
+  it("keeps legacy or malformed agent lists from crashing json output", async () => {
+    const malformed = {
+      ...createHealthSummary({
+        channels: {},
+        channelOrder: [],
+        channelLabels: {},
+      }),
+      agents: undefined,
+      heartbeatSeconds: 123,
+    } as unknown as HealthSummary;
+    callGatewayMock.mockResolvedValueOnce(malformed);
+
+    await healthCommand({ json: true, timeoutMs: 5000 }, runtime as never);
+
+    expect(runtime.exit).not.toHaveBeenCalled();
+    const logged = runtime.log.mock.calls[0]?.[0] as string;
+    const parsed = JSON.parse(logged) as HealthSummary;
+    expect(parsed.agents).toEqual([]);
+    expect(parsed.heartbeatSeconds).toBe(0);
+  });
+
   it("prints text summary when not json", async () => {
     callGatewayMock.mockResolvedValueOnce(
       createHealthSummary({

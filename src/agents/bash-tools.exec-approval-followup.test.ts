@@ -175,6 +175,25 @@ describe("exec approval followup", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("throws session followup failures instead of silently swallowing empty success output", async () => {
+    vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
+
+    await expect(
+      sendExecApprovalFollowup({
+        approvalId: "req-session-empty-resume-failed",
+        sessionKey: "agent:main:discord:channel:123",
+        turnSourceChannel: "discord",
+        turnSourceTo: "123",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: "456",
+        resultText:
+          "Exec finished (gateway id=req-session-empty-resume-failed, session=sess_2, code 0)",
+      }),
+    ).rejects.toThrow("Session followup failed: session missing");
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("uses safe denied copy with a next step when session resume fails", async () => {
     vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
 

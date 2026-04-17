@@ -256,7 +256,7 @@ export async function sendExecApprovalFollowup(
     return true;
   }
 
-  if (isSilentDirectExecApprovalFollowup(resultText)) {
+  if (!sessionError && isSilentDirectExecApprovalFollowup(resultText)) {
     return true;
   }
 
