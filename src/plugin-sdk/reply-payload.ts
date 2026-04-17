@@ -1,4 +1,5 @@
 import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
+import type { SupportedPayloadType } from "../channels/plugins/outbound.types.js";
 import { readStringValue } from "../shared/string-coerce.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
@@ -107,6 +108,28 @@ export function hasOutboundReplyContent(
     hasOutboundMedia(payload) ||
     Boolean(payload.sticker)
   );
+}
+
+/**
+ * Payload types that can be delivered standalone (without text or media).
+ * Types NOT in this set are delivery modifiers that require accompanying content.
+ */
+export const STANDALONE_PAYLOAD_TYPES: ReadonlySet<SupportedPayloadType> = new Set(["sticker"]);
+
+/**
+ * Extract capability-managed payload types present in the given payload.
+ * These are types that require explicit channel opt-in via supportedPayloadTypes,
+ * as opposed to core-managed content (interactive, channelData) which is handled
+ * separately by the pipeline.
+ */
+export function getCapabilityScopedPayloadTypes(payload: {
+  sticker?: unknown;
+}): SupportedPayloadType[] {
+  const types: SupportedPayloadType[] = [];
+  if (payload.sticker) {
+    types.push("sticker");
+  }
+  return types;
 }
 
 /** Normalize reply payload text/media into a trimmed, sendable shape for delivery paths. */
