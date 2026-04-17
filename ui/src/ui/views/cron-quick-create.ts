@@ -82,12 +82,25 @@ export function createDefaultDraft(): CronQuickCreateDraft {
   };
 }
 
+function buildDefaultScheduleAt(now = new Date()): string {
+  const next = new Date(now);
+  next.setHours(next.getHours() + 1, 0, 0, 0);
+  const year = next.getFullYear();
+  const month = String(next.getMonth() + 1).padStart(2, "0");
+  const day = String(next.getDate()).padStart(2, "0");
+  const hour = String(next.getHours()).padStart(2, "0");
+  const minute = String(next.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hour}:${minute}`;
+}
+
 // ── Convert draft to CronFormState patch ──
 
 export function draftToCronFormPatch(draft: CronQuickCreateDraft): Partial<CronFormState> {
   const patch: Partial<CronFormState> = {
     name: draft.name || "Automation",
     payloadKind: "agentTurn",
+    deleteAfterRun: false,
+    scheduleAt: "",
     payloadText: draft.prompt,
     enabled: true,
   };
@@ -117,6 +130,7 @@ export function draftToCronFormPatch(draft: CronQuickCreateDraft): Partial<CronF
       break;
     case "once":
       patch.scheduleKind = "at";
+      patch.scheduleAt = buildDefaultScheduleAt();
       patch.deleteAfterRun = true;
       break;
     default:
@@ -126,7 +140,7 @@ export function draftToCronFormPatch(draft: CronQuickCreateDraft): Partial<CronF
   // Delivery
   switch (draft.deliveryPreset) {
     case "notify":
-      patch.sessionTarget = "main";
+      patch.sessionTarget = "isolated";
       patch.deliveryMode = "announce";
       patch.wakeMode = "now";
       break;

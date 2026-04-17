@@ -8,6 +8,7 @@ import {
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
+import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
   renderChatControls,
@@ -431,6 +432,18 @@ const KNOWN_PROVIDER_KEYS = [
   { provider: "openrouter", label: "OpenRouter", envKey: "OPENROUTER_API_KEY" },
 ] as const;
 
+function formatQuickSettingsLabel(id: string): string {
+  const trimmed = id.trim();
+  if (!trimmed) {
+    return "Unknown";
+  }
+  return trimmed
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function extractQuickSettingsChannels(state: AppViewState): QuickSettingsChannel[] {
   const config = state.configForm ?? state.configSnapshot?.config;
   if (!config || typeof config !== "object") {
@@ -440,8 +453,16 @@ function extractQuickSettingsChannels(state: AppViewState): QuickSettingsChannel
     "channels" in config && config.channels && typeof config.channels === "object"
       ? (config.channels as Record<string, unknown>)
       : {};
+  const configuredIds = Object.keys(channelsConfig).filter((id) => id.trim().length > 0);
+  const channelIds =
+    configuredIds.length > 0
+      ? configuredIds.toSorted((a, b) => a.localeCompare(b))
+      : KNOWN_CHANNEL_IDS.map(({ id }) => id);
+  const knownLabels = new Map<string, string>(
+    KNOWN_CHANNEL_IDS.map(({ id, label }) => [id, label]),
+  );
   const channels: QuickSettingsChannel[] = [];
-  for (const { id, label } of KNOWN_CHANNEL_IDS) {
+  for (const id of channelIds) {
     const channelConfig = channelsConfig[id];
     const hasConfig =
       channelConfig != null &&
@@ -449,7 +470,7 @@ function extractQuickSettingsChannels(state: AppViewState): QuickSettingsChannel
       Object.keys(channelConfig).length > 0;
     channels.push({
       id,
-      label,
+      label: knownLabels.get(id) ?? formatQuickSettingsLabel(id),
       connected: hasConfig,
       detail: hasConfig ? "Configured" : undefined,
     });
@@ -461,9 +482,11 @@ function extractQuickSettingsApiKeys(state: AppViewState): QuickSettingsApiKey[]
   const config = state.configForm ?? state.configSnapshot?.config;
   const env = config && typeof config === "object" ? config.env : null;
   const envObj = env && typeof env === "object" ? (env as Record<string, unknown>) : {};
+  const envVars =
+    envObj.vars && typeof envObj.vars === "object" ? (envObj.vars as Record<string, unknown>) : {};
   return KNOWN_PROVIDER_KEYS.map(({ provider, label, envKey }) => {
-    const value = envObj[envKey];
-    const isSet = value != null && typeof value === "string" && value.trim().length > 0;
+    const value = typeof envVars[envKey] === "string" ? envVars[envKey] : envObj[envKey];
+    const isSet = typeof value === "string" && value.trim().length > 0;
     const masked = isSet ? `••••${value.slice(-4)}` : undefined;
     return { provider, label, masked, isSet };
   });
@@ -600,7 +623,8 @@ function renderCronQuickCreateForTab(
     onCreate: () => {
       const draft = state.cronQuickCreateDraft ?? createDefaultDraft();
       const formPatch = draftToCronFormPatch(draft);
-      state.cronForm = { ...state.cronForm, ...formPatch } as typeof state.cronForm;
+      state.cronEditingJobId = null;
+      state.cronForm = { ...DEFAULT_CRON_FORM, ...formPatch } as typeof state.cronForm;
       requestHostUpdate?.();
       void (async () => {
         await addCronJob(state);
