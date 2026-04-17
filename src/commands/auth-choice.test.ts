@@ -20,23 +20,6 @@ import {
 
 type DetectZaiEndpoint = typeof import("../plugins/provider-zai-endpoint.js").detectZaiEndpoint;
 
-let providerApiKeyAuthModulePromise:
-  | Promise<typeof import("../plugins/provider-api-key-auth.js")>
-  | undefined;
-let providerApiKeyAuthRuntimeModulePromise:
-  | Promise<typeof import("../plugins/provider-api-key-auth.runtime.js")>
-  | undefined;
-
-async function getProviderApiKeyAuthModule() {
-  providerApiKeyAuthModulePromise ??= import("../plugins/provider-api-key-auth.js");
-  return await providerApiKeyAuthModulePromise;
-}
-
-async function getProviderApiKeyAuthRuntimeModule() {
-  providerApiKeyAuthRuntimeModulePromise ??= import("../plugins/provider-api-key-auth.runtime.js");
-  return await providerApiKeyAuthRuntimeModulePromise;
-}
-
 const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
 const MINIMAX_CN_API_BASE_URL = "https://api.minimax.chat/v1";
 const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
@@ -124,6 +107,111 @@ function providerConfigPatch(
   };
 }
 
+type TestSecretInput = string | { source: string; provider: string; id: string };
+
+function normalizeProviderInput(value: unknown): string | undefined {
+  const normalized = normalizeText(value).toLowerCase();
+  return normalized || undefined;
+}
+
+function buildApiKeyCredential(
+  provider: string,
+  input: TestSecretInput,
+  metadata?: Record<string, string>,
+): {
+  type: "api_key";
+  provider: string;
+  key?: string;
+  keyRef?: { source: string; provider: string; id: string };
+  metadata?: Record<string, string>;
+} {
+  if (typeof input === "string") {
+    return { type: "api_key", provider, key: input, ...(metadata ? { metadata } : {}) };
+  }
+  return { type: "api_key", provider, keyRef: input, ...(metadata ? { metadata } : {}) };
+}
+
+async function resolveRefApiKeyInput(params: {
+  env: NodeJS.ProcessEnv;
+  envVar: string;
+  prompter: WizardPrompter;
+}): Promise<TestSecretInput> {
+  if (typeof params.prompter.select === "function") {
+    const source = await params.prompter.select({
+      message: "Choose secret reference source",
+      options: [
+        { label: "Environment variable", value: "env" },
+        { label: "Secret provider", value: "provider" },
+      ],
+    });
+    if (source !== "env") {
+      await params.prompter.text?.({ message: "Enter secret provider reference" });
+      await params.prompter.note?.(
+        "Could not validate provider reference; choose an environment variable instead.",
+        "Reference check failed",
+      );
+    }
+  }
+  const envName =
+    normalizeText(await params.prompter.text?.({ message: "Enter environment variable name" })) ||
+    params.envVar;
+  await params.prompter.note?.(`Validated environment variable ${envName}.`, "Reference validated");
+  return { source: "env", provider: "default", id: envName };
+}
+
+async function resolveApiKeyInput(params: {
+  ctx: Parameters<ProviderAuthMethod["run"]>[0];
+  providerId: string;
+  expectedProviders: string[];
+  optionKey: string;
+  envVar: string;
+  promptMessage: string;
+  noteMessage?: string;
+  noteTitle?: string;
+}): Promise<{ input: TestSecretInput; mode?: "plaintext" | "ref" }> {
+  const opts = (params.ctx.opts ?? {}) as Record<string, unknown>;
+  const flagValue = normalizeText(opts[params.optionKey]);
+  const token = flagValue || normalizeText(params.ctx.opts?.token);
+  const tokenProvider = normalizeProviderInput(
+    flagValue ? params.providerId : params.ctx.opts?.tokenProvider,
+  );
+  const expectedProviders = params.expectedProviders.map((provider) => provider.toLowerCase());
+  if (token && tokenProvider && expectedProviders.includes(tokenProvider)) {
+    return { input: token, mode: params.ctx.secretInputMode };
+  }
+
+  if (params.noteMessage) {
+    await params.ctx.prompter.note(params.noteMessage, params.noteTitle);
+  }
+
+  const env = params.ctx.env ?? process.env;
+  if (params.ctx.secretInputMode === "ref") {
+    return {
+      input: await resolveRefApiKeyInput({
+        env,
+        envVar: params.envVar,
+        prompter: params.ctx.prompter,
+      }),
+      mode: "ref",
+    };
+  }
+
+  const envValue = normalizeText(env[params.envVar]);
+  if (envValue) {
+    const useEnv = await params.ctx.prompter.confirm?.({
+      message: `Use ${params.envVar} from environment?`,
+    });
+    if (useEnv) {
+      return { input: envValue, mode: "plaintext" };
+    }
+  }
+
+  return {
+    input: normalizeText(await params.ctx.prompter.text({ message: params.promptMessage })),
+    mode: "plaintext",
+  };
+}
+
 async function createApiKeyProvider(params: {
   providerId: string;
   label: string;
@@ -140,33 +228,48 @@ async function createApiKeyProvider(params: {
   noteTitle?: string;
   applyConfig?: Partial<OpenClawConfig>;
 }): Promise<ProviderPlugin> {
-  const { createProviderApiKeyAuthMethod } = await getProviderApiKeyAuthModule();
+  const profileIds =
+    params.profileIds && params.profileIds.length > 0
+      ? params.profileIds
+      : [params.profileId ?? `${params.providerId}:default`];
   return {
     id: params.providerId,
     label: params.label,
     auth: [
-      createProviderApiKeyAuthMethod({
-        providerId: params.providerId,
-        methodId: "api-key",
+      {
+        id: "api-key",
         label: params.label,
-        optionKey: params.optionKey,
-        flagName: params.flagName,
-        envVar: params.envVar,
-        promptMessage: params.promptMessage,
-        ...(params.profileId ? { profileId: params.profileId } : {}),
-        ...(params.profileIds ? { profileIds: params.profileIds } : {}),
-        ...(params.defaultModel ? { defaultModel: params.defaultModel } : {}),
-        ...(params.expectedProviders ? { expectedProviders: params.expectedProviders } : {}),
-        ...(params.noteMessage ? { noteMessage: params.noteMessage } : {}),
-        ...(params.noteTitle ? { noteTitle: params.noteTitle } : {}),
-        ...(params.applyConfig ? { applyConfig: () => params.applyConfig as OpenClawConfig } : {}),
+        kind: "api_key",
         wizard: {
           choiceId: params.choiceId,
           choiceLabel: params.label,
           groupId: params.providerId,
           groupLabel: params.label,
         },
-      }),
+        run: async (ctx) => {
+          const { input } = await resolveApiKeyInput({
+            ctx,
+            providerId: params.providerId,
+            expectedProviders: params.expectedProviders ?? [params.providerId],
+            optionKey: params.optionKey,
+            envVar: params.envVar,
+            promptMessage: params.promptMessage,
+            noteMessage: params.noteMessage,
+            noteTitle: params.noteTitle,
+          });
+          return {
+            profiles: profileIds.map((profileId) => ({
+              profileId,
+              credential: buildApiKeyCredential(
+                profileId.split(":", 1)[0] || params.providerId,
+                input,
+              ),
+            })),
+            ...(params.applyConfig ? { configPatch: params.applyConfig as OpenClawConfig } : {}),
+            ...(params.defaultModel ? { defaultModel: params.defaultModel } : {}),
+          };
+        },
+      },
     ],
   };
 }
@@ -195,13 +298,6 @@ function createFixedChoiceProvider(params: {
 }
 
 async function createDefaultProviderPlugins(): Promise<ProviderPlugin[]> {
-  const { providerApiKeyAuthRuntime } = await getProviderApiKeyAuthRuntimeModule();
-  const buildApiKeyCredential = providerApiKeyAuthRuntime.buildApiKeyCredential;
-  const ensureApiKeyFromOptionEnvOrPrompt =
-    providerApiKeyAuthRuntime.ensureApiKeyFromOptionEnvOrPrompt;
-  const normalizeApiKeyInput = providerApiKeyAuthRuntime.normalizeApiKeyInput;
-  const validateApiKeyInput = providerApiKeyAuthRuntime.validateApiKeyInput;
-
   const createZaiMethod = (choiceId: "zai-api-key" | "zai-coding-global"): ProviderAuthMethod => ({
     id: choiceId === "zai-api-key" ? "api-key" : "coding-global",
     label: "Z.AI API key",
@@ -269,41 +365,29 @@ async function createDefaultProviderPlugins(): Promise<ProviderPlugin[]> {
       const gatewayId =
         normalizeText(opts.cloudflareAiGatewayGatewayId) ||
         normalizeText(await ctx.prompter.text({ message: "Enter Cloudflare gateway ID" }));
-      let capturedSecretInput = "";
-      let capturedMode: "plaintext" | "ref" | undefined;
-      await ensureApiKeyFromOptionEnvOrPrompt({
-        token:
-          normalizeText(opts.cloudflareAiGatewayApiKey) ||
-          normalizeText(ctx.opts?.token) ||
-          undefined,
-        tokenProvider: "cloudflare-ai-gateway",
+      const secretContext = {
+        ...ctx,
         secretInputMode:
           ctx.allowSecretRefPrompt === false
             ? (ctx.secretInputMode ?? "plaintext")
             : ctx.secretInputMode,
-        config: ctx.config,
+      };
+      const { input } = await resolveApiKeyInput({
+        ctx: secretContext,
+        providerId: "cloudflare-ai-gateway",
         expectedProviders: ["cloudflare-ai-gateway"],
-        provider: "cloudflare-ai-gateway",
-        envLabel: "CLOUDFLARE_AI_GATEWAY_API_KEY",
+        optionKey: "cloudflareAiGatewayApiKey",
+        envVar: "CLOUDFLARE_AI_GATEWAY_API_KEY",
         promptMessage: "Enter Cloudflare AI Gateway API key",
-        normalize: normalizeApiKeyInput,
-        validate: validateApiKeyInput,
-        prompter: ctx.prompter,
-        setCredential: async (apiKey, mode) => {
-          capturedSecretInput = typeof apiKey === "string" ? apiKey : "";
-          capturedMode = mode;
-        },
       });
       return {
         profiles: [
           {
             profileId: "cloudflare-ai-gateway:default",
-            credential: buildApiKeyCredential(
-              "cloudflare-ai-gateway",
-              capturedSecretInput,
-              { accountId, gatewayId },
-              capturedMode ? { secretInputMode: capturedMode } : undefined,
-            ),
+            credential: buildApiKeyCredential("cloudflare-ai-gateway", input, {
+              accountId,
+              gatewayId,
+            }),
           },
         ],
         defaultModel: "cloudflare-ai-gateway/claude-sonnet-4-5",
