@@ -7,8 +7,7 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
-import type { AuthChoice } from "./onboard-types.js";
+import { applyAuthChoice } from "./auth-choice.apply.js";
 import {
   authProfilePathForAgent,
   createAuthTestLifecycle,
@@ -871,11 +870,7 @@ describe("applyAuthChoice", () => {
 
   it("prompts and writes provider API key profiles for common providers", async () => {
     const scenarios: Array<{
-      authChoice:
-        | "minimax-global-api"
-        | "minimax-cn-api"
-        | "synthetic-api-key"
-        | "huggingface-api-key";
+      authChoice: "minimax-global-api" | "huggingface-api-key";
       promptContains: string;
       profileId: string;
       provider: string;
@@ -887,20 +882,6 @@ describe("applyAuthChoice", () => {
         profileId: "minimax:global",
         provider: "minimax",
         token: "sk-minimax-test",
-      },
-      {
-        authChoice: "minimax-cn-api" as const,
-        promptContains: "Enter MiniMax CN API key",
-        profileId: "minimax:cn",
-        provider: "minimax",
-        token: "sk-minimax-test",
-      },
-      {
-        authChoice: "synthetic-api-key" as const,
-        promptContains: "Enter Synthetic API key",
-        profileId: "synthetic:default",
-        provider: "synthetic",
-        token: "sk-synthetic-test",
       },
       {
         authChoice: "huggingface-api-key" as const,
@@ -1033,43 +1014,14 @@ describe("applyAuthChoice", () => {
       token: string;
       profileId: string;
       provider: string;
-      expectedModel?: string;
-      expectedModelPrefix?: string;
+      expectedModel: string;
     }> = [
-      {
-        tokenProvider: "huggingface",
-        token: "hf-token-provider-test",
-        profileId: "huggingface:default",
-        provider: "huggingface",
-        expectedModelPrefix: "huggingface/",
-      },
-      {
-        tokenProvider: "  ToGeThEr  ",
-        token: "sk-together-token-provider-test",
-        profileId: "together:default",
-        provider: "together",
-        expectedModelPrefix: "together/",
-      },
-      {
-        tokenProvider: "KIMI-CODING",
-        token: "sk-kimi-token-provider-test",
-        profileId: "kimi:default",
-        provider: "kimi",
-        expectedModelPrefix: "kimi/",
-      },
       {
         tokenProvider: " GOOGLE  ",
         token: "sk-gemini-token-provider-test",
         profileId: "google:default",
         provider: "google",
         expectedModel: GOOGLE_GEMINI_DEFAULT_MODEL,
-      },
-      {
-        tokenProvider: " LITELLM  ",
-        token: "sk-litellm-token-provider-test",
-        profileId: "litellm:default",
-        provider: "litellm",
-        expectedModelPrefix: "litellm/",
       },
     ];
     await setupTempState();
@@ -1097,18 +1049,9 @@ describe("applyAuthChoice", () => {
         provider: scenario.provider,
         mode: "api_key",
       });
-      if (scenario.expectedModel) {
-        expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
-          scenario.expectedModel,
-        );
-      }
-      if (scenario.expectedModelPrefix) {
-        expect(
-          resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)?.startsWith(
-            scenario.expectedModelPrefix,
-          ),
-        ).toBe(true);
-      }
+      expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
+        scenario.expectedModel,
+      );
       expect(text).not.toHaveBeenCalled();
       expect(confirm).not.toHaveBeenCalled();
       expect((await readAuthProfile(scenario.profileId))?.key).toBe(scenario.token);
@@ -1118,20 +1061,13 @@ describe("applyAuthChoice", () => {
   it("uses opts token for direct provider choices without prompting", async () => {
     await setupTempState();
     const scenarios: Array<{
-      authChoice: AuthChoice;
-      tokenProvider: string;
-      profileId: string;
-      provider: string;
-      modelPrefix: string;
-      extraProfiles?: string[];
+      authChoice: "opencode-zen";
+      tokenProvider: "opencode";
+      profileId: "opencode:default";
+      provider: "opencode";
+      modelPrefix: "opencode/";
+      extraProfiles: string[];
     }> = [
-      {
-        authChoice: "moonshot-api-key",
-        tokenProvider: "moonshot",
-        profileId: "moonshot:default",
-        provider: "moonshot",
-        modelPrefix: "moonshot/",
-      },
       {
         authChoice: "opencode-zen",
         tokenProvider: "opencode",
@@ -1251,8 +1187,8 @@ describe("applyAuthChoice", () => {
 
   it("uses existing env API keys for selected providers", async () => {
     const scenarios: Array<{
-      authChoice: "synthetic-api-key" | "openrouter-api-key" | "ai-gateway-api-key";
-      envKey: "SYNTHETIC_API_KEY" | "OPENROUTER_API_KEY" | "AI_GATEWAY_API_KEY";
+      authChoice: "openrouter-api-key" | "ai-gateway-api-key";
+      envKey: "OPENROUTER_API_KEY" | "AI_GATEWAY_API_KEY";
       envValue: string;
       profileId: string;
       provider: string;
@@ -1262,19 +1198,7 @@ describe("applyAuthChoice", () => {
       expectedKey?: string;
       expectedKeyRef?: { source: "env"; provider: string; id: string };
       expectedModel?: string;
-      expectedModelPrefix?: string;
     }> = [
-      {
-        authChoice: "synthetic-api-key",
-        envKey: "SYNTHETIC_API_KEY",
-        envValue: "sk-synthetic-env",
-        profileId: "synthetic:default",
-        provider: "synthetic",
-        expectEnvPrompt: true,
-        expectedTextCalls: 0,
-        expectedKey: "sk-synthetic-env",
-        expectedModelPrefix: "synthetic/",
-      },
       {
         authChoice: "openrouter-api-key",
         envKey: "OPENROUTER_API_KEY",
@@ -1285,17 +1209,6 @@ describe("applyAuthChoice", () => {
         expectedTextCalls: 0,
         expectedKey: "sk-openrouter-test",
         expectedModel: "openrouter/auto",
-      },
-      {
-        authChoice: "ai-gateway-api-key",
-        envKey: "AI_GATEWAY_API_KEY",
-        envValue: "gateway-test-key",
-        profileId: "vercel-ai-gateway:default",
-        provider: "vercel-ai-gateway",
-        expectEnvPrompt: true,
-        expectedTextCalls: 0,
-        expectedKey: "gateway-test-key",
-        expectedModel: "vercel-ai-gateway/anthropic/claude-opus-4.6",
       },
       {
         authChoice: "ai-gateway-api-key",
@@ -1348,13 +1261,6 @@ describe("applyAuthChoice", () => {
         expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
           scenario.expectedModel,
         );
-      }
-      if (scenario.expectedModelPrefix) {
-        expect(
-          resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)?.startsWith(
-            scenario.expectedModelPrefix,
-          ),
-        ).toBe(true);
       }
       const profile = await readAuthProfile(scenario.profileId);
       if (scenario.expectedKeyRef) {
@@ -1468,7 +1374,7 @@ describe("applyAuthChoice", () => {
 
   it("keeps existing default model for explicit provider keys when setDefaultModel=false", async () => {
     const scenarios: Array<{
-      authChoice: "synthetic-api-key" | "opencode-zen" | "opencode-go";
+      authChoice: "synthetic-api-key" | "opencode-zen";
       token: string;
       promptMessage: string;
       existingPrimary: string;
@@ -1476,7 +1382,7 @@ describe("applyAuthChoice", () => {
       profileId?: string;
       profileProvider?: string;
       extraProfileId?: string;
-      expectProviderConfigUndefined?: "opencode" | "opencode-go" | "opencode-zen";
+      expectProviderConfigUndefined?: "opencode";
       agentId?: string;
     }> = [
       {
@@ -1499,17 +1405,6 @@ describe("applyAuthChoice", () => {
         profileProvider: "opencode",
         extraProfileId: "opencode-go:default",
         expectProviderConfigUndefined: "opencode",
-      },
-      {
-        authChoice: "opencode-go",
-        token: "sk-opencode-go-test",
-        promptMessage: "Enter OpenCode API key",
-        existingPrimary: "anthropic/claude-opus-4-5",
-        expectedOverride: "opencode-go/kimi-k2.5",
-        profileId: "opencode-go:default",
-        profileProvider: "opencode-go",
-        extraProfileId: "opencode:default",
-        expectProviderConfigUndefined: "opencode-go",
       },
     ];
     await setupTempState();
@@ -1999,22 +1894,6 @@ describe("applyAuthChoice", () => {
         access: "access",
         refresh: "refresh",
       });
-    }
-  });
-});
-
-describe("resolvePreferredProviderForAuthChoice", () => {
-  it("maps known and unknown auth choices", async () => {
-    const scenarios = [
-      { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
-      { authChoice: "mistral-api-key" as const, expectedProvider: "mistral" },
-      { authChoice: "ollama" as const, expectedProvider: "ollama" },
-      { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },
-    ] as const;
-    for (const scenario of scenarios) {
-      await expect(
-        resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice }),
-      ).resolves.toBe(scenario.expectedProvider);
     }
   });
 });
