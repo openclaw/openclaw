@@ -74,6 +74,14 @@ function resolveCardNote(
   return parts.join(" | ");
 }
 
+/**
+ * Resolve the per-session `reasoningLevel` from the session store.
+ *
+ * Fail-closed: when sessionKey is missing or the store read throws,
+ * default to `"off"` so we do not disclose chain-of-thought to a user
+ * who may have previously opted out. Uses the cached reader so disk
+ * reads are amortized across replies.
+ */
 function resolveFeishuReasoningLevel(params: {
   cfg: ClawdbotConfig;
   sessionKey?: string;
@@ -81,22 +89,22 @@ function resolveFeishuReasoningLevel(params: {
   runtime: ReturnType<typeof getFeishuRuntime>;
 }): FeishuReasoningLevel {
   if (!params.sessionKey) {
-    return "on";
+    return "off";
   }
   try {
     const storePath = params.runtime.channel.session.resolveStorePath(params.cfg.session?.store, {
       agentId: params.agentId,
     });
-    const store = loadSessionStore(storePath, { skipCache: true });
+    const store = loadSessionStore(storePath);
     const level = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing
       ?.reasoningLevel;
     if (level === "off" || level === "on" || level === "stream") {
       return level;
     }
+    return "off";
   } catch {
-    // Fall through to default.
+    return "off";
   }
-  return "on";
 }
 
 export type CreateFeishuReplyDispatcherParams = {

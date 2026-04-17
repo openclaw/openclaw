@@ -543,9 +543,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("streams reasoning content as blockquote before answer", async () => {
+    resolveSessionStoreEntryMock.mockReturnValue({
+      existing: { reasoningLevel: "on" },
+    });
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
       allowReasoningPreview: true,
+      sessionKey: "agent:main:feishu:dm:ou_sender_1",
     });
 
     await options.onReplyStart?.();
@@ -619,9 +623,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("renders reasoning-only card when no answer text arrives", async () => {
+    resolveSessionStoreEntryMock.mockReturnValue({
+      existing: { reasoningLevel: "on" },
+    });
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
       allowReasoningPreview: true,
+      sessionKey: "agent:main:feishu:dm:ou_sender_1",
     });
 
     await options.onReplyStart?.();
@@ -655,6 +663,45 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;
+    expect(closeArg).toBe("final answer");
+    expect(closeArg).not.toContain("Thinking");
+  });
+
+  it("suppresses reasoning text when sessionKey is missing (fail closed)", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
+    });
+
+    await options.onReplyStart?.();
+    result.replyOptions.onReasoningStream?.({ text: "Reasoning:\n_thought_" });
+    result.replyOptions.onReasoningEnd?.();
+    await options.deliver({ text: "final answer" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;
+    expect(closeArg).toBe("final answer");
+    expect(closeArg).not.toContain("Thinking");
+  });
+
+  it("suppresses reasoning text when session store load throws (fail closed)", async () => {
+    loadSessionStoreMock.mockImplementationOnce(() => {
+      throw new Error("session store unreadable");
+    });
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
+      sessionKey: "agent:main:feishu:dm:ou_sender_1",
+    });
+
+    await options.onReplyStart?.();
+    result.replyOptions.onReasoningStream?.({ text: "Reasoning:\n_thought_" });
+    result.replyOptions.onReasoningEnd?.();
+    await options.deliver({ text: "final answer" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
     const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;
     expect(closeArg).toBe("final answer");
     expect(closeArg).not.toContain("Thinking");
