@@ -35,6 +35,10 @@ type HookRunnerLike = {
     input: { prompt: string },
     context: HookContext,
   ): Promise<PluginHookBeforeAgentStartResult | undefined>;
+  runBeforePromptBuild(
+    input: { prompt: string; messages: unknown[] },
+    context: HookContext,
+  ): Promise<{ toolsAllow?: string[] } | undefined>;
 };
 
 export async function resolveHookModelSelection(params: {
