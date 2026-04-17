@@ -10,7 +10,17 @@ import {
   createA2ABrokerClient,
   type A2ABrokerPartyRef,
   type A2ABrokerTaskRecord,
+  type A2ABrokerTaskSseEvent,
 } from "../a2a/standalone-broker-client.js";
+import {
+  isBrokerTaskTerminal,
+  isBrokerTimeoutCode,
+  isTerminalExecutionStatus,
+  mapBrokerErrorToTaskError,
+  mapBrokerStatusToDeliveryStatus,
+  mapBrokerStatusToExecutionStatus,
+  toEpochMs,
+} from "../a2a/type-mapping.js";
 import {
   applyA2ATaskProtocolCancel,
   applyA2ATaskProtocolUpdate,
@@ -22,13 +32,10 @@ import {
   type A2ATaskProtocolStatus,
   type A2ATaskRecord,
 } from "./sessions-send-broker.js";
-import type { SessionsSendA2AAdapter } from "./sessions-send-openclaw-adapter.js";
-
-const ACTIVE_BROKER_TASK_STATUSES = new Set<A2ABrokerTaskRecord["status"]>([
-  "queued",
-  "claimed",
-  "running",
-]);
+import type {
+  SessionsSendA2AAdapter,
+  SessionsSendA2ATaskSubscriptionResult,
+} from "./sessions-send-openclaw-adapter.js";
 
 const defaultStandaloneBrokerAdapterDeps = {
   createClient: createA2ABrokerClient,
@@ -141,6 +148,15 @@ export function createStandaloneBrokerSessionsSendA2AAdapter(params: {
       });
     },
 
+    subscribeTaskStatus({ sessionKey, taskId, signal }) {
+      return subscribeStandaloneBrokerA2ATaskWithClient({
+        client,
+        sessionKey,
+        taskId,
+        ...(signal ? { signal } : {}),
+      });
+    },
+
     cancelTask({ sessionKey, taskId, reason }) {
       return cancelStandaloneBrokerA2ATaskWithClient({
         client,
@@ -178,6 +194,87 @@ export async function cancelStandaloneBrokerA2ATask(params: {
     params.reason,
     client,
   );
+}
+
+export type SubscribeStandaloneBrokerA2ATaskResult = SessionsSendA2ATaskSubscriptionResult & {
+  eventsSeen: number;
+};
+
+/**
+ * Drives reconcile by consuming the broker's SSE event stream instead of
+ * polling getTask on a fixed cadence. Each event triggers a single reconcile
+ * call (which fetches a full broker task snapshot to fill in fields the SSE
+ * projection does not carry, like claimedAt/completedAt).
+ *
+ * Returns when the stream emits a terminal event, when the stream ends, or
+ * when the abort signal fires.
+ */
+export async function subscribeStandaloneBrokerA2ATask(params: {
+  config: OpenClawConfig;
+  sessionKey: string;
+  taskId: string;
+  signal?: AbortSignal;
+  onEvent?: (event: A2ABrokerTaskSseEvent) => void;
+  onStatus?: (status: A2ATaskProtocolStatus | undefined) => void;
+}): Promise<SubscribeStandaloneBrokerA2ATaskResult> {
+  const client = createConfiguredBrokerClient(params.config);
+  return subscribeStandaloneBrokerA2ATaskWithClient({
+    client,
+    sessionKey: params.sessionKey,
+    taskId: params.taskId,
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.onEvent ? { onEvent: params.onEvent } : {}),
+    ...(params.onStatus ? { onStatus: params.onStatus } : {}),
+  });
+}
+
+async function subscribeStandaloneBrokerA2ATaskWithClient(params: {
+  client: StandaloneBrokerClient;
+  sessionKey: string;
+  taskId: string;
+  signal?: AbortSignal;
+  onEvent?: (event: A2ABrokerTaskSseEvent) => void;
+  onStatus?: (status: A2ATaskProtocolStatus | undefined) => void;
+}): Promise<SubscribeStandaloneBrokerA2ATaskResult> {
+  let eventsSeen = 0;
+  let lastStatus: A2ATaskProtocolStatus | undefined;
+  let endedReason: SubscribeStandaloneBrokerA2ATaskResult["endedReason"] = "stream_ended";
+
+  try {
+    for await (const event of params.client.streamTaskEvents(
+      params.taskId,
+      params.signal ? { signal: params.signal } : {},
+    )) {
+      eventsSeen += 1;
+      params.onEvent?.(event);
+      lastStatus = await reconcileStandaloneBrokerA2ATaskWithClient({
+        client: params.client,
+        sessionKey: params.sessionKey,
+        taskId: params.taskId,
+      });
+      params.onStatus?.(lastStatus);
+      if (event.data.final) {
+        endedReason = "terminal";
+        break;
+      }
+      if (params.signal?.aborted) {
+        endedReason = "aborted";
+        break;
+      }
+    }
+  } catch (error) {
+    if (params.signal?.aborted) {
+      endedReason = "aborted";
+    } else {
+      throw error;
+    }
+  }
+
+  return {
+    finalStatus: lastStatus,
+    eventsSeen,
+    endedReason,
+  };
 }
 
 async function cancelStandaloneBrokerA2ATaskWithClient(
@@ -332,13 +429,18 @@ async function reconcileStandaloneBrokerA2ATaskWithClient(params: {
     existing.execution.heartbeatAt ?? 0,
     existing.delivery.updatedAt ?? 0,
   );
-  const mappedStatus = mapBrokerTaskExecutionStatus(brokerTask);
+  const mappedStatus = mapBrokerStatusToExecutionStatus({
+    brokerStatus: brokerTask.status,
+    brokerErrorCode: brokerTask.error?.code,
+  });
 
   if (
     existing.execution.status === mappedStatus &&
     currentUpdatedAt >= brokerUpdatedAt &&
-    (!isBrokerTaskTerminal(brokerTask.status) ||
-      existing.delivery.status === mapBrokerDeliveryStatus(brokerTask.status))
+    (!isBrokerTaskTerminal(
+      brokerTask.status as import("../a2a/type-mapping.js").BrokerTaskStatus,
+    ) ||
+      existing.delivery.status === mapBrokerStatusToDeliveryStatus(brokerTask.status))
   ) {
     return loadA2ATaskProtocolStatusById({
       sessionKey: params.sessionKey,
@@ -448,7 +550,11 @@ async function reconcileStandaloneBrokerA2ATaskWithClient(params: {
         ...trace,
         executionStatus,
         error: {
-          code: resolveTaskErrorCode(brokerTask) ?? BROKER_PROTOCOL_ERROR_CODES.remoteTaskFailed,
+          code:
+            mapBrokerErrorToTaskError({
+              brokerErrorCode: brokerTask.error?.code,
+              brokerStatus: brokerTask.status,
+            })?.code ?? BROKER_PROTOCOL_ERROR_CODES.remoteTaskFailed,
           ...(brokerTask.error?.message ? { message: brokerTask.error.message } : {}),
         },
         at: completedAt,
@@ -601,57 +707,31 @@ export function mapBrokerTaskRecordToOpenClawTaskRecord(params: {
       },
     },
     execution: {
-      status: mapBrokerTaskExecutionStatus(brokerTask),
+      status: mapBrokerStatusToExecutionStatus({
+        brokerStatus: brokerTask.status,
+        brokerErrorCode: brokerTask.error?.code,
+      }),
       createdAt: toEpochMs(brokerTask.createdAt),
       acceptedAt: toEpochMs(brokerTask.createdAt),
       ...(brokerTask.claimedAt ? { startedAt: toEpochMs(brokerTask.claimedAt) } : {}),
       updatedAt: toEpochMs(brokerTask.updatedAt),
       ...(brokerTask.completedAt ? { completedAt: toEpochMs(brokerTask.completedAt) } : {}),
-      ...(resolveTaskErrorCode(brokerTask) ? { errorCode: resolveTaskErrorCode(brokerTask) } : {}),
+      ...(() => {
+        const e = mapBrokerErrorToTaskError({
+          brokerErrorCode: brokerTask.error?.code,
+          brokerStatus: brokerTask.status,
+        });
+        return e ? { errorCode: e.code } : {};
+      })(),
       ...(brokerTask.error?.message ? { errorMessage: brokerTask.error.message } : {}),
     },
     delivery: {
-      status: mapBrokerDeliveryStatus(brokerTask.status),
+      status: mapBrokerStatusToDeliveryStatus(brokerTask.status),
       mode: "announce",
       updatedAt: toEpochMs(brokerTask.updatedAt),
     },
     ...(taskResult ? { result: taskResult } : {}),
   };
-}
-
-function mapBrokerTaskExecutionStatus(
-  brokerTask: Pick<A2ABrokerTaskRecord, "status" | "error">,
-): Exclude<A2ATaskRecord["execution"]["status"], "cancelled"> {
-  switch (brokerTask.status) {
-    case "queued":
-    case "claimed":
-      return "accepted";
-    case "running":
-      return "running";
-    case "succeeded":
-      return "completed";
-    case "failed":
-      return isBrokerTimeoutCode(brokerTask.error?.code) ? "timed_out" : "failed";
-    default:
-      return "failed";
-  }
-}
-
-function mapBrokerDeliveryStatus(
-  status: A2ABrokerTaskRecord["status"],
-): A2ATaskRecord["delivery"]["status"] {
-  switch (status) {
-    case "queued":
-    case "claimed":
-    case "running":
-      return "pending";
-    case "succeeded":
-    case "failed":
-    case "canceled":
-      return "skipped";
-    default:
-      return "pending";
-  }
 }
 
 function buildTaskResult(brokerTask: A2ABrokerTaskRecord): A2ATaskRecord["result"] | undefined {
@@ -685,16 +765,6 @@ function buildTaskOutput(brokerTask: A2ABrokerTaskRecord): unknown {
   };
 
   return Object.keys(output).length > 0 ? output : undefined;
-}
-
-function resolveTaskErrorCode(brokerTask: A2ABrokerTaskRecord): string | undefined {
-  if (brokerTask.error?.code) {
-    return brokerTask.error.code;
-  }
-  if (brokerTask.status === "failed") {
-    return BROKER_PROTOCOL_ERROR_CODES.remoteTaskFailed;
-  }
-  return undefined;
 }
 
 function classifyBrokerSyncError(error: unknown): { code: string; message: string } {
@@ -746,11 +816,6 @@ function classifyBrokerSyncError(error: unknown): { code: string; message: strin
   };
 }
 
-function isBrokerTimeoutCode(code: string | undefined): boolean {
-  const normalized = code?.trim().toLowerCase();
-  return normalized === "timeout" || normalized === "timed_out" || normalized === "broker_timeout";
-}
-
 function isTimeoutError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -780,24 +845,6 @@ function isTransientBrokerFetchError(error: unknown): boolean {
     message.includes("econn") ||
     message.includes("eai_")
   );
-}
-
-function isBrokerTaskTerminal(status: A2ABrokerTaskRecord["status"]): boolean {
-  return !ACTIVE_BROKER_TASK_STATUSES.has(status);
-}
-
-function isTerminalExecutionStatus(status: A2ATaskRecord["execution"]["status"]): boolean {
-  return (
-    status === "completed" ||
-    status === "failed" ||
-    status === "cancelled" ||
-    status === "timed_out"
-  );
-}
-
-function toEpochMs(value: string | undefined): number {
-  const parsed = value ? Date.parse(value) : NaN;
-  return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

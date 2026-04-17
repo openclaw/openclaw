@@ -9,6 +9,9 @@ const runA2ATaskRequestMock = vi.fn();
 const applyA2ATaskProtocolCancelMock = vi.fn();
 const applyA2ATaskProtocolUpdateMock = vi.fn();
 const loadA2ATaskProtocolStatusByIdMock = vi.fn();
+const loadA2ATaskListResultMock = vi.fn();
+const loadA2ATaskDetailMock = vi.fn();
+const loadA2ATaskDashboardMock = vi.fn();
 const errorShapeMock = vi.fn((code: string, message: string) => ({ code, message }));
 
 vi.mock("../../agents/a2a/openclaw-runtime.js", () => ({
@@ -22,6 +25,15 @@ vi.mock("../../agents/a2a/broker.js", () => ({
   loadA2ATaskProtocolStatusById: loadA2ATaskProtocolStatusByIdMock,
 }));
 
+vi.mock("../../agents/a2a/list.js", () => ({
+  loadA2ATaskListResult: loadA2ATaskListResultMock,
+  loadA2ATaskDashboard: loadA2ATaskDashboardMock,
+}));
+
+vi.mock("../../agents/a2a/status.js", () => ({
+  loadA2ATaskDetail: loadA2ATaskDetailMock,
+}));
+
 vi.mock("../protocol/index.js", () => ({
   ErrorCodes: {
     INTERNAL: "internal",
@@ -29,7 +41,10 @@ vi.mock("../protocol/index.js", () => ({
     NOT_FOUND: "not_found",
   },
   errorShape: errorShapeMock,
+  validateA2ADashboardParams: vi.fn(() => true),
   validateA2ATaskCancelParams: vi.fn(() => true),
+  validateA2ATaskDetailParams: vi.fn(() => true),
+  validateA2ATaskListParams: vi.fn(() => true),
   validateA2ATaskRequestParams: vi.fn(() => true),
   validateA2ATaskStatusParams: vi.fn(() => true),
   validateA2ATaskUpdateParams: vi.fn(() => true),
@@ -47,6 +62,9 @@ describe("a2a handlers", () => {
     applyA2ATaskProtocolCancelMock.mockReset();
     applyA2ATaskProtocolUpdateMock.mockReset();
     loadA2ATaskProtocolStatusByIdMock.mockReset();
+    loadA2ATaskListResultMock.mockReset();
+    loadA2ATaskDetailMock.mockReset();
+    loadA2ATaskDashboardMock.mockReset();
     errorShapeMock.mockClear();
 
     runA2ATaskRequestMock.mockResolvedValue({
@@ -58,6 +76,22 @@ describe("a2a handlers", () => {
     applyA2ATaskProtocolCancelMock.mockResolvedValue({
       method: "a2a.task.cancel",
       taskId: "task-1",
+    });
+    loadA2ATaskListResultMock.mockResolvedValue({
+      tasks: [{ taskId: "task-1" }],
+      total: 1,
+      filtered: 1,
+    });
+    loadA2ATaskDetailMock.mockResolvedValue({
+      taskId: "task-1",
+      protocolStatus: { taskId: "task-1" },
+    });
+    loadA2ATaskDashboardMock.mockResolvedValue({
+      counts: { total: 1 },
+      alerts: [],
+      recentTasks: [],
+      workerCounts: {},
+      timestamp: 1,
     });
   });
 
@@ -224,6 +258,83 @@ describe("a2a handlers", () => {
     expect(respond).toHaveBeenCalledWith(false, undefined, {
       code: "not_found",
       message: notFoundMessage,
+    });
+  });
+
+  it("returns session-scoped task lists for operator reads", async () => {
+    const { a2aHandlers } = await import("./a2a.js");
+    const respond = vi.fn();
+    const context = { logGateway: { error: vi.fn() } };
+
+    await a2aHandlers["a2a.task.list"]({
+      params: {
+        sessionKey: "agent:worker:main",
+        statusFilter: "active",
+        workerViewFilter: "worker-running",
+        limit: 10,
+        cursor: "task-0",
+      },
+      respond,
+      context,
+    } as never);
+
+    expect(loadA2ATaskListResultMock).toHaveBeenCalledWith({
+      sessionKey: "agent:worker:main",
+      statusFilter: "active",
+      workerViewFilter: "worker-running",
+      limit: 10,
+      cursor: "task-0",
+    });
+    expect(respond).toHaveBeenCalledWith(true, {
+      tasks: [{ taskId: "task-1" }],
+      total: 1,
+      filtered: 1,
+    });
+  });
+
+  it("returns detail not-found errors with session scope", async () => {
+    loadA2ATaskDetailMock.mockResolvedValue(undefined);
+    const { a2aHandlers } = await import("./a2a.js");
+    const respond = vi.fn();
+    const context = { logGateway: { error: vi.fn() } };
+
+    await a2aHandlers["a2a.task.detail"]({
+      params: {
+        sessionKey: "agent:worker:main",
+        taskId: "task-missing",
+      },
+      respond,
+      context,
+    } as never);
+
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "not_found",
+      message: "A2A task task-missing was not found in session agent:worker:main",
+    });
+  });
+
+  it("returns session-scoped A2A dashboard summaries", async () => {
+    const { a2aHandlers } = await import("./a2a.js");
+    const respond = vi.fn();
+    const context = { logGateway: { error: vi.fn() } };
+
+    await a2aHandlers["a2a.dashboard"]({
+      params: {
+        sessionKey: "agent:worker:main",
+      },
+      respond,
+      context,
+    } as never);
+
+    expect(loadA2ATaskDashboardMock).toHaveBeenCalledWith({
+      sessionKey: "agent:worker:main",
+    });
+    expect(respond).toHaveBeenCalledWith(true, {
+      counts: { total: 1 },
+      alerts: [],
+      recentTasks: [],
+      workerCounts: {},
+      timestamp: 1,
     });
   });
 });

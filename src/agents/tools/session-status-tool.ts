@@ -59,7 +59,10 @@ import {
   resolveSandboxedSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
-import { reconcileSessionsSendA2ATask } from "./sessions-send-tool.a2a.js";
+import {
+  type DelegatedTaskHook,
+  reconcileDelegatedTaskStatus,
+} from "./sessions-send-delegated-task.js";
 
 const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -396,6 +399,7 @@ async function reconcileSessionA2ATaskIndex(params: {
   sessionKey: string;
   cfg: OpenClawConfig;
   index: A2ATaskStatusIndexEntry[];
+  delegatedTaskHook?: DelegatedTaskHook;
 }): Promise<A2ATaskStatusIndexEntry[]> {
   const activeTasks = params.index.filter((entry) => entry.statusCategory === "active");
   if (activeTasks.length === 0) {
@@ -403,7 +407,8 @@ async function reconcileSessionA2ATaskIndex(params: {
   }
   await Promise.allSettled(
     activeTasks.map((entry) =>
-      reconcileSessionsSendA2ATask({
+      reconcileDelegatedTaskStatus({
+        hook: params.delegatedTaskHook,
         sessionKey: params.sessionKey,
         taskId: entry.taskId,
         config: params.cfg,
@@ -430,6 +435,7 @@ async function resolveSessionA2ATaskLine(params: {
   cfg: OpenClawConfig;
   statusA2AInput?: NormalizedStatusA2AInput;
   statusSummary?: Partial<Pick<StatusSummary, "contributors" | "a2a">>;
+  delegatedTaskHook?: DelegatedTaskHook;
 }): Promise<string | undefined> {
   const preferredInput = resolveSessionA2ARenderInput({
     statusA2AInput: params.statusA2AInput,
@@ -444,6 +450,7 @@ async function resolveSessionA2ATaskLine(params: {
       sessionKey: params.sessionKey,
       cfg: params.cfg,
       index: initialIndex,
+      delegatedTaskHook: params.delegatedTaskHook,
     });
     return formatSessionA2ATaskLine({ index, cfg: params.cfg });
   } catch {
@@ -521,6 +528,7 @@ export function createSessionStatusTool(opts?: {
   sandboxed?: boolean;
   statusA2AInput?: NormalizedStatusA2AInput;
   statusSummary?: Partial<Pick<StatusSummary, "contributors" | "a2a">>;
+  delegatedTaskHook?: DelegatedTaskHook;
 }): AnyAgentTool {
   return {
     label: "Session Status",
@@ -792,6 +800,7 @@ export function createSessionStatusTool(opts?: {
         cfg,
         statusA2AInput: opts?.statusA2AInput,
         statusSummary: opts?.statusSummary,
+        delegatedTaskHook: opts?.delegatedTaskHook,
       });
       const { buildStatusText } = await loadCommandsStatusRuntime();
       const statusText = await buildStatusText({

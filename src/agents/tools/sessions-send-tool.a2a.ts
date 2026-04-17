@@ -1,15 +1,19 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import { isTerminalExecutionStatus } from "../a2a/status.js";
 import {
   buildA2ATaskEnvelopeFromExchange,
   loadA2ATaskProtocolStatusById,
   type A2AExchangeRequest,
   type A2ATaskCancelTarget,
+  type A2ATaskProtocolStatus,
+  type A2ATaskRecord,
 } from "./sessions-send-broker.js";
 import {
   __testing as openClawA2ATesting,
   createOpenClawSessionsSendA2AAdapter,
   type SessionsSendA2AAdapter,
+  type SessionsSendA2ATaskSubscriptionResult,
 } from "./sessions-send-openclaw-adapter.js";
 import {
   createStandaloneBrokerSessionsSendA2AAdapter,
@@ -85,13 +89,26 @@ export async function runSessionsSendA2AFlow(params: {
   parentRunId?: string;
   cancelTarget?: A2ATaskCancelTarget;
   config?: OpenClawConfig;
+  followTaskStream?: boolean;
+  followSignal?: AbortSignal;
 }) {
   const exchangeRequest = buildSessionsSendA2AExchangeRequest(params);
   const adapter = selectSessionsSendA2AAdapter(params.config);
-  return await adapter.runTaskRequest({
+  const record = await adapter.runTaskRequest({
     request: exchangeRequest,
     taskId: params.waitRunId,
   });
+
+  if (params.followTaskStream && adapter.subscribeTaskStatus && shouldFollowTaskStream(record)) {
+    await followSessionsSendA2ATaskStreamWithFallback({
+      adapter,
+      sessionKey: exchangeRequest.target.sessionKey,
+      taskId: record.taskId,
+      ...(params.followSignal ? { signal: params.followSignal } : {}),
+    });
+  }
+
+  return record;
 }
 
 export async function reconcileSessionsSendA2ATask(params: {
@@ -133,6 +150,46 @@ function selectSessionsSendA2AAdapter(config?: OpenClawConfig): SessionsSendA2AA
   return config && sessionsSendA2ADeps.shouldUseBrokerAdapter(config)
     ? sessionsSendA2ADeps.createBrokerAdapter(config)
     : sessionsSendA2ADeps.createAdapter();
+}
+
+async function followSessionsSendA2ATaskStreamWithFallback(params: {
+  adapter: SessionsSendA2AAdapter;
+  sessionKey: string;
+  taskId: string;
+  signal?: AbortSignal;
+}) {
+  try {
+    const result = await params.adapter.subscribeTaskStatus?.({
+      sessionKey: params.sessionKey,
+      taskId: params.taskId,
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+    if (shouldFallbackToReconcile(result)) {
+      await params.adapter.reconcileTaskStatus?.({
+        sessionKey: params.sessionKey,
+        taskId: params.taskId,
+      });
+    }
+  } catch {
+    await params.adapter.reconcileTaskStatus?.({
+      sessionKey: params.sessionKey,
+      taskId: params.taskId,
+    });
+  }
+}
+
+function shouldFollowTaskStream(record: A2ATaskRecord): boolean {
+  return !isTerminalExecutionStatus(record.execution.status);
+}
+
+function shouldFallbackToReconcile(
+  result: SessionsSendA2ATaskSubscriptionResult | undefined,
+): boolean {
+  return result?.endedReason !== "terminal" || !isTerminalProtocolStatus(result.finalStatus);
+}
+
+function isTerminalProtocolStatus(status: A2ATaskProtocolStatus | undefined): boolean {
+  return isTerminalExecutionStatus(status?.executionStatus);
 }
 
 export const __testing = {

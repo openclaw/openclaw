@@ -4,12 +4,17 @@ import {
   loadA2ATaskProtocolStatusById,
   runA2ATaskRequest,
 } from "../../agents/a2a/broker.js";
+import { loadA2ATaskDashboard, loadA2ATaskListResult } from "../../agents/a2a/list.js";
 import { createOpenClawA2ABrokerRuntime } from "../../agents/a2a/openclaw-runtime.js";
+import { loadA2ATaskDetail } from "../../agents/a2a/status.js";
 import type { A2ABrokerRuntime } from "../../agents/a2a/types.js";
 import {
   ErrorCodes,
   errorShape,
+  validateA2ADashboardParams,
   validateA2ATaskCancelParams,
+  validateA2ATaskDetailParams,
+  validateA2ATaskListParams,
   validateA2ATaskRequestParams,
   validateA2ATaskStatusParams,
   validateA2ATaskUpdateParams,
@@ -230,6 +235,80 @@ export function createA2AHandlers(options: CreateA2AHandlersOptions = {}): Gatew
       } catch (err) {
         const failureMessage = formatA2AActionFailureMessage("status lookup", err, {
           taskId: params.taskId,
+          sessionKey: params.sessionKey,
+        });
+        context.logGateway.error(failureMessage);
+        respond(false, undefined, errorShape(ErrorCodes.INTERNAL, failureMessage));
+      }
+    },
+
+    "a2a.task.list": async ({ params, respond, context }) => {
+      if (!assertValidParams(params, validateA2ATaskListParams, "a2a.task.list", respond)) {
+        return;
+      }
+      try {
+        const result = await loadA2ATaskListResult({
+          sessionKey: params.sessionKey,
+          statusFilter: params.statusFilter,
+          workerViewFilter: params.workerViewFilter,
+          limit: params.limit,
+          cursor: params.cursor,
+        });
+        respond(true, result);
+      } catch (err) {
+        const failureMessage = formatA2AActionFailureMessage("list lookup", err, {
+          sessionKey: params.sessionKey,
+        });
+        context.logGateway.error(failureMessage);
+        respond(false, undefined, errorShape(ErrorCodes.INTERNAL, failureMessage));
+      }
+    },
+
+    "a2a.task.detail": async ({ params, respond, context }) => {
+      if (!assertValidParams(params, validateA2ATaskDetailParams, "a2a.task.detail", respond)) {
+        return;
+      }
+      try {
+        const result = await loadA2ATaskDetail({
+          sessionKey: params.sessionKey,
+          taskId: params.taskId,
+        });
+        if (!result) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.NOT_FOUND,
+              formatA2ATaskNotFoundMessage({
+                taskId: params.taskId,
+                sessionKey: params.sessionKey,
+              }),
+            ),
+          );
+          return;
+        }
+        respond(true, result);
+      } catch (err) {
+        const failureMessage = formatA2AActionFailureMessage("detail lookup", err, {
+          taskId: params.taskId,
+          sessionKey: params.sessionKey,
+        });
+        context.logGateway.error(failureMessage);
+        respond(false, undefined, errorShape(ErrorCodes.INTERNAL, failureMessage));
+      }
+    },
+
+    "a2a.dashboard": async ({ params, respond, context }) => {
+      if (!assertValidParams(params, validateA2ADashboardParams, "a2a.dashboard", respond)) {
+        return;
+      }
+      try {
+        const result = await loadA2ATaskDashboard({
+          sessionKey: params.sessionKey,
+        });
+        respond(true, result);
+      } catch (err) {
+        const failureMessage = formatA2AActionFailureMessage("dashboard lookup", err, {
           sessionKey: params.sessionKey,
         });
         context.logGateway.error(failureMessage);

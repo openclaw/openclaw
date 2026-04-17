@@ -23,7 +23,49 @@ export interface DelegatedTaskHook {
    * Optional error hook for failed background starts.
    */
   onError?(params: { error: unknown; task: DelegatedTaskParams }): void;
+
+  /**
+   * Reconcile the status of a delegated task against its source of truth.
+   * Returns undefined if the task is unknown or reconciliation is not supported.
+   */
+  reconcileTaskStatus?(params: {
+    sessionKey: string;
+    taskId: string;
+    config?: OpenClawConfig;
+  }): Promise<DelegatedTaskStatus | undefined>;
+
+  /**
+   * Cancel a delegated task.
+   * Returns undefined if the task is unknown or cancellation is not supported.
+   */
+  cancelTask?(params: {
+    sessionKey: string;
+    taskId: string;
+    reason?: string;
+    config?: OpenClawConfig;
+  }): Promise<DelegatedTaskCancelResult | undefined>;
 }
+
+/**
+ * Minimal task status surface exposed through the transport-neutral seam.
+ * Implementations map their internal representation to this shape.
+ */
+export type DelegatedTaskStatus = {
+  taskId: string;
+  executionStatus: string;
+  deliveryStatus: string;
+  summary?: string;
+  error?: { code: string; message?: string };
+  updatedAt: number;
+  hasHeartbeat: boolean;
+};
+
+/**
+ * Cancel result surface exposed through the transport-neutral seam.
+ */
+export type DelegatedTaskCancelResult = DelegatedTaskStatus & {
+  abortStatus?: string;
+};
 
 export type DelegatedTaskContextParams = {
   targetSessionKey: string;
@@ -59,3 +101,30 @@ export const NOOP_DELEGATED_TASK_HOOK: DelegatedTaskHook = {
   },
   start() {},
 };
+
+/**
+ * Reconcile a delegated task's status via the hook, returning undefined
+ * when the hook does not support reconciliation or the task is unknown.
+ */
+export async function reconcileDelegatedTaskStatus(params: {
+  hook?: DelegatedTaskHook;
+  sessionKey: string;
+  taskId: string;
+  config?: OpenClawConfig;
+}): Promise<DelegatedTaskStatus | undefined> {
+  return params.hook?.reconcileTaskStatus?.(params);
+}
+
+/**
+ * Cancel a delegated task via the hook, returning undefined when
+ * the hook does not support cancellation or the task is unknown.
+ */
+export async function cancelDelegatedTask(params: {
+  hook?: DelegatedTaskHook;
+  sessionKey: string;
+  taskId: string;
+  reason?: string;
+  config?: OpenClawConfig;
+}): Promise<DelegatedTaskCancelResult | undefined> {
+  return params.hook?.cancelTask?.(params);
+}

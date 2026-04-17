@@ -1,8 +1,14 @@
 import AjvPkg, { type ErrorObject } from "ajv";
 import type { SessionsPatchResult } from "../session-utils.types.js";
 import {
+  type A2ADashboardParams,
+  A2ADashboardParamsSchema,
   type A2ATaskCancelParams,
   A2ATaskCancelParamsSchema,
+  type A2ATaskDetailParams,
+  A2ATaskDetailParamsSchema,
+  type A2ATaskListParams,
+  A2ATaskListParamsSchema,
   type A2ATaskRequestParams,
   A2ATaskRequestParamsSchema,
   type A2ATaskStatusParams,
@@ -333,6 +339,10 @@ export const validateA2ATaskCancelParams =
   ajv.compile<A2ATaskCancelParams>(A2ATaskCancelParamsSchema);
 export const validateA2ATaskStatusParams =
   ajv.compile<A2ATaskStatusParams>(A2ATaskStatusParamsSchema);
+export const validateA2ATaskListParams = ajv.compile<A2ATaskListParams>(A2ATaskListParamsSchema);
+export const validateA2ATaskDetailParams =
+  ajv.compile<A2ATaskDetailParams>(A2ATaskDetailParamsSchema);
+export const validateA2ADashboardParams = ajv.compile<A2ADashboardParams>(A2ADashboardParamsSchema);
 export const validateAgentsListParams = ajv.compile<AgentsListParams>(AgentsListParamsSchema);
 export const validateAgentsCreateParams = ajv.compile<AgentsCreateParams>(AgentsCreateParamsSchema);
 export const validateAgentsUpdateParams = ajv.compile<AgentsUpdateParams>(AgentsUpdateParamsSchema);
@@ -582,10 +592,13 @@ export {
   AgentIdentityParamsSchema,
   AgentIdentityResultSchema,
   WakeParamsSchema,
+  A2ADashboardParamsSchema,
   A2ATaskRequestParamsSchema,
   A2ATaskUpdateParamsSchema,
   A2ATaskCancelParamsSchema,
   A2ATaskStatusParamsSchema,
+  A2ATaskListParamsSchema,
+  A2ATaskDetailParamsSchema,
   PushTestParamsSchema,
   PushTestResultSchema,
   NodePairRequestParamsSchema,

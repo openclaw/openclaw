@@ -12,7 +12,13 @@ import {
   createA2AWorkerHeartbeatEvent,
   createA2AWorkerStartedEvent,
 } from "./events.js";
-import { listA2ATaskIds, loadA2ATaskReadModel, loadA2ATaskStatusIndex } from "./list.js";
+import {
+  listA2ATaskIds,
+  loadA2ATaskDashboard,
+  loadA2ATaskListResult,
+  loadA2ATaskReadModel,
+  loadA2ATaskStatusIndex,
+} from "./list.js";
 import { resolveA2ATaskEventLogPath } from "./log.js";
 
 const tempDirs: string[] = [];
@@ -249,5 +255,159 @@ describe("A2A task list", () => {
       protocolStatus: { summary: "ok" },
     });
     expect(sanitized).toBeUndefined();
+  });
+
+  it("returns operator list pages with cursor, richer categories, and worker-view filtering", async () => {
+    const env = await makeEnv();
+    const sessionKey = "agent:main:telegram:direct:jinwon";
+
+    await writeTaskLog({
+      env,
+      sessionKey,
+      taskId: "task-delivery-pending",
+      at: 10,
+      events: [
+        createA2ATaskAcceptedEvent({ taskId: "task-delivery-pending", at: 11 }),
+        createA2ATaskCompletedEvent({ taskId: "task-delivery-pending", at: 20, summary: "ready" }),
+      ],
+    });
+    await writeTaskLog({
+      env,
+      sessionKey,
+      taskId: "task-waiting-external",
+      at: 21,
+      events: [
+        createA2ATaskAcceptedEvent({ taskId: "task-waiting-external", at: 22 }),
+        {
+          type: "task.updated",
+          taskId: "task-waiting-external",
+          at: 24,
+          executionStatus: "waiting_external",
+          summary: "waiting",
+        },
+      ],
+    });
+    await writeTaskLog({
+      env,
+      sessionKey,
+      taskId: "task-stale-running",
+      at: 25,
+      events: [
+        createA2ATaskAcceptedEvent({ taskId: "task-stale-running", at: 26 }),
+        createA2AWorkerStartedEvent({ taskId: "task-stale-running", at: 27 }),
+      ],
+    });
+
+    const list = await loadA2ATaskListResult({
+      sessionKey,
+      env,
+      limit: 2,
+      now: 27 + 181_000,
+    });
+    const waiting = await loadA2ATaskStatusIndex({
+      sessionKey,
+      env,
+      operatorView: true,
+      workerViewFilter: "waiting-external",
+      now: 27 + 181_000,
+    });
+    const cursorPage = await loadA2ATaskListResult({
+      sessionKey,
+      env,
+      cursor: list.cursor,
+      now: 27 + 181_000,
+    });
+
+    expect(list.total).toBe(3);
+    expect(list.filtered).toBe(3);
+    expect(list.tasks.map((task) => [task.taskId, task.statusCategory, task.workerView])).toEqual([
+      ["task-stale-running", "stale", "worker-stale"],
+      ["task-waiting-external", "waiting-external", "waiting-external"],
+    ]);
+    expect(list.cursor).toBe("task-waiting-external");
+    expect(waiting).toEqual([
+      expect.objectContaining({
+        taskId: "task-waiting-external",
+        statusCategory: "waiting-external",
+        workerView: "waiting-external",
+      }),
+    ]);
+    expect(cursorPage.tasks).toEqual([
+      expect.objectContaining({
+        taskId: "task-delivery-pending",
+        statusCategory: "active",
+        workerView: "announce-pending",
+      }),
+    ]);
+  });
+
+  it("builds dashboard counts, alerts, and recent tasks for one session", async () => {
+    const env = await makeEnv();
+    const sessionKey = "agent:main:telegram:direct:jinwon";
+
+    await writeTaskLog({
+      env,
+      sessionKey,
+      taskId: "task-delivery-failed",
+      at: 10,
+      events: [
+        createA2ATaskAcceptedEvent({ taskId: "task-delivery-failed", at: 11 }),
+        createA2ATaskCompletedEvent({ taskId: "task-delivery-failed", at: 15, summary: "done" }),
+        {
+          type: "delivery.failed",
+          taskId: "task-delivery-failed",
+          at: 16,
+          errorMessage: "announce failed",
+        },
+      ],
+    });
+    await writeTaskLog({
+      env,
+      sessionKey,
+      taskId: "task-stale",
+      at: 20,
+      events: [
+        createA2ATaskAcceptedEvent({ taskId: "task-stale", at: 21 }),
+        createA2AWorkerStartedEvent({ taskId: "task-stale", at: 22 }),
+      ],
+    });
+    await writeTaskLog({
+      env,
+      sessionKey,
+      taskId: "task-ok",
+      at: 30,
+      events: [
+        createA2ATaskAcceptedEvent({ taskId: "task-ok", at: 31 }),
+        createA2AWorkerStartedEvent({ taskId: "task-ok", at: 32 }),
+        createA2AWorkerHeartbeatEvent({ taskId: "task-ok", at: 33 }),
+      ],
+    });
+
+    const dashboard = await loadA2ATaskDashboard({
+      sessionKey,
+      env,
+      now: 200,
+      staleConfig: {
+        STALE_HEARTBEAT_MS: 170,
+        STALE_CRITICAL_MS: 260,
+        STALE_RUNNING_NO_HB_MS: 100,
+        DELIVERY_PENDING_STALE_MS: 60,
+      },
+    });
+
+    expect(dashboard.counts).toMatchObject({
+      total: 3,
+      active: 1,
+      stale: 1,
+      terminalFailure: 1,
+    });
+    expect(dashboard.workerCounts["worker-stale"]).toBe(1);
+    expect(dashboard.alerts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ taskId: "task-delivery-failed", type: "delivery-failed" }),
+        expect.objectContaining({ taskId: "task-stale", type: "stale-heartbeat" }),
+      ]),
+    );
+    expect(dashboard.recentTasks[0]?.taskId).toBe("task-ok");
   });
 });

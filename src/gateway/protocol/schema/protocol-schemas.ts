@@ -1,6 +1,9 @@
 import type { TSchema } from "@sinclair/typebox";
 import {
+  A2ADashboardParamsSchema,
   A2ATaskCancelParamsSchema,
+  A2ATaskDetailParamsSchema,
+  A2ATaskListParamsSchema,
   A2ATaskRequestParamsSchema,
   A2ATaskStatusParamsSchema,
   A2ATaskUpdateParamsSchema,
@@ -224,6 +227,9 @@ export const ProtocolSchemas = {
   A2ATaskUpdateParams: A2ATaskUpdateParamsSchema,
   A2ATaskCancelParams: A2ATaskCancelParamsSchema,
   A2ATaskStatusParams: A2ATaskStatusParamsSchema,
+  A2ATaskListParams: A2ATaskListParamsSchema,
+  A2ATaskDetailParams: A2ATaskDetailParamsSchema,
+  A2ADashboardParams: A2ADashboardParamsSchema,
   NodePairRequestParams: NodePairRequestParamsSchema,
   NodePairListParams: NodePairListParamsSchema,
   NodePairApproveParams: NodePairApproveParamsSchema,

@@ -186,3 +186,78 @@ export const A2ATaskStatusParamsSchema = Type.Object(
 );
 
 export type A2ATaskStatusParams = Static<typeof A2ATaskStatusParamsSchema>;
+
+const A2ATaskStatusFilterValueSchema = Type.Union([
+  Type.Literal("active"),
+  Type.Literal("terminal-success"),
+  Type.Literal("terminal-failure"),
+  Type.Literal("waiting-external"),
+  Type.Literal("canceled"),
+  Type.Literal("stale"),
+  Type.Literal("accepted"),
+  Type.Literal("running"),
+  Type.Literal("waiting_reply"),
+  Type.Literal("waiting_external"),
+  Type.Literal("completed"),
+  Type.Literal("failed"),
+  Type.Literal("cancelled"),
+  Type.Literal("timed_out"),
+]);
+
+const A2ATaskWorkerViewFilterValueSchema = Type.Union([
+  Type.Literal("broker-queued"),
+  Type.Literal("worker-running"),
+  Type.Literal("worker-stale"),
+  Type.Literal("waiting-reply"),
+  Type.Literal("waiting-external"),
+  Type.Literal("announce-pending"),
+  Type.Literal("announce-sent"),
+  Type.Literal("remote-failure"),
+  Type.Literal("local-mismatch"),
+  Type.Literal("done"),
+]);
+
+// ── a2a.task.list ────────────────────────────────────────────
+export const A2ATaskListParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    statusFilter: Type.Optional(
+      Type.Union([
+        A2ATaskStatusFilterValueSchema,
+        Type.Array(A2ATaskStatusFilterValueSchema, { minItems: 1 }),
+      ]),
+    ),
+    workerViewFilter: Type.Optional(
+      Type.Union([
+        A2ATaskWorkerViewFilterValueSchema,
+        Type.Array(A2ATaskWorkerViewFilterValueSchema, { minItems: 1 }),
+      ]),
+    ),
+    limit: Type.Optional(Type.Integer({ minimum: 1 })),
+    cursor: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export type A2ATaskListParams = Static<typeof A2ATaskListParamsSchema>;
+
+// ── a2a.task.detail ──────────────────────────────────────────
+export const A2ATaskDetailParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    taskId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export type A2ATaskDetailParams = Static<typeof A2ATaskDetailParamsSchema>;
+
+// ── a2a.dashboard ────────────────────────────────────────────
+export const A2ADashboardParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export type A2ADashboardParams = Static<typeof A2ADashboardParamsSchema>;

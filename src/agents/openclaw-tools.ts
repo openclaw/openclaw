@@ -308,6 +308,7 @@ export function createOpenClawTools(
       agentSessionKey: options?.agentSessionKey,
       config: resolvedConfig,
       sandboxed: options?.sandboxed,
+      delegatedTaskHook,
     }),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];
