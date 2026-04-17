@@ -35,6 +35,16 @@ shared `message` tool in core. Your plugin owns:
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch.
 
+If your channel adds message-tool params that carry media sources, expose those
+param names through `describeMessageTool(...).mediaSourceParams`. Core uses
+that explicit list for sandbox path normalization and outbound media-access
+policy, so plugins do not need shared-core special cases for provider-specific
+avatar, attachment, or cover-image params.
+Prefer returning an action-keyed map such as
+`{ "set-profile": ["avatarUrl", "avatarPath"] }` so unrelated actions do not
+inherit another action's media args. A flat array still works for params that
+are intentionally shared across every exposed action.
+
 If your platform stores extra scope inside conversation ids, keep that parsing
 in the plugin with `messaging.resolveSessionConversation(...)`. That is the
 canonical hook for mapping `rawId` to the base conversation id, optional thread
@@ -175,7 +185,9 @@ Keep inbound mention handling split in two layers:
 - plugin-owned evidence gathering
 - shared policy evaluation
 
-Use `openclaw/plugin-sdk/channel-inbound` for the shared layer.
+Use `openclaw/plugin-sdk/channel-mention-gating` for mention-policy decisions.
+Use `openclaw/plugin-sdk/channel-inbound` only when you need the broader inbound
+helper barrel.
 
 Good fit for plugin-local logic:
 
@@ -244,6 +256,11 @@ bundled channel plugins that already depend on runtime injection:
 - `matchesMentionWithExplicit`
 - `implicitMentionKindWhen`
 - `resolveInboundMentionDecision`
+
+If you only need `implicitMentionKindWhen` and
+`resolveInboundMentionDecision`, import from
+`openclaw/plugin-sdk/channel-mention-gating` to avoid loading unrelated inbound
+runtime helpers.
 
 The older `resolveMentionGating*` helpers remain on
 `openclaw/plugin-sdk/channel-inbound` as compatibility exports only. New code
@@ -482,6 +499,11 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
     OpenClaw loads this instead of the full entry when the channel is disabled
     or unconfigured. It avoids pulling in heavy runtime code during setup flows.
     See [Setup and Config](/plugins/sdk-setup#setup-entry) for details.
+
+    Bundled workspace channels that split setup-safe exports into sidecar
+    modules can use `defineBundledChannelSetupEntry(...)` from
+    `openclaw/plugin-sdk/channel-entry-contract` when they also need an
+    explicit setup-time runtime setter.
 
   </Step>
 

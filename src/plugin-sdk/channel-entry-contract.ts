@@ -2,17 +2,16 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
-  buildPluginLoaderJitiOptions,
-  resolveLoaderPackageRoot,
-  resolvePluginLoaderJitiConfig,
-} from "../plugins/sdk-alias.js";
+  getCachedPluginJitiLoader,
+  type PluginJitiLoaderCache,
+} from "../plugins/jiti-loader-cache.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
@@ -37,6 +36,8 @@ type DefineBundledChannelEntryOptions<TPlugin = ChannelPlugin> = {
   secrets?: BundledEntryModuleRef;
   configSchema?: ChannelEntryConfigSchema<TPlugin> | (() => ChannelEntryConfigSchema<TPlugin>);
   runtime?: BundledEntryModuleRef;
+  accountInspect?: BundledEntryModuleRef;
+  features?: BundledChannelEntryFeatures;
   registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
 };
@@ -45,6 +46,17 @@ type DefineBundledChannelSetupEntryOptions = {
   importMetaUrl: string;
   plugin: BundledEntryModuleRef;
   secrets?: BundledEntryModuleRef;
+  runtime?: BundledEntryModuleRef;
+  features?: BundledChannelSetupEntryFeatures;
+};
+
+export type BundledChannelSetupEntryFeatures = {
+  legacyStateMigrations?: boolean;
+  legacySessionSurfaces?: boolean;
+};
+
+export type BundledChannelEntryFeatures = {
+  accountInspect?: boolean;
 };
 
 export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
@@ -53,9 +65,11 @@ export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   name: string;
   description: string;
   configSchema: ChannelEntryConfigSchema<TPlugin>;
+  features?: BundledChannelEntryFeatures;
   register: (api: OpenClawPluginApi) => void;
   loadChannelPlugin: () => TPlugin;
   loadChannelSecrets?: () => ChannelPlugin["secrets"] | undefined;
+  loadChannelAccountInspector?: () => NonNullable<ChannelPlugin["config"]["inspectAccount"]>;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
 };
 
@@ -63,10 +77,12 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
   kind: "bundled-channel-setup-entry";
   loadSetupPlugin: () => TPlugin;
   loadSetupSecrets?: () => ChannelPlugin["secrets"] | undefined;
+  setChannelRuntime?: (runtime: PluginRuntime) => void;
+  features?: BundledChannelSetupEntryFeatures;
 };
 
 const nodeRequire = createRequire(import.meta.url);
-const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+const jitiLoaders: PluginJitiLoaderCache = new Map();
 const loadedModuleExports = new Map<string, unknown>();
 const disableBundledEntrySourceFallbackEnv = "OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK";
 
@@ -261,22 +277,13 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
 }
 
 function getJiti(modulePath: string) {
-  const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
+  return getCachedPluginJitiLoader({
+    cache: jitiLoaders,
     modulePath,
-    argv1: process.argv[1],
-    moduleUrl: import.meta.url,
+    importerUrl: import.meta.url,
     preferBuiltDist: true,
+    jitiFilename: import.meta.url,
   });
-  const cached = jitiLoaders.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const loader = createJiti(import.meta.url, {
-    ...buildPluginLoaderJitiOptions(aliasMap),
-    tryNative,
-  });
-  jitiLoaders.set(cacheKey, loader);
-  return loader;
 }
 
 function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): unknown {
@@ -333,6 +340,8 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   secrets,
   configSchema,
   runtime,
+  accountInspect,
+  features,
   registerCliMetadata,
   registerFull,
 }: DefineBundledChannelEntryOptions<TPlugin>): BundledChannelEntryContract<TPlugin> {
@@ -343,6 +352,13 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   const loadChannelPlugin = () => loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin);
   const loadChannelSecrets = secrets
     ? () => loadBundledEntryExportSync<ChannelPlugin["secrets"] | undefined>(importMetaUrl, secrets)
+    : undefined;
+  const loadChannelAccountInspector = accountInspect
+    ? () =>
+        loadBundledEntryExportSync<NonNullable<ChannelPlugin["config"]["inspectAccount"]>>(
+          importMetaUrl,
+          accountInspect,
+        )
     : undefined;
   const setChannelRuntime = runtime
     ? (pluginRuntime: PluginRuntime) => {
@@ -360,6 +376,9 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
     name,
     description,
     configSchema: resolvedConfigSchema,
+    ...(features || accountInspect
+      ? { features: { ...features, ...(accountInspect ? { accountInspect: true } : {}) } }
+      : {}),
     register(api: OpenClawPluginApi) {
       if (api.registrationMode === "cli-metadata") {
         registerCliMetadata?.(api);
@@ -375,6 +394,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
     },
     loadChannelPlugin,
     ...(loadChannelSecrets ? { loadChannelSecrets } : {}),
+    ...(loadChannelAccountInspector ? { loadChannelAccountInspector } : {}),
     ...(setChannelRuntime ? { setChannelRuntime } : {}),
   };
 }
@@ -383,7 +403,21 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
   importMetaUrl,
   plugin,
   secrets,
+  runtime,
+  features,
 }: DefineBundledChannelSetupEntryOptions): BundledChannelSetupEntryContract<TPlugin> {
+  // Bundled setup entries stay on a light path during setup-only/setup-runtime loads.
+  // When runtime wiring is needed, expose only the setter so the loader can hand
+  // the setup surface the active runtime without importing the full channel entry.
+  const setChannelRuntime = runtime
+    ? (pluginRuntime: PluginRuntime) => {
+        const setter = loadBundledEntryExportSync<(runtime: PluginRuntime) => void>(
+          importMetaUrl,
+          runtime,
+        );
+        setter(pluginRuntime);
+      }
+    : undefined;
   return {
     kind: "bundled-channel-setup-entry",
     loadSetupPlugin: () => loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin),
@@ -396,5 +430,7 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
             ),
         }
       : {}),
+    ...(setChannelRuntime ? { setChannelRuntime } : {}),
+    ...(features ? { features } : {}),
   };
 }
