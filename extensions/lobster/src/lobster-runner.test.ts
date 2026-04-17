@@ -173,6 +173,33 @@ describe("createEmbeddedLobsterRunner", () => {
     }
   });
 
+  it("surfaces missing relative workflow file errors instead of falling back to pipeline parsing", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-runner-"));
+
+    try {
+      const runtime = {
+        runToolRequest: vi.fn(),
+        resumeToolRequest: vi.fn(),
+      };
+      const runner = createEmbeddedLobsterRunner({
+        loadRuntime: vi.fn().mockResolvedValue(runtime),
+      });
+
+      await expect(
+        runner.run({
+          action: "run",
+          pipeline: "lobster/missing-workflow.lobster",
+          cwd: tempDir,
+          timeoutMs: 2000,
+          maxStdoutBytes: 4096,
+        }),
+      ).rejects.toThrow(/ENOENT|no such file/i);
+      expect(runtime.runToolRequest).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("throws when the embedded runtime returns an error envelope", async () => {
     const runtime = {
       runToolRequest: vi.fn().mockResolvedValue({
