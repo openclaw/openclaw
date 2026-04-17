@@ -1,11 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type {
-  MemoryWikiPluginConfig,
-  ResolvedMemoryWikiConfig,
-  WikiGetResult,
-  WikiSearchResult,
-} from "openclaw/extensions/memory-wiki/api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryPluginState,
@@ -22,14 +16,21 @@ import {
   type MemoryReadParams,
 } from "./memory-tool-manager-mock.js";
 
+type MemoryWikiPluginConfigLike = Record<string, unknown>;
+type ResolvedMemoryWikiConfigLike = Record<string, unknown>;
+type WikiSearchResultLike = Record<string, unknown>;
+type WikiGetResultLike = Record<string, unknown>;
+
 const memoryWikiFallbackMocks = vi.hoisted(() => ({
   resolveMemoryWikiConfig: vi.fn<
     (
-      config: MemoryWikiPluginConfig | undefined,
-    ) => ResolvedMemoryWikiConfig | MemoryWikiPluginConfig | undefined
+      config: MemoryWikiPluginConfigLike | undefined,
+    ) => ResolvedMemoryWikiConfigLike | MemoryWikiPluginConfigLike | undefined
   >((config) => config),
-  searchMemoryWiki: vi.fn<(..._args: any[]) => Promise<WikiSearchResult[]>>(async () => []),
-  getMemoryWikiPage: vi.fn<(..._args: any[]) => Promise<WikiGetResult | null>>(async () => null),
+  searchMemoryWiki: vi.fn<(..._args: any[]) => Promise<WikiSearchResultLike[]>>(async () => []),
+  getMemoryWikiPage: vi.fn<(..._args: any[]) => Promise<WikiGetResultLike | null>>(
+    async () => null,
+  ),
 }));
 
 vi.mock("openclaw/extensions/memory-wiki/api", () => ({
@@ -480,6 +481,37 @@ describe("memory tools", () => {
     expect(getMemorySearchManagerMockCalls()).toBe(0);
   });
 
+  it("does not run direct wiki fallback when memory-wiki is denied by plugin policy", async () => {
+    memoryWikiFallbackMocks.searchMemoryWiki.mockResolvedValue([
+      {
+        corpus: "wiki",
+        path: "sources/alpha.md",
+        title: "Alpha Source",
+        kind: "source",
+        score: 6,
+        snippet: "Alpha from fallback",
+      },
+    ]);
+
+    const tool = createMemorySearchToolOrThrow({
+      config: asOpenClawConfig({
+        agents: { list: [{ id: "main", default: true }] },
+        plugins: {
+          deny: ["memory-wiki"],
+          entries: { "memory-wiki": { enabled: true, config: {} } },
+        },
+      }),
+    });
+    const result = await tool.execute("call_wiki_policy_denied", {
+      query: "alpha",
+      corpus: "wiki",
+    });
+
+    expect(result.details).toMatchObject({ results: [] });
+    expect(memoryWikiFallbackMocks.searchMemoryWiki).not.toHaveBeenCalled();
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
   it("falls back to direct wiki get when no corpus supplements are registered", async () => {
     memoryWikiFallbackMocks.getMemoryWikiPage.mockResolvedValue({
       corpus: "wiki",
@@ -551,5 +583,78 @@ describe("memory tools", () => {
     });
     expect(memoryWikiFallbackMocks.resolveMemoryWikiConfig).toHaveBeenCalledWith({});
     expect(memoryWikiFallbackMocks.getMemoryWikiPage).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not double-get wiki fallback when memory-wiki supplement is already registered", async () => {
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [],
+      get: async () => null,
+    });
+    memoryWikiFallbackMocks.getMemoryWikiPage.mockResolvedValue({
+      corpus: "wiki",
+      path: "sources/alpha.md",
+      title: "Alpha Source",
+      kind: "source",
+      content: "Alpha fallback body",
+      fromLine: 2,
+      lineCount: 4,
+    });
+
+    const tool = createMemoryGetToolOrThrow(
+      asOpenClawConfig({
+        agents: { list: [{ id: "main", default: true }] },
+        plugins: { entries: { "memory-wiki": { enabled: true, config: {} } } },
+      }),
+    );
+    const result = await tool.execute("call_get_wiki_no_double_get", {
+      path: "sources/alpha.md",
+      from: 2,
+      lines: 4,
+      corpus: "wiki",
+    });
+
+    expect(result.details).toEqual({
+      path: "sources/alpha.md",
+      text: "",
+      disabled: true,
+      error: "wiki corpus result not found",
+    });
+    expect(memoryWikiFallbackMocks.getMemoryWikiPage).not.toHaveBeenCalled();
+  });
+
+  it("does not run direct wiki get fallback when memory-wiki is denied by plugin policy", async () => {
+    memoryWikiFallbackMocks.getMemoryWikiPage.mockResolvedValue({
+      corpus: "wiki",
+      path: "sources/alpha.md",
+      title: "Alpha Source",
+      kind: "source",
+      content: "Alpha fallback body",
+      fromLine: 2,
+      lineCount: 4,
+    });
+
+    const tool = createMemoryGetToolOrThrow(
+      asOpenClawConfig({
+        agents: { list: [{ id: "main", default: true }] },
+        plugins: {
+          deny: ["memory-wiki"],
+          entries: { "memory-wiki": { enabled: true, config: {} } },
+        },
+      }),
+    );
+    const result = await tool.execute("call_get_wiki_policy_denied", {
+      path: "sources/alpha.md",
+      from: 2,
+      lines: 4,
+      corpus: "wiki",
+    });
+
+    expect(result.details).toEqual({
+      path: "sources/alpha.md",
+      text: "",
+      disabled: true,
+      error: "wiki corpus result not found",
+    });
+    expect(memoryWikiFallbackMocks.getMemoryWikiPage).not.toHaveBeenCalled();
   });
 });

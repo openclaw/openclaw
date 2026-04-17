@@ -1,6 +1,10 @@
 import { Type } from "@sinclair/typebox";
 import type { MemoryWikiPluginConfig } from "openclaw/extensions/memory-wiki/api";
 import {
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+} from "openclaw/plugin-sdk/browser-config-runtime";
+import {
   listMemoryCorpusSupplements,
   resolveMemorySearchConfig,
   resolveSessionAgentId,
@@ -42,8 +46,22 @@ async function loadMemoryWikiFallbackRuntime(): Promise<MemoryWikiFallbackRuntim
 }
 
 function resolveMemoryWikiEntryConfig(cfg: OpenClawConfig): MemoryWikiPluginConfig | undefined {
+  const pluginsConfig = normalizePluginsConfig(cfg.plugins);
+  const enabled = resolveEffectiveEnableState({
+    id: "memory-wiki",
+    origin: "bundled",
+    config: pluginsConfig,
+    rootConfig: cfg,
+  }).enabled;
+  if (!enabled) {
+    return undefined;
+  }
+
   const entry = cfg.plugins?.entries?.["memory-wiki"];
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+  if (entry == null) {
+    return {} as MemoryWikiPluginConfig;
+  }
+  if (typeof entry !== "object" || Array.isArray(entry)) {
     return undefined;
   }
   if (entry.enabled === false) {
@@ -287,11 +305,18 @@ export async function getMemoryCorpusSupplementResult(params: {
   if (params.corpus === "memory") {
     return null;
   }
-  for (const registration of listMemoryCorpusSupplements()) {
+  const supplements = listMemoryCorpusSupplements();
+  const hasMemoryWikiSupplement = supplements.some(
+    (registration) => registration.pluginId === "memory-wiki",
+  );
+  for (const registration of supplements) {
     const result = await registration.supplement.get(params);
     if (result) {
       return result;
     }
+  }
+  if (hasMemoryWikiSupplement) {
+    return null;
   }
   return await getMemoryWikiFallback(params);
 }
