@@ -586,7 +586,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
         continue;
       }
       const isClose = match[1] === "/";
-      const isSelfClosing = !isClose && match[0].includes("/");
+      const isSelfClosing = !isClose && /\/\s*>$/.test(match[0]);
 
       if (isSelfClosing) {
         // Self-closing <final/> — treat as close if already inside a block.
