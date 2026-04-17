@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,
   parseSlackTarget,
   resolveSlackChannelId,
@@ -46,6 +47,28 @@ describe("parseSlackTarget", () => {
       );
     }
   });
+
+  it("returns undefined for empty or whitespace-only input", () => {
+    expect(parseSlackTarget("")).toBeUndefined();
+    expect(parseSlackTarget("   ")).toBeUndefined();
+    expect(parseSlackTarget("\t\n")).toBeUndefined();
+  });
+
+  it("falls back to channel kind for a bare id when no defaultKind is given", () => {
+    expect(parseSlackTarget("C123")).toMatchObject({
+      kind: "channel",
+      id: "C123",
+      normalized: "channel:c123",
+    });
+  });
+
+  it("honors defaultKind: user for a bare id", () => {
+    expect(parseSlackTarget("U999", { defaultKind: "user" })).toMatchObject({
+      kind: "user",
+      id: "U999",
+      normalized: "user:u999",
+    });
+  });
 });
 
 describe("resolveSlackChannelId", () => {
@@ -62,5 +85,53 @@ describe("resolveSlackChannelId", () => {
 describe("normalizeSlackMessagingTarget", () => {
   it("defaults raw ids to channels", () => {
     expect(normalizeSlackMessagingTarget("C123")).toBe("channel:c123");
+  });
+
+  it("returns undefined for empty input", () => {
+    expect(normalizeSlackMessagingTarget("")).toBeUndefined();
+    expect(normalizeSlackMessagingTarget("   ")).toBeUndefined();
+  });
+});
+
+describe("looksLikeSlackTargetId", () => {
+  it("recognizes mention syntax", () => {
+    expect(looksLikeSlackTargetId("<@U123>")).toBe(true);
+    expect(looksLikeSlackTargetId("<@u123>")).toBe(true);
+  });
+
+  it("recognizes user: and channel: prefixes", () => {
+    expect(looksLikeSlackTargetId("user:U123")).toBe(true);
+    expect(looksLikeSlackTargetId("channel:C123")).toBe(true);
+    expect(looksLikeSlackTargetId("USER:u123")).toBe(true);
+  });
+
+  it("recognizes the slack: prefix", () => {
+    expect(looksLikeSlackTargetId("slack:U123")).toBe(true);
+    expect(looksLikeSlackTargetId("SLACK:u123")).toBe(true);
+  });
+
+  it("recognizes @-prefixed and #-prefixed strings", () => {
+    expect(looksLikeSlackTargetId("@U123")).toBe(true);
+    expect(looksLikeSlackTargetId("#C123")).toBe(true);
+  });
+
+  it("recognizes raw Slack ID patterns for each valid leading letter", () => {
+    for (const id of ["C12345678", "U12345678", "W12345678", "G12345678", "D12345678"]) {
+      expect(looksLikeSlackTargetId(id), id).toBe(true);
+    }
+  });
+
+  it("returns false for empty input", () => {
+    expect(looksLikeSlackTargetId("")).toBe(false);
+    expect(looksLikeSlackTargetId("   ")).toBe(false);
+  });
+
+  it("returns false for strings that do not match any recognized pattern", () => {
+    expect(looksLikeSlackTargetId("not-an-id")).toBe(false);
+    expect(looksLikeSlackTargetId("bob")).toBe(false);
+    // Leading letter outside CUWGD — Slack IDs always start with one of those.
+    expect(looksLikeSlackTargetId("A12345678")).toBe(false);
+    // Too short to be a valid Slack ID (needs 8 trailing chars after the leading letter).
+    expect(looksLikeSlackTargetId("C1234")).toBe(false);
   });
 });
