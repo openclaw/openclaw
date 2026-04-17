@@ -181,6 +181,46 @@ describe("memory plugin state", () => {
     ]);
   });
 
+  it("preserves existing public artifacts when another memory plugin registers other capability fields", async () => {
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "memory-root",
+              workspaceDir: "/tmp/workspace",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/workspace/MEMORY.md",
+              agentIds: ["main"],
+              contentType: "markdown" as const,
+            },
+          ];
+        },
+      },
+    });
+
+    registerMemoryCapability("active-memory", {
+      promptBuilder: () => ["active prompt"],
+      flushPlanResolver: () => createMemoryFlushPlan("memory/active.md"),
+    });
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/workspace",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/workspace/MEMORY.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["active prompt"]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
+    expect(getMemoryCapabilityRegistration()).toMatchObject({
+      pluginId: "active-memory",
+    });
+  });
+
   it("passes citations mode through to the prompt builder", () => {
     registerMemoryPromptSection(({ citationsMode }) => [
       `citations: ${citationsMode ?? "default"}`,

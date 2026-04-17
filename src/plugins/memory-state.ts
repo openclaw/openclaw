@@ -171,7 +171,14 @@ export function registerMemoryCapability(
   pluginId: string,
   capability: MemoryPluginCapability,
 ): void {
-  memoryPluginState.capability = { pluginId, capability: { ...capability } };
+  const existingCapability = memoryPluginState.capability?.capability ?? {};
+  memoryPluginState.capability = {
+    pluginId,
+    capability: {
+      ...existingCapability,
+      ...capability,
+    },
+  };
 }
 
 export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistration | undefined {
