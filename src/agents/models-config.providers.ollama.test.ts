@@ -12,8 +12,7 @@ import {
 import type { ProviderPlugin } from "../plugins/types.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { OLLAMA_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
-import { resolveImplicitProviders } from "./models-config.providers.js";
-import type { ProviderConfig } from "./models-config.providers.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -49,15 +48,6 @@ describe("Ollama provider", () => {
     }
   }
 
-  async function resolveProvidersWithOllamaKey(agentDir: string) {
-    return withOllamaApiKey(() =>
-      resolveProvidersWithOllamaOnly({
-        agentDir,
-        env: { VITEST: "", NODE_ENV: "development" },
-      }),
-    );
-  }
-
   async function resolveProvidersWithOllamaOnly(params: {
     agentDir: string;
     explicitProviders?: Record<string, ProviderConfig>;
@@ -71,6 +61,7 @@ describe("Ollama provider", () => {
       ...params.env,
     } satisfies NodeJS.ProcessEnv;
 
+    const { resolveImplicitProviders } = await import("./models-config.providers.implicit.js");
     return resolveImplicitProviders({
       agentDir: params.agentDir,
       explicitProviders: params.explicitProviders,
@@ -202,7 +193,6 @@ describe("Ollama provider", () => {
   });
 
   it("discovers per-model context windows from /api/show", async () => {
-    const agentDir = createAgentDir();
     enableDiscoveryEnv();
     const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
       const url = String(input);
@@ -230,8 +220,10 @@ describe("Ollama provider", () => {
     });
     vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
-    const providers = await resolveProvidersWithOllamaKey(agentDir);
-    const models = providers?.ollama?.models ?? [];
+    const provider = await runOllamaCatalog({
+      env: { OLLAMA_API_KEY: "test-key", VITEST: "", NODE_ENV: "development" },
+    });
+    const models = provider?.models ?? [];
     const qwen = models.find((model) => model.id === "qwen3:32b");
     const llama = models.find((model) => model.id === "llama3.3:70b");
     expect(qwen?.contextWindow).toBe(131072);
@@ -325,7 +317,6 @@ describe("Ollama provider", () => {
   });
 
   it("falls back to default context window when /api/show fails", async () => {
-    const agentDir = createAgentDir();
     enableDiscoveryEnv();
     const fetchMock = vi.fn(async (input: unknown) => {
       const url = String(input);
@@ -342,14 +333,15 @@ describe("Ollama provider", () => {
     });
     vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
-    const providers = await resolveProvidersWithOllamaKey(agentDir);
-    const model = providers?.ollama?.models?.find((entry) => entry.id === "qwen3:32b");
+    const provider = await runOllamaCatalog({
+      env: { OLLAMA_API_KEY: "test-key", VITEST: "", NODE_ENV: "development" },
+    });
+    const model = provider?.models?.find((entry) => entry.id === "qwen3:32b");
     expect(model?.contextWindow).toBe(128000);
     expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 1 });
   });
 
   it("caps /api/show requests when /api/tags returns a very large model list", async () => {
-    const agentDir = createAgentDir();
     enableDiscoveryEnv();
     const manyModels = Array.from({ length: 250 }, (_, idx) => ({
       name: `model-${idx}`,
@@ -372,8 +364,10 @@ describe("Ollama provider", () => {
     });
     vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
-    const providers = await resolveProvidersWithOllamaKey(agentDir);
-    const models = providers?.ollama?.models ?? [];
+    const provider = await runOllamaCatalog({
+      env: { OLLAMA_API_KEY: "test-key", VITEST: "", NODE_ENV: "development" },
+    });
+    const models = provider?.models ?? [];
     // 1 call for /api/tags + 200 capped /api/show calls.
     expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 200 });
     expect(models).toHaveLength(200);
