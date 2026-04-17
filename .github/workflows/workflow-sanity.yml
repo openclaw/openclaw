@@ -96,3 +96,6 @@ jobs:
 
       - name: Check plugin SDK API baseline drift
         run: pnpm plugin-sdk:api:check
+
+      - name: Check Claude Code sub-agent drift (generated from SKILL.md)
+        run: pnpm skills:subagents:check

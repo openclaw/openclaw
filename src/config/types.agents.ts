@@ -16,6 +16,21 @@ export type AgentRuntimeAcpConfig = {
   cwd?: string;
 };
 
+export type AgentRuntimeClaudeSdkConfig = {
+  /** Claude model id override (defaults to agents.defaults.model when unset). */
+  model?: string;
+  /** Optional override for the max turns the SDK loop is allowed. */
+  maxTurns?: number;
+  /**
+   * Credential source:
+   * - "subscription" (default) — use the user's Claude.ai Pro/Max login
+   *   (`~/.claude/`). Non-metered.
+   * - "profile" — route through OpenClaw's auth-profile store. May select
+   *   an API key, which IS metered.
+   */
+  credential?: "subscription" | "profile";
+};
+
 export type AgentRuntimeConfig =
   | {
       type: "embedded";
@@ -23,6 +38,10 @@ export type AgentRuntimeConfig =
   | {
       type: "acp";
       acp?: AgentRuntimeAcpConfig;
+    }
+  | {
+      type: "claude-sdk";
+      claudeSdk?: AgentRuntimeClaudeSdkConfig;
     };
 
 export type AgentBindingMatch = {

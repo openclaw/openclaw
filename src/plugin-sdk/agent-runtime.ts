@@ -72,3 +72,12 @@ export type {
   TokenCredential,
   TokenExpiryState,
 } from "../agents/auth-profiles.js";
+
+// Runtime selector types — plugins that need to branch on the active agent driver
+// (embedded pi-ai loop, ACP bridge, or Claude Agent SDK) can read these without
+// reaching into the core config schema module.
+export type {
+  AgentRuntimeAcpConfig,
+  AgentRuntimeClaudeSdkConfig,
+  AgentRuntimeConfig,
+} from "../config/types.agents.js";

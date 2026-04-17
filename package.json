@@ -1206,6 +1206,8 @@
     "release:plugins:npm:plan": "node --import tsx scripts/plugin-npm-release-plan.ts",
     "runtime-sidecars:check": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --check",
     "runtime-sidecars:gen": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --write",
+    "skills:subagents:check": "node --import tsx scripts/migrate-skills-to-subagents.ts --check",
+    "skills:subagents:gen": "node --import tsx scripts/migrate-skills-to-subagents.ts --write",
     "stage:bundled-plugin-runtime-deps": "node scripts/stage-bundled-plugin-runtime-deps.mjs",
     "start": "node scripts/run-node.mjs",
     "test": "node scripts/test-projects.mjs",
@@ -1314,6 +1316,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.18.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.1.0",
     "@anthropic-ai/vertex-sdk": "^0.14.4",
     "@aws-sdk/client-bedrock": "3.1024.0",
     "@aws-sdk/client-bedrock-runtime": "3.1024.0",

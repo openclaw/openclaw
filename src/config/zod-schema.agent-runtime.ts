@@ -765,6 +765,26 @@ const AgentRuntimeAcpSchema = z
   .strict()
   .optional();
 
+const AgentRuntimeClaudeSdkSchema = z
+  .object({
+    /** Claude model id override (defaults to agents.defaults.model when unset). */
+    model: z.string().optional(),
+    /** Optional override for the max turns the SDK loop is allowed. */
+    maxTurns: z.number().int().positive().optional(),
+    /**
+     * Which credential source the SDK subprocess should use:
+     * - "subscription" (default) — inherit the user's `claude login` session
+     *   from `~/.claude/`. Requests count against the Claude.ai Pro/Max
+     *   subscription quota, NOT a pay-as-you-go API bill. Safe default.
+     * - "profile" — route through OpenClaw's auth-profile store. May use
+     *   an API key if one is configured, which is metered; only opt in if
+     *   you deliberately want that.
+     */
+    credential: z.enum(["subscription", "profile"]).optional(),
+  })
+  .strict()
+  .optional();
+
 const AgentRuntimeSchema = z
   .union([
     z
@@ -776,6 +796,12 @@ const AgentRuntimeSchema = z
       .object({
         type: z.literal("acp"),
         acp: AgentRuntimeAcpSchema,
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("claude-sdk"),
+        claudeSdk: AgentRuntimeClaudeSdkSchema,
       })
       .strict(),
   ])

@@ -5,7 +5,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { compactEmbeddedPiSession, runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
   derivePromptTokens,
@@ -44,11 +44,16 @@ import { readPostCompactionContext } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
+import { runAgent } from "../../agents/runtime-dispatch.js";
 
+// The `runEmbeddedPiAgent` deps key keeps its name (existing test mocks
+// target it) but the default impl is `runAgent`, which routes through
+// the agent runtime selector. Legacy (embedded) agents are unchanged —
+// `runAgent` forwards straight to `runEmbeddedPiAgent` for that case.
 const memoryDeps = {
   compactEmbeddedPiSession,
   runWithModelFallback,
-  runEmbeddedPiAgent,
+  runEmbeddedPiAgent: runAgent,
   registerAgentRunContext,
   refreshQueuedFollowupSession,
   incrementCompactionCount,
@@ -61,7 +66,7 @@ export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDe
   Object.assign(memoryDeps, {
     runWithModelFallback,
     compactEmbeddedPiSession,
-    runEmbeddedPiAgent,
+    runEmbeddedPiAgent: runAgent,
     registerAgentRunContext,
     refreshQueuedFollowupSession,
     incrementCompactionCount,

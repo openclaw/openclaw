@@ -13,7 +13,7 @@ import {
 } from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from "../agents/defaults.js";
 import { parseModelRef } from "../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { runAgent } from "../agents/runtime-dispatch.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -51,7 +51,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
     const provider = parsed?.provider ?? DEFAULT_PROVIDER;
     const model = parsed?.model ?? DEFAULT_MODEL;
 
-    const result = await runEmbeddedPiAgent({
+    const result = await runAgent({
       sessionId: `slug-generator-${Date.now()}`,
       sessionKey: "temp:slug-generator",
       agentId,

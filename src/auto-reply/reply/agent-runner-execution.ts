@@ -27,6 +27,7 @@ import {
 } from "../../agents/pi-embedded-helpers.js";
 import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { runAgent } from "../../agents/runtime-dispatch.js";
 import {
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
@@ -932,7 +933,7 @@ export async function runAgentTurnWithFallback(params: {
           return (async () => {
             let attemptCompactionCount = 0;
             try {
-              const result = await runEmbeddedPiAgent({
+              const result = await runAgent({
                 ...embeddedContext,
                 allowGatewaySubagentBinding: true,
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
