@@ -181,6 +181,79 @@ describe("applyPluginAutoEnable channels", () => {
     }
   });
 
+  it("memoizes empty external catalog preferOver lookups within one auto-enable pass", () => {
+    const stateDir = makeTempDir();
+    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
+    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/env-primary",
+            openclaw: {
+              channel: {
+                id: "env-primary",
+                label: "Env Primary",
+                selectionLabel: "Env Primary",
+                docsPath: "/channels/env-primary",
+                blurb: "Env primary entry",
+              },
+              install: {
+                npmSpec: "@openclaw/env-primary",
+              },
+            },
+          },
+          {
+            name: "@openclaw/env-secondary",
+            openclaw: {
+              channel: {
+                id: "env-secondary",
+                label: "Env Secondary",
+                selectionLabel: "Env Secondary",
+                docsPath: "/channels/env-secondary",
+                blurb: "Env secondary entry",
+              },
+              install: {
+                npmSpec: "@openclaw/env-secondary",
+              },
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+
+    materializePluginAutoEnableCandidates({
+      config: {
+        channels: {
+          "env-primary": { token: "primary" },
+          "env-secondary": { token: "secondary" },
+        },
+      },
+      candidates: Array.from({ length: 20 }, (_, index) => ({
+        pluginId: index % 2 === 0 ? "env-primary" : "env-secondary",
+        kind: "channel-configured" as const,
+        channelId: index % 2 === 0 ? "env-primary" : "env-secondary",
+      })),
+      env: {
+        ...makeIsolatedEnv(),
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      },
+      manifestRegistry: makeRegistry([]),
+    });
+
+    expect(
+      readFileSpy.mock.calls.filter(([filePath]) =>
+        String(filePath).endsWith("plugins/catalog.json"),
+      ),
+    ).toHaveLength(2);
+    readFileSpy.mockRestore();
+  });
+
   describe("third-party channel plugins (pluginId ≠ channelId)", () => {
     it("uses the plugin manifest id, not the channel id, for plugins.entries", () => {
       const result = applyWithApnChannelConfig();
