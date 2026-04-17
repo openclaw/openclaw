@@ -1,8 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setConsoleSubsystemFilter } from "./console.js";
+import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
+
+const logPathTracker = createSuiteLogPathTracker("openclaw-subsystem-");
+let logPath = "";
 
 function installConsoleMethodSpy(method: "warn" | "error") {
   const spy = vi.fn();
@@ -15,11 +20,23 @@ function installConsoleMethodSpy(method: "warn" | "error") {
   return spy;
 }
 
+beforeAll(async () => {
+  await logPathTracker.setup();
+});
+
 afterEach(() => {
   setConsoleSubsystemFilter(null);
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
+  if (logPath) {
+    fs.rmSync(logPath, { force: true });
+    logPath = "";
+  }
+});
+
+afterAll(async () => {
+  await logPathTracker.cleanup();
 });
 
 describe("createSubsystemLogger().isEnabled", () => {
@@ -163,5 +180,25 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
 
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("redacts file-path message and meta while preserving consoleMessage override", () => {
+    logPath = logPathTracker.nextPath();
+    setLoggerOverride({ level: "warn", consoleLevel: "warn", file: logPath });
+    const warn = installConsoleMethodSpy("warn");
+    const log = createSubsystemLogger("agent/embedded").child("auth");
+
+    log.warn("Authorization: Bearer abcdef1234567890ghij", {
+      apiKey: "abcdef1234567890ghij",
+      consoleMessage: "safe console summary",
+    });
+
+    const fileContents = fs.readFileSync(logPath, "utf8");
+    expect(fileContents).toContain("Authorization: Bearer abcdef…ghij");
+    expect(fileContents).toContain("abcdef…ghij");
+    expect(fileContents).not.toContain("abcdef1234567890ghij");
+    expect(fileContents).not.toContain("safe console summary");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("safe console summary");
   });
 });

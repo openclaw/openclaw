@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   enableConsoleCapture,
@@ -121,6 +122,21 @@ describe("enableConsoleCapture", () => {
 
     expect(stderrWrite).toHaveBeenCalledWith("diag\n");
     expect(stdoutWrite).toHaveBeenCalledWith('{\n  "ok": true\n}\n');
+  });
+
+  it("redacts console messages before forwarding them to file logs", () => {
+    const logPath = tempLogPath();
+    setLoggerOverride({ level: "info", file: logPath });
+    const errorSpy = vi.fn();
+    console.error = errorSpy;
+    enableConsoleCapture();
+
+    console.error("Authorization: Bearer abcdef1234567890ghij");
+
+    const fileContents = fs.readFileSync(logPath, "utf8");
+    expect(fileContents).toContain("Authorization: Bearer abcdef…ghij");
+    expect(fileContents).not.toContain("Authorization: Bearer abcdef1234567890ghij");
+    expect(errorSpy).toHaveBeenCalledWith("Authorization: Bearer abcdef1234567890ghij");
   });
 
   it.each([

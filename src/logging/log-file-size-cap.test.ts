@@ -7,6 +7,7 @@ import {
   setLoggerOverride,
 } from "../logging.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
+import { registerLogTransport } from "./logger.js";
 
 const DEFAULT_MAX_FILE_BYTES = 500 * 1024 * 1024;
 const logPathTracker = createSuiteLogPathTracker("openclaw-log-cap-");
@@ -50,9 +51,9 @@ describe("log file size cap", () => {
   });
 
   it("suppresses file writes after cap is reached and warns once", () => {
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(
-      () => true as unknown as ReturnType<typeof process.stderr.write>, // preserve stream contract in test spy
-    );
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
     setLoggerOverride({ level: "info", file: logPath, maxFileBytes: 1024 });
     const logger = getLogger();
 
@@ -71,5 +72,31 @@ describe("log file size cap", () => {
       .map(([firstArg]) => String(firstArg))
       .filter((line) => line.includes("log file size cap reached"));
     expect(capWarnings).toHaveLength(1);
+  });
+
+  it("redacts secrets before writing file logs and forwarding external transports", () => {
+    const records: Array<Record<string, unknown>> = [];
+    const unregister = registerLogTransport((record) => {
+      records.push(record);
+    });
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file: logPath });
+
+    try {
+      const logger = getLogger();
+      logger.error(
+        { apiKey: "abcdef1234567890ghij" },
+        "Authorization: Bearer abcdef1234567890ghij",
+      );
+    } finally {
+      unregister();
+    }
+
+    const fileContents = fs.readFileSync(logPath, "utf8");
+    const transportContents = JSON.stringify(records);
+
+    expect(fileContents).toContain("abcdef…ghij");
+    expect(fileContents).not.toContain("abcdef1234567890ghij");
+    expect(transportContents).toContain("abcdef…ghij");
+    expect(transportContents).not.toContain("abcdef1234567890ghij");
   });
 });
