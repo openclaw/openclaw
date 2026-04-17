@@ -100,6 +100,19 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
     expect(result).toEqual({ recipients: ["+15550007777"], source: "flag" });
   });
 
+  it("preserves explicit WhatsApp group JIDs passed via --to", () => {
+    const result = resolveWith({}, { to: " whatsapp:120363999999999999@g.us " });
+    expect(result).toEqual({
+      recipients: ["120363999999999999@g.us"],
+      source: "flag",
+    });
+  });
+
+  it("ignores invalid explicit --to values", () => {
+    const result = resolveWith({}, { to: "not-a-whatsapp-target" });
+    expect(result).toEqual({ recipients: [], source: "flag" });
+  });
+
   it("returns ambiguous session recipients when no allowFrom list exists", () => {
     setSessionStore({
       a: { lastChannel: "whatsapp", lastTo: "+15550000001", updatedAt: 2, sessionId: "a" },
