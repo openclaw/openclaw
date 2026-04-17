@@ -1769,14 +1769,24 @@ export async function runEmbeddedPiAgent(
                 });
               }
 
+              const friendlyIncompleteError = lastAssistant
+                ? formatAssistantErrorText(lastAssistant, {
+                    cfg: params.config,
+                    sessionKey: params.sessionKey ?? params.sessionId,
+                    provider: activeErrorContext.provider,
+                    model: activeErrorContext.model,
+                  })
+                : undefined;
+
               // Warn about potential side-effects when mutating tools executed
               // before the turn was interrupted, so users don't blindly retry.
               const hadMutatingTools = attempt.toolMetas.some((t) =>
                 isLikelyMutatingToolName(t.toolName),
               );
-              const errorText = hadMutatingTools
+              const genericIncompleteError = hadMutatingTools
                 ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
                 : "⚠️ Agent couldn't generate a response. Please try again.";
+              const errorText = friendlyIncompleteError || genericIncompleteError;
 
               return {
                 payloads: [

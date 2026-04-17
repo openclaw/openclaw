@@ -146,6 +146,13 @@ describe("formatAssistantErrorText", () => {
       "LLM request failed: network connection was interrupted.",
     );
   });
+
+  it("returns an interrupted-connection message for client disconnects", () => {
+    const msg = makeAssistantError("Client disconnected");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: network connection was interrupted.",
+    );
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {

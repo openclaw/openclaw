@@ -330,4 +330,39 @@ describe("runEmbeddedPiAgent", () => {
     expect(result.meta.error).toBeUndefined();
     expect(result.payloads?.length ?? 0).toBeGreaterThan(0);
   });
+
+  it("surfaces provider disconnect details for incomplete turns instead of the generic fallback", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+    const sessionKey = nextSessionKey();
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [],
+          stopReason: "toolUse",
+          errorMessage: "Client disconnected",
+        }),
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("incomplete-turn-disconnect"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toBe(
+      "LLM request failed: network connection was interrupted.",
+    );
+  });
 });

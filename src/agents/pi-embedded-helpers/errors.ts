@@ -83,7 +83,8 @@ function formatTransportErrorCopy(raw: string): string | undefined {
     /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i.test(raw) ||
     lower.includes("socket hang up") ||
     lower.includes("connection reset") ||
-    lower.includes("connection aborted")
+    lower.includes("connection aborted") ||
+    lower.includes("client disconnected")
   ) {
     return "LLM request failed: network connection was interrupted.";
   }
