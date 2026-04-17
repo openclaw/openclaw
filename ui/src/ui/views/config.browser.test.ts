@@ -271,6 +271,64 @@ describe("config view", () => {
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
   });
 
+  it("resets config content scroll when switching top-tab sections", async () => {
+    const { container } = renderConfigView({
+      activeSection: "channels",
+      navRootLabel: "Communication",
+      includeSections: ["channels", "messages"],
+      schema: {
+        type: "object",
+        properties: {
+          channels: {
+            type: "object",
+            properties: {
+              telegram: { type: "string" },
+            },
+          },
+          messages: {
+            type: "object",
+            properties: {
+              inbox: { type: "string" },
+            },
+          },
+        },
+      },
+      formValue: {
+        channels: { telegram: "on" },
+        messages: { inbox: "smart" },
+      },
+      originalValue: {
+        channels: { telegram: "on" },
+        messages: { inbox: "smart" },
+      },
+    });
+
+    const content = container.querySelector<HTMLElement>(".config-content");
+    expect(content).toBeTruthy();
+    if (!content) {
+      return;
+    }
+    content.scrollTop = 280;
+    content.scrollLeft = 24;
+    content.scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
+      content.scrollTop = top ?? content.scrollTop;
+      content.scrollLeft = left ?? content.scrollLeft;
+    }) as typeof content.scrollTo;
+
+    const messagesButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Messages",
+    );
+    expect(messagesButton).toBeTruthy();
+
+    messagesButton?.click();
+    await Promise.resolve();
+
+    expect(content.scrollTo).toHaveBeenCalledOnce();
+    expect(content.scrollTo).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
+    expect(content.scrollTop).toBe(0);
+    expect(content.scrollLeft).toBe(0);
+  });
+
   it("wires search input to onSearchChange", () => {
     const container = document.createElement("div");
     const onSearchChange = vi.fn();

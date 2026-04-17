@@ -17,6 +17,9 @@ describe("qa scenario catalog", () => {
     expect(pack.agent.identityMarkdown).toContain("Dev C-3PO");
     expect(pack.kickoffTask).toContain("Lobster Invaders");
     expect(listQaScenarioMarkdownPaths().length).toBe(pack.scenarios.length);
+    expect(listQaScenarioMarkdownPaths()).toContain(
+      "qa/scenarios/media/image-generation-roundtrip.md",
+    );
     expect(pack.scenarios.some((scenario) => scenario.id === "image-generation-roundtrip")).toBe(
       true,
     );
@@ -112,7 +115,7 @@ describe("qa scenario catalog", () => {
       (candidate) => candidate.id === "codex-harness-no-meta-leak",
     );
 
-    expect(scenario?.sourcePath).toBe("qa/scenarios/codex-harness-no-meta-leak.md");
+    expect(scenario?.sourcePath).toBe("qa/scenarios/models/codex-harness-no-meta-leak.md");
     expect(scenario?.execution.flow?.steps.map((step) => step.name)).toContain(
       "keeps codex coordination chatter out of the visible reply",
     );
@@ -135,7 +138,7 @@ describe("qa scenario catalog", () => {
           }
         | undefined;
 
-      expect(scenario.sourcePath).toBe(`qa/scenarios/${scenarioId}.md`);
+      expect(scenario.sourcePath).toBe(`qa/scenarios/runtime/${scenarioId}.md`);
       expect(config?.requiredProvider).toBe("mock-openai");
       expect(config?.prompt).toContain("check");
       expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
