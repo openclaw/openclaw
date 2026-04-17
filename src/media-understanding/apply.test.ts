@@ -502,16 +502,16 @@ describe("applyMediaUnderstanding", () => {
     expect(result.outputs).toEqual([
       expect.objectContaining({
         kind: "audio.transcription",
-        text: "[Voice note was empty or contained only silence — no speech detected]",
+        text: "[Voice note could not be transcribed because the audio attachment was too small]",
         provider: "openclaw",
         model: "synthetic-empty-audio",
       }),
     ]);
     expect(ctx.Transcript).toBe(
-      "[Voice note was empty or contained only silence — no speech detected]",
+      "[Voice note could not be transcribed because the audio attachment was too small]",
     );
     expect(ctx.Body).toBe(
-      "[Audio]\nTranscript:\n[Voice note was empty or contained only silence — no speech detected]",
+      "[Audio]\nTranscript:\n[Voice note could not be transcribed because the audio attachment was too small]",
     );
   });
 
@@ -547,16 +547,16 @@ describe("applyMediaUnderstanding", () => {
     expect(result.outputs).toEqual([
       expect.objectContaining({
         kind: "audio.transcription",
-        text: "[Voice note was empty or contained only silence — no speech detected]",
+        text: "[Voice note could not be transcribed because the audio attachment was too small]",
         provider: "openclaw",
         model: "synthetic-empty-audio",
       }),
     ]);
     expect(ctx.Transcript).toBe(
-      "[Voice note was empty or contained only silence — no speech detected]",
+      "[Voice note could not be transcribed because the audio attachment was too small]",
     );
     expect(ctx.Body).toBe(
-      "[Audio]\nTranscript:\n[Voice note was empty or contained only silence — no speech detected]",
+      "[Audio]\nTranscript:\n[Voice note could not be transcribed because the audio attachment was too small]",
     );
   });
 
