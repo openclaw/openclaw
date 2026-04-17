@@ -255,6 +255,7 @@ async function routeDM(params: {
           channel: "webchat",
           deliver: false,
           idempotencyKey,
+          sessionKey: `agent:main:discord:default:dm:${discordUserId}`,
           timeout: Math.floor(agentTimeoutMs / 1000),
         },
         expectFinal: true,
