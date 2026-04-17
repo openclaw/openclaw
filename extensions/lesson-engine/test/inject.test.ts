@@ -56,6 +56,28 @@ describe("injectLessons", () => {
     }
   });
 
+  test("maxLessons option overrides default cap", () => {
+    const fx = makeFixture();
+    try {
+      const lessons = [
+        makeLesson({ id: "L1", severity: "critical", hitCount: 5, lesson: "critical lesson" }),
+        makeLesson({ id: "L2", severity: "high", hitCount: 3, lesson: "high lesson" }),
+        makeLesson({ id: "L3", severity: "important", hitCount: 1, lesson: "important lesson" }),
+      ];
+      writeLessons(fx, "builder", makeFile(lessons));
+      const result = injectLessons({
+        agent: "builder",
+        root: fx.root,
+        maxLessons: 1,
+        dryRun: true,
+      });
+      expect(result.selected).toHaveLength(1);
+      expect(result.selected[0].id).toBe("L1");
+    } finally {
+      fx.cleanup();
+    }
+  });
+
   test("domainTags filter — only matching tags selected", () => {
     const fx = makeFixture();
     try {
@@ -309,6 +331,69 @@ describe("CLI inject", () => {
       expect(exitCode).toBe(0);
       const out = stdout as { results: { selected: number }[] };
       expect(out.results[0].selected).toBe(1);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("inject --max-lessons overrides default cap", async () => {
+    const fx = makeFixture();
+    try {
+      const lessons = [
+        makeLesson({ id: "L1", severity: "critical", hitCount: 5, lesson: "critical lesson" }),
+        makeLesson({ id: "L2", severity: "high", hitCount: 3, lesson: "high lesson" }),
+        makeLesson({ id: "L3", severity: "important", hitCount: 1, lesson: "important lesson" }),
+      ];
+      writeLessons(fx, "builder", makeFile(lessons));
+      const { stdout, exitCode } = await main([
+        "inject",
+        "--agent",
+        "builder",
+        "--max-lessons",
+        "1",
+        "--dry-run",
+        "--root",
+        fx.root,
+      ]);
+      expect(exitCode).toBe(0);
+      const out = stdout as { results: { selected: number }[] };
+      // --max-lessons 1 → only top 1 lesson selected
+      expect(out.results[0].selected).toBe(1);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("inject --max-tokens overrides default budget", async () => {
+    const fx = makeFixture();
+    try {
+      const longText = "a".repeat(200);
+      const lessons = [
+        makeLesson({
+          id: "L1",
+          severity: "critical",
+          hitCount: 5,
+          lesson: longText,
+          fix: longText,
+        }),
+        makeLesson({ id: "L2", severity: "high", hitCount: 3, lesson: longText, fix: longText }),
+      ];
+      writeLessons(fx, "builder", makeFile(lessons));
+      const { stdout, exitCode } = await main([
+        "inject",
+        "--agent",
+        "builder",
+        "--max-tokens",
+        "50",
+        "--dry-run",
+        "--root",
+        fx.root,
+      ]);
+      expect(exitCode).toBe(0);
+      const out = stdout as { results: { selected: number; estimatedTokens: number }[] };
+      // Each lesson ~103 tokens; budget=50 → none fit
+      expect(out.results[0].selected).toBe(0);
+      expect(out.results[0].estimatedTokens).toBe(0);
     } finally {
       fx.cleanup();
     }

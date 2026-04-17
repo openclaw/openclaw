@@ -9,6 +9,7 @@ export interface InjectOptions {
   agent: AgentName;
   domainTags?: string[];
   maxTokens?: number; // default 2000
+  maxLessons?: number; // default 10
   now?: Date;
   root?: string;
   dryRun?: boolean;
@@ -106,6 +107,7 @@ function renderMarkdown(
 
 export function injectLessons(opts: InjectOptions): InjectResult {
   const maxTokens = opts.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const maxLessons = opts.maxLessons ?? MAX_LESSONS;
   const now = opts.now ?? new Date();
   const dryRun = opts.dryRun ?? false;
 
@@ -138,12 +140,12 @@ export function injectLessons(opts: InjectOptions): InjectResult {
     return (b.hitCount ?? 0) - (a.hitCount ?? 0);
   });
 
-  // 5. Greedy selection: up to MAX_LESSONS, within maxTokens
+  // 5. Greedy selection: up to maxLessons, within maxTokens
   const selected: InjectedLesson[] = [];
   let estimatedTotal = 0;
 
   for (const l of active) {
-    if (selected.length >= MAX_LESSONS) break;
+    if (selected.length >= maxLessons) break;
     const text = lessonText(l);
     const tokens = estimateTokens(text);
     if (estimatedTotal + tokens > maxTokens) continue;
