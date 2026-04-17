@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import "../test-helpers/load-styles.ts";
 import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
 registerAppMountHooks();
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function mountApp(pathname: string) {
   return mountTestApp(pathname);
@@ -375,6 +379,10 @@ describe("control UI routing", () => {
   });
 
   it("auto-scrolls chat history to the latest message", async () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      queueMicrotask(() => callback(performance.now()));
+      return 1;
+    });
     const app = mountApp("/chat");
     await app.updateComplete;
 
