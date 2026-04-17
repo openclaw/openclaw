@@ -38,13 +38,8 @@ const discordComponentSelectSchema = Type.Object({
   options: Type.Optional(Type.Array(discordComponentOptionSchema)),
 });
 
-const discordTextBlockSchema = Type.Object({
-  type: Type.Literal("text"),
-  text: Type.String(),
-});
-
-const discordSectionBlockSchema = Type.Object({
-  type: Type.Literal("section"),
+const discordComponentBlockSchema = Type.Object({
+  type: stringEnum(["text", "section", "separator", "actions", "media-gallery", "file"]),
   text: Type.Optional(Type.String()),
   texts: Type.Optional(Type.Array(Type.String())),
   accessory: Type.Optional(
@@ -54,45 +49,22 @@ const discordSectionBlockSchema = Type.Object({
       button: Type.Optional(discordComponentButtonSchema),
     }),
   ),
-});
-
-const discordSeparatorBlockSchema = Type.Object({
-  type: Type.Literal("separator"),
   spacing: Type.Optional(stringEnum(["small", "large"])),
   divider: Type.Optional(Type.Boolean()),
-});
-
-const discordActionsBlockSchema = Type.Object({
-  type: Type.Literal("actions"),
   buttons: Type.Optional(Type.Array(discordComponentButtonSchema)),
   select: Type.Optional(discordComponentSelectSchema),
-});
-
-const discordMediaGalleryBlockSchema = Type.Object({
-  type: Type.Literal("media-gallery"),
-  items: Type.Array(
-    Type.Object({
-      url: Type.String(),
-      description: Type.Optional(Type.String()),
-      spoiler: Type.Optional(Type.Boolean()),
-    }),
+  items: Type.Optional(
+    Type.Array(
+      Type.Object({
+        url: Type.String(),
+        description: Type.Optional(Type.String()),
+        spoiler: Type.Optional(Type.Boolean()),
+      }),
+    ),
   ),
-});
-
-const discordFileBlockSchema = Type.Object({
-  type: Type.Literal("file"),
-  file: Type.String(),
+  file: Type.Optional(Type.String()),
   spoiler: Type.Optional(Type.Boolean()),
 });
-
-const discordComponentBlockSchema = Type.Union([
-  discordTextBlockSchema,
-  discordSectionBlockSchema,
-  discordSeparatorBlockSchema,
-  discordActionsBlockSchema,
-  discordMediaGalleryBlockSchema,
-  discordFileBlockSchema,
-]);
 
 const discordComponentModalFieldSchema = Type.Object({
   type: Type.String(),
