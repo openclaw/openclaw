@@ -9,6 +9,7 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { disposeSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
@@ -249,7 +250,6 @@ export function createFollowupRunner(params: {
                 verboseLevel: run.verboseLevel,
                 reasoningLevel: run.reasoningLevel,
                 suppressToolErrorWarnings: opts?.suppressToolErrorWarnings,
-                cleanupBundleMcpOnRunEnd: run.cleanupBundleMcpOnRunEnd,
                 execOverrides: run.execOverrides,
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,
@@ -398,6 +398,13 @@ export function createFollowupRunner(params: {
 
       await sendFollowupPayloads(finalPayloads, effectiveQueued);
     } finally {
+      if (run.cleanupBundleMcpOnRunEnd === true) {
+        await disposeSessionMcpRuntime(run.sessionId).catch((error) => {
+          logVerbose(
+            `failed to dispose bundle MCP runtime for one-shot followup ${run.sessionId}: ${formatErrorMessage(error)}`,
+          );
+        });
+      }
       replyOperation.complete();
       // Both signals are required for the typing controller to clean up.
       // The main inbound dispatch path calls markDispatchIdle() from the

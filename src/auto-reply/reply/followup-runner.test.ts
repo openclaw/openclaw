@@ -7,6 +7,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
+const disposeSessionMcpRuntimeMock = vi.fn(async (_sessionId?: unknown) => undefined);
 const compactEmbeddedPiSessionMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
@@ -263,6 +264,9 @@ async function loadFreshFollowupRunnerModuleForTest() {
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
     waitForEmbeddedPiRunEnd: vi.fn(async () => undefined),
   }));
+  vi.doMock("../../agents/pi-bundle-mcp-tools.js", () => ({
+    disposeSessionMcpRuntime: (sessionId: unknown) => disposeSessionMcpRuntimeMock(sessionId),
+  }));
   vi.doMock("./queue.js", () => ({
     clearFollowupQueue: clearFollowupQueueForFollowupTest,
     enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
@@ -354,6 +358,8 @@ beforeAll(async () => {
 beforeEach(() => {
   clearRuntimeConfigSnapshot?.();
   runEmbeddedPiAgentMock.mockReset();
+  disposeSessionMcpRuntimeMock.mockReset();
+  disposeSessionMcpRuntimeMock.mockResolvedValue(undefined);
   compactEmbeddedPiSessionMock.mockReset();
   runPreflightCompactionIfNeededMock.mockReset();
   resolveCommandSecretRefsViaGatewayMock.mockReset();
@@ -956,7 +962,7 @@ describe("createFollowupRunner compaction", () => {
 });
 
 describe("createFollowupRunner bootstrap warning dedupe", () => {
-  it("forwards bundle MCP cleanup into drained followup runs", async () => {
+  it("cleans up bundle MCP after a drained followup run completes", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: {},
@@ -982,7 +988,9 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
           cleanupBundleMcpOnRunEnd?: boolean;
         }
       | undefined;
-    expect(call?.cleanupBundleMcpOnRunEnd).toBe(true);
+    expect(call?.cleanupBundleMcpOnRunEnd).toBeUndefined();
+    expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session");
   });
 
   it("passes stored warning signature history to embedded followup runs", async () => {

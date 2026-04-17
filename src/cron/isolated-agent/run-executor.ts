@@ -1,3 +1,4 @@
+import { disposeSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -98,105 +99,114 @@ export function createCronPromptExecutor(params: {
   );
 
   const runPrompt = async (promptText: string) => {
-    const fallbackResult = await runWithModelFallback({
-      cfg: params.cfgWithAgentDefaults,
-      provider: params.liveSelection.provider,
-      model: params.liveSelection.model,
-      runId: params.cronSession.sessionEntry.sessionId,
-      agentDir: params.agentDir,
-      fallbacksOverride: cronFallbacksOverride,
-      run: async (providerOverride, modelOverride, runOptions) => {
-        if (params.abortSignal?.aborted) {
-          throw new Error(params.abortReason());
-        }
-        const bootstrapPromptWarningSignature =
-          bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-        if (isCliProvider(providerOverride, params.cfgWithAgentDefaults)) {
-          const cliSessionId = params.cronSession.isNewSession
-            ? undefined
-            : await getCliSessionId(params.cronSession.sessionEntry, providerOverride);
-          const result = await runCliAgent({
+    try {
+      const fallbackResult = await runWithModelFallback({
+        cfg: params.cfgWithAgentDefaults,
+        provider: params.liveSelection.provider,
+        model: params.liveSelection.model,
+        runId: params.cronSession.sessionEntry.sessionId,
+        agentDir: params.agentDir,
+        fallbacksOverride: cronFallbacksOverride,
+        run: async (providerOverride, modelOverride, runOptions) => {
+          if (params.abortSignal?.aborted) {
+            throw new Error(params.abortReason());
+          }
+          const bootstrapPromptWarningSignature =
+            bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+          if (isCliProvider(providerOverride, params.cfgWithAgentDefaults)) {
+            const cliSessionId = params.cronSession.isNewSession
+              ? undefined
+              : await getCliSessionId(params.cronSession.sessionEntry, providerOverride);
+            const result = await runCliAgent({
+              sessionId: params.cronSession.sessionEntry.sessionId,
+              sessionKey: params.agentSessionKey,
+              agentId: params.agentId,
+              sessionFile,
+              workspaceDir: params.workspaceDir,
+              config: params.cfgWithAgentDefaults,
+              prompt: promptText,
+              provider: providerOverride,
+              model: modelOverride,
+              thinkLevel: params.thinkLevel,
+              timeoutMs: params.timeoutMs,
+              runId: params.cronSession.sessionEntry.sessionId,
+              cliSessionId,
+              skillsSnapshot: params.skillsSnapshot,
+              bootstrapPromptWarningSignaturesSeen,
+              bootstrapPromptWarningSignature,
+              senderIsOwner: true,
+            });
+            bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+              result.meta?.systemPromptReport,
+            );
+            return result;
+          }
+          const { resolveFastModeState, resolveNestedAgentLane, runEmbeddedPiAgent } =
+            await loadCronEmbeddedRuntime();
+          const result = await runEmbeddedPiAgent({
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.agentSessionKey,
             agentId: params.agentId,
+            trigger: "cron",
+            allowGatewaySubagentBinding: true,
+            senderIsOwner: false,
+            messageChannel: params.messageChannel,
+            agentAccountId: params.resolvedDelivery.accountId,
             sessionFile,
+            agentDir: params.agentDir,
             workspaceDir: params.workspaceDir,
             config: params.cfgWithAgentDefaults,
+            skillsSnapshot: params.skillsSnapshot,
             prompt: promptText,
+            lane: resolveNestedAgentLane(params.lane),
             provider: providerOverride,
             model: modelOverride,
+            authProfileId: params.liveSelection.authProfileId,
+            authProfileIdSource: params.liveSelection.authProfileId
+              ? params.liveSelection.authProfileIdSource
+              : undefined,
             thinkLevel: params.thinkLevel,
+            fastMode: resolveFastModeState({
+              cfg: params.cfgWithAgentDefaults,
+              provider: providerOverride,
+              model: modelOverride,
+              agentId: params.agentId,
+              sessionEntry: params.cronSession.sessionEntry,
+            }).enabled,
+            verboseLevel: params.resolvedVerboseLevel,
             timeoutMs: params.timeoutMs,
+            bootstrapContextMode: params.agentPayload?.lightContext ? "lightweight" : undefined,
+            bootstrapContextRunKind: "cron",
+            toolsAllow: params.agentPayload?.toolsAllow,
             runId: params.cronSession.sessionEntry.sessionId,
-            cliSessionId,
-            skillsSnapshot: params.skillsSnapshot,
+            requireExplicitMessageTarget: params.toolPolicy.requireExplicitMessageTarget,
+            disableMessageTool: params.toolPolicy.disableMessageTool,
+            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+            abortSignal: params.abortSignal,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
-            senderIsOwner: true,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
           );
           return result;
-        }
-        const { resolveFastModeState, resolveNestedAgentLane, runEmbeddedPiAgent } =
-          await loadCronEmbeddedRuntime();
-        const result = await runEmbeddedPiAgent({
-          sessionId: params.cronSession.sessionEntry.sessionId,
-          sessionKey: params.agentSessionKey,
-          agentId: params.agentId,
-          trigger: "cron",
-          allowGatewaySubagentBinding: true,
-          senderIsOwner: false,
-          messageChannel: params.messageChannel,
-          agentAccountId: params.resolvedDelivery.accountId,
-          sessionFile,
-          agentDir: params.agentDir,
-          workspaceDir: params.workspaceDir,
-          config: params.cfgWithAgentDefaults,
-          skillsSnapshot: params.skillsSnapshot,
-          prompt: promptText,
-          lane: resolveNestedAgentLane(params.lane),
-          provider: providerOverride,
-          model: modelOverride,
-          authProfileId: params.liveSelection.authProfileId,
-          authProfileIdSource: params.liveSelection.authProfileId
-            ? params.liveSelection.authProfileIdSource
-            : undefined,
-          thinkLevel: params.thinkLevel,
-          fastMode: resolveFastModeState({
-            cfg: params.cfgWithAgentDefaults,
-            provider: providerOverride,
-            model: modelOverride,
-            agentId: params.agentId,
-            sessionEntry: params.cronSession.sessionEntry,
-          }).enabled,
-          verboseLevel: params.resolvedVerboseLevel,
-          timeoutMs: params.timeoutMs,
-          bootstrapContextMode: params.agentPayload?.lightContext ? "lightweight" : undefined,
-          bootstrapContextRunKind: "cron",
-          toolsAllow: params.agentPayload?.toolsAllow,
-          runId: params.cronSession.sessionEntry.sessionId,
-          cleanupBundleMcpOnRunEnd: params.job.sessionTarget === "isolated",
-          requireExplicitMessageTarget: params.toolPolicy.requireExplicitMessageTarget,
-          disableMessageTool: params.toolPolicy.disableMessageTool,
-          allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-          abortSignal: params.abortSignal,
-          bootstrapPromptWarningSignaturesSeen,
-          bootstrapPromptWarningSignature,
+        },
+      });
+      runResult = fallbackResult.result;
+      fallbackProvider = fallbackResult.provider;
+      fallbackModel = fallbackResult.model;
+      params.liveSelection.provider = fallbackResult.provider;
+      params.liveSelection.model = fallbackResult.model;
+      runEndedAt = Date.now();
+    } finally {
+      if (params.job.sessionTarget === "isolated") {
+        await disposeSessionMcpRuntime(params.cronSession.sessionEntry.sessionId).catch((error) => {
+          logWarn(
+            `failed to dispose bundle MCP runtime for isolated cron session ${params.cronSession.sessionEntry.sessionId}: ${String(error)}`,
+          );
         });
-        bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-          result.meta?.systemPromptReport,
-        );
-        return result;
-      },
-    });
-    runResult = fallbackResult.result;
-    fallbackProvider = fallbackResult.provider;
-    fallbackModel = fallbackResult.model;
-    params.liveSelection.provider = fallbackResult.provider;
-    params.liveSelection.model = fallbackResult.model;
-    runEndedAt = Date.now();
+      }
+    }
   };
 
   return {

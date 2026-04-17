@@ -10,9 +10,14 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 const state = vi.hoisted(() => ({
+  disposeSessionMcpRuntimeMock: vi.fn(async (_sessionId?: unknown) => undefined),
   runEmbeddedPiAgentMock: vi.fn(),
   runWithModelFallbackMock: vi.fn(),
   isInternalMessageChannelMock: vi.fn((_: unknown) => false),
+}));
+
+vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+  disposeSessionMcpRuntime: (sessionId: unknown) => state.disposeSessionMcpRuntimeMock(sessionId),
 }));
 
 vi.mock("../../agents/pi-embedded.js", () => ({
@@ -227,6 +232,8 @@ function createMockReplyOperation(): {
 
 describe("runAgentTurnWithFallback", () => {
   beforeEach(() => {
+    state.disposeSessionMcpRuntimeMock.mockReset();
+    state.disposeSessionMcpRuntimeMock.mockResolvedValue(undefined);
     state.runEmbeddedPiAgentMock.mockReset();
     state.runWithModelFallbackMock.mockReset();
     state.isInternalMessageChannelMock.mockReset();
@@ -1735,7 +1742,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(sessionStore.main.authProfileOverride).toBeUndefined();
   });
 
-  it("forwards bundle MCP cleanup into embedded runs", async () => {
+  it("cleans up bundle MCP once after fallback selection completes", async () => {
     state.runEmbeddedPiAgentMock.mockResolvedValue({
       payloads: [{ text: "ok" }],
       meta: {},
@@ -1779,9 +1786,11 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("success");
     expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(state.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      cleanupBundleMcpOnRunEnd: true,
-    });
+    expect(state.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).not.toHaveProperty(
+      "cleanupBundleMcpOnRunEnd",
+    );
+    expect(state.disposeSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(state.disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session");
   });
 
   it("does not persist fallback selection for legacy user overrides without modelOverrideSource", async () => {

@@ -6,6 +6,7 @@ import {
 } from "./run.suite-helpers.js";
 import {
   buildWorkspaceSkillSnapshotMock,
+  disposeSessionMcpRuntimeMock,
   getCliSessionIdMock,
   isCliProviderMock,
   lookupContextTokensMock,
@@ -135,9 +136,11 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     await runSkillFilterCase();
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      cleanupBundleMcpOnRunEnd: true,
-    });
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).not.toHaveProperty(
+      "cleanupBundleMcpOnRunEnd",
+    );
+    expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledOnce();
+    expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("test-session-id");
   });
 
   it("reuses cached snapshot when version and normalized skillFilter are unchanged", async () => {

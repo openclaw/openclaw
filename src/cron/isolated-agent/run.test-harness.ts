@@ -51,6 +51,7 @@ export const resolveHooksGmailModelMock = createMock();
 export const resolveThinkingDefaultMock = createMock();
 export const runWithModelFallbackMock = createMock();
 export const runEmbeddedPiAgentMock = createMock();
+export const disposeSessionMcpRuntimeMock = createMock();
 export const runCliAgentMock = createMock();
 export const lookupContextTokensMock = createMock();
 export const getCliSessionIdMock = createMock();
@@ -170,6 +171,10 @@ vi.mock("./run-execution.runtime.js", () => ({
   resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   registerAgentRunContext: registerAgentRunContextMock,
   logWarn: (...args: unknown[]) => logWarnMock(...args),
+}));
+
+vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+  disposeSessionMcpRuntime: (...args: unknown[]) => disposeSessionMcpRuntimeMock(...args),
 }));
 
 vi.mock("./run-auth-profile.runtime.js", () => ({
@@ -329,6 +334,8 @@ function resetRunExecutionMocks(): void {
   registerAgentRunContextMock.mockReturnValue(undefined);
   runWithModelFallbackMock.mockReset();
   runWithModelFallbackMock.mockResolvedValue(makeDefaultModelFallbackResult());
+  disposeSessionMcpRuntimeMock.mockReset();
+  disposeSessionMcpRuntimeMock.mockResolvedValue(undefined);
   runEmbeddedPiAgentMock.mockReset();
   runEmbeddedPiAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
   runCliAgentMock.mockReset();
