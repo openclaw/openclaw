@@ -331,6 +331,9 @@ async function promptWhatsAppDmAccess(params: {
   });
 
   const parsed = parseWhatsAppAllowFromEntries(trimPromptText(allowRaw));
+  if (parsed.invalidEntry) {
+    throw new Error(`Invalid number: ${parsed.invalidEntry}`);
+  }
   if (parsed.entries.length === 0) {
     throw new Error("Invalid WhatsApp allowFrom list (expected at least one E.164 number).");
   }
