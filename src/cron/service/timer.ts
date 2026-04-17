@@ -780,10 +780,8 @@ export async function onTimer(state: CronServiceState) {
               job.schedule.kind === "at" &&
               typeof job.state.runningAtMs !== "number" &&
               typeof job.state.nextRunAtMs === "number" &&
-              typeof job.state.lastRunAtMs !== "number"
+              job.state.lastStatus !== "ok"
             ) {
-              // Skip if lastStatus === "ok" (legitimately re-scheduled)
-              if (job.state.lastStatus === "ok") continue;
               job.state.nextRunAtMs = undefined;
               changed = true;
             }
