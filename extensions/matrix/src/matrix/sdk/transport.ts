@@ -1,16 +1,14 @@
-import {
-  fetchWithRuntimeDispatcher,
-  type PinnedDispatcherPolicy,
-} from "openclaw/plugin-sdk/infra-runtime";
+import { MatrixMediaSizeLimitError } from "../media-errors.js";
+import { readResponseWithLimit } from "./read-response-with-limit.js";
 import {
   buildTimeoutAbortSignal,
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
   type SsrFPolicy,
-} from "../../runtime-api.js";
-import { MatrixMediaSizeLimitError } from "../media-errors.js";
-import { readResponseWithLimit } from "./read-response-with-limit.js";
+  fetchWithRuntimeDispatcher,
+  type PinnedDispatcherPolicy,
+} from "./transport-runtime-api.js";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 

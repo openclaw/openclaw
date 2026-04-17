@@ -1,7 +1,10 @@
-import { formatErrorMessage, type PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
-import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import {
+  coerceSecretRef,
+  normalizeResolvedSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
