@@ -165,6 +165,45 @@ export function renderMessageGroup(
     onDelete?: () => void;
   },
 ) {
+  // Suppress the whole group (avatar + sender label + timestamp + footer)
+  // when every inner message renders empty. Without this, a user turn whose
+  // text consists entirely of now-stripped metadata/system-event lines still
+  // leaves an orphan "You · 12:34" bubble in Control UI.
+  const groupHasVisibleContent = group.messages.some(({ message }) => {
+    const m = message as Record<string, unknown>;
+    const role = typeof m.role === "string" ? m.role : "";
+    const normalized = normalizeMessage(message);
+    const rawText = normalized.content
+      .reduce<string[]>((acc, item) => {
+        if (item.type === "text" && typeof item.text === "string") {
+          acc.push(item.text);
+        }
+        return acc;
+      }, [])
+      .join("\n")
+      .trim();
+    if (rawText && processMessageText(rawText, role).trim()) {
+      return true;
+    }
+    if (extractImages(message).length > 0) {
+      return true;
+    }
+    if (normalized.replyTarget) {
+      return true;
+    }
+    if (normalized.content.some((item) => item.type === "attachment" || item.type === "canvas")) {
+      return true;
+    }
+    // Only count tool cards when the user has tool-call display enabled.
+    if ((opts.showToolCalls ?? true) && extractToolCards(message, "group-precheck").length > 0) {
+      return true;
+    }
+    return false;
+  });
+  if (!groupHasVisibleContent) {
+    return nothing;
+  }
+
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const assistantName = opts.assistantName ?? "Assistant";
   const userLabel = group.senderLabel?.trim();
