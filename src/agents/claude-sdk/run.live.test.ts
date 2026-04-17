@@ -20,6 +20,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runClaudeSdkAgent } from "./run.js";
+import { resolveSessionMirrorPath } from "./session-mirror.js";
 import type { RunEmbeddedPiAgentParams } from "../pi-embedded-runner/run/params.js";
 
 const LIVE = process.env.OPENCLAW_LIVE_TEST === "1";
@@ -81,13 +82,17 @@ describeLive("runClaudeSdkAgent (live, OPENCLAW_LIVE_TEST=1)", () => {
     expect(result.meta.agentMeta?.provider).toBe("anthropic");
   }, RUN_TIMEOUT_MS);
 
-  it("writes the pi-ai JSONL mirror to the session file", async () => {
+  it("writes the pi-ai JSONL mirror to the sidecar file", async () => {
     await runClaudeSdkAgent(
       makeParams({
         prompt: "Say hi in one word.",
       }),
     );
-    const written = fs.readFileSync(sessionFile, "utf8");
+    // The mirror writes to a sidecar at <sessionFile>.claude-sdk.jsonl
+    // rather than the primary file, because pi-ai's SessionManager owns
+    // the primary path and may rewrite it.
+    const sidecarPath = resolveSessionMirrorPath(sessionFile);
+    const written = fs.readFileSync(sidecarPath, "utf8");
     // First frame is the system kickoff; we at least expect some assistant
     // text was projected afterward.
     const lines = written

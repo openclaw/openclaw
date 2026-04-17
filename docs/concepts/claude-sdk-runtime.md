@@ -89,7 +89,11 @@ Events not in the mapping are logged as a warning (they're dropped for the SDK r
 
 ## Session persistence
 
-The SDK writes its primary Anthropic-shape transcript to `~/.claude/projects/<encoded-path>/<session-id>.jsonl` as usual. In parallel, `src/agents/claude-sdk/session-mirror.ts` projects each SDK message into the legacy pi-ai JSONL shape and appends to OpenClaw's existing per-agent session file (`~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl`) so tooling that reads that path — the `/session-logs` skill, `openclaw doctor`, ad-hoc JSONL viewers — keeps working during the compat window.
+The SDK writes its primary Anthropic-shape transcript to `~/.claude/projects/<encoded-path>/<session-id>.jsonl` as usual.
+
+In parallel, `src/agents/claude-sdk/session-mirror.ts` projects each SDK message into the legacy pi-ai JSONL shape and writes a **sidecar file** alongside OpenClaw's existing per-agent session file. The sidecar lives at `<primarySessionFile>.claude-sdk.jsonl` — for example `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl.claude-sdk.jsonl`. We use a sidecar (not the primary file) because pi-ai's `SessionManager` may open and rewrite the primary file during pre-run initialization, which would clobber any frames an in-process append stream had already written.
+
+The sidecar's existence and content is the deterministic on-disk evidence that a turn went through the claude-sdk runtime. Tooling that wants to surface "this turn ran on claude-sdk" should check for the sidecar; tooling that reads the legacy session file is unaffected.
 
 ## Parameter coverage
 
