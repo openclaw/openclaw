@@ -389,7 +389,13 @@ async function saveSessionStoreUnlocked(
       // Rotate oversized transcript files.
       const activeSessionKey = opts?.activeSessionKey?.trim();
       if (maintenance.transcriptRotateBytes != null && maintenance.transcriptRotateBytes > 0) {
-        if (activeSessionKey) {
+        if (opts?.bulkTranscriptRotation) {
+          // Bulk path (explicit maintenance only): scan the full sessions
+          // directory so pre-existing oversized transcripts get cleaned up.
+          // This covers all transcripts including the active one, so no
+          // separate hot-path call is needed.
+          await rotateTranscriptFiles({ storePath, maintenance });
+        } else if (activeSessionKey) {
           // Hot path (per-write): only check the active transcript to avoid an
           // expensive full-directory walk on every save.
           const activeEntry = store[activeSessionKey];
@@ -401,16 +407,10 @@ async function saveSessionStoreUnlocked(
             );
             await rotateTranscriptFile({ transcriptPath, maintenance });
           }
-        } else if (opts?.bulkTranscriptRotation) {
-          // Bulk path (explicit maintenance only): scan the full sessions
-          // directory so pre-existing oversized transcripts that were never
-          // rotated on the hot path get cleaned up.  This is intentionally
-          // NOT the default for runtime call sites that lack an
-          // activeSessionKey (e.g. heartbeat updates), because a full
-          // directory walk under the store lock would add unacceptable
-          // latency in production.
-          await rotateTranscriptFiles({ storePath, maintenance });
         }
+        // When neither flag is set (e.g. heartbeat updates without an
+        // activeSessionKey), skip transcript rotation entirely to avoid
+        // an expensive directory walk under the store lock.
       }
 
       const diskBudget = await enforceSessionDiskBudget({
