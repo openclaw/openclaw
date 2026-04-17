@@ -170,10 +170,22 @@ async function persistPlanApprovalRequest(
  * user-driven path so the agent can't escape the operator's feature
  * flag.
  */
+/**
+ * Result of persisting a plan-mode-enter intercept.
+ * - `freshEntry: true` means the session transitioned from
+ *   normal/none → plan (caller should schedule new nudge crons).
+ * - `freshEntry: false` means the session was ALREADY in plan mode
+ *   and we just refreshed `updatedAt` — caller MUST NOT schedule
+ *   additional nudges, otherwise `nudgeJobIds` would grow unbounded
+ *   on repeated `enter_plan_mode` calls (PR-9 adversarial review #1).
+ * - `ok: false` means the persist failed (gated off, IO error, etc.).
+ */
+type PersistPlanModeEnterResult = { ok: boolean; freshEntry: boolean };
+
 async function persistPlanModeEnter(
   sessionKey: string,
   log: { warn?: (msg: string) => void } | undefined,
-): Promise<boolean> {
+): Promise<PersistPlanModeEnterResult> {
   try {
     const [
       { updateSessionStoreEntry },
@@ -191,7 +203,7 @@ async function persistPlanModeEnter(
       // Feature gated off — refuse the transition. Agent will see the
       // tool succeed but no state change; the workspaceNotes / tool
       // description should explain plan mode is disabled.
-      return false;
+      return { ok: false, freshEntry: false };
     }
     const parsed = parseAgentSessionKey(sessionKey);
     const storePath = resolveStorePath(
@@ -199,13 +211,18 @@ async function persistPlanModeEnter(
       parsed?.agentId ? { agentId: parsed.agentId } : {},
     );
     const now = Date.now();
+    let wasFreshEntry = false;
     await updateSessionStoreEntry({
       storePath,
       sessionKey,
       update: async (entry) => {
         const current = entry.planMode;
         if (current?.mode === "plan") {
-          // Already in plan mode — refresh updatedAt only.
+          // Already in plan mode — refresh updatedAt only. NUDGES MUST
+          // NOT be re-scheduled here (caller checks `freshEntry`),
+          // otherwise repeated `enter_plan_mode` calls would append
+          // unbounded entries to `nudgeJobIds`.
+          wasFreshEntry = false;
           return {
             planMode: {
               ...current,
@@ -216,6 +233,7 @@ async function persistPlanModeEnter(
         // Fresh entry: clear any stale rejection history, reset to a
         // clean pending-nothing state. Mirrors the sessions.patch
         // { planMode: "plan" } user-driven path.
+        wasFreshEntry = true;
         return {
           planMode: {
             mode: "plan",
@@ -227,10 +245,75 @@ async function persistPlanModeEnter(
         };
       },
     });
-    return true;
+    return { ok: true, freshEntry: wasFreshEntry };
   } catch (err) {
     log?.warn?.(`failed to persist plan-mode entry: ${String(err)}`);
-    return false;
+    return { ok: false, freshEntry: false };
+  }
+}
+
+/**
+ * PR-9 Wave B3: schedule plan-nudge wake-up crons after enter_plan_mode
+ * succeeds, then persist the resulting job IDs onto
+ * `SessionEntry.planMode.nudgeJobIds` so cleanup can target them
+ * precisely when the plan resolves (sessions-patch.ts handles the
+ * cleanup transition).
+ *
+ * Fire-and-forget from the caller — schedule failures are tolerated
+ * (the plan still works without nudges; nudges are an augmentation).
+ * Bounded retry / observability would land in a follow-up.
+ */
+async function schedulePlanNudgesAndPersist(params: {
+  sessionKey: string;
+  log?: { warn?: (msg: string) => void; info?: (msg: string) => void };
+}): Promise<void> {
+  try {
+    const { schedulePlanNudges } = await import("./plan-mode/plan-nudge-crons.js");
+    const scheduled = await schedulePlanNudges({
+      sessionKey: params.sessionKey,
+      log: params.log,
+    });
+    if (scheduled.length === 0) {
+      return;
+    }
+    const jobIds = scheduled.map((n) => n.jobId);
+    const [
+      { updateSessionStoreEntry },
+      { loadConfig },
+      { resolveStorePath },
+      { parseAgentSessionKey },
+    ] = await Promise.all([
+      loadSessionStoreRuntime(),
+      loadConfigModule(),
+      loadSessionPaths(),
+      loadRouting(),
+    ]);
+    const cfg = loadConfig();
+    const parsed = parseAgentSessionKey(params.sessionKey);
+    const storePath = resolveStorePath(
+      cfg.session?.store,
+      parsed?.agentId ? { agentId: parsed.agentId } : {},
+    );
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey: params.sessionKey,
+      update: async (entry) => {
+        if (!entry.planMode || entry.planMode.mode !== "plan") {
+          // Plan mode resolved between schedule + persist — drop the
+          // ids on the floor; sessions-patch already cleaned them up
+          // (or there's nothing to clean up).
+          return null;
+        }
+        return {
+          planMode: {
+            ...entry.planMode,
+            nudgeJobIds: [...(entry.planMode.nudgeJobIds ?? []), ...jobIds],
+          },
+        };
+      },
+    });
+  } catch (err) {
+    params.log?.warn?.(`schedulePlanNudgesAndPersist failed: ${String(err)}`);
   }
 }
 
@@ -1354,8 +1437,8 @@ export async function handleToolExecutionEnd(
   // exit_plan_mode call follows because the agent's prompt logic
   // believes the user must propose work first in plan mode.
   if (toolName === "enter_plan_mode" && !isToolError && ctx.params.sessionKey) {
-    const ok = await persistPlanModeEnter(ctx.params.sessionKey, ctx.log);
-    if (ok) {
+    const enterResult = await persistPlanModeEnter(ctx.params.sessionKey, ctx.log);
+    if (enterResult.ok) {
       // PR-8 follow-up: mirror the transition into AgentRunContext so
       // sessions_spawn (and other runtime checks) can read `inPlanMode`
       // without a session-store round-trip. Drives the cleanup:"keep"
@@ -1363,6 +1446,21 @@ export async function handleToolExecutionEnd(
       const runCtx = getAgentRunContext(ctx.params.runId);
       if (runCtx) {
         runCtx.inPlanMode = true;
+      }
+      // PR-9 Wave B3: schedule plan-nudge wake-up crons so the agent
+      // gets pulled back to the active plan even if it goes idle in
+      // chat. Stored job ids are persisted so cleanup at exit/complete
+      // is precise. Failures are tolerated (best-effort augmentation).
+      //
+      // Adversarial review #1: only schedule on FRESH entry. Repeated
+      // enter_plan_mode calls when already in plan mode just refresh
+      // updatedAt — scheduling more nudges in that case would append
+      // entries to `nudgeJobIds` indefinitely.
+      if (enterResult.freshEntry) {
+        void schedulePlanNudgesAndPersist({
+          sessionKey: ctx.params.sessionKey,
+          log: ctx.log,
+        });
       }
       const planEnterEvent: AgentApprovalEventData = {
         phase: "requested",

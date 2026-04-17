@@ -1,5 +1,6 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
 import { repairToolUseResultPairing } from "./session-transcript-repair.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
   "anthropic-messages",
@@ -33,6 +34,54 @@ function defaultAllowSyntheticToolResults(modelApi: Api): boolean {
 function isFailedAssistantTurn(message: Context["messages"][number]): boolean {
   if (message.role !== "assistant") {
     return false;
+const log = createSubsystemLogger("agents/transport-message-transform");
+
+/**
+ * PR-9 Wave C-#1b: structured placeholder text used when a tool_use
+ * has no matching tool_result at transport-assembly time. Carries
+ * enough context (toolName + toolCallId) for the agent's read-time
+ * context to surface a real diagnosis, AND a `[transport-repair]`
+ * marker so log triage / Eva's transcript-anomaly heuristics can
+ * distinguish "the tool actually failed" from "the result was lost
+ * during reconstruction." Replaces the prior bare `"No result
+ * provided"` string which was indistinguishable from a real failure
+ * (Eva's reliability handoff #1b).
+ */
+function buildMissingToolResultText(toolCall: PendingToolCall): string {
+  return [
+    `[transport-repair] tool_use "${toolCall.name}" (id=${toolCall.id}) had no paired`,
+    "tool_result at transport-assembly time. The original result was likely lost",
+    "during session-history reconstruction (crash before disk flush, history",
+    "compaction that dropped the pairing, or replay drift). This is a transport",
+    "repair placeholder, NOT evidence that the tool itself failed — check the",
+    "live agent logs and gateway transcript for the original result.",
+  ].join(" ");
+}
+
+function appendMissingToolResults(
+  result: Context["messages"],
+  pendingToolCalls: PendingToolCall[],
+  existingToolResultIds: ReadonlySet<string>,
+): void {
+  for (const toolCall of pendingToolCalls) {
+    if (!existingToolResultIds.has(toolCall.id)) {
+      // PR-9 Wave C-#1b: log the repair so operators can grep
+      // `transport-repair` in gateway logs to find the originating
+      // session+turn. The placeholder text already includes the same
+      // marker so it's discoverable from both sides.
+      log.warn(
+        `transport-repair: synthesized placeholder for unpaired tool_use ` +
+          `name=${toolCall.name} id=${toolCall.id}`,
+      );
+      result.push({
+        role: "toolResult",
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        content: [{ type: "text", text: buildMissingToolResultText(toolCall) }],
+        isError: true,
+        timestamp: Date.now(),
+      });
+    }
   }
   return message.stopReason === "error" || message.stopReason === "aborted";
 }

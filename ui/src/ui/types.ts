@@ -469,6 +469,9 @@ export type GatewaySessionRow = {
       step: string;
       status: string;
       activeForm?: string;
+      // PR-9 Wave B1 — closure-gate fields (optional, backwards-compatible).
+      acceptanceCriteria?: string[];
+      verifiedCriteria?: string[];
     }>;
     lastPlanUpdatedAt?: number;
   };

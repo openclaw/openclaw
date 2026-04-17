@@ -45,7 +45,17 @@ export type AgentItemEventData = {
 };
 
 export type AgentPlanEventData = {
-  phase: "update";
+  /**
+   * - "update": normal plan update from `update_plan` (also fires on
+   *   plan-template seed and planning-only retry detection).
+   * - "completed": PR-9 Wave A2 — emitted by `update_plan` when every
+   *   step in the merged plan has terminal status (`completed` or
+   *   `cancelled`). The gateway-side persister listens for this phase
+   *   and auto-flips `SessionEntry.planMode.mode` back to `"normal"`
+   *   so mutations stay unlocked and the user-visible "plan complete"
+   *   state is consistent with persisted session state.
+   */
+  phase: "update" | "completed";
   title: string;
   explanation?: string;
   steps?: string[];
@@ -136,6 +146,24 @@ export type PlanStepSnapshot = {
   step: string;
   status: string;
   activeForm?: string;
+  /**
+   * PR-9 Wave B1 — closure gate. Optional list of acceptance criteria
+   * the agent must explicitly verify before this step can transition to
+   * `status: "completed"`. When present, `update_plan` rejects the
+   * transition unless `verifiedCriteria` covers every entry in
+   * `acceptanceCriteria` (string-equality match).
+   *
+   * Backwards-compatible: omit both fields and the step behaves
+   * identically to the prior shape (no gating).
+   */
+  acceptanceCriteria?: string[];
+  /**
+   * Strings from `acceptanceCriteria` the agent has explicitly checked
+   * against live state. The agent calls `update_plan` with the same
+   * step text plus an updated `verifiedCriteria` array as it confirms
+   * each criterion (e.g., after running a verification command).
+   */
+  verifiedCriteria?: string[];
 };
 
 export type AgentRunContext = {
@@ -218,6 +246,27 @@ export function drainCompletedSubagentFromParents(childRunId: string): void {
   const state = getAgentEventState();
   for (const ctx of state.runContextById.values()) {
     ctx.openSubagentRunIds?.delete(childRunId);
+  }
+}
+
+/**
+ * PR-9 Wave A2: called by the gateway-side plan-snapshot persister
+ * when a plan structurally completes (all steps terminal). Clears the
+ * `inPlanMode` flag on every run context for the given session so that
+ * subsequent `sessions_spawn` calls revert to default cleanup behavior
+ * (no longer forced to `"keep"`) and `exit_plan_mode` would no longer
+ * be expected.
+ *
+ * Looking up by sessionKey rather than runId because the same session
+ * may have multiple concurrent runs (heartbeat + user turn) and we
+ * want all of them to see the cleared state immediately.
+ */
+export function clearInPlanModeForSession(sessionKey: string): void {
+  const state = getAgentEventState();
+  for (const ctx of state.runContextById.values()) {
+    if (ctx.sessionKey === sessionKey) {
+      ctx.inPlanMode = false;
+    }
   }
 }
 

@@ -333,8 +333,6 @@ export function createOpenClawTools(
       sessionId: options?.sessionId,
       onYield: options?.onYield,
     }),
-<<<<<<< HEAD
-=======
     createSessionsSpawnTool({
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel,
@@ -354,7 +352,6 @@ export function createOpenClawTools(
       // (so exit_plan_mode can block on pending children).
       runId: options?.runId,
     }),
->>>>>>> 00da7920f3 (PR-8 Round 2: subagent-aware exit_plan_mode + plan-view persistence + GPT-5 boot reorder + spec)
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
     }),

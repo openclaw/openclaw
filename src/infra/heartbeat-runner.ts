@@ -719,9 +719,81 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
-  const prompt = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
+  // PR-9 Wave A1: when the session has an active plan with an
+  // in_progress (or first pending) step, prepend a structured
+  // "continue plan" nudge BEFORE the heartbeat / HEARTBEAT.md content.
+  // This keeps task state in runtime structured form
+  // (`SessionEntry.planMode.lastPlanSteps`) and out of HEARTBEAT.md, so
+  // operators don't have to manually encode current work in HEARTBEAT.md
+  // for heartbeats to "stay on the plan."
+  const planNudge = buildActivePlanNudge(params.preflight.session.entry?.planMode);
+  const promptWithNudge = planNudge ? `${planNudge}\n\n${basePrompt}` : basePrompt;
+  const prompt = appendHeartbeatWorkspacePathHint(promptWithNudge, params.workspaceDir);
 
   return { prompt, hasExecCompletion, hasCronEvents };
+}
+
+/**
+ * PR-9 Wave A1: build a heartbeat-prompt prefix that orients the agent
+ * back to the active plan when one exists. Returns `null` when there's
+ * no active plan or no actionable step — the caller appends only when
+ * non-null so existing heartbeat shape is preserved for normal-mode
+ * sessions.
+ *
+ * Step selection: prefer the `in_progress` step if present (matches the
+ * agent's most-recent self-reported active work); otherwise fall back to
+ * the first `pending` step (resume from the next undone step). Skips
+ * the prefix entirely when all steps are completed/cancelled — the
+ * close-on-complete detector (Wave A2) handles auto-exit in that case.
+ */
+export function buildActivePlanNudge(
+  planMode: import("../config/sessions/types.js").SessionEntry["planMode"],
+): string | null {
+  if (!planMode || planMode.mode !== "plan") {
+    return null;
+  }
+  const steps = planMode.lastPlanSteps;
+  if (!steps || steps.length === 0) {
+    return null;
+  }
+  const inProgress = steps.find((s) => s.status === "in_progress");
+  const nextPending = inProgress ?? steps.find((s) => s.status === "pending");
+  if (!nextPending) {
+    // All steps are completed/cancelled — Wave A2's close-on-complete
+    // detector owns this case; no nudge needed.
+    //
+    // Adversarial review #5: if the plan has steps but none match the
+    // standard four statuses (e.g., legacy "abandoned"/"stalled" or
+    // null), we also fall through here. Log it once so operators can
+    // spot stale/broken plan data instead of silently skipping the
+    // nudge.
+    const standardStatuses: ReadonlySet<string> = new Set([
+      "pending",
+      "in_progress",
+      "completed",
+      "cancelled",
+    ]);
+    const unknownStatuses = steps.map((s) => s.status).filter((s) => !standardStatuses.has(s));
+    if (unknownStatuses.length > 0) {
+      log.warn(
+        `plan-nudge skipped: lastPlanSteps contains non-standard statuses ` +
+          `[${[...new Set(unknownStatuses)].join(", ")}] — plan data may be stale or migrated`,
+      );
+    }
+    return null;
+  }
+  const stepIndex = steps.indexOf(nextPending) + 1;
+  const total = steps.length;
+  const stateLabel = nextPending.status === "in_progress" ? "in_progress" : "pending";
+  const display =
+    nextPending.status === "in_progress" && nextPending.activeForm
+      ? nextPending.activeForm
+      : nextPending.step;
+  return [
+    `Your plan is active. Step ${stepIndex} of ${total} is ${stateLabel}: "${display}".`,
+    "Continue from where you left off — call the next concrete tool action without restating the plan.",
+    "Use update_plan to mark this step completed (and the next one in_progress) as you advance.",
+  ].join(" ");
 }
 
 export async function runHeartbeatOnce(opts: {
