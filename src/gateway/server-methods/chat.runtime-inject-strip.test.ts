@@ -180,4 +180,23 @@ describe("stripRuntimeInjectedContent", () => {
     expect(content[1].type).toBe("image_url");
     expect(content[2].text).toBe("Describe this image"); // Should NOT be corrupted
   });
+
+  it("preserves leading/trailing whitespace when no runtime content present", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "  Indented code snippet:\n    function foo() {\n      return 42;\n    }\n  ",
+          },
+        ],
+      },
+    ];
+    const result = stripRuntimeInjectedContent(messages);
+    expect(result).toBe(messages); // Same reference = no changes
+    const msg = result[0] as Record<string, unknown>;
+    const content = msg.content as Array<Record<string, unknown>>;
+    expect(content[0].text).toBe("  Indented code snippet:\n    function foo() {\n      return 42;\n    }\n  ");
+  });
 });

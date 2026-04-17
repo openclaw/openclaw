@@ -263,9 +263,15 @@ function stripSystemEventLines(text: string): string {
 }
 
 function stripRuntimeContentFromText(text: string): string {
-  let result = stripSystemEventLines(text);
-  result = stripStartupContextBlock(result);
-  return result.trim();
+  const afterSystemStrip = stripSystemEventLines(text);
+  const afterStartupStrip = stripStartupContextBlock(afterSystemStrip);
+
+  // Only trim if we actually removed content
+  if (afterStartupStrip !== text) {
+    return afterStartupStrip.trim();
+  }
+
+  return text;
 }
 
 function stripRuntimeContentFromMessage(
