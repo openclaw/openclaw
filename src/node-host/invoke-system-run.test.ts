@@ -1167,46 +1167,59 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
   });
 
-  it("rejects blocked environment overrides before execution", async () => {
-    const { runCommand, sendInvokeResult } = await runSystemInvoke({
-      preferMacAppExecHost: false,
-      security: "full",
-      ask: "off",
-      env: { CLASSPATH: "/tmp/evil-classpath" },
-    });
-
-    expect(runCommand).not.toHaveBeenCalled();
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "SYSTEM_RUN_DENIED: environment override rejected",
-    });
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "CLASSPATH",
-    });
-  });
-
-  it("rejects blocked environment overrides for shell-wrapper commands", async () => {
+  it("rejects unsafe environment inputs before execution", async () => {
     const shellCommand =
       process.platform === "win32"
         ? ["cmd.exe", "/d", "/s", "/c", "echo ok"]
         : ["/bin/sh", "-lc", "echo ok"];
-    const { runCommand, sendInvokeResult } = await runSystemInvoke({
-      preferMacAppExecHost: false,
-      security: "full",
-      ask: "off",
-      command: shellCommand,
-      env: {
-        CLASSPATH: "/tmp/evil-classpath",
-        LANG: "C",
+    const cases = [
+      {
+        label: "blocked override",
+        env: { CLASSPATH: "/tmp/evil-classpath" },
+        message: "SYSTEM_RUN_DENIED: environment override rejected",
+        details: ["CLASSPATH"],
       },
-    });
+      {
+        label: "blocked override for shell-wrapper",
+        command: shellCommand,
+        env: {
+          CLASSPATH: "/tmp/evil-classpath",
+          LANG: "C",
+        },
+        message: "SYSTEM_RUN_DENIED: environment override rejected",
+        details: ["CLASSPATH"],
+      },
+      {
+        label: "blocked argv assignment",
+        command: ["/usr/bin/env", "SHELLOPTS=xtrace", "PS4=$(id)", "bash", "-lc", "echo ok"],
+        message: "SYSTEM_RUN_DENIED: command env assignment rejected",
+        details: ["SHELLOPTS", "PS4"],
+      },
+      {
+        label: "invalid override key",
+        env: { "BAD-KEY": "x" },
+        message: "SYSTEM_RUN_DENIED: environment override rejected",
+        details: ["BAD-KEY"],
+      },
+    ];
 
-    expect(runCommand).not.toHaveBeenCalled();
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "SYSTEM_RUN_DENIED: environment override rejected",
-    });
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "CLASSPATH",
-    });
+    for (const testCase of cases) {
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        security: "full",
+        ask: "off",
+        command: testCase.command,
+        env: testCase.env,
+      });
+
+      expect(runCommand, testCase.label).not.toHaveBeenCalled();
+      expectInvokeErrorMessage(sendInvokeResult, {
+        message: testCase.message,
+      });
+      for (const detail of testCase.details) {
+        expectInvokeErrorMessage(sendInvokeResult, { message: detail });
+      }
+    }
   });
 
   it("applies shell-wrapper env allowlist for shell executable commands without inline payload", async () => {
@@ -1230,43 +1243,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       LC_TIME: "C",
     });
     expectInvokeOk(sendInvokeResult);
-  });
-
-  it("rejects blocked env assignment keys embedded in command argv", async () => {
-    const { runCommand, sendInvokeResult } = await runSystemInvoke({
-      preferMacAppExecHost: false,
-      security: "full",
-      ask: "off",
-      command: ["/usr/bin/env", "SHELLOPTS=xtrace", "PS4=$(id)", "bash", "-lc", "echo ok"],
-    });
-
-    expect(runCommand).not.toHaveBeenCalled();
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "SYSTEM_RUN_DENIED: command env assignment rejected",
-    });
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "SHELLOPTS",
-    });
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "PS4",
-    });
-  });
-
-  it("rejects invalid non-portable environment override keys before execution", async () => {
-    const { runCommand, sendInvokeResult } = await runSystemInvoke({
-      preferMacAppExecHost: false,
-      security: "full",
-      ask: "off",
-      env: { "BAD-KEY": "x" },
-    });
-
-    expect(runCommand).not.toHaveBeenCalled();
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "SYSTEM_RUN_DENIED: environment override rejected",
-    });
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "BAD-KEY",
-    });
   });
 
   async function expectNestedEnvShellDenied(params: {
