@@ -254,7 +254,7 @@ describe("resolveEffectivePluginActivationState", () => {
     });
   });
 
-  it("preserves explicit selection even when plugins are globally disabled", () => {
+  it("activates explicitly enabled plugins even when plugins are globally disabled", () => {
     const rawConfig = {
       plugins: {
         enabled: false,
@@ -275,11 +275,11 @@ describe("resolveEffectivePluginActivationState", () => {
         activationSource: createPluginActivationSource({ config: rawConfig }),
       }),
     ).toEqual({
-      enabled: false,
-      activated: false,
+      enabled: true,
+      activated: true,
       explicitlyEnabled: true,
-      source: "disabled",
-      reason: "plugins disabled",
+      source: "explicit",
+      reason: "enabled in config",
     });
   });
 
