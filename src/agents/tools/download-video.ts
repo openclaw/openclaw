@@ -554,27 +554,24 @@ function sanitizeFilename(title: string): string {
 }
 
 /**
- * Builds a media URL from workspace root using absolute path for source parameter
- * The gateway media handler expects: /__openclaw__/assistant-media?source=<absolutePath>
+ * Builds a media URL using the appropriate route for the environment
+ * Uses absolute path with query parameter for both gateway and localhost to ensure consistent routing
  */
 function buildMediaUrl(workspaceRoot: string, filePath: string, gatewayOrigin?: string): string {
-  // Use absolute path for the source parameter to ensure the gateway can find the file
+  // Use absolute path for the source parameter to ensure the handler can find the file
   const absolutePath = path.resolve(filePath);
   const encodedPath = encodeURIComponent(absolutePath);
   
-  // If gateway origin is provided (e.g., from environment or request context), use the media route
+  // If gateway origin is provided (e.g., from environment or request context), use the gateway route
   if (gatewayOrigin) {
     // Remove trailing slash if present
     const baseOrigin = gatewayOrigin.replace(/\/$/, '');
-    // Use query parameter format that matches gateway media handler with absolute path
     return `${baseOrigin}/__openclaw__/assistant-media?source=${encodedPath}`;
   }
   
-  // Fallback to localhost for development/local deployments using relative path
-  const relativePath = path.relative(workspaceRoot, filePath);
-  const posixPath = relativePath.split(path.sep).join('/');
-  const encodedRelativePath = posixPath.split('/').map(encodeURIComponent).join('/');
-  return `http://localhost:${MEDIA_SERVER_PORT}/${encodedRelativePath}`;
+  // Fallback to localhost for development/local deployments using the same route pattern
+  // The local media server should also handle /__openclaw__/assistant-media?source= queries
+  return `http://localhost:${MEDIA_SERVER_PORT}/__openclaw__/assistant-media?source=${encodedPath}`;
 }
 
 export const downloadVideoTool = {
