@@ -252,9 +252,9 @@ export async function compensateAfterWaitTimeout(params: {
 
   return {
     newReply: hasNewReply ? latestReply.text : undefined,
-    accepted: true,
+    accepted: hasNewReply,
     delivery: {
-      status: "accepted",
+      status: hasNewReply ? "accepted" : "pending",
       note: hasNewReply
         ? "reply arrived after timeout window"
         : "run accepted, no reply within timeout",
