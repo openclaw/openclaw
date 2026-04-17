@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempRepoRoot } from "./helpers/temp-repo.js";
@@ -136,6 +136,7 @@ exit 0
       PATH: `${fakeBinDir}:/usr/bin:/bin`,
     });
 
+    expect(existsSync(markerFile)).toBe(true);
     const marker = readFileSync(markerFile, "utf8").trim();
     expect(marker).toBe("ok");
   });
