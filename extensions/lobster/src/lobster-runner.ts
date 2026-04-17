@@ -176,6 +176,8 @@ function throwOnErrorEnvelope(envelope: LobsterEnvelope): Extract<LobsterEnvelop
   throw new Error(envelope.error.message);
 }
 
+const WORKFLOW_FILE_EXTS = new Set([".lobster", ".yaml", ".yml", ".json"]);
+
 async function resolveWorkflowFile(candidate: string, cwd: string) {
   const { stat } = await import("node:fs/promises");
   const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(cwd, candidate);
@@ -184,18 +186,24 @@ async function resolveWorkflowFile(candidate: string, cwd: string) {
     throw new Error("Workflow path is not a file");
   }
   const ext = path.extname(resolved).toLowerCase();
-  if (![".lobster", ".yaml", ".yml", ".json"].includes(ext)) {
+  if (!WORKFLOW_FILE_EXTS.has(ext)) {
     throw new Error("Workflow file must end in .lobster, .yaml, .yml, or .json");
   }
   return resolved;
 }
 
 function looksLikeWorkflowFileCandidate(candidate: string) {
-  if (!candidate || /\s/.test(candidate)) {
+  if (!candidate) {
     return false;
   }
   const ext = path.extname(candidate).toLowerCase();
-  return [".lobster", ".yaml", ".yml", ".json"].includes(ext) || /[\\/]/.test(candidate);
+  if (WORKFLOW_FILE_EXTS.has(ext)) {
+    return true;
+  }
+  if (/\s/.test(candidate)) {
+    return false;
+  }
+  return /[\\/]/.test(candidate);
 }
 
 async function detectWorkflowFile(candidate: string, cwd: string) {

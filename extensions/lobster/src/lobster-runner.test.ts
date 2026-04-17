@@ -133,6 +133,34 @@ describe("createEmbeddedLobsterRunner", () => {
     }
   });
 
+  it("surfaces missing file errors for workflow paths with spaces", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-runner-"));
+
+    try {
+      const runtime = {
+        runToolRequest: vi.fn(),
+        resumeToolRequest: vi.fn(),
+      };
+
+      const runner = createEmbeddedLobsterRunner({
+        loadRuntime: vi.fn().mockResolvedValue(runtime),
+      });
+
+      await expect(
+        runner.run({
+          action: "run",
+          pipeline: "lobster workflows/missing-workflow.lobster",
+          cwd: tempDir,
+          timeoutMs: 2000,
+          maxStdoutBytes: 4096,
+        }),
+      ).rejects.toThrow(/ENOENT|no such file or directory/i);
+      expect(runtime.runToolRequest).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps inline pipelines with slash-containing args on the pipeline path", async () => {
     const runtime = {
       runToolRequest: vi.fn().mockResolvedValue({
