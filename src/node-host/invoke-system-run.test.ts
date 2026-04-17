@@ -52,13 +52,17 @@ describe("formatSystemRunAllowlistMissMessage", () => {
 describe("handleSystemRunInvoke mac app exec host routing", () => {
   let sharedFixtureRoot = "";
   let sharedOpenClawHome = "";
+  let sharedRuntimeBinDir = "";
   let sharedFixtureId = 0;
   let previousOpenClawHome: string | undefined;
+  const sharedRuntimeBins = new Set<string>();
 
   beforeAll(() => {
     sharedFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-host-fixtures-"));
     sharedOpenClawHome = path.join(sharedFixtureRoot, "openclaw-home");
+    sharedRuntimeBinDir = path.join(sharedFixtureRoot, "bin");
     fs.mkdirSync(sharedOpenClawHome, { recursive: true });
+    fs.mkdirSync(sharedRuntimeBinDir, { recursive: true });
   });
 
   afterAll(() => {
@@ -314,21 +318,21 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     runtime: "bun" | "deno" | "jiti" | "tsx";
     run: () => Promise<T>;
   }): Promise<T> {
-    const tmp = createFixtureDir(`openclaw-${params.runtime}-path-`);
-    const binDir = path.join(tmp, "bin");
-    fs.mkdirSync(binDir, { recursive: true });
-    const runtimePath =
-      process.platform === "win32"
-        ? path.join(binDir, `${params.runtime}.cmd`)
-        : path.join(binDir, params.runtime);
-    const runtimeBody =
-      process.platform === "win32" ? "@echo off\r\nexit /b 0\r\n" : "#!/bin/sh\nexit 0\n";
-    fs.writeFileSync(runtimePath, runtimeBody, { mode: 0o755 });
-    if (process.platform !== "win32") {
-      fs.chmodSync(runtimePath, 0o755);
+    if (!sharedRuntimeBins.has(params.runtime)) {
+      const runtimePath =
+        process.platform === "win32"
+          ? path.join(sharedRuntimeBinDir, `${params.runtime}.cmd`)
+          : path.join(sharedRuntimeBinDir, params.runtime);
+      const runtimeBody =
+        process.platform === "win32" ? "@echo off\r\nexit /b 0\r\n" : "#!/bin/sh\nexit 0\n";
+      fs.writeFileSync(runtimePath, runtimeBody, { mode: 0o755 });
+      if (process.platform !== "win32") {
+        fs.chmodSync(runtimePath, 0o755);
+      }
+      sharedRuntimeBins.add(params.runtime);
     }
     const oldPath = process.env.PATH;
-    process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+    process.env.PATH = `${sharedRuntimeBinDir}${path.delimiter}${oldPath ?? ""}`;
     try {
       return await params.run();
     } finally {
