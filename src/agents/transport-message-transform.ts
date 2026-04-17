@@ -1,6 +1,27 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
 
+type AssistantContentBlock = Extract<Context["messages"][number], { role: "assistant" }>["content"];
 type PendingToolCall = { id: string; name: string };
+
+/**
+ * Normalize assistant message content to an array of content blocks.
+ *
+ * Some providers (e.g. MiniMax) return `content` as a plain string instead
+ * of the expected `ContentBlock[]`. Coercing once at the transport boundary
+ * protects all downstream code that calls array methods on content.
+ */
+export function normalizeAssistantContent(content: unknown): AssistantContentBlock {
+  if (Array.isArray(content)) {
+    return content;
+  }
+  if (typeof content === "string") {
+    return content.length > 0 ? [{ type: "text", text: content }] : [];
+  }
+  if (content == null) {
+    return [];
+  }
+  return [{ type: "text", text: JSON.stringify(content) }];
+}
 
 function appendMissingToolResults(
   result: Context["messages"],
@@ -46,8 +67,9 @@ export function transformTransportMessages(
     }
     const isSameModel =
       msg.provider === model.provider && msg.api === model.api && msg.model === model.id;
+    const normalizedContent = normalizeAssistantContent(msg.content);
     const content: typeof msg.content = [];
-    for (const block of msg.content) {
+    for (const block of normalizedContent) {
       if (block.type === "thinking") {
         if (block.redacted) {
           if (isSameModel) {
