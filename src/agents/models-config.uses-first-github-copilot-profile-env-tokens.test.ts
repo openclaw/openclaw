@@ -125,6 +125,11 @@ describe("models-config", () => {
   });
 
   it("keeps a non-empty existing models.json baseUrl when merge mode regenerates the provider", async () => {
+    const kilocodeProvider = {
+      baseUrl: "https://api.kilo.ai/api/gateway/v1",
+      api: "openai-completions" as const,
+      models: [],
+    };
     const existingContents = `${JSON.stringify(
       {
         providers: {
@@ -144,29 +149,21 @@ describe("models-config", () => {
         cfg: {
           models: {
             providers: {
-              kilocode: {
-                baseUrl: "https://api.kilo.ai/api/gateway/v1",
-                api: "openai-completions",
-                models: [],
-              },
+              kilocode: kilocodeProvider,
             },
           },
         },
         sourceConfigForSecrets: {
           models: {
             providers: {
-              kilocode: {
-                baseUrl: "https://api.kilo.ai/api/gateway/v1",
-                api: "openai-completions",
-                models: [],
-              },
+              kilocode: kilocodeProvider,
             },
           },
         },
         agentDir: "/tmp/openclaw-agent",
         env: {} as NodeJS.ProcessEnv,
         existingRaw: existingContents,
-        existingParsed: JSON.parse(existingContents) as unknown,
+        existingParsed: JSON.parse(existingContents),
       },
       {
         resolveImplicitProviders: async () => ({}),
