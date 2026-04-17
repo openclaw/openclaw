@@ -87,8 +87,10 @@ describe("group-membership-cache", () => {
     const r2 = await verifyGroupMembership({ chatId: -100789, api, botId: 999, allowFrom });
     expect(r2.trusted).toBe(true);
 
-    // getChatMemberCount should only be called once (first call), not on cached second call
-    expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+    // Positive verification re-snapshots the member count (race guard), so each
+    // uncached trusted-path check calls getChatMemberCount twice. Second
+    // verification hits the cache and doesn't re-call, so total is 2 not 4.
+    expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
   });
 
   it("invalidateGroupMembership clears cache for that chat", async () => {
@@ -99,13 +101,14 @@ describe("group-membership-cache", () => {
     const allowFrom = makeAllowFrom(["111"]);
 
     await verifyGroupMembership({ chatId: -100111, api, botId: 999, allowFrom });
-    expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+    // Trusted verification calls getChatMemberCount twice (initial + re-snapshot).
+    expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
 
     invalidateGroupMembership(-100111);
 
     await verifyGroupMembership({ chatId: -100111, api, botId: 999, allowFrom });
-    // Should have called API again after invalidation
-    expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+    // Post-invalidation re-verification: another 2 calls for the fresh trusted path.
+    expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(4);
   });
 
   it("fails closed on API error (getChatMemberCount)", async () => {
@@ -191,8 +194,8 @@ describe("group-membership-cache", () => {
       allowFrom: allowNoWild,
     });
     expect(r1.trusted).toBe(true);
-    // API was called for the non-wildcard path
-    expect((apiNoWild.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+    // API was called for the non-wildcard path (initial + re-snapshot on trusted).
+    expect((apiNoWild.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
 
     // allowFrom with same entries but hasWildcard=true: should be cached separately
     const apiWild = makeApi({ memberCount: 100 });
@@ -226,8 +229,9 @@ describe("group-membership-cache", () => {
     // Bot B: same chat, same allowFrom — should make its own API call
     await verifyGroupMembership({ chatId: 1, api: mockApi, botId: 200, allowFrom });
 
-    // Each bot should have triggered its own getChatMemberCount call
-    expect((mockApi.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+    // Each bot triggered its own trusted verification (2 count calls each for
+    // initial + re-snapshot), so we expect 4 total.
+    expect((mockApi.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(4);
   });
 
   describe("eviction sweep", () => {
@@ -271,9 +275,10 @@ describe("group-membership-cache", () => {
       });
       const allowFrom = makeAllowFrom(["111"]);
 
-      // Populate the cache and confirm one API call.
+      // Populate the cache. Trusted path calls getChatMemberCount twice
+      // (initial + re-snapshot race guard).
       await verifyGroupMembership({ chatId: -100801, api, botId: 999, allowFrom });
-      expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+      expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
 
       // Fire the sweep interval (entry is now evicted).
       vi.advanceTimersByTime(TTL_MS + 1);
@@ -285,8 +290,9 @@ describe("group-membership-cache", () => {
       vi.setSystemTime(Date.now() - (TTL_MS - 1000));
       const r2 = await verifyGroupMembership({ chatId: -100801, api, botId: 999, allowFrom });
       expect(r2.trusted).toBe(true);
-      // API called a second time — proves the sweep (not TTL read-check) evicted the entry.
-      expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+      // Another trusted verification: 2 more calls → 4 total. Proves the sweep
+      // (not TTL read-check) evicted the entry.
+      expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(4);
     });
   });
 });

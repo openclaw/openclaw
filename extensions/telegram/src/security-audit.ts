@@ -122,6 +122,16 @@ export async function collectTelegramSecurityAuditFindings(params: {
   const defaultGroupAllowFrom = Array.isArray(params.cfg.channels?.defaults?.groupAllowFrom)
     ? params.cfg.channels.defaults.groupAllowFrom
     : [];
+  const defaultGroupAllowFromHasWildcard = defaultGroupAllowFrom.some(
+    (value) => (normalizeOptionalString(String(value)) ?? "") === "*",
+  );
+  // defaults.groupAllowFrom feeds Telegram sender authorization via the same
+  // fallback chain as channels.telegram.groupAllowFrom, so wildcard and
+  // non-numeric entries there are equally dangerous and must be audited.
+  collectInvalidTelegramAllowFromEntries({
+    entries: defaultGroupAllowFrom,
+    target: invalidTelegramAllowFromEntries,
+  });
   const hasAnySenderAllowlist =
     storeAllowFrom.length > 0 ||
     groupAllowFrom.length > 0 ||
@@ -150,7 +160,7 @@ export async function collectTelegramSecurityAuditFindings(params: {
     });
   }
 
-  if (storeHasWildcard || groupAllowFromHasWildcard) {
+  if (storeHasWildcard || groupAllowFromHasWildcard || defaultGroupAllowFromHasWildcard) {
     findings.push({
       checkId: "channels.telegram.groups.allowFrom.wildcard",
       severity: "critical",
@@ -158,7 +168,7 @@ export async function collectTelegramSecurityAuditFindings(params: {
       detail:
         'Telegram group sender allowlist contains "*", which allows any group member to run /… commands and control directives.',
       remediation:
-        'Remove "*" from channels.telegram.groupAllowFrom and pairing store; prefer explicit numeric Telegram user IDs.',
+        'Remove "*" from channels.telegram.groupAllowFrom, channels.defaults.groupAllowFrom, and pairing store; prefer explicit numeric Telegram user IDs.',
     });
     return findings;
   }

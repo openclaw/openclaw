@@ -158,7 +158,11 @@ export function collectOpenGroupPolicyRestrictSendersWarnings(
     groupPolicy: GroupPolicy;
   },
 ): string[] {
-  if (params.groupPolicy !== "open") {
+  // "members" is a Telegram-only policy; non-Telegram runtimes that consume
+  // this collector normalize it to effectively open access (see
+  // normalizeNonTelegramGroupPolicy), so the open-policy restrict-senders
+  // warning must fire for both "open" and "members" to avoid silent bypass.
+  if (params.groupPolicy !== "open" && params.groupPolicy !== "members") {
     return [];
   }
   return [buildOpenGroupPolicyRestrictSendersWarning(params)];

@@ -118,8 +118,11 @@ export async function verifyGroupMembership(params: {
       return result;
     }
 
-    // Verify each trusted ID is actually a member
+    // Verify each trusted ID is actually a member. Track transient per-member
+    // errors separately: "left"/"kicked" is a definitive negative, but a
+    // network/API failure for one lookup could mask an untrusted member.
     let presentCount = 0;
+    let transientErrors = 0;
     for (const userId of trustedIds) {
       try {
         const member = await api.getChatMember(Number(chatId), userId);
@@ -128,18 +131,45 @@ export async function verifyGroupMembership(params: {
           presentCount++;
         }
       } catch {
-        // User not in group or API error for this specific user — skip
+        transientErrors++;
       }
     }
 
-    // Trusted if all members are accounted for by the trusted set
-    const trusted = presentCount === totalCount;
-    const result: MembershipResult = trusted
-      ? { trusted: true }
-      : {
+    const trusted = presentCount === totalCount && transientErrors === 0;
+
+    if (trusted) {
+      // Re-snapshot member count for positive-cache path only: grammY processes
+      // updates concurrently, so an untrusted member could have joined between
+      // the initial getChatMemberCount and now. If the count changed, the
+      // "all trusted" conclusion is stale — fail closed and skip caching so
+      // the next inbound message re-checks. Cheap two-call cost only on the
+      // exact code path that would otherwise pin trusted=true for 5 minutes.
+      const recountCount = await api.getChatMemberCount(Number(chatId)).catch(() => -1);
+      if (recountCount !== totalCount) {
+        return {
           trusted: false,
-          reason: `untrusted-members: ${totalCount} total, ${presentCount} trusted`,
+          reason: `member-count-changed: ${totalCount}->${recountCount} during verification`,
         };
+      }
+      const result: MembershipResult = { trusted: true };
+      cache.set(key, { result, timestamp: Date.now() });
+      return result;
+    }
+
+    // Transient errors during per-ID lookup: refuse to cache a (possibly wrong)
+    // negative result. Let the next message retry rather than poisoning the
+    // cache with a stale "untrusted" entry.
+    if (transientErrors > 0) {
+      return {
+        trusted: false,
+        reason: `transient-errors: ${transientErrors} trusted-ID lookups failed`,
+      };
+    }
+
+    const result: MembershipResult = {
+      trusted: false,
+      reason: `untrusted-members: ${totalCount} total, ${presentCount} trusted`,
+    };
     cache.set(key, { result, timestamp: Date.now() });
     return result;
   } catch {
