@@ -180,6 +180,7 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
   assembleAttemptContextEngine,
   buildLoopPromptCacheInfo,

@@ -5,6 +5,7 @@ import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
+  buildContextEnginePromptCacheInfo,
   buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
   decodeHtmlEntitiesInObject,
@@ -444,9 +445,7 @@ describe("resolveUnknownToolGuardThreshold", () => {
   it("falls back to the default threshold when the override is non-positive", () => {
     expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: 0 })).toBe(10);
     expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: -5 })).toBe(10);
-    expect(
-      resolveUnknownToolGuardThreshold({ unknownToolThreshold: Number.NaN }),
-    ).toBe(10);
+    expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: Number.NaN })).toBe(10);
   });
 
   it("floors fractional overrides", () => {
@@ -1739,9 +1738,11 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     );
 
     const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
-    const stream = wrapped({ api: "google-gemini" } as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
+    const stream = wrapped(
+      { api: "google-gemini" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
@@ -2831,6 +2832,15 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
   });
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
+    const promptCache = buildContextEnginePromptCacheInfo({
+      lastCallUsage: {
+        input: 10,
+        output: 5,
+        cacheRead: 40,
+        cacheWrite: 2,
+        total: 57,
+      },
+    });
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
@@ -2851,7 +2861,8 @@ describe("buildAfterTurnRuntimeContext", () => {
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
       tokenBudget: 1050000,
-      currentTokenCount: 232393,
+      currentTokenCount: 52,
+      promptCache,
     });
 
     expect(legacy).toMatchObject({
@@ -2861,7 +2872,12 @@ describe("buildAfterTurnRuntimeContext", () => {
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
       tokenBudget: 1050000,
-      currentTokenCount: 232393,
+      currentTokenCount: 52,
+      promptCache: {
+        lastCallUsage: {
+          total: 57,
+        },
+      },
     });
   });
 
