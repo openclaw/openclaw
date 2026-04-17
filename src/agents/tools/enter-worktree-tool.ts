@@ -8,6 +8,7 @@ import {
 } from "../tool-description-presets.js";
 import {
   createSessionWorktree,
+  removeSessionWorktree,
   resolveRuntimeWorkspaceDirForSession,
 } from "../worktree-runtime.js";
 import type { AnyAgentTool } from "./common.js";
@@ -83,15 +84,31 @@ export function createEnterWorktreeTool(opts: {
       });
 
       const gatewayCall = opts.callGateway ?? callGateway;
-      await gatewayCall({
-        method: "sessions.patch",
-        params: {
-          key: sessionKey,
-          worktreeMode: "active",
-          worktreeArtifact: artifact,
-        },
-        config: opts.config,
-      });
+      try {
+        await gatewayCall({
+          method: "sessions.patch",
+          params: {
+            key: sessionKey,
+            worktreeMode: "active",
+            worktreeArtifact: artifact,
+          },
+          config: opts.config,
+        });
+      } catch (error) {
+        const rollback = await removeSessionWorktree({
+          repoRoot: artifact.repoRoot,
+          worktreeDir: artifact.worktreeDir,
+          force: true,
+        });
+        if (!rollback.removed) {
+          const rollbackError = rollback.error ? ` Rollback failed: ${rollback.error}` : "";
+          throw new Error(
+            `${error instanceof Error ? error.message : String(error)}${rollbackError}`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
 
       return jsonResult({
         status: "active",

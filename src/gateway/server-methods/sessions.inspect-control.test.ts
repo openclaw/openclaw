@@ -314,6 +314,34 @@ describe("sessions inspect/control handlers", () => {
     );
   });
 
+  it("fails team close validation before applying other control mutations", async () => {
+    const respond = vi.fn() as unknown as RespondFn;
+    hoisted.resolveTeamFlowMock.mockReturnValue(null);
+
+    await sessionsHandlers["sessions.control"]({
+      req: { id: "req-preflight" } as never,
+      params: {
+        key: "main",
+        plan: { exit: true, status: "completed", summary: "done" },
+        worktree: { exit: true, cleanup: "remove", force: true },
+        team: { close: true, teamId: "missing-team" },
+      },
+      respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(hoisted.applySessionsPatchToStoreMock).not.toHaveBeenCalled();
+    expect(hoisted.removeSessionWorktreeMock).not.toHaveBeenCalled();
+    expect(hoisted.closeTeamFlowMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "No managed team found for this session." }),
+    );
+  });
+
   it("persists inactive worktree state before destructive removal", async () => {
     const respond = vi.fn() as unknown as RespondFn;
     let sawInactivePatchBeforeRemoval = false;

@@ -1531,6 +1531,21 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const teamFlow = wantsTeamClose
+      ? resolveTeamFlow({
+          ownerSessionKey: loaded.canonicalKey,
+          teamId: normalizeOptionalString(p.team?.teamId) ?? undefined,
+        })
+      : null;
+    if (wantsTeamClose && !teamFlow) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "No managed team found for this session."),
+      );
+      return;
+    }
+
     let latestEntry = loaded.entry;
     const actions: Record<string, unknown> = {};
 
@@ -1674,23 +1689,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
     }
 
-    if (wantsTeamClose) {
-      const flow = resolveTeamFlow({
-        ownerSessionKey: loaded.canonicalKey,
-        teamId: normalizeOptionalString(p.team?.teamId) ?? undefined,
-      });
-      if (!flow) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "No managed team found for this session."),
-        );
-        return;
-      }
+    if (wantsTeamClose && teamFlow) {
       let closed: TeamFlowView;
       try {
         closed = await closeTeamFlow({
-          flow,
+          flow: teamFlow,
           ownerSessionKey: loaded.canonicalKey,
           summary: normalizeOptionalString(p.team?.summary) ?? undefined,
           cancelActive: p.team?.cancelActive !== false,

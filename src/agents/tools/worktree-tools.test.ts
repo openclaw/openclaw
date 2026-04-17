@@ -81,6 +81,71 @@ describe("worktree tools", () => {
     });
   });
 
+  it("rolls back a created worktree when session persistence fails", async () => {
+    hoisted.createSessionWorktreeMock.mockResolvedValue({
+      repoRoot: "/repo",
+      worktreeDir: "/repo/.openclaw-worktrees/main",
+      cleanupPolicy: "keep",
+      createdAt: 10,
+      updatedAt: 10,
+      status: "active",
+    });
+    hoisted.callGatewayMock.mockRejectedValue(new Error("patch failed"));
+    hoisted.removeSessionWorktreeMock.mockResolvedValue({
+      removed: true,
+      dirty: false,
+      error: undefined,
+    });
+
+    const tool = createEnterWorktreeTool({
+      agentSessionKey: "agent:main:main",
+      workspaceDir: "/repo",
+      callGateway:
+        hoisted.callGatewayMock as unknown as typeof import("../../gateway/call.js").callGateway,
+    });
+
+    await expect(
+      tool.execute("call-rollback", {
+        cleanup: "keep",
+      }),
+    ).rejects.toThrow("patch failed");
+    expect(hoisted.removeSessionWorktreeMock).toHaveBeenCalledWith({
+      repoRoot: "/repo",
+      worktreeDir: "/repo/.openclaw-worktrees/main",
+      force: true,
+    });
+  });
+
+  it("surfaces rollback failures after session persistence errors", async () => {
+    hoisted.createSessionWorktreeMock.mockResolvedValue({
+      repoRoot: "/repo",
+      worktreeDir: "/repo/.openclaw-worktrees/main",
+      cleanupPolicy: "keep",
+      createdAt: 10,
+      updatedAt: 10,
+      status: "active",
+    });
+    hoisted.callGatewayMock.mockRejectedValue(new Error("patch failed"));
+    hoisted.removeSessionWorktreeMock.mockResolvedValue({
+      removed: false,
+      dirty: false,
+      error: "remove failed",
+    });
+
+    const tool = createEnterWorktreeTool({
+      agentSessionKey: "agent:main:main",
+      workspaceDir: "/repo",
+      callGateway:
+        hoisted.callGatewayMock as unknown as typeof import("../../gateway/call.js").callGateway,
+    });
+
+    await expect(
+      tool.execute("call-rollback-failed", {
+        cleanup: "keep",
+      }),
+    ).rejects.toThrow("patch failed Rollback failed: remove failed");
+  });
+
   it("deactivates the worktree even when removal is skipped for dirty changes", async () => {
     hoisted.callGatewayMock.mockResolvedValue({
       key: "agent:main:main",
