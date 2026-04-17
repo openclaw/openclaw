@@ -1048,6 +1048,62 @@ export async function runEmbeddedPiAgent(
             lastAssistant?.stopReason === "error"
               ? lastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
+          const buildEmptyTurnErrorText = (
+            fallbackAgentMeta?: EmbeddedPiAgentMeta,
+          ): { text: string; agentMeta: EmbeddedPiAgentMeta } => {
+            const agentMeta =
+              fallbackAgentMeta ??
+              buildErrorAgentMeta({
+                sessionId: sessionIdUsed,
+                provider,
+                model: model.id,
+                usageAccumulator,
+                lastRunPromptUsage,
+                lastAssistant,
+                lastTurnTotal,
+              });
+            const hadMutatingTools = attempt.toolMetas.some((t) =>
+              isLikelyMutatingToolName(t.toolName),
+            );
+            const genericEmptyTurnError = timedOut && !timedOutDuringCompaction
+              ? "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config."
+              : promptError
+                ? `LLM request failed: ${describeUnknownError(promptError)}`
+                : aborted
+                  ? "LLM request was interrupted before a response was generated. Please try again."
+                  : hadMutatingTools
+                    ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed, please verify before retrying."
+                    : "⚠️ Agent couldn't generate a response. Please try again.";
+            return {
+              text: formattedAssistantErrorText || genericEmptyTurnError,
+              agentMeta,
+            };
+          };
+          const buildEmptyTurnErrorResult = (
+            fallbackAgentMeta?: EmbeddedPiAgentMeta,
+          ) => {
+            const { text, agentMeta } = buildEmptyTurnErrorText(fallbackAgentMeta);
+            return {
+              payloads: [
+                {
+                  text,
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
+            };
+          };
 
           // ── Timeout-triggered compaction ──────────────────────────────────
           // When the LLM times out with high context usage, compact before
@@ -1528,34 +1584,7 @@ export async function runEmbeddedPiAgent(
               !attempt.didSendDeterministicApprovalPrompt &&
               !attempt.lastToolError
             ) {
-              return {
-                payloads: [
-                  {
-                    text: `LLM request failed: ${describeUnknownError(promptError)}`,
-                    isError: true,
-                  },
-                ],
-                meta: {
-                  durationMs: Date.now() - started,
-                  agentMeta: buildErrorAgentMeta({
-                    sessionId: sessionIdUsed,
-                    provider,
-                    model: model.id,
-                    usageAccumulator,
-                    lastRunPromptUsage,
-                    lastAssistant,
-                    lastTurnTotal,
-                  }),
-                  aborted,
-                  systemPromptReport: attempt.systemPromptReport,
-                },
-                didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-                didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-                messagingToolSentTexts: attempt.messagingToolSentTexts,
-                messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-                messagingToolSentTargets: attempt.messagingToolSentTargets,
-                successfulCronAdds: attempt.successfulCronAdds,
-              };
+              return buildEmptyTurnErrorResult();
             }
             throw promptError;
           }
@@ -1764,49 +1793,7 @@ export async function runEmbeddedPiAgent(
               });
             }
 
-            const friendlyIncompleteError = lastAssistant
-              ? formatAssistantErrorText(lastAssistant, {
-                  cfg: params.config,
-                  sessionKey: params.sessionKey ?? params.sessionId,
-                  provider: activeErrorContext.provider,
-                  model: activeErrorContext.model,
-                })
-              : undefined;
-
-            const hadMutatingTools = attempt.toolMetas.some((t) =>
-              isLikelyMutatingToolName(t.toolName),
-            );
-            const genericEmptyTurnError = timedOut && !timedOutDuringCompaction
-              ? "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config."
-              : promptError
-                ? `LLM request failed: ${describeUnknownError(promptError)}`
-                : aborted
-                  ? "LLM request was interrupted before a response was generated. Please try again."
-                  : hadMutatingTools
-                    ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed, please verify before retrying."
-                    : "⚠️ Agent couldn't generate a response. Please try again.";
-            const errorText = friendlyIncompleteError || genericEmptyTurnError;
-
-            return {
-              payloads: [
-                {
-                  text: errorText,
-                  isError: true,
-                },
-              ],
-              meta: {
-                durationMs: Date.now() - started,
-                agentMeta,
-                aborted,
-                systemPromptReport: attempt.systemPromptReport,
-              },
-              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-              messagingToolSentTexts: attempt.messagingToolSentTexts,
-              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-              messagingToolSentTargets: attempt.messagingToolSentTargets,
-              successfulCronAdds: attempt.successfulCronAdds,
-            };
+            return buildEmptyTurnErrorResult(agentMeta);
           }
 
           log.debug(
