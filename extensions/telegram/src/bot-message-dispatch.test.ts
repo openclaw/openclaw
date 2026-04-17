@@ -3529,6 +3529,80 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("clears Telegram status reactions after reply when removeAckAfterReply is enabled", async () => {
+    vi.useFakeTimers();
+    const reactionApi = vi.fn(async () => true);
+    const statusReactionController = {
+      setThinking: vi.fn(async () => {}),
+      setCompacting: vi.fn(async () => {}),
+      setTool: vi.fn(async () => {}),
+      setDone: vi.fn(async () => {}),
+      setError: vi.fn(async () => {}),
+      setQueued: vi.fn(async () => {}),
+      cancelPending: vi.fn(() => {}),
+      clear: vi.fn(async () => {}),
+      restoreInitial: vi.fn(async () => {}),
+    };
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    try {
+      await dispatchWithContext({
+        context: createContext({
+          reactionApi: reactionApi as never,
+          removeAckAfterReply: true,
+          statusReactionController: statusReactionController as never,
+        }),
+        streamMode: "off",
+      });
+
+      expect(statusReactionController.setDone).toHaveBeenCalledTimes(1);
+      expect(reactionApi).not.toHaveBeenCalledWith(123, 456, []);
+
+      await vi.advanceTimersByTimeAsync(1500);
+
+      expect(reactionApi).toHaveBeenCalledWith(123, 456, []);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not clear Telegram status reactions after reply when removeAckAfterReply is disabled", async () => {
+    vi.useFakeTimers();
+    const reactionApi = vi.fn(async () => true);
+    const statusReactionController = {
+      setThinking: vi.fn(async () => {}),
+      setCompacting: vi.fn(async () => {}),
+      setTool: vi.fn(async () => {}),
+      setDone: vi.fn(async () => {}),
+      setError: vi.fn(async () => {}),
+      setQueued: vi.fn(async () => {}),
+      cancelPending: vi.fn(() => {}),
+      clear: vi.fn(async () => {}),
+      restoreInitial: vi.fn(async () => {}),
+    };
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    try {
+      await dispatchWithContext({
+        context: createContext({
+          reactionApi: reactionApi as never,
+          removeAckAfterReply: false,
+          statusReactionController: statusReactionController as never,
+        }),
+        streamMode: "off",
+      });
+
+      await vi.advanceTimersByTimeAsync(1500);
+
+      expect(statusReactionController.setDone).toHaveBeenCalledTimes(1);
+      expect(reactionApi).not.toHaveBeenCalledWith(123, 456, []);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses resolved DM config for auto-topic-label overrides", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
     loadSessionStore.mockReturnValue({ s1: {} });

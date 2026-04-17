@@ -16,7 +16,7 @@ import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history"
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isAbortRequestText, type ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import {
@@ -1116,9 +1116,16 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (statusReactionController) {
-    void Promise.resolve(statusReactionController.setDone()).catch((err: unknown) => {
-      logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
-    });
+    void Promise.resolve(statusReactionController.setDone())
+      .then(async () => {
+        if (!removeAckAfterReply) return;
+        if (!msg.message_id || !reactionApi) return;
+        await sleepWithAbort(1500);
+        await reactionApi(chatId, msg.message_id, []);
+      })
+      .catch((err: unknown) => {
+        logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
+      });
   } else {
     removeAckReactionAfterReply({
       removeAfterReply: removeAckAfterReply,
