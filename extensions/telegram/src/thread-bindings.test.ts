@@ -95,6 +95,66 @@ describe("telegram thread bindings", () => {
     expect(manager.getByConversationId("-100200300:topic:77")?.boundBy).toBe("user-1");
   });
 
+  it("rejects ACP current bindings on the protected primary Telegram DM", async () => {
+    const manager = createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+
+    await expect(
+      getSessionBindingService().bind({
+        targetSessionKey: "agent:codex:acp:protected-primary",
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "8582659364",
+        },
+        placement: "current",
+      }),
+    ).rejects.toMatchObject({
+      code: "BINDING_PROTECTED_CONVERSATION",
+      message: expect.stringMatching(/Primary Telegram direct conversations/),
+    });
+
+    expect(
+      getSessionBindingService().resolveByConversation({
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "8582659364",
+      }),
+    ).toBeNull();
+    expect(manager.listBindings()).toEqual([]);
+  });
+
+  it("still allows named-account Telegram direct ACP bindings outside the protected lane", async () => {
+    const manager = createTelegramThreadBindingManager({
+      accountId: "atlas",
+      persist: false,
+      enableSweeper: false,
+    });
+
+    const bound = await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:atlas-direct",
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "atlas",
+        conversationId: "8582659364",
+      },
+      placement: "current",
+    });
+
+    expect(bound.conversation.channel).toBe("telegram");
+    expect(bound.conversation.accountId).toBe("atlas");
+    expect(bound.conversation.conversationId).toBe("8582659364");
+    expect(bound.targetSessionKey).toBe("agent:codex:acp:atlas-direct");
+    expect(manager.getByConversationId("8582659364")?.targetSessionKey).toBe(
+      "agent:codex:acp:atlas-direct",
+    );
+  });
+
   it("rejects child placement when conversationId is a bare topic ID with no group context", async () => {
     createTelegramThreadBindingManager({
       accountId: "default",
@@ -279,7 +339,7 @@ describe("telegram thread bindings", () => {
     process.env.OPENCLAW_STATE_DIR = stateDirOverride;
 
     createTelegramThreadBindingManager({
-      accountId: "default",
+      accountId: "atlas",
       persist: true,
       enableSweeper: false,
     });
@@ -289,7 +349,7 @@ describe("telegram thread bindings", () => {
       targetKind: "session",
       conversation: {
         channel: "telegram",
-        accountId: "default",
+        accountId: "atlas",
         conversationId: "8460800771",
       },
     });
@@ -302,7 +362,7 @@ describe("telegram thread bindings", () => {
     await __testing.resetTelegramThreadBindingsForTests();
 
     const reloaded = createTelegramThreadBindingManager({
-      accountId: "default",
+      accountId: "atlas",
       persist: true,
       enableSweeper: false,
     });
