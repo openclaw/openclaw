@@ -685,12 +685,14 @@ async function wakeSlackReplySession(params: {
 
   // Derive thread-scoped session key when the interaction came from a thread,
   // consistent with prepareSlackMessage's resolveThreadSessionKeys usage.
-  const threadId = parsed.threadTs ?? undefined;
+  // For DMs, fall back to messageTs for auto-threading (matches resolveSlackThreadContext).
+  const threadId = parsed.threadTs ?? (isDirectMessage ? parsed.messageTs : undefined);
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: route.sessionKey,
     threadId,
   });
   const sessionKey = threadKeys.sessionKey;
+  const parentSessionKey = threadKeys.parentSessionKey;
 
   const ctxPayload = finalizeInboundContext({
     Body: replyText,
@@ -711,6 +713,7 @@ async function wakeSlackReplySession(params: {
     AccountId: route.accountId,
     OriginatingChannel: "slack" as const,
     OriginatingTo: isDirectMessage ? `user:${parsed.userId}` : `channel:${parsed.channelId}`,
+    ...(parentSessionKey ? { ParentSessionKey: parentSessionKey } : {}),
   });
 
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
