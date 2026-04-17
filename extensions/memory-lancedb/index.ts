@@ -150,6 +150,29 @@ class MemoryDB {
     await this.ensureInitialized();
     return this.table!.countRows();
   }
+
+  async reindex(): Promise<{ rowCount: number; indexed: boolean }> {
+    await this.ensureInitialized();
+    const rowCount = await this.table!.countRows();
+    if (rowCount === 0) {
+      return { rowCount, indexed: false };
+    }
+    const lancedb = await loadLanceDbModule();
+    await this.table!.createIndex("vector", {
+      config: lancedb.Index.ivfFlat(),
+      replace: true,
+    });
+    return { rowCount, indexed: true };
+  }
+
+  async dropIndexes(): Promise<{ dropped: string[] }> {
+    await this.ensureInitialized();
+    const indexNames = (await this.table!.listIndices()).map((index) => index.name).toSorted();
+    for (const indexName of indexNames) {
+      await this.table!.dropIndex(indexName);
+    }
+    return { dropped: indexNames };
+  }
 }
 
 // ============================================================================
@@ -505,6 +528,30 @@ export default definePluginEntry({
           .action(async () => {
             const count = await db.count();
             console.log(`Total memories: ${count}`);
+          });
+
+        memory
+          .command("reindex")
+          .description("Recreate the LanceDB IVF_FLAT vector index for the vector column")
+          .action(async () => {
+            const { rowCount, indexed } = await db.reindex();
+            if (!indexed) {
+              console.log(`No memories to reindex (rows: ${rowCount})`);
+              return;
+            }
+            console.log(`Recreated vector index for column: vector (rows: ${rowCount})`);
+          });
+
+        memory
+          .command("drop-index")
+          .description("Drop all LanceDB indexes for the memories table")
+          .action(async () => {
+            const { dropped } = await db.dropIndexes();
+            if (dropped.length === 0) {
+              console.log("No memory indexes to drop");
+              return;
+            }
+            console.log(`Dropped ${dropped.length} memory index(es): ${dropped.join(", ")}`);
           });
 
         memory
