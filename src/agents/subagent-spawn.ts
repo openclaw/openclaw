@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
 import {
   mapToolContextToSpawnedRunMetadata,
@@ -72,13 +73,6 @@ type SubagentSpawnDeps = {
   getGlobalHookRunner: () => SubagentLifecycleHookRunner | null;
   loadConfig: typeof loadConfig;
   updateSessionStore: typeof updateSessionStore;
-};
-
-type SubagentDeliveryOrigin = {
-  channel?: string;
-  accountId?: string;
-  to?: string;
-  threadId?: string | number;
 };
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
@@ -306,7 +300,7 @@ async function ensureThreadBindingForSubagentSpawn(params: {
     threadId?: string | number;
   };
 }): Promise<
-  { status: "ok"; deliveryOrigin?: SubagentDeliveryOrigin } | { status: "error"; error: string }
+  { status: "ok"; deliveryOrigin?: DeliveryContext } | { status: "error"; error: string }
 > {
   const hookRunner = params.hookRunner;
   if (!hookRunner?.hasHooks("subagent_spawning")) {
@@ -361,9 +355,7 @@ async function ensureThreadBindingForSubagentSpawn(params: {
   }
 }
 
-function resolveThreadBindingDeliveryOrigin(
-  childSessionKey: string,
-): SubagentDeliveryOrigin | undefined {
+function resolveThreadBindingDeliveryOrigin(childSessionKey: string): DeliveryContext | undefined {
   const activeBindings = getSessionBindingService()
     .listBySession(childSessionKey)
     .filter((binding) => binding.status === "active");
@@ -384,7 +376,7 @@ function resolveThreadBindingDeliveryOrigin(
     accountId: binding.conversation.accountId,
     to: target.to,
     threadId: target.threadId,
-  }) as SubagentDeliveryOrigin | undefined;
+  });
 }
 
 export async function spawnSubagentDirect(
@@ -431,7 +423,7 @@ export async function spawnSubagentDirect(
     accountId: ctx.agentAccountId,
     to: ctx.agentTo,
     threadId: ctx.agentThreadId,
-  }) as SubagentDeliveryOrigin | undefined;
+  });
   let childSessionOrigin = requesterOrigin;
   const hookRunner = subagentSpawnDeps.getGlobalHookRunner();
   const cfg = loadSubagentConfig();
