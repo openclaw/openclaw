@@ -27,6 +27,7 @@ import {
   type CronListJob,
 } from "./live-agent-probes.js";
 import { renderCatFacePngBase64 } from "./live-image-probe.js";
+import { getActiveMcpLoopbackRuntime } from "./mcp-http.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 // Aggregate docker live runs can contend on startup enough that the gateway
@@ -37,6 +38,21 @@ const CLI_GATEWAY_CONNECT_TIMEOUT_MS = 60_000;
 const CLI_CRON_MCP_PROBE_MAX_ATTEMPTS = 10;
 const CLI_CRON_MCP_PROBE_VERIFY_POLLS = 20;
 const CLI_CRON_MCP_PROBE_VERIFY_POLL_MS = 2_000;
+
+function shouldLogCliCronProbe(): boolean {
+  return (
+    isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG) ||
+    isTruthyEnvValue(process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT)
+  );
+}
+
+function logCliCronProbe(step: string, details?: Record<string, unknown>): void {
+  if (!shouldLogCliCronProbe()) {
+    return;
+  }
+  const suffix = details && Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : "";
+  console.error(`[gateway-cli-live:cron] ${step}${suffix}`);
+}
 
 export type BootstrapWorkspaceContext = {
   expectedInjectedFiles: string[];
@@ -197,6 +213,172 @@ export async function createBootstrapWorkspace(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+type LoopbackJsonRpcResponse = {
+  result?: unknown;
+  error?: { message?: string };
+};
+
+async function callLoopbackJsonRpc(params: {
+  sessionKey: string;
+  senderIsOwner: boolean;
+  messageProvider?: string;
+  accountId?: string;
+  body: Record<string, unknown>;
+}): Promise<LoopbackJsonRpcResponse> {
+  const runtime = getActiveMcpLoopbackRuntime();
+  if (!runtime) {
+    throw new Error("mcp loopback runtime is not active");
+  }
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${runtime.token}`,
+    "Content-Type": "application/json",
+    "x-session-key": params.sessionKey,
+    "x-openclaw-sender-is-owner": params.senderIsOwner ? "true" : "false",
+  };
+  if (params.messageProvider) {
+    headers["x-openclaw-message-channel"] = params.messageProvider;
+  }
+  if (params.accountId) {
+    headers["x-openclaw-account-id"] = params.accountId;
+  }
+  const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(params.body),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`mcp loopback http ${response.status}: ${text}`);
+  }
+  if (!text.trim()) {
+    return {};
+  }
+  const parsed = JSON.parse(text) as LoopbackJsonRpcResponse;
+  if (parsed.error?.message) {
+    throw new Error(`mcp loopback json-rpc error: ${parsed.error.message}`);
+  }
+  return parsed;
+}
+
+export async function verifyCliCronMcpLoopbackPreflight(params: {
+  sessionKey: string;
+  port: number;
+  token: string;
+  env: NodeJS.ProcessEnv;
+  senderIsOwner: boolean;
+  messageProvider?: string;
+  accountId?: string;
+}): Promise<void> {
+  const cronProbe = createLiveCronProbeSpec();
+  logCliCronProbe("loopback-preflight:start", {
+    sessionKey: params.sessionKey,
+    senderIsOwner: params.senderIsOwner,
+    jobName: cronProbe.name,
+  });
+
+  await callLoopbackJsonRpc({
+    sessionKey: params.sessionKey,
+    senderIsOwner: params.senderIsOwner,
+    messageProvider: params.messageProvider,
+    accountId: params.accountId,
+    body: {
+      jsonrpc: "2.0",
+      id: "init",
+      method: "initialize",
+      params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "vitest" } },
+    },
+  });
+  await callLoopbackJsonRpc({
+    sessionKey: params.sessionKey,
+    senderIsOwner: params.senderIsOwner,
+    messageProvider: params.messageProvider,
+    accountId: params.accountId,
+    body: { jsonrpc: "2.0", method: "notifications/initialized" },
+  });
+  const toolsList = await callLoopbackJsonRpc({
+    sessionKey: params.sessionKey,
+    senderIsOwner: params.senderIsOwner,
+    messageProvider: params.messageProvider,
+    accountId: params.accountId,
+    body: { jsonrpc: "2.0", id: "tools-list", method: "tools/list" },
+  });
+  const tools = Array.isArray((toolsList.result as { tools?: unknown[] } | undefined)?.tools)
+    ? (((toolsList.result as { tools?: unknown[] }).tools ?? []) as Array<{ name?: string }>)
+    : [];
+  const toolNames = tools
+    .map((tool) => (typeof tool.name === "string" ? tool.name : ""))
+    .filter(Boolean);
+  logCliCronProbe("loopback-preflight:tools", {
+    senderIsOwner: params.senderIsOwner,
+    toolCount: toolNames.length,
+    cronVisible: toolNames.includes("cron"),
+  });
+  if (!toolNames.includes("cron")) {
+    throw new Error(
+      `mcp loopback tools/list did not expose cron (senderIsOwner=${String(params.senderIsOwner)})`,
+    );
+  }
+
+  const toolCall = await callLoopbackJsonRpc({
+    sessionKey: params.sessionKey,
+    senderIsOwner: params.senderIsOwner,
+    messageProvider: params.messageProvider,
+    accountId: params.accountId,
+    body: {
+      jsonrpc: "2.0",
+      id: "cron-add",
+      method: "tools/call",
+      params: {
+        name: "cron",
+        arguments: JSON.parse(cronProbe.argsJson) as Record<string, unknown>,
+      },
+    },
+  });
+  const toolCallError =
+    (toolCall.result as { isError?: unknown } | undefined)?.isError === true ||
+    !(toolCall.result as { content?: unknown } | undefined);
+  logCliCronProbe("loopback-preflight:call", {
+    isError: toolCallError,
+    jobName: cronProbe.name,
+  });
+  if (toolCallError) {
+    throw new Error(`mcp loopback cron tools/call returned isError for job ${cronProbe.name}`);
+  }
+
+  const createdJob = await assertCronJobVisibleViaCli({
+    port: params.port,
+    token: params.token,
+    env: params.env,
+    expectedName: cronProbe.name,
+    expectedMessage: cronProbe.message,
+  });
+  if (!createdJob) {
+    throw new Error(`mcp loopback cron tools/call did not create job ${cronProbe.name}`);
+  }
+  assertCronJobMatches({
+    job: createdJob,
+    expectedName: cronProbe.name,
+    expectedMessage: cronProbe.message,
+    expectedSessionKey: params.sessionKey,
+  });
+  if (createdJob.id) {
+    await runOpenClawCliJson(
+      [
+        "cron",
+        "rm",
+        createdJob.id,
+        "--json",
+        "--url",
+        `ws://127.0.0.1:${params.port}`,
+        "--token",
+        params.token,
+      ],
+      params.env,
+    );
+  }
+  logCliCronProbe("loopback-preflight:done", { jobName: cronProbe.name });
 }
 
 export function shouldRetryCliCronMcpProbeReply(text: string): boolean {
@@ -494,6 +676,12 @@ export async function verifyCliCronMcpProbe(params: {
   let lastCronText = "";
 
   for (let attempt = 0; attempt < CLI_CRON_MCP_PROBE_MAX_ATTEMPTS && !createdJob; attempt += 1) {
+    logCliCronProbe("agent-attempt:start", {
+      attempt,
+      providerId: params.providerId,
+      sessionKey: params.sessionKey,
+      expectedJob: cronProbe.name,
+    });
     const runIdMcp = randomUUID();
     const cronResult = await params.client.request(
       "agent",
@@ -516,11 +704,18 @@ export async function verifyCliCronMcpProbe(params: {
     }
     lastCronText = extractPayloadText(cronResult?.result).trim();
     const retryableReply = shouldRetryCliCronMcpProbeReply(lastCronText);
+    logCliCronProbe("agent-attempt:reply", {
+      attempt,
+      retryableReply,
+      reply: lastCronText,
+    });
+    let pollsUsed = 0;
     for (
       let verifyAttempt = 0;
       verifyAttempt < CLI_CRON_MCP_PROBE_VERIFY_POLLS;
       verifyAttempt += 1
     ) {
+      pollsUsed = verifyAttempt + 1;
       createdJob = await assertCronJobVisibleViaCli({
         port: params.port,
         token: params.token,
@@ -535,16 +730,22 @@ export async function verifyCliCronMcpProbe(params: {
         await sleep(CLI_CRON_MCP_PROBE_VERIFY_POLL_MS);
       }
     }
+    logCliCronProbe("agent-attempt:verify", {
+      attempt,
+      pollsUsed,
+      createdJob: Boolean(createdJob),
+      retryableReply,
+    });
     if (!createdJob && !retryableReply) {
       throw new Error(
-        `cron cli verify could not find job ${cronProbe.name}: reply=${JSON.stringify(lastCronText)}`,
+        `cron cli verify could not find job ${cronProbe.name} after attempt ${attempt + 1}: reply=${JSON.stringify(lastCronText)}`,
       );
     }
   }
 
   if (!createdJob) {
     throw new Error(
-      `cron cli verify did not create job ${cronProbe.name}: reply=${JSON.stringify(lastCronText)}`,
+      `cron cli verify did not create job ${cronProbe.name} after ${CLI_CRON_MCP_PROBE_MAX_ATTEMPTS} attempts: reply=${JSON.stringify(lastCronText)}`,
     );
   }
   assertCronJobMatches({

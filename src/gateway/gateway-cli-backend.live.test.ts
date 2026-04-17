@@ -24,6 +24,7 @@ import {
   shouldRunCliMcpProbe,
   snapshotCliBackendLiveEnv,
   type SystemPromptReport,
+  verifyCliCronMcpLoopbackPreflight,
   verifyCliCronMcpProbe,
   verifyCliBackendImageProbe,
   withClaudeMcpConfigOverrides,
@@ -353,6 +354,18 @@ describeLive("gateway live (cli backend)", () => {
         }
 
         if (enableCliMcpProbe) {
+          logCliBackendLiveStep("cron-mcp-loopback-preflight:start", {
+            sessionKey,
+            senderIsOwner: true,
+          });
+          await verifyCliCronMcpLoopbackPreflight({
+            sessionKey,
+            port,
+            token,
+            env: process.env,
+            senderIsOwner: true,
+          });
+          logCliBackendLiveStep("cron-mcp-loopback-preflight:done");
           logCliBackendLiveStep("cron-mcp-probe:start", { sessionKey });
           await verifyCliCronMcpProbe({
             client,
