@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HealthSummary } from "./health.js";
 import {
+  buildStatusA2AValue,
   buildStatusFooterLines,
   buildStatusHealthRows,
   buildStatusPairingRecoveryLines,
@@ -13,6 +14,27 @@ import {
 } from "./status.command-sections.ts";
 
 describe("status.command-sections", () => {
+  it("accepts contributor-first a2a rows without requiring summary.a2a", () => {
+    expect(
+      buildStatusA2AValue({
+        summary: {
+          contributors: [
+            {
+              id: "a2a",
+              label: "A2A",
+              state: "warn",
+              summary: "plugin-owned broker status",
+              details: ["1 active"],
+            },
+          ],
+        },
+        ok: (value) => `ok(${value})`,
+        warn: (value) => `warn(${value})`,
+        muted: (value) => `muted(${value})`,
+      }),
+    ).toBe("warn(plugin-owned broker status) · 1 active");
+  });
+
   it("formats security audit lines with finding caps and follow-up commands", () => {
     const lines = buildStatusSecurityAuditLines({
       securityAudit: {

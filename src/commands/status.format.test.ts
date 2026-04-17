@@ -36,4 +36,17 @@ describe("status cache formatting", () => {
       }),
     ).toBe("5.0k/10k (50%) · 🗄️ 67% cached");
   });
+
+  it("avoids implying context utilization when used tokens exceed the context window", () => {
+    expect(
+      formatTokensCompact({
+        inputTokens: 4_090_555,
+        cacheRead: 3_960_832,
+        cacheWrite: 0,
+        totalTokens: 8_051_387,
+        contextTokens: 1_050_000,
+        percentUsed: null,
+      }),
+    ).toBe("8051k used · 1050k ctx · 🗄️ 49% cached");
+  });
 });

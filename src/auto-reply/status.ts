@@ -201,9 +201,12 @@ const formatTokens = (total: number | null | undefined, contextTokens: number | 
     const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
     return `?/${ctxLabel}`;
   }
-  const pct = ctx ? Math.min(999, Math.round((total / ctx) * 100)) : null;
   const totalLabel = formatTokenCount(total);
   const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
+  if (ctx && total > ctx) {
+    return `${totalLabel} used · ${ctxLabel} ctx`;
+  }
+  const pct = ctx ? Math.min(999, Math.round((total / ctx) * 100)) : null;
   return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
 };
 

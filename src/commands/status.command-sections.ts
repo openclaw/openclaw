@@ -2,11 +2,11 @@ import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { TableColumn } from "../terminal/table.js";
-import { resolvePreferredStatusA2AInput } from "./status.a2a-input.js";
-import type { SessionStatus, StatusContributorSummary, StatusSummary } from "./status.types.js";
 import type { HealthSummary } from "./health.js";
+import { resolvePreferredStatusA2AInput } from "./status.a2a-input.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import type { MemoryStatusSnapshot, MemoryPluginStatus } from "./status.scan.shared.js";
+import type { SessionStatus, StatusContributorSummary, StatusSummary } from "./status.types.js";
 
 type AgentStatusLike = {
   defaultId?: string | null;
@@ -15,7 +15,10 @@ type AgentStatusLike = {
   agents: AgentLocalStatus[];
 };
 
-type SummaryLike = Pick<StatusSummary, "a2a" | "contributors" | "tasks" | "taskAudit" | "heartbeat" | "sessions">;
+type SummaryLike = Pick<
+  StatusSummary,
+  "a2a" | "contributors" | "tasks" | "taskAudit" | "heartbeat" | "sessions"
+>;
 type MemoryLike = MemoryStatusSnapshot | null;
 type MemoryPluginLike = MemoryPluginStatus;
 type SessionsRecentLike = SessionStatus;
@@ -105,7 +108,9 @@ function decorateStatusContributorSummary(params: {
 function listStatusContributorDetails(contributor: StatusContributorSummary): string[] {
   return Array.isArray(contributor.details)
     ? contributor.details
-        .filter((detail): detail is string => typeof detail === "string" && detail.trim().length > 0)
+        .filter(
+          (detail): detail is string => typeof detail === "string" && detail.trim().length > 0,
+        )
         .map((detail) => detail.trim())
     : [];
 }
@@ -156,7 +161,7 @@ export function buildStatusContributorOverviewRows(params: {
 }
 
 export function buildStatusA2AValue(params: {
-  summary: Pick<SummaryLike, "a2a" | "contributors">;
+  summary: Pick<SummaryLike, "contributors"> & Partial<Pick<SummaryLike, "a2a">>;
   ok: (value: string) => string;
   warn: (value: string) => string;
   muted: (value: string) => string;

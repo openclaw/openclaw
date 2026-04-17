@@ -3,9 +3,25 @@ import {
   extractContentFromMessage,
   extractTextFromMessage,
   extractThinkingFromMessage,
+  formatContextUsageLine,
+  formatTokens,
   isCommandMessage,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
+
+describe("token formatting", () => {
+  it("avoids implying context utilization when total tokens exceed the context window", () => {
+    expect(formatTokens(8_051_387, 1_050_000)).toBe("tokens 8.1m used · 1.1m ctx");
+    expect(
+      formatContextUsageLine({
+        total: 8_051_387,
+        context: 1_050_000,
+        remaining: null,
+        percent: null,
+      }),
+    ).toBe("tokens 8.1m used · 1.1m ctx");
+  });
+});
 
 describe("extractTextFromMessage", () => {
   it("prefers final_answer text over commentary text for assistant messages", () => {

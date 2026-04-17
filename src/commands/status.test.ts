@@ -766,6 +766,32 @@ describe("statusCommand", () => {
     });
   });
 
+  it("does not report impossible context utilization percentages", async () => {
+    mocks.loadSessionStore.mockReturnValue({
+      "+1000": {
+        ...createDefaultSessionStoreEntry(),
+        inputTokens: 4_090_555,
+        outputTokens: 29_551,
+        cacheRead: 3_960_832,
+        cacheWrite: 0,
+        totalTokens: 8_051_387,
+        contextTokens: 1_050_000,
+      },
+    });
+
+    runtimeLogMock.mockClear();
+    await statusCommand({ json: true }, runtime as never);
+    const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+    expect(payload.sessions.recent[0].percentUsed).toBeNull();
+    expect(payload.sessions.recent[0].remainingTokens).toBeNull();
+
+    const logs = await runStatusAndGetLogs();
+    expect(logs.some((line) => line.includes("8051k used") && line.includes("1050k ctx"))).toBe(
+      true,
+    );
+    expect(logs.some((line) => line.includes("767%"))).toBe(false);
+  });
+
   it("prints unknown usage in formatted output when totalTokens is missing", async () => {
     await withUnknownUsageStore(async () => {
       const logs = await runStatusAndGetLogs();

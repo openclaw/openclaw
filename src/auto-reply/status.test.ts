@@ -408,6 +408,27 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Context: 200k/1.0m");
   });
 
+  it("avoids impossible context percentages when stored prompt tokens exceed the context window", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai-codex/gpt-5.4",
+        contextTokens: 1_048_576,
+      },
+      sessionEntry: {
+        sessionId: "ctx-over",
+        updatedAt: 0,
+        totalTokens: 8_051_387,
+        contextTokens: 1_050_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Context: 8.1m used · 1.1m ctx");
+    expect(normalizeTestText(text)).not.toContain("767%");
+  });
+
   it("recomputes context window from the active model after switching away from a smaller session override", () => {
     const sessionEntry = {
       sessionId: "switch-back",

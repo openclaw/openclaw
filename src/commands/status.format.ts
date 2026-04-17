@@ -28,9 +28,10 @@ export const formatTokensCompact = (
     result = ctx ? `unknown/${formatKTokens(ctx)} (?%)` : "unknown used";
   } else if (!ctx) {
     result = `${formatKTokens(used)} used`;
+  } else if (sess.percentUsed != null) {
+    result = `${formatKTokens(used)}/${formatKTokens(ctx)} (${sess.percentUsed}%)`;
   } else {
-    const pctLabel = sess.percentUsed != null ? `${sess.percentUsed}%` : "?%";
-    result = `${formatKTokens(used)}/${formatKTokens(ctx)} (${pctLabel})`;
+    result = `${formatKTokens(used)} used · ${formatKTokens(ctx)} ctx`;
   }
 
   const cacheStats = resolvePromptCacheStats(sess);

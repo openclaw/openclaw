@@ -378,6 +378,9 @@ export function formatTokens(total?: number | null, context?: number | null) {
   if (context == null) {
     return `tokens ${totalLabel}`;
   }
+  if (typeof total === "number" && total > context) {
+    return `tokens ${totalLabel} used · ${formatTokenCount(context)} ctx`;
+  }
   const pct =
     typeof total === "number" && context > 0
       ? Math.min(999, Math.round((total / context) * 100))
@@ -398,6 +401,9 @@ export function formatContextUsageLine(params: {
     typeof params.remaining === "number" ? `${formatTokenCount(params.remaining)} left` : null;
   const pctLabel = pct !== null ? `${pct}%` : null;
   const extra = [remainingLabel, pctLabel].filter(Boolean).join(", ");
+  if (pct === null && typeof params.total === "number" && typeof params.context === "number") {
+    return `tokens ${totalLabel} used · ${ctxLabel} ctx`;
+  }
   return `tokens ${totalLabel}/${ctxLabel}${extra ? ` (${extra})` : ""}`;
 }
 
