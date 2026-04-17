@@ -351,7 +351,7 @@ struct MacNodeRuntimeTests {
     }
 
     @Test func `handle invoke screen snapshot rejects oversized payloads`() async throws {
-        let payloadSize = 20_000_000
+        let payloadSize = 19_660_800
 
         @MainActor
         final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {

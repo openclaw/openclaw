@@ -5,7 +5,9 @@ import OpenClawKit
 
 actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
-    private static let maxScreenSnapshotImageBytes = (maxGatewayPayloadBytes / 4) * 3
+    private static let maxScreenSnapshotEnvelopeReserveBytes = 1024
+    private static let maxScreenSnapshotImageBytes =
+        ((maxGatewayPayloadBytes - maxScreenSnapshotEnvelopeReserveBytes) / 4) * 3
     private let cameraCapture = CameraCaptureService()
     private let makeMainActorServices: () async -> any MacNodeRuntimeMainActorServices
     private let browserProxyRequest: @Sendable (String?) async throws -> String
