@@ -433,6 +433,8 @@ export function renderConfigForm(props: ConfigFormProps) {
     `;
   }
 
+  const isSingleTopLevelSection = filteredEntries.length === 1 && !subsectionContext;
+
   const renderSectionCard = (params: {
     id: string;
     sectionKey: string;
@@ -443,15 +445,19 @@ export function renderConfigForm(props: ConfigFormProps) {
     path: Array<string | number>;
   }) => html`
     <section class="config-section-card" id=${params.id}>
-      <div class="config-section-card__header">
-        <span class="config-section-card__icon">${getSectionIcon(params.sectionKey)}</span>
-        <div class="config-section-card__titles">
-          <h3 class="config-section-card__title">${params.label}</h3>
-          ${params.description
-            ? html`<p class="config-section-card__desc">${params.description}</p>`
-            : nothing}
-        </div>
-      </div>
+      ${!isSingleTopLevelSection
+        ? html`
+            <div class="config-section-card__header">
+              <span class="config-section-card__icon">${getSectionIcon(params.sectionKey)}</span>
+              <div class="config-section-card__titles">
+                <h3 class="config-section-card__title">${params.label}</h3>
+                ${params.description
+                  ? html`<p class="config-section-card__desc">${params.description}</p>`
+                  : nothing}
+              </div>
+            </div>
+          `
+        : nothing}
       <div class="config-section-card__content">
         ${renderNode({
           schema: params.node,
