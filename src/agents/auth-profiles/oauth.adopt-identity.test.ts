@@ -79,8 +79,8 @@ vi.mock("./doctor.js", () => ({
 }));
 
 vi.mock("./external-cli-sync.js", () => ({
-  syncExternalCliCredentials: () => false,
   readManagedExternalCliCredential: () => null,
+  resolveExternalCliAuthProfiles: () => [],
   areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
 }));
 

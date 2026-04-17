@@ -72,8 +72,8 @@ vi.mock("./external-auth.js", () => ({
 }));
 
 vi.mock("./external-cli-sync.js", () => ({
-  syncExternalCliCredentials: () => false,
   readManagedExternalCliCredential: () => null,
+  resolveExternalCliAuthProfiles: () => [],
   areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
 }));
 

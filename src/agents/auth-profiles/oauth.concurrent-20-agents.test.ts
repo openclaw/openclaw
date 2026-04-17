@@ -65,8 +65,8 @@ vi.mock("./doctor.js", () => ({
 // credential files; it is slow and can pollute test state. Stub it to a no-op
 // so the suite only exercises in-repo auth-profile logic.
 vi.mock("./external-cli-sync.js", () => ({
-  syncExternalCliCredentials: () => false,
   readManagedExternalCliCredential: () => null,
+  resolveExternalCliAuthProfiles: () => [],
   areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
 }));
 
