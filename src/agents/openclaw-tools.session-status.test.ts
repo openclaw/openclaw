@@ -650,10 +650,12 @@ describe("session_status tool", () => {
     const firstContent = result.content?.[0];
     const text = (firstContent as { text: string } | undefined)?.text ?? "";
 
-    expect(text).toContain("🔁 A2A: broker off, 1 active");
+    expect(text).toContain("🔁 A2A: broker disabled, 1 active task");
+    expect(text).toContain("task task-active");
     expect(text).toContain("[running]");
+    expect(text).toContain("age ");
     expect(text).toContain("delivery pending");
-    expect(text).toContain("heartbeat");
+    expect(text).toContain("last heartbeat");
     expect(text).not.toContain("should stay hidden");
   });
 
@@ -686,9 +688,10 @@ describe("session_status tool", () => {
     const firstContent = result.content?.[0];
     const text = (firstContent as { text: string } | undefined)?.text ?? "";
 
-    expect(text).toContain("🔁 A2A: broker off, 1 recent failure");
+    expect(text).toContain("🔁 A2A: broker disabled, 1 recent failure");
+    expect(text).toContain("task task-failed");
     expect(text).toContain("[failed]");
-    expect(text).toContain("Permission denied by operator policy");
+    expect(text).toContain("permission_denied: Permission denied by operator policy");
   });
 
   it("prefers injected contributor-first A2A summary over legacy session index output", async () => {
@@ -730,7 +733,7 @@ describe("session_status tool", () => {
 
     expect(text).toContain("🔁 A2A: plugin-owned broker status · 1 active");
     expect(text).not.toContain("[running]");
-    expect(text).not.toContain("broker off");
+    expect(text).not.toContain("broker disabled");
   });
 
   it("accepts normalized contributor-first A2A input without summary.a2a", async () => {
@@ -767,7 +770,47 @@ describe("session_status tool", () => {
 
     expect(text).toContain("🔁 A2A: plugin-owned broker status · 1 active · waiting on broker");
     expect(text).not.toContain("[running]");
-    expect(text).not.toContain("broker off");
+    expect(text).not.toContain("broker disabled");
+  });
+
+  it("shows when the standalone broker adapter is enabled", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      plugins: {
+        entries: {
+          "a2a-broker-adapter": {
+            enabled: true,
+            config: {
+              baseUrl: "https://broker.example",
+            },
+          },
+        },
+      },
+    };
+    const env = await makeA2AEnv();
+    await writeA2ATaskLog({
+      env,
+      sessionKey: "agent:main:main",
+      taskId: "task-active",
+      at: 10,
+      events: [
+        createA2ATaskAcceptedEvent({ taskId: "task-active", at: 11 }),
+        createA2AWorkerStartedEvent({ taskId: "task-active", at: 12 }),
+      ],
+    });
+
+    const tool = createSessionStatusTool({ agentSessionKey: "agent:main:main" });
+    const result = await tool.execute("tc-a2a-broker-enabled", { sessionKey: "agent:main:main" });
+    const firstContent = result.content?.[0];
+    const text = (firstContent as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("🔁 A2A: broker enabled, 1 active task");
   });
 
   it("hides stale completed task rows from session_status output", async () => {

@@ -194,7 +194,20 @@ function formatSessionTaskLine(params: {
 }
 
 function formatA2ATaskStatusLabel(status: string): string {
-  return status.replaceAll("_", " ");
+  switch (status) {
+    case "waiting_reply":
+      return "waiting on reply";
+    case "waiting_external":
+      return "waiting on external";
+    case "timed_out":
+      return "timed out";
+    default:
+      return status.replaceAll("_", " ");
+  }
+}
+
+function formatCountLabel(count: number, singular: string, plural?: string): string {
+  return `${count} ${count === 1 ? singular : (plural ?? `${singular}s`)}`;
 }
 
 function resolveA2ABrokerAdapterLabel(cfg: OpenClawConfig): string {
@@ -204,15 +217,22 @@ function resolveA2ABrokerAdapterLabel(cfg: OpenClawConfig): string {
     pluginEntry.enabled !== false &&
     typeof baseUrl === "string" &&
     baseUrl.trim()
-    ? "broker on"
-    : "broker off";
+    ? "broker enabled"
+    : "broker disabled";
+}
+
+function formatA2ATaskErrorDetail(entry: A2ATaskStatusIndexEntry): string | undefined {
+  const code = entry.error?.code?.trim();
+  const message = entry.error?.message?.trim();
+  if (code && message && code !== message) {
+    return `${code}: ${message}`;
+  }
+  return message || code;
 }
 
 function formatA2ATaskDetail(entry: A2ATaskStatusIndexEntry): string | undefined {
   const raw =
-    entry.statusCategory === "terminal-failure"
-      ? (entry.error?.message ?? entry.error?.code)
-      : entry.summary;
+    entry.statusCategory === "terminal-failure" ? formatA2ATaskErrorDetail(entry) : entry.summary;
   const sanitized = sanitizeTaskStatusText(raw, {
     errorContext: entry.statusCategory === "terminal-failure",
     maxChars: TASK_STATUS_DETAIL_MAX_CHARS,
@@ -250,7 +270,7 @@ function formatA2ATaskElapsed(
   now = Date.now(),
 ): string | undefined {
   const origin = entry.startedAt ?? entry.updatedAt;
-  return typeof origin === "number" ? formatRelativeDuration(origin, now) : undefined;
+  return typeof origin === "number" ? `age ${formatRelativeDuration(origin, now)}` : undefined;
 }
 
 function formatA2AHeartbeatAge(
@@ -260,7 +280,7 @@ function formatA2AHeartbeatAge(
   if (entry.statusCategory !== "active" || typeof entry.heartbeatAt !== "number") {
     return undefined;
   }
-  return `heartbeat ${formatRelativeDuration(entry.heartbeatAt, now)} ago`;
+  return `last heartbeat ${formatRelativeDuration(entry.heartbeatAt, now)} ago`;
 }
 
 function formatSessionA2AContributorLine(input: NormalizedStatusA2AInput): string | undefined {
@@ -291,15 +311,19 @@ function formatSessionA2ATaskLine(params: {
   const headlineParts: string[] = [resolveA2ABrokerAdapterLabel(cfg)];
 
   if (active.length > 0) {
-    headlineParts.push(`${active.length} active`);
+    headlineParts.push(formatCountLabel(active.length, "active task"));
   }
   if (waitingExternal.length > 0) {
-    headlineParts.push(`${waitingExternal.length} waiting external`);
+    headlineParts.push(
+      formatCountLabel(
+        waitingExternal.length,
+        "task waiting on external",
+        "tasks waiting on external",
+      ),
+    );
   }
   if (terminalFailures.length > 0) {
-    headlineParts.push(
-      `${terminalFailures.length} recent failure${terminalFailures.length === 1 ? "" : "s"}`,
-    );
+    headlineParts.push(formatCountLabel(terminalFailures.length, "recent failure"));
   }
   if (headlineParts.length === 0) {
     headlineParts.push(
@@ -310,9 +334,14 @@ function formatSessionA2ATaskLine(params: {
 
   const activeFocus = active.slice(0, 3);
   activeFocus.forEach((entry, idx) => {
-    const branch = idx === activeFocus.length - 1 && terminalFailures.length === 0 ? "└─" : "├─";
+    const hasMoreActive = active.length > activeFocus.length;
+    const branch =
+      idx === activeFocus.length - 1 && terminalFailures.length === 0 && !hasMoreActive
+        ? "└─"
+        : "├─";
     const detailBranch = branch === "└─" ? "   " : "│  ";
     const parts = [
+      `task ${entry.taskId}`,
       `[${formatA2ATaskStatusLabel(entry.executionStatus)}]`,
       formatA2ATaskDirection(entry),
       formatA2ATaskElapsed(entry, now),
@@ -329,16 +358,19 @@ function formatSessionA2ATaskLine(params: {
   });
 
   if (active.length > activeFocus.length) {
-    lines.push(`  ├─ …and ${active.length - activeFocus.length} more active`);
+    lines.push(
+      `  ├─ …and ${formatCountLabel(active.length - activeFocus.length, "more active task")}`,
+    );
   }
 
   const recentFailure = terminalFailures[0];
   if (recentFailure) {
     const failureParts = [
+      `task ${recentFailure.taskId}`,
       `[${formatA2ATaskStatusLabel(recentFailure.executionStatus)}]`,
       formatA2ATaskDirection(recentFailure),
       typeof recentFailure.updatedAt === "number"
-        ? `${formatRelativeDuration(recentFailure.updatedAt, now)} ago`
+        ? `last update ${formatRelativeDuration(recentFailure.updatedAt, now)} ago`
         : undefined,
       recentFailure.deliveryStatus === "none"
         ? undefined

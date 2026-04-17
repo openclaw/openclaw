@@ -9,6 +9,7 @@ const runA2ATaskRequestMock = vi.fn();
 const applyA2ATaskProtocolCancelMock = vi.fn();
 const applyA2ATaskProtocolUpdateMock = vi.fn();
 const loadA2ATaskProtocolStatusByIdMock = vi.fn();
+const errorShapeMock = vi.fn((code: string, message: string) => ({ code, message }));
 
 vi.mock("../../agents/a2a/openclaw-runtime.js", () => ({
   createOpenClawA2ABrokerRuntime: createOpenClawA2ABrokerRuntimeMock,
@@ -27,7 +28,7 @@ vi.mock("../protocol/index.js", () => ({
     INVALID_REQUEST: "invalid_request",
     NOT_FOUND: "not_found",
   },
-  errorShape: vi.fn(),
+  errorShape: errorShapeMock,
   validateA2ATaskCancelParams: vi.fn(() => true),
   validateA2ATaskRequestParams: vi.fn(() => true),
   validateA2ATaskStatusParams: vi.fn(() => true),
@@ -46,6 +47,7 @@ describe("a2a handlers", () => {
     applyA2ATaskProtocolCancelMock.mockReset();
     applyA2ATaskProtocolUpdateMock.mockReset();
     loadA2ATaskProtocolStatusByIdMock.mockReset();
+    errorShapeMock.mockClear();
 
     runA2ATaskRequestMock.mockResolvedValue({
       response: {
@@ -135,5 +137,93 @@ describe("a2a handlers", () => {
         runtime: injectedRuntime,
       }),
     );
+  });
+
+  it("logs request failures with target session context", async () => {
+    runA2ATaskRequestMock.mockRejectedValue(new Error("broker handshake timed out"));
+    const { a2aHandlers } = await import("./a2a.js");
+    const respond = vi.fn();
+    const context = {
+      logGateway: {
+        error: vi.fn(),
+      },
+    };
+
+    await a2aHandlers["a2a.task.request"]({
+      params: {
+        request: {
+          target: { sessionKey: "agent:worker:main" },
+        },
+      },
+      respond,
+      context,
+    } as never);
+
+    const failureMessage =
+      "A2A request failed for target session agent:worker:main: broker handshake timed out";
+    expect(context.logGateway.error).toHaveBeenCalledWith(failureMessage);
+    expect(errorShapeMock).toHaveBeenCalledWith("internal", failureMessage);
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "internal",
+      message: failureMessage,
+    });
+  });
+
+  it("logs cancel failures with task and session context", async () => {
+    applyA2ATaskProtocolCancelMock.mockRejectedValue(new Error("remote run already finished"));
+    const { a2aHandlers } = await import("./a2a.js");
+    const respond = vi.fn();
+    const context = {
+      logGateway: {
+        error: vi.fn(),
+      },
+    };
+
+    await a2aHandlers["a2a.task.cancel"]({
+      params: {
+        sessionKey: "agent:worker:main",
+        cancel: {
+          taskId: "task-9",
+        },
+      },
+      respond,
+      context,
+    } as never);
+
+    const failureMessage =
+      "A2A cancel failed for task task-9 in session agent:worker:main: remote run already finished";
+    expect(context.logGateway.error).toHaveBeenCalledWith(failureMessage);
+    expect(errorShapeMock).toHaveBeenCalledWith("invalid_request", failureMessage);
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "invalid_request",
+      message: failureMessage,
+    });
+  });
+
+  it("returns status not-found errors with session scope", async () => {
+    loadA2ATaskProtocolStatusByIdMock.mockResolvedValue(undefined);
+    const { a2aHandlers } = await import("./a2a.js");
+    const respond = vi.fn();
+    const context = {
+      logGateway: {
+        error: vi.fn(),
+      },
+    };
+
+    await a2aHandlers["a2a.task.status"]({
+      params: {
+        sessionKey: "agent:worker:main",
+        taskId: "task-missing",
+      },
+      respond,
+      context,
+    } as never);
+
+    const notFoundMessage = "A2A task task-missing was not found in session agent:worker:main";
+    expect(errorShapeMock).toHaveBeenCalledWith("not_found", notFoundMessage);
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "not_found",
+      message: notFoundMessage,
+    });
   });
 });

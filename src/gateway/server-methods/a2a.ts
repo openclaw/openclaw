@@ -60,6 +60,39 @@ type CreateA2AHandlersOptions = {
   isAnnounceSkip?: typeof defaultIsAnnounceSkip;
 };
 
+function formatGatewayErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function formatA2AActionScope(params: {
+  taskId?: string;
+  sessionKey?: string;
+  targetSessionKey?: string;
+}): string {
+  const scopeParts: string[] = [];
+  if (typeof params.taskId === "string" && params.taskId.trim()) {
+    scopeParts.push(`task ${params.taskId.trim()}`);
+  }
+  if (typeof params.sessionKey === "string" && params.sessionKey.trim()) {
+    scopeParts.push(`session ${params.sessionKey.trim()}`);
+  } else if (typeof params.targetSessionKey === "string" && params.targetSessionKey.trim()) {
+    scopeParts.push(`target session ${params.targetSessionKey.trim()}`);
+  }
+  return scopeParts.length > 0 ? ` for ${scopeParts.join(" in ")}` : "";
+}
+
+function formatA2AActionFailureMessage(
+  action: string,
+  err: unknown,
+  scope: Parameters<typeof formatA2AActionScope>[0] = {},
+): string {
+  return `A2A ${action} failed${formatA2AActionScope(scope)}: ${formatGatewayErrorMessage(err)}`;
+}
+
+function formatA2ATaskNotFoundMessage(params: { taskId: string; sessionKey: string }): string {
+  return `A2A task ${params.taskId} was not found in session ${params.sessionKey}`;
+}
+
 // ── Handlers ──
 
 export function createA2AHandlers(options: CreateA2AHandlersOptions = {}): GatewayRequestHandlers {
@@ -93,17 +126,11 @@ export function createA2AHandlers(options: CreateA2AHandlersOptions = {}): Gatew
         });
         respond(true, result.response);
       } catch (err) {
-        context.logGateway.error(
-          `a2a.task.request failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INTERNAL,
-            `a2a.task.request failed: ${err instanceof Error ? err.message : String(err)}`,
-          ),
-        );
+        const failureMessage = formatA2AActionFailureMessage("request", err, {
+          targetSessionKey: params.request.target.sessionKey,
+        });
+        context.logGateway.error(failureMessage);
+        respond(false, undefined, errorShape(ErrorCodes.INTERNAL, failureMessage));
       }
     },
 
@@ -120,19 +147,24 @@ export function createA2AHandlers(options: CreateA2AHandlersOptions = {}): Gatew
           respond(
             false,
             undefined,
-            errorShape(ErrorCodes.NOT_FOUND, `a2a task not found: ${params.update.taskId}`),
+            errorShape(
+              ErrorCodes.NOT_FOUND,
+              formatA2ATaskNotFoundMessage({
+                taskId: params.update.taskId,
+                sessionKey: params.sessionKey,
+              }),
+            ),
           );
           return;
         }
         respond(true, result);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        context.logGateway.error(`a2a.task.update failed: ${message}`);
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `a2a.task.update failed: ${message}`),
-        );
+        const failureMessage = formatA2AActionFailureMessage("update", err, {
+          taskId: params.update.taskId,
+          sessionKey: params.sessionKey,
+        });
+        context.logGateway.error(failureMessage);
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, failureMessage));
       }
     },
 
@@ -150,19 +182,24 @@ export function createA2AHandlers(options: CreateA2AHandlersOptions = {}): Gatew
           respond(
             false,
             undefined,
-            errorShape(ErrorCodes.NOT_FOUND, `a2a task not found: ${params.cancel.taskId}`),
+            errorShape(
+              ErrorCodes.NOT_FOUND,
+              formatA2ATaskNotFoundMessage({
+                taskId: params.cancel.taskId,
+                sessionKey: params.sessionKey,
+              }),
+            ),
           );
           return;
         }
         respond(true, result);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        context.logGateway.error(`a2a.task.cancel failed: ${message}`);
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `a2a.task.cancel failed: ${message}`),
-        );
+        const failureMessage = formatA2AActionFailureMessage("cancel", err, {
+          taskId: params.cancel.taskId,
+          sessionKey: params.sessionKey,
+        });
+        context.logGateway.error(failureMessage);
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, failureMessage));
       }
     },
 
@@ -179,23 +216,24 @@ export function createA2AHandlers(options: CreateA2AHandlersOptions = {}): Gatew
           respond(
             false,
             undefined,
-            errorShape(ErrorCodes.NOT_FOUND, `a2a task not found: ${params.taskId}`),
+            errorShape(
+              ErrorCodes.NOT_FOUND,
+              formatA2ATaskNotFoundMessage({
+                taskId: params.taskId,
+                sessionKey: params.sessionKey,
+              }),
+            ),
           );
           return;
         }
         respond(true, result);
       } catch (err) {
-        context.logGateway.error(
-          `a2a.task.status failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INTERNAL,
-            `a2a.task.status failed: ${err instanceof Error ? err.message : String(err)}`,
-          ),
-        );
+        const failureMessage = formatA2AActionFailureMessage("status lookup", err, {
+          taskId: params.taskId,
+          sessionKey: params.sessionKey,
+        });
+        context.logGateway.error(failureMessage);
+        respond(false, undefined, errorShape(ErrorCodes.INTERNAL, failureMessage));
       }
     },
   };
