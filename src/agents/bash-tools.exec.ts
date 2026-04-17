@@ -920,6 +920,67 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   };
 }
 
+function isInsideStringLiteral(content: string, index: number): boolean {
+  let inSingle = false;
+  let inDouble = false;
+  let inTripleSingle = false;
+  let inTripleDouble = false;
+  let i = 0;
+  while (i < index) {
+    const c = content[i];
+    const c2 = content[i + 1] ?? "";
+    const c3 = content[i + 2] ?? "";
+
+    if (inTripleDouble) {
+      if (c === '"' && c2 === '"' && c3 === '"') {
+        inTripleDouble = false;
+        i += 3;
+        continue;
+      }
+    } else if (inTripleSingle) {
+      if (c === "'" && c2 === "'" && c3 === "'") {
+        inTripleSingle = false;
+        i += 3;
+        continue;
+      }
+    } else if (inDouble) {
+      if (c === "\\") {
+        i += 2;
+        continue;
+      }
+      if (c === '"') {
+        inDouble = false;
+      }
+    } else if (inSingle) {
+      if (c === "\\") {
+        i += 2;
+        continue;
+      }
+      if (c === "'") {
+        inSingle = false;
+      }
+    } else {
+      if (c === "#") {
+        // Skip to end of line (Python/JS-style comment outside strings)
+        const nl = content.indexOf("\n", i);
+        i = nl === -1 ? content.length : nl;
+      } else if (c === '"' && c2 === '"' && c3 === '"') {
+        inTripleDouble = true;
+        i += 2;
+      } else if (c === "'" && c2 === "'" && c3 === "'") {
+        inTripleSingle = true;
+        i += 2;
+      } else if (c === '"') {
+        inDouble = true;
+      } else if (c === "'") {
+        inSingle = true;
+      }
+    }
+    i++;
+  }
+  return inSingle || inDouble || inTripleSingle || inTripleDouble;
+}
+
 async function validateScriptFileForShellBleed(params: {
   command: string;
   workdir: string;
@@ -988,13 +1049,17 @@ async function validateScriptFileForShellBleed(params: {
 
     // Common failure mode: shell env var syntax leaking into Python/JS.
     // We deliberately match all-caps/underscore vars to avoid false positives with `$` as a JS identifier.
-    const envVarRegex = /\$[A-Z_][A-Z0-9_]{1,}/g;
-    const first = envVarRegex.exec(content);
-    if (first) {
-      const idx = first.index;
+    // Skip `$` followed by `{` (f-strings / template literals) and matches inside string literals.
+    const envVarRegex = /\$[A-Z_][A-Z0-9_]{1,}(?!\{)/g;
+    let match: RegExpExecArray | null;
+    while ((match = envVarRegex.exec(content)) !== null) {
+      if (isInsideStringLiteral(content, match.index)) {
+        continue;
+      }
+      const idx = match.index;
       const before = content.slice(0, idx);
       const line = before.split("\n").length;
-      const token = first[0];
+      const token = match[0];
       throw new Error(
         [
           `exec preflight: detected likely shell variable injection (${token}) in ${target.kind} script: ${path.basename(

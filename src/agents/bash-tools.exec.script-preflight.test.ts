@@ -78,6 +78,55 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("does not block python scripts where $VAR appears only inside string literals", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const pyPath = path.join(tmp, "good.py");
+
+      await fs.writeFile(
+        pyPath,
+        [
+          "def main():",
+          "    '''sim: Execute on Simmer LMSR with $SIM (paper trading)'''",
+          "    cost = 42.50",
+          '    print(f"Total: ${cost:.2f}")',
+          "    help_text = \"Trading venue: 'sim' for $SIM paper trading\"",
+          "main()",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      const result = await tool.execute("call-string-literal", {
+        command: "python good.py",
+        workdir: tmp,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
+
+  it("does not block node scripts where $VAR appears only inside string literals", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const jsPath = path.join(tmp, "good.js");
+
+      await fs.writeFile(
+        jsPath,
+        ['const msg = "Price: $USD";', "console.log(msg);"].join("\n"),
+        "utf-8",
+      );
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      const result = await tool.execute("call-js-string-literal", {
+        command: "node good.js",
+        workdir: tmp,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
+
   it("blocks obvious shell-as-js output before node execution", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const jsPath = path.join(tmp, "bad.js");
