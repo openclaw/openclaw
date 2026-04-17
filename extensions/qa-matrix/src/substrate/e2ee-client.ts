@@ -37,6 +37,12 @@ type MatrixQaE2eeClientParams = {
   userId: string;
 };
 
+const MATRIX_QA_E2EE_SYNC_FILTER = {
+  room: {
+    ephemeral: { not_types: ["m.receipt"] },
+  },
+};
+
 export type MatrixQaE2eeScenarioClient = {
   acceptVerification(id: string): Promise<MatrixVerificationSummary>;
   bootstrapOwnDeviceVerification(params?: {
@@ -122,9 +128,9 @@ function buildMatrixQaE2eeStoragePaths(params: {
   outputDir: string;
   scenarioId: string;
 }) {
-  void params.scenarioId;
   const rootDir = path.join(params.outputDir, "matrix-e2ee", "accounts", params.actorId);
   const accountDir = path.join(rootDir, "account");
+  const scenarioKey = params.scenarioId.replace(/[^A-Za-z0-9_-]/g, "-").slice(-80);
   const runKey = path
     .basename(params.outputDir)
     .replace(/[^A-Za-z0-9_-]/g, "-")
@@ -136,7 +142,7 @@ function buildMatrixQaE2eeStoragePaths(params: {
     idbSnapshotPath: path.join(accountDir, "crypto-idb-snapshot.json"),
     recoveryKeyPath: path.join(accountDir, "recovery-key.json"),
     rootDir,
-    storagePath: path.join(accountDir, "sync-store.json"),
+    storagePath: path.join(rootDir, "scenarios", scenarioKey || "scenario", "sync-store.json"),
   };
 }
 
@@ -148,6 +154,7 @@ async function prepareMatrixQaE2eeStorage(params: {
   const storage = buildMatrixQaE2eeStoragePaths(params);
   await fs.mkdir(storage.rootDir, { recursive: true });
   await fs.mkdir(storage.accountDir, { recursive: true });
+  await fs.mkdir(path.dirname(storage.storagePath), { recursive: true });
   await fs.writeFile(storage.idbSnapshotPath, "[]\n", { flag: "wx" }).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
       throw error;
@@ -174,6 +181,7 @@ async function createMatrixQaE2eeMatrixClient(params: MatrixQaE2eeClientParams) 
     recoveryKeyPath: storage.recoveryKeyPath,
     ssrfPolicy: { allowPrivateNetwork: true },
     storagePath: storage.storagePath,
+    syncFilter: MATRIX_QA_E2EE_SYNC_FILTER,
     userId: params.userId,
   });
 }
@@ -394,6 +402,7 @@ export async function runMatrixQaE2eeBootstrap(
 }
 
 export const __testing = {
+  MATRIX_QA_E2EE_SYNC_FILTER,
   buildMatrixQaE2eeStoragePaths,
   findMatrixQaObservedEventMatch,
 };

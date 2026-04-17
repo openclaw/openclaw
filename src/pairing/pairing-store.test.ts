@@ -7,6 +7,48 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { resolveOAuthDir } from "../config/paths.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { withEnvAsync } from "../test-utils/env.js";
+
+vi.mock("../channels/plugins/pairing.js", () => ({
+  getPairingAdapter: () => null,
+}));
+
+vi.mock("../infra/file-lock.js", () => ({
+  withFileLock: async (_path: string, _options: unknown, fn: () => unknown) => await fn(),
+}));
+
+vi.mock("../plugin-sdk/json-store.js", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+
+  return {
+    readJsonFileWithFallback: async <T>(filePath: string, fallback: T) => {
+      let raw: string;
+      try {
+        raw = await fs.readFile(filePath, "utf8");
+      } catch (err) {
+        if ((err as { code?: string }).code === "ENOENT") {
+          return { value: fallback, exists: false };
+        }
+        return { value: fallback, exists: false };
+      }
+      try {
+        const parsed = JSON.parse(raw) as T;
+        return {
+          value: parsed ?? fallback,
+          exists: true,
+        };
+      } catch {
+        return { value: fallback, exists: true };
+      }
+    },
+    writeJsonFileAtomically: async (filePath: string, value: unknown) => {
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    },
+  };
+});
+
+import * as jsonStore from "../plugin-sdk/json-store.js";
 import {
   addChannelAllowFromStoreEntry,
   clearPairingAllowFromReadCacheForTest,
@@ -55,6 +97,11 @@ function resolvePairingFilePath(stateDir: string, channel: string) {
 function resolveAllowFromFilePath(stateDir: string, channel: string, accountId?: string) {
   const suffix = accountId ? `-${accountId}` : "";
   return path.join(resolveOAuthDir(process.env, stateDir), `${channel}${suffix}-allowFrom.json`);
+}
+
+async function clearOAuthFixtures(stateDir: string) {
+  clearPairingAllowFromReadCacheForTest();
+  await fs.rm(resolveOAuthDir(process.env, stateDir), { recursive: true, force: true });
 }
 
 async function writeAllowFromFixture(params: {
@@ -441,140 +488,127 @@ describe("pairing store", () => {
     });
   });
 
-  it.each([
-    {
-      name: "does not read legacy channel-scoped allowFrom for non-default account ids",
-      setup: async (stateDir: string) => {
-        await seedTelegramAllowFromFixtures({
-          stateDir,
-          scopedAccountId: "yy",
-          scopedAllowFrom: ["1003"],
-          legacyAllowFrom: ["1001", "*", "1002", "1001"],
-        });
-      },
-      accountId: "yy",
-      expected: ["1003"],
-    },
-    {
-      name: "does not fall back to legacy allowFrom when scoped file exists but is empty",
-      setup: async (stateDir: string) => {
-        await seedTelegramAllowFromFixtures({
-          stateDir,
-          scopedAccountId: "yy",
-          scopedAllowFrom: [],
-        });
-      },
-      accountId: "yy",
-      expected: [],
-    },
-    {
-      name: "keeps async and sync reads aligned for malformed scoped allowFrom files",
-      setup: async (stateDir: string) => {
-        await writeAllowFromFixture({
-          stateDir,
-          channel: "telegram",
-          allowFrom: ["1001"],
-        });
-        const malformedScopedPath = resolveAllowFromFilePath(stateDir, "telegram", "yy");
-        await fs.mkdir(path.dirname(malformedScopedPath), { recursive: true });
-        await fs.writeFile(malformedScopedPath, "{ this is not json\n", "utf8");
-      },
-      accountId: "yy",
-      expected: [],
-    },
-    {
-      name: "reads legacy channel-scoped allowFrom for default account",
-      setup: async (stateDir: string) => {
-        await seedDefaultAccountAllowFromFixture(stateDir);
-      },
-      accountId: DEFAULT_ACCOUNT_ID,
-      expected: ["1002", "1001"],
-    },
-    {
-      name: "uses default-account allowFrom when account id is omitted",
-      setup: async (stateDir: string) => {
-        await seedDefaultAccountAllowFromFixture(stateDir);
-      },
-      accountId: undefined,
-      expected: ["1002", "1001"],
-    },
-  ] as const)("$name", async ({ setup, accountId, expected }) => {
+  it("reads allowFrom variants with account-scoped isolation", async () => {
     await withTempStateDir(async (stateDir) => {
-      await setup(stateDir);
-      await expectAllowFromReadConsistencyCase({
-        ...(accountId !== undefined ? { accountId } : {}),
-        expected,
-      });
+      for (const { setup, accountId, expected } of [
+        {
+          setup: async () => {
+            await seedTelegramAllowFromFixtures({
+              stateDir,
+              scopedAccountId: "yy",
+              scopedAllowFrom: ["1003"],
+              legacyAllowFrom: ["1001", "*", "1002", "1001"],
+            });
+          },
+          accountId: "yy",
+          expected: ["1003"],
+        },
+        {
+          setup: async () => {
+            await seedTelegramAllowFromFixtures({
+              stateDir,
+              scopedAccountId: "yy",
+              scopedAllowFrom: [],
+            });
+          },
+          accountId: "yy",
+          expected: [],
+        },
+        {
+          setup: async () => {
+            await writeAllowFromFixture({
+              stateDir,
+              channel: "telegram",
+              allowFrom: ["1001"],
+            });
+            const malformedScopedPath = resolveAllowFromFilePath(stateDir, "telegram", "yy");
+            await fs.mkdir(path.dirname(malformedScopedPath), { recursive: true });
+            await fs.writeFile(malformedScopedPath, "{ this is not json\n", "utf8");
+          },
+          accountId: "yy",
+          expected: [],
+        },
+        {
+          setup: async () => {
+            await seedDefaultAccountAllowFromFixture(stateDir);
+          },
+          accountId: DEFAULT_ACCOUNT_ID,
+          expected: ["1002", "1001"],
+        },
+        {
+          setup: async () => {
+            await seedDefaultAccountAllowFromFixture(stateDir);
+          },
+          accountId: undefined,
+          expected: ["1002", "1001"],
+        },
+      ] as const) {
+        await clearOAuthFixtures(stateDir);
+        await setup();
+        await expectAllowFromReadConsistencyCase({
+          ...(accountId !== undefined ? { accountId } : {}),
+          expected,
+        });
+      }
     });
   });
 
-  it.each([
-    {
-      name: "does not reuse pairing requests across accounts for the same sender id",
-      run: async () => {
-        await withTempStateDir(async () => {
-          await expectPendingPairingRequestsIsolatedByAccount({
-            sharedId: "12345",
-            firstAccountId: "alpha",
-            secondAccountId: "beta",
-          });
-        });
-      },
-    },
-    {
-      name: "does not block a new account when other accounts already filled their own pending slots",
-      run: async () => {
-        await withTempStateDir(async () => {
-          for (const accountId of ["alpha", "beta", "gamma"]) {
-            const created = await upsertChannelPairingRequest({
-              channel: "telegram",
-              accountId,
-              id: `pending-${accountId}`,
-            });
-            expect(created.created).toBe(true);
-          }
+  it("keeps pending pairing requests isolated by account", async () => {
+    await withTempStateDir(async (stateDir) => {
+      await expectPendingPairingRequestsIsolatedByAccount({
+        sharedId: "12345",
+        firstAccountId: "alpha",
+        secondAccountId: "beta",
+      });
 
-          const delta = await upsertChannelPairingRequest({
-            channel: "telegram",
-            accountId: "delta",
-            id: "pending-delta",
-          });
-          expect(delta.created).toBe(true);
-
-          const deltaList = await listChannelPairingRequests("telegram", process.env, "delta");
-          const allPending = await listChannelPairingRequests("telegram");
-          expect(deltaList.map((entry) => entry.id)).toEqual(["pending-delta"]);
-          expect(allPending.map((entry) => entry.id)).toEqual([
-            "pending-alpha",
-            "pending-beta",
-            "pending-gamma",
-            "pending-delta",
-          ]);
+      await clearOAuthFixtures(stateDir);
+      for (const accountId of ["alpha", "beta", "gamma"]) {
+        const created = await upsertChannelPairingRequest({
+          channel: "telegram",
+          accountId,
+          id: `pending-${accountId}`,
         });
-      },
-    },
-  ] as const)("$name", async ({ run }) => {
-    await run();
+        expect(created.created).toBe(true);
+      }
+
+      const delta = await upsertChannelPairingRequest({
+        channel: "telegram",
+        accountId: "delta",
+        id: "pending-delta",
+      });
+      expect(delta.created).toBe(true);
+
+      const deltaList = await listChannelPairingRequests("telegram", process.env, "delta");
+      const allPending = await listChannelPairingRequests("telegram");
+      expect(deltaList.map((entry) => entry.id)).toEqual(["pending-delta"]);
+      expect(allPending.map((entry) => entry.id)).toEqual([
+        "pending-alpha",
+        "pending-beta",
+        "pending-gamma",
+        "pending-delta",
+      ]);
+    });
   });
 
-  it.each([
-    {
-      label: "async",
-      createReadSpy: () => vi.spyOn(fs, "readFile"),
-      readAllowFrom: () => readChannelAllowFromStore("telegram", process.env, "yy"),
-    },
-    {
-      label: "sync",
-      createReadSpy: () => vi.spyOn(fsSync, "readFileSync"),
-      readAllowFrom: async () => readChannelAllowFromStoreSync("telegram", process.env, "yy"),
-    },
-  ])("reuses cached $label allowFrom reads and invalidates on file updates", async (variant) => {
+  it("reuses cached allowFrom reads and invalidates on file updates", async () => {
     await withTempStateDir(async (stateDir) => {
-      await withAllowFromCacheReadSpy({
-        stateDir,
-        createReadSpy: variant.createReadSpy,
-        readAllowFrom: variant.readAllowFrom,
-      });
+      for (const variant of [
+        {
+          createReadSpy: () => vi.spyOn(jsonStore, "readJsonFileWithFallback"),
+          readAllowFrom: () => readChannelAllowFromStore("telegram", process.env, "yy"),
+        },
+        {
+          createReadSpy: () => vi.spyOn(fsSync, "readFileSync"),
+          readAllowFrom: async () => readChannelAllowFromStoreSync("telegram", process.env, "yy"),
+        },
+      ]) {
+        await clearOAuthFixtures(stateDir);
+        await withAllowFromCacheReadSpy({
+          stateDir,
+          createReadSpy: variant.createReadSpy,
+          readAllowFrom: variant.readAllowFrom,
+        });
+      }
     });
   });
 });

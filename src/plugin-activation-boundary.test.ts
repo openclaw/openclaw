@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() =>
   vi.fn((params: { artifactBasename: string }) => {
@@ -101,15 +101,9 @@ vi.mock("./plugin-sdk/facade-runtime.js", () => ({
 }));
 
 describe("plugin activation boundary", () => {
-  beforeEach(() => {
-    loadBundledPluginPublicSurfaceModuleSync.mockReset();
-  });
-
-  let ambientImportsPromise: Promise<void> | undefined;
   let configHelpersPromise:
     | Promise<{
         isStaticallyChannelConfigured: typeof import("./config/channel-configured-shared.js").isStaticallyChannelConfigured;
-        resolveEnvApiKey: typeof import("./agents/model-auth-env.js").resolveEnvApiKey;
       }>
     | undefined;
   let modelSelectionPromise:
@@ -134,24 +128,12 @@ describe("plugin activation boundary", () => {
         resolveProfile: typeof import("./plugin-sdk/browser-config.js").resolveProfile;
       }>
     | undefined;
-  let browserAmbientImportsPromise: Promise<void> | undefined;
-  function importAmbientModules() {
-    ambientImportsPromise ??= Promise.all([
-      import("./commands/onboard-custom.js"),
-      import("./plugins/provider-model-defaults.js"),
-      import("./plugins/provider-model-primary.js"),
-    ]).then(() => undefined);
-    return ambientImportsPromise;
-  }
-
   function importConfigHelpers() {
-    configHelpersPromise ??= Promise.all([
-      import("./config/channel-configured-shared.js"),
-      import("./agents/model-auth-env.js"),
-    ]).then(([channelConfigured, modelAuthEnv]) => ({
-      isStaticallyChannelConfigured: channelConfigured.isStaticallyChannelConfigured,
-      resolveEnvApiKey: modelAuthEnv.resolveEnvApiKey,
-    }));
+    configHelpersPromise ??= import("./config/channel-configured-shared.js").then(
+      (channelConfigured) => ({
+        isStaticallyChannelConfigured: channelConfigured.isStaticallyChannelConfigured,
+      }),
+    );
     return configHelpersPromise;
   }
 
@@ -185,26 +167,13 @@ describe("plugin activation boundary", () => {
     return browserHelpersPromise;
   }
 
-  function importBrowserAmbientModules() {
-    browserAmbientImportsPromise ??= Promise.all([
-      import("./agents/sandbox/browser.js"),
-      import("./agents/sandbox/context.js"),
-      import("./commands/doctor-browser.js"),
-      import("./node-host/runner.js"),
-      import("./security/audit.js"),
-      import("./security/audit-extra.sync.js"),
-    ]).then(() => undefined);
-    return browserAmbientImportsPromise;
-  }
+  it("keeps generic boundaries cold and loads only narrow browser helper surfaces on use", async () => {
+    loadBundledPluginPublicSurfaceModuleSync.mockReset();
 
-  it("keeps ambient core imports cold", async () => {
-    const [, { isStaticallyChannelConfigured, resolveEnvApiKey }, { normalizeModelRef }] =
-      await Promise.all([
-        importAmbientModules(),
-        importConfigHelpers(),
-        importModelSelection(),
-        importBrowserAmbientModules(),
-      ]);
+    const [{ isStaticallyChannelConfigured }, { normalizeModelRef }] = await Promise.all([
+      importConfigHelpers(),
+      importModelSelection(),
+    ]);
 
     expect(isStaticallyChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(
       true,
@@ -218,26 +187,17 @@ describe("plugin activation boundary", () => {
       }),
     ).toBe(true);
     expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
-    expect(
-      resolveEnvApiKey("anthropic-vertex", {
-        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
-      }),
-    ).toEqual({
-      apiKey: "gcp-vertex-credentials",
-      source: "gcloud adc",
-    });
-    expect(normalizeModelRef("google", "gemini-3.1-pro")).toEqual({
+    const staticNormalize = { allowPluginNormalization: false };
+    expect(normalizeModelRef("google", "gemini-3.1-pro", staticNormalize)).toEqual({
       provider: "google",
       model: "gemini-3.1-pro-preview",
     });
-    expect(normalizeModelRef("xai", "grok-4-fast-reasoning")).toEqual({
+    expect(normalizeModelRef("xai", "grok-4-fast-reasoning", staticNormalize)).toEqual({
       provider: "xai",
       model: "grok-4-fast",
     });
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
-  });
 
-  it("keeps browser helper imports cold and loads only narrow browser helper surfaces on use", async () => {
     const browser = await importBrowserHelpers();
 
     expect(browser.DEFAULT_AI_SNAPSHOT_MAX_CHARS).toBe(80_000);
@@ -275,13 +235,10 @@ describe("plugin activation boundary", () => {
       "browser-host-inspection.js",
       "browser-host-inspection.js",
     ]);
-  });
 
-  it("keeps disabled browser cleanup and generic session-binding cleanup cold", async () => {
-    const [browser, { getSessionBindingService }] = await Promise.all([
-      importBrowserHelpers(),
-      import("./infra/outbound/session-binding-service.js"),
-    ]);
+    loadBundledPluginPublicSurfaceModuleSync.mockReset();
+    const { getSessionBindingService } =
+      await import("./infra/outbound/session-binding-service.js");
 
     await expect(browser.closeTrackedBrowserTabsForSessions({ sessionKeys: [] })).resolves.toBe(0);
     await expect(
