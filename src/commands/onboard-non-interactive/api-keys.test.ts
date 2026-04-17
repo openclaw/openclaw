@@ -60,37 +60,54 @@ describe("resolveNonInteractiveApiKey", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
-  it("rejects flag input in secret-ref mode without broad env discovery", async () => {
-    const runtime = createRuntime();
-    resolveEnvApiKey.mockReturnValue(null);
-    const previousXaiApiKey = process.env.XAI_API_KEY;
-    delete process.env.XAI_API_KEY;
+  it.each([
+    {
+      provider: "xai",
+      flagValue: "xai-flag-key",
+      flagName: "--xai-api-key",
+      envVar: "XAI_API_KEY",
+    },
+    {
+      provider: "custom-models-custom-local",
+      flagValue: "custom-inline-key-should-not-leak",
+      flagName: "--custom-api-key",
+      envVar: "CUSTOM_API_KEY",
+    },
+  ])(
+    "rejects $flagName input in secret-ref mode without broad env discovery",
+    async ({ provider, flagValue, flagName, envVar }) => {
+      const runtime = createRuntime();
+      resolveEnvApiKey.mockReturnValue(null);
+      const previousValue = process.env[envVar];
+      delete process.env[envVar];
 
-    try {
-      const result = await resolveNonInteractiveApiKey({
-        provider: "xai",
-        cfg: {},
-        flagValue: "xai-flag-key",
-        flagName: "--xai-api-key",
-        envVar: "XAI_API_KEY",
-        runtime: runtime as never,
-        secretInputMode: "ref",
-      });
+      try {
+        const result = await resolveNonInteractiveApiKey({
+          provider,
+          cfg: {},
+          flagValue,
+          flagName,
+          envVar,
+          runtime: runtime as never,
+          secretInputMode: "ref",
+        });
 
-      expect(result).toBeNull();
-      expect(resolveEnvApiKey).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("--secret-input-mode ref"),
-      );
-    } finally {
-      if (previousXaiApiKey === undefined) {
-        delete process.env.XAI_API_KEY;
-      } else {
-        process.env.XAI_API_KEY = previousXaiApiKey;
+        const errorText = runtime.error.mock.calls.map(([message]) => String(message)).join("\n");
+        expect(result).toBeNull();
+        expect(resolveEnvApiKey).not.toHaveBeenCalled();
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+        expect(errorText).toContain(flagName);
+        expect(errorText).toContain(envVar);
+        expect(errorText).not.toContain(flagValue);
+      } finally {
+        if (previousValue === undefined) {
+          delete process.env[envVar];
+        } else {
+          process.env[envVar] = previousValue;
+        }
       }
-    }
-  });
+    },
+  );
 
   it("returns explicit env fallback keys when provider env discovery misses", async () => {
     const runtime = createRuntime();
