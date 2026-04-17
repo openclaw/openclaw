@@ -46,7 +46,7 @@ describe("config form renderer", () => {
           "gateway.auth.token": { label: "Gateway Token", sensitive: true },
         },
         unsupportedPaths: analysis.unsupportedPaths,
-        value: {},
+        value: { allowFrom: ["+1"], bind: "auto" },
         revealSensitive: true,
         onPatch,
       }),
@@ -79,22 +79,6 @@ describe("config form renderer", () => {
     checkbox.checked = true;
     checkbox.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["enabled"], true);
-  });
-
-  it("adds and removes array entries", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const analysis = rootAnalysis;
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { allowFrom: ["+1"] },
-        onPatch,
-      }),
-      container,
-    );
 
     const addButton = container.querySelector(".cfg-array__add");
     expect(addButton).not.toBeUndefined();
@@ -105,22 +89,6 @@ describe("config form renderer", () => {
     expect(removeButton).not.toBeUndefined();
     removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], []);
-  });
-
-  it("renders union literals as select options", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const analysis = rootAnalysis;
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { bind: "auto" },
-        onPatch,
-      }),
-      container,
-    );
 
     const tailnetButton = Array.from(
       container.querySelectorAll<HTMLButtonElement>(".cfg-segmented__btn"),
@@ -223,12 +191,7 @@ describe("config form renderer", () => {
     );
     expect(tags).toContain("security");
     expect(tags).toContain("secret");
-  });
 
-  it("filters by tag query", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const analysis = rootAnalysis;
     render(
       renderConfigForm({
         schema: analysis.schema,
@@ -330,7 +293,7 @@ describe("config form renderer", () => {
   });
 
   it("accepts renderable unions", () => {
-    const schema = {
+    const renderableUnionSchema = {
       type: "object",
       properties: {
         mixed: {
@@ -338,23 +301,19 @@ describe("config form renderer", () => {
         },
       },
     };
-    const analysis = analyzeConfigSchema(schema);
+    let analysis = analyzeConfigSchema(renderableUnionSchema);
     expect(analysis.unsupportedPaths).not.toContain("mixed");
-  });
 
-  it("supports nullable types", () => {
-    const schema = {
+    const nullableSchema = {
       type: "object",
       properties: {
         note: { type: ["string", "null"] },
       },
     };
-    const analysis = analyzeConfigSchema(schema);
+    analysis = analyzeConfigSchema(nullableSchema);
     expect(analysis.unsupportedPaths).not.toContain("note");
-  });
 
-  it("ignores untyped additionalProperties schemas", () => {
-    const schema = {
+    const untypedAdditionalPropertiesSchema = {
       type: "object",
       properties: {
         channels: {
@@ -371,7 +330,7 @@ describe("config form renderer", () => {
         },
       },
     };
-    const analysis = analyzeConfigSchema(schema);
+    analysis = analyzeConfigSchema(untypedAdditionalPropertiesSchema);
     expect(analysis.unsupportedPaths).not.toContain("channels");
   });
 
