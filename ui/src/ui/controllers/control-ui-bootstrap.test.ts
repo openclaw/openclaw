@@ -42,7 +42,7 @@ describe("loadControlUiBootstrapConfig", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
-      expect.objectContaining({ method: "GET" }),
+      expect.objectContaining({ method: "GET", cache: "no-store" }),
     );
     expect(state.assistantName).toBe("Ops");
     expect(state.assistantAvatar).toBe("O");
@@ -212,7 +212,7 @@ describe("loadControlUiBootstrapConfig", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
-      expect.objectContaining({ method: "GET" }),
+      expect.objectContaining({ method: "GET", cache: "no-store" }),
     );
     expect(state.assistantName).toBe("Assistant");
     expect(state.embedSandboxMode).toBe("scripts");
@@ -240,7 +240,7 @@ describe("loadControlUiBootstrapConfig", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
-      expect.objectContaining({ method: "GET" }),
+      expect.objectContaining({ method: "GET", cache: "no-store" }),
     );
 
     vi.unstubAllGlobals();

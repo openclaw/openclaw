@@ -966,7 +966,13 @@ function resolveAssistantAttachmentAvailability(
   if (!isLocalAssistantAttachmentSource(source)) {
     return { status: "available" };
   }
-  if (!isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)) {
+  if (
+    // When roots are empty, bootstrap config hasn't loaded yet; fall through to the
+    // authoritative server-side meta check rather than hard-denying. If the server
+    // genuinely has no roots configured, the meta endpoint will deny correctly.
+    localMediaPreviewRoots.length > 0 &&
+    !isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)
+  ) {
     return { status: "unavailable", reason: "Outside allowed folders", checkedAt: Date.now() };
   }
   const normalizedAuthToken = authToken?.trim() ?? "";

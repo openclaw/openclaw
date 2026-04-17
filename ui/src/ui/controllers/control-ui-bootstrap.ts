@@ -85,7 +85,12 @@ export async function loadControlUiBootstrapConfig(
       if (candidate) {
         headers.Authorization = `Bearer ${candidate}`;
       }
-      res = await fetch(url, { method: "GET", headers, credentials: "same-origin" });
+      res = await fetch(url, {
+        method: "GET",
+        headers,
+        credentials: "same-origin",
+        cache: "no-store",
+      });
       if (res.ok) {
         break;
       }
