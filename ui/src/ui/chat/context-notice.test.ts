@@ -3,6 +3,11 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../types.ts";
+
+vi.mock("../markdown.ts", () => ({
+  toSanitizedMarkdownHtml: (value: string) => value,
+}));
+
 import {
   getContextNoticeViewModel,
   renderContextNotice,
