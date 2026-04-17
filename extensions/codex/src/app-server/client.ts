@@ -64,6 +64,9 @@ export class CodexAppServerClient {
         embeddedAgentLog.debug(`codex app-server stderr: ${text}`);
       }
     });
+    child.stdin.on?.("error", (error) => {
+      embeddedAgentLog.debug("codex app-server stdin error", { error });
+    });
     child.once("error", (error) =>
       this.closeWithError(error instanceof Error ? error : new Error(String(error))),
     );

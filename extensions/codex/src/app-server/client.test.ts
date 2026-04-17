@@ -68,6 +68,14 @@ describe("CodexAppServerClient", () => {
     expect(outbound.method).toBe("model/list");
   });
 
+  it("swallows EPIPE errors emitted on stdin after subprocess exit", () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    expect(() => harness.process.stdin.emit("error", epipe)).not.toThrow();
+  });
+
   it("preserves JSON-RPC error codes", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);
