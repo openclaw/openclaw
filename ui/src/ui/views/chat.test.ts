@@ -8,6 +8,16 @@ import { normalizeMessage } from "../chat/message-normalizer.ts";
 import type { SessionsListResult } from "../types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
 
+vi.mock("./markdown-sidebar.ts", async () => {
+  const { html } = await import("lit");
+  return {
+    renderMarkdownSidebar: (props: { content?: { content?: string; title?: string } | null }) =>
+      html`<div class="sidebar-panel" data-mocked-sidebar>
+        ${props.content?.title ?? props.content?.content ?? ""}
+      </div>`,
+  };
+});
+
 function createSessions(): SessionsListResult {
   return {
     ts: 0,
@@ -1514,57 +1524,6 @@ describe("chat view", () => {
         kind: "markdown",
       }),
     );
-  });
-
-  it("renders markdown inside tool output sidebar", async () => {
-    const container = document.createElement("div");
-    let sidebarContent: ChatProps["sidebarContent"] = null;
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "toolcall", name: "noop", arguments: {} },
-          { type: "toolresult", name: "noop", text: "Hello **world**" },
-        ],
-        timestamp: Date.now(),
-      },
-    ];
-    const renderWithSidebar = () =>
-      render(
-        renderChat(
-          createProps({
-            messages,
-            sidebarOpen: sidebarContent !== null,
-            sidebarContent,
-            sidebarError: null,
-            onOpenSidebar: (content) => {
-              sidebarContent = content;
-              renderWithSidebar();
-            },
-            onCloseSidebar: () => {
-              sidebarContent = null;
-              renderWithSidebar();
-            },
-            onRequestUpdate: renderWithSidebar,
-          }),
-        ),
-        container,
-      );
-
-    renderWithSidebar();
-
-    const toolSummary = container.querySelector<HTMLElement>(".chat-tool-msg-summary");
-    expect(toolSummary).not.toBeNull();
-    toolSummary?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await flushTasks();
-
-    const openSidebarButton = container.querySelector<HTMLElement>(".chat-tool-card__action-btn");
-    expect(openSidebarButton).not.toBeNull();
-    openSidebarButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await flushTasks();
-
-    const strongNodes = Array.from(container.querySelectorAll(".sidebar-markdown strong"));
-    expect(strongNodes.some((node) => node.textContent === "world")).toBe(true);
   });
 
   it("lets a tool call collapse while keeping matching tool output visible", async () => {

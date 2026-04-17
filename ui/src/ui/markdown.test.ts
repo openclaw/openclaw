@@ -1,5 +1,7 @@
+import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { md, toSanitizedMarkdownHtml } from "./markdown.ts";
+import { renderMarkdownSidebar } from "./views/markdown-sidebar.ts";
 
 describe("toSanitizedMarkdownHtml", () => {
   // ── Original tests from before markdown-it migration ──
@@ -508,5 +510,23 @@ describe("toSanitizedMarkdownHtml", () => {
         warnSpy.mockRestore();
       }
     });
+  });
+});
+
+describe("renderMarkdownSidebar", () => {
+  it("renders sanitized markdown content", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderMarkdownSidebar({
+        content: { kind: "markdown", content: "Hello **world**" },
+        error: null,
+        onClose: () => undefined,
+        onViewRawText: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".sidebar-markdown strong")?.textContent).toBe("world");
   });
 });
