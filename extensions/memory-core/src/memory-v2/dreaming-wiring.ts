@@ -3,6 +3,21 @@ import type { ShortTermRecallEntry } from "../short-term-promotion.js";
 import { type TouchableHit, recordTouchedLocations } from "./location/location-touch.js";
 import { createSidecarOpener } from "./sidecar-store.js";
 
+// Module-level lazy singleton so successive dreaming sweeps share one
+// workspace-keyed opener (and its DatabaseSync cache) instead of each sweep
+// creating a fresh cache and opening a new handle per workspace. Ingest and
+// rerank achieve the same dedup by closing the opener over their respective
+// handler factories (`buildAgentEndHandler`, `buildRerankWrapper`); D1/D2
+// have no plugin-register factory to capture it in, so the dedup lives at
+// module scope instead.
+let defaultOpener: ReturnType<typeof createSidecarOpener> | undefined;
+function getDefaultOpener(): ReturnType<typeof createSidecarOpener> {
+  if (!defaultOpener) {
+    defaultOpener = createSidecarOpener();
+  }
+  return defaultOpener;
+}
+
 // Step-zero path-representation outcome (Slice D1, 2026-04-16): short-term
 // entries with `source: "memory"` already carry paths normalized via
 // `normalizeMemoryPath` to a `memory/<file>` shape; no dreaming-side
@@ -73,7 +88,7 @@ export function touchSidecarFromDreamingEntries(
     if (hits.length === 0) {
       return;
     }
-    const openDb = deps.openDb ?? createSidecarOpener();
+    const openDb = deps.openDb ?? getDefaultOpener();
     const touch = deps.touch ?? recordTouchedLocations;
     const now = deps.now ?? Date.now;
     const db = openDb(workspaceDir);

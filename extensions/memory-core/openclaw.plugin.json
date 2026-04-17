@@ -62,6 +62,15 @@
                 "maximum": 1
               }
             }
+          },
+          "dreamingShadowTouch": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              }
+            }
           }
         }
       },
