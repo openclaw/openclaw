@@ -692,6 +692,7 @@ async function wakeSlackReplySession(params: {
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: route.sessionKey,
     threadId,
+    parentSessionKey: threadId ? route.sessionKey : undefined,
   });
   const sessionKey = threadKeys.sessionKey;
   const parentSessionKey = threadKeys.parentSessionKey;
@@ -709,7 +710,7 @@ async function wakeSlackReplySession(params: {
     Provider: "slack" as const,
     Surface: "slack" as const,
     WasMentioned: true,
-    MessageSid: `interaction:${parsed.messageTs ?? "unknown"}:${Date.now()}`,
+    MessageSid: `interaction:${parsed.messageTs ?? "unknown"}:${parsed.typedBody.trigger_id ?? String(Date.now())}`,
     Timestamp: Date.now(),
     SessionKey: sessionKey,
     AccountId: route.accountId,

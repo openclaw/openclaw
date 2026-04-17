@@ -27,9 +27,9 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/routing", () => ({
   resolveAgentRoute: resolveAgentRouteMock,
-  resolveThreadSessionKeys: vi.fn(({ baseSessionKey, threadId }: { baseSessionKey: string; threadId?: string }) => ({
+  resolveThreadSessionKeys: vi.fn(({ baseSessionKey, threadId, parentSessionKey }: { baseSessionKey: string; threadId?: string; parentSessionKey?: string }) => ({
     sessionKey: threadId ? `${baseSessionKey}:thread:${threadId}` : baseSessionKey,
-    parentSessionKey: threadId ? baseSessionKey : undefined,
+    parentSessionKey: threadId ? parentSessionKey : undefined,
   })),
 }));
 vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
