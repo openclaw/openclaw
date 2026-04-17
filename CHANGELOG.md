@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - macOS/gateway: add `screen.snapshot` support for macOS app nodes, including runtime plumbing, default macOS allowlisting, and docs for monitor preview flows. (#67954) Thanks @BunsDev.
+- Gateway/cron: add `cron.webhookAllowPrivateNetwork` (default false). When true, `postCronWebhook` passes `{ allowPrivateNetwork: true }` to `fetchWithSsrFGuard` so webhook POST can reach RFC 1918 / loopback / link-local targets. Enables self-hosted deployments where the cron webhook receiver is a sibling service on the same host/network to accept cron deliveries without changing the default locked-down SSRF posture. Emits a startup warn for operator audit when enabled.
 
 ### Fixes
 

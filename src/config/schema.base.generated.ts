@@ -19746,6 +19746,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Bearer token attached to cron webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
           },
+          webhookAllowPrivateNetwork: {
+            type: "boolean",
+            title: "Cron Webhook: Allow Private Network Targets",
+            description:
+              "When true, relax the cron webhook POST SSRF guard with `{ allowPrivateNetwork: true }` so `http(s)://` targets resolving to RFC 1918 / loopback / link-local addresses are allowed. Operator-only opt-in for self-hosted deployments where the webhook receiver runs on the same host or private network; enabling this in a multi-tenant deployment lets cron jobs reach internal services. Default false.",
+          },
           sessionRetention: {
             anyOf: [
               {
@@ -26236,6 +26242,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Bearer token attached to cron webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
       tags: ["security", "auth", "automation"],
       sensitive: true,
+    },
+    "cron.webhookAllowPrivateNetwork": {
+      label: "Cron Webhook: Allow Private Network Targets",
+      help: "When true, relax the cron webhook POST SSRF guard with `{ allowPrivateNetwork: true }` so `http(s)://` targets resolving to RFC 1918 / loopback / link-local addresses are allowed. Operator-only opt-in for self-hosted deployments where the webhook receiver runs on the same host or private network; enabling this in a multi-tenant deployment lets cron jobs reach internal services. Default false.",
+      tags: ["access", "automation"],
     },
     "cron.sessionRetention": {
       label: "Cron Session Retention",

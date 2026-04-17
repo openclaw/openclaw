@@ -1382,6 +1382,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Deprecated legacy fallback webhook URL used only for old jobs with `notify=true`. Migrate to per-job delivery using `delivery.mode="webhook"` plus `delivery.to`, and avoid relying on this global field.',
   "cron.webhookToken":
     "Bearer token attached to cron webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
+  "cron.webhookAllowPrivateNetwork":
+    "When true, relax the cron webhook POST SSRF guard with `{ allowPrivateNetwork: true }` so `http(s)://` targets resolving to RFC 1918 / loopback / link-local addresses are allowed. Operator-only opt-in for self-hosted deployments where the webhook receiver runs on the same host or private network; enabling this in a multi-tenant deployment lets cron jobs reach internal services. Default false.",
   "cron.sessionRetention":
     "Controls how long completed cron run sessions are kept before pruning (`24h`, `7d`, `1h30m`, or `false` to disable pruning; default: `24h`). Use shorter retention to reduce storage growth on high-frequency schedules.",
   "cron.runLog":

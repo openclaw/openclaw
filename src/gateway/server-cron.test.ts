@@ -140,6 +140,44 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("allows private webhook URLs when cron.webhookAllowPrivateNetwork=true", async () => {
+    const cfg = createCronConfig("server-cron-ssrf-opt-in");
+    (cfg as { cron: { webhookAllowPrivateNetwork?: boolean } }).cron.webhookAllowPrivateNetwork =
+      true;
+    loadConfigMock.mockReturnValue(cfg);
+    fetchWithSsrFGuardMock.mockResolvedValue({ release: async () => {} });
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "ssrf-webhook-opt-in",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "hello" },
+        delivery: {
+          mode: "webhook",
+          to: "http://127.0.0.1:8080/cron-finished",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+      const call = fetchWithSsrFGuardMock.mock.calls[0][0] as {
+        policy?: { allowPrivateNetwork?: boolean };
+      };
+      expect(call.policy).toEqual({ allowPrivateNetwork: true });
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("blocks private webhook URLs via SSRF-guarded fetch", async () => {
     const cfg = createCronConfig("server-cron-ssrf");
     loadConfigMock.mockReturnValue(cfg);

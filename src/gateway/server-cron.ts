@@ -102,6 +102,14 @@ async function postCronWebhook(params: {
   blockedLog: string;
   failedLog: string;
   logger: ReturnType<typeof getChildLogger>;
+  /**
+   * When true, widen the SSRF guard with `{ allowPrivateNetwork: true }` so
+   * cron webhook targets resolving to RFC 1918 / loopback / link-local
+   * addresses are permitted. Driven by `cron.webhookAllowPrivateNetwork` and
+   * intended only for operator-controlled self-hosted deployments where the
+   * webhook receiver is a sibling service on the same host/network.
+   */
+  allowPrivateNetwork?: boolean;
 }): Promise<void> {
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
@@ -117,6 +125,7 @@ async function postCronWebhook(params: {
         body: JSON.stringify(params.payload),
         signal: abortController.signal,
       },
+      policy: params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
     });
     await result.release();
   } catch (err) {
@@ -152,6 +161,15 @@ export function buildGatewayCronService(params: {
   const cronLogger = getChildLogger({ module: "cron" });
   const storePath = resolveCronStorePath(params.cfg.cron?.store);
   const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
+
+  // Operator audit trail: log once at startup when the SSRF guard is widened
+  // for cron webhook delivery. Stays quiet in the default locked-down config.
+  if (params.cfg.cron?.webhookAllowPrivateNetwork === true) {
+    cronLogger.warn(
+      {},
+      "cron: webhookAllowPrivateNetwork=true — cron webhook POST can reach private network addresses",
+    );
+  }
 
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
     Array.isArray(cfg.agents?.list)
@@ -377,6 +395,7 @@ export function buildGatewayCronService(params: {
             blockedLog: "cron: failure alert webhook blocked by SSRF guard",
             failedLog: "cron: failure alert webhook failed",
             logger: cronLogger,
+            allowPrivateNetwork: params.cfg.cron?.webhookAllowPrivateNetwork === true,
           });
         } else {
           cronLogger.warn(
@@ -456,6 +475,7 @@ export function buildGatewayCronService(params: {
               blockedLog: "cron: webhook delivery blocked by SSRF guard",
               failedLog: "cron: webhook delivery failed",
               logger: cronLogger,
+              allowPrivateNetwork: params.cfg.cron?.webhookAllowPrivateNetwork === true,
             });
           })();
         }
@@ -491,6 +511,7 @@ export function buildGatewayCronService(params: {
                       blockedLog: "cron: failure destination webhook blocked by SSRF guard",
                       failedLog: "cron: failure destination webhook failed",
                       logger: cronLogger,
+                      allowPrivateNetwork: params.cfg.cron?.webhookAllowPrivateNetwork === true,
                     });
                   })();
                 } else {
