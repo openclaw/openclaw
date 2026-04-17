@@ -2,7 +2,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  resolveMemoryDreamingConfig,
+  resolveMemoryRemDreamingConfig,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
@@ -211,12 +214,17 @@ async function listWorkspaceDailyFiles(workspaceDir: string, limit: number): Pro
 
 function formatDreamingSummary(cfg: OpenClawConfig): string {
   const pluginConfig = resolveMemoryPluginConfig(cfg);
-  const dreaming = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+  const dreaming = resolveMemoryDreamingConfig({ pluginConfig, cfg });
   if (!dreaming.enabled) {
     return "off";
   }
   const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
-  return `${dreaming.cron}${timezone} · limit=${dreaming.limit} · minScore=${dreaming.minScore} · minRecallCount=${dreaming.minRecallCount} · minUniqueQueries=${dreaming.minUniqueQueries} · recencyHalfLifeDays=${dreaming.recencyHalfLifeDays} · maxAgeDays=${dreaming.maxAgeDays ?? "none"}`;
+  const phaseBits = [
+    `light ${dreaming.phases.light.enabled ? "on" : "off"}`,
+    `deep ${dreaming.phases.deep.enabled ? "on" : "off"}`,
+    `rem ${dreaming.phases.rem.enabled ? "on" : "off"}`,
+  ].join(" · ");
+  return `${dreaming.frequency}${timezone} · ${phaseBits}`;
 }
 
 function formatAuditCounts(audit: ShortTermAuditSummary): string {
