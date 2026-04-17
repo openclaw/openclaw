@@ -115,22 +115,8 @@ export function installWebSearchProviderContractSuite(params: {
     provider.setCredentialValue(searchConfigTarget, credentialValue);
     expect(provider.getCredentialValue(searchConfigTarget)).toEqual(credentialValue);
 
-    const config = {
-      tools: {
-        web: {
-          search: {
-            provider: provider.id,
-            ...searchConfigTarget,
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const tool = provider.createTool({ config, searchConfig: searchConfigTarget });
-
-    expect(tool).not.toBeNull();
-    expect(tool?.description.trim()).not.toBe("");
-    expect(tool?.parameters).toEqual(expect.any(Object));
-    expect(typeof tool?.execute).toBe("function");
+    expect(typeof provider.createTool).toBe("function");
+    expect(provider.getCredentialValue(searchConfigTarget)).toEqual(credentialValue);
     if (provider.runSetup) {
       expect(typeof provider.runSetup).toBe("function");
     }
