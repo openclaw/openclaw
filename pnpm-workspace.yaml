@@ -4,7 +4,7 @@ packages:
   - packages/*
   - extensions/*
 
-minimumReleaseAge: 2880
+minimumReleaseAge: 40
 
 minimumReleaseAgeExclude:
   - "acpx"
