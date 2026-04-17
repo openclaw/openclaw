@@ -1134,7 +1134,7 @@ export async function spawnAcpDirect(
       const storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
       const store = loadSessionStore(storePath);
       const entry = store[sessionKey] as SessionEntry | undefined;
-      if (!entry?.acp?.mode || entry.acp.mode !== "persistent") {
+      if (!entry || (entry.acp?.mode && entry.acp.mode !== "persistent")) {
         wasResolved = false;
         // Backfill spawnedBy: the initial patch omitted it because
         // wasResolved was true, but the session was actually recreated.
