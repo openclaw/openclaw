@@ -429,7 +429,7 @@ export type MemorySearchConfig = {
     tokens?: number;
     /** Token overlap between adjacent chunks (fixed-size strategy). */
     overlap?: number;
-    /** Maximum heading depth to split on (markdown-heading strategy, default: 3). */
+    /** Maximum heading depth to split on (markdown-heading strategy, default: 2). */
     maxDepth?: number;
     /** Maximum tokens per chunk before fallback sub-chunking (markdown-heading strategies). */
     maxTokens?: number;

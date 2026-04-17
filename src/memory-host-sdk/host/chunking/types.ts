@@ -14,7 +14,7 @@ export type LlmCompletionFn = (prompt: string) => Promise<string>;
 
 // /** User-facing chunking configuration (optional fields, before defaults). */
 export type ChunkingConfig = {
-  strategy: string;
+  strategy: ChunkingStrategyName;
   completionModel?: string | undefined;
   tokens?: number | undefined;
   overlap?: number | undefined;

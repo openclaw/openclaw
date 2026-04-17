@@ -6,7 +6,7 @@ import { chunkFixedSize } from "./fixed-size.js";
 import type { ChunkingStrategy, ChunkingConfig } from "./types.js";
 
 /** Default maximum heading depth to split on. */
-export const DEFAULT_MAX_DEPTH = 3;
+export const DEFAULT_MAX_DEPTH = 2;
 
 /** Default max tokens per chunk (fallback for oversized sections). */
 export const DEFAULT_MAX_TOKENS = 400;
@@ -37,7 +37,7 @@ export class MarkdownHeadingStrategy implements ChunkingStrategy {
     this.maxTokens = config.maxTokens ?? DEFAULT_MAX_TOKENS;
   }
 
-  chunk(content: string, cfg: ChunkingConfig): MemoryChunk[] {
+  chunk(content: string, _cfg: ChunkingConfig): MemoryChunk[] {
     const sections = this.splitIntoSections(content);
     const chunks: MemoryChunk[] = [];
     const maxChars = Math.max(32, this.maxTokens * CHARS_PER_TOKEN_ESTIMATE);

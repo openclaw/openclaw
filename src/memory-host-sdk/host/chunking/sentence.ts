@@ -20,8 +20,8 @@ export const DEFAULT_OVERLAP_SENTENCES = 1;
  * Does NOT match a lone ASCII dot followed by a lowercase letter or digit
  * (abbreviation / decimal guard).
  */
-export const SENTENCE_TERMINATOR_RE =
-  /([.!?。！？；;…]+[\])）」』〉》】»›"'"']*)/g;
+export const SENTENCE_TERMINATOR_RE = 
+/([.!?。！？；;…]+[\])）」』〉》】»›"'"']*)/g;
 
 /**
  * Full sentence-boundary detector used in splitIntoSentences().
@@ -35,7 +35,7 @@ export const SENTENCE_TERMINATOR_RE =
  *   [1]  sentence-ending punctuation + closing brackets  (keep in text)
  *   [2]  trailing whitespace                             (skip, don't include)
  */
-export const SENTENCE_BOUNDARY_RE = /([.!?。！？；;…]+[\])）」』〉》】»›"'"']*)(\s+|$)/g;
+export const SENTENCE_BOUNDARY_RE = /([.!?。！？；;…]+[\])）」』〉》】»›"'"']*)(\s*)/g;
 
 type SentenceEntry = {
   text: string;
@@ -62,7 +62,7 @@ export class SentenceStrategy implements ChunkingStrategy {
     this.overlapSentences = config.overlapSentences ?? DEFAULT_OVERLAP_SENTENCES;
   }
 
-  chunk(content: string, cfg: ChunkingConfig): MemoryChunk[] {
+  chunk(content: string, _cfg: ChunkingConfig): MemoryChunk[] {
     const sentences = splitIntoSentences(content);
     if (sentences.length === 0) {
       return [];

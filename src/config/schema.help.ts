@@ -1051,7 +1051,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.chunking.theta":
     "Token threshold per paragraph group for the lumber chunking strategy (default: 550). Paragraphs are accumulated until their combined tokens exceed this threshold, then an LLM identifies the content shift point within the group.",
   "agents.defaults.memorySearch.chunking.completionModel":
-    "Model used for lumber chunking strategy (default: 'gpt-3.5-turbo').",
+    "Model used for LLM-assisted chunking strategies. Required when using 'lumber' or 'hichunk'; must be set to a valid model reference. For 'hichunk', this should be the HiChunk model (arXiv:2509.11552); for 'lumber', any general-purpose chat model works.",
   "agents.defaults.memorySearch.chunking.windowSize":
     "Window size in estimated tokens for each LLM inference round in the hichunk strategy (default: 16384). Controls how many sentences are sent per LLM call.",
   "agents.defaults.memorySearch.chunking.lineMaxLen":

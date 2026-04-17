@@ -66,11 +66,9 @@ function getIndicesAboveThreshold(
   if (distances.length === 0) {
     return [];
   }
-  const sorted = [...distances].sort((a, b) => a - b);
+  const sorted = [...distances].toSorted((a, b) => a - b);
   const thresholdIdx = Math.floor((breakpointPercentileThreshold / 100) * sorted.length);
-  // console.log("thresholdIdx", thresholdIdx);
   const threshold = sorted[Math.min(thresholdIdx, sorted.length - 1)] ?? 0;
-  // console.log("threshold", threshold);
   return distances.reduce<number[]>((acc, d, i) => {
     if (d >= threshold) {
       acc.push(i);
@@ -96,7 +94,7 @@ function buildChunksFromBoundaries(
 
   // Convert break-point indices to a Set for O(1) lookup.
   const breakSet = new Set(indicesAboveThreshold);
-  const breakSetSorted = [...breakSet].sort((a, b) => a - b);
+  const breakSetSorted = [...breakSet].toSorted((a, b) => a - b);
   const chunks: MemoryChunk[] = [];
 
   // Group sentences into segments; each break-point starts a new group.
@@ -160,28 +158,26 @@ export class SemanticStrategy implements ChunkingStrategy {
     this.provider = provider;
   }
 
-  async chunk(content: string, cfg: ChunkingConfig): Promise<MemoryChunk[]> {
+  async chunk(content: string, _cfg: ChunkingConfig): Promise<MemoryChunk[]> {
     // 1. Split text into sentences (reuse the same boundary regex as SentenceStrategy).
     const rawSentences = splitIntoSentences(content);
-    // console.log("content", content);
-    // console.log("rawSentences", rawSentences);
     if (rawSentences.length === 0) {
       return [];
     }
     if (rawSentences.length === 1) {
       // Single sentence, no need for semantic chunking.
       return [{
-        startLine: rawSentences[0]!.startLine,
-        endLine: rawSentences[0]!.endLine,
-        text: content,
-        hash: hashText(content),
-        embeddingInput: buildTextEmbeddingInput(content),
-      }];
+          startLine: rawSentences[0]!.startLine,
+          endLine: rawSentences[0]!.endLine,
+          text: content,
+          hash: hashText(content),
+          embeddingInput: buildTextEmbeddingInput(content),
+        }];
     }
 
     // 2. Combine adjacent sentences into context windows.
     let sentences = combineSentences(rawSentences, this.bufferSize);
-    
+
     // 3. Compute embeddings for all combined sentences in one batch.
     const embeddingStrings = sentences.map((s) => s.combined_text ?? s.text);
     if (!this.provider) {
@@ -197,14 +193,12 @@ export class SemanticStrategy implements ChunkingStrategy {
     for (let i = 0; i < distances.length; i += 1) {
       sentences[i]!.dist_to_next = distances[i];
     }
-    // console.log("distances", distances);
 
     // 5. Find sentence indices above the percentile threshold.
     const indicesAboveThreshold = getIndicesAboveThreshold(
       distances,
       this.breakpointPercentileThreshold,
     );
-    // console.log("indicesAboveThreshold", indicesAboveThreshold);
 
     // 6. Convert sentence-level break-points to line-level indices.
     return buildChunksFromBoundaries(sentences, indicesAboveThreshold);

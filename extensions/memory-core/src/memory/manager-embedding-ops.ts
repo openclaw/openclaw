@@ -10,7 +10,6 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engi
 import { type SessionFileEntry } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   buildMultimodalChunkForIndexing,
-  chunkMarkdown,
   hashText,
   remapChunkLines,
   resolveChunkingStrategy,
@@ -640,15 +639,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     let completionFn: LlmCompletionFn | undefined;
     if (this.settings.chunking.strategy === "lumber" || this.settings.chunking.strategy === "hichunk") {
       const lumberCfg = this.settings.chunking;
+      const prepared = await prepareSimpleCompletionModelForAgent({
+        cfg: this.cfg,
+        agentId: this.agentId,
+        modelRef: lumberCfg.completionModel
+      });
+      if ("error" in prepared) {
+        throw new Error(`Lumber/HiChunk chunking LLM preparation failed: ${prepared.error}`);
+      }
       completionFn = async (prompt: string) => {
-        const prepared = await prepareSimpleCompletionModelForAgent({
-          cfg: this.cfg,
-          agentId: this.agentId,
-          modelRef: lumberCfg.completionModel
-        });
-        if ("error" in prepared) {
-          throw new Error(`Lumber/HiChunk chunking LLM preparation failed: ${prepared.error}`);
-        }
         const response = await completeWithPreparedSimpleCompletionModel({
           model: prepared.model,
           auth: prepared.auth,

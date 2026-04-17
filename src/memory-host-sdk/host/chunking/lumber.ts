@@ -36,7 +36,9 @@ export function splitIntoParagraphs(content: string): Paragraph[] {
   let currentLines: { text: string; lineNo: number }[] = [];
 
   const flush = () => {
-    if (currentLines.length === 0) return;
+    if (currentLines.length === 0) {
+      return;
+    }
     const first = currentLines[0]!;
     const last = currentLines[currentLines.length - 1]!;
     const text = currentLines.map((l) => l.text).join("\n");
@@ -85,7 +87,9 @@ export function parseShiftPointId(response: string): number | null {
     return null;
   }
   const match = ANSWER_RE.exec(response);
-  if (!match?.[1]) return null;
+  if (!match?.[1]) {
+    return null;
+  }
   return Number.parseInt(match[1], 10);
 }
 
@@ -108,7 +112,7 @@ export class LumberChunkerStrategy implements ChunkingStrategy {
     this.completionFn = completionFn;
   }
 
-  async chunk(content: string, cfg: ChunkingConfig): Promise<MemoryChunk[]> {
+  async chunk(content: string, _cfg: ChunkingConfig): Promise<MemoryChunk[]> {
     const paragraphs = splitIntoParagraphs(content);
     // Short-circuit: single or empty paragraph
     if (paragraphs.length <= 1) {
@@ -135,11 +139,15 @@ export class LumberChunkerStrategy implements ChunkingStrategy {
       while (groupEnd < paragraphs.length) {
         tokenSum += paragraphs[groupEnd]!.estimatedTokens;
         groupEnd++;
-        if (tokenSum >= this.theta) break;
+        if (tokenSum >= this.theta) {
+          break;
+        }
       }
 
       // If we've reached the end of the document, no more splits needed
-      if (groupEnd >= paragraphs.length) break;
+      if (groupEnd >= paragraphs.length) {
+        break;
+      }
 
       const group = paragraphs.slice(cursor, groupEnd);
       if (group.length <= 1) {
@@ -180,7 +188,7 @@ export class LumberChunkerStrategy implements ChunkingStrategy {
     totalParagraphs: number,
     splitIndices: number[],
   ): Array<[number, number]> {
-    const sorted = [...new Set(splitIndices)].sort((a, b) => a - b);
+    const sorted = [...new Set(splitIndices)].toSorted((a, b) => a - b);
     const ranges: Array<[number, number]> = [];
     let start = 0;
     for (const idx of sorted) {
@@ -205,7 +213,9 @@ export class LumberChunkerStrategy implements ChunkingStrategy {
     const chunks: MemoryChunk[] = [];
     for (const [start, end] of ranges) {
       const group = paragraphs.slice(start, end + 1);
-      if (group.length === 0) continue;
+      if (group.length === 0) {
+        continue;
+      }
       const text = group.map((p) => p.text).join("\n\n");
       const firstParagraph = group[0]!;
       const lastParagraph = group[group.length - 1]!;

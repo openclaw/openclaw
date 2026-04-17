@@ -29,7 +29,7 @@ export class FixedSizeStrategy implements ChunkingStrategy {
     this.overlap = config.overlap ?? DEFAULT_CHUNK_OVERLAP;
   }
 
-  chunk(content: string, cfg: ChunkingConfig): MemoryChunk[] {
+  chunk(content: string, _cfg: ChunkingConfig): MemoryChunk[] {
     return chunkFixedSize(content, { tokens: this.tokens, overlap: this.overlap });
   }
 }
@@ -42,10 +42,10 @@ export function chunkFixedSize(
   content: string,
   chunking: { tokens: number; overlap: number },
 ): MemoryChunk[] {
-  const lines = content.split("\n");
-  if (lines.length === 0) {
+  if (content.length === 0) {
     return [];
   }
+  const lines = content.split("\n");
   const maxChars = Math.max(32, chunking.tokens * CHARS_PER_TOKEN_ESTIMATE);
   const overlapChars = Math.max(0, chunking.overlap * CHARS_PER_TOKEN_ESTIMATE);
   const chunks: MemoryChunk[] = [];

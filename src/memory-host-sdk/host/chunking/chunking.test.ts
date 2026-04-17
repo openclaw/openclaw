@@ -1,68 +1,40 @@
 // src/memory-host-sdk/host/chunking/chunking.test.ts
 
 import { describe, expect, it, vi } from "vitest";
-
-// ── fixed-size ──────────────────────────────────────────────────────────────
-import {
-  chunkFixedSize,
-  DEFAULT_CHUNK_OVERLAP,
-  DEFAULT_CHUNK_TOKENS,
-  FixedSizeStrategy,
-} from "./fixed-size.js";
-
-// ── markdown-heading ─────────────────────────────────────────────────────────
-import {
-  DEFAULT_MAX_DEPTH,
-  DEFAULT_MAX_TOKENS,
-  MarkdownHeadingStrategy,
-} from "./markdown-heading.js";
-
-// ── sentence ─────────────────────────────────────────────────────────────────
-import {
-  DEFAULT_OVERLAP_SENTENCES,
-  DEFAULT_TARGET_TOKENS,
-  SentenceStrategy,
-  splitIntoSentences,
-} from "./sentence.js";
-
-// ── semantic ─────────────────────────────────────────────────────────────────
-import { SemanticStrategy } from "./semantic.js";
 import type { EmbeddingProvider } from "../embeddings.js";
-
-// ── lumber ───────────────────────────────────────────────────────────────────
-import {
-  buildLumberPrompt,
-  LumberChunkerStrategy,
-  parseShiftPointId,
-  splitIntoParagraphs,
-} from "./lumber.js";
-
+// ── fixed-size ──────────────────────────────────────────────────────────────
+import { chunkFixedSize, FixedSizeStrategy } from "./fixed-size.js";
 // ── hichunk ──────────────────────────────────────────────────────────────────
 import {
   countHeadingLevel,
-  DEFAULT_MAX_LEVEL,
   HiChunkStrategy,
   isEnglish,
   parseAnswerChunkingPoints,
   replaceHeadingMarkers,
   truncateSentence,
 } from "./hichunk.js";
-
+// ── lumber ───────────────────────────────────────────────────────────────────
+import { LumberChunkerStrategy, parseShiftPointId, splitIntoParagraphs } from "./lumber.js";
+// ── markdown-heading ─────────────────────────────────────────────────────────
+import { MarkdownHeadingStrategy } from "./markdown-heading.js";
 // ── factory ───────────────────────────────────────────────────────────────────
 import { resolveChunkingStrategy } from "./resolve.js";
+// ── semantic ─────────────────────────────────────────────────────────────────
+import { SemanticStrategy } from "./semantic.js";
+// ── sentence ─────────────────────────────────────────────────────────────────
+import { SentenceStrategy, splitIntoSentences } from "./sentence.js";
 import type { ChunkingConfig } from "./types.js";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 /** Build a simple fake EmbeddingProvider that returns zero-vectors or custom vectors. */
 function makeFakeProvider(vectors?: number[][]): EmbeddingProvider {
-  let callCount = 0;
   return {
     embedBatch: vi.fn(async (texts: string[]) => {
       if (vectors) {
-        return texts.map((_, i) => vectors[i] ?? new Array(4).fill(0));
+        return texts.map((_, i) => vectors[i] ?? Array.from({ length: 4 }, () => 0));
       }
-      return texts.map(() => new Array(4).fill(0));
+      return texts.map(() => Array.from({ length: 4 }, () => 0));
     }),
   } as unknown as EmbeddingProvider;
 }
@@ -153,7 +125,7 @@ describe("FixedSizeStrategy", () => {
 // ============================================================================
 
 describe("MarkdownHeadingStrategy", () => {
-  const cfg: ChunkingConfig = { strategy: "markdown-heading" };
+  const cfg: ChunkingConfig = { strategy: "markdown-heading", maxDepth: 3 };
 
   it("emits one chunk for plain text with no headings", () => {
     const strategy = new MarkdownHeadingStrategy(cfg);
