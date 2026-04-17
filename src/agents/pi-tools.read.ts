@@ -243,7 +243,15 @@ function createSandboxReadOperations(params: SandboxToolParams) {
   return {
     readFile: (filePath: string) => params.bridge.readFile({ filePath, cwd: params.root }),
     stat: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }),
-    readdir: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }).then(() => []),
+    readdir: async (filePath: string) => {
+      // Attempt to use readdir if available on the bridge
+      if (typeof (params.bridge as any).readdir === 'function') {
+        return await (params.bridge as any).readdir({ filePath, cwd: params.root });
+      }
+      // Fallback: return empty array with console warning
+      console.warn(`Directory listing not fully supported in sandbox mode for ${filePath}. Bridge missing readdir implementation.`);
+      return [];
+    },
     access: (filePath: string) =>
       params.bridge.stat({ filePath, cwd: params.root }).then((s) => {
         if (!s) {
@@ -767,28 +775,27 @@ export function transformToolResultForTransport(result: AgentToolResult): AgentT
   }
 
   const transformedContent = result.content.map((block: any) => {
-    // Transform image blocks from webchat format to transport format
+    // Transform image blocks - convert to text with just filename
     if (block.type === 'image' && block.source && block.source.type === 'base64') {
       return {
-        type: 'image',
-        data: block.source.data,
-        mimeType: block.source.media_type,
+        type: 'text',
+        text: block.filename || 'image',
       };
     }
     
-    // Audio blocks - transports don't support them, convert to text
+    // Audio blocks - convert to text with just filename
     if (block.type === 'audio') {
       return {
         type: 'text',
-        text: `Audio file: ${block.filename || 'audio'}\nURL: ${block.url}`,
+        text: block.filename || 'audio',
       };
     }
     
-    // Video blocks - transports don't support them, convert to text
+    // Video blocks - convert to text with just filename
     if (block.type === 'video') {
       return {
         type: 'text',
-        text: `Video file: ${block.filename || 'video'}\nURL: ${block.url}`,
+        text: block.filename || 'video',
       };
     }
     
@@ -846,7 +853,6 @@ export function createOpenClawReadTool(
           if (!bridgeStats) {
             throw new Error(`ENOENT: ${inputPath} not found in sandbox`);
           }
-          // SandboxFsStat uses 'type' property instead of isDirectory()
           isDirectory = bridgeStats.type === "directory";
           fileSize = bridgeStats.size;
           stats = { size: fileSize, isDirectory: () => isDirectory };
@@ -857,56 +863,18 @@ export function createOpenClawReadTool(
         }
 
         if (isDirectory) {
-          if (signal?.aborted) {
-            throw new Error("Read operation aborted");
-          }
-
-          // For sandboxed mode, we cannot list directory contents through the bridge
-          // because SandboxFsBridge doesn't have a readdir method. Return a message
-          // indicating that directory listing is not supported in sandboxed mode.
-          if (useBridge) {
-            return {
-              toolCallId,
-              content: [
-                {
-                  type: "text",
-                  text: `Cannot list directory ${inputPath} in sandboxed mode. Please specify a specific file path.`,
-                },
-              ],
-              details: { path: inputPath },
-            } as AgentToolResult;
-          }
-
-          // Host mode - can list directories
-          const files = await fs.readdir(inputPath);
+          const result = await base.execute(toolCallId, params, signal);
           
-          // Sort files for deterministic output (fixes cache determinism issue)
-          const sortedFiles = [...files].sort((a, b) => a.localeCompare(b));
-
-          let truncated = false;
-          let fileList = sortedFiles;
-          if (fileList.length > MAX_DIR_ENTRIES) {
-            truncated = true;
-            fileList = fileList.slice(0, MAX_DIR_ENTRIES);
+          if (options?.transformForTransport) {
+            return transformToolResultForTransport(result);
           }
-
-          const listingText = `Listing for ${inputPath}:\n${fileList.join("\n")}${
-            truncated
-              ? `\n\n... and ${files.length - MAX_DIR_ENTRIES} more entries not shown (limit: ${MAX_DIR_ENTRIES})`
-              : ""
-          }`;
-
-          return {
-            toolCallId,
-            content: [{ type: "text", text: listingText }],
-            details: { path: inputPath },
-          } as AgentToolResult;
+          
+          return result;
         }
 
         const ext = inputPath.toLowerCase().split(".").pop() ?? "";
         const fileName = path.basename(inputPath);
         
-        // Build valid media URLs using dynamic base URL (fixes localhost hardcoding issue)
         const mediaUrl = getMediaUrl(inputPath, options?.getBaseUrl);
 
         let result: AgentToolResult;
@@ -916,7 +884,6 @@ export function createOpenClawReadTool(
             throw new Error("Read operation aborted");
           }
 
-          // Use bridge for file reading if available
           let fileBuffer: Buffer;
           if (useBridge) {
             const buffer = await options.bridge!.readFile({
@@ -958,7 +925,6 @@ export function createOpenClawReadTool(
             }
           }
 
-          // KEEP THE ORIGINAL WORKING FORMAT
           result = {
             toolCallId,
             content: [
@@ -969,13 +935,12 @@ export function createOpenClawReadTool(
                   media_type: mimeType,
                   data: fileBuffer.toString("base64"),
                 },
-              },
-              { type: "text", text: `📷 [${fileName}](${mediaUrl})` },
+              } as any,
+              { type: "text", text: `${fileName}` },
             ],
             details: { path: inputPath, size: fileBuffer.length },
           } as AgentToolResult;
         } else if (AUDIO_EXTENSIONS.has(ext)) {
-          // Audio handling with player - KEEP ORIGINAL FORMAT
           const mimeType = getAudioMimeType(ext);
 
           result = {
@@ -987,12 +952,10 @@ export function createOpenClawReadTool(
                 filename: fileName,
                 mimeType: mimeType,
               } as any,
-              { type: "text", text: `🎵 [${fileName}](${mediaUrl})` },
             ],
             details: { path: inputPath, size: fileSize },
           } as AgentToolResult;
         } else if (VIDEO_EXTENSIONS.has(ext)) {
-          // Video handling with player - KEEP ORIGINAL FORMAT
           const mimeType = getVideoMimeType(ext);
 
           result = {
@@ -1004,7 +967,6 @@ export function createOpenClawReadTool(
                 filename: fileName,
                 mimeType: mimeType,
               } as any,
-              { type: "text", text: `🎬 [${fileName}](${mediaUrl})` },
             ],
             details: { path: inputPath, size: fileSize },
           } as AgentToolResult;
@@ -1020,7 +982,6 @@ export function createOpenClawReadTool(
           let text: string;
           let truncated = false;
 
-          // Use streaming for host mode, fallback to full read for bridge mode
           if (useBridge) {
             const bridgeResult = await readTextFileBridge(
               options.bridge!,
@@ -1052,25 +1013,21 @@ export function createOpenClawReadTool(
           } as AgentToolResult;
         }
 
-        // Apply transport transformation if requested
         if (options?.transformForTransport) {
           result = transformToolResultForTransport(result);
         }
 
         return result;
       } catch (error) {
-        // Re-throw abort errors to maintain cancellation semantics
         if (signal?.aborted || (error as Error).message === "Read operation aborted") {
           throw error;
         }
         
-        // Check for abort signal related errors from the bridge or streaming
         const err = error as Error & { code?: string };
         if (err.name === "AbortError" || err.code === "ABORT_ERR") {
           throw error;
         }
         
-        // For all other errors, return a friendly error message
         return {
           toolCallId,
           content: [
