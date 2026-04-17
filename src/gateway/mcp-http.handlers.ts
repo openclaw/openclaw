@@ -10,18 +10,24 @@ import {
 } from "./mcp-http.protocol.js";
 import type { McpLoopbackTool, McpToolSchemaEntry } from "./mcp-http.schema.js";
 
-type McpTextContent = {
-  type: "text";
-  text: string;
-};
+// MCP content-block types per the spec: text/image/audio/resource/resource_link.
+// Typed blocks (those with a recognized `type` string) pass through untouched so
+// image data/mimeType, resource uris, audio payloads, etc. survive the gateway.
+// Anything that isn't a typed object is wrapped into a text block as before.
+type McpContentBlock = { type: string; [key: string]: unknown };
 
-function normalizeToolCallContent(result: unknown): McpTextContent[] {
+export function normalizeToolCallContent(result: unknown): McpContentBlock[] {
   const content = (result as { content?: unknown })?.content;
   if (Array.isArray(content)) {
-    return content.map((block: { type?: string; text?: string }) => ({
-      type: (block.type ?? "text") as "text",
-      text: block.text ?? (typeof block === "string" ? block : JSON.stringify(block)),
-    }));
+    return content.map((block) => {
+      if (block && typeof block === "object" && typeof (block as { type?: unknown }).type === "string") {
+        return block as McpContentBlock;
+      }
+      return {
+        type: "text",
+        text: typeof block === "string" ? block : JSON.stringify(block),
+      };
+    });
   }
   return [
     {

@@ -302,3 +302,62 @@ describe("createMcpLoopbackServerConfig", () => {
     );
   });
 });
+
+describe("normalizeToolCallContent", () => {
+  it("passes image blocks through with data and mimeType intact", async () => {
+    const { normalizeToolCallContent } = await import("./mcp-http.handlers.js");
+    const result = {
+      content: [
+        { type: "image", data: "QkFEU0NSRUVOU0hPVA==", mimeType: "image/png" },
+      ],
+    };
+    expect(normalizeToolCallContent(result)).toEqual([
+      { type: "image", data: "QkFEU0NSRUVOU0hPVA==", mimeType: "image/png" },
+    ]);
+  });
+
+  it("passes resource_link blocks through with uri and name intact", async () => {
+    const { normalizeToolCallContent } = await import("./mcp-http.handlers.js");
+    const result = {
+      content: [{ type: "resource_link", uri: "file:///tmp/out.png", name: "out.png" }],
+    };
+    expect(normalizeToolCallContent(result)).toEqual([
+      { type: "resource_link", uri: "file:///tmp/out.png", name: "out.png" },
+    ]);
+  });
+
+  it("passes audio blocks through with data and mimeType intact", async () => {
+    const { normalizeToolCallContent } = await import("./mcp-http.handlers.js");
+    const result = {
+      content: [{ type: "audio", data: "UklGRg==", mimeType: "audio/wav" }],
+    };
+    expect(normalizeToolCallContent(result)).toEqual([
+      { type: "audio", data: "UklGRg==", mimeType: "audio/wav" },
+    ]);
+  });
+
+  it("preserves existing text blocks untouched", async () => {
+    const { normalizeToolCallContent } = await import("./mcp-http.handlers.js");
+    const result = { content: [{ type: "text", text: "hello" }] };
+    expect(normalizeToolCallContent(result)).toEqual([{ type: "text", text: "hello" }]);
+  });
+
+  it("wraps untyped content entries into text blocks", async () => {
+    const { normalizeToolCallContent } = await import("./mcp-http.handlers.js");
+    const result = { content: ["plain string", { foo: "bar" }] };
+    expect(normalizeToolCallContent(result)).toEqual([
+      { type: "text", text: "plain string" },
+      { type: "text", text: JSON.stringify({ foo: "bar" }) },
+    ]);
+  });
+
+  it("falls back to a single text block when result has no content array", async () => {
+    const { normalizeToolCallContent } = await import("./mcp-http.handlers.js");
+    expect(normalizeToolCallContent("raw string result")).toEqual([
+      { type: "text", text: "raw string result" },
+    ]);
+    expect(normalizeToolCallContent({ other: "shape" })).toEqual([
+      { type: "text", text: JSON.stringify({ other: "shape" }) },
+    ]);
+  });
+});
