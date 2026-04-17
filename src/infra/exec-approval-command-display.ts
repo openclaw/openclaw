@@ -31,7 +31,7 @@ function escapeInvisibles(text: string): string {
 // redaction would have replaced first. That is conservative — it may over-count overlapping
 // matches — but that is acceptable for a coverage check.
 function computeRedactionBitmap(text: string, patterns: RegExp[]): boolean[] {
-  const bitmap = new Array<boolean>(text.length).fill(false);
+  const bitmap: boolean[] = Array.from({ length: text.length }, () => false);
   for (const pattern of patterns) {
     const iter = pattern.flags.includes("g")
       ? new RegExp(pattern.source, pattern.flags)
