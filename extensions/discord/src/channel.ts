@@ -376,7 +376,10 @@ function parseDiscordExplicitTarget(raw: string) {
       return null;
     }
     return {
-      to: target.id,
+      // Use normalized `user:<id>` / `channel:<id>` so session/cron explicit targets
+      // are not reduced to bare snowflakes (ambiguous vs guild channel ids → Discord
+      // "Unknown Channel" on outbound cron delivery).
+      to: target.normalized,
       chatType: target.kind === "user" ? ("direct" as const) : ("channel" as const),
     };
   } catch {

@@ -465,6 +465,49 @@ describe("discordPlugin security", () => {
   });
 });
 
+describe("discordPlugin messaging parseExplicitTarget", () => {
+  it("preserves user:/channel: kind prefix in the outbound `to` (regression: Unknown Channel)", () => {
+    // Regression: previously returned `target.id` (a bare snowflake) which was
+    // downstream re-parsed as a guild channel id, causing Discord error 10003
+    // "Unknown Channel" for DM cron deliveries. See #68179.
+    const parseExplicitTarget = discordPlugin.messaging?.parseExplicitTarget;
+    if (!parseExplicitTarget) {
+      throw new Error("Expected discordPlugin.messaging.parseExplicitTarget to be defined");
+    }
+
+    expect(parseExplicitTarget({ raw: "<@123>" })).toEqual({
+      to: "user:123",
+      chatType: "direct",
+    });
+    expect(parseExplicitTarget({ raw: "user:123" })).toEqual({
+      to: "user:123",
+      chatType: "direct",
+    });
+    expect(parseExplicitTarget({ raw: "channel:456" })).toEqual({
+      to: "channel:456",
+      chatType: "channel",
+    });
+    // Bare snowflake falls back to defaultKind "channel".
+    expect(parseExplicitTarget({ raw: "789" })).toEqual({
+      to: "channel:789",
+      chatType: "channel",
+    });
+  });
+
+  it("infers direct chat type from a user-prefixed `to`", () => {
+    // Paired check with parseExplicitTarget: inferTargetChatType consumes the
+    // same helper, so a bare snowflake must never be presented as `to` from
+    // the producer side (that would default to "channel" and mis-route DMs).
+    const inferTargetChatType = discordPlugin.messaging?.inferTargetChatType;
+    if (!inferTargetChatType) {
+      throw new Error("Expected discordPlugin.messaging.inferTargetChatType to be defined");
+    }
+
+    expect(inferTargetChatType({ to: "user:123" })).toBe("direct");
+    expect(inferTargetChatType({ to: "channel:456" })).toBe("channel");
+  });
+});
+
 describe("discordPlugin groups", () => {
   it("uses plugin-owned group policy resolvers", () => {
     const cfg = {
