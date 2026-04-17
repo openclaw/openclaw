@@ -712,13 +712,15 @@ export async function runHeartbeatOnce(opts: {
     explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
   );
   const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
+  const reasonFlags = resolveHeartbeatReasonFlags(opts.reason);
+  const isExecEventReason = reasonFlags.isExecEventReason;
   if (!areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+  if (!isExecEventReason && !isHeartbeatEnabledForAgent(cfg, agentId)) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+  if (!isExecEventReason && !resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
     return { status: "skipped", reason: "disabled" };
   }
 
@@ -772,10 +774,14 @@ export async function runHeartbeatOnce(opts: {
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing still uses the main session entry (lastChannel, lastTo).
   const useIsolatedSession = heartbeat?.isolatedSession === true;
+  const effectiveHeartbeat =
+    preflight.isExecEventReason && heartbeat?.target === undefined
+      ? ({ ...heartbeat, target: "last" } satisfies HeartbeatConfig)
+      : heartbeat;
   const delivery = resolveHeartbeatDeliveryTarget({
     cfg,
     entry,
-    heartbeat,
+    heartbeat: effectiveHeartbeat,
     // Isolated heartbeat runs drain system events from their dedicated
     // `:heartbeat` session, not from the base session we peek during preflight.
     // Reusing base-session turnSource routing here can pin later isolated runs
@@ -815,7 +821,7 @@ export async function runHeartbeatOnce(opts: {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const { prompt, hasExecCompletion, hasCronEvents } = resolveHeartbeatRunPrompt({
     cfg,
-    heartbeat,
+    heartbeat: effectiveHeartbeat,
     preflight,
     canRelayToUser,
     workspaceDir,
@@ -1003,12 +1009,14 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
-    const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
-    const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
+    const heartbeatModelOverride = normalizeOptionalString(effectiveHeartbeat?.model);
+    const suppressToolErrorWarnings = effectiveHeartbeat?.suppressToolErrorWarnings === true;
     const timeoutOverrideSeconds =
-      typeof heartbeat?.timeoutSeconds === "number" ? heartbeat.timeoutSeconds : undefined;
+      typeof effectiveHeartbeat?.timeoutSeconds === "number"
+        ? effectiveHeartbeat.timeoutSeconds
+        : undefined;
     const bootstrapContextMode: "lightweight" | undefined =
-      heartbeat?.lightContext === true ? "lightweight" : undefined;
+      effectiveHeartbeat?.lightContext === true ? "lightweight" : undefined;
     const replyOpts = {
       isHeartbeat: true,
       ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
@@ -1021,7 +1029,7 @@ export async function runHeartbeatOnce(opts: {
       opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
-    const includeReasoning = heartbeat?.includeReasoning === true;
+    const includeReasoning = effectiveHeartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
       ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
       : [];
@@ -1048,7 +1056,7 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
+    const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, effectiveHeartbeat);
     const normalized = normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars);
     // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
     // The model should be responding with exec results, not ack tokens.
@@ -1400,10 +1408,13 @@ export function startHeartbeatRunner(opts: {
       } satisfies HeartbeatRunResult;
     }
     if (state.agents.size === 0) {
-      return {
-        status: "skipped",
-        reason: "disabled",
-      } satisfies HeartbeatRunResult;
+      const reasonKind = resolveHeartbeatReasonKind(params?.reason);
+      if (reasonKind !== "exec-event" || (!params?.sessionKey && !params?.agentId)) {
+        return {
+          status: "skipped",
+          reason: "disabled",
+        } satisfies HeartbeatRunResult;
+      }
     }
 
     const reason = params?.reason;
@@ -1420,8 +1431,17 @@ export function startHeartbeatRunner(opts: {
     try {
       if (requestedSessionKey || requestedAgentId) {
         const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
-        const targetAgent = state.agents.get(targetAgentId);
-        if (!targetAgent) {
+        const targetAgent = state.agents.get(targetAgentId) ?? {
+          agentId: targetAgentId,
+          heartbeat: resolveHeartbeatConfig(state.cfg, targetAgentId),
+          intervalMs: 0,
+          phaseMs: 0,
+          nextDueMs: now,
+        };
+        if (
+          !state.agents.has(targetAgentId) &&
+          resolveHeartbeatReasonKind(reason) !== "exec-event"
+        ) {
           return { status: "skipped", reason: "disabled" };
         }
         try {
@@ -1433,7 +1453,10 @@ export function startHeartbeatRunner(opts: {
             sessionKey: requestedSessionKey,
             deps: { runtime: state.runtime },
           });
-          if (res.status !== "skipped" || res.reason !== "disabled") {
+          if (
+            targetAgent.intervalMs > 0 &&
+            (res.status !== "skipped" || res.reason !== "disabled")
+          ) {
             advanceAgentSchedule(targetAgent, now, reason);
           }
           return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
@@ -1442,7 +1465,9 @@ export function startHeartbeatRunner(opts: {
           log.error(`heartbeat runner: targeted runOnce threw unexpectedly: ${errMsg}`, {
             error: errMsg,
           });
-          advanceAgentSchedule(targetAgent, now, reason);
+          if (targetAgent.intervalMs > 0) {
+            advanceAgentSchedule(targetAgent, now, reason);
+          }
           return { status: "failed", reason: errMsg };
         }
       }
