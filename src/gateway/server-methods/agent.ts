@@ -286,7 +286,13 @@ function dispatchAgentRunFromGateway(params: {
       });
     })
     .finally(() => {
-      params.context.chatAbortControllers.delete(params.runId);
+      // Only delete if this agent run's controller is still the registered
+      // one. A concurrent chat.send may have taken ownership of the slot, in
+      // which case we must not remove their entry.
+      const current = params.context.chatAbortControllers.get(params.runId);
+      if (current?.controller === params.abortController) {
+        params.context.chatAbortControllers.delete(params.runId);
+      }
     });
 }
 
@@ -849,7 +855,13 @@ export const agentHandlers: GatewayRequestHandlers = {
       ownerDeviceId: normalizeOptionalString(client?.connect?.device?.id),
       kind: "agent",
     };
-    context.chatAbortControllers.set(runId, abortEntry);
+    // Only register if no other run with the same runId is already tracked.
+    // A concurrent chat.send with the same idempotency key may already hold
+    // an entry; overwriting it would discard the chat.send's controller and
+    // the .finally() cleanup below would remove the entry prematurely.
+    if (!context.chatAbortControllers.has(runId)) {
+      context.chatAbortControllers.set(runId, abortEntry);
+    }
 
     respond(true, accepted, undefined, { runId });
 
