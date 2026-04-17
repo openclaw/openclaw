@@ -107,4 +107,68 @@ describe("spawnSubagentDirect thread binding delivery", () => {
       }),
     );
   });
+
+  it("keeps completion announcements when no bound delivery origin is resolved", async () => {
+    hoisted.hookRunner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "subagent_spawning",
+    );
+    hoisted.hookRunner.runSubagentSpawning.mockResolvedValue({
+      status: "ok",
+      threadBindingReady: true,
+    });
+    const { spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
+      callGatewayMock: hoisted.callGatewayMock,
+      loadConfig: () =>
+        createSubagentSpawnTestConfig(os.tmpdir(), {
+          agents: {
+            defaults: {
+              workspace: os.tmpdir(),
+            },
+            list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+          },
+        }),
+      updateSessionStoreMock: hoisted.updateSessionStoreMock,
+      registerSubagentRunMock: hoisted.registerSubagentRunMock,
+      emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
+      hookRunner: hoisted.hookRunner,
+      getSessionBindingService: () => ({ listBySession: () => [] }),
+      resolveSubagentSpawnModelSelection: () => "openai-codex/gpt-5.4",
+      resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "reply with a marker",
+        thread: true,
+        mode: "session",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "matrix",
+        agentAccountId: "sut",
+        agentTo: "room:!parent:example",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = hoisted.callGatewayMock.mock.calls.find(
+      ([call]) => (call as { method?: string }).method === "agent",
+    )?.[0] as { params?: Record<string, unknown> } | undefined;
+    expect(agentCall?.params).toMatchObject({
+      channel: "matrix",
+      accountId: "sut",
+      to: "room:!parent:example",
+      deliver: false,
+    });
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectsCompletionMessage: true,
+        requesterOrigin: {
+          channel: "matrix",
+          accountId: "sut",
+          to: "room:!parent:example",
+        },
+      }),
+    );
+  });
 });

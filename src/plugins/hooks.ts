@@ -258,7 +258,7 @@ export function createHookRunner(
     if (next.status === "error") {
       return next;
     }
-    const deliveryOrigin = next.deliveryOrigin ?? acc?.deliveryOrigin;
+    const deliveryOrigin = acc?.deliveryOrigin ?? next.deliveryOrigin;
     return {
       status: "ok",
       threadBindingReady: Boolean(acc?.threadBindingReady || next.threadBindingReady),
