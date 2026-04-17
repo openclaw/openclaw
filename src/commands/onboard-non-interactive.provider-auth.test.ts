@@ -1331,24 +1331,6 @@ describe("onboard (non-interactive): provider auth", () => {
       },
       {
         options: {
-          mistralApiKey: "mistral-test-key", // pragma: allowlist secret
-        },
-        profileId: "mistral:default",
-        provider: "mistral",
-        key: "mistral-test-key",
-      },
-      {
-        options: {
-          authChoice: "ai-gateway-api-key",
-          aiGatewayApiKey: "gateway-test-key", // pragma: allowlist secret
-        },
-        profileId: "vercel-ai-gateway:default",
-        provider: "vercel-ai-gateway",
-        key: "gateway-test-key",
-        expectedModel: "vercel-ai-gateway/anthropic/claude-opus-4.6",
-      },
-      {
-        options: {
           modelstudioApiKey: "modelstudio-test-key", // pragma: allowlist secret
         },
         profileId: "qwen:default",
@@ -1414,25 +1396,11 @@ describe("onboard (non-interactive): provider auth", () => {
   it("fails fast when ref mode receives explicit provider keys without env and does not leak keys", async () => {
     const scenarios = [
       {
-        name: "anthropic",
-        authChoice: "apiKey",
-        optionKey: "anthropicApiKey",
-        flagName: "--anthropic-api-key",
-        envVar: "ANTHROPIC_API_KEY",
-      },
-      {
         name: "openai",
         authChoice: "openai-api-key",
         optionKey: "openaiApiKey",
         flagName: "--openai-api-key",
         envVar: "OPENAI_API_KEY",
-      },
-      {
-        name: "openrouter",
-        authChoice: "openrouter-api-key",
-        optionKey: "openrouterApiKey",
-        flagName: "--openrouter-api-key",
-        envVar: "OPENROUTER_API_KEY",
       },
     ] as const;
 

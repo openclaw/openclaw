@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBindingResolverTestPlugin } from "../test-utils/channel-plugins.js";
 import {
-  loadFreshAgentsCommandModuleForTest,
+  loadFreshAgentsBindCommandModuleForTest,
   readConfigFileSnapshotMock,
   resetAgentsBindTestHarness,
   runtime,
@@ -51,14 +51,14 @@ vi.mock("../channels/plugins/index.js", async () => {
   };
 });
 
-let agentsBindCommand: typeof import("./agents.js").agentsBindCommand;
-let agentsBindingsCommand: typeof import("./agents.js").agentsBindingsCommand;
-let agentsUnbindCommand: typeof import("./agents.js").agentsUnbindCommand;
+let agentsBindCommand: typeof import("./agents.commands.bind.js").agentsBindCommand;
+let agentsBindingsCommand: typeof import("./agents.commands.bind.js").agentsBindingsCommand;
+let agentsUnbindCommand: typeof import("./agents.commands.bind.js").agentsUnbindCommand;
 
 describe("agents bind/unbind commands", () => {
   beforeEach(async () => {
     ({ agentsBindCommand, agentsBindingsCommand, agentsUnbindCommand } =
-      await loadFreshAgentsCommandModuleForTest());
+      await loadFreshAgentsBindCommandModuleForTest());
     resetAgentsBindTestHarness();
   });
 
