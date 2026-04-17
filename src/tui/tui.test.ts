@@ -10,6 +10,7 @@ import {
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
   resolveInitialTuiAgentId,
+  resolveLocalAuthCliInvocation,
   resolveTuiSessionKey,
   stopTuiSafely,
 } from "./tui.js";
@@ -333,5 +334,37 @@ describe("resolveCodexCliBin", () => {
     expect(() => resolveCodexCliBin()).not.toThrow();
     const result = resolveCodexCliBin();
     expect(result === null || typeof result === "string").toBe(true);
+  });
+});
+
+describe("resolveLocalAuthCliInvocation", () => {
+  it("uses the source runner when dist is unavailable", () => {
+    expect(
+      resolveLocalAuthCliInvocation({
+        execPath: "/usr/bin/node",
+        wrapperPath: "/repo/openclaw.mjs",
+        runNodePath: "/repo/scripts/run-node.mjs",
+        hasDistEntry: false,
+        hasRunNodeScript: true,
+      }),
+    ).toEqual({
+      command: "/usr/bin/node",
+      args: ["/repo/scripts/run-node.mjs", "models", "auth", "login"],
+    });
+  });
+
+  it("uses the packaged wrapper when dist is available", () => {
+    expect(
+      resolveLocalAuthCliInvocation({
+        execPath: "/usr/bin/node",
+        wrapperPath: "/repo/openclaw.mjs",
+        runNodePath: "/repo/scripts/run-node.mjs",
+        hasDistEntry: true,
+        hasRunNodeScript: true,
+      }),
+    ).toEqual({
+      command: "/usr/bin/node",
+      args: ["/repo/openclaw.mjs", "models", "auth", "login"],
+    });
   });
 });
