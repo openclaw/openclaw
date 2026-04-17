@@ -48,17 +48,6 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm run build
 
-FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS runtime-assets
-WORKDIR /app
-COPY --from=build /app/dist ./dist
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/package.json .
-COPY --from=build /app/openclaw.mjs .
-COPY --from=build /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
-COPY --from=build /app/skills ./skills
-COPY --from=build /app/docs ./docs
-COPY --from=build /app/qa ./qa
-
 FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS final
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 
@@ -70,14 +59,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=runtime-assets --chown=node:node /app/dist ./dist
-COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
-COPY --from=runtime-assets --chown=node:node /app/package.json .
-COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
-COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
-COPY --from=runtime-assets --chown=node:node /app/skills ./skills
-COPY --from=runtime-assets --chown=node:node /app/docs ./docs
-COPY --from=runtime-assets --chown=node:node /app/qa ./qa
+COPY --from=build --chown=node:node /app/dist ./dist
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/package.json .
+COPY --from=build --chown=node:node /app/openclaw.mjs .
+COPY --from=build --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
+COPY --from=build --chown=node:node /app/skills ./skills
+COPY --from=build --chown=node:node /app/docs ./docs
+COPY --from=build --chown=node:node /app/qa ./qa
 
 COPY --chown=node:node render-start.sh /app/render-start.sh
 COPY --chown=node:node railway-start.sh /app/railway-start.sh
