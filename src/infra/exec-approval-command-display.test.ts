@@ -44,38 +44,33 @@ describe("sanitizeExecApprovalDisplayText", () => {
     expect(result).toContain("git clone");
   });
 
-  it("redacts tokens even when followed by control characters that would otherwise break token matching", () => {
-    const cmd = "echo sk-abc123456789012345678\ncurl https://api.example.com";
-    const result = sanitizeExecApprovalDisplayText(cmd);
-    expect(result).not.toContain("sk-abc123456789012345678");
-    expect(result).toContain("https://api.example.com");
-  });
-
-  it("redacts tokens containing spliced invisible characters that would otherwise bypass token regex boundaries", () => {
+  it("suppresses raw command and emits a bypass marker when a token bypass is detected", () => {
     const cmd = "echo sk-abc123\u200B456789012345678 remainder";
     const result = sanitizeExecApprovalDisplayText(cmd);
     expect(result).not.toContain("sk-abc123");
     expect(result).not.toContain("456789012345678");
-    expect(result).toContain("remainder");
+    expect(result).not.toContain("remainder");
+    expect(result).toContain("obfuscated sensitive content");
+    expect(result).toContain("full text suppressed");
   });
 
-  it("redacts tokens containing spliced NBSP (Zs) characters", () => {
+  it("suppresses raw command when NBSP (Zs) is spliced into a token", () => {
     const cmd = "echo sk-abc123\u00A0456789012345678 remainder";
     const result = sanitizeExecApprovalDisplayText(cmd);
     expect(result).not.toContain("sk-abc123");
     expect(result).not.toContain("456789012345678");
-    expect(result).toContain("remainder");
+    expect(result).toContain("obfuscated sensitive content");
   });
 
-  it("redacts tokens containing spliced narrow no-break space", () => {
+  it("suppresses raw command when narrow no-break space is spliced into a token", () => {
     const cmd = "echo sk-abc123\u202F456789012345678 remainder";
     const result = sanitizeExecApprovalDisplayText(cmd);
     expect(result).not.toContain("sk-abc123");
     expect(result).not.toContain("456789012345678");
-    expect(result).toContain("remainder");
+    expect(result).toContain("obfuscated sensitive content");
   });
 
-  it("preserves multi-line boundary context when bypass is detected so approval UI is not spoofed into looking single-line", () => {
+  it("includes line-count metadata in the bypass marker so the approval UI cannot be spoofed into looking single-line", () => {
     const cmd = "line1\necho sk-abc123\u00A0456789012345678\nline3";
     const result = sanitizeExecApprovalDisplayText(cmd);
     expect(result).not.toContain("sk-abc123");
@@ -92,6 +87,20 @@ describe("sanitizeExecApprovalDisplayText", () => {
     const result = sanitizeExecApprovalDisplayText(cmd);
     expect(result).not.toContain("12345678");
     expect(result).not.toContain("1234567890");
+  });
+
+  it("does not leak bearer tokens when bypass is triggered by a separate spliced secret", () => {
+    // Bearer+NBSP is caught by the raw view (NBSP matches \s in non-u JS regex) but stripping
+    // removes NBSP, turning `Bearer<jwt>` into a pattern the bearer regex no longer matches.
+    // A separate spliced-invisible token in the same command triggers bypass detection, and
+    // neither view can be shown safely: raw leaks the spliced token tail, stripped re-exposes
+    // the bearer JWT.
+    const cmd =
+      'curl -H "Authorization: Bearer\u00A0eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.longtoken.sig" https://api.example.com; echo sk-abc123\u200B456789012345678';
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.longtoken.sig");
+    expect(result).not.toContain("456789012345678");
+    expect(result).toContain("obfuscated sensitive content");
   });
 });
 

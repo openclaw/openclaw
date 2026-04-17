@@ -47,15 +47,21 @@ export function sanitizeExecApprovalDisplayText(commandText: string): string {
   if (strippedRedacted === rawRedactedStripped) {
     return escapeInvisibles(rawRedacted);
   }
-  // Bypass detected: suppress the raw display (it would still show the portion of the secret
-  // that survived word-boundary matching). Emit a marker that preserves line-count context so
-  // the operator is not misled about multi-line boundaries, plus the stripped+redacted form.
+  // Bypass detected. Neither view can be safely displayed on its own:
+  //   - The raw view may still show the tail of a secret whose prefix was masked by a short
+  //     `***` literal (because word boundaries bounded the match short of the full token).
+  //   - The stripped view removes invisibles/Zs characters, which can defeat whitespace-
+  //     dependent patterns like `Bearer\s+(...)` and re-expose a secret that the raw view
+  //     had already masked (`Bearer\u00A0<jwt>` turns into `Bearer<jwt>` in stripped, and
+  //     the bearer regex no longer matches).
+  // Emit a metadata-only marker. Operators must reject or escalate; there is no way to
+  // render the original bytes without risking a partial-secret leak under either view.
   const lineCount = commandText.split(/\r\n|\r|\n|\u2028|\u2029/).length;
   const lineLabel =
     lineCount > 1
-      ? `${lineCount}-line command with obfuscated sensitive content`
-      : "command with obfuscated sensitive content";
-  return `[${lineLabel}; redacted view: ${escapeInvisibles(strippedRedacted)}]`;
+      ? `${lineCount}-line, ${commandText.length}-char`
+      : `${commandText.length}-char`;
+  return `[exec approval ${lineLabel} command contains obfuscated sensitive content; full text suppressed for safety]`;
 }
 
 function normalizePreview(commandText: string, commandPreview?: string | null): string | null {

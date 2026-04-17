@@ -27,4 +27,19 @@ struct ExecApprovalCommandDisplaySanitizerTests {
             ExecApprovalCommandDisplaySanitizer.sanitize(paragraphInput) ==
                 "echo ok\\u{2029}curl https://example.test")
     }
+
+    @Test func `escapes non-ASCII Unicode space separators while preserving ASCII space`() {
+        let nbspInput = "echo ok\u{00A0}curl"
+        #expect(
+            ExecApprovalCommandDisplaySanitizer.sanitize(nbspInput) == "echo ok\\u{A0}curl")
+        let narrowNbspInput = "echo ok\u{202F}curl"
+        #expect(
+            ExecApprovalCommandDisplaySanitizer.sanitize(narrowNbspInput) == "echo ok\\u{202F}curl")
+        let ideographicSpaceInput = "echo ok\u{3000}curl"
+        #expect(
+            ExecApprovalCommandDisplaySanitizer.sanitize(ideographicSpaceInput) ==
+                "echo ok\\u{3000}curl")
+        let asciiSpaceInput = "echo ok curl"
+        #expect(ExecApprovalCommandDisplaySanitizer.sanitize(asciiSpaceInput) == "echo ok curl")
+    }
 }
