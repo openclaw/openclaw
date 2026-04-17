@@ -81,8 +81,9 @@ function clearDeleteConfirmSkip() {
 }
 
 describe("chat view", () => {
-  it("renders BTW side results outside transcript history", () => {
+  it("renders, dismisses, and styles BTW side results outside transcript history", () => {
     const container = document.createElement("div");
+    const onDismissSideResult = vi.fn();
     render(
       renderChat(
         createProps({
@@ -102,6 +103,7 @@ describe("chat view", () => {
             isError: false,
             ts: 2,
           },
+          onDismissSideResult,
         }),
       ),
       container,
@@ -113,37 +115,12 @@ describe("chat view", () => {
     expect(container.textContent).toContain("Not saved to chat history");
     expect(container.textContent).toContain("Saved transcript message");
     expect(container.querySelectorAll(".chat-side-result")).toHaveLength(1);
-  });
-
-  it("dismisses BTW side results from the dismiss button", () => {
-    const container = document.createElement("div");
-    const onDismissSideResult = vi.fn();
-    render(
-      renderChat(
-        createProps({
-          sideResult: {
-            kind: "btw",
-            runId: "btw-run-2",
-            sessionKey: "main",
-            question: "what changed?",
-            text: "Dismiss me",
-            isError: false,
-            ts: 3,
-          },
-          onDismissSideResult,
-        }),
-      ),
-      container,
-    );
 
     const button = container.querySelector<HTMLButtonElement>(".chat-side-result__dismiss");
     expect(button).not.toBeNull();
     button?.click();
     expect(onDismissSideResult).toHaveBeenCalledTimes(1);
-  });
 
-  it("renders BTW errors with the error variant", () => {
-    const container = document.createElement("div");
     render(
       renderChat(
         createProps({
