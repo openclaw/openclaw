@@ -246,9 +246,13 @@ function createSandboxReadOperations(params: SandboxToolParams) {
       if (typeof (params.bridge as any).readdir === 'function') {
         return await (params.bridge as any).readdir({ filePath, cwd: params.root });
       }
-      // Fallback: throw an error since directory listing is not supported
-      // This ensures the base tool's error handling can provide meaningful feedback
-      throw new Error(`Directory listing not supported in sandbox mode for ${filePath}. The current bridge implementation does not support readdir.`);
+      // Throw an error instead of returning empty array
+      // This ensures the base tool can provide meaningful error feedback
+      // rather than silently reporting an empty directory
+      throw new Error(
+        `Directory listing not supported in sandbox mode for ${filePath}. ` +
+        `The current bridge implementation does not support readdir operations.`
+      );
     },
     access: (filePath: string) =>
       params.bridge.stat({ filePath, cwd: params.root }).then((s) => {
@@ -382,7 +386,7 @@ function getAudioMimeType(ext: string): string {
     aac: "audio/aac",
     opus: "audio/opus",
     wma: "audio/x-ms-wma",
-    webm: "audio/webm", // Add WebM audio MIME type
+    webm: "audio/webm", // Audio-only WebM files
   };
   return mimeMap[ext] ?? "audio/mpeg";
 }
@@ -763,10 +767,8 @@ export function wrapToolWorkspaceRootGuardWithOptions(
 
 // Supported media file extensions for the read tool
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "bmp", "webp", "svg"]);
-// FIX: Add webm to audio extensions to properly handle audio-only WebM files
-// WebM can contain either video or audio. By including it in both sets, we prioritize audio
-// detection by checking audio extensions first. This ensures audio-only WebM files are
-// correctly identified as audio rather than video.
+// WebM is included in both audio and video extensions, with audio taking precedence
+// This ensures audio-only WebM files are correctly identified as audio
 const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma", "webm"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi", "mkv", "m4v", "mpg", "mpeg"]);
 const MAX_DIR_ENTRIES = 200;
@@ -882,8 +884,8 @@ export function createOpenClawReadTool(
 
         let result: AgentToolResult;
 
-        // Check audio extensions first to prioritize audio detection
-        // This ensures audio-only WebM files are correctly identified as audio
+        // Check audio extensions first - this ensures WebM files are treated as audio
+        // when they contain audio-only content (most common use case for WebM in AI contexts)
         if (AUDIO_EXTENSIONS.has(ext)) {
           const mimeType = getAudioMimeType(ext);
 
