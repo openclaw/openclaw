@@ -116,6 +116,22 @@ export function resolvePreferredOpenClawTmpDir(
     }
   };
 
+  const formatFallbackDiagnostic = (fallbackPath: string, reason: string): string => {
+    // Give users a copyable recovery path: primary (`/tmp/openclaw`) failed
+    // AND the OS `tmpdir()` fallback failed. Name the TMPDIR env override,
+    // where we looked, and the exact command to create a safe fallback.
+    const tmpdirBase = tmpdir();
+    const safeFallback = path.join(tmpdirBase, uid === undefined ? "openclaw" : `openclaw-${uid}`);
+    return [
+      `${reason}: ${fallbackPath}`,
+      `  primary: ${POSIX_OPENCLAW_TMP_DIR}`,
+      `  os.tmpdir(): ${tmpdirBase}`,
+      `Override with the TMPDIR env var (points at a directory you own with mode 0700).`,
+      `Recover with:`,
+      `  mkdir -p ${safeFallback} && chmod 700 ${safeFallback}`,
+    ].join("\n");
+  };
+
   const ensureTrustedFallbackDir = (): string => {
     const fallbackPath = fallback();
     const state = resolveDirState(fallbackPath);
@@ -126,16 +142,18 @@ export function resolvePreferredOpenClawTmpDir(
       if (tryRepairWritableBits(fallbackPath)) {
         return fallbackPath;
       }
-      throw new Error(`Unsafe fallback OpenClaw temp dir: ${fallbackPath}`);
+      throw new Error(formatFallbackDiagnostic(fallbackPath, "Unsafe fallback OpenClaw temp dir"));
     }
     try {
       mkdirSync(fallbackPath, { recursive: true, mode: 0o700 });
       chmodSync(fallbackPath, 0o700);
     } catch {
-      throw new Error(`Unable to create fallback OpenClaw temp dir: ${fallbackPath}`);
+      throw new Error(
+        formatFallbackDiagnostic(fallbackPath, "Unable to create fallback OpenClaw temp dir"),
+      );
     }
     if (resolveDirState(fallbackPath) !== "available" && !tryRepairWritableBits(fallbackPath)) {
-      throw new Error(`Unsafe fallback OpenClaw temp dir: ${fallbackPath}`);
+      throw new Error(formatFallbackDiagnostic(fallbackPath, "Unsafe fallback OpenClaw temp dir"));
     }
     return fallbackPath;
   };

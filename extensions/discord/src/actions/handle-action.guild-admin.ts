@@ -4,6 +4,7 @@ import {
   readNumberParam,
   readStringArrayParam,
   readStringParam,
+  ToolInputError,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -12,6 +13,29 @@ import {
   isDiscordModerationAction,
   readDiscordModerationCommand,
 } from "./runtime.moderation-shared.js";
+
+// Rethrow a `ToolInputError` with the action name and a copyable example when
+// a required discord-admin param is missing. Keeps the same error class so
+// consumers (status=400, error surfaces) do not break.
+function requireGuildAdminParam<T>(params: {
+  action: string;
+  paramName: string;
+  example: Record<string, unknown>;
+  read: () => T;
+}): T {
+  try {
+    return params.read();
+  } catch (err) {
+    if (err instanceof ToolInputError) {
+      throw new ToolInputError(
+        `message(${params.action}) requires \`${params.paramName}\`. Example: ${JSON.stringify(
+          params.example,
+        )}`,
+      );
+    }
+    throw err;
+  }
+}
 
 type Ctx = Pick<
   ChannelMessageActionContext,
@@ -383,8 +407,19 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
 
   // Some actions are conceptually "admin", but still act on a resolved channel.
   if (action === "thread-list") {
-    const guildId = readStringParam(actionParams, "guildId", {
-      required: true,
+    const guildId = requireGuildAdminParam({
+      action: "thread-list",
+      paramName: "guildId",
+      example: {
+        action: "thread-list",
+        channel: "discord",
+        guildId: "1234567890",
+        includeArchived: false,
+      },
+      read: () =>
+        readStringParam(actionParams, "guildId", {
+          required: true,
+        }),
     });
     const channelId = readStringParam(actionParams, "channelId");
     const includeArchived =

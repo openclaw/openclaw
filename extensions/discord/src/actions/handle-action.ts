@@ -3,6 +3,7 @@ import {
   readNumberParam,
   readStringArrayParam,
   readStringParam,
+  ToolInputError,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
@@ -16,6 +17,29 @@ import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-a
 import { readDiscordParentIdParam } from "./runtime.shared.js";
 
 const providerId = "discord";
+
+// Wrap required-param parsing with a friendlier error that surfaces which
+// action and what a working call looks like. Keep the same `ToolInputError`
+// class so upstream consumers (status codes, error channels) do not change.
+function requireDiscordParam<T>(params: {
+  action: string;
+  paramName: string;
+  example: Record<string, unknown>;
+  read: () => T;
+}): T {
+  try {
+    return params.read();
+  } catch (err) {
+    if (err instanceof ToolInputError) {
+      throw new ToolInputError(
+        `message(${params.action}) requires \`${params.paramName}\`. Example: ${JSON.stringify(
+          params.example,
+        )}`,
+      );
+    }
+    throw err;
+  }
+}
 
 export async function handleDiscordMessageAction(
   ctx: Pick<
@@ -39,9 +63,15 @@ export async function handleDiscordMessageAction(
     mediaReadFile: ctx.mediaReadFile,
   } as const;
 
-  const resolveChannelId = () =>
+  const resolveChannelId = (actionLabel: string = action) =>
     resolveDiscordChannelId(
-      readStringParam(params, "channelId") ?? readStringParam(params, "to", { required: true }),
+      readStringParam(params, "channelId") ??
+        requireDiscordParam({
+          action: actionLabel,
+          paramName: "to",
+          example: { action: actionLabel, channel: "discord", to: "channel:1234567890" },
+          read: () => readStringParam(params, "to", { required: true }),
+        }),
     );
 
   if (action === "send") {
