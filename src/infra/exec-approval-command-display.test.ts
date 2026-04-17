@@ -118,11 +118,48 @@ describe("sanitizeExecApprovalDisplayText", () => {
     expect(result).toContain("> key.pem");
   });
 
-  it("truncates very large command text so regex work is bounded", () => {
+  it("truncates the redacted output (not the raw input) so large commands are bounded", () => {
     const padding = "x".repeat(20 * 1024);
     const result = sanitizeExecApprovalDisplayText(padding);
     expect(result.length).toBeLessThan(padding.length);
     expect(result).toContain("[truncated]");
+  });
+
+  it("refuses to display commands above the hard input cap", () => {
+    const huge = "x".repeat(300 * 1024);
+    const result = sanitizeExecApprovalDisplayText(huge);
+    expect(result).toContain("exceeds display size limit");
+    expect(result.length).toBeLessThan(1024);
+  });
+
+  it("redacts tokens at the tail of long inputs instead of truncating them below pattern length", () => {
+    // Pad with non-token content, then append a secret at the end. Truncating BEFORE redaction
+    // would split the token below the pattern's minimum length and leak the prefix. With
+    // redaction first, the full token is masked before any size-based truncation runs.
+    const padding = "a ".repeat(10 * 1024);
+    const cmd = padding + "ghp_1234567890abcdefghij1234567890abcdef";
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("ghp_1234567890abcdefghij1234567890abcdef");
+    expect(result).not.toContain("ghp_1234567890");
+  });
+
+  it("escapes astral-plane invisible characters (e.g. U+E0061 tag characters)", () => {
+    const cmd = "echo hi\u{E0061}there";
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).toContain("\\u{E0061}");
+    expect(result).not.toMatch(/hi[\uDB40\uDC61]there/u);
+  });
+
+  it("masks a secret spliced with an astral-plane invisible character", () => {
+    // U+E0061 is a Cf (format) code point in the supplementary plane. Iterating the input by
+    // UTF-16 code unit would see two surrogate halves, neither of which matches \p{Cf}, so
+    // the splice would survive stripping and the stripped-view redaction would miss the
+    // full token. Code-point iteration strips it correctly and bypass detection fires.
+    const cmd = "echo sk-abc123\u{E0061}456789012345678 remainder";
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("sk-abc123");
+    expect(result).not.toContain("456789012345678");
+    expect(result).toContain("remainder");
   });
 });
 

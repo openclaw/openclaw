@@ -7,13 +7,18 @@ import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 const EXEC_APPROVAL_INVISIBLE_CHAR_REGEX =
   /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]/gu;
 const EXEC_APPROVAL_INVISIBLE_CHAR_SINGLE =
-  /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]/u;
+  /^[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]$/u;
 
-// Upper bound on input size for display sanitization to avoid unbounded regex work on huge
-// attacker-controlled command payloads. Commands longer than this are truncated for display
-// only; execution decisions are made from the raw payload elsewhere.
-const EXEC_APPROVAL_MAX_DISPLAY_INPUT = 16 * 1024;
+// Hard cap on input the sanitizer will process at all. Above this size we return a constant
+// marker without running any regex work, so an attacker cannot force unbounded CPU/memory.
+const EXEC_APPROVAL_MAX_INPUT = 256 * 1024;
+// Soft cap on displayed output. Truncation happens AFTER redaction so a secret near the
+// cutoff is not partially exposed when the cut lands mid-token below a pattern's minimum
+// length (e.g. `ghp_` needs 20+ trailing chars before the `\b` match).
+const EXEC_APPROVAL_MAX_OUTPUT = 16 * 1024;
 const EXEC_APPROVAL_TRUNCATION_MARKER = "…[truncated]";
+const EXEC_APPROVAL_OVERSIZED_MARKER =
+  "[exec approval command exceeds display size limit; full text suppressed]";
 
 const BYPASS_MASK = "***";
 
@@ -25,11 +30,19 @@ function escapeInvisibles(text: string): string {
   return text.replace(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX, formatCodePointEscape);
 }
 
+function truncateForDisplay(text: string): string {
+  if (text.length <= EXEC_APPROVAL_MAX_OUTPUT) {
+    return text;
+  }
+  return text.slice(0, EXEC_APPROVAL_MAX_OUTPUT) + EXEC_APPROVAL_TRUNCATION_MARKER;
+}
+
 // Build a boolean bitmap of positions in `text` that ANY redaction pattern would match.
 // Patterns are applied independently to the raw text (not sequentially against a
 // progressively-redacted view) so later patterns can still find matches that the in-place
 // redaction would have replaced first. That is conservative — it may over-count overlapping
-// matches — but that is acceptable for a coverage check.
+// matches — but that is acceptable for a coverage check. Indices are UTF-16 code-unit
+// offsets, matching what `matchAll` returns and aligning with `String#length`.
 function computeRedactionBitmap(text: string, patterns: RegExp[]): boolean[] {
   const bitmap: boolean[] = Array.from({ length: text.length }, () => false);
   for (const pattern of patterns) {
@@ -49,36 +62,39 @@ function computeRedactionBitmap(text: string, patterns: RegExp[]): boolean[] {
   return bitmap;
 }
 
+// Iterate by full Unicode code point so astral-plane invisibles (e.g. U+E0061 TAG LATIN
+// SMALL LETTER A, category Cf) are matched as single characters instead of being seen as a
+// surrogate pair whose halves are category Cs and would escape the invisible-char regex.
 function buildStrippedView(original: string): { stripped: string; strippedToOrig: number[] } {
   const strippedChars: string[] = [];
   const strippedToOrig: number[] = [];
-  for (let i = 0; i < original.length; i++) {
-    const ch = original[i];
-    if (EXEC_APPROVAL_INVISIBLE_CHAR_SINGLE.test(ch)) {
-      continue;
+  let offset = 0;
+  for (const cp of original) {
+    if (!EXEC_APPROVAL_INVISIBLE_CHAR_SINGLE.test(cp)) {
+      strippedChars.push(cp);
+      for (let k = 0; k < cp.length; k++) {
+        strippedToOrig.push(offset + k);
+      }
     }
-    strippedChars.push(ch);
-    strippedToOrig.push(i);
+    offset += cp.length;
   }
   return { stripped: strippedChars.join(""), strippedToOrig };
 }
 
 export function sanitizeExecApprovalDisplayText(commandText: string): string {
-  // Truncate oversized input before any regex work to bound CPU/memory on attacker-controlled
-  // payloads. The sanitizer runs the full token pattern set over the text multiple times, so
-  // we cap the work at a constant multiple of a reasonable display size.
-  const input =
-    commandText.length > EXEC_APPROVAL_MAX_DISPLAY_INPUT
-      ? commandText.slice(0, EXEC_APPROVAL_MAX_DISPLAY_INPUT) + EXEC_APPROVAL_TRUNCATION_MARKER
-      : commandText;
-  const rawRedacted = redactSensitiveText(input, { mode: "tools" });
-  const { stripped, strippedToOrig } = buildStrippedView(input);
+  if (commandText.length > EXEC_APPROVAL_MAX_INPUT) {
+    // Refuse to display inputs above the hard cap; anything larger must be approved through
+    // another channel. Running redaction on a multi-megabyte payload would be a DoS vector.
+    return EXEC_APPROVAL_OVERSIZED_MARKER;
+  }
+  const rawRedacted = redactSensitiveText(commandText, { mode: "tools" });
+  const { stripped, strippedToOrig } = buildStrippedView(commandText);
   const strippedRedacted = redactSensitiveText(stripped, { mode: "tools" });
   // Fast path: stripping invisibles did not expose any additional secret-like content, so the
   // raw-view redaction is sufficient. Preserve structure and show invisible-character spoof
   // attempts as `\u{...}` escapes.
   if (strippedRedacted === stripped) {
-    return escapeInvisibles(rawRedacted);
+    return truncateForDisplay(escapeInvisibles(rawRedacted));
   }
   // Detect bypass by position-bitmap coverage. Run each redaction pattern independently on
   // both views and map stripped-view match positions back to original coordinates. If every
@@ -89,7 +105,7 @@ export function sanitizeExecApprovalDisplayText(commandText: string): string {
   // the tail of an `sk-` token whose prefix-boundary was broken by a spliced zero-width or
   // NBSP character).
   const { patterns } = resolveRedactOptions({ mode: "tools" });
-  const rawMask = computeRedactionBitmap(input, patterns);
+  const rawMask = computeRedactionBitmap(commandText, patterns);
   const strippedMask = computeRedactionBitmap(stripped, patterns);
   let bypassDetected = false;
   for (let i = 0; i < strippedMask.length; i++) {
@@ -99,12 +115,15 @@ export function sanitizeExecApprovalDisplayText(commandText: string): string {
     }
   }
   if (!bypassDetected) {
-    return escapeInvisibles(rawRedacted);
+    return truncateForDisplay(escapeInvisibles(rawRedacted));
   }
   // Bypass path. Project the stripped-view mask back onto original positions, union with the
   // raw-view mask, and emit a rendering where each contiguous masked run becomes a single
   // `***` marker. Invisible characters that fall outside masked runs still render as visible
-  // `\u{...}` escapes so multi-line structure and spliced invisibles stay readable.
+  // `\u{...}` escapes so multi-line structure and spliced invisibles stay readable. The
+  // render loop advances by full code point so astral-plane invisibles are escaped as one
+  // `\u{...}` token rather than two separate surrogate escapes (or, worse, passed through
+  // unescaped because neither surrogate half matches the Cf regex).
   const unionMask = rawMask.slice();
   for (let i = 0; i < strippedMask.length; i++) {
     if (strippedMask[i]) {
@@ -113,21 +132,22 @@ export function sanitizeExecApprovalDisplayText(commandText: string): string {
   }
   let out = "";
   let i = 0;
-  while (i < input.length) {
+  while (i < commandText.length) {
     if (unionMask[i]) {
       let j = i;
-      while (j < input.length && unionMask[j]) {
+      while (j < commandText.length && unionMask[j]) {
         j++;
       }
       out += BYPASS_MASK;
       i = j;
       continue;
     }
-    const ch = input[i];
-    out += EXEC_APPROVAL_INVISIBLE_CHAR_SINGLE.test(ch) ? formatCodePointEscape(ch) : ch;
-    i++;
+    const codePoint = commandText.codePointAt(i) ?? 0xfffd;
+    const cp = String.fromCodePoint(codePoint);
+    out += EXEC_APPROVAL_INVISIBLE_CHAR_SINGLE.test(cp) ? formatCodePointEscape(cp) : cp;
+    i += cp.length;
   }
-  return out;
+  return truncateForDisplay(out);
 }
 
 function normalizePreview(commandText: string, commandPreview?: string | null): string | null {
