@@ -123,6 +123,9 @@ export type AppViewState = {
   planApprovalRequest: import("./app-tool-stream.ts").PlanApprovalRequest | null;
   planApprovalBusy: boolean;
   planApprovalError: string | null;
+  /** Inline-revise textarea state (no popup). */
+  planApprovalReviseOpen: boolean;
+  planApprovalReviseDraft: string;
   pendingGatewayUrl: string | null;
   configLoading: boolean;
   configRaw: string;
@@ -401,6 +404,10 @@ export type AppViewState = {
       decision: "approve" | "reject" | "edit",
       feedback?: string,
     ) => Promise<void>;
+    /** Inline-revise textarea control (no popup). */
+    handlePlanApprovalReviseOpen: () => void;
+    handlePlanApprovalReviseCancel: () => void;
+    handlePlanApprovalReviseDraftChange: (text: string) => void;
     handleGatewayUrlConfirm: () => void;
     handleGatewayUrlCancel: () => void;
     handleConfigLoad: () => Promise<void>;

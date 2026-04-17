@@ -143,6 +143,16 @@ export type ChatProps = {
   ) => void | Promise<void>;
   /** Open the full plan content in the right sidebar (read-only viewer). */
   onOpenPlanInSidebar?: (request: PlanApprovalRequest) => void;
+  /**
+   * Inline-revise textarea state owned by the host. When the user
+   * clicks Revise we open an inline textarea (no popup) — this state
+   * tracks open/draft so the textarea survives chat re-renders.
+   */
+  planApprovalReviseOpen?: boolean;
+  planApprovalReviseDraft?: string;
+  onPlanApprovalReviseOpen?: () => void;
+  onPlanApprovalReviseCancel?: () => void;
+  onPlanApprovalReviseDraftChange?: (text: string) => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -1561,11 +1571,16 @@ export function renderChat(props: ChatProps) {
             request: props.planApprovalRequest,
             busy: props.planApprovalBusy ?? false,
             error: props.planApprovalError ?? null,
+            reviseOpen: props.planApprovalReviseOpen ?? false,
+            reviseDraft: props.planApprovalReviseDraft ?? "",
             onApprove: () => void props.onPlanApprovalDecision!("approve"),
-            onEdit: () => void props.onPlanApprovalDecision!("edit"),
-            onReject: () => {
-              const feedback = window.prompt("Feedback for revision (optional):") ?? undefined;
-              void props.onPlanApprovalDecision!("reject", feedback || undefined);
+            onAcceptWithEdits: () => void props.onPlanApprovalDecision!("edit"),
+            onReviseOpen: () => props.onPlanApprovalReviseOpen?.(),
+            onReviseCancel: () => props.onPlanApprovalReviseCancel?.(),
+            onReviseDraftChange: (text) => props.onPlanApprovalReviseDraftChange?.(text),
+            onReviseSubmit: () => {
+              const draft = (props.planApprovalReviseDraft ?? "").trim();
+              void props.onPlanApprovalDecision!("reject", draft || undefined);
             },
             onOpenPlan: () => {
               if (props.planApprovalRequest && props.onOpenPlanInSidebar) {
@@ -1575,184 +1590,194 @@ export function renderChat(props: ChatProps) {
           })
         : nothing}
 
-      <!-- Input bar -->
-      <div class="agent-chat__input">
-        ${renderSlashMenu(requestUpdate, props)} ${renderAttachmentPreview(props)}
+      <!--
+        Hide the chat input while a plan-approval card is showing —
+        prevents the user from typing into the wrong surface during
+        the approval moment. The card's own Revise textarea handles
+        feedback collection in-place.
+      -->
+      ${props.planApprovalRequest
+        ? nothing
+        : html`
+            <!-- Input bar -->
+            <div class="agent-chat__input">
+              ${renderSlashMenu(requestUpdate, props)} ${renderAttachmentPreview(props)}
 
-        <input
-          type="file"
-          accept=${CHAT_ATTACHMENT_ACCEPT}
-          multiple
-          class="agent-chat__file-input"
-          @change=${(e: Event) => handleFileSelect(e, props)}
-        />
+              <input
+                type="file"
+                accept=${CHAT_ATTACHMENT_ACCEPT}
+                multiple
+                class="agent-chat__file-input"
+                @change=${(e: Event) => handleFileSelect(e, props)}
+              />
 
-        ${vs.sttRecording && vs.sttInterimText
-          ? html`<div class="agent-chat__stt-interim">${vs.sttInterimText}</div>`
-          : nothing}
+              ${vs.sttRecording && vs.sttInterimText
+                ? html`<div class="agent-chat__stt-interim">${vs.sttInterimText}</div>`
+                : nothing}
 
-        <textarea
-          ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
-          .value=${props.draft}
-          dir=${detectTextDirection(props.draft)}
-          ?disabled=${!props.connected}
-          @keydown=${handleKeyDown}
-          @input=${handleInput}
-          @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
-          placeholder=${vs.sttRecording ? "Listening..." : placeholder}
-          rows="1"
-        ></textarea>
+              <textarea
+                ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
+                .value=${props.draft}
+                dir=${detectTextDirection(props.draft)}
+                ?disabled=${!props.connected}
+                @keydown=${handleKeyDown}
+                @input=${handleInput}
+                @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+                placeholder=${vs.sttRecording ? "Listening..." : placeholder}
+                rows="1"
+              ></textarea>
 
-        <div class="agent-chat__toolbar">
-          <div class="agent-chat__toolbar-left">
-            ${(() => {
-              // PR-8 / #67721: mode chip lives at the LEFT edge of the
-              // toolbar (before paperclip) per user feedback — it's the
-              // most-frequently-touched control on the input row.
-              if (!props.onSetMode) {
-                return nothing;
-              }
-              const currentMode = resolveCurrentMode(
-                activeSession?.execSecurity,
-                activeSession?.execAsk,
-                activeSession?.planMode?.mode,
-              );
-              return renderModeSwitcher({
-                currentMode,
-                menuOpen: vs.modeMenuOpen,
-                onToggleMenu: () => {
-                  vs.modeMenuOpen = !vs.modeMenuOpen;
-                  requestUpdate();
-                },
-                onSelectMode: (mode) => {
-                  vs.modeMenuOpen = false;
-                  props.onSetMode!(mode);
-                  requestUpdate();
-                },
-              });
-            })()}
-            <button
-              class="agent-chat__input-btn"
-              @click=${() => {
-                document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
-              }}
-              title="Attach file"
-              aria-label="Attach file"
-              ?disabled=${!props.connected}
-            >
-              ${icons.paperclip}
-            </button>
-
-            ${isSttSupported()
-              ? html`
-                  <button
-                    class="agent-chat__input-btn ${vs.sttRecording
-                      ? "agent-chat__input-btn--recording"
-                      : ""}"
-                    @click=${() => {
-                      if (vs.sttRecording) {
-                        stopStt();
-                        vs.sttRecording = false;
-                        vs.sttInterimText = "";
+              <div class="agent-chat__toolbar">
+                <div class="agent-chat__toolbar-left">
+                  ${(() => {
+                    // PR-8 / #67721: mode chip lives at the LEFT edge of the
+                    // toolbar (before paperclip) per user feedback — it's the
+                    // most-frequently-touched control on the input row.
+                    if (!props.onSetMode) {
+                      return nothing;
+                    }
+                    const currentMode = resolveCurrentMode(
+                      activeSession?.execSecurity,
+                      activeSession?.execAsk,
+                      activeSession?.planMode?.mode,
+                    );
+                    return renderModeSwitcher({
+                      currentMode,
+                      menuOpen: vs.modeMenuOpen,
+                      onToggleMenu: () => {
+                        vs.modeMenuOpen = !vs.modeMenuOpen;
                         requestUpdate();
-                      } else {
-                        const started = startStt({
-                          onTranscript: (text, isFinal) => {
-                            if (isFinal) {
-                              const current = getDraft();
-                              const sep = current && !current.endsWith(" ") ? " " : "";
-                              props.onDraftChange(current + sep + text);
-                              vs.sttInterimText = "";
-                            } else {
-                              vs.sttInterimText = text;
-                            }
-                            requestUpdate();
-                          },
-                          onStart: () => {
-                            vs.sttRecording = true;
-                            requestUpdate();
-                          },
-                          onEnd: () => {
-                            vs.sttRecording = false;
-                            vs.sttInterimText = "";
-                            requestUpdate();
-                          },
-                          onError: () => {
-                            vs.sttRecording = false;
-                            vs.sttInterimText = "";
-                            requestUpdate();
-                          },
-                        });
-                        if (started) {
-                          vs.sttRecording = true;
-                          requestUpdate();
-                        }
-                      }
+                      },
+                      onSelectMode: (mode) => {
+                        vs.modeMenuOpen = false;
+                        props.onSetMode!(mode);
+                        requestUpdate();
+                      },
+                    });
+                  })()}
+                  <button
+                    class="agent-chat__input-btn"
+                    @click=${() => {
+                      document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
                     }}
-                    title=${vs.sttRecording ? "Stop recording" : "Voice input"}
+                    title="Attach file"
+                    aria-label="Attach file"
                     ?disabled=${!props.connected}
                   >
-                    ${vs.sttRecording ? icons.micOff : icons.mic}
+                    ${icons.paperclip}
                   </button>
-                `
-              : nothing}
-            ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
-          </div>
 
-          <div class="agent-chat__toolbar-right">
-            ${nothing /* search hidden for now */}
-            ${canAbort
-              ? nothing
-              : html`
+                  ${isSttSupported()
+                    ? html`
+                        <button
+                          class="agent-chat__input-btn ${vs.sttRecording
+                            ? "agent-chat__input-btn--recording"
+                            : ""}"
+                          @click=${() => {
+                            if (vs.sttRecording) {
+                              stopStt();
+                              vs.sttRecording = false;
+                              vs.sttInterimText = "";
+                              requestUpdate();
+                            } else {
+                              const started = startStt({
+                                onTranscript: (text, isFinal) => {
+                                  if (isFinal) {
+                                    const current = getDraft();
+                                    const sep = current && !current.endsWith(" ") ? " " : "";
+                                    props.onDraftChange(current + sep + text);
+                                    vs.sttInterimText = "";
+                                  } else {
+                                    vs.sttInterimText = text;
+                                  }
+                                  requestUpdate();
+                                },
+                                onStart: () => {
+                                  vs.sttRecording = true;
+                                  requestUpdate();
+                                },
+                                onEnd: () => {
+                                  vs.sttRecording = false;
+                                  vs.sttInterimText = "";
+                                  requestUpdate();
+                                },
+                                onError: () => {
+                                  vs.sttRecording = false;
+                                  vs.sttInterimText = "";
+                                  requestUpdate();
+                                },
+                              });
+                              if (started) {
+                                vs.sttRecording = true;
+                                requestUpdate();
+                              }
+                            }
+                          }}
+                          title=${vs.sttRecording ? "Stop recording" : "Voice input"}
+                          ?disabled=${!props.connected}
+                        >
+                          ${vs.sttRecording ? icons.micOff : icons.mic}
+                        </button>
+                      `
+                    : nothing}
+                  ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
+                </div>
+
+                <div class="agent-chat__toolbar-right">
+                  ${nothing /* search hidden for now */}
+                  ${canAbort
+                    ? nothing
+                    : html`
+                        <button
+                          class="btn btn--ghost"
+                          @click=${props.onNewSession}
+                          title="New session"
+                          aria-label="New session"
+                        >
+                          ${icons.plus}
+                        </button>
+                      `}
                   <button
                     class="btn btn--ghost"
-                    @click=${props.onNewSession}
-                    title="New session"
-                    aria-label="New session"
+                    @click=${() => exportMarkdown(props)}
+                    title="Export"
+                    aria-label="Export chat"
+                    ?disabled=${props.messages.length === 0}
                   >
-                    ${icons.plus}
+                    ${icons.download}
                   </button>
-                `}
-            <button
-              class="btn btn--ghost"
-              @click=${() => exportMarkdown(props)}
-              title="Export"
-              aria-label="Export chat"
-              ?disabled=${props.messages.length === 0}
-            >
-              ${icons.download}
-            </button>
 
-            ${canAbort
-              ? html`
-                  <button
-                    class="chat-send-btn chat-send-btn--stop"
-                    @click=${props.onAbort}
-                    title="Stop"
-                    aria-label="Stop generating"
-                  >
-                    ${icons.stop}
-                  </button>
-                `
-              : html`
-                  <button
-                    class="chat-send-btn"
-                    @click=${() => {
-                      if (props.draft.trim()) {
-                        inputHistory.push(props.draft);
-                      }
-                      props.onSend();
-                    }}
-                    ?disabled=${!props.connected || props.sending}
-                    title=${isBusy ? "Queue" : "Send"}
-                    aria-label=${isBusy ? "Queue message" : "Send message"}
-                  >
-                    ${icons.send}
-                  </button>
-                `}
-          </div>
-        </div>
-      </div>
+                  ${canAbort
+                    ? html`
+                        <button
+                          class="chat-send-btn chat-send-btn--stop"
+                          @click=${props.onAbort}
+                          title="Stop"
+                          aria-label="Stop generating"
+                        >
+                          ${icons.stop}
+                        </button>
+                      `
+                    : html`
+                        <button
+                          class="chat-send-btn"
+                          @click=${() => {
+                            if (props.draft.trim()) {
+                              inputHistory.push(props.draft);
+                            }
+                            props.onSend();
+                          }}
+                          ?disabled=${!props.connected || props.sending}
+                          title=${isBusy ? "Queue" : "Send"}
+                          aria-label=${isBusy ? "Queue message" : "Send message"}
+                        >
+                          ${icons.send}
+                        </button>
+                      `}
+                </div>
+              </div>
+            </div>
+          `}
     </section>
   `;
 }
