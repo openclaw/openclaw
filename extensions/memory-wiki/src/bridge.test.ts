@@ -389,6 +389,62 @@ describe("syncMemoryWikiBridgeSources", () => {
     });
   });
 
+  it("prunes bridge pages when config filters out all artifact kinds but capability is healthy", async () => {
+    const workspaceDir = await createBridgeWorkspace("config-filter-workspace");
+    const { rootDir: vaultDir, config: firstConfig } = await createVault({
+      rootDir: nextCaseRoot("config-filter-vault"),
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexMemoryRoot: true,
+        },
+      },
+    });
+
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
+    registerBridgeArtifacts([
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "MEMORY.md",
+        absolutePath: path.join(workspaceDir, "MEMORY.md"),
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+    const appConfig: OpenClawConfig = {
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    };
+
+    const first = await syncMemoryWikiBridgeSources({ config: firstConfig, appConfig });
+    expect(first.importedCount).toBe(1);
+    const firstPagePath = first.pagePaths[0] ?? "";
+    await expect(fs.stat(path.join(vaultDir, firstPagePath))).resolves.toBeTruthy();
+
+    // Now disable indexMemoryRoot — capability still returns artifacts, but
+    // config filters them all out. This is NOT an outage; prune should proceed.
+    const { config: secondConfig } = await createVault({
+      rootDir: vaultDir,
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexMemoryRoot: false,
+        },
+      },
+    });
+    const second = await syncMemoryWikiBridgeSources({ config: secondConfig, appConfig });
+
+    expect(second.artifactCount).toBe(0);
+    expect(second.removedCount).toBe(1);
+    await expect(fs.stat(path.join(vaultDir, firstPagePath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("caps composed bridge source filenames to the filesystem component limit", async () => {
     const workspaceDir = await createBridgeWorkspace(`${"漢".repeat(50)}-workspace`);
     const { rootDir: vaultDir, config } = await createVault({

@@ -248,22 +248,19 @@ export async function syncMemoryWikiBridgeSources(params: {
   }
   const workspaceCount = new Set(publicArtifacts.map((artifact) => artifact.workspaceDir)).size;
 
-  // Guard: when no artifacts were found but existing bridge entries still have
-  // source files on disk, the memory capability is likely temporarily unavailable
-  // rather than all sources being genuinely deleted. Skip pruning in that case to
-  // avoid wiping all bridge pages on a transient capability outage. (#67658)
-  //
-  // Known limitation: this heuristic cannot distinguish a transient outage from
-  // a legitimate "all workspaces removed" scenario where source files still linger
-  // on disk. In that edge case stale bridge pages will persist until the next sync
-  // cycle where the capability is available and returns a definitive empty result.
-  // This is an acceptable tradeoff: stale pages are benign, data loss is not.
+  // Guard: when the capability returned zero artifacts (unfiltered) but existing
+  // bridge entries still have source files on disk, the memory capability is likely
+  // temporarily unavailable rather than all sources being genuinely deleted. Skip
+  // pruning in that case to avoid wiping all bridge pages on a transient outage.
+  // Note: we check publicArtifacts (pre-filter), not artifacts (post-filter), so
+  // config-driven filtering (e.g. disabling all bridge index flags) correctly
+  // triggers pruning rather than being misread as an outage. (#67658)
   const existingBridgeSourcePaths = Object.values(state.entries)
     .filter((entry) => entry.group === "bridge")
     .map((entry) => entry.sourcePath);
 
   const shouldSkipPrune =
-    artifacts.length === 0 &&
+    publicArtifacts.length === 0 &&
     existingBridgeSourcePaths.length > 0 &&
     (await Promise.any(
       existingBridgeSourcePaths.map((sourcePath) =>
