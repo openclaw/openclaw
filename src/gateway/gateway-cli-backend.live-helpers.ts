@@ -193,7 +193,11 @@ export function shouldRetryCliCronMcpProbeReply(text: string): boolean {
     normalized.includes("could not create job") ||
     normalized.includes("couldn't create job") ||
     normalized.includes("couldn’t create job");
-  const mentionsRetryRequest = normalized.includes("please retry");
+  const mentionsRetryRequest =
+    normalized.includes("please retry") ||
+    normalized.includes("i'll retry") ||
+    normalized.includes("i’ll retry") ||
+    normalized.includes("send the same request again");
   const mentionsMissingJob =
     normalized.includes("job was not created") ||
     normalized.includes("job still was not created") ||
