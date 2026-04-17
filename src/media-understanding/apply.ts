@@ -74,12 +74,18 @@ const TEXT_EXT_MIME = new Map<string, string>([
   [".xml", "application/xml"],
 ]);
 
-function sanitizeMimeType(value?: string): string | undefined {
+// Exported for direct testing; kept narrow since this is the single MIME
+// validator for media-understanding inputs.
+export function sanitizeMimeType(value?: string): string | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
   if (!trimmed) {
     return undefined;
   }
-  const match = trimmed.match(/^([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+)/);
+  // Anchor both ends; allow optional RFC 7231 parameters after the type/subtype.
+  // Trailing garbage (e.g. `text/plain<script>` or `text/plain\ngarbage`) is
+  // rejected outright instead of silently truncated. Input is already
+  // lowercased by normalizeOptionalLowercaseString.
+  const match = trimmed.match(/^([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+)(?:\s*;.*)?$/);
   return match?.[1];
 }
 
