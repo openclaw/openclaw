@@ -151,6 +151,25 @@ export async function runDiscordGatewayLifecycle(params: {
     mutableGateway.state.sequence = null;
     mutableGateway.sequence = null;
   };
+  // Discord's gateway sends a HeartbeatAck (op 11) every ~41.25s as keep-alive,
+  // which Carbon's ConnectionMonitor counts in `messagesReceived`. The monitor
+  // emits a `metrics` event on its own interval (60s by default). Treat any
+  // increase in `messagesReceived` between ticks as proof the socket is alive,
+  // so idle agents (no inbound messages, just heartbeat ACKs) don't get
+  // false-flagged as stale by the channel health monitor.
+  let lastObservedMessagesReceived = 0;
+  const onGatewayMetrics = (metrics: unknown) => {
+    const received =
+      typeof (metrics as { messagesReceived?: number } | undefined)?.messagesReceived === "number"
+        ? (metrics as { messagesReceived: number }).messagesReceived
+        : 0;
+    if (received > lastObservedMessagesReceived) {
+      lastObservedMessagesReceived = received;
+      pushStatus({ lastEventAt: Date.now() });
+    }
+  };
+  gatewayEmitter?.on("metrics", onGatewayMetrics);
+
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
     const at = Date.now();
@@ -330,6 +349,7 @@ export async function runDiscordGatewayLifecycle(params: {
     reconnectStallWatchdog.stop();
     clearHelloWatch();
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
+    gatewayEmitter?.removeListener("metrics", onGatewayMetrics);
     params.abortSignal?.removeEventListener("abort", onAbort);
     if (params.voiceManager) {
       await params.voiceManager.destroy();

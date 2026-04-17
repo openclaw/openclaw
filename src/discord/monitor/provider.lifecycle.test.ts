@@ -228,6 +228,44 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(connectedCall![0].lastConnectedAt).toBeTypeOf("number");
   });
 
+  it("advances lastEventAt when Carbon metrics report inbound traffic (e.g. heartbeat ACKs)", async () => {
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const { emitter, gateway } = createGatewayHarness();
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+    let resolveWait: (() => void) | undefined;
+    waitForDiscordGatewayStopMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveWait = resolve;
+        }),
+    );
+
+    const { lifecycleParams, statusSink } = createLifecycleHarness({ gateway });
+    const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+
+    await Promise.resolve();
+
+    const baselinePatchCount = statusSink.mock.calls.length;
+    emitter.emit("metrics", { messagesReceived: 7 });
+    emitter.emit("metrics", { messagesReceived: 7 });
+    emitter.emit("metrics", { messagesReceived: 12 });
+
+    const newCalls = statusSink.mock.calls.slice(baselinePatchCount);
+    const livenessPatches = newCalls.filter((call) => {
+      const patch = (call[0] ?? {}) as Record<string, unknown>;
+      return (
+        typeof patch.lastEventAt === "number" &&
+        patch.connected === undefined &&
+        patch.lastDisconnect === undefined
+      );
+    });
+    expect(livenessPatches).toHaveLength(2);
+
+    resolveWait?.();
+    await expect(lifecyclePromise).resolves.toBeUndefined();
+  });
+
   it("handles queued disallowed intents errors without waiting for gateway events", async () => {
     const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const {
