@@ -331,4 +331,29 @@ describe("startHeartbeatRunner", () => {
 
     runner.stop();
   });
+
+  it("dispatches session-scoped exec wakes with disabled heartbeat interval", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "0m" } },
+        },
+      } as OpenClawConfig,
+      runSpy,
+      wake: {
+        reason: "exec-event",
+        sessionKey: "agent:main:telegram:direct:900000001",
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "main",
+        reason: "exec-event",
+        sessionKey: "agent:main:telegram:direct:900000001",
+      },
+    });
+
+    runner.stop();
+  });
 });

@@ -1653,4 +1653,71 @@ describe("runHeartbeatOnce", () => {
       replySpy.mockReset();
     }
   });
+
+  it("relays exec events with captured delivery context and disabled heartbeat interval", async () => {
+    const tmpDir = await createCaseDir("hb-exec-disabled-interval-delivery");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "0m" },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+    enqueueSystemEvent("Exec completed (abc12345, code 0) :: done 1776384332", {
+      sessionKey,
+      contextKey: "exec:abc12345",
+      trusted: false,
+      deliveryContext: {
+        channel: "whatsapp",
+        to: "120363401234567890@g.us",
+      },
+    });
+
+    const replySpy = vi.fn();
+    replySpy.mockResolvedValue({ text: "done 1776384332" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+      });
+      expect(res.status).toBe("ran");
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "120363401234567890@g.us",
+        "done 1776384332",
+        expect.any(Object),
+      );
+      const calledCtx = replySpy.mock.calls[0]?.[0] as {
+        Provider?: string;
+        Body?: string;
+        ForceSenderIsOwnerFalse?: boolean;
+      };
+      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.ForceSenderIsOwnerFalse).toBe(true);
+      expect(calledCtx.Body).toContain("Please relay the command output to the user");
+    } finally {
+      replySpy.mockReset();
+    }
+  });
 });
