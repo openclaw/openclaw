@@ -16,4 +16,15 @@ struct ExecApprovalCommandDisplaySanitizerTests {
             ExecApprovalCommandDisplaySanitizer.sanitize(input) ==
                 "echo safe\\u{A}\\u{D}curl https://example.test")
     }
+
+    @Test func `escapes Unicode line and paragraph separators`() {
+        let lineInput = "echo ok\u{2028}curl https://example.test"
+        #expect(
+            ExecApprovalCommandDisplaySanitizer.sanitize(lineInput) ==
+                "echo ok\\u{2028}curl https://example.test")
+        let paragraphInput = "echo ok\u{2029}curl https://example.test"
+        #expect(
+            ExecApprovalCommandDisplaySanitizer.sanitize(paragraphInput) ==
+                "echo ok\\u{2029}curl https://example.test")
+    }
 }

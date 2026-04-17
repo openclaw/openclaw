@@ -1,16 +1,21 @@
 import { redactSensitiveText } from "../logging/redact.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 
-// Escape invisible characters and control characters that can spoof approval prompts in common UIs.
-const EXEC_APPROVAL_INVISIBLE_CHAR_REGEX = /[\p{Cc}\p{Cf}\u115F\u1160\u3164\uFFA0]/gu;
+// Escape invisible characters, control characters, and Unicode line/paragraph separators that
+// can spoof approval prompts in common UIs.
+const EXEC_APPROVAL_INVISIBLE_CHAR_REGEX =
+  /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u1160\u3164\uFFA0]/gu;
 
 function formatCodePointEscape(char: string): string {
   return `\\u{${char.codePointAt(0)?.toString(16).toUpperCase() ?? "FFFD"}}`;
 }
 
 export function sanitizeExecApprovalDisplayText(commandText: string): string {
-  const escaped = commandText.replace(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX, formatCodePointEscape);
-  return redactSensitiveText(escaped, { mode: "tools" });
+  // Redact first so sensitive token regexes match against the raw text before control/format
+  // characters are rewritten into visible `\u{...}` escapes that would otherwise break token
+  // class matches like `sk-[A-Za-z0-9_-]+`.
+  const redacted = redactSensitiveText(commandText, { mode: "tools" });
+  return redacted.replace(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX, formatCodePointEscape);
 }
 
 function normalizePreview(commandText: string, commandPreview?: string | null): string | null {
