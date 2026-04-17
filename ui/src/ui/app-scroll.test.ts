@@ -118,6 +118,73 @@ describe("handleChatScroll", () => {
     expect(host.chatUserNearBottom).toBe(false);
     expect(host.chatFollowLocked).toBe(true);
   });
+
+  it("does NOT re-enable follow just because a post-wheel scroll event is still near bottom", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 2000,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatLastScrollTop = 2000;
+
+    handleChatWheelIntent(host, createWheelEvent(-120, 2000, 400));
+    handleChatScroll(host, createScrollEvent(2000, 1540, 400));
+
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(true);
+  });
+
+  it("re-enables follow once the user actually returns to the bottom", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1576,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
+    host.chatLastScrollTop = 1540;
+    host.chatNewMessagesBelow = true;
+
+    handleChatScroll(host, createScrollEvent(2000, 1576, 400));
+
+    expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatFollowLocked).toBe(false);
+    expect(host.chatNewMessagesBelow).toBe(false);
+  });
+
+  it("does not treat smooth auto-scroll progress as upward manual scroll intent", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1200,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatSmoothAutoScrolling = true;
+    host.chatLastScrollTop = 1200;
+
+    handleChatScroll(host, createScrollEvent(2000, 1300, 400));
+
+    expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatFollowLocked).toBe(false);
+  });
+
+  it("releases follow when the user scrolls upward during smooth auto-scroll", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1200,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatSmoothAutoScrolling = true;
+    host.chatLastScrollTop = 1600;
+
+    handleChatScroll(host, createScrollEvent(2000, 1100, 400));
+
+    expect(host.chatSmoothAutoScrolling).toBe(false);
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(true);
+  });
 });
 
 describe("handleChatWheelIntent", () => {
@@ -304,22 +371,6 @@ describe("scheduleChatScroll", () => {
     expect(host.chatNewMessagesBelow).toBe(true);
   });
 
-  it("does NOT re-enable follow just because a post-wheel scroll event is still near bottom", () => {
-    const { host } = createScrollHost({
-      scrollHeight: 2000,
-      scrollTop: 2000,
-      clientHeight: 400,
-    });
-    host.chatUserNearBottom = true;
-    host.chatLastScrollTop = 2000;
-
-    handleChatWheelIntent(host, createWheelEvent(-120, 2000, 400));
-    handleChatScroll(host, createScrollEvent(2000, 1540, 400));
-
-    expect(host.chatUserNearBottom).toBe(false);
-    expect(host.chatFollowLocked).toBe(true);
-  });
-
   it("preserves the wheel-intent lock for small upward deltas that still land within the bottom threshold", () => {
     const { host } = createScrollHost({
       scrollHeight: 2000,
@@ -332,57 +383,6 @@ describe("scheduleChatScroll", () => {
     handleChatWheelIntent(host, createWheelEvent(-5, 2000, 400));
     handleChatScroll(host, createScrollEvent(2000, 1592, 400));
 
-    expect(host.chatUserNearBottom).toBe(false);
-    expect(host.chatFollowLocked).toBe(true);
-  });
-
-  it("re-enables follow once the user actually returns to the bottom", () => {
-    const { host } = createScrollHost({
-      scrollHeight: 2000,
-      scrollTop: 1576,
-      clientHeight: 400,
-    });
-    host.chatUserNearBottom = false;
-    host.chatFollowLocked = true;
-    host.chatLastScrollTop = 1540;
-    host.chatNewMessagesBelow = true;
-
-    handleChatScroll(host, createScrollEvent(2000, 1576, 400));
-
-    expect(host.chatUserNearBottom).toBe(true);
-    expect(host.chatFollowLocked).toBe(false);
-    expect(host.chatNewMessagesBelow).toBe(false);
-  });
-
-  it("does not treat smooth auto-scroll progress as upward manual scroll intent", () => {
-    const { host } = createScrollHost({
-      scrollHeight: 2000,
-      scrollTop: 1200,
-      clientHeight: 400,
-    });
-    host.chatUserNearBottom = true;
-    host.chatSmoothAutoScrolling = true;
-    host.chatLastScrollTop = 1200;
-
-    handleChatScroll(host, createScrollEvent(2000, 1300, 400));
-
-    expect(host.chatUserNearBottom).toBe(true);
-    expect(host.chatFollowLocked).toBe(false);
-  });
-
-  it("releases follow when the user scrolls upward during smooth auto-scroll", () => {
-    const { host } = createScrollHost({
-      scrollHeight: 2000,
-      scrollTop: 1200,
-      clientHeight: 400,
-    });
-    host.chatUserNearBottom = true;
-    host.chatSmoothAutoScrolling = true;
-    host.chatLastScrollTop = 1600;
-
-    handleChatScroll(host, createScrollEvent(2000, 1100, 400));
-
-    expect(host.chatSmoothAutoScrolling).toBe(false);
     expect(host.chatUserNearBottom).toBe(false);
     expect(host.chatFollowLocked).toBe(true);
   });
