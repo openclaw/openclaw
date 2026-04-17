@@ -1,4 +1,3 @@
-import { describe, expect, it } from "vitest";
 import {
   isBrokerTaskTerminal,
   isBrokerTimeoutCode,
@@ -12,7 +11,8 @@ import {
   ACTIVE_BROKER_STATUSES,
   TERMINAL_BROKER_STATUSES,
   TERMINAL_OPENCLAW_STATUSES,
-} from "./type-mapping.js";
+} from "openclaw/plugin-sdk/a2a-broker-adapter";
+import { describe, expect, it } from "vitest";
 
 describe("mapBrokerStatusToExecutionStatus", () => {
   it("maps queued/claimed → accepted", () => {

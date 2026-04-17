@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { z } from "zod";
-import { loadA2ATaskRecordFromEventLog, readA2ATaskEvents } from "../a2a/log.js";
 import {
   A2ABrokerClientError,
   type A2ABrokerTaskRecord,
   type A2ABrokerTaskSseEvent,
-} from "../a2a/standalone-broker-client.js";
+} from "openclaw/plugin-sdk/a2a-broker-adapter";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { loadA2ATaskRecordFromEventLog, readA2ATaskEvents } from "../a2a/log.js";
 import type { A2AExchangeRequest } from "./sessions-send-broker.js";
 import {
   __testing,

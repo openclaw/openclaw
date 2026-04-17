@@ -408,6 +408,10 @@
       "types": "./dist/plugin-sdk/account-resolution.d.ts",
       "default": "./dist/plugin-sdk/account-resolution.js"
     },
+    "./plugin-sdk/a2a-broker-adapter": {
+      "types": "./dist/plugin-sdk/a2a-broker-adapter.d.ts",
+      "default": "./dist/plugin-sdk/a2a-broker-adapter.js"
+    },
     "./plugin-sdk/agent-config-primitives": {
       "types": "./dist/plugin-sdk/agent-config-primitives.d.ts",
       "default": "./dist/plugin-sdk/agent-config-primitives.js"

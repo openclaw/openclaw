@@ -1,4 +1,4 @@
-import { A2A_BROKER_ADAPTER_PLUGIN_ID } from "./api.js";
+import { A2A_BROKER_ADAPTER_PLUGIN_ID } from "./plugin-id.js";
 import { type A2ABrokerPartyRef, createA2ABrokerClient } from "./standalone-broker-client.js";
 
 export type A2ABrokerAdapterEntryConfig = {

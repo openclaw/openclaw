@@ -1,18 +1,8 @@
-import { z } from "zod";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { createA2ATaskAcceptedEvent, createA2ATaskCreatedEvent } from "../a2a/events.js";
-import { createA2ATaskEventLogSink, loadA2ATaskRecordFromEventLog } from "../a2a/log.js";
 import {
-  A2A_BROKER_ADAPTER_PLUGIN_ID,
   A2ABrokerClientError,
   buildBrokerCreateTaskRequestFromOpenClaw,
   createA2ABrokerClient,
-  type A2ABrokerPartyRef,
-  type A2ABrokerTaskRecord,
-  type A2ABrokerTaskSseEvent,
-} from "../a2a/standalone-broker-client.js";
-import {
+  createConfiguredA2ABrokerClient,
   isBrokerTaskTerminal,
   isBrokerTimeoutCode,
   isTerminalExecutionStatus,
@@ -20,7 +10,14 @@ import {
   mapBrokerStatusToDeliveryStatus,
   mapBrokerStatusToExecutionStatus,
   toEpochMs,
-} from "../a2a/type-mapping.js";
+  type A2ABrokerTaskRecord,
+  type A2ABrokerTaskSseEvent,
+} from "openclaw/plugin-sdk/a2a-broker-adapter";
+import { z } from "zod";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createA2ATaskAcceptedEvent, createA2ATaskCreatedEvent } from "../a2a/events.js";
+import { createA2ATaskEventLogSink, loadA2ATaskRecordFromEventLog } from "../a2a/log.js";
 import {
   applyA2ATaskProtocolCancel,
   applyA2ATaskProtocolUpdate,
@@ -36,6 +33,8 @@ import type {
   SessionsSendA2AAdapter,
   SessionsSendA2ATaskSubscriptionResult,
 } from "./sessions-send-openclaw-adapter.js";
+
+export { shouldUseStandaloneBrokerSessionsSendAdapter } from "openclaw/plugin-sdk/a2a-broker-adapter";
 
 const defaultStandaloneBrokerAdapterDeps = {
   createClient: createA2ABrokerClient,
@@ -54,45 +53,6 @@ const BROKER_PROTOCOL_ERROR_CODES = {
   requestFailed: "broker_request_failed",
   remoteTaskFailed: "remote_task_failed",
 } as const;
-
-type StandaloneBrokerPluginConfig = {
-  enabled: boolean;
-  explicitlyActivated: boolean;
-  baseUrl?: string;
-  edgeSecret?: string;
-  requester?: A2ABrokerPartyRef;
-};
-
-function resolveStandaloneBrokerPluginConfig(
-  config?: OpenClawConfig,
-): StandaloneBrokerPluginConfig {
-  const plugins = config?.plugins;
-  const entry = plugins?.entries?.[A2A_BROKER_ADAPTER_PLUGIN_ID];
-  const pluginConfig = entry?.config;
-  const allow = Array.isArray(plugins?.allow) ? plugins.allow : [];
-  const deny = Array.isArray(plugins?.deny) ? plugins.deny : [];
-  const allowlisted = allow.includes(A2A_BROKER_ADAPTER_PLUGIN_ID);
-  const allowlistBlocked = allow.length > 0 && !allowlisted;
-  const explicitlyEnabled = entry?.enabled === true;
-  const disabled =
-    plugins?.enabled === false ||
-    deny.includes(A2A_BROKER_ADAPTER_PLUGIN_ID) ||
-    entry?.enabled === false ||
-    allowlistBlocked;
-
-  return {
-    enabled: !disabled,
-    explicitlyActivated: !disabled && (explicitlyEnabled || allowlisted),
-    baseUrl: readOptionalString(pluginConfig?.baseUrl),
-    edgeSecret: readOptionalString(pluginConfig?.edgeSecret),
-    requester: resolveRequester(pluginConfig?.requester),
-  };
-}
-
-export function shouldUseStandaloneBrokerSessionsSendAdapter(cfg?: OpenClawConfig): boolean {
-  const pluginConfig = resolveStandaloneBrokerPluginConfig(cfg);
-  return pluginConfig.enabled && pluginConfig.explicitlyActivated && Boolean(pluginConfig.baseUrl);
-}
 
 export function createStandaloneBrokerSessionsSendA2AAdapter(params: {
   config: OpenClawConfig;
@@ -438,7 +398,7 @@ async function reconcileStandaloneBrokerA2ATaskWithClient(params: {
     existing.execution.status === mappedStatus &&
     currentUpdatedAt >= brokerUpdatedAt &&
     (!isBrokerTaskTerminal(
-      brokerTask.status as import("../a2a/type-mapping.js").BrokerTaskStatus,
+      brokerTask.status as import("openclaw/plugin-sdk/a2a-broker-adapter").BrokerTaskStatus,
     ) ||
       existing.delivery.status === mapBrokerStatusToDeliveryStatus(brokerTask.status))
   ) {
@@ -637,22 +597,8 @@ async function seedStandaloneBrokerTaskEventLog(params: {
 }
 
 function createConfiguredBrokerClient(config: OpenClawConfig): StandaloneBrokerClient {
-  const pluginConfig = resolveStandaloneBrokerPluginConfig(config);
-  if (!pluginConfig.enabled) {
-    throw new Error(
-      "Standalone A2A broker adapter is disabled; falling back requires shouldUseStandaloneBrokerSessionsSendAdapter() to gate selection",
-    );
-  }
-  if (!pluginConfig.baseUrl) {
-    throw new Error(
-      "Standalone A2A broker adapter requires plugins.entries.a2a-broker-adapter.config.baseUrl",
-    );
-  }
-
-  return standaloneBrokerAdapterDeps.createClient({
-    baseUrl: pluginConfig.baseUrl,
-    ...(pluginConfig.edgeSecret ? { edgeSecret: pluginConfig.edgeSecret } : {}),
-    ...(pluginConfig.requester ? { requester: pluginConfig.requester } : {}),
+  return createConfiguredA2ABrokerClient(config, {
+    createClient: standaloneBrokerAdapterDeps.createClient,
   });
 }
 
@@ -849,24 +795,6 @@ function isTransientBrokerFetchError(error: unknown): boolean {
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function resolveRequester(value: unknown): A2ABrokerPartyRef | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  const id = readOptionalString(record.id);
-  if (!id) {
-    return undefined;
-  }
-  const kind = readOptionalString(record.kind) as A2ABrokerPartyRef["kind"] | undefined;
-  const role = readOptionalString(record.role) as A2ABrokerPartyRef["role"] | undefined;
-  return {
-    id,
-    ...(kind ? { kind } : {}),
-    ...(role ? { role } : {}),
-  };
 }
 
 type BrokerTaskPayload = {

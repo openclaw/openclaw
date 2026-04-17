@@ -1,5 +1,5 @@
+import { A2A_BROKER_ADAPTER_PLUGIN_ID } from "openclaw/plugin-sdk/a2a-broker-adapter";
 import { listA2ATaskEventLogTaskTokens, loadA2ATaskRecordFromEventLog } from "../agents/a2a/log.js";
-import { A2A_BROKER_ADAPTER_PLUGIN_ID } from "../agents/a2a/standalone-broker-client.js";
 import { buildA2ATaskProtocolStatus, classifyA2AExecutionStatus } from "../agents/a2a/status.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
@@ -158,7 +158,6 @@ function resolveA2AHealthState(
   }
   return "ok";
 }
-
 
 function buildA2AStatusContributor(summary: A2AStatusSummary): StatusContributorSummary {
   const state: StatusContributorSummary["state"] =

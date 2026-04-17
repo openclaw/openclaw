@@ -1,4 +1,3 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   A2ABrokerClientError,
   A2ABrokerMalformedResponseError,
@@ -8,7 +7,8 @@ import {
   type A2ABrokerSseChunk,
   type A2ABrokerTaskRecord,
   type A2ABrokerTaskSseEvent,
-} from "./standalone-broker-client.js";
+} from "openclaw/plugin-sdk/a2a-broker-adapter";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 afterEach(() => {
   vi.restoreAllMocks();

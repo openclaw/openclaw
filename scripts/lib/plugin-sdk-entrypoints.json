@@ -88,6 +88,7 @@
   "account-core",
   "account-id",
   "account-resolution",
+  "a2a-broker-adapter",
   "agent-config-primitives",
   "allow-from",
   "allowlist-config-edit",

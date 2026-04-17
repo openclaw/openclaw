@@ -1,5 +1,5 @@
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { A2A_BROKER_ADAPTER_PLUGIN_ID } from "./api.js";
+import { A2A_BROKER_ADAPTER_PLUGIN_ID } from "./plugin-id.js";
 import { createA2AGatewayHandlers } from "./src/gateway-handlers.js";
 
 export default definePluginEntry({
