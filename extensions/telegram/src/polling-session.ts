@@ -227,9 +227,20 @@ export class TelegramPollingSession {
     let inFlightGetUpdates = 0;
     let _stopSequenceLogged = false;
     let stallDiagLoggedAt = 0;
+    // Counter of in-flight watchdog health-check probes. When > 0, the API
+    // middleware skips its liveness-bookkeeping path so the probe cannot
+    // refresh the signals that the stall watchdog relies on. Otherwise a
+    // periodic getMe() probe would keep `apiElapsed` from crossing the
+    // restart threshold even for a genuinely stuck getUpdates loop, which
+    // would defeat the stall-recovery path instead of recovering it.
+    let healthCheckProbesInFlight = 0;
 
     bot.api.config.use(async (prev, method, payload, signal) => {
       if (method !== "getUpdates") {
+        if (healthCheckProbesInFlight > 0) {
+          // Pass through without updating liveness counters.
+          return await prev(method, payload, signal);
+        }
         const startedAt = Date.now();
         const callId = nextInFlightApiCallId;
         nextInFlightApiCallId += 1;
@@ -406,9 +417,11 @@ export class TelegramPollingSession {
                 HEALTH_CHECK_TIMEOUT_MS,
               );
             });
+            healthCheckProbesInFlight += 1;
             try {
               await Promise.race([bot.api.getMe(), timeoutPromise]);
             } finally {
+              healthCheckProbesInFlight -= 1;
               if (healthCheckTimeoutHandle) {
                 clearTimeout(healthCheckTimeoutHandle);
                 healthCheckTimeoutHandle = undefined;
