@@ -30,25 +30,14 @@ let getResolvedSpeechProviderConfig: TtsRuntimeModule["_test"]["getResolvedSpeec
 let formatTtsProviderError: TtsRuntimeModule["_test"]["formatTtsProviderError"];
 let sanitizeTtsErrorForLog: TtsRuntimeModule["_test"]["sanitizeTtsErrorForLog"];
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const original =
-    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
-  return {
-    ...original,
-    completeSimple: vi.fn(),
-  };
-});
+vi.mock("@mariozechner/pi-ai", () => ({
+  completeSimple: vi.fn(),
+}));
 
-vi.mock("@mariozechner/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
-    "@mariozechner/pi-ai/oauth",
-  );
-  return {
-    ...actual,
-    getOAuthProviders: () => [],
-    getOAuthApiKey: vi.fn(async () => null),
-  };
-});
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthProviders: () => [],
+  getOAuthApiKey: vi.fn(async () => null),
+}));
 
 function createResolvedModel(provider: string, modelId: string, api = "openai-completions") {
   return {
