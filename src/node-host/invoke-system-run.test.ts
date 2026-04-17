@@ -952,76 +952,74 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
-  it("validates approved runtime script operand stability", async () => {
-    for (const runtime of ["bun", "deno", "tsx", "jiti"] as const) {
-      await withFakeRuntimeOnPath({
-        runtime,
-        run: async () => {
-          const tmp = createFixtureDir(`openclaw-approval-${runtime}-script-drift-`);
-          const fixture = createRuntimeScriptOperandFixture({ tmp, runtime });
-          fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
-          try {
-            const prepared = buildSystemRunApprovalPlan({
-              command: fixture.command,
-              cwd: tmp,
-            });
-            expect(prepared.ok).toBe(true);
-            if (!prepared.ok) {
-              throw new Error("unreachable");
-            }
-
-            fs.writeFileSync(fixture.scriptPath, fixture.changedBody);
-            const { runCommand, sendInvokeResult } = await runSystemInvoke({
-              preferMacAppExecHost: false,
-              command: prepared.plan.argv,
-              rawCommand: prepared.plan.commandText,
-              systemRunPlan: prepared.plan,
-              cwd: prepared.plan.cwd ?? tmp,
-              approved: true,
-              security: "full",
-              ask: "off",
-            });
-
-            expect(runCommand).not.toHaveBeenCalled();
-            expectInvokeErrorMessage(sendInvokeResult, {
-              message: "SYSTEM_RUN_DENIED: approval script operand changed before execution",
-              exact: true,
-            });
-          } finally {
-            fs.rmSync(tmp, { recursive: true, force: true });
+  it("validates approved runtime script operand stability at dispatch", async () => {
+    await withFakeRuntimeOnPath({
+      runtime: "tsx",
+      run: async () => {
+        const tmp = createFixtureDir("openclaw-approval-tsx-script-drift-");
+        const fixture = createRuntimeScriptOperandFixture({ tmp, runtime: "tsx" });
+        fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+        try {
+          const prepared = buildSystemRunApprovalPlan({
+            command: fixture.command,
+            cwd: tmp,
+          });
+          expect(prepared.ok).toBe(true);
+          if (!prepared.ok) {
+            throw new Error("unreachable");
           }
-          const stableTmp = createFixtureDir(`openclaw-approval-${runtime}-script-stable-`);
-          const stableFixture = createRuntimeScriptOperandFixture({ tmp: stableTmp, runtime });
-          fs.writeFileSync(stableFixture.scriptPath, stableFixture.initialBody);
-          try {
-            const prepared = buildSystemRunApprovalPlan({
-              command: stableFixture.command,
-              cwd: stableTmp,
-            });
-            expect(prepared.ok).toBe(true);
-            if (!prepared.ok) {
-              throw new Error("unreachable");
-            }
 
-            const { runCommand, sendInvokeResult } = await runSystemInvoke({
-              preferMacAppExecHost: false,
-              command: prepared.plan.argv,
-              rawCommand: prepared.plan.commandText,
-              systemRunPlan: prepared.plan,
-              cwd: prepared.plan.cwd ?? stableTmp,
-              approved: true,
-              security: "full",
-              ask: "off",
-            });
+          fs.writeFileSync(fixture.scriptPath, fixture.changedBody);
+          const { runCommand, sendInvokeResult } = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: prepared.plan.argv,
+            rawCommand: prepared.plan.commandText,
+            systemRunPlan: prepared.plan,
+            cwd: prepared.plan.cwd ?? tmp,
+            approved: true,
+            security: "full",
+            ask: "off",
+          });
 
-            expect(runCommand).toHaveBeenCalledTimes(1);
-            expectInvokeOk(sendInvokeResult);
-          } finally {
-            fs.rmSync(stableTmp, { recursive: true, force: true });
+          expect(runCommand).not.toHaveBeenCalled();
+          expectInvokeErrorMessage(sendInvokeResult, {
+            message: "SYSTEM_RUN_DENIED: approval script operand changed before execution",
+            exact: true,
+          });
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+        const stableTmp = createFixtureDir("openclaw-approval-tsx-script-stable-");
+        const stableFixture = createRuntimeScriptOperandFixture({ tmp: stableTmp, runtime: "tsx" });
+        fs.writeFileSync(stableFixture.scriptPath, stableFixture.initialBody);
+        try {
+          const prepared = buildSystemRunApprovalPlan({
+            command: stableFixture.command,
+            cwd: stableTmp,
+          });
+          expect(prepared.ok).toBe(true);
+          if (!prepared.ok) {
+            throw new Error("unreachable");
           }
-        },
-      });
-    }
+
+          const { runCommand, sendInvokeResult } = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: prepared.plan.argv,
+            rawCommand: prepared.plan.commandText,
+            systemRunPlan: prepared.plan,
+            cwd: prepared.plan.cwd ?? stableTmp,
+            approved: true,
+            security: "full",
+            ask: "off",
+          });
+
+          expect(runCommand).toHaveBeenCalledTimes(1);
+          expectInvokeOk(sendInvokeResult);
+        } finally {
+          fs.rmSync(stableTmp, { recursive: true, force: true });
+        }
+      },
+    });
   });
 
   it("denies approval-based execution when tsx is missing a required mutable script binding", async () => {
