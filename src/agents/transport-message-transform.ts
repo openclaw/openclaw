@@ -12,7 +12,7 @@ type PendingToolCall = { id: string; name: string };
  */
 export function normalizeAssistantContent(content: unknown): AssistantContentBlock {
   if (Array.isArray(content)) {
-    return content;
+    return content as AssistantContentBlock;
   }
   if (typeof content === "string") {
     return content.length > 0 ? [{ type: "text", text: content }] : [];
