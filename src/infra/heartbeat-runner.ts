@@ -829,6 +829,17 @@ export async function runHeartbeatOnce(opts: {
     heartbeatFileContent: preflight.heartbeatFileContent,
   });
 
+  if (preflight.isExecEventReason && !hasExecCompletion) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: "no-exec-completion",
+      durationMs: Date.now() - startedAt,
+      channel: delivery.channel !== "none" ? delivery.channel : undefined,
+      accountId: delivery.accountId,
+    });
+    return { status: "skipped", reason: "no-exec-completion" };
+  }
+
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
     // Wake-triggered events should stay queued when the run short-circuits:

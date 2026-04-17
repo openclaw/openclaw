@@ -27,7 +27,7 @@ import {
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import { telegramMessagingForTest } from "./outbound/targets.test-helpers.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
+import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
 let previousRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let testRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
@@ -1716,6 +1716,61 @@ describe("runHeartbeatOnce", () => {
       expect(calledCtx.Provider).toBe("exec-event");
       expect(calledCtx.ForceSenderIsOwnerFalse).toBe(true);
       expect(calledCtx.Body).toContain("Please relay the command output to the user");
+    } finally {
+      replySpy.mockReset();
+    }
+  });
+
+  it("skips exec-event wakes without exec completions when heartbeat interval is disabled", async () => {
+    const tmpDir = await createCaseDir("hb-exec-disabled-interval-no-completion");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "0m" },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "120363401234567890@g.us",
+        },
+      }),
+    );
+    enqueueSystemEvent("Manual note: do not consume this from an exec wake", {
+      sessionKey,
+      contextKey: "manual:note",
+    });
+
+    const replySpy = vi.fn();
+    replySpy.mockResolvedValue({ text: "unexpected heartbeat" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+      });
+      expect(res).toEqual({ status: "skipped", reason: "no-exec-completion" });
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+      expect(peekSystemEvents(sessionKey)).toEqual([
+        "Manual note: do not consume this from an exec wake",
+      ]);
     } finally {
       replySpy.mockReset();
     }
