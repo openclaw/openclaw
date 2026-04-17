@@ -217,6 +217,9 @@ function resolveDefaultIdbSnapshotPath(): string {
 export async function restoreIdbFromDisk(snapshotPath?: string): Promise<boolean> {
   const candidatePaths = snapshotPath ? [snapshotPath] : [resolveDefaultIdbSnapshotPath()];
   for (const resolvedPath of candidatePaths) {
+    if (!fs.existsSync(resolvedPath)) {
+      continue;
+    }
     try {
       const restored = await withFileLock(
         resolvedPath,

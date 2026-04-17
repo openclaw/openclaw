@@ -91,6 +91,7 @@ describe("Matrix IndexedDB persistence lock ordering", () => {
     });
     await persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" });
 
+    fs.writeFileSync(snapshotPath, "[]", "utf8");
     withFileLockMock.mockImplementationOnce(async (_filePath, options) => {
       capturedOptions.push(options as CapturedLockOptions);
       return false;
