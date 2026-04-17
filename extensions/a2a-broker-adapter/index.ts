@@ -12,25 +12,47 @@ export default definePluginEntry({
   name: "A2A Broker Adapter",
   description: "Standalone A2A broker gateway method registration and broker routing",
   register(api: OpenClawPluginApi) {
-    // ── Config migration: auto-enable if existing A2A config detected ──
-    // Ensures environments that already had baseUrl configured continue
-    // to work after core a2a.task.* methods are removed.
+    // ── Config migration: preserve explicit activation for existing A2A config ──
+    // Environments that already set broker config should keep working after
+    // core a2a.task.* ownership moves behind the plugin gate.
     api.registerConfigMigration((config) => {
-      const entry = config.plugins?.entries?.["a2a-broker-adapter"];
-      if (entry?.config && entry.enabled !== false && entry.enabled !== true) {
-        const migrated = structuredClone(config);
-        const entries = { ...migrated.plugins?.entries };
-        entries["a2a-broker-adapter"] = {
-          ...entries["a2a-broker-adapter"],
-          enabled: true,
-        };
-        migrated.plugins = { ...migrated.plugins, entries };
-        return {
-          config: migrated,
-          changes: ["a2a-broker-adapter: auto-enabled (existing config detected)"],
-        };
+      const entry = config.plugins?.entries?.[A2A_BROKER_ADAPTER_PLUGIN_ID];
+      if (!entry?.config || entry.enabled === false) {
+        return null;
       }
-      return null;
+
+      const allow = config.plugins?.allow;
+      const shouldEnable = entry.enabled !== true;
+      const shouldAllowlist =
+        Array.isArray(allow) && !allow.includes(A2A_BROKER_ADAPTER_PLUGIN_ID);
+      if (!shouldEnable && !shouldAllowlist) {
+        return null;
+      }
+
+      const migrated = structuredClone(config);
+      const plugins = { ...(migrated.plugins ?? {}) };
+      const entries = { ...(plugins.entries ?? {}) };
+      entries[A2A_BROKER_ADAPTER_PLUGIN_ID] = {
+        ...entries[A2A_BROKER_ADAPTER_PLUGIN_ID],
+        enabled: true,
+      };
+      plugins.entries = entries;
+      if (shouldAllowlist) {
+        plugins.allow = [...allow, A2A_BROKER_ADAPTER_PLUGIN_ID];
+      }
+      migrated.plugins = plugins;
+
+      const changes: string[] = [];
+      if (shouldEnable) {
+        changes.push("a2a-broker-adapter: auto-enabled (existing config detected)");
+      }
+      if (shouldAllowlist) {
+        changes.push("a2a-broker-adapter: added to plugins.allow (existing config detected)");
+      }
+      return {
+        config: migrated,
+        changes,
+      };
     });
 
     // ── Gateway method registration (ownership from core) ──

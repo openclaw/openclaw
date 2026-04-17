@@ -118,9 +118,9 @@ function findStatusContributor(params: {
   const targetId = normalizeLowercaseStringOrEmpty(params.id);
   const targetLabel = normalizeLowercaseStringOrEmpty(params.label);
   return contributors.find((contributor) => {
-    const idMatches = targetId.length > 0 && normalizeLowercaseStringOrEmpty(contributor.id) == targetId;
+    const idMatches = targetId.length > 0 && normalizeLowercaseStringOrEmpty(contributor.id) === targetId;
     const labelMatches =
-      targetLabel.length > 0 && normalizeLowercaseStringOrEmpty(contributor.label) == targetLabel;
+      targetLabel.length > 0 && normalizeLowercaseStringOrEmpty(contributor.label) === targetLabel;
     return idMatches || labelMatches;
   });
 }

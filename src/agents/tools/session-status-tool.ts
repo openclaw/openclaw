@@ -249,7 +249,11 @@ function formatA2AHeartbeatAge(entry: A2ATaskStatusIndexEntry, now = Date.now())
   return `heartbeat ${formatRelativeDuration(entry.heartbeatAt, now)} ago`;
 }
 
-function buildA2ATaskLine(index: A2ATaskStatusIndexEntry[], cfg: OpenClawConfig): string | undefined {
+function formatSessionA2ATaskLine(params: {
+  index: A2ATaskStatusIndexEntry[];
+  cfg: OpenClawConfig;
+}): string | undefined {
+  const { index, cfg } = params;
   if (index.length === 0) {
     return undefined;
   }
@@ -323,26 +327,45 @@ function buildA2ATaskLine(index: A2ATaskStatusIndexEntry[], cfg: OpenClawConfig)
   return lines.join("\n");
 }
 
-async function formatSessionA2ATaskLine(params: {
+async function loadSessionA2ATaskIndex(params: {
+  sessionKey: string;
+}): Promise<A2ATaskStatusIndexEntry[]> {
+  return loadA2ATaskStatusIndex({ sessionKey: params.sessionKey });
+}
+
+async function reconcileSessionA2ATaskIndex(params: {
+  sessionKey: string;
+  cfg: OpenClawConfig;
+  index: A2ATaskStatusIndexEntry[];
+}): Promise<A2ATaskStatusIndexEntry[]> {
+  const activeTasks = params.index.filter((entry) => entry.statusCategory === "active");
+  if (activeTasks.length === 0) {
+    return params.index;
+  }
+  await Promise.allSettled(
+    activeTasks.map((entry) =>
+      reconcileSessionsSendA2ATask({
+        sessionKey: params.sessionKey,
+        taskId: entry.taskId,
+        config: params.cfg,
+      }),
+    ),
+  );
+  return loadSessionA2ATaskIndex({ sessionKey: params.sessionKey });
+}
+
+async function resolveSessionA2ATaskLine(params: {
   sessionKey: string;
   cfg: OpenClawConfig;
 }): Promise<string | undefined> {
   try {
-    let index = await loadA2ATaskStatusIndex({ sessionKey: params.sessionKey });
-    const activeTasks = index.filter((entry) => entry.statusCategory === "active");
-    if (activeTasks.length > 0) {
-      await Promise.allSettled(
-        activeTasks.map((entry) =>
-          reconcileSessionsSendA2ATask({
-            sessionKey: params.sessionKey,
-            taskId: entry.taskId,
-            config: params.cfg,
-          }),
-        ),
-      );
-      index = await loadA2ATaskStatusIndex({ sessionKey: params.sessionKey });
-    }
-    return buildA2ATaskLine(index, params.cfg);
+    const initialIndex = await loadSessionA2ATaskIndex({ sessionKey: params.sessionKey });
+    const index = await reconcileSessionA2ATaskIndex({
+      sessionKey: params.sessionKey,
+      cfg: params.cfg,
+      index: initialIndex,
+    });
+    return formatSessionA2ATaskLine({ index, cfg: params.cfg });
   } catch {
     return undefined;
   }
@@ -682,7 +705,7 @@ export function createSessionStatusTool(opts?: {
         relatedSessionKey: resolved.key,
         callerOwnerKey: visibilityRequesterKey,
       });
-      const a2aTaskLine = await formatSessionA2ATaskLine({
+      const a2aTaskLine = await resolveSessionA2ATaskLine({
         sessionKey: resolved.key,
         cfg,
       });
