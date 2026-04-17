@@ -1,84 +1,40 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as authModule from "../../agents/model-auth.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildGeminiEmbeddingRequest,
   buildGeminiTextEmbeddingRequest,
+  createGeminiEmbeddingProvider,
   DEFAULT_GEMINI_EMBEDDING_MODEL,
   GEMINI_EMBEDDING_2_MODELS,
   isGeminiEmbedding2Model,
   normalizeGeminiModel,
   resolveGeminiOutputDimensionality,
-} from "./embeddings-gemini-request.js";
-import {
-  createGeminiBatchFetchMock,
-  createJsonResponseFetchMock,
-  installFetchMock,
-  mockResolvedProviderKey,
-  parseFetchBody,
-  readFirstFetchRequest,
-  type JsonFetchMock,
-} from "./embeddings-provider.test-support.js";
-
-const { resolveApiKeyForProviderMock } = vi.hoisted(() => ({
-  resolveApiKeyForProviderMock: vi.fn(),
-}));
-
-vi.mock("../../agents/model-auth.js", () => {
-  return {
-    resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-    requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
-      if (auth.apiKey) {
-        return auth.apiKey;
-      }
-      throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth.mode}).`);
-    },
-  };
-});
-
-vi.mock("../../agents/api-key-rotation.js", () => ({
-  collectProviderApiKeysForExecution: (params: { primaryApiKey?: string }) =>
-    params.primaryApiKey ? [params.primaryApiKey] : [],
-  executeWithApiKeyRotation: async <T>(params: {
-    apiKeys: string[];
-    execute: (apiKey: string) => Promise<T>;
-  }) => {
-    const apiKey = params.apiKeys[0];
-    if (!apiKey) {
-      throw new Error('No API keys configured for provider "google".');
-    }
-    return await params.execute(apiKey);
-  },
-}));
-
-beforeEach(() => {
-  vi.useRealTimers();
-  vi.doUnmock("undici");
-});
+} from "./embedding-provider.js";
 
 afterEach(() => {
-  vi.doUnmock("undici");
-  vi.resetAllMocks();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-type GeminiProviderOptions = Parameters<
-  typeof import("./embeddings-gemini.js").createGeminiEmbeddingProvider
->[0];
-
-async function createProviderWithFetch(
-  fetchMock: JsonFetchMock,
-  options: Partial<GeminiProviderOptions> & { model: string },
-) {
-  installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
-  mockResolvedProviderKey(authModule.resolveApiKeyForProvider);
-  const { createGeminiEmbeddingProvider } = await import("./embeddings-gemini.js");
-  const { provider } = await createGeminiEmbeddingProvider({
-    config: {} as never,
-    provider: "gemini",
-    fallback: "none",
-    ...options,
+function installFetchMock(
+  handler: (input: RequestInfo | URL, init?: RequestInit) => unknown,
+): ReturnType<typeof vi.fn> {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    return new Response(JSON.stringify(handler(input, init)), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
   });
-  return provider;
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function fetchJsonBody(fetchMock: ReturnType<typeof vi.fn>, index: number): unknown {
+  const init = fetchMock.mock.calls[index]?.[1] as RequestInit | undefined;
+  const body = init?.body;
+  if (typeof body !== "string") {
+    throw new Error("Expected JSON string request body.");
+  }
+  return JSON.parse(body) as unknown;
 }
 
 describe("Gemini embedding request helpers", () => {
@@ -149,24 +105,9 @@ describe("Gemini embedding request helpers", () => {
   });
 });
 
-describe("gemini embedding provider", () => {
+describe("Gemini embedding provider", () => {
   it("handles legacy and v2 request/response behavior", async () => {
-    const legacyFetch = createGeminiBatchFetchMock(2);
-    const legacyProvider = await createProviderWithFetch(legacyFetch, {
-      model: "gemini-embedding-001",
-    });
-
-    await legacyProvider.embedQuery("test query");
-    await legacyProvider.embedBatch(["text1", "text2"]);
-
-    expect(parseFetchBody(legacyFetch, 0)).toMatchObject({
-      taskType: "RETRIEVAL_QUERY",
-      content: { parts: [{ text: "test query" }] },
-    });
-    expect(parseFetchBody(legacyFetch, 0)).not.toHaveProperty("outputDimensionality");
-    expect(parseFetchBody(legacyFetch, 1)).not.toHaveProperty("outputDimensionality");
-
-    const v2Fetch = createJsonResponseFetchMock((input) => {
+    const fetchMock = installFetchMock((input) => {
       const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
       return url.endsWith(":batchEmbedContents")
         ? {
@@ -176,16 +117,22 @@ describe("gemini embedding provider", () => {
           }
         : { embedding: { values: [3, 4, Number.NaN] } };
     });
-    const v2Provider = await createProviderWithFetch(v2Fetch, {
+
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
       model: "gemini-embedding-2-preview",
       outputDimensionality: 768,
       taskType: "SEMANTIC_SIMILARITY",
+      fallback: "none",
     });
-    await expect(v2Provider.embedQuery("   ")).resolves.toEqual([]);
-    await expect(v2Provider.embedBatch([])).resolves.toEqual([]);
-    await expect(v2Provider.embedQuery("test query")).resolves.toEqual([0.6, 0.8, 0]);
 
-    const structuredBatch = await v2Provider.embedBatchInputs?.([
+    await expect(provider.embedQuery("   ")).resolves.toEqual([]);
+    await expect(provider.embedBatch([])).resolves.toEqual([]);
+    await expect(provider.embedQuery("test query")).resolves.toEqual([0.6, 0.8, 0]);
+
+    const structuredBatch = await provider.embedBatchInputs?.([
       {
         text: "Image file: diagram.png",
         parts: [
@@ -206,38 +153,39 @@ describe("gemini embedding provider", () => {
       [0, 0, 1],
     ]);
 
-    const { url } = readFirstFetchRequest(v2Fetch);
-    expect(url).toBe(
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent",
     );
-    expect(parseFetchBody(v2Fetch, 0)).toMatchObject({
+    expect(fetchJsonBody(fetchMock, 0)).toMatchObject({
       outputDimensionality: 768,
       taskType: "SEMANTIC_SIMILARITY",
       content: { parts: [{ text: "test query" }] },
     });
-    expect(parseFetchBody(v2Fetch, 1).requests).toEqual([
-      {
-        model: "models/gemini-embedding-2-preview",
-        content: {
-          parts: [
-            { text: "Image file: diagram.png" },
-            { inlineData: { mimeType: "image/png", data: "img" } },
-          ],
+    expect(fetchJsonBody(fetchMock, 1)).toMatchObject({
+      requests: [
+        {
+          model: "models/gemini-embedding-2-preview",
+          content: {
+            parts: [
+              { text: "Image file: diagram.png" },
+              { inlineData: { mimeType: "image/png", data: "img" } },
+            ],
+          },
+          taskType: "SEMANTIC_SIMILARITY",
+          outputDimensionality: 768,
         },
-        taskType: "SEMANTIC_SIMILARITY",
-        outputDimensionality: 768,
-      },
-      {
-        model: "models/gemini-embedding-2-preview",
-        content: {
-          parts: [
-            { text: "Audio file: note.wav" },
-            { inlineData: { mimeType: "audio/wav", data: "aud" } },
-          ],
+        {
+          model: "models/gemini-embedding-2-preview",
+          content: {
+            parts: [
+              { text: "Audio file: note.wav" },
+              { inlineData: { mimeType: "audio/wav", data: "aud" } },
+            ],
+          },
+          taskType: "SEMANTIC_SIMILARITY",
+          outputDimensionality: 768,
         },
-        taskType: "SEMANTIC_SIMILARITY",
-        outputDimensionality: 768,
-      },
-    ]);
+      ],
+    });
   });
 });

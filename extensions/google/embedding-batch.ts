@@ -1,14 +1,15 @@
+import crypto from "node:crypto";
 import {
   buildEmbeddingBatchGroupOptions,
   runEmbeddingBatchGroups,
   type EmbeddingBatchExecutionParams,
-} from "./batch-runner.js";
-import { buildBatchHeaders, normalizeBatchBaseUrl } from "./batch-utils.js";
-import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
-import { debugEmbeddingsLog } from "./embeddings-debug.js";
-import type { GeminiEmbeddingClient, GeminiTextEmbeddingRequest } from "./embeddings-gemini.js";
-import { hashText } from "./internal.js";
-import { withRemoteHttpResponse } from "./remote-http.js";
+  buildBatchHeaders,
+  debugEmbeddingsLog,
+  normalizeBatchBaseUrl,
+  sanitizeAndNormalizeEmbedding,
+  withRemoteHttpResponse,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { GeminiEmbeddingClient, GeminiTextEmbeddingRequest } from "./embedding-provider.js";
 
 export type GeminiBatchRequest = {
   custom_id: string;
@@ -40,6 +41,10 @@ export type GeminiBatchOutputLine = {
 };
 
 const GEMINI_BATCH_MAX_REQUESTS = 50000;
+function hashText(text: string): string {
+  return crypto.createHash("sha256").update(text).digest("hex");
+}
+
 function getGeminiUploadUrl(baseUrl: string): string {
   if (baseUrl.includes("/v1beta")) {
     return baseUrl.replace(/\/v1beta\/?$/, "/upload/v1beta");
