@@ -4,6 +4,7 @@ import { CONFIG_PATH } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { shortenHomePath } from "../utils.js";
 import { confirm, select } from "./configure.shared.js";
 import { guardCancel } from "./onboard-helpers.js";
@@ -24,7 +25,7 @@ function listConfiguredChannelRemovalChoices(
   return Object.keys(channels)
     .map((id) => ({
       id,
-      label: labelsById.get(id) ?? id,
+      label: labelsById.get(id) ?? sanitizeTerminalText(id),
     }))
     .toSorted(compareChannelRemovalChoices);
 }
