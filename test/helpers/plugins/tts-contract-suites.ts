@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "../../../src/plugin-sdk/facade-loader.js";
 import { __testing as pluginLoaderTesting } from "../../../src/plugins/loader.js";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
@@ -11,6 +12,8 @@ type TtsRuntimeModule = typeof import("../../../src/tts/tts.js");
 
 let ttsRuntime: TtsRuntimeModule;
 let ttsRuntimePromise: Promise<TtsRuntimeModule> | null = null;
+let ttsRuntimeInitialized = false;
+let ttsPluginRegistryCacheKey: string | null = null;
 let completeSimple: typeof import("@mariozechner/pi-ai").completeSimple;
 let getApiKeyForModelMock: typeof import("../../../src/agents/model-auth.js").getApiKeyForModel;
 let requireApiKeyMock: typeof import("../../../src/agents/model-auth.js").requireApiKey;
@@ -396,11 +399,26 @@ function buildTestGoogleSpeechProvider(): SpeechProviderPlugin {
 }
 
 async function loadTtsRuntime(): Promise<TtsRuntimeModule> {
-  ttsRuntimePromise ??= import("../../../src/tts/tts.js");
+  ttsRuntimePromise ??= Promise.resolve(
+    loadBundledPluginPublicSurfaceModuleSync<TtsRuntimeModule>({
+      dirName: "speech-core",
+      artifactBasename: "runtime-api.js",
+    }),
+  );
   return await ttsRuntimePromise;
 }
 
+function getTtsPluginRegistryCacheKey(): string {
+  ttsPluginRegistryCacheKey ??= pluginLoaderTesting.resolvePluginLoadCacheContext({
+    config: {},
+  }).cacheKey;
+  return ttsPluginRegistryCacheKey;
+}
+
 async function setupTtsRuntime() {
+  if (ttsRuntimeInitialized) {
+    return;
+  }
   ttsRuntime = await loadTtsRuntime();
   resolveTtsConfig = ttsRuntime.resolveTtsConfig;
   maybeApplyTtsToPayload = ttsRuntime.maybeApplyTtsToPayload;
@@ -413,6 +431,7 @@ async function setupTtsRuntime() {
     formatTtsProviderError,
     sanitizeTtsErrorForLog,
   } = ttsRuntime._test);
+  ttsRuntimeInitialized = true;
 }
 
 function setupTestSpeechProviderRegistry() {
@@ -424,8 +443,7 @@ function setupTestSpeechProviderRegistry() {
     { pluginId: "elevenlabs", provider: buildTestElevenLabsSpeechProvider(), source: "test" },
     { pluginId: "google", provider: buildTestGoogleSpeechProvider(), source: "test" },
   ];
-  const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
-  setActivePluginRegistry(registry, cacheKey);
+  setActivePluginRegistry(registry, getTtsPluginRegistryCacheKey());
 }
 
 async function setupSummarizationMocks() {
@@ -954,8 +972,7 @@ export function describeTtsProviderRuntimeContract() {
           { pluginId: "openai", provider: throwingPrimary, source: "test" },
           { pluginId: "microsoft", provider: fallback, source: "test" },
         ];
-        const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
-        setActivePluginRegistry(registry, cacheKey);
+        setActivePluginRegistry(registry, getTtsPluginRegistryCacheKey());
 
         const result = await ttsRuntime.synthesizeSpeech({
           text: "hello fallback",
@@ -1023,8 +1040,7 @@ export function describeTtsProviderRuntimeContract() {
           { pluginId: "primary-throws", provider: throwingPrimary, source: "test" },
           { pluginId: "microsoft", provider: fallback, source: "test" },
         ];
-        const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
-        setActivePluginRegistry(registry, cacheKey);
+        setActivePluginRegistry(registry, getTtsPluginRegistryCacheKey());
 
         const result = await ttsRuntime.textToSpeechTelephony({
           text: "hello telephony fallback",
@@ -1071,8 +1087,7 @@ export function describeTtsProviderRuntimeContract() {
         registry.speechProviders = [
           { pluginId: "openai", provider: failingProvider, source: "test" },
         ];
-        const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
-        setActivePluginRegistry(registry, cacheKey);
+        setActivePluginRegistry(registry, getTtsPluginRegistryCacheKey());
 
         const result = await ttsRuntime.textToSpeech({
           text: "hello",
