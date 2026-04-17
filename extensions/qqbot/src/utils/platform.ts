@@ -82,6 +82,17 @@ export function getQQBotMediaDir(...subPaths: string[]): string {
   return dir;
 }
 
+/**
+ * Return a path under `~/.openclaw/media/<subdir>` (e.g. `outbound`, `inbound`)
+ * **without** creating it. Used by `resolveQQBotPayloadLocalFilePath` to extend
+ * the allowlist to OpenClaw-managed media directories that tooling (screenshot
+ * helpers, inbound attachment capture) writes to. The caller is responsible for
+ * creating the directory if needed.
+ */
+function openClawMediaSubdirPath(subdir: string): string {
+  return path.join(getHomeDir(), ".openclaw", "media", subdir);
+}
+
 // Temporary directory helpers.
 
 /** Return the preferred OpenClaw temp directory. */
@@ -182,7 +193,16 @@ export function resolveQQBotPayloadLocalFilePath(p: string): string | null {
   }
 
   const canonicalCandidate = fs.realpathSync(resolvedCandidate);
-  const allowedRoots = [getQQBotMediaDir()];
+  // Allowlist: QQ Bot's own media storage plus the OpenClaw-managed media
+  // subdirectories that framework tooling writes to (screenshots saved by
+  // agents to `media/outbound/`, inbound captures in `media/inbound/`).
+  // All three dirs live under `~/.openclaw/media/` so they share the same
+  // containment semantics as the original `media/qqbot/` root.
+  const allowedRoots = [
+    getQQBotMediaDir(),
+    openClawMediaSubdirPath("outbound"),
+    openClawMediaSubdirPath("inbound"),
+  ];
 
   for (const root of allowedRoots) {
     const resolvedRoot = path.resolve(root);

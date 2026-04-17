@@ -114,6 +114,42 @@ describe("qqbot local media path remapping", () => {
     expect(resolveQQBotPayloadLocalFilePath(dataFile)).toBeNull();
   });
 
+  it("allows structured payload files inside the OpenClaw managed media outbound directory", () => {
+    const { actualHome, testRootName } = createOpenClawTestRoot();
+
+    const outboundFile = path.join(
+      actualHome,
+      ".openclaw",
+      "media",
+      "outbound",
+      testRootName,
+      "screenshot.png",
+    );
+    fs.mkdirSync(path.dirname(outboundFile), { recursive: true });
+    fs.writeFileSync(outboundFile, "image", "utf8");
+    createdPaths.push(path.dirname(outboundFile));
+
+    expect(resolveQQBotPayloadLocalFilePath(outboundFile)).toBe(fs.realpathSync(outboundFile));
+  });
+
+  it("allows structured payload files inside the OpenClaw managed media inbound directory", () => {
+    const { actualHome, testRootName } = createOpenClawTestRoot();
+
+    const inboundFile = path.join(
+      actualHome,
+      ".openclaw",
+      "media",
+      "inbound",
+      testRootName,
+      "capture.png",
+    );
+    fs.mkdirSync(path.dirname(inboundFile), { recursive: true });
+    fs.writeFileSync(inboundFile, "image", "utf8");
+    createdPaths.push(path.dirname(inboundFile));
+
+    expect(resolveQQBotPayloadLocalFilePath(inboundFile)).toBe(fs.realpathSync(inboundFile));
+  });
+
   it("allows legacy workspace paths when they remap into QQ Bot media storage", () => {
     const { actualHome, testRootName, mediaFile } = createQqbotMediaFile("legacy.png");
 
