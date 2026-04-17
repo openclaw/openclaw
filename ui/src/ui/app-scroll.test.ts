@@ -235,7 +235,7 @@ describe("handleChatWheelIntent", () => {
     expect(host.chatFollowLocked).toBe(false);
   });
 
-  it("does not disengage follow for bubbled wheel events from nested scrollables", () => {
+  it("does not disengage follow for bubbled wheel events from nested scrollables that can still scroll up", () => {
     const { host } = createScrollHost({
       scrollHeight: 2000,
       clientHeight: 400,
@@ -251,6 +251,7 @@ describe("handleChatWheelIntent", () => {
     Object.defineProperty(container, "clientHeight", { value: 400, configurable: true });
     Object.defineProperty(nestedScrollable, "scrollHeight", { value: 600, configurable: true });
     Object.defineProperty(nestedScrollable, "clientHeight", { value: 300, configurable: true });
+    Object.defineProperty(nestedScrollable, "scrollTop", { value: 120, configurable: true });
 
     handleChatWheelIntent(host, {
       deltaY: -120,
@@ -262,6 +263,40 @@ describe("handleChatWheelIntent", () => {
     expect(host.chatFollowLocked).toBe(false);
     expect(host.chatScrollFrame).toBe(99);
     expect(host.chatScrollTimeout).not.toBeNull();
+  });
+
+  it("does not ignore wheel intent when a nested scrollable is already at the top", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatScrollFrame = 99;
+    host.chatScrollTimeout = window.setTimeout(() => {}, 1000);
+
+    const container = document.createElement("div");
+    const nestedScrollable = document.createElement("div");
+    container.appendChild(nestedScrollable);
+    Object.defineProperty(container, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(container, "clientHeight", { value: 400, configurable: true });
+    Object.defineProperty(nestedScrollable, "scrollHeight", { value: 600, configurable: true });
+    Object.defineProperty(nestedScrollable, "clientHeight", { value: 300, configurable: true });
+    Object.defineProperty(nestedScrollable, "scrollTop", { value: 0, configurable: true });
+
+    vi.spyOn(window, "getComputedStyle").mockImplementation(
+      () => ({ overflowY: "auto" }) as CSSStyleDeclaration,
+    );
+
+    handleChatWheelIntent(host, {
+      deltaY: -120,
+      currentTarget: container,
+      target: nestedScrollable,
+    } as unknown as WheelEvent);
+
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(true);
+    expect(host.chatScrollFrame).toBeNull();
+    expect(host.chatScrollTimeout).toBeNull();
   });
 
   it("does not ignore wheel intent for a clipped descendant that cannot scroll vertically", () => {

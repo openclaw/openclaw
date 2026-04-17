@@ -33,15 +33,29 @@ function cancelPendingChatScroll(host: ScrollHost) {
   }
 }
 
-function hasNestedScrollableAncestor(target: EventTarget | null, container: HTMLElement) {
+function canConsumeVerticalWheelDelta(node: HTMLElement, deltaY: number) {
+  const overflowY = getComputedStyle(node).overflowY;
+  const hasVerticalScrollRange = node.scrollHeight - node.clientHeight > 1;
+  const canScrollVertically =
+    (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
+    hasVerticalScrollRange;
+  if (!canScrollVertically) {
+    return false;
+  }
+  if (deltaY < 0) {
+    return node.scrollTop > 1;
+  }
+  return node.scrollTop + node.clientHeight < node.scrollHeight - 1;
+}
+
+function hasNestedScrollableAncestor(
+  target: EventTarget | null,
+  container: HTMLElement,
+  deltaY: number,
+) {
   let node = target instanceof HTMLElement ? target : null;
   while (node && node !== container) {
-    const overflowY = getComputedStyle(node).overflowY;
-    const hasVerticalScrollRange = node.scrollHeight - node.clientHeight > 1;
-    const canScrollVertically =
-      (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
-      hasVerticalScrollRange;
-    if (canScrollVertically) {
+    if (canConsumeVerticalWheelDelta(node, deltaY)) {
       return true;
     }
     node = node.parentElement;
@@ -196,7 +210,7 @@ export function handleChatWheelIntent(host: ScrollHost, event: WheelEvent) {
   if (!container || container.scrollHeight - container.clientHeight <= 1) {
     return;
   }
-  if (hasNestedScrollableAncestor(event.target, container)) {
+  if (hasNestedScrollableAncestor(event.target, container, event.deltaY)) {
     return;
   }
   if (!host.chatUserNearBottom && host.chatFollowLocked) {
