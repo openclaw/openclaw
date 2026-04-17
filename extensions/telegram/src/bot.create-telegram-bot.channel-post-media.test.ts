@@ -1,7 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useFrozenTime, useRealTime } from "../../../test/helpers/plugins/frozen-time.js";
+import * as harness from "./bot.create-telegram-bot.test-harness.js";
+import { createTelegramBot as createTelegramBotBase, setTelegramBotRuntimeForTest } from "./bot.js";
 
-const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const {
   getLoadConfigMock,
   getOnHandler,
@@ -10,8 +11,6 @@ const {
   telegramBotDepsForTest,
   telegramBotRuntimeForTest,
 } = harness;
-const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
-  await import("./bot.js");
 
 let createTelegramBot: (
   opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
@@ -28,6 +27,7 @@ function setOpenChannelPostConfig() {
   loadConfig.mockReturnValue({
     channels: {
       telegram: {
+        allowBots: true,
         groupPolicy: "open",
         groups: {
           "-100777111222": {
@@ -150,6 +150,7 @@ describe("createTelegramBot channel_post media", () => {
   });
 
   beforeEach(() => {
+    harness.resetTelegramHarnessStateForTest();
     setTelegramBotRuntimeForTest(
       telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
     );
@@ -179,6 +180,33 @@ describe("createTelegramBot channel_post media", () => {
       setTimeoutSpy.mockRestore();
       fetchSpy.mockRestore();
     }
+  });
+
+  it("drops bot-authored channel_post messages when allowBots is not enabled", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-100777111222": {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    const handler = getChannelPostHandler();
+    await handler(
+      createChannelPostContext({
+        messageId: 251,
+        date: 1736380800,
+        text: "bot-originated channel ping",
+      }),
+    );
+
+    expect(replySpy).not.toHaveBeenCalled();
   });
 
   it("coalesces channel_post near-limit text fragments into one message", async () => {

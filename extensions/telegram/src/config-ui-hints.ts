@@ -17,6 +17,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram DM Policy",
     help: 'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
   },
+  allowBots: {
+    label: "Telegram Allow Bot Messages",
+    help: "Allow bot-authored inbound Telegram messages. Default is false.",
+  },
   configWrites: {
     label: "Telegram Config Writes",
     help: "Allow Telegram to write config in response to channel events/commands (default: true).",

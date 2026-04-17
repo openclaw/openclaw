@@ -1783,6 +1783,12 @@ export const registerTelegramHandlers = ({
         return;
       }
 
+      // Keep Telegram bot-authored inbound off by default (parity with Discord allowBots behavior).
+      if (event.msg.from?.is_bot === true && telegramCfg.allowBots !== true) {
+        logVerbose("telegram: drop bot message (allowBots=false)");
+        return;
+      }
+
       if (
         shouldSkipGroupMessage({
           isGroup: event.isGroup,

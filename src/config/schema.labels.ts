@@ -804,6 +804,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.mattermost": "Mattermost",
   "channels.modelByChannel": "Channel Model Overrides",
   "channels.matrix.allowBots": "Matrix Allow Bot Messages",
+  "channels.telegram.allowBots": "Telegram Allow Bot Messages",
   "channels.mattermost.botToken": "Mattermost Bot Token",
   "channels.mattermost.baseUrl": "Mattermost Base URL",
   "channels.mattermost.configWrites": "Mattermost Config Writes",

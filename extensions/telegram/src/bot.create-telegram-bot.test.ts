@@ -2,9 +2,15 @@ import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runt
 import { withEnvAsync } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
-const harness = await import("./bot.create-telegram-bot.test-harness.js");
-const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
-const configRuntime = await import("openclaw/plugin-sdk/config-runtime");
+import * as harness from "./bot.create-telegram-bot.test-harness.js";
+import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
+import * as configRuntime from "openclaw/plugin-sdk/config-runtime";
+import { resolveTelegramFetch } from "./fetch.js";
+import {
+  createTelegramBot as createTelegramBotBase,
+  getTelegramSequentialKey,
+  setTelegramBotRuntimeForTest,
+} from "./bot.js";
 const EYES_EMOJI = "\u{1F440}";
 const {
   answerCallbackQuerySpy,
@@ -40,12 +46,6 @@ const {
   throttlerSpy,
   useSpy,
 } = harness;
-const { resolveTelegramFetch } = await import("./fetch.js");
-const {
-  createTelegramBot: createTelegramBotBase,
-  getTelegramSequentialKey,
-  setTelegramBotRuntimeForTest,
-} = await import("./bot.js");
 let createTelegramBot: (
   opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
 ) => ReturnType<typeof import("./bot.js").createTelegramBot>;
@@ -127,6 +127,7 @@ describe("createTelegramBot", () => {
     process.env.TZ = ORIGINAL_TZ;
   });
   beforeEach(() => {
+    harness.resetTelegramHarnessStateForTest();
     setTelegramBotRuntimeForTest(
       telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
     );
@@ -1030,6 +1031,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
+          allowBots: true,
           dmPolicy: "open",
           allowFrom: ["*"],
           groupPolicy: "open",

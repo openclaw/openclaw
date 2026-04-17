@@ -6,7 +6,7 @@ import {
   type MsgContext,
 } from "openclaw/plugin-sdk/reply-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/testing";
-import { beforeEach, vi } from "vitest";
+import { vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 
 type AnyMock = ReturnType<typeof vi.fn>;
@@ -471,7 +471,7 @@ export function makeForumGroupMessageCtx(params?: {
   });
 }
 
-beforeEach(() => {
+export const resetTelegramHarnessStateForTest = () => {
   resetInboundDedupe();
   loadConfig.mockReset();
   loadConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
@@ -558,4 +558,4 @@ beforeEach(() => {
   sequentializeSpy.mockImplementation(() => runnerHoisted.sequentializeMiddleware);
   botCtorSpy.mockReset();
   sequentializeKey = undefined;
-});
+};

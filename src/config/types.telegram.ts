@@ -130,6 +130,8 @@ export type TelegramAccountConfig = {
   defaultTo?: string | number;
   /** Optional allowlist for Telegram group senders (numeric Telegram user IDs). */
   groupAllowFrom?: Array<string | number>;
+  /** Allow bot-authored inbound Telegram messages (default: false). */
+  allowBots?: boolean;
   /**
    * Controls how group messages are handled:
    * - "open": groups bypass allowFrom, only mention-gating applies
