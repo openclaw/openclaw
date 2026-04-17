@@ -12,28 +12,46 @@ import { captureEnv } from "../test-utils/env.js";
 
 let testConfig: Record<string, unknown> = {};
 const applyPluginAutoEnable = vi.hoisted(() => vi.fn(({ config }) => ({ config, changes: [] })));
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: () => testConfig,
-  };
-});
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => testConfig,
+}));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable,
 }));
 
-const { resolveCommandSecretRefsViaGateway, callGatewayMock } = vi.hoisted(() => ({
-  resolveCommandSecretRefsViaGateway: vi.fn(async ({ config }: { config: unknown }) => ({
+const { resolveCommandConfigWithSecrets, callGatewayMock } = vi.hoisted(() => ({
+  resolveCommandConfigWithSecrets: vi.fn(async ({ config }: { config: unknown }) => ({
     resolvedConfig: config,
+    effectiveConfig: config,
     diagnostics: [] as string[],
   })),
   callGatewayMock: vi.fn(),
 }));
 
-vi.mock("../cli/command-secret-gateway.js", () => ({
-  resolveCommandSecretRefsViaGateway,
+vi.mock("../cli/command-config-resolution.js", () => ({
+  resolveCommandConfigWithSecrets: async (opts: {
+    autoEnable?: boolean;
+    config: unknown;
+    env?: NodeJS.ProcessEnv;
+    runtime?: { log: (message: string) => void };
+  }) => {
+    const result = await resolveCommandConfigWithSecrets(opts);
+    for (const entry of result.diagnostics ?? []) {
+      opts.runtime?.log(`[secrets] ${entry}`);
+    }
+    const effectiveConfig =
+      opts.autoEnable === true
+        ? applyPluginAutoEnable({
+            config: result.resolvedConfig,
+            env: opts.env ?? process.env,
+          }).config
+        : result.effectiveConfig;
+    return {
+      ...result,
+      effectiveConfig,
+    };
+  },
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -68,7 +86,7 @@ beforeEach(() => {
   callGatewayMock.mockClear();
   handleDiscordAction.mockClear();
   handleTelegramAction.mockClear();
-  resolveCommandSecretRefsViaGateway.mockClear();
+  resolveCommandConfigWithSecrets.mockClear();
   applyPluginAutoEnable.mockClear();
   applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
 });
@@ -203,8 +221,9 @@ function mockResolvedCommandConfig(params: {
   diagnostics?: string[];
 }) {
   testConfig = params.rawConfig;
-  resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
+  resolveCommandConfigWithSecrets.mockResolvedValueOnce({
     resolvedConfig: params.resolvedConfig,
+    effectiveConfig: params.resolvedConfig,
     diagnostics: params.diagnostics ?? ["resolved channels.telegram.token"],
   });
 }
