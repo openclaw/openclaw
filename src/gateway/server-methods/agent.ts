@@ -859,10 +859,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     // A concurrent chat.send with the same idempotency key may already hold
     // an entry; overwriting it would discard the chat.send's controller and
     // the .finally() cleanup below would remove the entry prematurely.
-    const alreadyRegistered = context.chatAbortControllers.has(runId);
-    // DEBUG: temporary diagnostic for CI — remove before merge
-    process.stderr.write(`[agent RPC DEBUG] runId=${runId} alreadyRegistered=${alreadyRegistered}\n`);
-    if (!alreadyRegistered) {
+    if (!context.chatAbortControllers.has(runId)) {
       context.chatAbortControllers.set(runId, abortEntry);
     }
 
@@ -1032,8 +1029,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         ? Math.max(0, Math.floor(p.timeoutMs))
         : 30_000;
     const activeRunEntry = context.chatAbortControllers.get(runId);
-    // DEBUG: temporary diagnostic for CI — remove before merge
-    process.stderr.write(`[agent.wait DEBUG] runId=${runId} hasEntry=${!!activeRunEntry} kind=${activeRunEntry?.kind} mapSize=${context.chatAbortControllers.size} mapKeys=[${[...context.chatAbortControllers.keys()].join(",")}]\n`);
     // When a chat.send run is active with the same runId, ignore cached
     // agent terminal snapshots so stale agent results do not preempt it.
     // When an agent RPC run is active, all cached terminal snapshots (both
