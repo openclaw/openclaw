@@ -115,7 +115,6 @@ import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
-import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import {
   resolveTranscriptPolicy,
@@ -151,7 +150,7 @@ import {
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
-import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
+import { applySkillPlanTemplateSeed, resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
   describeEmbeddedAgentStreamStrategy,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
@@ -183,9 +182,11 @@ import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import {
   assembleAttemptContextEngine,
+  buildLoopPromptCacheInfo,
   buildContextEnginePromptCacheInfo,
   findCurrentAttemptAssistantMessage,
   finalizeAttemptContextEngineTurn,
+  resolvePromptCacheTouchTimestamp,
   resolveAttemptBootstrapContext,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
@@ -225,6 +226,7 @@ import {
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
 import {
+  sanitizeReplayToolCallIdsForStream,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
@@ -294,11 +296,21 @@ const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 export function resolveUnknownToolGuardThreshold(loopDetection?: {
   enabled?: boolean;
   unknownToolThreshold?: number;
-}): number | undefined {
-  if (loopDetection?.enabled !== true) {
-    return undefined;
+}): number {
+  // The unknown-tool guard is a safety net against the model hallucinating a
+  // tool name or calling a tool that has since been removed from the allowlist
+  // (for example after a `skills.allowBundled` config change). After `threshold`
+  // consecutive unknown-tool attempts the stream wrapper rewrites the assistant
+  // message content to tell the model to stop, which breaks otherwise-infinite
+  // Tool-not-found loops against the provider. Unlike the genericRepeat /
+  // pingPong / pollNoProgress detectors this guard has no false-positive
+  // surface because the tool is objectively not registered in this run, so it
+  // stays on regardless of `tools.loopDetection.enabled`.
+  const raw = loopDetection?.unknownToolThreshold;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
   }
-  return loopDetection.unknownToolThreshold ?? UNKNOWN_TOOL_THRESHOLD;
+  return UNKNOWN_TOOL_THRESHOLD;
 }
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
@@ -416,6 +428,31 @@ export async function runEmbeddedAttempt(
           config: params.config,
         });
 
+    // Seed the agent's plan from any loaded skill's `planTemplate` (if
+    // present) BEFORE the first LLM turn (#67541). The seed is a no-op
+    // when no skill carries a template, when more than one skill is
+    // tied (use alpha-first as a deterministic winner), or when an
+    // existing plan would be clobbered. Idempotency against
+    // `AgentRunContext.lastPlanSteps` lands in #67514's follow-up.
+    //
+    // We pass both `entries` and `skillsSnapshot`: in the snapshot-backed
+    // run path `entries` is empty (resolveEmbeddedRunSkillEntries skips
+    // re-loading) and the seeder reads `resolvedPlanTemplates` from the
+    // snapshot instead. Without this fallback the seed would silently
+    // no-op in production sessions.
+    applySkillPlanTemplateSeed({
+      entries: skillEntries ?? [],
+      ...(params.skillsSnapshot ? { skillsSnapshot: params.skillsSnapshot } : {}),
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      config: params.config,
+      // Forward the run-scoped event callback so callback-only consumers
+      // (e.g. the auto-reply pipeline) see the seeded plan event the same
+      // way they see subsequent update_plan events. Codex P2 #67541
+      // r3096399082/r3096435183.
+      ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
+    });
+
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
@@ -474,11 +511,32 @@ export async function runEmbeddedAttempt(
       seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
       previousSignature: params.bootstrapPromptWarningSignature,
     });
-    const workspaceNotes = hookAdjustedBootstrapFiles.some(
-      (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
-    )
-      ? ["Reminder: commit your changes in this workspace after edits."]
-      : undefined;
+    const workspaceNotesList: string[] = [];
+    if (
+      hookAdjustedBootstrapFiles.some(
+        (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
+      )
+    ) {
+      workspaceNotesList.push("Reminder: commit your changes in this workspace after edits.");
+    }
+    // PR-8 follow-up: when a session is in plan mode, the agent needs
+    // to know the rules — write/edit/exec are blocked, only read +
+    // update_plan + exit_plan_mode are usable. Without this note the
+    // agent will try mutating tools, get them blocked, and not
+    // understand why. enter_plan_mode/exit_plan_mode are the entry
+    // points; the user controls mode via the chip + /plan command.
+    if (params.planMode === "plan") {
+      workspaceNotesList.push(
+        [
+          "PLAN MODE ACTIVE.",
+          "Mutating tools (write, edit, exec, bash with mutating commands, apply_patch) are blocked.",
+          "Read-only tools (read, web_search, web_fetch, update_plan) are available.",
+          "Workflow: investigate with read-only tools, draft a plan with update_plan, then call exit_plan_mode with the proposed plan to request user approval.",
+          "After approval the runtime flips the session out of plan mode and you can execute. After rejection the user feedback comes via [PLAN_DECISION] in the next turn — revise and re-propose.",
+        ].join(" "),
+      );
+    }
+    const workspaceNotes = workspaceNotesList.length > 0 ? workspaceNotesList : undefined;
 
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
 
@@ -1065,6 +1123,24 @@ export async function runEmbeddedAttempt(
           tokenBudget: params.contextTokenBudget,
           modelId: params.modelId,
           getPrePromptMessageCount: () => prePromptMessageCount,
+          getRuntimeContext: ({ messages, prePromptMessageCount: loopPrePromptMessageCount }) =>
+            buildAfterTurnRuntimeContext({
+              attempt: params,
+              workspaceDir: effectiveWorkspace,
+              agentDir,
+              tokenBudget: params.contextTokenBudget,
+              promptCache:
+                promptCache ??
+                buildLoopPromptCacheInfo({
+                  messagesSnapshot: messages,
+                  prePromptMessageCount: loopPrePromptMessageCount,
+                  retention: effectivePromptCacheRetention,
+                  fallbackLastCacheTouchAt: readLastCacheTtlTimestamp(sessionManager, {
+                    provider: params.provider,
+                    modelId: params.modelId,
+                  }),
+                }),
+            }),
         });
       }
       const cacheTrace = createCacheTrace({
@@ -1245,25 +1321,23 @@ export async function runEmbeddedAttempt(
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
-          const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
-            modelApi: (model as { api?: unknown })?.api as string | null | undefined,
-            policy: transcriptPolicy,
-          });
-          const sanitized = sanitizeToolCallIdsForCloudCodeAssist(
-            messages as AgentMessage[],
+          const nextMessages = sanitizeReplayToolCallIdsForStream({
+            messages: messages as AgentMessage[],
             mode,
-            {
-              preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
-              preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
-              allowedToolNames,
-            },
-          );
-          if (sanitized === messages) {
+            allowedToolNames,
+            preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
+            preserveReplaySafeThinkingToolCallIds: shouldAllowProviderOwnedThinkingReplay({
+              modelApi: (model as { api?: unknown })?.api as string | null | undefined,
+              policy: transcriptPolicy,
+            }),
+            repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
+          });
+          if (nextMessages === messages) {
             return inner(model, context, options);
           }
           const nextContext = {
             ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
+            messages: nextMessages,
           } as unknown;
           return inner(model, nextContext as typeof context, options);
         };
@@ -2231,13 +2305,18 @@ export async function runEmbeddedAttempt(
                 changes: cacheBreak?.changes ?? promptCacheChangesForTurn,
               }
             : undefined;
+        const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(sessionManager, {
+          provider: params.provider,
+          modelId: params.modelId,
+        });
         promptCache = buildContextEnginePromptCacheInfo({
           retention: effectivePromptCacheRetention,
           lastCallUsage,
           observation: promptCacheObservation,
-          lastCacheTouchAt: readLastCacheTtlTimestamp(sessionManager, {
-            provider: params.provider,
-            modelId: params.modelId,
+          lastCacheTouchAt: resolvePromptCacheTouchTimestamp({
+            lastCallUsage,
+            assistantTimestamp: currentAttemptAssistant?.timestamp,
+            fallbackLastCacheTouchAt,
           }),
         });
 
