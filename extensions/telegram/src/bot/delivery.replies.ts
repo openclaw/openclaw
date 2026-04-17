@@ -18,6 +18,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import { probeVideoDimensions } from "../../../../src/media/video-dimensions.js";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {
@@ -290,6 +291,8 @@ async function deliverMediaReply(params: {
       progress: params.progress,
     });
     const shouldAttachButtonsToMedia = isFirstMedia && params.replyMarkup && !followUpText;
+    // Probe video dimensions so Telegram doesn't re-encode/distort portrait videos
+    const videoDims = kind === "video" ? await probeVideoDimensions(media.buffer) : undefined;
     const mediaParams: Record<string, unknown> = {
       caption: htmlCaption,
       ...(htmlCaption ? { parse_mode: "HTML" } : {}),
@@ -299,6 +302,7 @@ async function deliverMediaReply(params: {
         thread: params.thread,
         silent: params.silent,
       }),
+      ...(videoDims ? { width: videoDims.width, height: videoDims.height } : {}),
     };
     if (isGif) {
       const result = await sendTelegramWithThreadFallback({
