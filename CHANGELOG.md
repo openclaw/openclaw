@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/streaming: clear the compaction replay guard after visible non-final boundaries so a post-tool assistant reply rotates to a fresh preview instead of editing the pre-compaction message. (#67993) Thanks @obviyus.
 - Matrix: fix `sessions_spawn --thread` subagent session spawning — thread binding creation, cleanup on session end, and completion-message delivery target resolution now work end-to-end. (#67643) Thanks @eejohnso-ops and @gumadeiras.
 - Control UI/chat: route grouped assistant and user message text through `processMessageText` in `renderGroupedMessage` so `<think>`/`<final>` scaffolding from Gemini-family models and injected inbound metadata sentinels are stripped at render time, matching the existing `extractText` behavior and restoring clean output in Control UI.
+- Auto-reply/inbound strip: also drop per-line `System:` / `System (untrusted):` event prefixes and the paired "An async command you ran earlier has completed." / "Current time: …" agent-facing instruction lines from user-visible text. These are emitted by `session-system-events.ts` one prefix per line, so a per-line sweep is safe; only line-anchored matches are stripped so prose like "Operating System: Linux" is preserved.
 
 ## 2026.4.15
 

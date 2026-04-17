@@ -121,7 +121,9 @@ This is plain user text`;
 
   it("strips an active-memory prompt prefix block even when earlier text precedes it", () => {
     const input = `Queued earlier user turn\n\n${ACTIVE_MEMORY_PREFIX_BLOCK}\n\nWhat should I grab on the way?`;
-    expect(stripInboundMetadata(input)).toBe("Queued earlier user turn\n\nWhat should I grab on the way?");
+    expect(stripInboundMetadata(input)).toBe(
+      "Queued earlier user turn\n\nWhat should I grab on the way?",
+    );
   });
 
   it("does not strip active-memory lookalike user text without exact tag lines", () => {
@@ -241,5 +243,35 @@ describe("builder compatibility", () => {
     } as TemplateContext)}\n\nActual user message`;
 
     expect(stripInboundMetadata(input)).toBe("Actual user message");
+  });
+});
+
+describe("per-line system events and internal instructions", () => {
+  it("strips consecutive `System (untrusted):` exec lines", () => {
+    const input = [
+      "System (untrusted): [2026-04-17 06:11:17 UTC] Exec completed (gentle-g, code 0) :: ok",
+      "System (untrusted): [2026-04-17 06:12:04 UTC] Exec completed (swift-co, code 0) :: ok",
+      "Actual user message",
+    ].join("\n");
+    expect(stripInboundMetadata(input)).toBe("Actual user message");
+  });
+
+  it("strips `System:` (trusted) prefix lines too", () => {
+    const input = ["System: session started", "real user prose"].join("\n");
+    expect(stripInboundMetadata(input)).toBe("real user prose");
+  });
+
+  it("strips the async-command completion instruction and current-time leak", () => {
+    const input = [
+      "An async command you ran earlier has completed. The result is shown in the system messages above.",
+      "Current time: Friday, April 17th, 2026 - 6:26 AM (UTC) / 2026-04-17 06:26 UTC",
+      "User question goes here",
+    ].join("\n");
+    expect(stripInboundMetadata(input)).toBe("User question goes here");
+  });
+
+  it("preserves prose that mentions System: inline (only matches line start)", () => {
+    const input = "Operating System: Linux — works as expected";
+    expect(stripInboundMetadata(input)).toBe(input);
   });
 });

@@ -18,6 +18,25 @@ import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
 const LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
 
 /**
+ * Line-level sentinel for per-line system event prefix injection. Matches both
+ * `System:` (trusted) and `System (untrusted):` variants emitted by
+ * `session-system-events.ts`. These blocks may span multiple consecutive lines
+ * — each continuation line re-uses the same prefix for safety, so a simple
+ * consecutive-line sweep is sufficient to remove them.
+ */
+const SYSTEM_EVENT_LINE_RE = /^System(?: \(untrusted\))?:/;
+
+/**
+ * Bare-line sentinels that mark OpenClaw-internal agent instructions leaking
+ * into user-visible text (not user input). Stripped as standalone lines so
+ * surrounding user prose is preserved.
+ */
+const INTERNAL_INSTRUCTION_LINE_PREFIXES = [
+  "An async command you ran earlier has completed.",
+  "Current time: ",
+];
+
+/**
  * Sentinel strings that identify the start of an injected metadata block.
  * Must stay in sync with `buildInboundUserContextPrefix` in `inbound-meta.ts`.
  */
@@ -38,8 +57,16 @@ const [CONVERSATION_INFO_SENTINEL, SENDER_INFO_SENTINEL] = INBOUND_META_SENTINEL
 const InboundMetaBlockSchema = z.record(z.string(), z.unknown());
 
 // Pre-compiled fast-path regex — avoids line-by-line parse when no blocks present.
+// Also catches per-line system-event prefixes and leaked internal instruction
+// lines so those variants still trigger the slow parse below.
 const SENTINEL_FAST_RE = new RegExp(
-  [...INBOUND_META_SENTINELS, UNTRUSTED_CONTEXT_HEADER]
+  [
+    ...INBOUND_META_SENTINELS,
+    UNTRUSTED_CONTEXT_HEADER,
+    "System:",
+    "System (untrusted):",
+    ...INTERNAL_INSTRUCTION_LINE_PREFIXES,
+  ]
     .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
     .join("|"),
 );
@@ -47,6 +74,15 @@ const SENTINEL_FAST_RE = new RegExp(
 function isInboundMetaSentinelLine(line: string): boolean {
   const trimmed = line.trim();
   return INBOUND_META_SENTINELS.some((sentinel) => sentinel === trimmed);
+}
+
+function isSystemEventLine(line: string): boolean {
+  return SYSTEM_EVENT_LINE_RE.test(line);
+}
+
+function isInternalInstructionLine(line: string): boolean {
+  const trimmed = line.trim();
+  return INTERNAL_INSTRUCTION_LINE_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
 }
 
 function restoreNeutralizedMarkdownFences(value: unknown): unknown {
@@ -195,6 +231,14 @@ export function stripInboundMetadata(text: string): string {
     // When this structured header appears, drop it and everything that follows.
     if (!inMetaBlock && shouldStripTrailingUntrustedContext(strippedLeadingPrefixLines, i)) {
       break;
+    }
+
+    // Per-line system-event prefix (`System:` / `System (untrusted):`) and
+    // agent-facing internal instructions must never appear in user-visible
+    // chat text. Every continuation line re-applies the prefix upstream, so
+    // a simple per-line filter is sufficient and cannot strand stray prose.
+    if (!inMetaBlock && (isSystemEventLine(line) || isInternalInstructionLine(line))) {
+      continue;
     }
 
     // Detect start of a metadata block.
