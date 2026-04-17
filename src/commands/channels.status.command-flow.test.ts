@@ -51,6 +51,50 @@ vi.mock("../channels/plugins/index.js", () => ({
     (mocks.listChannelPlugins() as Array<{ id: string }>).find((plugin) => plugin.id === channel),
 }));
 
+vi.mock("../channels/account-snapshot-fields.js", () => ({
+  hasConfiguredUnavailableCredentialStatus: (account: Record<string, unknown>) =>
+    Object.values(account).includes("configured_unavailable"),
+  hasResolvedCredentialValue: (account: Record<string, unknown>) =>
+    ["token", "botToken", "appToken", "signingSecret"].some(
+      (key) => typeof account[key] === "string" && account[key].length > 0,
+    ),
+}));
+
+vi.mock("../channels/plugins/status.js", () => ({
+  buildReadOnlySourceChannelAccountSnapshot: async ({
+    plugin,
+    cfg,
+    accountId,
+  }: {
+    plugin: ReturnType<typeof createTokenOnlyPlugin>;
+    cfg: { secretResolved?: boolean };
+    accountId: string;
+  }) => ({
+    accountId,
+    ...plugin.config.inspectAccount(cfg),
+  }),
+  buildChannelAccountSnapshot: async ({
+    plugin,
+    cfg,
+    accountId,
+  }: {
+    plugin: ReturnType<typeof createTokenOnlyPlugin>;
+    cfg: { secretResolved?: boolean };
+    accountId: string;
+  }) => ({
+    accountId,
+    ...plugin.config.resolveAccount(cfg),
+  }),
+}));
+
+vi.mock("../cli/command-secret-targets.js", () => ({
+  getChannelsCommandSecretTargetIds: () => [],
+}));
+
+vi.mock("../infra/channels-status-issues.js", () => ({
+  collectChannelStatusIssues: () => [],
+}));
+
 vi.mock("../cli/progress.js", () => ({
   withProgress: (opts: unknown, run: () => Promise<unknown>) => mocks.withProgress(opts, run),
 }));
