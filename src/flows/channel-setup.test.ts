@@ -314,4 +314,75 @@ describe("setupChannels workspace shadow exclusion", () => {
       },
     });
   });
+
+  it("does not re-enable an explicitly disabled channel when selected lazily", async () => {
+    const setupWizard = {
+      channel: "telegram",
+      getStatus: vi.fn(async () => ({
+        channel: "telegram",
+        configured: true,
+        statusLines: [],
+      })),
+      configure: vi.fn(),
+    };
+    const telegramPlugin = {
+      id: "telegram",
+      meta: { id: "telegram", label: "Telegram", blurb: "" },
+      capabilities: {},
+      config: {
+        resolveAccount: vi.fn(() => ({ enabled: false })),
+      },
+      setupWizard,
+    };
+    resolveChannelSetupEntries.mockReturnValue({
+      entries: [
+        {
+          id: "telegram",
+          meta: { id: "telegram", label: "Telegram", blurb: "" },
+        },
+      ],
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
+    });
+    loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue({
+      channels: [{ plugin: telegramPlugin }],
+      channelSetups: [],
+    });
+    const select = vi.fn().mockResolvedValueOnce("telegram").mockResolvedValueOnce("__done__");
+    const cfg = {
+      channels: {
+        telegram: { enabled: false, token: "secret" },
+      },
+    };
+
+    const next = await setupChannels(
+      cfg as never,
+      {} as never,
+      {
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => undefined),
+        select,
+      } as never,
+      {
+        deferStatusUntilSelection: true,
+        skipConfirm: true,
+        skipDmPolicyPrompt: true,
+      },
+    );
+
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        workspaceDir: "/tmp/openclaw-workspace",
+      }),
+    );
+    expect(setupWizard.configure).not.toHaveBeenCalled();
+    expect(next).toEqual({
+      channels: {
+        telegram: { enabled: false, token: "secret" },
+      },
+    });
+  });
 });

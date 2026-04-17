@@ -323,6 +323,16 @@ export async function setupChannels(
       await refreshStatus(channel);
       return true;
     }
+    const disabledHint = resolveConfigDisabledHint(channel);
+    if (disabledHint) {
+      const plugin = await loadScopedChannelPlugin(channel);
+      if (!plugin) {
+        await prompter.note(`${channel} plugin not available (${disabledHint}).`, "Channel setup");
+        return false;
+      }
+      await refreshStatus(channel);
+      return true;
+    }
     const result = enablePluginInConfig(next, channel);
     next = result.config;
     if (!result.enabled) {
