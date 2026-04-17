@@ -8,7 +8,7 @@ title: "FAQ"
 
 # FAQ
 
-Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS, multi-agent, OAuth/API keys, model failover). For runtime diagnostics, see [Troubleshooting](/gateway/troubleshooting). For the full config reference, see [Configuration](/gateway/gateway/configuration-reference-reference).
+Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS, multi-agent, OAuth/API keys, model failover). For runtime diagnostics, see [Troubleshooting](/gateway/troubleshooting). For the full config reference, see [Configuration](/gateway/configuration-reference-reference).
 
 ## First 60 seconds if something is broken
 
@@ -790,7 +790,7 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title='Can I run a "fast chat" agent and an "Opus for coding" agent?'>
-    Yes. Use multi-agent routing: give each agent its own default model, then bind inbound routes (provider account or specific peers) to each agent. Example config lives in [Multi-Agent Routing](/concepts/multi-agent). See also [Models](/concepts/models) and [Configuration](/gateway/gateway/configuration-reference-reference).
+    Yes. Use multi-agent routing: give each agent its own default model, then bind inbound routes (provider account or specific peers) to each agent. Example config lives in [Multi-Agent Routing](/concepts/multi-agent). See also [Models](/concepts/models) and [Configuration](/gateway/configuration-reference-reference).
   </Accordion>
 
   <Accordion title="Does Homebrew work on Linux?">
@@ -1046,7 +1046,7 @@ for usage/billing and raise limits as needed.
     - Discord overrides: `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.idleHours`, `channels.discord.threadBindings.maxAgeHours`.
     - Auto-bind on spawn: set `channels.discord.threadBindings.spawnSubagentSessions: true`.
 
-    Docs: [Sub-agents](/tools/subagents), [Discord](/channels/discord), [Configuration Reference](/gateway/gateway/configuration-reference-reference-reference), [Slash commands](/tools/slash-commands).
+    Docs: [Sub-agents](/tools/subagents), [Discord](/channels/discord), [Configuration Reference](/gateway/configuration-reference-reference-reference), [Slash commands](/tools/slash-commands).
 
   </Accordion>
 
@@ -1297,7 +1297,7 @@ for usage/billing and raise limits as needed.
 
     Setup walkthrough + example config: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent)
 
-    Key config reference: [Gateway configuration](/gateway/gateway/configuration-reference-reference-reference#agentsdefaultssandbox)
+    Key config reference: [Gateway configuration](/gateway/configuration-reference-reference-reference#agentsdefaultssandbox)
 
   </Accordion>
 
