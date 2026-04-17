@@ -214,9 +214,9 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolvePublishedInstallerUrl("win32")).toBe("https://openclaw.ai/install.ps1");
   });
 
-  it("keeps private QA lab sidecars out of generated install inventory", () => {
+  it("keeps only legacy QA compat sidecars in generated install inventory", () => {
     expect(isPackagedDistPath("dist/extensions/qa-channel/runtime-api.js")).toBe(true);
-    expect(isPackagedDistPath("dist/extensions/qa-lab/runtime-api.js")).toBe(false);
+    expect(isPackagedDistPath("dist/extensions/qa-lab/runtime-api.js")).toBe(true);
     expect(isPackagedDistPath("dist/extensions/qa-lab/openclaw.plugin.json")).toBe(false);
     expect(isPackagedDistPath("dist/extensions/slack/runtime-api.js")).toBe(true);
   });
