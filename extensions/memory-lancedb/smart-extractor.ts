@@ -137,12 +137,16 @@ export function parseExtractionResponse(raw: string): ExtractedMemory[] {
   const results: ExtractedMemory[] = [];
 
   for (const item of memoriesArr) {
-    if (!item || typeof item !== "object") continue;
+    if (!item || typeof item !== "object") {
+      continue;
+    }
     const m = item as Record<string, unknown>;
 
     const value = typeof m.value === "string" ? m.value.trim() : "";
     const text = typeof m.text === "string" ? m.text.trim() : value;
-    if (!text || text.length < 5) continue;
+    if (!text || text.length < 5) {
+      continue;
+    }
 
     const category = validCategories.has(String(m.category))
       ? (String(m.category) as MemoryCategory)
@@ -152,7 +156,9 @@ export function parseExtractionResponse(raw: string): ExtractedMemory[] {
       ? Math.min(1, Math.max(0, m.importance))
       : 0.7;
 
-    if (importance < 0.5) continue;
+    if (importance < 0.5) {
+      continue;
+    }
 
     const key = typeof m.key === "string" ? m.key.trim() : text.slice(0, 40);
 

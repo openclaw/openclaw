@@ -1,22 +1,6 @@
-import { describe, test, expect, vi } from "vitest";
+import { describe, test, expect } from "vitest";
 
 describe("smart-extractor parseExtractionResponse", () => {
-  async function getParseFn() {
-    vi.doMock("openai", () => ({ default: class {} }));
-    vi.doMock("./config.js", () => ({
-      MEMORY_CATEGORIES: ["preference", "fact", "decision", "entity", "other"],
-    }));
-    try {
-      const mod = await import("./smart-extractor.js");
-      return (mod as any).__parseExtractionResponse as
-        | ((raw: string) => any[])
-        | undefined;
-    } finally {
-      vi.doUnmock("openai");
-      vi.doUnmock("./config.js");
-      vi.resetModules();
-    }
-  }
 
   test("parses well-formed JSON response", async () => {
     const { parseExtractionResponse } = await import("./smart-extractor.js");
