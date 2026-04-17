@@ -21,27 +21,30 @@ printf '%s\n' '${escapedOutput}'
   return { root, cliPath };
 }
 
-function resolveVersionFromInstaller(cliPath: string): string {
+function resolveVersionsFromInstaller(cliPaths: string[]): string[] {
   const installerPath = path.join(process.cwd(), "scripts", "install.sh");
   const output = execFileSync(
     "bash",
     [
       "-lc",
       `source "${installerPath}" >/dev/null 2>&1
-OPENCLAW_BIN="$FAKE_OPENCLAW_BIN"
-resolve_openclaw_version`,
+for openclaw_bin in "$@"; do
+  OPENCLAW_BIN="$openclaw_bin"
+  resolve_openclaw_version
+done`,
+      "openclaw-version-test",
+      ...cliPaths,
     ],
     {
       cwd: process.cwd(),
       encoding: "utf-8",
       env: {
         ...process.env,
-        FAKE_OPENCLAW_BIN: cliPath,
         OPENCLAW_INSTALL_SH_NO_RUN: "1",
       },
     },
   );
-  return output.trim();
+  return output.trimEnd().split("\n");
 }
 
 function resolveVersionFromInstallerViaStdin(cliPath: string, cwd: string): string {
@@ -68,23 +71,15 @@ describe("install.sh version resolution", () => {
     cleanupTempDirs(tempRoots);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "extracts the semantic version from decorated CLI output",
-    () => {
-      const fixture = withFakeCli("OpenClaw 2026.3.10 (abcdef0)");
+  it.runIf(process.platform !== "win32")("parses decorated and raw CLI versions", () => {
+    const decorated = withFakeCli("OpenClaw 2026.3.10 (abcdef0)");
+    const raw = withFakeCli("OpenClaw dev's build");
 
-      expect(resolveVersionFromInstaller(fixture.cliPath)).toBe("2026.3.10");
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "falls back to raw output when no semantic version is present",
-    () => {
-      const fixture = withFakeCli("OpenClaw dev's build");
-
-      expect(resolveVersionFromInstaller(fixture.cliPath)).toBe("OpenClaw dev's build");
-    },
-  );
+    expect(resolveVersionsFromInstaller([decorated.cliPath, raw.cliPath])).toEqual([
+      "2026.3.10",
+      "OpenClaw dev's build",
+    ]);
+  });
 
   it.runIf(process.platform !== "win32")(
     "does not source version helpers from cwd when installer runs via stdin",

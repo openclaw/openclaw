@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() =>
   vi.fn((params: { artifactBasename: string }) => {
@@ -101,10 +101,6 @@ vi.mock("./plugin-sdk/facade-runtime.js", () => ({
 }));
 
 describe("plugin activation boundary", () => {
-  beforeEach(() => {
-    loadBundledPluginPublicSurfaceModuleSync.mockReset();
-  });
-
   let configHelpersPromise:
     | Promise<{
         isStaticallyChannelConfigured: typeof import("./config/channel-configured-shared.js").isStaticallyChannelConfigured;
@@ -171,7 +167,9 @@ describe("plugin activation boundary", () => {
     return browserHelpersPromise;
   }
 
-  it("keeps config and model boundary helpers cold", async () => {
+  it("keeps generic boundaries cold and loads only narrow browser helper surfaces on use", async () => {
+    loadBundledPluginPublicSurfaceModuleSync.mockReset();
+
     const [{ isStaticallyChannelConfigured }, { normalizeModelRef }] = await Promise.all([
       importConfigHelpers(),
       importModelSelection(),
@@ -198,9 +196,7 @@ describe("plugin activation boundary", () => {
       model: "grok-4-fast",
     });
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
-  });
 
-  it("keeps browser helper imports cold and loads only narrow browser helper surfaces on use", async () => {
     const browser = await importBrowserHelpers();
 
     expect(browser.DEFAULT_AI_SNAPSHOT_MAX_CHARS).toBe(80_000);
@@ -238,13 +234,10 @@ describe("plugin activation boundary", () => {
       "browser-host-inspection.js",
       "browser-host-inspection.js",
     ]);
-  });
 
-  it("keeps disabled browser cleanup and generic session-binding cleanup cold", async () => {
-    const [browser, { getSessionBindingService }] = await Promise.all([
-      importBrowserHelpers(),
-      import("./infra/outbound/session-binding-service.js"),
-    ]);
+    loadBundledPluginPublicSurfaceModuleSync.mockReset();
+    const { getSessionBindingService } =
+      await import("./infra/outbound/session-binding-service.js");
 
     await expect(browser.closeTrackedBrowserTabsForSessions({ sessionKeys: [] })).resolves.toBe(0);
     await expect(
