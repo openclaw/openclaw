@@ -49,6 +49,14 @@ ARG OPENCLAW_EXTENSIONS
 RUN pnpm install --frozen-lockfile
 
 COPY . .
+
+# Explicitly install UI dependencies and build UI first (required for Control UI assets)
+RUN pnpm install --frozen-lockfile --filter ./ui
+RUN pnpm ui:build
+
+# Verify UI assets were built before proceeding
+RUN test -f /app/dist/control-ui/index.html || (echo "ERROR: Control UI assets not found after ui:build" && exit 1)
+
 RUN pnpm run build
 
 FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS final
@@ -67,7 +75,6 @@ COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/package.json .
 COPY --from=build --chown=node:node /app/openclaw.mjs .
 COPY --from=build --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
-COPY --from=build --chown=node:node /app/ui ./ui
 COPY --from=build --chown=node:node /app/skills ./skills
 COPY --from=build --chown=node:node /app/docs ./docs
 COPY --from=build --chown=node:node /app/qa ./qa
