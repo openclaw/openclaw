@@ -2447,5 +2447,61 @@ describe("registerSlackInteractionEvents", () => {
     // replyThreadTs should carry the real Slack timestamp
     expect(deliverArgs?.replyThreadTs).toBe("100.100");
   });
+
+  it("preserves legitimate replyToId values in interaction wake delivery", async () => {
+    const { ctx, getHandler } = createContext({
+      resolveChannelName: async () => ({ name: "general", type: "channel" }),
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "reply_actions",
+        value: "Sure",
+        text: { type: "plain_text", text: "Sure" },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(dispatchReplyWithDispatcherMock).toHaveBeenCalledTimes(1);
+    });
+    const dispatchCall = dispatchReplyWithDispatcherMock.mock.calls[0]?.[0] as {
+      dispatcherOptions?: { deliver?: (payload: { replyToId?: string; text?: string }) => Promise<void> };
+    } | undefined;
+    const deliverRepliesMod = await import("../replies.js");
+    const deliverMock = vi.mocked(deliverRepliesMod.deliverReplies);
+    deliverMock.mockClear();
+    // Simulate a legitimate directive-provided replyToId (real Slack ts)
+    await dispatchCall?.dispatcherOptions?.deliver?.({
+      text: "test reply",
+      replyToId: "100.100",
+    });
+    const deliverArgs = deliverMock.mock.calls[0]?.[0] as {
+      replies?: { replyToId?: string }[];
+    } | undefined;
+    // Legitimate replyToId must be preserved
+    expect(deliverArgs?.replies?.[0]?.replyToId).toBe("100.100");
+  });
 });
 const selectedDateTimeEpoch = 1_771_632_300;

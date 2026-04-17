@@ -737,13 +737,19 @@ async function wakeSlackReplySession(params: {
     dispatcherOptions: {
       ...replyPipeline,
       deliver: async (payload) => {
-        // Strip synthetic replyToId derived from the interaction
-        // MessageSid to prevent it from overriding the real Slack
-        // thread_ts (replyThreadTs).  The interaction MessageSid is
-        // a unique dedupe key and not a valid Slack timestamp.
-        const { replyToId: _discarded, ...safePayload } = payload;
+        // Only strip synthetic replyToId values derived from the
+        // interaction MessageSid (format: "interaction:<ts>:<epoch>").
+        // Legitimate explicit reply targets (e.g. directive/tool-
+        // provided thread IDs) must be preserved so deliverReplies
+        // can honor them over the computed replyThreadTs.
+        const isSyntheticReplyId =
+          typeof payload.replyToId === "string" &&
+          payload.replyToId.startsWith("interaction:");
+        const safePayload = isSyntheticReplyId
+          ? { ...payload, replyToId: undefined }
+          : payload;
         await deliverReplies({
-          replies: [safePayload as typeof payload],
+          replies: [safePayload],
           target: parsed.channelId!,
           token: ctx.botToken,
           accountId: ctx.accountId,
