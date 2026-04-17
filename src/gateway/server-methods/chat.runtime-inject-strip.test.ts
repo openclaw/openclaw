@@ -199,4 +199,61 @@ describe("stripRuntimeInjectedContent", () => {
     const content = msg.content as Array<Record<string, unknown>>;
     expect(content[0].text).toBe("  Indented code snippet:\n    function foo() {\n      return 42;\n    }\n  ");
   });
+
+  it("does not strip startup context prefix when it appears mid-message", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: 'The error message says "[Startup context loaded by runtime]" but I don\'t understand what it means.',
+          },
+        ],
+      },
+    ];
+    const result = stripRuntimeInjectedContent(messages);
+    expect(result).toBe(messages); // Same reference = no changes
+    const msg = result[0] as Record<string, unknown>;
+    const content = msg.content as Array<Record<string, unknown>>;
+    expect(content[0].text).toBe('The error message says "[Startup context loaded by runtime]" but I don\'t understand what it means.');
+  });
+
+  it("strips startup context prefix only when at leading position", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "[Startup context loaded by runtime]\nContext here\n\nUser message after",
+          },
+        ],
+      },
+    ];
+    const result = stripRuntimeInjectedContent(messages);
+    expect(result).toHaveLength(1);
+    const msg = result[0] as Record<string, unknown>;
+    const content = msg.content as Array<Record<string, unknown>>;
+    expect(content[0].text).toBe("User message after");
+  });
+
+  it("does not strip startup context prefix with leading whitespace", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: '  [Startup context loaded by runtime]\nUser indented message',
+          },
+        ],
+      },
+    ];
+    const result = stripRuntimeInjectedContent(messages);
+    expect(result).toBe(messages); // Same reference = no changes
+    const msg = result[0] as Record<string, unknown>;
+    const content = msg.content as Array<Record<string, unknown>>;
+    expect(content[0].text).toBe('  [Startup context loaded by runtime]\nUser indented message');
+  });
 });

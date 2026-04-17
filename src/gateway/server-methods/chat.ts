@@ -191,13 +191,14 @@ function extractUserMessageText(
 }
 
 function stripStartupContextBlock(text: string): string {
-  const startIdx = text.indexOf(STARTUP_CONTEXT_PREFIX);
-  if (startIdx < 0) {
+  // Runtime-injected content never has leading whitespace
+  // Only strip if prefix is at absolute start (prevents false positives on indented user messages)
+  if (!text.startsWith(STARTUP_CONTEXT_PREFIX)) {
     return text;
   }
+
   // Find end of startup block (double newline followed by non-startup content)
-  const afterPrefix = text.slice(startIdx);
-  const lines = afterPrefix.split("\n");
+  const lines = text.split("\n");
   let endOfBlockIdx = -1;
 
   for (let i = 0; i < lines.length; i++) {
@@ -222,17 +223,12 @@ function stripStartupContextBlock(text: string): string {
   }
 
   if (endOfBlockIdx >= 0) {
-    // Keep text before startup block + text after blank line separator
-    const beforeBlock = text.slice(0, startIdx).trim();
-    const afterBlock = afterPrefix.slice(endOfBlockIdx).trim();
-    if (beforeBlock && afterBlock) {
-      return `${beforeBlock}\n\n${afterBlock}`;
-    }
-    return beforeBlock || afterBlock;
+    // Return text after blank line separator
+    return text.slice(endOfBlockIdx).trim();
   }
 
-  // No user content after - entire rest is startup block, keep only text before
-  return text.slice(0, startIdx).trim();
+  // No user content after - entire message is startup block
+  return "";
 }
 
 function stripSystemEventLines(text: string): string {
