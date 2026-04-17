@@ -98,6 +98,13 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "talk", kind: "none" },
   { prefix: "skills", kind: "none" },
   { prefix: "secrets", kind: "none" },
+  // Top-level `auth.profiles.*` is touched whenever an OAuth provider refreshes
+  // its token (email/openai-codex/etc.).  Credentials are read per-request via
+  // the auth token resolution path, so a gateway restart is not required —
+  // and restarting mid-dispatch drops in-flight WebSocket work.  The separate
+  // `gateway.auth.*` path (auth token/mode for the gateway itself) still
+  // restarts via the `gateway` rule below.
+  { prefix: "auth", kind: "none" },
   { prefix: "plugins", kind: "restart" },
   { prefix: "ui", kind: "none" },
   { prefix: "gateway", kind: "restart" },
