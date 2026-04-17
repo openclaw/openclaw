@@ -234,7 +234,11 @@ function resolveDiscordGuildNativeCommandAuthorized(params: {
     configured: hasAccessRestrictions,
     allowed: memberAllowed,
   };
-  const fallbackAuthorizers = [policyAuthorizer, ownerAuthorizer, memberAuthorizer];
+  const senderRestrictionsConfigured = params.ownerAllowListConfigured || hasAccessRestrictions;
+  if (!params.commandsAllowFromAccess.configured && !senderRestrictionsConfigured) {
+    return true;
+  }
+  const fallbackAuthorizers = [ownerAuthorizer, memberAuthorizer];
   return resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups: params.useAccessGroups,
     authorizers: params.useAccessGroups
@@ -550,7 +554,7 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
 function readDiscordCommandArgs(
   interaction: CommandInteraction,
   definitions?: CommandArgDefinition[],
-): CommandArgs | undefined {
+): { raw?: string; values?: CommandArgValues } | undefined {
   if (!definitions || definitions.length === 0) {
     return undefined;
   }
