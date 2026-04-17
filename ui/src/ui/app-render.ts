@@ -1954,12 +1954,16 @@ export function renderApp(state: AppViewState) {
                 } else {
                   // Clear any active plan mode so the chip + backend agree.
                   patch.planMode = "normal";
-                  if (mode.execSecurity !== undefined) {
-                    patch.execSecurity = mode.execSecurity;
-                  }
-                  if (mode.execAsk !== undefined) {
-                    patch.execAsk = mode.execAsk;
-                  }
+                  // For the "Default" mode entry (execSecurity +
+                  // execAsk both undefined) send `null` to DELETE the
+                  // session override so the runtime falls back to
+                  // config defaults. Explicit null is the patch
+                  // contract's "clear" signal. Without this, Default
+                  // would no-op (the patch handler skips undefined
+                  // keys) and the chip would immediately flip back to
+                  // whatever the prior override was.
+                  patch.execSecurity = mode.execSecurity ?? null;
+                  patch.execAsk = mode.execAsk ?? null;
                 }
                 void state.client.request("sessions.patch", patch).then(
                   () => {

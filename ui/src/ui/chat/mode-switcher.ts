@@ -94,11 +94,25 @@ const planIcon = html`<svg
 </svg>`;
 
 export const MODE_DEFINITIONS: ModeDefinition[] = [
+  // "Default" clears the per-session execSecurity/execAsk overrides so
+  // the runtime falls back to whatever's in agents.defaults / per-agent
+  // config (the "normal agentic" mode the operator configured). This
+  // is the truer post-plan-mode fallback than locking back to Ask —
+  // most operator configs don't want every-mutation prompts.
+  // Implementation note: handlers detect undefined execSecurity/execAsk
+  // on this entry and DELETE the session-side overrides via patch.
+  {
+    id: "default",
+    label: "Default permissions",
+    shortLabel: "Default",
+    shortcut: "1",
+    icon: shieldIcon,
+  },
   {
     id: "ask",
-    label: "Ask permissions",
+    label: "Ask each mutation",
     shortLabel: "Ask",
-    shortcut: "1",
+    shortcut: "2",
     execSecurity: "allowlist",
     execAsk: "on-miss",
     icon: shieldIcon,
@@ -107,7 +121,7 @@ export const MODE_DEFINITIONS: ModeDefinition[] = [
     id: "accept",
     label: "Accept edits",
     shortLabel: "Accept",
-    shortcut: "2",
+    shortcut: "3",
     execSecurity: "allowlist",
     execAsk: "off",
     icon: checkIcon,
@@ -123,7 +137,7 @@ export const MODE_DEFINITIONS: ModeDefinition[] = [
     id: "plan",
     label: "Plan mode",
     shortLabel: "Plan",
-    shortcut: "3",
+    shortcut: "4",
     planMode: "plan",
     icon: planIcon,
   },
@@ -131,7 +145,7 @@ export const MODE_DEFINITIONS: ModeDefinition[] = [
     id: "bypass",
     label: "Bypass permissions",
     shortLabel: "Bypass",
-    shortcut: "4",
+    shortcut: "5",
     execSecurity: "full",
     execAsk: "off",
     icon: unlockIcon,
