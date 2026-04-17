@@ -13,7 +13,7 @@ import Testing
         let box = CalendarService._TestPermissionRequestBox()
 
         async let granted: Bool = box.installAndAwait()
-        await Task.yield()
+        await box.waitUntilInstalled()
         box.resume(true)
 
         #expect(await granted == true)

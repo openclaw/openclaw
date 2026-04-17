@@ -195,13 +195,36 @@ final class CalendarService: CalendarServicing {
 extension CalendarService {
     final class _TestPermissionRequestBox: @unchecked Sendable {
         private let box = PermissionRequestBox()
+        private let lock = NSLock()
+        private var installWaiters: [CheckedContinuation<Void, Never>] = []
+        private var hasInstalled = false
 
         func resume(_ value: Bool) {
             self.box.resume(value)
         }
 
+        func waitUntilInstalled() async {
+            self.lock.lock()
+            if self.hasInstalled {
+                self.lock.unlock()
+                return
+            }
+            await withCheckedContinuation { continuation in
+                self.installWaiters.append(continuation)
+                self.lock.unlock()
+            }
+        }
+
         func installAndAwait() async -> Bool {
             await withCheckedContinuation { continuation in
+                self.lock.lock()
+                self.hasInstalled = true
+                let waiters = self.installWaiters
+                self.installWaiters.removeAll()
+                self.lock.unlock()
+                for waiter in waiters {
+                    waiter.resume()
+                }
                 self.box.install(continuation)
             }
         }
