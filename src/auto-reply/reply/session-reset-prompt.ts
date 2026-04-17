@@ -4,6 +4,7 @@ import {
   buildLimitedBootstrapPromptLines,
 } from "../../agents/bootstrap-prompt.js";
 import { appendCronStyleCurrentTimeLine } from "../../agents/current-time.js";
+import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inventory.js";
 import { isWorkspaceBootstrapPending } from "../../agents/workspace.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -33,6 +34,28 @@ const BARE_SESSION_RESET_PROMPT_BOOTSTRAP_LIMITED = [
   "If the runtime model differs from default_model in the system prompt, mention the default model only after you have handled this limitation.",
   "Do not mention internal steps, files, tools, or reasoning.",
 ].join(" ");
+
+export function resolveBareResetBootstrapFileAccess(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  workspaceDir?: string;
+  modelProvider?: string;
+  modelId?: string;
+}): boolean {
+  if (!params.cfg) {
+    return false;
+  }
+  const inventory = resolveEffectiveToolInventory({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    workspaceDir: params.workspaceDir,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
+  return inventory.groups.some((group) => group.tools.some((tool) => tool.id === "read"));
+}
 
 export async function resolveBareSessionResetPromptState(params: {
   cfg?: OpenClawConfig;

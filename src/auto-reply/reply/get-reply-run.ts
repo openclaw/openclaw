@@ -44,6 +44,7 @@ import { buildReplyPromptBodies } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
+import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
@@ -325,6 +326,14 @@ export async function runPreparedReply(
       ? await resolveBareSessionResetPromptState({
           cfg,
           workspaceDir,
+          hasBootstrapFileAccess: resolveBareResetBootstrapFileAccess({
+            cfg,
+            agentId,
+            sessionKey,
+            workspaceDir,
+            modelProvider: provider,
+            modelId: model,
+          }),
         })
       : null;
   const startupContextPrelude =

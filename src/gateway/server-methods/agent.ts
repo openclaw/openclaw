@@ -5,7 +5,10 @@ import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
-import { resolveBareSessionResetPromptState } from "../../auto-reply/reply/session-reset-prompt.js";
+import {
+  resolveBareResetBootstrapFileAccess,
+  resolveBareSessionResetPromptState,
+} from "../../auto-reply/reply/session-reset-prompt.js";
 import {
   buildSessionStartupContextPrelude,
   shouldApplyStartupContext,
@@ -565,12 +568,26 @@ export const agentHandlers: GatewayRequestHandlers = {
           sessionEntry: resetSessionEntry,
           spawnedBy: resetSpawnedBy,
         });
+        const resetSessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKey);
+        const resetModelRef = resolveSessionModelRef(
+          resetCfg,
+          resetSessionEntry,
+          resetSessionAgentId,
+        );
         const bareResetPromptState = await resolveBareSessionResetPromptState({
           cfg: resetCfg,
           workspaceDir: runtimeWorkspaceDir,
           isPrimaryRun:
             !isSubagentSessionKey(requestedSessionKey) && !isAcpSessionKey(requestedSessionKey),
           isCanonicalWorkspace,
+          hasBootstrapFileAccess: resolveBareResetBootstrapFileAccess({
+            cfg: resetCfg,
+            agentId: resetSessionAgentId,
+            sessionKey: requestedSessionKey,
+            workspaceDir: runtimeWorkspaceDir,
+            modelProvider: resetModelRef.provider,
+            modelId: resetModelRef.model,
+          }),
         });
         // Keep bare /new and /reset behavior aligned with chat.send:
         // reset first, then run a fresh-session greeting prompt in-place.
