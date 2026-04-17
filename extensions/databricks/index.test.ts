@@ -480,6 +480,35 @@ describe("Databricks plugin", () => {
       expect(typeof userMsg?.content).toBe("string");
       expect(userMsg?.content).toBe("Hello World");
     });
+
+    it("preserves plain-string assistant content from older transcripts", async () => {
+      const api = { registerProvider: vi.fn() } as any;
+      await plugin.register(api);
+      const wrapStreamFn = api.registerProvider.mock.calls[0][0].wrapStreamFn;
+
+      const model = { id: "test", baseUrl: "https://test.com", api: "openai-completions" } as any;
+      const context = {
+        messages: [
+          { role: "user", content: "hi" },
+          // Older transcripts / some provider paths store assistant content as a plain string
+          { role: "assistant", content: "Sure, I can help with that.", stopReason: "stop" },
+          { role: "user", content: "thanks" },
+        ],
+      } as any;
+      const options = { apiKey: "token" } as any;
+
+      fetchWithSsrFGuardMock.mockResolvedValue(
+        mockFetchResult(new Response("data: [DONE]\n", { status: 200 })),
+      );
+
+      const streamFn = wrapStreamFn({} as ProviderWrapStreamFnContext);
+      await streamFn(model, context, options);
+
+      const sentBody = JSON.parse(fetchWithSsrFGuardMock.mock.calls[0][0].init.body);
+      const assistantMsg = sentBody.messages.find((m: { role: string }) => m.role === "assistant");
+      // Plain-string content must survive normalization, not become null
+      expect(assistantMsg?.content).toBe("Sure, I can help with that.");
+    });
   });
 
   describe("SSE resilience", () => {

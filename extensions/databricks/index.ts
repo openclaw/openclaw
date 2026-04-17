@@ -116,8 +116,14 @@ function mapDatabricksMessages(context: {
         continue;
       }
 
-      // Strip thinking/redacted blocks from assistant content; retain text and toolCall blocks
-      const rawContent = Array.isArray(msg.content) ? msg.content : [];
+      // Strip thinking/redacted blocks from assistant content; retain text and toolCall blocks.
+      // When content is a plain string (common in older transcripts / some provider paths),
+      // wrap it in a synthetic text block so it survives the block-level filtering below.
+      const rawContent = Array.isArray(msg.content)
+        ? msg.content
+        : typeof msg.content === "string" && msg.content
+          ? [{ type: "text", text: msg.content }]
+          : [];
       const strippedContent: AssistantContentBlock[] = [];
       const newToolCalls: Array<{ id: string; name: string }> = [];
 
