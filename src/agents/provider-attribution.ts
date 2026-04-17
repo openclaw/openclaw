@@ -124,7 +124,11 @@ const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
   "https://dashscope.aliyuncs.com/compatible-mode/v1",
   "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
 ]);
-const OPENAI_RESPONSES_APIS = new Set(["openai-responses", "azure-openai-responses"]);
+const OPENAI_RESPONSES_APIS = new Set([
+  "openai-responses",
+  "azure-openai-responses",
+  "openai-codex-responses",
+]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 const MOONSHOT_COMPAT_PROVIDERS = new Set(["moonshot", "kimi"]);
 
@@ -315,6 +319,11 @@ function resolveKnownProviderFamily(provider: string | undefined): string {
     default:
       return provider || "unknown";
   }
+}
+
+export function isOpenAIResponsesApi(api: string | null | undefined): boolean {
+  const normalizedApi = normalizeOptionalLowercaseString(api);
+  return normalizedApi !== undefined && OPENAI_RESPONSES_APIS.has(normalizedApi);
 }
 
 export function resolveProviderAttributionIdentity(
@@ -573,7 +582,7 @@ export function resolveProviderRequestCapabilities(
     compatibilityFamily = "moonshot";
   }
 
-  const isResponsesApi = api !== undefined && OPENAI_RESPONSES_APIS.has(api);
+  const isResponsesApi = isOpenAIResponsesApi(api);
   const promptCacheKeySupport = input.compat?.supportsPromptCacheKey;
   // Default strip behavior (proxy-like endpoints with responses APIs) is
   // preserved as a safety net for providers that reject prompt_cache_key,
