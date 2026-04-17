@@ -53,6 +53,7 @@ import {
   runReactionThreadedScenario,
   runRoomAutoJoinInviteScenario,
   runRoomThreadReplyOverrideScenario,
+  runSubagentThreadSpawnScenario,
   runThreadFollowUpScenario,
   runThreadIsolationScenario,
   runThreadNestedReplyShapeScenario,
@@ -168,6 +169,8 @@ export async function runMatrixQaScenario(
       return await runThreadNestedReplyShapeScenario(context);
     case "matrix-thread-isolation":
       return await runThreadIsolationScenario(context);
+    case "matrix-subagent-thread-spawn":
+      return await runSubagentThreadSpawnScenario(context);
     case "matrix-top-level-reply-shape":
       return await runTopLevelReplyShapeScenario(context);
     case "matrix-room-thread-reply-override":

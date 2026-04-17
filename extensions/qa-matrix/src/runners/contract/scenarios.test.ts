@@ -24,12 +24,46 @@ import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   findMissingLiveTransportStandardScenarios,
 } from "../../shared/live-transport-scenarios.js";
+import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { MATRIX_QA_MEDIA_TYPE_COVERAGE_CASES } from "./scenario-media-fixtures.js";
 import {
   __testing as scenarioTesting,
   MATRIX_QA_SCENARIOS,
   runMatrixQaScenario,
+  type MatrixQaScenarioContext,
 } from "./scenarios.js";
+
+const MATRIX_SUBAGENT_MISSING_HOOK_ERROR =
+  "thread=true is unavailable because no channel plugin registered subagent_spawning hooks.";
+
+function matrixQaScenarioContext(): MatrixQaScenarioContext {
+  return {
+    baseUrl: "http://127.0.0.1:28008/",
+    canary: undefined,
+    driverAccessToken: "driver-token",
+    driverUserId: "@driver:matrix-qa.test",
+    observedEvents: [],
+    observerAccessToken: "observer-token",
+    observerUserId: "@observer:matrix-qa.test",
+    roomId: "!main:matrix-qa.test",
+    restartGateway: undefined,
+    syncState: {},
+    sutAccessToken: "sut-token",
+    sutUserId: "@sut:matrix-qa.test",
+    timeoutMs: 8_000,
+    topology: {
+      defaultRoomId: "!main:matrix-qa.test",
+      defaultRoomKey: "main",
+      rooms: [],
+    },
+  };
+}
+
+function matrixQaE2eeRoomKey(
+  scenarioId: Parameters<typeof scenarioTesting.buildMatrixQaE2eeScenarioRoomKey>[0],
+) {
+  return scenarioTesting.buildMatrixQaE2eeScenarioRoomKey(scenarioId);
+}
 
 describe("matrix live qa scenarios", () => {
   beforeEach(() => {
@@ -45,6 +79,7 @@ describe("matrix live qa scenarios", () => {
       "matrix-thread-root-preservation",
       "matrix-thread-nested-reply-shape",
       "matrix-thread-isolation",
+      "matrix-subagent-thread-spawn",
       "matrix-top-level-reply-shape",
       "matrix-room-thread-reply-override",
       "matrix-room-quiet-streaming-preview",
@@ -256,6 +291,43 @@ describe("matrix live qa scenarios", () => {
         ],
       }),
     ).toThrow('Matrix QA topology room "ops" has conflicting definitions');
+  });
+
+  it("provisions isolated encrypted rooms for each E2EE scenario", () => {
+    const topology = scenarioTesting.buildMatrixQaTopologyForScenarios({
+      defaultRoomName: "OpenClaw Matrix QA run",
+      scenarios: [
+        MATRIX_QA_SCENARIOS.find((scenario) => scenario.id === "matrix-e2ee-basic-reply")!,
+        MATRIX_QA_SCENARIOS.find((scenario) => scenario.id === "matrix-e2ee-thread-follow-up")!,
+      ],
+    });
+
+    expect(topology.rooms).toEqual([
+      {
+        encrypted: false,
+        key: "main",
+        kind: "group",
+        members: ["driver", "observer", "sut"],
+        name: "OpenClaw Matrix QA run",
+        requireMention: true,
+      },
+      {
+        encrypted: true,
+        key: "e2ee-basic-reply",
+        kind: "group",
+        members: ["driver", "observer", "sut"],
+        name: "Matrix QA E2EE Basic Reply Room",
+        requireMention: true,
+      },
+      {
+        encrypted: true,
+        key: "e2ee-thread-follow-up",
+        kind: "group",
+        members: ["driver", "observer", "sut"],
+        name: "Matrix QA E2EE Thread Follow-up Room",
+        requireMention: true,
+      },
+    ]);
   });
 
   it("resolves scenario room ids from provisioned topology keys", () => {
@@ -565,6 +637,70 @@ describe("matrix live qa scenarios", () => {
     );
     expect(scenario).toBeDefined();
 
+    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+      artifacts: {
+        driverEventId: "$room-thread-trigger",
+        reply: {
+          relatesTo: {
+            relType: "m.thread",
+            eventId: "$room-thread-trigger",
+          },
+        },
+      },
+    });
+  });
+
+  it("runs the subagent thread spawn scenario against a child thread", async () => {
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$subagent-spawn-trigger");
+    const waitForRoomEvent = vi
+      .fn()
+      .mockImplementationOnce(async () => ({
+        event: {
+          kind: "message",
+          roomId: "!main:matrix-qa.test",
+          eventId: "$subagent-thread-root",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+          body: "qa session active. Messages here go directly to this session.",
+        },
+        since: "driver-sync-intro",
+      }))
+      .mockImplementationOnce(async () => {
+        const childToken =
+          /task="Reply exactly `([^`]+)`/.exec(
+            String(sendTextMessage.mock.calls[0]?.[0]?.body),
+          )?.[1] ?? "MATRIX_QA_SUBAGENT_CHILD_FIXED";
+        return {
+          event: {
+            kind: "message",
+            roomId: "!main:matrix-qa.test",
+            eventId: "$subagent-completion",
+            sender: "@sut:matrix-qa.test",
+            type: "m.room.message",
+            body: childToken,
+            relatesTo: {
+              relType: "m.thread",
+              eventId: "$subagent-thread-root",
+              inReplyToId: "$subagent-thread-root",
+              isFallingBack: true,
+            },
+          },
+          since: "driver-sync-next",
+        };
+      });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-subagent-thread-spawn",
+    );
+    expect(scenario).toBeDefined();
+
     await expect(
       runMatrixQaScenario(scenario!, {
         baseUrl: "http://127.0.0.1:28008/",
@@ -588,15 +724,90 @@ describe("matrix live qa scenarios", () => {
       }),
     ).resolves.toMatchObject({
       artifacts: {
-        driverEventId: "$room-thread-trigger",
-        reply: {
+        driverEventId: "$subagent-spawn-trigger",
+        subagentCompletion: {
+          eventId: "$subagent-completion",
           relatesTo: {
             relType: "m.thread",
-            eventId: "$room-thread-trigger",
+            eventId: "$subagent-thread-root",
           },
+          tokenMatched: true,
         },
+        subagentIntro: {
+          eventId: "$subagent-thread-root",
+        },
+        threadRootEventId: "$subagent-thread-root",
       },
     });
+
+    expect(sendTextMessage).toHaveBeenCalledWith({
+      body: expect.stringContaining("Use sessions_spawn for this QA check"),
+      mentionUserIds: ["@sut:matrix-qa.test"],
+      roomId: "!main:matrix-qa.test",
+    });
+    expect(waitForRoomEvent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        since: "driver-sync-start",
+      }),
+    );
+    expect(waitForRoomEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        predicate: expect.any(Function),
+        since: "driver-sync-intro",
+      }),
+    );
+    const introPredicate = waitForRoomEvent.mock.calls[0]?.[0]?.predicate as
+      | ((event: MatrixQaObservedEvent) => boolean)
+      | undefined;
+    expect(() =>
+      introPredicate?.({
+        kind: "message",
+        roomId: "!main:matrix-qa.test",
+        eventId: "$missing-hook-error",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        body: MATRIX_SUBAGENT_MISSING_HOOK_ERROR,
+      }),
+    ).toThrow("missing hook error");
+  });
+
+  it("fails the subagent thread spawn scenario when Matrix lacks subagent hooks", async () => {
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$subagent-spawn-trigger");
+    const waitForRoomEvent = vi.fn().mockImplementationOnce(async (options) => {
+      const event = {
+        kind: "message",
+        roomId: "!main:matrix-qa.test",
+        eventId: "$missing-hook-error",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        body: MATRIX_SUBAGENT_MISSING_HOOK_ERROR,
+      } satisfies MatrixQaObservedEvent;
+      options.predicate(event);
+      return {
+        event,
+        since: "driver-sync-error",
+      };
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-subagent-thread-spawn",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).rejects.toThrow(
+      "missing hook error",
+    );
+
+    expect(waitForRoomEvent).toHaveBeenCalledTimes(1);
   });
 
   it("captures quiet preview notices before the finalized Matrix reply", async () => {
@@ -676,7 +887,7 @@ describe("matrix live qa scenarios", () => {
     });
 
     expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("Matrix quiet streaming QA check"),
+      body: expect.stringContaining("Quiet streaming QA check"),
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });
@@ -781,7 +992,7 @@ describe("matrix live qa scenarios", () => {
     });
 
     expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("Matrix block streaming QA check"),
+      body: expect.stringContaining("Block streaming QA check"),
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!block:matrix-qa.test",
     });
@@ -1711,7 +1922,7 @@ describe("matrix live qa scenarios", () => {
           defaultRoomKey: "main",
           rooms: [
             {
-              key: scenarioTesting.MATRIX_QA_E2EE_ROOM_KEY,
+              key: matrixQaE2eeRoomKey("matrix-e2ee-verification-notice-no-trigger"),
               kind: "group",
               memberRoles: ["driver", "observer", "sut"],
               memberUserIds: [
@@ -1832,7 +2043,7 @@ describe("matrix live qa scenarios", () => {
           rooms: [
             {
               encrypted: true,
-              key: scenarioTesting.MATRIX_QA_E2EE_ROOM_KEY,
+              key: matrixQaE2eeRoomKey("matrix-e2ee-recovery-key-lifecycle"),
               kind: "group",
               memberRoles: ["driver", "observer", "sut"],
               memberUserIds: [
@@ -1930,7 +2141,7 @@ describe("matrix live qa scenarios", () => {
           defaultRoomKey: "main",
           rooms: [
             {
-              key: scenarioTesting.MATRIX_QA_E2EE_ROOM_KEY,
+              key: matrixQaE2eeRoomKey("matrix-e2ee-key-bootstrap-failure"),
               kind: "group",
               memberRoles: ["driver", "observer", "sut"],
               memberUserIds: [
