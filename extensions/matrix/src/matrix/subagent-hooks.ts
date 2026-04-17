@@ -1,5 +1,8 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
+import {
+  getSessionBindingService,
+  type SessionBindingRecord,
+} from "openclaw/plugin-sdk/conversation-binding-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { findMatrixAccountConfig, resolveMatrixBaseConfig } from "./account-config.js";
@@ -41,26 +44,23 @@ type MatrixSubagentDeliveryTargetEvent = {
   expectsCompletionMessage: boolean;
 };
 
+type MatrixDeliveryOrigin = {
+  channel: "matrix";
+  accountId: string;
+  to: string;
+  threadId?: string;
+};
+
 type SpawningResult =
   | {
       status: "ok";
       threadBindingReady?: boolean;
-      deliveryOrigin?: {
-        channel: string;
-        accountId: string;
-        to: string;
-        threadId?: string;
-      };
+      deliveryOrigin?: MatrixDeliveryOrigin;
     }
   | { status: "error"; error: string };
 
 type DeliveryTargetResult = {
-  origin: {
-    channel: string;
-    accountId: string;
-    to: string;
-    threadId?: string;
-  };
+  origin: MatrixDeliveryOrigin;
 };
 
 function summarizeError(err: unknown): string {
@@ -92,6 +92,28 @@ function resolveThreadBindingFlags(
       accountThreadBindings?.spawnSubagentSessions ??
       baseThreadBindings?.spawnSubagentSessions ??
       false,
+  };
+}
+
+function resolveMatrixBindingThreadId(binding: SessionBindingRecord): string | undefined {
+  const { conversationId, parentConversationId } = binding.conversation;
+  return parentConversationId && parentConversationId !== conversationId
+    ? conversationId
+    : undefined;
+}
+
+function resolveMatrixBindingDeliveryOrigin(
+  binding: SessionBindingRecord,
+  fallbackAccountId: string,
+): MatrixDeliveryOrigin {
+  const boundRoomId =
+    binding.conversation.parentConversationId ?? binding.conversation.conversationId;
+  const threadId = resolveMatrixBindingThreadId(binding);
+  return {
+    channel: "matrix",
+    accountId: binding.conversation.accountId ?? fallbackAccountId,
+    to: `room:${boundRoomId}`,
+    ...(threadId ? { threadId } : {}),
   };
 }
 
@@ -176,24 +198,11 @@ export async function handleMatrixSubagentSpawning(
         boundBy: "system",
       },
     });
-    const boundRoomId =
-      binding.conversation.parentConversationId ?? binding.conversation.conversationId;
-    const threadId =
-      binding.conversation.parentConversationId &&
-      binding.conversation.parentConversationId !== binding.conversation.conversationId
-        ? binding.conversation.conversationId
-        : undefined;
-    const result = {
+    return {
       status: "ok",
       threadBindingReady: true,
-      deliveryOrigin: {
-        channel: "matrix",
-        accountId: binding.conversation.accountId ?? accountId,
-        to: `room:${boundRoomId}`,
-        ...(threadId ? { threadId } : {}),
-      },
+      deliveryOrigin: resolveMatrixBindingDeliveryOrigin(binding, accountId),
     } satisfies SpawningResult;
-    return result;
   } catch (err) {
     return {
       status: "error",
