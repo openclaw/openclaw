@@ -71,9 +71,10 @@ export function describeEnterPlanModeTool(): string {
 
 export function describeExitPlanModeTool(): string {
   return [
-    "Exit plan mode and request user approval of the proposed plan.",
-    "Pass the current plan steps via `plan` (use the same shape as update_plan).",
-    "The runtime emits an approval request — the user can Approve (mutations unlock), Reject with feedback (you stay in plan mode and revise), or let it Time Out.",
-    "Call this only after you have proposed a plan via update_plan; calling it without a plan is rejected.",
+    "REQUIRED when the session is in plan mode: submits the proposed plan to the user for Approve/Edit/Reject.",
+    "When the user asks for a plan while in plan mode, your reply MUST be a brief acknowledgement followed by an exit_plan_mode tool call — do NOT write the plan as a markdown list in chat text, that bypasses the approval flow.",
+    "Pass the full plan via `plan` using the same shape as update_plan (array of {step, status, activeForm?}).",
+    "The runtime emits an approval card; the user can Approve (mutations unlock and you proceed), Approve with edits (same), Reject with feedback (you stay in plan mode and revise; feedback arrives in your next turn as [PLAN_DECISION]), or let it Time Out.",
+    "Calling this without an active plan-mode session is a no-op; calling it without `plan` content is rejected.",
   ].join(" ");
 }
