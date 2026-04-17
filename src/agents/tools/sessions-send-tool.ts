@@ -14,6 +14,7 @@ import { AGENT_LANE_NESTED } from "../lanes.js";
 import {
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
+  compensateAfterWaitTimeout,
 } from "../run-wait.js";
 import {
   describeSessionsSendTool,
@@ -343,6 +344,34 @@ export function createSessionsSendTool(opts?: {
       });
 
       if (result.status === "timeout") {
+        // Post-timeout compensation: check whether the run was accepted and
+        // a reply arrived after the wait window closed.
+        const compensation = await compensateAfterWaitTimeout({
+          sessionKey: resolvedKey,
+          baseline: baselineReply,
+          limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+          callGateway: gatewayCall,
+        });
+
+        if (compensation.newReply) {
+          startA2AFlow(compensation.newReply);
+          return jsonResult({
+            runId,
+            status: "ok",
+            reply: compensation.newReply,
+            sessionKey: displayKey,
+            delivery: compensation.delivery,
+          });
+        }
+        if (compensation.accepted) {
+          return jsonResult({
+            runId,
+            status: "accepted",
+            sessionKey: displayKey,
+            delivery: compensation.delivery,
+          });
+        }
+        // Hard timeout — run was not accepted or is truly stalled.
         return jsonResult({
           runId,
           status: "timeout",
