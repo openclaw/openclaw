@@ -269,6 +269,75 @@ describe("setupChannels workspace shadow exclusion", () => {
     expect(collectChannelStatus).not.toHaveBeenCalled();
   });
 
+  it("uses an active deferred setup plugin without enabling config on selection", async () => {
+    const setupWizard = {
+      channel: "custom-chat",
+      getStatus: vi.fn(async () => ({
+        channel: "custom-chat",
+        configured: false,
+        statusLines: [],
+      })),
+      configure: vi.fn(async ({ cfg }: { cfg: Record<string, unknown> }) => ({
+        cfg: {
+          ...cfg,
+          channels: {
+            "custom-chat": { token: "secret" },
+          },
+        },
+      })),
+    };
+    const activePlugin = {
+      id: "custom-chat",
+      meta: { id: "custom-chat", label: "Custom Chat", blurb: "" },
+      capabilities: {},
+      config: {
+        resolveAccount: vi.fn(() => ({})),
+      },
+      setupWizard,
+    };
+    listActiveChannelSetupPlugins.mockReturnValue([activePlugin]);
+    resolveChannelSetupEntries.mockReturnValue({
+      entries: [
+        {
+          id: "custom-chat",
+          meta: { id: "custom-chat", label: "Custom Chat", blurb: "" },
+        },
+      ],
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
+    });
+    const select = vi.fn().mockResolvedValueOnce("custom-chat").mockResolvedValueOnce("__done__");
+
+    const next = await setupChannels(
+      {} as never,
+      {} as never,
+      {
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => undefined),
+        select,
+      } as never,
+      {
+        deferStatusUntilSelection: true,
+        skipConfirm: true,
+        skipDmPolicyPrompt: true,
+      },
+    );
+
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(setupWizard.configure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {},
+      }),
+    );
+    expect(next).toEqual({
+      channels: {
+        "custom-chat": { token: "secret" },
+      },
+    });
+  });
+
   it("loads the selected bundled catalog plugin without writing explicit plugin enablement", async () => {
     const setupWizard = {
       channel: "telegram",

@@ -125,8 +125,14 @@ export async function setupChannels(
     scopedPluginsById.set(channel, plugin);
     options?.onResolvedPlugin?.(channel, plugin);
   };
+  const activePluginsById = new Map<ChannelChoice, ChannelSetupPlugin>();
+  const rememberActivePlugin = (plugin: ChannelSetupPlugin) => {
+    activePluginsById.set(plugin.id, plugin);
+    return plugin;
+  };
   const getVisibleChannelPlugin = (channel: ChannelChoice): ChannelSetupPlugin | undefined =>
     scopedPluginsById.get(channel) ??
+    activePluginsById.get(channel) ??
     (deferStatusUntilSelection ? undefined : getChannelSetupPlugin(channel));
   const listVisibleInstalledPlugins = (params?: {
     includeRegistry?: boolean;
@@ -135,7 +141,7 @@ export async function setupChannels(
     const merged = new Map<string, ChannelSetupPlugin>();
     const registryPlugins = includeRegistry
       ? listChannelSetupPlugins()
-      : listActiveChannelSetupPlugins();
+      : listActiveChannelSetupPlugins().map(rememberActivePlugin);
     for (const plugin of registryPlugins) {
       if (shouldShowChannelInSetup(plugin.meta)) {
         merged.set(plugin.id, plugin);
