@@ -22,7 +22,7 @@
       },
       "nonInteractivePermissions": {
         "type": "string",
-        "enum": ["deny", "fail"]
+        "enum": ["deny", "fail", "allow"]
       },
       "pluginToolsMcpBridge": {
         "type": "boolean"
