@@ -16,12 +16,17 @@ export type MemoryConfig = {
   autoRecall?: boolean;
   captureMaxChars?: number;
   storageOptions?: Record<string, string>;
+  smartExtraction?: {
+    enabled: boolean;
+    model?: string;
+  };
 };
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 const DEFAULT_MODEL = "text-embedding-3-small";
+const DEFAULT_SMART_EXTRACTION_MODEL = "gpt-4o-mini";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 const LEGACY_STATE_DIRS: string[] = [];
 
@@ -91,6 +96,22 @@ function resolveEmbeddingModel(embedding: Record<string, unknown>): string {
   return model;
 }
 
+function resolveSmartExtraction(
+  raw: unknown,
+): MemoryConfig["smartExtraction"] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const cfg = raw as Record<string, unknown>;
+  if (cfg.enabled !== true) {
+    return undefined;
+  }
+  return {
+    enabled: true,
+    model: typeof cfg.model === "string" ? cfg.model : DEFAULT_SMART_EXTRACTION_MODEL,
+  };
+}
+
 export const memoryConfigSchema = {
   parse(value: unknown): MemoryConfig {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -107,6 +128,7 @@ export const memoryConfigSchema = {
         "autoRecall",
         "captureMaxChars",
         "storageOptions",
+        "smartExtraction",
       ],
       "memory config",
     );
@@ -137,7 +159,6 @@ export const memoryConfigSchema = {
               throw new Error("dreaming config must be an object");
             })();
 
-    // Parse storageOptions (object with string values)
     let storageOptions: Record<string, string> | undefined;
     const storageOpts = cfg.storageOptions as Record<string, unknown> | undefined;
     if (storageOpts !== undefined && storageOpts !== null) {
@@ -145,12 +166,11 @@ export const memoryConfigSchema = {
         throw new Error("storageOptions must be an object");
       }
       storageOptions = {};
-      // Validate all values are strings
-      for (const [key, value] of Object.entries(storageOpts)) {
-        if (typeof value !== "string") {
+      for (const [key, val] of Object.entries(storageOpts)) {
+        if (typeof val !== "string") {
           throw new Error(`storageOptions.${key} must be a string`);
         }
-        storageOptions[key] = resolveEnvVars(value);
+        storageOptions[key] = resolveEnvVars(val);
       }
     }
 
@@ -169,6 +189,7 @@ export const memoryConfigSchema = {
       autoRecall: cfg.autoRecall !== false,
       captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
       ...(storageOptions ? { storageOptions } : {}),
+      smartExtraction: resolveSmartExtraction(cfg.smartExtraction),
     };
   },
   uiHints: {
@@ -220,6 +241,16 @@ export const memoryConfigSchema = {
       sensitive: true,
       advanced: true,
       help: "Storage configuration options (access_key, secret_key, endpoint, etc.); supports ${ENV_VAR} values",
+    },
+    "smartExtraction.enabled": {
+      label: "Smart Extraction",
+      help: "Use LLM to intelligently extract memories instead of regex patterns",
+    },
+    "smartExtraction.model": {
+      label: "Extraction Model",
+      placeholder: DEFAULT_SMART_EXTRACTION_MODEL,
+      help: "OpenAI-compatible chat model for memory extraction",
+      advanced: true,
     },
   },
 };
