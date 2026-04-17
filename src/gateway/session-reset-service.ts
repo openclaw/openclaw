@@ -453,15 +453,21 @@ export async function cleanupSessionBeforeMutation(params: {
   if (acpCloseError) {
     return acpCloseError;
   }
-  for (const sessionKey of new Set(
-    [params.legacyKey, params.canonicalKey, params.target.canonicalKey, params.key].filter(
-      (value): value is string => typeof value === "string" && value.length > 0,
-    ),
-  )) {
-    try {
-      purgeSubagentRunsForSessionKey(sessionKey);
-    } catch {
-      // Best-effort: failure here should not block the mutation flow.
+  // Reset keeps the session key and only rotates the sessionId/transcript, so
+  // the spawnMode="session" marker that sessions_send uses to decide skipA2A
+  // must stay in place. Only delete — which retires the key entirely — should
+  // drop the registry row.
+  if (params.reason === "session-delete") {
+    for (const sessionKey of new Set(
+      [params.legacyKey, params.canonicalKey, params.target.canonicalKey, params.key].filter(
+        (value): value is string => typeof value === "string" && value.length > 0,
+      ),
+    )) {
+      try {
+        purgeSubagentRunsForSessionKey(sessionKey);
+      } catch {
+        // Best-effort: failure here should not block the mutation flow.
+      }
     }
   }
   return undefined;
