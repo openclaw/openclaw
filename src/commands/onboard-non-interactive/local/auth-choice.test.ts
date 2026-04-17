@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import { applyNonInteractiveAuthChoice } from "./auth-choice.js";
 
 const applyNonInteractivePluginProviderChoice = vi.hoisted(() => vi.fn(async () => undefined));
@@ -99,7 +100,9 @@ describe("applyNonInteractiveAuthChoice", () => {
       provider: "default",
       id: "CUSTOM_API_KEY",
     });
-    expect(result?.agents?.defaults?.model?.primary).toBe("custom-models-custom-local/local-large");
+    expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
+      "custom-models-custom-local/local-large",
+    );
     expect(resolveNonInteractiveApiKey).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "custom-models-custom-local",

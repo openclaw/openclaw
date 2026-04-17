@@ -167,9 +167,22 @@ const createTelegramSendPluginRegistration = () => ({
     label: "Telegram",
     actions: {
       describeMessageTool: () => ({ actions: ["send"] }),
-      handleAction: (async ({ action, params, cfg, accountId }: ChannelActionParams) => {
+      handleAction: (async ({
+        action,
+        params,
+        cfg,
+        accountId,
+        agentId,
+        senderIsOwner,
+      }: ChannelActionParams) => {
         return await handleTelegramAction(
-          { action, to: params.to, accountId: accountId ?? undefined },
+          {
+            action,
+            to: params.to,
+            accountId: accountId ?? undefined,
+            agentId,
+            senderIsOwner,
+          },
           cfg,
         );
       }) as unknown as NonNullable<ChannelPlugin["actions"]>["handleAction"],
@@ -185,9 +198,22 @@ const createTelegramPollPluginRegistration = () => ({
     label: "Telegram",
     actions: {
       describeMessageTool: () => ({ actions: ["poll"] }),
-      handleAction: (async ({ action, params, cfg, accountId }: ChannelActionParams) => {
+      handleAction: (async ({
+        action,
+        params,
+        cfg,
+        accountId,
+        agentId,
+        senderIsOwner,
+      }: ChannelActionParams) => {
         return await handleTelegramAction(
-          { action, to: params.to, accountId: accountId ?? undefined },
+          {
+            action,
+            to: params.to,
+            accountId: accountId ?? undefined,
+            agentId,
+            senderIsOwner,
+          },
           cfg,
         );
       }) as unknown as NonNullable<ChannelPlugin["actions"]>["handleAction"],
@@ -294,6 +320,19 @@ describe("messageCommand", () => {
       }),
     );
     expect(sendText.mock.calls[0]?.[0]?.cfg).not.toBe(rawConfig);
+    expect(resolveCommandConfigWithSecrets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: rawConfig,
+        commandName: "message",
+      }),
+    );
+    const call = resolveCommandConfigWithSecrets.mock.calls[0]?.[0] as {
+      targetIds?: Set<string>;
+    };
+    expect(call.targetIds).toBeInstanceOf(Set);
+    expect([...(call.targetIds ?? [])].every((id) => id.startsWith("channels.telegram."))).toBe(
+      true,
+    );
   });
 
   it("keeps local-fallback resolved cfg in outbound adapter sends", async () => {
@@ -330,6 +369,11 @@ describe("messageCommand", () => {
 
   it("defaults channel when only one configured", async () => {
     process.env.TELEGRAM_BOT_TOKEN = "token-abc";
+    testConfig = {
+      agents: {
+        list: [{ id: "alpha" }, { id: "ops", default: true }],
+      },
+    };
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -346,7 +390,13 @@ describe("messageCommand", () => {
       deps,
       runtime,
     );
-    expect(handleTelegramAction).toHaveBeenCalled();
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "ops",
+        senderIsOwner: true,
+      }),
+      expect.any(Object),
+    );
   });
 
   it("defaults channel from the auto-enabled config snapshot when only one channel becomes configured", async () => {
@@ -500,6 +550,7 @@ describe("messageCommand", () => {
         pollQuestion: "Ship it?",
         pollOption: ["Yes", "No"],
         pollDurationSeconds: 120,
+        senderIsOwner: false,
       },
       deps,
       runtime,
@@ -508,6 +559,7 @@ describe("messageCommand", () => {
       expect.objectContaining({
         action: "poll",
         to: "123456789",
+        senderIsOwner: false,
       }),
       expect.any(Object),
     );
