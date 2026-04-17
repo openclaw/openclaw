@@ -516,4 +516,94 @@ describe("anthropic transport stream", () => {
       undefined,
     );
   });
+
+  it("uses adaptive thinking for Claude Sonnet 4.7 transport runs", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "claude-sonnet-4-7",
+        name: "Claude Sonnet 4.7",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"anthropic-messages">,
+      {
+        proxy: {
+          mode: "env-proxy",
+        },
+      },
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "Think about this." }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "sk-ant-api",
+          reasoning: "high",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    expect(anthropicMessagesStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thinking: { type: "adaptive" },
+        output_config: { effort: "high" },
+      }),
+      undefined,
+    );
+  });
+
+  it("forward-compat: uses adaptive thinking for future Claude opus-4-8 model", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "claude-opus-4-8",
+        name: "Claude Opus 4.8",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"anthropic-messages">,
+      {
+        proxy: {
+          mode: "env-proxy",
+        },
+      },
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "Think about the future." }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "sk-ant-api",
+          reasoning: "xhigh",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    expect(anthropicMessagesStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thinking: { type: "adaptive" },
+        output_config: { effort: "xhigh" },
+      }),
+      undefined,
+    );
+  });
 });
