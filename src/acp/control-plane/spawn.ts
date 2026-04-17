@@ -20,6 +20,7 @@ export async function cleanupFailedAcpSpawn(params: {
   shouldDeleteSession: boolean;
   deleteTranscript: boolean;
   runtimeCloseHandle?: AcpSpawnRuntimeCloseHandle;
+  preserveExistingSession?: boolean;
 }): Promise<void> {
   if (params.runtimeCloseHandle) {
     await params.runtimeCloseHandle.runtime
@@ -34,31 +35,33 @@ export async function cleanupFailedAcpSpawn(params: {
       });
   }
 
-  const acpManager = getAcpSessionManager();
-  await acpManager
-    .closeSession({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      reason: "spawn-failed",
-      allowBackendUnavailable: true,
-      requireAcpSession: false,
-    })
-    .catch((err) => {
-      logVerbose(
-        `acp-spawn: manager cleanup close failed for ${params.sessionKey}: ${String(err)}`,
-      );
-    });
+  if (!params.preserveExistingSession) {
+    const acpManager = getAcpSessionManager();
+    await acpManager
+      .closeSession({
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        reason: "spawn-failed",
+        allowBackendUnavailable: true,
+        requireAcpSession: false,
+      })
+      .catch((err) => {
+        logVerbose(
+          `acp-spawn: manager cleanup close failed for ${params.sessionKey}: ${String(err)}`,
+        );
+      });
 
-  await getSessionBindingService()
-    .unbind({
-      targetSessionKey: params.sessionKey,
-      reason: "spawn-failed",
-    })
-    .catch((err) => {
-      logVerbose(
-        `acp-spawn: binding cleanup unbind failed for ${params.sessionKey}: ${String(err)}`,
-      );
-    });
+    await getSessionBindingService()
+      .unbind({
+        targetSessionKey: params.sessionKey,
+        reason: "spawn-failed",
+      })
+      .catch((err) => {
+        logVerbose(
+          `acp-spawn: binding cleanup unbind failed for ${params.sessionKey}: ${String(err)}`,
+        );
+      });
+  }
 
   if (!params.shouldDeleteSession) {
     return;

@@ -1150,6 +1150,7 @@ export async function spawnAcpDirect(
       shouldDeleteSession: sessionCreated && !wasResolved,
       deleteTranscript: !wasResolved,
       runtimeCloseHandle: initializedRuntime,
+      preserveExistingSession: wasResolved,
     });
     return createAcpSpawnFailure({
       status: "error",
@@ -1227,6 +1228,7 @@ export async function spawnAcpDirect(
       sessionKey,
       shouldDeleteSession: !wasResolved,
       deleteTranscript: !wasResolved,
+      preserveExistingSession: wasResolved,
     });
     return createAcpSpawnFailure({
       status: "error",
