@@ -90,7 +90,11 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
       // force=true only overrides when we haven't auto-scrolled yet (initial load).
       // After initial load, respect the user's scroll position.
       const effectiveForce = force && !host.chatHasAutoScrolled;
-      const shouldStick = effectiveForce || (host.chatUserNearBottom && !host.chatFollowLocked);
+      const hasVerticalScrollRange = target.scrollHeight - target.clientHeight > 1;
+      const shouldStick =
+        effectiveForce ||
+        (host.chatUserNearBottom && !host.chatFollowLocked) ||
+        !hasVerticalScrollRange;
 
       if (!shouldStick) {
         // User is scrolled up — flag that new content arrived below.
