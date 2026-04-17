@@ -6,6 +6,8 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
+import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
+import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { withPathResolutionEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
@@ -235,6 +237,9 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       ].join("\n"),
       "utf-8",
     );
+
+    clearPluginDiscoveryCache();
+    clearPluginManifestRegistryCache();
 
     const commands = withPathResolutionEnv(tempHome!.home, { PATH: "" }, () =>
       buildWorkspaceSkillCommandSpecs(workspaceDir, {
