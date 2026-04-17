@@ -2209,6 +2209,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         hookPolicy: entry?.hooks,
         registrationMode,
       });
+      const registrySnapshot = snapshotPluginRegistry(registry);
       const previousAgentHarnesses = listRegisteredAgentHarnesses();
       const previousCompactionProviders = listRegisteredCompactionProviders();
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
@@ -2217,7 +2218,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
       const previousMemoryPromptSupplements = listMemoryPromptSupplements();
       const previousMemoryRuntime = getMemoryRuntime();
-      const registrySnapshot = snapshotPluginRegistry(registry);
 
       try {
         runPluginRegisterSync(register, api);

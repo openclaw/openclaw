@@ -10,10 +10,12 @@ const hoisted = vi.hoisted(() => {
   const sendMessageMock = vi.fn();
   const cancelSessionMock = vi.fn();
   const killSubagentRunAdminMock = vi.fn();
+  const resolveConfiguredSecretInputStringMock = vi.fn();
   return {
     sendMessageMock,
     cancelSessionMock,
     killSubagentRunAdminMock,
+    resolveConfiguredSecretInputStringMock,
   };
 });
 
@@ -30,6 +32,17 @@ vi.mock("../../../src/acp/control-plane/manager.js", () => ({
 vi.mock("../../../src/agents/subagent-control.js", () => ({
   killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
 }));
+
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime-api.js")>();
+  hoisted.resolveConfiguredSecretInputStringMock.mockImplementation(
+    actual.resolveConfiguredSecretInputString,
+  );
+  return {
+    ...actual,
+    resolveConfiguredSecretInputString: hoisted.resolveConfiguredSecretInputStringMock,
+  };
+});
 
 type MockIncomingMessage = IncomingMessage & {
   destroyed?: boolean;
@@ -58,7 +71,7 @@ function createJsonRequest(params: {
     return req;
   }) as MockIncomingMessage["destroy"];
 
-  void Promise.resolve().then(() => {
+  setImmediate(() => {
     req.emit("data", Buffer.from(JSON.stringify(params.body), "utf8"));
     req.emit("end");
   });
@@ -93,6 +106,17 @@ function createHandler(): {
     target,
     secret,
   };
+}
+
+function createHandlerWithTarget(
+  target: TaskFlowWebhookTarget,
+  cfg: OpenClawConfig = {} as OpenClawConfig,
+): ReturnType<typeof createTaskFlowWebhookRequestHandler> {
+  const targetsByPath = new Map<string, TaskFlowWebhookTarget[]>([[target.path, [target]]]);
+  return createTaskFlowWebhookRequestHandler({
+    cfg,
+    targetsByPath,
+  });
 }
 
 async function dispatchJsonRequest(params: {
@@ -134,6 +158,47 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     expect(res.statusCode).toBe(401);
     expect(res.body).toBe("unauthorized");
     expect(target.taskFlow.list()).toEqual([]);
+  });
+
+  it("caches SecretRef resolution across requests for the same route", async () => {
+    const runtime = createRuntimeTaskFlow();
+    const target: TaskFlowWebhookTarget = {
+      routeId: "cached",
+      path: "/plugins/webhooks/cached",
+      secretInput: {
+        source: "env",
+        provider: "default",
+        id: "OPENCLAW_WEBHOOK_SECRET",
+      },
+      secretConfigPath: "plugins.entries.webhooks.routes.cached.secret",
+      defaultControllerId: "webhooks/cached",
+      taskFlow: runtime.bindSession({
+        sessionKey: "agent:main:webhook-cached",
+      }),
+    };
+    hoisted.resolveConfiguredSecretInputStringMock.mockResolvedValue({ value: "shared-secret" });
+    const handler = createHandlerWithTarget(target);
+
+    const first = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      secret: "shared-secret",
+      body: {
+        action: "list_flows",
+      },
+    });
+    const second = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      secret: "shared-secret",
+      body: {
+        action: "list_flows",
+      },
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(hoisted.resolveConfiguredSecretInputStringMock).toHaveBeenCalledTimes(1);
   });
 
   it("creates flows through the bound session and scrubs owner metadata from responses", async () => {

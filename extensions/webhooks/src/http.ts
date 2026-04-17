@@ -667,6 +667,7 @@ export function createTaskFlowWebhookRequestHandler(params: {
   targetsByPath: Map<string, TaskFlowWebhookTarget[]>;
   inFlightLimiter?: WebhookInFlightLimiter;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
+  const secretByTarget = new WeakMap<TaskFlowWebhookTarget, Promise<string | undefined>>();
   const rateLimiter = createFixedWindowRateLimiter({
     windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
     maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
@@ -678,6 +679,20 @@ export function createTaskFlowWebhookRequestHandler(params: {
       maxInFlightPerKey: WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey,
       maxTrackedKeys: WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
     });
+  const resolveTargetSecret = (target: TaskFlowWebhookTarget): Promise<string | undefined> => {
+    const cached = secretByTarget.get(target);
+    if (cached) {
+      return cached;
+    }
+    const pending = resolveConfiguredSecretInputString({
+      config: params.cfg,
+      env: process.env,
+      value: target.secretInput,
+      path: target.secretConfigPath,
+    }).then((resolved) => resolved.value);
+    secretByTarget.set(target, pending);
+    return pending;
+  };
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     return await withResolvedWebhookRequestPipeline({
@@ -708,14 +723,9 @@ export function createTaskFlowWebhookRequestHandler(params: {
             if (presentedSecret.length === 0) {
               return false;
             }
-            const resolvedSecret = await resolveConfiguredSecretInputString({
-              config: params.cfg,
-              env: process.env,
-              value: candidate.secretInput,
-              path: candidate.secretConfigPath,
-            });
+            const resolvedSecret = await resolveTargetSecret(candidate);
             return Boolean(
-              resolvedSecret.value && timingSafeEquals(resolvedSecret.value, presentedSecret),
+              resolvedSecret && timingSafeEquals(resolvedSecret, presentedSecret),
             );
           },
         });
