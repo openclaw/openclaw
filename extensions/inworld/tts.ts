@@ -1,4 +1,5 @@
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const DEFAULT_INWORLD_BASE_URL = "https://api.inworld.ai";
 export const DEFAULT_INWORLD_VOICE_ID = "Dennis";
@@ -43,38 +44,39 @@ export async function inworldTTS(params: {
   timeoutMs?: number;
 }): Promise<Buffer> {
   const baseUrl = normalizeInworldBaseUrl(params.baseUrl);
+  const url = `${baseUrl}/tts/v1/voice:stream`;
+  const requestBody = JSON.stringify({
+    text: params.text,
+    voiceId: params.voiceId ?? DEFAULT_INWORLD_VOICE_ID,
+    modelId: params.modelId ?? DEFAULT_INWORLD_MODEL_ID,
+    audioConfig: {
+      audioEncoding: params.audioEncoding ?? "MP3",
+      ...(params.sampleRateHertz && { sampleRateHertz: params.sampleRateHertz }),
+    },
+    ...(params.temperature != null && { temperature: params.temperature }),
+  });
 
-  const controller = new AbortController();
-  const timeout = params.timeoutMs
-    ? setTimeout(() => controller.abort(), params.timeoutMs)
-    : undefined;
-
-  try {
-    const res = await fetch(`${baseUrl}/tts/v1/voice:stream`, {
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init: {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Basic ${params.apiKey}`,
       },
-      body: JSON.stringify({
-        text: params.text,
-        voiceId: params.voiceId ?? DEFAULT_INWORLD_VOICE_ID,
-        modelId: params.modelId ?? DEFAULT_INWORLD_MODEL_ID,
-        audioConfig: {
-          audioEncoding: params.audioEncoding ?? "MP3",
-          ...(params.sampleRateHertz && { sampleRateHertz: params.sampleRateHertz }),
-        },
-        ...(params.temperature != null && { temperature: params.temperature }),
-      }),
-      signal: controller.signal,
-    });
+      body: requestBody,
+    },
+    timeoutMs: params.timeoutMs,
+    auditContext: "inworld-tts",
+  });
 
-    if (!res.ok) {
-      const errorBody = await res.text().catch(() => "");
-      throw new Error(`Inworld TTS API error (${res.status}): ${errorBody}`);
+  try {
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => "");
+      throw new Error(`Inworld TTS API error (${response.status}): ${errorBody}`);
     }
 
-    const body = await res.text();
+    const body = await response.text();
     const chunks: Buffer[] = [];
 
     for (const line of body.split("\n")) {
@@ -110,9 +112,7 @@ export async function inworldTTS(params: {
 
     return Buffer.concat(chunks);
   } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
+    await release();
   }
 }
 
@@ -124,39 +124,49 @@ export async function listInworldVoices(params: {
 }): Promise<SpeechVoiceOption[]> {
   const baseUrl = normalizeInworldBaseUrl(params.baseUrl);
   const langParam = params.language ? `?languages=${encodeURIComponent(params.language)}` : "";
+  const url = `${baseUrl}/voices/v1/voices${langParam}`;
 
-  const res = await fetch(`${baseUrl}/voices/v1/voices${langParam}`, {
-    headers: {
-      Authorization: `Basic ${params.apiKey}`,
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init: {
+      method: "GET",
+      headers: {
+        Authorization: `Basic ${params.apiKey}`,
+      },
     },
-    ...(params.timeoutMs && { signal: AbortSignal.timeout(params.timeoutMs) }),
+    timeoutMs: params.timeoutMs,
+    auditContext: "inworld-voices",
   });
 
-  if (!res.ok) {
-    const errorBody = await res.text().catch(() => "");
-    throw new Error(`Inworld voices API error (${res.status}): ${errorBody}`);
+  try {
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => "");
+      throw new Error(`Inworld voices API error (${response.status}): ${errorBody}`);
+    }
+
+    const json = (await response.json()) as {
+      voices?: Array<{
+        voiceId?: string;
+        displayName?: string;
+        description?: string;
+        langCode?: string;
+        tags?: string[];
+        source?: string;
+      }>;
+    };
+
+    return Array.isArray(json.voices)
+      ? json.voices
+          .map((voice) => ({
+            id: voice.voiceId?.trim() ?? "",
+            name: voice.displayName?.trim() || undefined,
+            description: voice.description?.trim() || undefined,
+            locale: voice.langCode || undefined,
+            gender: voice.tags?.find((t) => t === "male" || t === "female") || undefined,
+          }))
+          .filter((voice) => voice.id.length > 0)
+      : [];
+  } finally {
+    await release();
   }
-
-  const json = (await res.json()) as {
-    voices?: Array<{
-      voiceId?: string;
-      displayName?: string;
-      description?: string;
-      langCode?: string;
-      tags?: string[];
-      source?: string;
-    }>;
-  };
-
-  return Array.isArray(json.voices)
-    ? json.voices
-        .map((voice) => ({
-          id: voice.voiceId?.trim() ?? "",
-          name: voice.displayName?.trim() || undefined,
-          description: voice.description?.trim() || undefined,
-          locale: voice.langCode || undefined,
-          gender: voice.tags?.find((t) => t === "male" || t === "female") || undefined,
-        }))
-        .filter((voice) => voice.id.length > 0)
-    : [];
 }
