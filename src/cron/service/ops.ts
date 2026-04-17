@@ -215,7 +215,14 @@ export async function start(state: CronServiceState) {
       }
     }
     if (changed) {
-      await persist(state);
+      try {
+        await persist(state);
+      } catch (persistErr) {
+        state.deps.log.error(
+          { err: String(persistErr) },
+          "cron: failed to persist final startup state; arming timer anyway",
+        );
+      }
     }
     armTimer(state);
     state.deps.log.info(
