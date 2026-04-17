@@ -1,12 +1,13 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "../../gateway-child.js";
-import { startQaMockOpenAiServer } from "../../mock-openai-server.js";
+import type { QaProviderMode } from "../../model-selection.js";
+import { startQaProviderServer } from "../../providers/server-runtime.js";
 import type { QaThinkingLevel } from "../../qa-gateway-config.js";
 import { appendLiveLaneIssue } from "./live-lane-helpers.js";
 
 async function stopQaLiveLaneResources(resources: {
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
-  mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | null;
+  mock: { baseUrl: string; stop(): Promise<void> } | null;
 }) {
   const errors: string[] = [];
   try {
@@ -28,9 +29,15 @@ async function stopQaLiveLaneResources(resources: {
 
 export async function startQaLiveLaneGateway(params: {
   repoRoot: string;
-  qaBusBaseUrl: string;
+  transport: {
+    requiredPluginIds: readonly string[];
+    createGatewayConfig: (params: {
+      baseUrl: string;
+    }) => Pick<OpenClawConfig, "channels" | "messages">;
+  };
+  transportBaseUrl: string;
   controlUiAllowedOrigins?: string[];
-  providerMode: "mock-openai" | "live-frontier";
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   fastMode?: boolean;
@@ -39,19 +46,13 @@ export async function startQaLiveLaneGateway(params: {
   controlUiEnabled?: boolean;
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 }) {
-  const mock =
-    params.providerMode === "mock-openai"
-      ? await startQaMockOpenAiServer({
-          host: "127.0.0.1",
-          port: 0,
-        })
-      : null;
+  const mock = await startQaProviderServer(params.providerMode);
   try {
     const gateway = await startQaGatewayChild({
       repoRoot: params.repoRoot,
       providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
-      qaBusBaseUrl: params.qaBusBaseUrl,
-      includeQaChannel: false,
+      transport: params.transport,
+      transportBaseUrl: params.transportBaseUrl,
       controlUiAllowedOrigins: params.controlUiAllowedOrigins,
       providerMode: params.providerMode,
       primaryModel: params.primaryModel,

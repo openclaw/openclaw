@@ -8,13 +8,20 @@ import baseConfig, { rootVitestProjects } from "./vitest/vitest.config.ts";
 import { createContractsVitestConfig } from "./vitest/vitest.contracts.config.ts";
 import { createGatewayVitestConfig } from "./vitest/vitest.gateway.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
+import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
+import unitUiConfig from "./vitest/vitest.unit-ui.config.ts";
 import { createUnitVitestConfig } from "./vitest/vitest.unit.config.ts";
 
 describe("projects vitest config", () => {
   it("defines the native root project list for all non-live Vitest lanes", () => {
     expect(baseConfig.test?.projects).toEqual([...rootVitestProjects]);
+  });
+
+  it("disables vite env-file loading for vitest lanes", () => {
+    expect(baseConfig.envFile).toBe(false);
+    expect(sharedVitestConfig.envFile).toBe(false);
   });
 
   it("keeps root projects on their expected pool defaults", () => {
@@ -43,6 +50,15 @@ describe("projects vitest config", () => {
     expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
     expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
     expect(config.test.deps?.optimizer?.web?.enabled).toBe(true);
+  });
+
+  it("keeps the unit-ui shard aligned with the isolated jsdom setup", () => {
+    expect(unitUiConfig.test?.environment).toBe("jsdom");
+    expect(unitUiConfig.test?.isolate).toBe(true);
+    expect(unitUiConfig.test?.runner).toBeUndefined();
+    const setupFiles = normalizeConfigPaths(unitUiConfig.test?.setupFiles);
+    expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
+    expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
   });
 
   it("keeps the unit lane on the non-isolated runner by default", () => {

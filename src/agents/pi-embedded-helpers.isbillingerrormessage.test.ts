@@ -266,6 +266,18 @@ describe("isCloudflareOrHtmlErrorPage", () => {
     expect(isCloudflareOrHtmlErrorPage(htmlError)).toBe(true);
   });
 
+  it("detects standalone Cloudflare challenge HTML pages", () => {
+    const htmlError = `<!DOCTYPE html>
+<html lang="en-US">
+  <head><title>Just a moment...</title></head>
+  <body>
+    <span id="challenge-error-text">Enable JavaScript and cookies to continue</span>
+    <script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script>
+  </body>
+</html>`;
+    expect(isCloudflareOrHtmlErrorPage(htmlError)).toBe(true);
+  });
+
   it("does not flag non-HTML status lines", () => {
     expect(isCloudflareOrHtmlErrorPage("500 Internal Server Error")).toBe(false);
     expect(isCloudflareOrHtmlErrorPage("429 Too Many Requests")).toBe(false);
@@ -648,6 +660,12 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("410 conversation expired")).toBe("session_expired");
   });
 
+  it("classifies 'No conversation found' from Claude CLI as session_expired", () => {
+    expect(classifyFailoverReason("No conversation found with session ID: abc123")).toBe(
+      "session_expired",
+    );
+  });
+
   it("keeps explicit billing and auth signals on 410 text", () => {
     expect(classifyFailoverReason("HTTP 410: invalid_api_key")).toBe("auth");
     expect(classifyFailoverReason("HTTP 410: authentication failed")).toBe("auth");
@@ -682,6 +700,12 @@ describe("classifyFailoverReason", () => {
         "HTTP 400: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
       ),
     ).toBeNull();
+  });
+
+  it("classifies OpenAI Responses unknown-no-details message as unknown", () => {
+    const message = "Unknown error (no error details in response)";
+    expect(classifyFailoverReason(message)).toBe("unknown");
+    expect(isFailoverErrorMessage(message)).toBe(true);
   });
 
   it("classifies provider-scoped generic upstream messages", () => {
@@ -770,6 +794,14 @@ describe("isFailoverErrorMessage", () => {
       "Unhandled stop reason: network_error",
       "stop reason: network_error",
       "reason: network_error",
+    ]);
+  });
+
+  it("matches Provider finish_reason: network_error as timeout (#61281)", () => {
+    expectTimeoutFailoverSamples([
+      "Provider finish_reason: network_error",
+      "Provider finish_reason: abort",
+      "Provider finish_reason: malformed_response",
     ]);
   });
 
@@ -1175,6 +1207,9 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(classifyProviderRuntimeFailureKind("tool_use.input: Field required")).toBe(
       "replay_invalid",
     );
+    expect(
+      classifyProviderRuntimeFailureKind("401 input item ID does not belong to this connection"),
+    ).toBe("replay_invalid");
   });
 
   it("does not classify generic config errors that mention proxy settings as proxy failures", () => {

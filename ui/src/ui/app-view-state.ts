@@ -29,6 +29,7 @@ import type {
   LogEntry,
   LogLevel,
   ChatModelOverride,
+  ModelAuthStatusResult,
   ModelCatalogEntry,
   NostrProfile,
   PresenceEntry,
@@ -136,6 +137,8 @@ export type AppViewState = {
   dreamingModeSaving: boolean;
   dreamDiaryLoading: boolean;
   dreamDiaryActionLoading: boolean;
+  dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
+  dreamDiaryActionArchivePath: string | null;
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
@@ -146,6 +149,7 @@ export type AppViewState = {
   wikiMemoryPalaceError: string | null;
   wikiMemoryPalace: import("./controllers/dreaming.js").WikiMemoryPalace | null;
   configFormMode: "form" | "raw";
+  configSettingsMode: "quick" | "advanced";
   configSearchQuery: string;
   configActiveSection: string | null;
   configActiveSubsection: string | null;
@@ -271,6 +275,9 @@ export type AppViewState = {
 } & Pick<
   CronState,
   | "cronLoading"
+  | "cronQuickCreateOpen"
+  | "cronQuickCreateStep"
+  | "cronQuickCreateDraft"
   | "cronJobsLoadingMore"
   | "cronJobs"
   | "cronJobsTotal"
@@ -326,6 +333,9 @@ export type AppViewState = {
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;
+    modelAuthStatusLoading: boolean;
+    modelAuthStatusResult: ModelAuthStatusResult | null;
+    modelAuthStatusError: string | null;
     debugLoading: boolean;
     debugStatus: StatusSummary | null;
     debugHealth: HealthSummary | null;
@@ -366,7 +376,7 @@ export type AppViewState = {
     setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
     setBorderRadius: (value: number) => void;
     applySettings: (next: UiSettings) => void;
-    loadOverview: () => Promise<void>;
+    loadOverview: (opts?: { refresh?: boolean }) => Promise<void>;
     loadAssistantIdentity: () => Promise<void>;
     loadCron: () => Promise<void>;
     handleWhatsAppStart: (force: boolean) => Promise<void>;

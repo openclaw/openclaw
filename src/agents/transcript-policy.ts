@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import { shouldPreserveThinkingBlocks } from "../plugins/provider-replay-helpers.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
-import { resolveProviderRuntimePlugin } from "../plugins/provider-runtime.js";
 import type { ProviderReplayPolicy } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
@@ -28,6 +28,21 @@ export type TranscriptPolicy = {
   validateAnthropicTurns: boolean;
   allowSyntheticToolResults: boolean;
 };
+
+export function shouldAllowProviderOwnedThinkingReplay(params: {
+  modelApi?: string | null;
+  policy: Pick<
+    TranscriptPolicy,
+    "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
+  >;
+}): boolean {
+  return (
+    isAnthropicApi(params.modelApi) &&
+    params.policy.validateAnthropicTurns &&
+    params.policy.preserveSignatures &&
+    !params.policy.dropThinkingBlocks
+  );
+}
 
 const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   sanitizeMode: "images-only",

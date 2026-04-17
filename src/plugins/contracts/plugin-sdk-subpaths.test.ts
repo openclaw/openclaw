@@ -346,7 +346,6 @@ describe("plugin-sdk subpath exports", () => {
       "pairing-access",
       "provider-model-definitions",
       "reply-prefix",
-      "secret-input-runtime",
       "secret-input-schema",
       "signal-core",
       "synology-chat",
@@ -643,7 +642,10 @@ describe("plugin-sdk subpath exports", () => {
         resolve(REPO_ROOT, "test"),
       ],
       pattern: /openclaw\/plugin-sdk\/channel-runtime(?=["'])/u,
-      exclude: ["src/plugins/sdk-alias.test.ts"],
+      exclude: [
+        "src/plugins/sdk-alias.test.ts",
+        "src/plugins/contracts/plugin-sdk-root-alias.test.ts",
+      ],
     });
     expect(matches).toEqual([]);
   });

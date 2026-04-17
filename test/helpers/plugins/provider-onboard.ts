@@ -35,13 +35,20 @@ export function expectProviderOnboardPrimaryAndFallbacks(params: {
   applyConfig: (config: OpenClawConfig) => OpenClawConfig;
   modelRef: string;
 }) {
-  const cfg = params.applyConfig({});
-  expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(params.modelRef);
+  expectProviderOnboardPrimaryModel(params);
 
   const cfgWithFallbacks = params.applyConfig(createConfigWithFallbacks());
   expect(resolveAgentModelFallbackValues(cfgWithFallbacks.agents?.defaults?.model)).toEqual([
     ...EXPECTED_FALLBACKS,
   ]);
+}
+
+export function expectProviderOnboardPrimaryModel(params: {
+  applyConfig: (config: OpenClawConfig) => OpenClawConfig;
+  modelRef: string;
+}) {
+  const cfg = params.applyConfig({});
+  expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(params.modelRef);
 }
 
 export function expectProviderOnboardPreservesPrimary(params: {

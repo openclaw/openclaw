@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
+import {
+  assertGatewayAuthNotKnownWeak,
+  assertHooksTokenSeparateFromGatewayAuth,
+  ensureGatewayStartupAuth,
+} from "./startup-auth.js";
 
 const mocks = vi.hoisted(() => ({
   replaceConfigFile: vi.fn(async (_params: { nextConfig: OpenClawConfig }) => {}),
@@ -13,15 +18,6 @@ vi.mock("../config/config.js", async () => {
     replaceConfigFile: mocks.replaceConfigFile,
   };
 });
-
-let assertHooksTokenSeparateFromGatewayAuth: typeof import("./startup-auth.js").assertHooksTokenSeparateFromGatewayAuth;
-let ensureGatewayStartupAuth: typeof import("./startup-auth.js").ensureGatewayStartupAuth;
-
-async function loadFreshStartupAuthModuleForTest() {
-  vi.resetModules();
-  ({ assertHooksTokenSeparateFromGatewayAuth, ensureGatewayStartupAuth } =
-    await import("./startup-auth.js"));
-}
 
 describe("ensureGatewayStartupAuth", () => {
   async function expectEphemeralGeneratedTokenWhenOverridden(cfg: OpenClawConfig) {
@@ -39,10 +35,9 @@ describe("ensureGatewayStartupAuth", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   }
 
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.restoreAllMocks();
     mocks.replaceConfigFile.mockClear();
-    await loadFreshStartupAuthModuleForTest();
   });
 
   async function expectNoTokenGeneration(cfg: OpenClawConfig, mode: string) {
@@ -407,6 +402,139 @@ describe("ensureGatewayStartupAuth", () => {
         } as NodeJS.ProcessEnv,
       }),
     ).rejects.toThrow(/hooks\.token must not match gateway auth token/i);
+  });
+
+  it("rejects the .env.example placeholder token supplied via environment", async () => {
+    await expect(
+      ensureGatewayStartupAuth({
+        cfg: {},
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "change-me-to-a-long-random-token",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).rejects.toThrow(/example placeholder/i);
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects the .env.example placeholder token supplied via config", async () => {
+    await expect(
+      ensureGatewayStartupAuth({
+        cfg: {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: "change-me-to-a-long-random-token",
+            },
+          },
+        },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).rejects.toThrow(/example placeholder/i);
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects the .env.example placeholder password supplied via config", async () => {
+    await expect(
+      ensureGatewayStartupAuth({
+        cfg: {
+          gateway: {
+            auth: {
+              mode: "password",
+              password: "change-me-to-a-strong-password", // pragma: allowlist secret
+            },
+          },
+        },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).rejects.toThrow(/example placeholder/i);
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("accepts any non-placeholder token (negative control)", async () => {
+    await expectResolvedToken({
+      cfg: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "a-legit-random-token-0123456789abcdef",
+          },
+        },
+      },
+      env: {} as NodeJS.ProcessEnv,
+      expectedToken: "a-legit-random-token-0123456789abcdef",
+    });
+  });
+});
+
+describe("assertGatewayAuthNotKnownWeak", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    mocks.replaceConfigFile.mockClear();
+  });
+
+  it("throws on the known-weak token sentinel", () => {
+    expect(() =>
+      assertGatewayAuthNotKnownWeak({
+        mode: "token",
+        modeSource: "config",
+        token: "change-me-to-a-long-random-token",
+        allowTailscale: false,
+      }),
+    ).toThrow(/example placeholder/i);
+  });
+
+  it("throws on the known-weak password sentinel", () => {
+    expect(() =>
+      assertGatewayAuthNotKnownWeak({
+        mode: "password",
+        modeSource: "config",
+        password: "change-me-to-a-strong-password", // pragma: allowlist secret
+        allowTailscale: false,
+      }),
+    ).toThrow(/example placeholder/i);
+  });
+
+  it("ignores whitespace-padded placeholder tokens (trimmed match)", () => {
+    expect(() =>
+      assertGatewayAuthNotKnownWeak({
+        mode: "token",
+        modeSource: "config",
+        token: "  change-me-to-a-long-random-token  ",
+        allowTailscale: false,
+      }),
+    ).toThrow(/example placeholder/i);
+  });
+
+  it("does not throw on an empty token (falls through to generation path)", () => {
+    expect(() =>
+      assertGatewayAuthNotKnownWeak({
+        mode: "token",
+        modeSource: "config",
+        token: "",
+        allowTailscale: false,
+      }),
+    ).not.toThrow();
+  });
+
+  it("does not throw on a real token", () => {
+    expect(() =>
+      assertGatewayAuthNotKnownWeak({
+        mode: "token",
+        modeSource: "config",
+        token: "a-legit-random-token-0123456789abcdef",
+        allowTailscale: false,
+      }),
+    ).not.toThrow();
+  });
+
+  it("does not throw on the none mode", () => {
+    expect(() =>
+      assertGatewayAuthNotKnownWeak({
+        mode: "none",
+        modeSource: "default",
+        allowTailscale: false,
+      }),
+    ).not.toThrow();
   });
 });
 
