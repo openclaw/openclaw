@@ -40,7 +40,9 @@ const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 const DEFAULT_PROVIDER = "claude-cli";
 const DEFAULT_MODEL =
   resolveCliBackendLiveTest(DEFAULT_PROVIDER)?.defaultModelRef ?? "claude-cli/claude-sonnet-4-6";
-const CLI_BACKEND_LIVE_TIMEOUT_MS = 420_000;
+// The cron/MCP live probe now tolerates more cancelled tool-call retries in CI,
+// so the outer test budget needs enough headroom to finish those retries.
+const CLI_BACKEND_LIVE_TIMEOUT_MS = 720_000;
 
 function logCliBackendLiveStep(step: string, details?: Record<string, unknown>): void {
   if (!CLI_DEBUG) {
