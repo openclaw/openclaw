@@ -330,7 +330,11 @@ export function parseDaemonEnvEntries(
     }
     const key = entry.slice(0, eq).trim();
     const value = entry.slice(eq + 1);
-    if (key) result[key] = value;
+    if (!key) {
+      warn?.(`--daemon-env: ignoring malformed entry ${JSON.stringify(entry)} (key is empty)`);
+      continue;
+    }
+    result[key] = value;
   }
   return result;
 }
