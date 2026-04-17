@@ -1,4 +1,4 @@
-import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
+import { readManagedExternalCliCredential } from "./external-cli-sync.js";
 import { resolveEffectiveOAuthCredential as resolveManagedOAuthCredential } from "./oauth-manager.js";
 import type { OAuthCredential } from "./types.js";
 
@@ -10,7 +10,7 @@ export function resolveEffectiveOAuthCredential(params: {
     profileId: params.profileId,
     credential: params.credential,
     readBootstrapCredential: ({ profileId, credential }) =>
-      readExternalCliBootstrapCredential({
+      readManagedExternalCliCredential({
         profileId,
         credential,
       }),
