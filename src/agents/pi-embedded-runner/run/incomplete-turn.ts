@@ -362,6 +362,9 @@ function shouldApplyPlanningOnlyRetryGuard(params: {
   provider?: string;
   modelId?: string;
 }): boolean {
+  if (normalizeLowercaseStringOrEmpty(params.provider ?? "") === "ollama") {
+    return true;
+  }
   return isStrictAgenticSupportedProviderModel({
     provider: params.provider,
     modelId: params.modelId,
