@@ -84,8 +84,10 @@ const NARRATIVE_SYSTEM_PROMPT = [
   "- Output ONLY the diary entry. No preamble, no sign-off, no commentary.",
 ].join("\n");
 
-const NARRATIVE_TIMEOUT_MS = 60_000;
-const NARRATIVE_DELETE_SETTLE_TIMEOUT_MS = 120_000;
+// Narrative generation is best-effort. Keep the timeout short so a stalled
+// diary subagent does not leave the parent dreaming cron job "running" for
+// minutes after the reports have already been written.
+const NARRATIVE_TIMEOUT_MS = 15_000;
 const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
 const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
 const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
@@ -855,8 +857,6 @@ export async function generateAndAppendDreamNarrative(params: {
   });
   const message = buildNarrativePrompt(params.data);
   let runId: string | null = null;
-  let waitStatus: string | null = null;
-
   try {
     runId = await startNarrativeRunOrFallback({
       subagent: params.subagent,
@@ -876,7 +876,6 @@ export async function generateAndAppendDreamNarrative(params: {
       runId,
       timeoutMs: NARRATIVE_TIMEOUT_MS,
     });
-    waitStatus = result.status;
 
     if (result.status !== "ok") {
       params.logger.warn(
@@ -914,24 +913,6 @@ export async function generateAndAppendDreamNarrative(params: {
       `memory-core: narrative generation failed for ${params.data.phase} phase: ${formatErrorMessage(err)}`,
     );
   } finally {
-    if (params.subagent && runId && waitStatus === "timeout") {
-      try {
-        const settle = await params.subagent.waitForRun({
-          runId,
-          timeoutMs: NARRATIVE_DELETE_SETTLE_TIMEOUT_MS,
-        });
-        if (settle.status !== "ok" && settle.status !== "error") {
-          params.logger.warn(
-            `memory-core: narrative cleanup wait ended with status=${settle.status} for ${params.data.phase} phase.`,
-          );
-        }
-      } catch (cleanupWaitErr) {
-        params.logger.warn(
-          `memory-core: narrative cleanup wait failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupWaitErr)}`,
-        );
-      }
-    }
-
     // Guard against subagent becoming unavailable mid-flight (throws TypeError without this).
     if (params.subagent) {
       try {
