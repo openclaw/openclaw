@@ -254,22 +254,23 @@ describe("runEmbeddedPiAgent", () => {
         promptError: new Error("boom"),
       }),
     );
-    await expect(
-      runEmbeddedPiAgent({
-        sessionId: "session:test",
-        sessionKey,
-        sessionFile,
-        workspaceDir,
-        config: cfg,
-        prompt: "boom",
-        provider: "openai",
-        model: "mock-error",
-        timeoutMs: 5_000,
-        agentDir,
-        runId: nextRunId("prompt-error"),
-        enqueue: immediateEnqueue,
-      }),
-    ).rejects.toThrow("boom");
+    const result = await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "boom",
+      provider: "openai",
+      model: "mock-error",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("prompt-error"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toBe("LLM request failed: boom");
 
     try {
       const messages = await readSessionMessages(sessionFile);
@@ -364,5 +365,35 @@ describe("runEmbeddedPiAgent", () => {
     expect(result.payloads?.[0]?.text).toBe(
       "LLM request failed: network connection was interrupted.",
     );
+  });
+
+  it("surfaces prompt errors when an interrupted turn produced no payloads", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+    const sessionKey = nextSessionKey();
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: [],
+        promptError: new Error("socket hang up"),
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("empty-turn-prompt-error"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toBe("LLM request failed: socket hang up");
   });
 });
