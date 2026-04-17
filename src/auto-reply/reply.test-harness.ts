@@ -32,6 +32,18 @@ vi.mock("../agents/pi-embedded.js", () => ({
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
 
+// Mock the unified runtime dispatch too: production code that calls
+// `runAgent` routes through the same test mock as direct
+// `runEmbeddedPiAgent` callers, regardless of whether the runtime
+// selector returns "claude-sdk" or "default". Without this, an agent
+// config that triggers the claude-sdk driver (e.g. after the eventual
+// Phase 3 default flip) would bypass the test mocks entirely and the
+// reply pipeline tests would lose their stub surface.
+vi.mock("../agents/runtime-dispatch.js", () => ({
+  runAgent: (...args: unknown[]) =>
+    replyRuntimeMockState.mocks.runEmbeddedPiAgent(...args),
+}));
+
 vi.mock("../agents/model-catalog.runtime.js", () => ({
   loadModelCatalog: (...args: unknown[]) => replyRuntimeMockState.mocks.loadModelCatalog(...args),
 }));

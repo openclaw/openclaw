@@ -4,14 +4,17 @@
 // (missing agent, missing runtime, `embedded`, `acp`) fall back to
 // `"default"`, which preserves the legacy pi-embedded code path.
 //
-// NOTE ON THE PHASE 3 FLIP: an earlier revision of this file defaulted
-// to `"claude-sdk"` for agents that omit `runtime.type`. That flip was
-// reverted because the auto-reply test harness mocks
-// `runEmbeddedPiAgent`, and routing through `runClaudeSdkAgent` by
-// default bypassed those mocks and regressed ~24 tests. The opt-in
-// driver remains available; flipping the default is deferred until the
-// test harness is updated to mock the unified `runAgent` dispatch seam
-// (tracked under Phase 4 preparation).
+// WHY THE DEFAULT HASN'T FLIPPED YET: the eventual target is to default
+// to claude-sdk, matching the plan's Phase 3 milestone. The auto-reply
+// test suite relies on `vi.mock("../agents/pi-embedded.js")` in ~20
+// test files and integration harnesses to intercept run calls. Flipping
+// the default before those are ported to mock
+// `../agents/runtime-dispatch.js` (where `runAgent` lives) caused ~24
+// regressions because production code started routing through
+// `runClaudeSdkAgent` and bypassed those mocks. The central harness
+// (`src/auto-reply/reply.test-harness.ts`) has been pre-patched to
+// mock both paths, but per-file inline mocks remain; that porting is
+// tracked as Phase 3 follow-up.
 
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
