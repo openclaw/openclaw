@@ -530,7 +530,17 @@ export async function runClaudeSdkAgent(
     });
 
     for await (const message of query) {
-      mirror.writeSdkMessage(message);
+      // Mirror writes are best-effort — a failure to append a single
+      // frame (disk full, EPERM mid-run) shouldn't kill an otherwise
+      // successful SDK iteration. The user-visible reply still arrives;
+      // we just lose that one frame's evidence trail.
+      try {
+        mirror.writeSdkMessage(message);
+      } catch (writeErr) {
+        log.warn(
+          `[claude-sdk] mirror write failed (continuing run): ${(writeErr as Error).message}`,
+        );
+      }
       const m = message as unknown as {
         type?: string;
         message?: { content?: unknown };
@@ -571,6 +581,15 @@ export async function runClaudeSdkAgent(
 
       if (m.type === "result" && typeof m.stop_reason === "string") {
         stopReason = m.stop_reason;
+        // Mirror the abort signal back to the run-level `aborted` flag
+        // when the SDK's own result frame says we stopped via abort.
+        // Without this, an SDK-detected abort (e.g., subprocess exit on
+        // signal) would leave `aborted` false and downstream
+        // consumers reading `meta.aborted` would misclassify the run
+        // as a clean completion.
+        if (/abort/i.test(stopReason)) {
+          aborted = true;
+        }
       }
 
       if (onAgentEvent && typeof m.type === "string") {
