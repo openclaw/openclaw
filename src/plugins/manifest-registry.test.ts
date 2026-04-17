@@ -656,6 +656,18 @@ describe("loadPluginManifestRegistry", () => {
       },
     });
 
+    const tavilyDir = makeTempDir();
+    writeManifest(tavilyDir, {
+      id: "tavily",
+      configSchema: { type: "object" },
+      contracts: {
+        webSearchProviders: ["tavily"],
+      },
+      configContracts: {
+        compatibilityRuntimePaths: ["tools.web.search.apiKey"],
+      },
+    });
+
     const otherDir = makeTempDir();
     writeManifest(otherDir, {
       id: "google",
@@ -669,6 +681,11 @@ describe("loadPluginManifestRegistry", () => {
       createPluginCandidate({
         idHint: "brave",
         rootDir: dir,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "tavily",
+        rootDir: tavilyDir,
         origin: "bundled",
       }),
       createPluginCandidate({
@@ -688,7 +705,7 @@ describe("loadPluginManifestRegistry", () => {
             ),
         )
         .map((plugin) => plugin.id),
-    ).toEqual(["brave"]);
+    ).toEqual(["brave", "tavily"]);
   });
   it("does not promote legacy top-level capability fields into contracts", () => {
     const dir = makeTempDir();
