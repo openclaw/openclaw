@@ -72,6 +72,8 @@ export async function mergeHybridResults(params: {
     startLine: number;
     endLine: number;
     score: number;
+    vectorScore: number;
+    textScore: number;
     snippet: string;
     source: HybridSource;
   }>
@@ -131,6 +133,8 @@ export async function mergeHybridResults(params: {
       startLine: entry.startLine,
       endLine: entry.endLine,
       score,
+      vectorScore: entry.vectorScore,
+      textScore: entry.textScore,
       snippet: entry.snippet,
       source: entry.source,
     };
