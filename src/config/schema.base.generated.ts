@@ -19608,7 +19608,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   "Rotate individual transcript `.jsonl` files when they exceed this size (e.g. `10mb`). When exceeded, the older portion is archived and the most recent `transcriptMaxLines` lines are kept. Default: disabled (null).",
               },
               transcriptMaxLines: {
-                type: "number",
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
                 title: "Transcript Max Lines",
                 description:
                   "Maximum number of lines to keep per transcript `.jsonl` file after rotation. The most recent N lines are preserved; older lines are archived. Default: disabled (null).",
@@ -26218,7 +26220,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "session.maintenance.transcriptMaxLines": {
       label: "Transcript Max Lines",
       help: "Maximum number of lines to keep per transcript `.jsonl` file after rotation. The most recent N lines are preserved; older lines are archived. Default: disabled (null).",
-      tags: ["storage"],
+      tags: ["performance", "storage"],
     },
     "cron.enabled": {
       label: "Cron Enabled",
