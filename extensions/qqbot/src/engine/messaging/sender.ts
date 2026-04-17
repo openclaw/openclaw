@@ -20,7 +20,7 @@
  */
 
 import os from "node:os";
-import { ApiClient } from "../api/client.js";
+import { ApiClient } from "../api/api-client.js";
 import { MediaApi as MediaApiClass } from "../api/media.js";
 import type { Credentials } from "../api/messages.js";
 import { MessageApi as MessageApiClass } from "../api/messages.js";
@@ -304,7 +304,7 @@ export async function withTokenRetry<T>(
   } catch (err) {
     const errMsg = formatErrorMessage(err);
     if (errMsg.includes("401") || errMsg.includes("token") || errMsg.includes("access_token")) {
-      log?.info?.(`[sender:${accountId ?? creds.appId}] Token may be expired, refreshing...`);
+      log?.debug?.(`[qqbot:${accountId ?? creds.appId}] Token may be expired, refreshing...`);
       clearTokenCache(creds.appId);
       const newToken = await getAccessToken(creds.appId, creds.clientSecret);
       return await sendFn(newToken);

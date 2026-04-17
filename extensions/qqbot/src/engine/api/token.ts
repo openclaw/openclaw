@@ -68,7 +68,7 @@ export class TokenManager {
     // Singleflight: reuse an in-progress fetch.
     let pending = this.fetchPromises.get(normalizedId);
     if (pending) {
-      this.logger?.info?.(`[token:${normalizedId}] Fetch in progress, reusing promise`);
+      this.logger?.debug?.(`[qqbot:token:${normalizedId}] Fetch in progress, reusing promise`);
       return pending;
     }
 
@@ -88,10 +88,10 @@ export class TokenManager {
   clearCache(appId?: string): void {
     if (appId) {
       this.cache.delete(appId.trim());
-      this.logger?.info?.(`[token:${appId}] Cache cleared`);
+      this.logger?.debug?.(`[qqbot:token:${appId}] Cache cleared`);
     } else {
       this.cache.clear();
-      this.logger?.info?.(`[token] All caches cleared`);
+      this.logger?.debug?.(`[token] All caches cleared`);
     }
   }
 
@@ -119,7 +119,7 @@ export class TokenManager {
     options?: BackgroundRefreshOptions,
   ): void {
     if (this.refreshControllers.has(appId)) {
-      this.logger?.info?.(`[token:${appId}] Background refresh already running`);
+      this.logger?.info?.(`[qqbot:token:${appId}] Background refresh already running`);
       return;
     }
 
@@ -135,7 +135,7 @@ export class TokenManager {
     const { signal } = controller;
 
     const loop = async () => {
-      this.logger?.info?.(`[token:${appId}] Background refresh started`);
+      this.logger?.info?.(`[qqbot:token:${appId}] Background refresh started`);
 
       while (!signal.aborted) {
         try {
@@ -150,7 +150,7 @@ export class TokenManager {
               minRefreshIntervalMs,
             );
             this.logger?.debug?.(
-              `[token:${appId}] Next refresh in ${Math.round(refreshIn / 1000)}s`,
+              `[qqbot:token:${appId}] Next refresh in ${Math.round(refreshIn / 1000)}s`,
             );
             await this.abortableSleep(refreshIn, signal);
           } else {
@@ -161,19 +161,19 @@ export class TokenManager {
             break;
           }
           this.logger?.error?.(
-            `[token:${appId}] Background refresh failed: ${formatErrorMessage(err)}`,
+            `[qqbot:token:${appId}] Background refresh failed: ${formatErrorMessage(err)}`,
           );
           await this.abortableSleep(retryDelayMs, signal);
         }
       }
 
       this.refreshControllers.delete(appId);
-      this.logger?.info?.(`[token:${appId}] Background refresh stopped`);
+      this.logger?.info?.(`[qqbot:token:${appId}] Background refresh stopped`);
     };
 
     loop().catch((err) => {
       this.refreshControllers.delete(appId);
-      this.logger?.error?.(`[token:${appId}] Background refresh crashed: ${err}`);
+      this.logger?.error?.(`[qqbot:token:${appId}] Background refresh crashed: ${err}`);
     });
   }
 
@@ -204,7 +204,7 @@ export class TokenManager {
   // ---- Internal ----
 
   private async doFetchToken(appId: string, clientSecret: string): Promise<string> {
-    this.logger?.info?.(`[token:${appId}] >>> POST ${TOKEN_URL}`);
+    this.logger?.debug?.(`[qqbot:token:${appId}] >>> POST ${TOKEN_URL}`);
 
     let response: Response;
     try {
@@ -217,22 +217,22 @@ export class TokenManager {
         body: JSON.stringify({ appId, clientSecret }),
       });
     } catch (err) {
-      this.logger?.error?.(`[token:${appId}] Network error: ${formatErrorMessage(err)}`);
+      this.logger?.error?.(`[qqbot:token:${appId}] Network error: ${formatErrorMessage(err)}`);
       throw new Error(`Network error getting access_token: ${formatErrorMessage(err)}`, {
         cause: err,
       });
     }
 
     const traceId = response.headers.get("x-tps-trace-id") ?? "";
-    this.logger?.info?.(
-      `[token:${appId}] <<< ${response.status}${traceId ? ` | TraceId: ${traceId}` : ""}`,
+    this.logger?.debug?.(
+      `[qqbot:token:${appId}] <<< ${response.status}${traceId ? ` | TraceId: ${traceId}` : ""}`,
     );
 
     let data: { access_token?: string; expires_in?: number };
     try {
       const rawBody = await response.text();
       const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
-      this.logger?.debug?.(`[token:${appId}] <<< Body: ${logBody}`);
+      this.logger?.debug?.(`[qqbot:token:${appId}] <<< Body: ${logBody}`);
       data = JSON.parse(rawBody);
     } catch (err) {
       throw new Error(`Failed to parse access_token response: ${formatErrorMessage(err)}`, {
@@ -246,8 +246,8 @@ export class TokenManager {
 
     const expiresAt = Date.now() + (data.expires_in ?? 7200) * 1000;
     this.cache.set(appId, { token: data.access_token, expiresAt, appId });
-    this.logger?.info?.(
-      `[token:${appId}] Cached, expires at: ${new Date(expiresAt).toISOString()}`,
+    this.logger?.debug?.(
+      `[qqbot:token:${appId}] Cached, expires at: ${new Date(expiresAt).toISOString()}`,
     );
 
     return data.access_token;

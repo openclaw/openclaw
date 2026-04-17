@@ -67,7 +67,6 @@ export class ApiClient {
     options?: RequestOptions,
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
-    const reqTs = Date.now();
 
     const headers: Record<string, string> = {
       Authorization: `QQBot ${accessToken}`,
@@ -93,15 +92,15 @@ export class ApiClient {
     }
 
     // Debug logging with optional body redaction.
-    this.logger?.info?.(`[core-api][${reqTs}] >>> ${method} ${url} (timeout: ${timeout}ms)`);
-    if (body && this.logger?.info) {
+    this.logger?.debug?.(`[qqbot:api] >>> ${method} ${url} (timeout: ${timeout}ms)`);
+    if (body && this.logger?.debug) {
       const logBody = { ...(body as Record<string, unknown>) };
       for (const key of options?.redactBodyKeys ?? ["file_data"]) {
         if (typeof logBody[key] === "string") {
           logBody[key] = `<redacted ${logBody[key].length} chars>`;
         }
       }
-      this.logger.info(`[core-api][${reqTs}] >>> Body: ${JSON.stringify(logBody)}`);
+      this.logger.debug(`[qqbot:api] >>> Body: ${JSON.stringify(logBody)}`);
     }
 
     let res: Response;
@@ -110,10 +109,10 @@ export class ApiClient {
     } catch (err) {
       clearTimeout(timeoutId);
       if (err instanceof Error && err.name === "AbortError") {
-        this.logger?.error?.(`[core-api][${reqTs}] <<< Timeout after ${timeout}ms`);
+        this.logger?.error?.(`[qqbot:api] <<< Timeout after ${timeout}ms`);
         throw new ApiError(`Request timeout [${path}]: exceeded ${timeout}ms`, 0, path);
       }
-      this.logger?.error?.(`[core-api][${reqTs}] <<< Network error: ${formatErrorMessage(err)}`);
+      this.logger?.error?.(`[qqbot:api] <<< Network error: ${formatErrorMessage(err)}`);
       throw new ApiError(`Network error [${path}]: ${formatErrorMessage(err)}`, 0, path);
     } finally {
       clearTimeout(timeoutId);
@@ -122,7 +121,7 @@ export class ApiClient {
     // Log response status and trace ID.
     const traceId = res.headers.get("x-tps-trace-id") ?? "";
     this.logger?.info?.(
-      `[core-api][${reqTs}] <<< Status: ${res.status} ${res.statusText}${traceId ? ` | TraceId: ${traceId}` : ""}`,
+      `[qqbot:api] <<< Status: ${res.status} ${res.statusText}${traceId ? ` | TraceId: ${traceId}` : ""}`,
     );
 
     let rawBody: string;
@@ -135,7 +134,7 @@ export class ApiClient {
         path,
       );
     }
-    this.logger?.debug?.(`[core-api][${reqTs}] <<< Body: ${rawBody}`);
+    this.logger?.debug?.(`[qqbot:api] <<< Body: ${rawBody}`);
 
     // Detect non-JSON responses (HTML gateway errors, CDN rate-limit pages).
     const contentType = res.headers.get("content-type") ?? "";

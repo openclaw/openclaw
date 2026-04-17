@@ -118,7 +118,7 @@ export async function processAttachments(
       if (wavLocalPath) {
         localPath = wavLocalPath;
         audioPath = wavLocalPath;
-        log?.info(
+        log?.debug?.(
           `${prefix} Voice attachment: ${att.filename}, downloaded WAV directly (skip SILK→WAV)`,
         );
       } else {
@@ -154,10 +154,10 @@ export async function processAttachments(
 
       if (localPath) {
         if (att.content_type?.startsWith("image/")) {
-          log?.info(`${prefix} Downloaded attachment to: ${localPath}`);
+          log?.debug?.(`${prefix} Downloaded attachment to: ${localPath}`);
           return { localPath, type: "image" as const, contentType: att.content_type, meta };
         } else if (isVoice) {
-          log?.info(`${prefix} Downloaded attachment to: ${localPath}`);
+          log?.debug?.(`${prefix} Downloaded attachment to: ${localPath}`);
           return processVoiceAttachment(
             localPath,
             audioPath,
@@ -169,7 +169,7 @@ export async function processAttachments(
             prefix,
           );
         } else {
-          log?.info(`${prefix} Downloaded attachment to: ${localPath}`);
+          log?.debug?.(`${prefix} Downloaded attachment to: ${localPath}`);
           return { localPath, type: "other" as const, filename: att.filename, meta };
         }
       } else {
@@ -299,12 +299,12 @@ async function processVoiceAttachment(
   const sttCfg = resolveSTTConfig(cfg as Record<string, unknown>);
   if (!sttCfg) {
     if (asrReferText) {
-      log?.info(
+      log?.debug?.(
         `${prefix} Voice attachment: ${att.filename} (STT not configured, using asr_refer_text fallback)`,
       );
       return { localPath, type: "voice", transcript: asrReferText, transcriptSource: "asr", meta };
     }
-    log?.info(
+    log?.debug?.(
       `${prefix} Voice attachment: ${att.filename} (STT not configured, skipping transcription)`,
     );
     return {
@@ -318,12 +318,12 @@ async function processVoiceAttachment(
 
   // Convert SILK input to WAV before STT when necessary.
   if (!audioPath) {
-    log?.info(`${prefix} Voice attachment: ${att.filename}, converting SILK→WAV...`);
+    log?.debug?.(`${prefix} Voice attachment: ${att.filename}, converting SILK→WAV...`);
     try {
       const wavResult = await getAudioAdapter().convertSilkToWav(localPath, downloadDir);
       if (wavResult) {
         audioPath = wavResult.wavPath;
-        log?.info(
+        log?.debug?.(
           `${prefix} Voice converted: ${wavResult.wavPath} (${getAudioAdapter().formatDuration(wavResult.duration)})`,
         );
       } else {
@@ -358,14 +358,14 @@ async function processVoiceAttachment(
   try {
     const transcript = await transcribeAudio(audioPath, cfg as Record<string, unknown>);
     if (transcript) {
-      log?.info(`${prefix} STT transcript: ${transcript.slice(0, 100)}...`);
+      log?.debug?.(`${prefix} STT transcript: ${transcript.slice(0, 100)}...`);
       return { localPath, type: "voice", transcript, transcriptSource: "stt", meta };
     }
     if (asrReferText) {
-      log?.info(`${prefix} STT returned empty result, using asr_refer_text fallback`);
+      log?.debug?.(`${prefix} STT returned empty result, using asr_refer_text fallback`);
       return { localPath, type: "voice", transcript: asrReferText, transcriptSource: "asr", meta };
     }
-    log?.info(`${prefix} STT returned empty result`);
+    log?.debug?.(`${prefix} STT returned empty result`);
     return {
       localPath,
       type: "voice",

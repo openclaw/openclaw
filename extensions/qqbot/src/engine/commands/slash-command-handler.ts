@@ -85,7 +85,7 @@ export async function trySlashCommand(
       return "enqueue";
     }
 
-    log?.info(`[qqbot:${account.accountId}] Slash command matched: ${content}`);
+    log?.debug?.(`[qqbot:${account.accountId}] Slash command matched: ${content}`);
 
     const isFileResult = typeof reply === "object" && reply !== null && "filePath" in reply;
     const replyText = isFileResult ? (reply as { text: string }).text : reply;

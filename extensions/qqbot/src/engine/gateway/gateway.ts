@@ -82,7 +82,9 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
 
   // ---- 4. API config ----
   initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
-  log?.info(`[qqbot:${account.accountId}] API config: markdownSupport=${account.markdownSupport}`);
+  log?.debug?.(
+    `[qqbot:${account.accountId}] API config: markdownSupport=${account.markdownSupport}`,
+  );
 
   // ---- 5. Outbound refIdx cache hook ----
   onMessageSent(account.appId, (refIdx, meta) => {

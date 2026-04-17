@@ -179,7 +179,7 @@ export class GatewayConnection {
     try {
       this.cleanup();
       if (this.shouldRefreshToken) {
-        log?.info(`[qqbot:${account.accountId}] Refreshing token...`);
+        log?.debug?.(`[qqbot:${account.accountId}] Refreshing token...`);
         clearTokenCache(account.appId);
         this.shouldRefreshToken = false;
       }
@@ -241,6 +241,9 @@ export class GatewayConnection {
               break;
 
             case GatewayOp.DISPATCH: {
+              log?.debug?.(
+                `[qqbot:${account.accountId}] Dispatch event: t=${t}, d=${JSON.stringify(d)}`,
+              );
               const result = dispatchEvent(t ?? "", d, account.accountId, log);
               if (result.action === "ready") {
                 this.sessionId = result.sessionId;

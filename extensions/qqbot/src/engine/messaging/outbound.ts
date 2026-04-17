@@ -74,7 +74,6 @@ import {
 import { ReplyLimiter, type ReplyLimitResult } from "./reply-limiter.js";
 import {
   sendText as senderSendText,
-  sendProactiveText,
   sendImage as senderSendImage,
   sendVoiceMessage as senderSendVoice,
   sendVideoMessage as senderSendVideo,
@@ -91,16 +90,6 @@ const replyLimiter = new ReplyLimiter();
 // Limit passive replies per message_id within the QQ Bot reply window.
 // Delegated to core/messaging/reply-limiter.ts for cross-version sharing.
 const MESSAGE_REPLY_LIMIT = 4;
-
-type QQMessageResult = {
-  ext_info?: {
-    ref_idx?: string;
-  };
-};
-
-function getRefIdx(result: QQMessageResult): string | undefined {
-  return result.ext_info?.ref_idx;
-}
 
 /** Result of the passive-reply limit check. */
 export type { ReplyLimitResult };
@@ -1079,53 +1068,6 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   }
 }
 
-/** Send a proactive message without a replyToId. */
-export async function sendProactiveMessage(
-  account: GatewayAccount,
-  to: string,
-  text: string,
-): Promise<OutboundResult> {
-  const timestamp = new Date().toISOString();
-
-  if (!account.appId || !account.clientSecret) {
-    const errorMsg = "QQBot not configured (missing appId or clientSecret)";
-    debugError(`[${timestamp}] [qqbot] sendProactiveMessage: ${errorMsg}`);
-    return { channel: "qqbot", error: errorMsg };
-  }
-
-  debugLog(
-    `[${timestamp}] [qqbot] sendProactiveMessage: starting, to=${to}, text length=${text.length}, accountId=${account.accountId}`,
-  );
-
-  try {
-    const target = parseTarget(to);
-    const creds = accountToCreds(account);
-    const deliveryTarget: DeliveryTarget = {
-      type: target.type === "channel" ? "channel" : target.type,
-      id: target.id,
-    };
-    debugLog(`[${timestamp}] [qqbot] sendProactiveMessage: target=${target.type}:${target.id}`);
-
-    const result = await sendProactiveText(deliveryTarget, text, creds);
-    debugLog(
-      `[${timestamp}] [qqbot] sendProactiveMessage: sent successfully, messageId=${result.id}`,
-    );
-    return {
-      channel: "qqbot",
-      messageId: result.id,
-      timestamp: result.timestamp,
-      refIdx: getRefIdx(result),
-    };
-  } catch (err) {
-    const errorMessage = formatErrorMessage(err);
-    debugError(`[${timestamp}] [qqbot] sendProactiveMessage: error: ${errorMessage}`);
-    debugError(
-      `[${timestamp}] [qqbot] sendProactiveMessage: error stack: ${err instanceof Error ? err.stack : "No stack trace"}`,
-    );
-    return { channel: "qqbot", error: errorMessage };
-  }
-}
-
 /** Send rich media, auto-routing by media type and source. */
 export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResult> {
   const { to, text, replyToId, account, mimeType } = ctx;
@@ -1282,7 +1224,7 @@ export async function sendCronMessage(
       );
 
       // Send the reminder content.
-      const result = await sendProactiveMessage(account, targetTo, payload.content);
+      const result = await sendText({ account, to: targetTo, text: payload.content });
 
       if (result.error) {
         debugError(
@@ -1298,5 +1240,5 @@ export async function sendCronMessage(
 
   // Fall back to plain text handling when the payload is not structured.
   debugLog(`[${timestamp}] [qqbot] sendCronMessage: plain text message, sending to ${to}`);
-  return await sendProactiveMessage(account, to, message);
+  return await sendText({ account, to, text: message });
 }

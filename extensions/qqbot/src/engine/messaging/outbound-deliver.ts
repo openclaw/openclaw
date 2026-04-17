@@ -304,7 +304,7 @@ async function sendVoiceWithTimeout(
     const result = await Promise.race([
       mediaSender.sendVoice(target, voicePath, uploadFormats, transcodeEnabled).then((r) => {
         if (ac.signal.aborted) {
-          log?.info(`${prefix} sendVoice completed after timeout, suppressing late delivery`);
+          log?.debug?.(`${prefix} sendVoice completed after timeout, suppressing late delivery`);
           return {
             channel: "qqbot",
             error: "Voice send completed after timeout (suppressed)",
@@ -364,7 +364,7 @@ export async function parseAndSendMediaTags(
     },
     {} as Record<string, number>,
   );
-  log?.info(
+  log?.debug?.(
     `${prefix} Detected media tags: ${Object.entries(tagCounts)
       .map(([k, v]) => `${v} <${k}>`)
       .join(", ")}`,
@@ -402,7 +402,7 @@ export async function parseAndSendMediaTags(
       };
       const itemType = typeMap[tagName] ?? "image";
       sendQueue.push({ type: itemType, content: mediaPath });
-      log?.info(`${prefix} Found ${itemType} in <${tagName}>: ${mediaPath}`);
+      log?.debug?.(`${prefix} Found ${itemType} in <${tagName}>: ${mediaPath}`);
     }
 
     lastIndex = match.index + match[0].length;
@@ -416,7 +416,7 @@ export async function parseAndSendMediaTags(
     sendQueue.push({ type: "text", content: filterInternalMarkers(textAfter) });
   }
 
-  log?.info(`${prefix} Send queue: ${sendQueue.map((item) => item.type).join(" -> ")}`);
+  log?.debug?.(`${prefix} Send queue: ${sendQueue.map((item) => item.type).join(" -> ")}`);
 
   const mediaTarget = resolveMediaTargetContext(event, account, prefix);
 
@@ -502,7 +502,7 @@ export async function sendPlainReply(
     if (isHttpUrl || isDataUrl) {
       if (!collectedImageUrls.includes(url)) {
         collectedImageUrls.push(url);
-        log?.info(
+        log?.debug?.(
           `${prefix} Collected ${isDataUrl ? "Base64" : "media URL"}: ${isDataUrl ? `(length: ${url.length})` : url.slice(0, 80) + "..."}`,
         );
       }
@@ -511,7 +511,7 @@ export async function sendPlainReply(
     if (isLocalFilePath(url)) {
       if (!localMediaToSend.includes(url)) {
         localMediaToSend.push(url);
-        log?.info(`${prefix} Collected local media for auto-routing: ${url}`);
+        log?.debug?.(`${prefix} Collected local media for auto-routing: ${url}`);
       }
       return true;
     }
@@ -535,11 +535,11 @@ export async function sendPlainReply(
     if (url && !collectedImageUrls.includes(url)) {
       if (url.startsWith("http://") || url.startsWith("https://")) {
         collectedImageUrls.push(url);
-        log?.info(`${prefix} Extracted HTTP image from markdown: ${url.slice(0, 80)}...`);
+        log?.debug?.(`${prefix} Extracted HTTP image from markdown: ${url.slice(0, 80)}...`);
       } else if (isLocalFilePath(url)) {
         if (!localMediaToSend.includes(url)) {
           localMediaToSend.push(url);
-          log?.info(`${prefix} Collected local media from markdown for auto-routing: ${url}`);
+          log?.debug?.(`${prefix} Collected local media from markdown for auto-routing: ${url}`);
         }
       }
     }
@@ -553,12 +553,12 @@ export async function sendPlainReply(
     const url = m[1];
     if (url && !collectedImageUrls.includes(url)) {
       collectedImageUrls.push(url);
-      log?.info(`${prefix} Extracted bare image URL: ${url.slice(0, 80)}...`);
+      log?.debug?.(`${prefix} Extracted bare image URL: ${url.slice(0, 80)}...`);
     }
   }
 
   const useMarkdown = account.markdownSupport;
-  log?.info(`${prefix} Markdown mode: ${useMarkdown}, images: ${collectedImageUrls.length}`);
+  log?.debug?.(`${prefix} Markdown mode: ${useMarkdown}, images: ${collectedImageUrls.length}`);
 
   let textWithoutImages = filterInternalMarkers(replyText);
 
@@ -597,7 +597,7 @@ export async function sendPlainReply(
 
   // Send local media collected from payload.mediaUrl or markdown local paths.
   if (localMediaToSend.length > 0) {
-    log?.info(
+    log?.debug?.(
       `${prefix} Sending ${localMediaToSend.length} local media via sendMedia auto-routing`,
     );
     await autoMediaBatch({
@@ -617,7 +617,7 @@ export async function sendPlainReply(
 
   // Forward media gathered during the tool phase.
   if (toolMediaUrls.length > 0) {
-    log?.info(
+    log?.debug?.(
       `${prefix} Forwarding ${toolMediaUrls.length} tool-collected media URL(s) after block deliver`,
     );
     await autoMediaBatch({
@@ -660,13 +660,13 @@ async function sendMarkdownReply(
       httpImageUrls.push(url);
     }
   }
-  log?.info(
+  log?.debug?.(
     `${prefix} Image classification: httpUrls=${httpImageUrls.length}, base64=${base64ImageUrls.length}`,
   );
 
   // Send Base64 images via Rich Media API.
   if (base64ImageUrls.length > 0) {
-    log?.info(`${prefix} Sending ${base64ImageUrls.length} image(s) via Rich Media API...`);
+    log?.debug?.(`${prefix} Sending ${base64ImageUrls.length} image(s) via Rich Media API...`);
     for (const imageUrl of base64ImageUrls) {
       try {
         const target = buildDeliveryTarget(event);
@@ -676,9 +676,11 @@ async function sendMarkdownReply(
             await senderSendImage(target, imageUrl, creds, { msgId: event.messageId });
           });
         } else {
-          log?.info(`${prefix} ${target.type} does not support rich media, skipping Base64 image`);
+          log?.debug?.(
+            `${prefix} ${target.type} does not support rich media, skipping Base64 image`,
+          );
         }
-        log?.info(
+        log?.debug?.(
           `${prefix} Sent Base64 image via Rich Media API (size: ${imageUrl.length} chars)`,
         );
       } catch (imgErr) {
@@ -696,11 +698,13 @@ async function sendMarkdownReply(
       try {
         const size = await getImageSize(url);
         imagesToAppend.push(formatQQBotMarkdownImage(url, size));
-        log?.info(
+        log?.debug?.(
           `${prefix} Formatted HTTP image: ${size ? `${size.width}x${size.height}` : "default size"} - ${url.slice(0, 60)}...`,
         );
       } catch (err) {
-        log?.info(`${prefix} Failed to get image size, using default: ${formatErrorMessage(err)}`);
+        log?.debug?.(
+          `${prefix} Failed to get image size, using default: ${formatErrorMessage(err)}`,
+        );
         imagesToAppend.push(formatQQBotMarkdownImage(url, null));
       }
     }
@@ -716,11 +720,11 @@ async function sendMarkdownReply(
       try {
         const size = await getImageSize(imgUrl);
         result = result.replace(fullMatch, formatQQBotMarkdownImage(imgUrl, size));
-        log?.info(
+        log?.debug?.(
           `${prefix} Updated image with size: ${size ? `${size.width}x${size.height}` : "default"} - ${imgUrl.slice(0, 60)}...`,
         );
       } catch (err) {
-        log?.info(
+        log?.debug?.(
           `${prefix} Failed to get image size for existing md, using default: ${formatErrorMessage(err)}`,
         );
         result = result.replace(fullMatch, formatQQBotMarkdownImage(imgUrl, null));

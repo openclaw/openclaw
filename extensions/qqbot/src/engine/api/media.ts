@@ -14,7 +14,7 @@ import {
   type MessageResponse,
   type EngineLogger,
 } from "../types.js";
-import { ApiClient } from "./client.js";
+import { ApiClient } from "./api-client.js";
 import { withRetry, UPLOAD_RETRY_POLICY } from "./retry.js";
 import { mediaUploadPath, getNextMsgSeq } from "./routes.js";
 import { TokenManager } from "./token.js";

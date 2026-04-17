@@ -158,12 +158,12 @@ export async function handleStructuredPayload(
   );
 
   if (isCronReminderPayload(parsedPayload)) {
-    log?.info(`[qqbot:${account.accountId}] Processing cron_reminder payload`);
+    log?.debug?.(`[qqbot:${account.accountId}] Processing cron_reminder payload`);
     const cronMessage = encodePayloadForCron(parsedPayload);
     const confirmText = `⏰ Reminder scheduled. It will be sent at the configured time: "${parsedPayload.content}"`;
     try {
       await sendTextToTarget(ctx, confirmText);
-      log?.info(
+      log?.debug?.(
         `[qqbot:${account.accountId}] Cron reminder confirmation sent, cronMessage: ${cronMessage}`,
       );
     } catch (err) {
@@ -176,7 +176,7 @@ export async function handleStructuredPayload(
   }
 
   if (isMediaPayload(parsedPayload)) {
-    log?.info(
+    log?.debug?.(
       `[qqbot:${account.accountId}] Processing media payload, mediaType: ${parsedPayload.mediaType}`,
     );
 
@@ -355,7 +355,7 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
         return;
       }
       imageUrl = `data:${mimeType};base64,${base64Data}`;
-      log?.info(
+      log?.debug?.(
         `[qqbot:${account.accountId}] Converted local image to Base64 (size: ${formatFileSize(fileBuffer.length)})`,
       );
     } catch (readErr) {
@@ -393,7 +393,7 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
       log,
       account.accountId,
     );
-    log?.info(`[qqbot:${account.accountId}] Sent image via media payload`);
+    log?.debug?.(`[qqbot:${account.accountId}] Sent image via media payload`);
 
     if (payload.caption) {
       await sendTextToTarget(ctx, payload.caption);
@@ -420,7 +420,7 @@ async function handleAudioPayload(
       return;
     }
 
-    log?.info(`[qqbot:${account.accountId}] TTS: "${ttsText.slice(0, 50)}..."`);
+    log?.debug?.(`[qqbot:${account.accountId}] TTS: "${ttsText.slice(0, 50)}..."`);
     const ttsResult = await deps.tts.textToSpeech({
       text: ttsText,
       cfg,
@@ -432,7 +432,7 @@ async function handleAudioPayload(
     }
 
     const providerLabel = ttsResult.provider ?? "unknown";
-    log?.info(
+    log?.debug?.(
       `[qqbot:${account.accountId}] TTS returned: provider=${providerLabel}, format=${ttsResult.outputFormat}, path=${ttsResult.audioPath}`,
     );
 
@@ -443,7 +443,7 @@ async function handleAudioPayload(
     }
     const silkPath = ttsResult.audioPath;
 
-    log?.info(`[qqbot:${account.accountId}] TTS done (${providerLabel}), file: ${silkPath}`);
+    log?.debug?.(`[qqbot:${account.accountId}] TTS done (${providerLabel}), file: ${silkPath}`);
 
     const deliveryTarget = buildDeliveryTarget(target);
     const creds = accountToCreds(account);
@@ -468,7 +468,7 @@ async function handleAudioPayload(
       log,
       account.accountId,
     );
-    log?.info(`[qqbot:${account.accountId}] Voice message sent`);
+    log?.debug?.(`[qqbot:${account.accountId}] Voice message sent`);
   } catch (err) {
     log?.error(`[qqbot:${account.accountId}] TTS/voice send failed: ${formatErrorMessage(err)}`);
   }
@@ -484,7 +484,7 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
     const videoPath = resolved.path;
     const isHttpUrl = resolved.isHttpUrl;
 
-    log?.info(
+    log?.debug?.(
       `[qqbot:${account.accountId}] Video send: ${describeMediaTargetForLog(videoPath, isHttpUrl)}`,
     );
 
@@ -507,7 +507,7 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
         } else {
           const fileBuffer = await readStructuredPayloadLocalFile(videoPath);
           const videoBase64 = fileBuffer.toString("base64");
-          log?.info(
+          log?.debug?.(
             `[qqbot:${account.accountId}] Read local video (${formatFileSize(fileBuffer.length)}): ${describeMediaTargetForLog(videoPath, false)}`,
           );
           await senderSendVideo(deliveryTarget, creds, {
@@ -520,7 +520,7 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
       log,
       account.accountId,
     );
-    log?.info(`[qqbot:${account.accountId}] Video message sent`);
+    log?.debug?.(`[qqbot:${account.accountId}] Video message sent`);
 
     if (payload.caption) {
       await sendTextToTarget(ctx, payload.caption);
@@ -541,7 +541,7 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
     const isHttpUrl = resolved.isHttpUrl;
 
     const fileName = sanitizeFileName(path.basename(filePath));
-    log?.info(
+    log?.debug?.(
       `[qqbot:${account.accountId}] File send: ${describeMediaTargetForLog(filePath, isHttpUrl)} (${isHttpUrl ? "URL" : "local"})`,
     );
 
@@ -576,7 +576,7 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
       log,
       account.accountId,
     );
-    log?.info(`[qqbot:${account.accountId}] File message sent`);
+    log?.debug?.(`[qqbot:${account.accountId}] File message sent`);
   } catch (err) {
     log?.error(`[qqbot:${account.accountId}] File send failed: ${formatErrorMessage(err)}`);
   }

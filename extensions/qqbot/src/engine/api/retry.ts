@@ -71,7 +71,7 @@ export async function withRetry<T>(
       // Check for persistent-retry trigger before standard retry logic.
       if (persistentPolicy?.shouldPersistRetry(lastError)) {
         (logger?.warn ?? logger?.error)?.(
-          `[retry] Hit persistent-retry trigger, entering persistent loop (timeout=${persistentPolicy.timeoutMs / 1000}s)`,
+          `[qqbot:retry] Hit persistent-retry trigger, entering persistent loop (timeout=${persistentPolicy.timeoutMs / 1000}s)`,
         );
         return await persistentRetryLoop(fn, persistentPolicy, logger);
       }
@@ -88,8 +88,8 @@ export async function withRetry<T>(
             ? policy.baseDelayMs * Math.pow(2, attempt)
             : policy.baseDelayMs;
 
-        logger?.info?.(
-          `[retry] Attempt ${attempt + 1} failed, retrying in ${delay}ms: ${lastError.message.slice(0, 100)}`,
+        logger?.debug?.(
+          `[qqbot:retry] Attempt ${attempt + 1} failed, retrying in ${delay}ms: ${lastError.message.slice(0, 100)}`,
         );
         await sleep(delay);
       }
@@ -117,14 +117,14 @@ async function persistentRetryLoop<T>(
   while (Date.now() < deadline) {
     try {
       const result = await fn();
-      logger?.info?.(`[retry] Persistent retry succeeded after ${attempt} retries`);
+      logger?.debug?.(`[qqbot:retry] Persistent retry succeeded after ${attempt} retries`);
       return result;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(formatErrorMessage(err));
 
       // If the error is no longer retryable, abort immediately.
       if (!policy.shouldPersistRetry(lastError)) {
-        logger?.error?.(`[retry] Persistent retry: error is no longer retryable, aborting`);
+        logger?.error?.(`[qqbot:retry] Persistent retry: error is no longer retryable, aborting`);
         throw lastError;
       }
 
@@ -136,14 +136,14 @@ async function persistentRetryLoop<T>(
 
       const actualDelay = Math.min(policy.intervalMs, remaining);
       (logger?.warn ?? logger?.error)?.(
-        `[retry] Persistent retry #${attempt}: retrying in ${actualDelay}ms (remaining=${Math.round(remaining / 1000)}s)`,
+        `[qqbot:retry] Persistent retry #${attempt}: retrying in ${actualDelay}ms (remaining=${Math.round(remaining / 1000)}s)`,
       );
       await sleep(actualDelay);
     }
   }
 
   logger?.error?.(
-    `[retry] Persistent retry timed out after ${policy.timeoutMs / 1000}s (${attempt} attempts)`,
+    `[qqbot:retry] Persistent retry timed out after ${policy.timeoutMs / 1000}s (${attempt} attempts)`,
   );
   throw lastError ?? new Error(`Persistent retry timed out (${policy.timeoutMs / 1000}s)`);
 }

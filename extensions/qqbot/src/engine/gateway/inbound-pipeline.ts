@@ -249,7 +249,7 @@ async function resolveQuote(
   const refEntry = getRefIndex(event.refMsgIdx);
 
   if (refEntry) {
-    log?.info(
+    log?.debug?.(
       `[qqbot:${account.accountId}] Quote detected via refMsgIdx cache: refMsgIdx=${event.refMsgIdx}, sender=${refEntry.senderName ?? refEntry.senderId}`,
     );
     return {
@@ -299,7 +299,7 @@ async function resolveQuote(
         { appId: account.appId, peerId: refPeerId, cfg: account.config, log },
         attachmentProcessor,
       );
-      log?.info(
+      log?.debug?.(
         `[qqbot:${account.accountId}] Quote detected via msg_elements[0] (cache miss): id=${event.refMsgIdx}, content="${(refBody ?? "").slice(0, 80)}..."`,
       );
       return {
@@ -313,7 +313,7 @@ async function resolveQuote(
       );
     }
   } else {
-    log?.info(
+    log?.debug?.(
       `[qqbot:${account.accountId}] Quote detected but no cache and msgType=${event.msgType}: refMsgIdx=${event.refMsgIdx}`,
     );
   }

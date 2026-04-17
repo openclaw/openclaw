@@ -191,7 +191,7 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
 
   const startProcessor = (handleMessageFn: (msg: QueuedMessage) => Promise<void>): void => {
     handleMessageFnRef = handleMessageFn;
-    log?.info(
+    log?.debug?.(
       `[qqbot:${accountId}] Message processor started (per-user concurrency, max ${MAX_CONCURRENT_USERS} users)`,
     );
   };

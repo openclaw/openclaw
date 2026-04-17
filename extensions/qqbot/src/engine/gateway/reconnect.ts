@@ -80,7 +80,7 @@ export class ReconnectState {
     const delay =
       customDelay ?? RECONNECT_DELAYS[Math.min(this.attempts, RECONNECT_DELAYS.length - 1)];
     this.attempts++;
-    this.log?.info(
+    this.log?.debug?.(
       `[qqbot:${this.accountId}] Reconnecting in ${delay}ms (attempt ${this.attempts})`,
     );
     return delay;
@@ -175,7 +175,7 @@ export class ReconnectState {
     const connectionDuration = Date.now() - this.lastConnectTime;
     if (connectionDuration < QUICK_DISCONNECT_THRESHOLD && this.lastConnectTime > 0) {
       this.quickDisconnectCount++;
-      this.log?.info(
+      this.log?.debug?.(
         `[qqbot:${this.accountId}] Quick disconnect detected (${connectionDuration}ms), count: ${this.quickDisconnectCount}`,
       );
 

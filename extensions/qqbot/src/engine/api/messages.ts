@@ -15,7 +15,7 @@ import type {
   InlineKeyboard,
 } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
-import { ApiClient } from "./client.js";
+import { ApiClient } from "./api-client.js";
 import {
   messagePath,
   channelMessagePath,
@@ -72,7 +72,9 @@ export class MessageApi {
       try {
         this.messageSentHook(refIdx, meta);
       } catch (err) {
-        this.logger?.error?.(`[messages] onMessageSent hook error: ${formatErrorMessage(err)}`);
+        this.logger?.error?.(
+          `[qqbot:messages] onMessageSent hook error: ${formatErrorMessage(err)}`,
+        );
       }
     }
   }
@@ -217,7 +219,9 @@ export class MessageApi {
       try {
         this.messageSentHook(result.ext_info.ref_idx, meta);
       } catch (err) {
-        this.logger?.error?.(`[messages] onMessageSent hook error: ${formatErrorMessage(err)}`);
+        this.logger?.error?.(
+          `[qqbot:messages] onMessageSent hook error: ${formatErrorMessage(err)}`,
+        );
       }
     }
     return result;
