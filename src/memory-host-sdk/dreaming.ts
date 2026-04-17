@@ -202,15 +202,23 @@ export function validateMemoryDreamingFrequency(
   // distinct reason so callers can render a targeted configuration hint
   // instead of a generic parse error.
   if (containsInlineCronTimezone(frequency)) {
+    let inlineCron: Cron | undefined;
     try {
-      const cron = new Cron(frequency, { timezone: resolvedTimezone, catch: false });
-      cron.nextRun(new Date());
+      inlineCron = new Cron(frequency, { timezone: resolvedTimezone, catch: false });
+      inlineCron.nextRun(new Date());
     } catch (error) {
       return {
         valid: false,
         error: formatValidationError(error),
         reason: "inline-timezone",
       };
+    } finally {
+      // Croner only registers a timer when a callback is passed to the
+      // constructor (see `schedule()` in croner), so this validator-only
+      // usage should not leak timers today. Still stop defensively so intent
+      // is explicit and any future Croner change cannot silently start
+      // accumulating handles in this hot reconcile path.
+      inlineCron?.stop();
     }
     // Croner accepted it, but the inline prefix is still ambiguous for our
     // managed job shape. Reject with a stable placeholder message.
@@ -221,9 +229,10 @@ export function validateMemoryDreamingFrequency(
     };
   }
 
+  let parseCron: Cron | undefined;
   try {
-    const cron = new Cron(frequency, { timezone: resolvedTimezone, catch: false });
-    cron.nextRun(new Date());
+    parseCron = new Cron(frequency, { timezone: resolvedTimezone, catch: false });
+    parseCron.nextRun(new Date());
     return { valid: true };
   } catch (error) {
     return {
@@ -231,6 +240,11 @@ export function validateMemoryDreamingFrequency(
       error: formatValidationError(error),
       reason: "parse",
     };
+  } finally {
+    // Symmetric with the inline-timezone branch above — stop the
+    // validator-only instance so we never rely on Croner's current
+    // callback-gated scheduling behavior to avoid leaking timers.
+    parseCron?.stop();
   }
 }
 
