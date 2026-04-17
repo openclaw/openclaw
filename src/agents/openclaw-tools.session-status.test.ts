@@ -39,7 +39,7 @@ const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() =>
   vi.fn((_params?: { provider?: string }) => null as { apiKey: string; source: string } | null),
 );
 
-const defaultStatusSummary = () => ({
+const _defaultStatusSummary = () => ({
   contributors: [],
   a2a: {
     state: "ok",
@@ -691,7 +691,6 @@ describe("session_status tool", () => {
     expect(text).toContain("Permission denied by operator policy");
   });
 
-
   it("prefers injected contributor-first A2A summary over legacy session index output", async () => {
     resetSessionStore({
       "agent:main:main": {
@@ -714,7 +713,6 @@ describe("session_status tool", () => {
     const tool = createSessionStatusTool({
       agentSessionKey: "agent:main:main",
       statusSummary: {
-        ...defaultStatusSummary(),
         contributors: [
           {
             id: "a2a",
@@ -724,18 +722,6 @@ describe("session_status tool", () => {
             details: ["1 active"],
           },
         ],
-        a2a: {
-          ...defaultStatusSummary().a2a,
-          state: "failed",
-          broker: {
-            ...defaultStatusSummary().a2a.broker,
-            adapterEnabled: false,
-          },
-          tasks: {
-            ...defaultStatusSummary().a2a.tasks,
-            failed: 1,
-          },
-        },
       },
     });
     const result = await tool.execute("tc-a2a-summary", { sessionKey: "agent:main:main" });
@@ -743,6 +729,43 @@ describe("session_status tool", () => {
     const text = (firstContent as { text: string } | undefined)?.text ?? "";
 
     expect(text).toContain("🔁 A2A: plugin-owned broker status · 1 active");
+    expect(text).not.toContain("[running]");
+    expect(text).not.toContain("broker off");
+  });
+
+  it("accepts normalized contributor-first A2A input without summary.a2a", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    });
+    const env = await makeA2AEnv();
+    await writeA2ATaskLog({
+      env,
+      sessionKey: "agent:main:main",
+      taskId: "task-active",
+      at: 10,
+      events: [
+        createA2ATaskAcceptedEvent({ taskId: "task-active", at: 11 }),
+        createA2AWorkerStartedEvent({ taskId: "task-active", at: 12 }),
+      ],
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:main:main",
+      statusA2AInput: {
+        source: "contributor",
+        state: "warn",
+        summary: "plugin-owned broker status",
+        details: ["1 active", "waiting on broker"],
+      },
+    });
+    const result = await tool.execute("tc-a2a-input", { sessionKey: "agent:main:main" });
+    const firstContent = result.content?.[0];
+    const text = (firstContent as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("🔁 A2A: plugin-owned broker status · 1 active · waiting on broker");
     expect(text).not.toContain("[running]");
     expect(text).not.toContain("broker off");
   });

@@ -11,7 +11,9 @@ export type NormalizedStatusA2AInput = {
 function listNormalizedContributorDetails(details: StatusContributorSummary["details"]): string[] {
   return Array.isArray(details)
     ? details
-        .filter((detail): detail is string => typeof detail === "string" && detail.trim().length > 0)
+        .filter(
+          (detail): detail is string => typeof detail === "string" && detail.trim().length > 0,
+        )
         .map((detail) => detail.trim())
     : [];
 }
@@ -114,7 +116,7 @@ export function buildStatusA2ASummaryFallbackInput(
 }
 
 export function resolvePreferredStatusA2AInput(params: {
-  summary: Pick<StatusSummary, "contributors" | "a2a">;
+  summary: Partial<Pick<StatusSummary, "contributors" | "a2a">>;
 }): NormalizedStatusA2AInput | undefined {
   const contributor = findA2AContributor(params.summary.contributors);
   return (

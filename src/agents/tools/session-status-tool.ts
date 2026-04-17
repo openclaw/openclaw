@@ -5,12 +5,12 @@ import type {
   ThinkLevel,
   VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import { loadConfig } from "../../config/config.js";
 import {
   resolvePreferredStatusA2AInput,
   type NormalizedStatusA2AInput,
 } from "../../commands/status.a2a-input.js";
 import type { StatusSummary } from "../../commands/status.types.js";
+import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveStorePath,
@@ -35,7 +35,6 @@ import {
   TASK_STATUS_DETAIL_MAX_CHARS,
 } from "../../tasks/task-status.js";
 import { loadA2ATaskStatusIndex, type A2ATaskStatusIndexEntry } from "../a2a/list.js";
-import { reconcileSessionsSendA2ATask } from "./sessions-send-tool.a2a.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
   buildAllowedModelSet,
@@ -60,6 +59,7 @@ import {
   resolveSandboxedSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
+import { reconcileSessionsSendA2ATask } from "./sessions-send-tool.a2a.js";
 
 const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -200,7 +200,10 @@ function formatA2ATaskStatusLabel(status: string): string {
 function resolveA2ABrokerAdapterLabel(cfg: OpenClawConfig): string {
   const pluginEntry = cfg.plugins?.entries?.["a2a-broker-adapter"];
   const baseUrl = pluginEntry?.config?.baseUrl;
-  return pluginEntry && pluginEntry.enabled !== false && typeof baseUrl === "string" && baseUrl.trim()
+  return pluginEntry &&
+    pluginEntry.enabled !== false &&
+    typeof baseUrl === "string" &&
+    baseUrl.trim()
     ? "broker on"
     : "broker off";
 }
@@ -208,7 +211,7 @@ function resolveA2ABrokerAdapterLabel(cfg: OpenClawConfig): string {
 function formatA2ATaskDetail(entry: A2ATaskStatusIndexEntry): string | undefined {
   const raw =
     entry.statusCategory === "terminal-failure"
-      ? entry.error?.message ?? entry.error?.code
+      ? (entry.error?.message ?? entry.error?.code)
       : entry.summary;
   const sanitized = sanitizeTaskStatusText(raw, {
     errorContext: entry.statusCategory === "terminal-failure",
@@ -242,12 +245,18 @@ function formatA2ATaskDirection(entry: A2ATaskStatusIndexEntry): string | undefi
   return `${requester ?? "unknown"} → ${target ?? "unknown"}`;
 }
 
-function formatA2ATaskElapsed(entry: A2ATaskStatusIndexEntry, now = Date.now()): string | undefined {
+function formatA2ATaskElapsed(
+  entry: A2ATaskStatusIndexEntry,
+  now = Date.now(),
+): string | undefined {
   const origin = entry.startedAt ?? entry.updatedAt;
   return typeof origin === "number" ? formatRelativeDuration(origin, now) : undefined;
 }
 
-function formatA2AHeartbeatAge(entry: A2ATaskStatusIndexEntry, now = Date.now()): string | undefined {
+function formatA2AHeartbeatAge(
+  entry: A2ATaskStatusIndexEntry,
+  now = Date.now(),
+): string | undefined {
   if (entry.statusCategory !== "active" || typeof entry.heartbeatAt !== "number") {
     return undefined;
   }
@@ -259,7 +268,9 @@ function formatSessionA2AContributorLine(input: NormalizedStatusA2AInput): strin
   if (!summary) {
     return undefined;
   }
-  const details = input.details.filter((detail) => typeof detail === "string" && detail.trim().length > 0);
+  const details = input.details.filter(
+    (detail) => typeof detail === "string" && detail.trim().length > 0,
+  );
   return [`🔁 A2A: ${summary}`, ...details].join(" · ");
 }
 
@@ -291,7 +302,9 @@ function formatSessionA2ATaskLine(params: {
     );
   }
   if (headlineParts.length === 0) {
-    headlineParts.push(`latest ${formatA2ATaskStatusLabel(index[0]?.executionStatus ?? "unknown")}`);
+    headlineParts.push(
+      `latest ${formatA2ATaskStatusLabel(index[0]?.executionStatus ?? "unknown")}`,
+    );
   }
   lines.push(`🔁 A2A: ${headlineParts.join(", ")}`);
 
@@ -368,14 +381,28 @@ async function reconcileSessionA2ATaskIndex(params: {
   return loadSessionA2ATaskIndex({ sessionKey: params.sessionKey });
 }
 
+function resolveSessionA2ARenderInput(params: {
+  statusA2AInput?: NormalizedStatusA2AInput;
+  statusSummary?: Partial<Pick<StatusSummary, "contributors" | "a2a">>;
+}): NormalizedStatusA2AInput | undefined {
+  return (
+    params.statusA2AInput ??
+    (params.statusSummary
+      ? resolvePreferredStatusA2AInput({ summary: params.statusSummary })
+      : undefined)
+  );
+}
+
 async function resolveSessionA2ATaskLine(params: {
   sessionKey: string;
   cfg: OpenClawConfig;
-  statusSummary?: Pick<StatusSummary, "contributors" | "a2a">;
+  statusA2AInput?: NormalizedStatusA2AInput;
+  statusSummary?: Partial<Pick<StatusSummary, "contributors" | "a2a">>;
 }): Promise<string | undefined> {
-  const preferredInput = params.statusSummary
-    ? resolvePreferredStatusA2AInput({ summary: params.statusSummary })
-    : undefined;
+  const preferredInput = resolveSessionA2ARenderInput({
+    statusA2AInput: params.statusA2AInput,
+    statusSummary: params.statusSummary,
+  });
   if (preferredInput) {
     return formatSessionA2AContributorLine(preferredInput);
   }
@@ -460,7 +487,8 @@ export function createSessionStatusTool(opts?: {
   agentSessionKey?: string;
   config?: OpenClawConfig;
   sandboxed?: boolean;
-  statusSummary?: Pick<StatusSummary, "contributors" | "a2a">;
+  statusA2AInput?: NormalizedStatusA2AInput;
+  statusSummary?: Partial<Pick<StatusSummary, "contributors" | "a2a">>;
 }): AnyAgentTool {
   return {
     label: "Session Status",
@@ -730,6 +758,7 @@ export function createSessionStatusTool(opts?: {
       const a2aTaskLine = await resolveSessionA2ATaskLine({
         sessionKey: resolved.key,
         cfg,
+        statusA2AInput: opts?.statusA2AInput,
         statusSummary: opts?.statusSummary,
       });
       const { buildStatusText } = await loadCommandsStatusRuntime();

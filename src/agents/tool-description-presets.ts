@@ -42,7 +42,7 @@ export function describeSessionsSpawnTool(): string {
 
 export function describeSessionStatusTool(): string {
   return [
-    "Show a /status-equivalent session status card for the current or another visible session, including usage, time, cost when available, and linked background task context.",
+    "Show a /status-equivalent session status card for the current or another visible session, including usage, time, cost when available, linked background task context, and session-scoped A2A task state when present.",
     "Optional `model` sets a per-session model override; `model=default` resets overrides.",
     "Use this for questions like what model is active or how a session is configured.",
   ].join(" ");

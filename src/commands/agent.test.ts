@@ -937,6 +937,36 @@ describe("agentCommand", () => {
     });
   });
 
+  it("keeps explicit non-default agent session key when session scope is global", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, undefined, undefined, [
+        { id: "main", default: true },
+        { id: "codex-test" },
+      ]);
+      configSpy.mockReturnValue({
+        ...configSpy.mock.results.at(-1)?.value,
+        session: { store, mainKey: "main", scope: "global" },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-6" },
+            models: { "anthropic/claude-opus-4-6": {} },
+            workspace: path.join(home, "openclaw"),
+          },
+          list: [{ id: "main", default: true }, { id: "codex-test" }],
+        },
+      } as OpenClawConfig);
+
+      await agentCommand({ message: "hi", agentId: "codex-test" }, runtime);
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.sessionKey).toBe("agent:codex-test:main");
+      expect(callArgs?.sessionFile).toContain(
+        `${path.sep}agents${path.sep}codex-test${path.sep}sessions`,
+      );
+    });
+  });
+
   it("rejects unknown agent overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");

@@ -62,6 +62,29 @@ describe("resolvePreferredStatusA2AInput", () => {
     });
   });
 
+  it("accepts contributor-owned a2a input without requiring summary.a2a", () => {
+    const input = resolvePreferredStatusA2AInput({
+      summary: {
+        contributors: [
+          {
+            id: "a2a",
+            label: "A2A",
+            state: "warn",
+            summary: "plugin-owned broker status",
+            details: ["1 active"],
+          },
+        ],
+      },
+    });
+
+    expect(input).toEqual({
+      source: "contributor",
+      state: "warn",
+      summary: "plugin-owned broker status",
+      details: ["1 active"],
+    });
+  });
+
   it("uses summary.a2a fallback when no a2a contributor is present", () => {
     const input = resolvePreferredStatusA2AInput({
       summary: createSummary({

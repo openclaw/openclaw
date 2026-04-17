@@ -45,7 +45,10 @@ export function resolveExplicitAgentSessionKey(params: {
 }
 
 export function canonicalizeMainSessionAlias(params: {
-  cfg?: { session?: { scope?: SessionScope; mainKey?: string } };
+  cfg?: {
+    session?: { scope?: SessionScope; mainKey?: string };
+    agents?: { list?: Array<{ id?: string; default?: boolean }> };
+  };
   agentId: string;
   sessionKey: string;
 }): string {
@@ -58,6 +61,12 @@ export function canonicalizeMainSessionAlias(params: {
   const mainKey = normalizeMainKey(params.cfg?.session?.mainKey);
   const agentMainSessionKey = buildMainSessionKey(agentId, mainKey);
   const agentMainAliasKey = buildMainSessionKey(agentId, "main");
+  const agents = params.cfg?.agents?.list ?? [];
+  const defaultAgentId = normalizeAgentId(
+    agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? FALLBACK_DEFAULT_AGENT_ID,
+  );
+  const defaultAgentMainKey = buildMainSessionKey(defaultAgentId, mainKey);
+  const defaultAgentMainAliasKey = buildMainSessionKey(defaultAgentId, "main");
 
   // Also recognize legacy keys built with the hardcoded DEFAULT_AGENT_ID ("main")
   // when the configured agent differs. resolveSessionKey() historically used
@@ -74,7 +83,14 @@ export function canonicalizeMainSessionAlias(params: {
     raw === legacyMainKey ||
     raw === legacyMainAliasKey;
 
-  if (params.cfg?.session?.scope === "global" && isMainAlias) {
+  const shouldCollapseToGlobal =
+    params.cfg?.session?.scope === "global" &&
+    (raw === "main" ||
+      raw === mainKey ||
+      raw === defaultAgentMainKey ||
+      raw === defaultAgentMainAliasKey);
+
+  if (shouldCollapseToGlobal) {
     return "global";
   }
   if (isMainAlias) {

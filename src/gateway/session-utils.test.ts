@@ -166,6 +166,19 @@ describe("gateway session utils", () => {
     expect(target.agentId).toBe("ops");
   });
 
+  test("resolveSessionStoreKey keeps explicit non-default agent main keys under global scope", () => {
+    const cfg = {
+      session: { scope: "global", mainKey: "work" },
+      agents: { list: [{ id: "ops", default: true }, { id: "codex-test" }] },
+    } as OpenClawConfig;
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:codex-test:main" })).toBe(
+      "agent:codex-test:work",
+    );
+    const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:codex-test:main" });
+    expect(target.canonicalKey).toBe("agent:codex-test:work");
+    expect(target.agentId).toBe("codex-test");
+  });
+
   test("resolveGatewaySessionStoreTarget uses canonical key for main alias", () => {
     const storeTemplate = path.join(
       os.tmpdir(),
