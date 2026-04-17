@@ -215,7 +215,7 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("restores only postinstall-generated QA lab compat sidecar after pruning old installs", async () => {
+  it("restores only postinstall-generated QA compat sidecars after pruning old installs", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-qa-compat-");
     const currentFile = path.join(packageRoot, "dist", "entry.js");
     const stalePackage = path.join(packageRoot, "dist", "extensions", "qa-lab", "package.json");

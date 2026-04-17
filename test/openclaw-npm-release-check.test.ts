@@ -351,7 +351,7 @@ describe("collectForbiddenPackedPathErrors", () => {
     ]);
   });
 
-  it("allows only the legacy update verifier QA runtime sidecars", () => {
+  it("allows legacy update verifier QA runtime sidecars", () => {
     expect(
       collectForbiddenPackedPathErrors([
         "dist/extensions/qa-channel/runtime-api.js",
