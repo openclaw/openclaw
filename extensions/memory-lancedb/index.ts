@@ -151,7 +151,7 @@ class MemoryDB {
     return this.table!.countRows();
   }
 
-  async reindex(): Promise<{ rowCount: number; indexed: boolean }> {
+  async reindex(timeoutSeconds: number): Promise<{ rowCount: number; indexed: boolean }> {
     await this.ensureInitialized();
     const rowCount = await this.table!.countRows();
     if (rowCount === 0) {
@@ -161,6 +161,7 @@ class MemoryDB {
     await this.table!.createIndex("vector", {
       config: lancedb.Index.ivfFlat(),
       replace: true,
+      waitTimeoutSeconds: timeoutSeconds,
     });
     return { rowCount, indexed: true };
   }
@@ -533,13 +534,17 @@ export default definePluginEntry({
         memory
           .command("reindex")
           .description("Recreate the LanceDB IVF_FLAT vector index for the vector column")
-          .action(async () => {
-            const { rowCount, indexed } = await db.reindex();
+          .option("--timeout <seconds>", "Seconds to wait for index creation to finish", "180")
+          .action(async (opts) => {
+            const timeoutSeconds = Number.parseInt(String(opts.timeout), 10);
+            const { rowCount, indexed } = await db.reindex(timeoutSeconds);
             if (!indexed) {
               console.log(`No memories to reindex (rows: ${rowCount})`);
               return;
             }
-            console.log(`Recreated vector index for column: vector (rows: ${rowCount})`);
+            console.log(
+              `Recreated vector index for column: vector (rows: ${rowCount}, timeout: ${timeoutSeconds}s)`,
+            );
           });
 
         memory
