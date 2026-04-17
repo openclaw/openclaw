@@ -5,7 +5,6 @@ import {
   resolveManifestContractPluginIds,
 } from "../manifest-registry.js";
 import {
-  imageGenerationProviderContractRegistry,
   pluginRegistrationContractRegistry,
   providerContractLoadError,
   providerContractPluginIds,
@@ -91,7 +90,8 @@ describe("plugin contract registry", () => {
     },
     {
       name: "does not duplicate bundled image-generation provider ids",
-      ids: () => imageGenerationProviderContractRegistry.map((entry) => entry.provider.id),
+      ids: () =>
+        pluginRegistrationContractRegistry.flatMap((entry) => entry.imageGenerationProviderIds),
     },
   ] as const)("$name", ({ ids }) => {
     expectUniqueIds(ids());
