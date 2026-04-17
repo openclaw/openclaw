@@ -635,7 +635,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
-  it("uses a longer Windows health deadline when daemon install was requested", async () => {
+  it("uses longer Windows health timeouts when daemon install was requested", async () => {
     await withStateDir("state-local-daemon-health-win-", async (stateDir) => {
       const captured = mockGatewayReachableWithCapturedTimeouts();
 
@@ -646,17 +646,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
       expect(captured.deadlineMs).toBe(90_000);
       expect(captured.probeTimeoutMs).toBe(15_000);
-    });
-  }, 60_000);
-
-  it("uses a longer Windows health command timeout when daemon install was requested", async () => {
-    await withStateDir("state-local-daemon-health-command-win-", async (stateDir) => {
-      waitForGatewayReachableMock = vi.fn(async () => ({ ok: true }));
-
-      await withMockedPlatform("win32", async () => {
-        await runLocalDaemonSetup(stateDir);
-      });
-
       expect(healthCommandMock).toHaveBeenCalledTimes(1);
       expect(healthCommandMock).toHaveBeenCalledWith(
         expect.objectContaining({

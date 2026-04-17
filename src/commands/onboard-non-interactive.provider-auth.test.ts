@@ -1178,49 +1178,51 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("configures a custom provider from non-interactive flags", async () => {
-    await withOnboardEnv("openclaw-onboard-custom-provider-", async ({ configPath, runtime }) => {
-      await runNonInteractiveSetupWithDefaults(runtime, {
-        authChoice: "custom-api-key",
-        customBaseUrl: "https://llm.example.com/v1",
-        customApiKey: "custom-test-key", // pragma: allowlist secret
-        customModelId: "foo-large",
-        customCompatibility: "anthropic",
-        skipSkills: true,
-      });
-
-      const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
-
-      const provider = cfg.models?.providers?.["custom-llm-example-com"];
-      expect(provider?.baseUrl).toBe("https://llm.example.com/v1");
-      expect(provider?.api).toBe("anthropic-messages");
-      expect(provider?.apiKey).toBe("custom-test-key");
-      expect(provider?.models?.some((model) => model.id === "foo-large")).toBe(true);
-      expect(cfg.agents?.defaults?.model?.primary).toBe("custom-llm-example-com/foo-large");
-    });
-  });
-
-  it("infers custom provider auth choice from custom flags", async () => {
-    await withOnboardEnv(
-      "openclaw-onboard-custom-provider-infer-",
-      async ({ configPath, runtime }) => {
-        await runNonInteractiveSetupWithDefaults(runtime, {
+  it("configures custom providers from explicit or inferred non-interactive flags", async () => {
+    const scenarios = [
+      {
+        options: {
+          authChoice: "custom-api-key",
+          customBaseUrl: "https://llm.example.com/v1",
+          customApiKey: "custom-test-key", // pragma: allowlist secret
+          customModelId: "foo-large",
+          customCompatibility: "anthropic",
+          skipSkills: true,
+        },
+        providerId: "custom-llm-example-com",
+        expectedBaseUrl: "https://llm.example.com/v1",
+        expectedApi: "anthropic-messages",
+        expectedModel: "custom-llm-example-com/foo-large",
+        modelId: "foo-large",
+      },
+      {
+        options: {
           customBaseUrl: "https://models.custom.local/v1",
           customModelId: "local-large",
           customApiKey: "custom-test-key", // pragma: allowlist secret
           skipSkills: true,
-        });
-
-        const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
-
-        expect(cfg.models?.providers?.["custom-models-custom-local"]?.baseUrl).toBe(
-          "https://models.custom.local/v1",
-        );
-        expect(cfg.models?.providers?.["custom-models-custom-local"]?.api).toBe(
-          "openai-completions",
-        );
-        expect(cfg.agents?.defaults?.model?.primary).toBe("custom-models-custom-local/local-large");
+        },
+        providerId: "custom-models-custom-local",
+        expectedBaseUrl: "https://models.custom.local/v1",
+        expectedApi: "openai-completions",
+        expectedModel: "custom-models-custom-local/local-large",
+        modelId: "local-large",
       },
-    );
+    ] as const;
+
+    await withOnboardEnv("openclaw-onboard-custom-provider-", async ({ configPath, runtime }) => {
+      for (const scenario of scenarios) {
+        await fs.rm(configPath, { force: true });
+        resetProviderAuthTestState();
+        await runNonInteractiveSetupWithDefaults(runtime, scenario.options);
+        const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
+        const provider = cfg.models?.providers?.[scenario.providerId];
+        expect(provider?.baseUrl).toBe(scenario.expectedBaseUrl);
+        expect(provider?.api).toBe(scenario.expectedApi);
+        expect(provider?.apiKey).toBe("custom-test-key");
+        expect(provider?.models?.some((model) => model.id === scenario.modelId)).toBe(true);
+        expect(cfg.agents?.defaults?.model?.primary).toBe(scenario.expectedModel);
+      }
+    });
   });
 });

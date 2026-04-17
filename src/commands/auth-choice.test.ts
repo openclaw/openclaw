@@ -1092,20 +1092,49 @@ describe("applyAuthChoice", () => {
     }
   });
 
-  it("maps apiKey tokenProvider aliases to provider flow", async () => {
+  it("uses provided tokens without prompting across alias and direct provider choices", async () => {
     const scenarios: Array<{
+      authChoice: "apiKey" | "opencode-zen" | "gemini-api-key";
+      config?: OpenClawConfig;
+      setDefaultModel: boolean;
       tokenProvider: string;
       token: string;
       profileId: string;
       provider: string;
-      expectedModel: string;
+      expectedModel?: string;
+      expectedModelPrefix?: string;
+      expectedAgentModelOverride?: string;
+      extraProfiles?: string[];
     }> = [
       {
+        authChoice: "apiKey",
+        setDefaultModel: true,
         tokenProvider: " GOOGLE  ",
         token: "sk-gemini-token-provider-test",
         profileId: "google:default",
         provider: "google",
         expectedModel: GOOGLE_GEMINI_DEFAULT_MODEL,
+      },
+      {
+        authChoice: "opencode-zen",
+        setDefaultModel: true,
+        tokenProvider: "opencode",
+        token: "sk-opencode-test",
+        profileId: "opencode:default",
+        provider: "opencode",
+        expectedModelPrefix: "opencode/",
+        extraProfiles: ["opencode-go:default"],
+      },
+      {
+        authChoice: "gemini-api-key",
+        config: { agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } } },
+        setDefaultModel: false,
+        tokenProvider: "google",
+        token: "sk-gemini-test",
+        profileId: "google:default",
+        provider: "google",
+        expectedModel: "openai/gpt-4o-mini",
+        expectedAgentModelOverride: GOOGLE_GEMINI_DEFAULT_MODEL,
       },
     ];
     await setupTempState();
@@ -1118,122 +1147,38 @@ describe("applyAuthChoice", () => {
       const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
 
       const result = await applyAuthChoice({
-        authChoice: "apiKey",
-        config: {},
+        authChoice: scenario.authChoice,
+        config: scenario.config ?? {},
         prompter,
         runtime,
-        setDefaultModel: true,
+        setDefaultModel: scenario.setDefaultModel,
         opts: {
           tokenProvider: scenario.tokenProvider,
           token: scenario.token,
         },
       });
 
+      expect(text).not.toHaveBeenCalled();
+      expect(confirm).not.toHaveBeenCalled();
       expect(result.config.auth?.profiles?.[scenario.profileId]).toMatchObject({
         provider: scenario.provider,
         mode: "api_key",
       });
-      expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
-        scenario.expectedModel,
-      );
-      expect(text).not.toHaveBeenCalled();
-      expect(confirm).not.toHaveBeenCalled();
+      const selectedModel = resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model);
+      if (scenario.expectedModel) {
+        expect(selectedModel).toBe(scenario.expectedModel);
+      }
+      if (scenario.expectedModelPrefix) {
+        expect(selectedModel?.startsWith(scenario.expectedModelPrefix)).toBe(true);
+      }
+      if (scenario.expectedAgentModelOverride) {
+        expect(result.agentModelOverride).toBe(scenario.expectedAgentModelOverride);
+      }
       expect((await readAuthProfile(scenario.profileId))?.key).toBe(scenario.token);
-    }
-  });
-
-  it("uses opts token for direct provider choices without prompting", async () => {
-    await setupTempState();
-    const scenarios: Array<{
-      authChoice: "opencode-zen";
-      tokenProvider: "opencode";
-      profileId: "opencode:default";
-      provider: "opencode";
-      modelPrefix: "opencode/";
-      extraProfiles: string[];
-    }> = [
-      {
-        authChoice: "opencode-zen",
-        tokenProvider: "opencode",
-        profileId: "opencode:default",
-        provider: "opencode",
-        modelPrefix: "opencode/",
-        extraProfiles: ["opencode-go:default"],
-      },
-    ];
-    for (const {
-      authChoice,
-      tokenProvider,
-      profileId,
-      provider,
-      modelPrefix,
-      extraProfiles,
-    } of scenarios) {
-      const text = vi.fn();
-      const confirm = vi.fn(async () => false);
-      const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
-      const token = `sk-${tokenProvider}-test`;
-
-      const result = await applyAuthChoice({
-        authChoice,
-        config: {},
-        prompter,
-        runtime,
-        setDefaultModel: true,
-        opts: {
-          tokenProvider,
-          token,
-        },
-      });
-
-      expect(text).not.toHaveBeenCalled();
-      expect(confirm).not.toHaveBeenCalled();
-      expect(result.config.auth?.profiles?.[profileId]).toMatchObject({
-        provider,
-        mode: "api_key",
-      });
-      expect(
-        resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)?.startsWith(
-          modelPrefix,
-        ),
-      ).toBe(true);
-      expect((await readAuthProfile(profileId))?.key).toBe(token);
-      for (const extraProfile of extraProfiles ?? []) {
-        expect((await readAuthProfile(extraProfile))?.key).toBe(token);
+      for (const extraProfile of scenario.extraProfiles ?? []) {
+        expect((await readAuthProfile(extraProfile))?.key).toBe(scenario.token);
       }
     }
-  });
-
-  it("uses opts token for Gemini and keeps global default model when setDefaultModel=false", async () => {
-    await setupTempState();
-
-    const text = vi.fn();
-    const confirm = vi.fn(async () => false);
-    const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
-
-    const result = await applyAuthChoice({
-      authChoice: "gemini-api-key",
-      config: { agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } } },
-      prompter,
-      runtime,
-      setDefaultModel: false,
-      opts: {
-        tokenProvider: "google",
-        token: "sk-gemini-test",
-      },
-    });
-
-    expect(text).not.toHaveBeenCalled();
-    expect(confirm).not.toHaveBeenCalled();
-    expect(result.config.auth?.profiles?.["google:default"]).toMatchObject({
-      provider: "google",
-      mode: "api_key",
-    });
-    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
-      "openai/gpt-4o-mini",
-    );
-    expect(result.agentModelOverride).toBe(GOOGLE_GEMINI_DEFAULT_MODEL);
-    expect((await readAuthProfile("google:default"))?.key).toBe("sk-gemini-test");
   });
 
   it("prompts for Venice API key and shows the Venice note when no token is provided", async () => {
