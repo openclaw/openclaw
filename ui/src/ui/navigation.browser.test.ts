@@ -162,7 +162,7 @@ describe("control UI routing", () => {
     expect(app.querySelector(".dreams__lobster")).not.toBeNull();
   });
 
-  it("renders the refreshed top navigation shell", async () => {
+  it("renders the refreshed desktop navigation shell and collapsed state", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
@@ -170,11 +170,6 @@ describe("control UI routing", () => {
     expect(app.querySelector(".topnav-shell__content")).not.toBeNull();
     expect(app.querySelector(".topnav-shell__actions")).not.toBeNull();
     expect(app.querySelector(".topnav-shell .brand-title")).toBeNull();
-  });
-
-  it("renders the refreshed sidebar shell structure", async () => {
-    const app = mountApp("/chat");
-    await app.updateComplete;
 
     expect(app.querySelector(".sidebar-shell")).not.toBeNull();
     expect(app.querySelector(".sidebar-shell__header")).not.toBeNull();
@@ -183,11 +178,6 @@ describe("control UI routing", () => {
     expect(app.querySelector(".sidebar-brand")).not.toBeNull();
     expect(app.querySelector(".sidebar-brand__logo")).not.toBeNull();
     expect(app.querySelector(".sidebar-brand__copy")).not.toBeNull();
-  });
-
-  it("does not render a desktop sidebar resizer or inject a custom nav width", async () => {
-    const app = mountApp("/chat");
-    await app.updateComplete;
 
     app.applySettings({ ...app.settings, navWidth: 360 });
     await app.updateComplete;
@@ -195,36 +185,15 @@ describe("control UI routing", () => {
     expect(app.querySelector(".sidebar-resizer")).toBeNull();
     const shell = app.querySelector<HTMLElement>(".shell");
     expect(shell?.style.getPropertyValue("--shell-nav-width")).toBe("");
-  });
-
-  it("hides section labels in collapsed mode", async () => {
-    const app = mountApp("/chat");
-    await app.updateComplete;
 
     app.applySettings({ ...app.settings, navCollapsed: true });
     await app.updateComplete;
 
     expect(app.querySelector(".nav-section__label")).toBeNull();
     expect(app.querySelector(".sidebar-brand__logo")).toBeNull();
-  });
-
-  it("keeps footer utilities available in collapsed mode", async () => {
-    const app = mountApp("/chat");
-    await app.updateComplete;
-
-    app.applySettings({ ...app.settings, navCollapsed: true });
-    await app.updateComplete;
 
     expect(app.querySelector(".sidebar-shell__footer")).not.toBeNull();
     expect(app.querySelector(".sidebar-utility-link")).not.toBeNull();
-  });
-
-  it("keeps the collapsed desktop rail compact", async () => {
-    const app = mountApp("/chat");
-    await app.updateComplete;
-
-    app.applySettings({ ...app.settings, navCollapsed: true });
-    await app.updateComplete;
 
     const item = app.querySelector<HTMLElement>(".sidebar .nav-item");
     const header = app.querySelector<HTMLElement>(".sidebar-shell__header");
