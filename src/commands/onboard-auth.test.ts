@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyAuthProfileConfig,
   upsertApiKeyProfile,
@@ -13,6 +13,16 @@ import {
   readAuthProfilesForAgent,
   setupAuthTestEnv,
 } from "./test-wizard-helpers.js";
+
+vi.mock("../agents/provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) => {
+    const normalized = provider.trim().toLowerCase();
+    if (normalized === "z.ai" || normalized === "z-ai") {
+      return "zai";
+    }
+    return normalized;
+  },
+}));
 
 describe("writeOAuthCredentials", () => {
   const lifecycle = createAuthTestLifecycle([
