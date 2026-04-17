@@ -478,6 +478,12 @@ export function createOpenClawCodingTools(options?: {
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
         });
+
+  // Determine if download video tool should be included
+  // Only include when workspace writes are allowed AND we're not in a sandboxed environment
+  // This prevents host-side operations that could escape sandbox boundaries
+  const shouldIncludeDownloadVideoTool = allowWorkspaceWrites && !sandbox;
+
   const tools: AnyAgentTool[] = [
     ...base,
     ...(sandboxRoot
@@ -558,8 +564,9 @@ export function createOpenClawCodingTools(options?: {
       onYield: options?.onYield,
       allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
     }),
-    // Only include downloadVideoTool when workspace writes are allowed
-    ...(allowWorkspaceWrites ? [downloadVideoTool as AnyAgentTool] : []),
+    // Only include downloadVideoTool when workspace writes are allowed AND not in a sandboxed environment
+    // This prevents host-side operations from escaping sandbox boundaries
+    ...(shouldIncludeDownloadVideoTool ? [downloadVideoTool as AnyAgentTool] : []),
   ];
   const toolsForMemoryFlush =
     isMemoryFlushRun && memoryFlushWritePath
