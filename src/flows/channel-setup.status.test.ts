@@ -113,4 +113,26 @@ describe("resolveChannelSetupSelectionContributions", () => {
       hint: "configured · disabled",
     });
   });
+
+  it("sanitizes picker labels and hints before terminal rendering", () => {
+    const contributions = resolveChannelSetupSelectionContributions({
+      entries: [
+        {
+          id: "zalo",
+          meta: {
+            id: "zalo",
+            label: "Zalo\u001B[31m\nBot\u0007",
+          },
+        },
+      ] as never,
+      statusByChannel: new Map([["zalo", { selectionHint: "configured\u001B[2K\nnow" }]]),
+      resolveDisabledHint: () => "disabled\u0007",
+    });
+
+    expect(contributions[0]?.option).toEqual({
+      value: "zalo",
+      label: "Zalo\\nBot",
+      hint: "configured\\nnow · disabled",
+    });
+  });
 });

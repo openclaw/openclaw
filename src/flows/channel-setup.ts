@@ -2,6 +2,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
   getChannelSetupPlugin,
+  listActiveChannelSetupPlugins,
   listChannelSetupPlugins,
 } from "../channels/plugins/setup-registry.js";
 import type {
@@ -132,11 +133,12 @@ export async function setupChannels(
   }): ChannelSetupPlugin[] => {
     const includeRegistry = params?.includeRegistry ?? includeRegistryBeforeSelection;
     const merged = new Map<string, ChannelSetupPlugin>();
-    if (includeRegistry) {
-      for (const plugin of listChannelSetupPlugins()) {
-        if (shouldShowChannelInSetup(plugin.meta)) {
-          merged.set(plugin.id, plugin);
-        }
+    const registryPlugins = includeRegistry
+      ? listChannelSetupPlugins()
+      : listActiveChannelSetupPlugins();
+    for (const plugin of registryPlugins) {
+      if (shouldShowChannelInSetup(plugin.meta)) {
+        merged.set(plugin.id, plugin);
       }
     }
     for (const plugin of scopedPluginsById.values()) {
@@ -261,6 +263,12 @@ export async function setupChannels(
   };
 
   const resolveConfigDisabledHint = (channel: ChannelChoice): string | undefined => {
+    if (next.plugins?.enabled === false) {
+      return "plugins disabled";
+    }
+    if (next.plugins?.entries?.[channel]?.enabled === false) {
+      return "plugin disabled";
+    }
     if (
       typeof (next.channels as Record<string, { enabled?: boolean }> | undefined)?.[channel]
         ?.enabled === "boolean"
@@ -268,12 +276,6 @@ export async function setupChannels(
       return (next.channels as Record<string, { enabled?: boolean }>)[channel]?.enabled === false
         ? "disabled"
         : undefined;
-    }
-    if (next.plugins?.entries?.[channel]?.enabled === false) {
-      return "plugin disabled";
-    }
-    if (next.plugins?.enabled === false) {
-      return "plugins disabled";
     }
     return undefined;
   };
@@ -325,13 +327,11 @@ export async function setupChannels(
     }
     const disabledHint = resolveConfigDisabledHint(channel);
     if (disabledHint) {
-      const plugin = await loadScopedChannelPlugin(channel);
-      if (!plugin) {
-        await prompter.note(`${channel} plugin not available (${disabledHint}).`, "Channel setup");
-        return false;
-      }
-      await refreshStatus(channel);
-      return true;
+      await prompter.note(
+        `${channel} cannot be configured while ${disabledHint}. Enable it before setup.`,
+        "Channel setup",
+      );
+      return false;
     }
     const result = enablePluginInConfig(next, channel);
     next = result.config;
@@ -507,6 +507,16 @@ export async function setupChannels(
     const { catalogById, installedCatalogById } = getChannelEntries();
     const catalogEntry = catalogById.get(channel);
     const installedCatalogEntry = installedCatalogById.get(channel);
+    const deferredDisabledHint = deferStatusUntilSelection
+      ? resolveConfigDisabledHint(channel)
+      : undefined;
+    if (deferredDisabledHint) {
+      await prompter.note(
+        `${channel} cannot be configured while ${deferredDisabledHint}. Enable it before setup.`,
+        "Channel setup",
+      );
+      return;
+    }
     if (catalogEntry) {
       const workspaceDir = resolveWorkspaceDir();
       const result = await ensureChannelSetupPluginInstalled({

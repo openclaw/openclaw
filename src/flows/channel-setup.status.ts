@@ -17,6 +17,7 @@ import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatDocsLink } from "../terminal/links.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { FlowContribution } from "./types.js";
 
@@ -65,6 +66,17 @@ function buildChannelSetupSelectionContribution(params: {
     },
     source: params.source,
   };
+}
+
+function formatSetupSelectionLabel(label: string, fallback: string): string {
+  return sanitizeTerminalText(label) || fallback;
+}
+
+function formatSetupSelectionHint(hint: string | undefined): string | undefined {
+  if (!hint) {
+    return undefined;
+  }
+  return sanitizeTerminalText(hint) || undefined;
 }
 
 export async function collectChannelStatus(params: {
@@ -261,8 +273,8 @@ export function resolveChannelSetupSelectionContributions(params: {
       const hint = [statusHint, disabledHint].filter(Boolean).join(" · ") || undefined;
       return buildChannelSetupSelectionContribution({
         channel: entry.id,
-        label: entry.meta.selectionLabel ?? entry.meta.label,
-        hint,
+        label: formatSetupSelectionLabel(entry.meta.selectionLabel ?? entry.meta.label, entry.id),
+        hint: formatSetupSelectionHint(hint),
         source: bundledChannelIds.has(entry.id) ? "core" : "plugin",
       });
     });

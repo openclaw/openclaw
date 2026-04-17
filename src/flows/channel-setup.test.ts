@@ -9,6 +9,7 @@ const listTrustedChannelPluginCatalogEntries = vi.hoisted(() =>
 );
 const getChannelSetupPlugin = vi.hoisted(() => vi.fn((_channel?: unknown) => undefined));
 const listChannelSetupPlugins = vi.hoisted(() => vi.fn((): unknown[] => []));
+const listActiveChannelSetupPlugins = vi.hoisted(() => vi.fn((): unknown[] => []));
 const loadChannelSetupPluginRegistrySnapshotForChannel = vi.hoisted(() =>
   vi.fn((_params?: unknown) => ({ channels: [], channelSetups: [] })),
 );
@@ -50,6 +51,7 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../channels/plugins/setup-registry.js", () => ({
   getChannelSetupPlugin: (channel?: unknown) => getChannelSetupPlugin(channel),
+  listActiveChannelSetupPlugins: () => listActiveChannelSetupPlugins(),
   listChannelSetupPlugins: () => listChannelSetupPlugins(),
 }));
 
@@ -116,6 +118,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       },
     ]);
     getChannelSetupPlugin.mockReturnValue(undefined);
+    listActiveChannelSetupPlugins.mockReturnValue([]);
     listChannelSetupPlugins.mockReturnValue([]);
     loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue({
       channels: [],
@@ -228,6 +231,44 @@ describe("setupChannels workspace shadow exclusion", () => {
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
   });
 
+  it("keeps already-active setup plugins in the deferred picker without registry fallback", async () => {
+    const activePlugin = {
+      id: "custom-chat",
+      meta: { id: "custom-chat", label: "Custom Chat", blurb: "" },
+    };
+    listActiveChannelSetupPlugins.mockReturnValue([activePlugin]);
+    resolveChannelSetupEntries.mockImplementation(() => ({
+      entries: [],
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
+    }));
+    const select = vi.fn(async () => "__done__");
+
+    await setupChannels(
+      {} as never,
+      {} as never,
+      {
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => undefined),
+        select,
+      } as never,
+      {
+        deferStatusUntilSelection: true,
+        skipConfirm: true,
+      },
+    );
+
+    expect(resolveChannelSetupEntries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        installedPlugins: [activePlugin],
+      }),
+    );
+    expect(listChannelSetupPlugins).not.toHaveBeenCalled();
+    expect(collectChannelStatus).not.toHaveBeenCalled();
+  });
+
   it("loads the selected bundled catalog plugin without writing explicit plugin enablement", async () => {
     const setupWizard = {
       channel: "telegram",
@@ -315,7 +356,7 @@ describe("setupChannels workspace shadow exclusion", () => {
     });
   });
 
-  it("does not re-enable an explicitly disabled channel when selected lazily", async () => {
+  it("does not load or re-enable an explicitly disabled channel when selected lazily", async () => {
     const setupWizard = {
       channel: "telegram",
       getStatus: vi.fn(async () => ({
@@ -324,15 +365,6 @@ describe("setupChannels workspace shadow exclusion", () => {
         statusLines: [],
       })),
       configure: vi.fn(),
-    };
-    const telegramPlugin = {
-      id: "telegram",
-      meta: { id: "telegram", label: "Telegram", blurb: "" },
-      capabilities: {},
-      config: {
-        resolveAccount: vi.fn(() => ({ enabled: false })),
-      },
-      setupWizard,
     };
     resolveChannelSetupEntries.mockReturnValue({
       entries: [
@@ -346,11 +378,8 @@ describe("setupChannels workspace shadow exclusion", () => {
       installedCatalogById: new Map(),
       installableCatalogById: new Map(),
     });
-    loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue({
-      channels: [{ plugin: telegramPlugin }],
-      channelSetups: [],
-    });
     const select = vi.fn().mockResolvedValueOnce("telegram").mockResolvedValueOnce("__done__");
+    const note = vi.fn(async () => undefined);
     const cfg = {
       channels: {
         telegram: { enabled: false, token: "secret" },
@@ -362,7 +391,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       {} as never,
       {
         confirm: vi.fn(async () => true),
-        note: vi.fn(async () => undefined),
+        note,
         select,
       } as never,
       {
@@ -372,11 +401,10 @@ describe("setupChannels workspace shadow exclusion", () => {
       },
     );
 
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        workspaceDir: "/tmp/openclaw-workspace",
-      }),
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      "telegram cannot be configured while disabled. Enable it before setup.",
+      "Channel setup",
     );
     expect(setupWizard.configure).not.toHaveBeenCalled();
     expect(next).toEqual({
@@ -384,5 +412,49 @@ describe("setupChannels workspace shadow exclusion", () => {
         telegram: { enabled: false, token: "secret" },
       },
     });
+  });
+
+  it("honors global plugin disablement before lazy channel setup loads plugins", async () => {
+    resolveChannelSetupEntries.mockReturnValue({
+      entries: [
+        {
+          id: "telegram",
+          meta: { id: "telegram", label: "Telegram", blurb: "" },
+        },
+      ],
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
+    });
+    const select = vi.fn().mockResolvedValueOnce("telegram").mockResolvedValueOnce("__done__");
+    const note = vi.fn(async () => undefined);
+    const cfg = {
+      plugins: { enabled: false },
+      channels: {
+        telegram: { enabled: true, token: "secret" },
+      },
+    };
+
+    await setupChannels(
+      cfg as never,
+      {} as never,
+      {
+        confirm: vi.fn(async () => true),
+        note,
+        select,
+      } as never,
+      {
+        deferStatusUntilSelection: true,
+        skipConfirm: true,
+        skipDmPolicyPrompt: true,
+      },
+    );
+
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      "telegram cannot be configured while plugins disabled. Enable it before setup.",
+      "Channel setup",
+    );
   });
 });

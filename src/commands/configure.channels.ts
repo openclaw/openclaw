@@ -1,6 +1,7 @@
 import { listChatChannels } from "../channels/chat-meta.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { CONFIG_PATH } from "../config/config.js";
+import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
@@ -23,14 +24,21 @@ function listConfiguredChannelRemovalChoices(
   if (!channels) {
     return [];
   }
-  const labelsById = new Map(listChatChannels().map((meta) => [meta.id, meta.label]));
+  const labelsById = new Map(
+    listChatChannels().map((meta) => [meta.id, formatChannelRemovalLabel(meta.label, meta.id)]),
+  );
   return Object.keys(channels)
     .filter((id) => !RESERVED_CHANNEL_CONFIG_KEYS.has(id))
+    .filter((id) => !isBlockedObjectKey(id))
     .map((id) => ({
       id,
       label: labelsById.get(id) ?? formatUnknownChannelRemovalLabel(id),
     }))
     .toSorted(compareChannelRemovalChoices);
+}
+
+function formatChannelRemovalLabel(label: string, fallback: string): string {
+  return sanitizeTerminalText(label) || formatUnknownChannelRemovalLabel(fallback);
 }
 
 function formatUnknownChannelRemovalLabel(id: string): string {

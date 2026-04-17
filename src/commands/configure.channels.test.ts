@@ -3,12 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const select = vi.hoisted(() => vi.fn());
 const confirm = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
-
-vi.mock("../channels/chat-meta.js", () => ({
-  listChatChannels: () => [
+const chatChannels = vi.hoisted(() =>
+  vi.fn(() => [
     { id: "telegram", label: "Telegram" },
     { id: "twitch", label: "Twitch" },
-  ],
+  ]),
+);
+
+vi.mock("../channels/chat-meta.js", () => ({
+  listChatChannels: () => chatChannels(),
 }));
 
 vi.mock("../terminal/note.js", () => ({
@@ -25,6 +28,10 @@ import { removeChannelConfigWizard } from "./configure.channels.js";
 describe("removeChannelConfigWizard", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    chatChannels.mockReturnValue([
+      { id: "telegram", label: "Telegram" },
+      { id: "twitch", label: "Twitch" },
+    ]);
     confirm.mockResolvedValue(true);
   });
 
@@ -100,6 +107,65 @@ describe("removeChannelConfigWizard", () => {
       defaults: { groupPolicy: "open" },
       modelByChannel: { openai: { telegram: "gpt-5.4" } },
     });
+  });
+
+  it("does not list blocked object keys as removable channels", async () => {
+    select.mockResolvedValue("done");
+
+    await removeChannelConfigWizard(
+      {
+        channels: {
+          __proto__: { token: "secret" },
+          constructor: { token: "secret" },
+          prototype: { token: "secret" },
+          telegram: { token: "secret" },
+        },
+      } as never,
+      {} as never,
+    );
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: [
+          expect.objectContaining({ value: "telegram", label: "Telegram" }),
+          { value: "done", label: "Done" },
+        ],
+      }),
+    );
+  });
+
+  it("sanitizes known channel labels before rendering prompts", async () => {
+    chatChannels.mockReturnValue([
+      { id: "telegram", label: "Telegram\u001B[31m\nBot\u0007" },
+      { id: "twitch", label: "Twitch" },
+    ]);
+    select.mockResolvedValueOnce("telegram").mockResolvedValueOnce("done");
+
+    await removeChannelConfigWizard(
+      {
+        channels: {
+          telegram: { token: "secret" },
+        },
+      } as never,
+      {} as never,
+    );
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.arrayContaining([
+          expect.objectContaining({ value: "telegram", label: "Telegram\\nBot" }),
+        ]),
+      }),
+    );
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Delete Telegram\\nBot configuration from ~/.openclaw/openclaw.json?",
+      }),
+    );
+    expect(note).toHaveBeenCalledWith(
+      "Telegram\\nBot removed from config.\nNote: credentials/sessions on disk are unchanged.",
+      "Channel removed",
+    );
   });
 
   it("sanitizes unknown channel keys before rendering prompts", async () => {
