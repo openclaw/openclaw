@@ -85,21 +85,43 @@ export async function executeJobCoreWithTimeout(
 
   const runAbortController = new AbortController();
   let timeoutId: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      executeJobCore(state, job, runAbortController.signal),
-      new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          runAbortController.abort(timeoutErrorMessage());
-          reject(new Error(timeoutErrorMessage()));
-        }, jobTimeoutMs);
-      }),
-    ]);
-  } finally {
+
+  const jobPromise = executeJobCore(state, job, runAbortController.signal);
+
+  return await new Promise<Awaited<ReturnType<typeof executeJobCore>>>((resolve, reject) => {
+    let graceExpired = false;
+    timeoutId = setTimeout(() => {
+      // The timeout fired, but the job may have completed cleanly just before
+      // this tick (race). Give the job a short grace period to resolve — if it
+      // does, use that result. Only abort + reject if the grace period expires
+      // with no job resolution.
+      const GRACE_MS = 150;
+      const graceTimer = setTimeout(() => {
+        graceExpired = true;
+        runAbortController.abort(timeoutErrorMessage());
+        // After aborting, wait for the job to settle and return its result
+        // (which will be an aborted error since isAborted() will be true).
+        jobPromise.then(resolve).catch(reject);
+      }, GRACE_MS);
+
+      // If the job resolves during the grace window, take that result instead.
+      jobPromise.then((result) => {
+        clearTimeout(graceTimer);
+        if (!graceExpired) {
+          resolve(result);
+        }
+      }).catch((err) => {
+        clearTimeout(graceTimer);
+        if (!graceExpired) {
+          reject(err);
+        }
+      });
+    }, jobTimeoutMs);
+  }).finally(() => {
     if (timeoutId) {
       clearTimeout(timeoutId);
     }
-  }
+  });
 }
 
 function resolveRunConcurrency(state: CronServiceState): number {
