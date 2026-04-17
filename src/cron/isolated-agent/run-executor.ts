@@ -253,6 +253,8 @@ export async function executeCronRun(params: {
     normalizeVerboseLevel(params.cronSession.sessionEntry.verboseLevel) ??
     normalizeVerboseLevel(params.agentVerboseDefault) ??
     "off";
+  const initialCleanupSessionId = params.cronSession.sessionEntry.sessionId;
+  let latestCleanupSessionId = initialCleanupSessionId;
   registerAgentRunContext(params.cronSession.sessionEntry.sessionId, {
     sessionKey: params.agentSessionKey,
     verboseLevel: resolvedVerboseLevel,
@@ -324,6 +326,7 @@ export async function executeCronRun(params: {
     if (!runResult) {
       throw new Error("cron isolated run returned no result");
     }
+    latestCleanupSessionId = runResult.meta?.agentMeta?.sessionId?.trim() || latestCleanupSessionId;
 
     if (!params.isAborted()) {
       const interimPayloads = runResult.payloads ?? [];
@@ -368,6 +371,8 @@ export async function executeCronRun(params: {
         ].join(" ");
         await executor.runPrompt(continuationPrompt);
         ({ runResult, fallbackProvider, fallbackModel, runEndedAt } = executor.getState());
+        latestCleanupSessionId =
+          runResult?.meta?.agentMeta?.sessionId?.trim() || latestCleanupSessionId;
       }
     }
 
@@ -385,11 +390,16 @@ export async function executeCronRun(params: {
   } finally {
     if (params.job.sessionTarget === "isolated") {
       const { disposeSessionMcpRuntime } = await loadBundleMcpToolsRuntime();
-      await disposeSessionMcpRuntime(params.cronSession.sessionEntry.sessionId).catch((error) => {
-        logWarn(
-          `failed to dispose bundle MCP runtime for isolated cron session ${params.cronSession.sessionEntry.sessionId}: ${formatErrorMessage(error)}`,
-        );
-      });
+      for (const sessionId of new Set([initialCleanupSessionId, latestCleanupSessionId])) {
+        if (!sessionId) {
+          continue;
+        }
+        await disposeSessionMcpRuntime(sessionId).catch((error) => {
+          logWarn(
+            `failed to dispose bundle MCP runtime for isolated cron session ${sessionId}: ${formatErrorMessage(error)}`,
+          );
+        });
+      }
     }
   }
 }

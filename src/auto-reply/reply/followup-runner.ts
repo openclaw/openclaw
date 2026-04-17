@@ -159,6 +159,7 @@ export function createFollowupRunner(params: {
         : { ...queued, run: { ...queued.run, config: runtimeConfig } };
     const run = effectiveQueued.run;
     const initialCleanupSessionId = run.sessionId;
+    let latestCleanupSessionId = initialCleanupSessionId;
     const replyOperation = createReplyOperation({
       sessionId: run.sessionId,
       sessionKey: replySessionKey ?? "",
@@ -297,6 +298,8 @@ export function createFollowupRunner(params: {
           },
         });
         runResult = fallbackResult.result;
+        latestCleanupSessionId =
+          normalizeOptionalString(runResult.meta?.agentMeta?.sessionId) ?? latestCleanupSessionId;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
       } catch (err) {
@@ -412,6 +415,7 @@ export function createFollowupRunner(params: {
         const { disposeSessionMcpRuntime } = await loadBundleMcpToolsRuntime();
         const sessionIds = new Set([
           initialCleanupSessionId,
+          latestCleanupSessionId,
           normalizeOptionalString(run.sessionId),
           normalizeOptionalString(queued.run.sessionId),
         ]);

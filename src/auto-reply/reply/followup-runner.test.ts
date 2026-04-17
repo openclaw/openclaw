@@ -965,7 +965,11 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
   it("cleans up bundle MCP after a drained followup run completes", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [],
-      meta: {},
+      meta: {
+        agentMeta: {
+          sessionId: "session-compacted",
+        },
+      },
     });
 
     const runner = createFollowupRunner({
@@ -989,8 +993,7 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
         }
       | undefined;
     expect(call?.cleanupBundleMcpOnRunEnd).toBeUndefined();
-    expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
-    expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session");
+    expect(disposeSessionMcpRuntimeMock.mock.calls).toEqual([["session"], ["session-compacted"]]);
   });
 
   it("passes stored warning signature history to embedded followup runs", async () => {

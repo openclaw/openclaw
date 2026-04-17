@@ -609,6 +609,7 @@ export async function runAgentTurnWithFallback(params: {
           config: runtimeConfig,
         };
   const initialCleanupSessionId = effectiveRun.sessionId;
+  let latestCleanupSessionId = initialCleanupSessionId;
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
@@ -1270,6 +1271,8 @@ export async function runAgentTurnWithFallback(params: {
           },
         });
         runResult = fallbackResult.result;
+        latestCleanupSessionId =
+          normalizeOptionalString(runResult.meta?.agentMeta?.sessionId) ?? latestCleanupSessionId;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
         fallbackAttempts = Array.isArray(fallbackResult.attempts)
@@ -1613,6 +1616,7 @@ export async function runAgentTurnWithFallback(params: {
       const { disposeSessionMcpRuntime } = await loadBundleMcpToolsRuntime();
       const sessionIds = new Set([
         initialCleanupSessionId,
+        latestCleanupSessionId,
         normalizeOptionalString(params.followupRun.run.sessionId),
       ]);
       for (const sessionId of sessionIds) {

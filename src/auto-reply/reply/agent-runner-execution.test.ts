@@ -1745,12 +1745,13 @@ describe("runAgentTurnWithFallback", () => {
   it("cleans up bundle MCP once after fallback selection completes", async () => {
     const followupRun = createFollowupRun();
     followupRun.run.cleanupBundleMcpOnRunEnd = true;
-    state.runEmbeddedPiAgentMock.mockImplementation(async () => {
-      followupRun.run.sessionId = "session-rotated";
-      return {
-        payloads: [{ text: "ok" }],
-        meta: {},
-      };
+    state.runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          sessionId: "session-compacted",
+        },
+      },
     });
 
     const sessionEntry: SessionEntry = {
@@ -1794,7 +1795,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(state.disposeSessionMcpRuntimeMock).toHaveBeenCalledTimes(2);
     expect(state.disposeSessionMcpRuntimeMock.mock.calls).toEqual([
       ["session"],
-      ["session-rotated"],
+      ["session-compacted"],
     ]);
   });
 
