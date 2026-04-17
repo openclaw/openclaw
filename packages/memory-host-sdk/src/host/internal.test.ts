@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   buildMultimodalChunkForIndexing,
   buildFileEntry,
@@ -16,13 +16,24 @@ import {
   type MemoryMultimodalSettings,
 } from "./multimodal.js";
 
+let sharedTempRoot = "";
+let sharedTempId = 0;
+
+beforeAll(async () => {
+  sharedTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-sdk-tests-"));
+});
+
+afterAll(async () => {
+  if (sharedTempRoot) {
+    await fs.rm(sharedTempRoot, { recursive: true, force: true });
+  }
+});
+
 function setupTempDirLifecycle(prefix: string): () => string {
   let tmpDir = "";
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  });
-  afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    tmpDir = path.join(sharedTempRoot, `${prefix}${sharedTempId++}`);
+    await fs.mkdir(tmpDir, { recursive: true });
   });
   return () => tmpDir;
 }
@@ -76,6 +87,25 @@ describe("listMemoryFiles", () => {
     const files = await listMemoryFiles(tmpDir, [singleFile]);
     expect(files).toHaveLength(2);
     expect(files.some((file) => file.endsWith("standalone.md"))).toBe(true);
+  });
+
+  it("uses lowercase memory.md as the root fallback when MEMORY.md is absent", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy memory");
+
+    const files = await listMemoryFiles(tmpDir);
+
+    expect(files).toEqual([path.join(tmpDir, "memory.md")]);
+  });
+
+  it("prefers MEMORY.md when both root files exist", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy memory");
+
+    const files = await listMemoryFiles(tmpDir);
+
+    expect(files).toEqual([path.join(tmpDir, "MEMORY.md")]);
   });
 
   it("handles relative paths in additional paths", async () => {

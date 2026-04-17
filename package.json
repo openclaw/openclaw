@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.12-beta.1",
+  "version": "2026.4.16",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -29,16 +29,22 @@
     "dist/",
     "!dist/**/*.map",
     "!dist/plugin-sdk/.tsbuildinfo",
+    "!dist/extensions/*/node_modules/**",
     "!dist/extensions/qa-channel/**",
     "dist/extensions/qa-channel/runtime-api.js",
     "!dist/extensions/qa-lab/**",
     "dist/extensions/qa-lab/runtime-api.js",
-    "docs/",
-    "!docs/.generated/**",
-    "!docs/.i18n/zh-CN.tm.jsonl",
-    "qa/scenarios/",
+    "!dist/extensions/qa-matrix/**",
+    "!dist/plugin-sdk/extensions/qa-lab/**",
+    "!dist/plugin-sdk/qa-lab.*",
+    "!dist/plugin-sdk/qa-runtime.*",
+    "!dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
+    "!dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
+    "!dist/qa-runtime-*.js",
+    "docs/reference/templates/",
     "skills/",
     "scripts/npm-runner.mjs",
+    "scripts/preinstall-package-manager-warning.mjs",
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/windows-cmd-helpers.mjs"
   ],
@@ -53,6 +59,14 @@
     "./plugin-sdk/core": {
       "types": "./dist/plugin-sdk/core.d.ts",
       "default": "./dist/plugin-sdk/core.js"
+    },
+    "./plugin-sdk/lmstudio": {
+      "types": "./dist/plugin-sdk/lmstudio.d.ts",
+      "default": "./dist/plugin-sdk/lmstudio.js"
+    },
+    "./plugin-sdk/lmstudio-runtime": {
+      "types": "./dist/plugin-sdk/lmstudio-runtime.d.ts",
+      "default": "./dist/plugin-sdk/lmstudio-runtime.js"
     },
     "./plugin-sdk/provider-setup": {
       "types": "./dist/plugin-sdk/provider-setup.d.ts",
@@ -474,6 +488,10 @@
       "types": "./dist/plugin-sdk/command-status.d.ts",
       "default": "./dist/plugin-sdk/command-status.js"
     },
+    "./plugin-sdk/command-status-runtime": {
+      "types": "./dist/plugin-sdk/command-status-runtime.d.ts",
+      "default": "./dist/plugin-sdk/command-status-runtime.js"
+    },
     "./plugin-sdk/command-detection": {
       "types": "./dist/plugin-sdk/command-detection.d.ts",
       "default": "./dist/plugin-sdk/command-detection.js"
@@ -754,6 +772,10 @@
       "types": "./dist/plugin-sdk/matrix-thread-bindings.d.ts",
       "default": "./dist/plugin-sdk/matrix-thread-bindings.js"
     },
+    "./plugin-sdk/qa-runner-runtime": {
+      "types": "./dist/plugin-sdk/qa-runner-runtime.d.ts",
+      "default": "./dist/plugin-sdk/qa-runner-runtime.js"
+    },
     "./plugin-sdk/mattermost": {
       "types": "./dist/plugin-sdk/mattermost.d.ts",
       "default": "./dist/plugin-sdk/mattermost.js"
@@ -858,6 +880,10 @@
       "types": "./dist/plugin-sdk/skill-commands-runtime.d.ts",
       "default": "./dist/plugin-sdk/skill-commands-runtime.js"
     },
+    "./plugin-sdk/native-command-config-runtime": {
+      "types": "./dist/plugin-sdk/native-command-config-runtime.d.ts",
+      "default": "./dist/plugin-sdk/native-command-config-runtime.js"
+    },
     "./plugin-sdk/native-command-registry": {
       "types": "./dist/plugin-sdk/native-command-registry.d.ts",
       "default": "./dist/plugin-sdk/native-command-registry.js"
@@ -921,6 +947,10 @@
     "./plugin-sdk/provider-model-shared": {
       "types": "./dist/plugin-sdk/provider-model-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-model-shared.js"
+    },
+    "./plugin-sdk/opencode": {
+      "types": "./dist/plugin-sdk/opencode.d.ts",
+      "default": "./dist/plugin-sdk/opencode.js"
     },
     "./plugin-sdk/volc-model-catalog-shared": {
       "types": "./dist/plugin-sdk/volc-model-catalog-shared.d.ts",
@@ -1101,14 +1131,15 @@
     "android:test:third-party": "cd apps/android && ./gradlew :app:testThirdPartyDebugUnitTest",
     "audit:seams": "node scripts/audit-seams.mjs",
     "build": "node scripts/build-all.mjs",
-    "build:docker": "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --experimental-strip-types scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
+    "build:ci-artifacts": "node scripts/build-all.mjs ciArtifacts",
+    "build:docker": "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node --import tsx scripts/write-npm-update-compat-sidecars.ts && node scripts/build-stamp.mjs && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --experimental-strip-types scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
     "build:strict-smoke": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs",
     "canon:check": "node scripts/canon.mjs check",
     "canon:check:json": "node scripts/canon.mjs check --json",
     "canon:enforce": "node scripts/canon.mjs enforce --json",
     "canvas:a2ui:bundle": "node scripts/bundle-a2ui.mjs",
-    "check": "pnpm check:no-conflict-markers && pnpm tool-display:check && pnpm check:host-env-policy:swift && pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm tsgo && node scripts/prepare-extension-package-boundary-artifacts.mjs && pnpm lint && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
+    "check": "pnpm check:no-conflict-markers && pnpm tool-display:check && pnpm check:host-env-policy:swift && pnpm tsgo && pnpm lint && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope && pnpm check:import-cycles && pnpm check:madge-import-cycles",
     "check:base-config-schema": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "check:bundled-channel-config-metadata": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-i18n-glossary && pnpm docs:check-links",
@@ -1133,6 +1164,7 @@
     "deadcode:report:ci:ts-unused": "mkdir -p .artifacts/deadcode && pnpm deadcode:ts-unused > .artifacts/deadcode/ts-unused-exports.txt 2>&1 || true",
     "deadcode:ts-prune": "pnpm dlx ts-prune src extensions scripts",
     "deadcode:ts-unused": "pnpm dlx ts-unused-exports tsconfig.json --ignoreTestFiles --exitWithCount",
+    "deps:root-ownership": "node scripts/root-dependency-ownership-audit.mjs",
     "dev": "node scripts/run-node.mjs",
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:check-i18n-glossary": "node scripts/check-docs-i18n-glossary.mjs",
@@ -1208,6 +1240,7 @@
     "plugin-sdk:usage": "node --import tsx scripts/analyze-plugin-sdk-usage.ts",
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",
     "postinstall": "node scripts/postinstall-bundled-plugins.mjs",
+    "preinstall": "node scripts/preinstall-package-manager-warning.mjs",
     "prepack": "node --import tsx scripts/openclaw-prepack.ts",
     "prepare": "command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath git-hooks || exit 0",
     "prepush:ci": "bash scripts/prepush-ci.sh",
@@ -1240,6 +1273,7 @@
     "test": "node scripts/test-projects.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:auth:compat": "node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts src/gateway/protocol/connect-error-details.test.ts",
+    "test:build:bundled-runtime-deps": "node scripts/test-built-bundled-runtime-deps.mjs",
     "test:build:singleton": "node scripts/test-built-plugin-singleton.mjs",
     "test:bundled": "node scripts/run-vitest.mjs run --config test/vitest/vitest.bundled.config.ts",
     "test:changed": "node scripts/test-projects.mjs --changed origin/main",
@@ -1359,7 +1393,6 @@
     "@homebridge/ciao": "^1.3.6",
     "@lancedb/lancedb": "^0.27.2",
     "@larksuiteoapi/node-sdk": "^1.60.0",
-    "@line/bot-sdk": "^11.0.0",
     "@lydell/node-pty": "1.2.0-beta.12",
     "@mariozechner/pi-agent-core": "0.66.1",
     "@mariozechner/pi-ai": "0.66.1",
@@ -1368,9 +1401,11 @@
     "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
+    "@pierre/diffs": "1.1.13",
     "@sinclair/typebox": "0.34.49",
     "@slack/bolt": "^4.7.0",
     "@slack/web-api": "^7.15.0",
+    "@whiskeysockets/baileys": "7.0.0-rc.9",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",
@@ -1384,7 +1419,6 @@
     "gaxios": "7.1.4",
     "google-auth-library": "^10.6.2",
     "grammy": "^1.42.0",
-    "hono": "4.12.12",
     "https-proxy-agent": "^9.0.0",
     "ipaddr.js": "^2.3.0",
     "jimp": "^1.6.1",
@@ -1417,6 +1451,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@copilotkit/aimock": "1.13.0",
     "@grammyjs/types": "^3.26.0",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
@@ -1453,10 +1488,12 @@
   "optionalDependencies": {
     "@discordjs/opus": "^0.10.0",
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
-    "openshell": "0.1.0"
+    "fake-indexeddb": "^6.2.5",
+    "music-metadata": "^11.12.3"
   },
   "overrides": {
-    "axios": "1.15.0"
+    "axios": "1.15.0",
+    "follow-redirects": "1.16.0"
   },
   "engines": {
     "node": ">=22.14.0"
@@ -1465,14 +1502,15 @@
   "pnpm": {
     "overrides": {
       "@anthropic-ai/sdk": "0.81.0",
-      "hono": "4.12.12",
-      "@hono/node-server": "1.19.13",
+      "hono": "4.12.14",
+      "@hono/node-server": "1.19.14",
       "axios": "1.15.0",
+      "follow-redirects": "1.16.0",
       "defu": "6.1.5",
       "fast-xml-parser": "5.5.7",
       "request": "npm:@cypress/request@3.0.10",
       "request-promise": "npm:@cypress/request-promise@5.0.0",
-      "basic-ftp": "5.2.2",
+      "basic-ftp": "5.3.0",
       "file-type": "22.0.1",
       "form-data": "2.5.4",
       "minimatch": "10.2.4",
@@ -1482,7 +1520,8 @@
       "@sinclair/typebox": "0.34.49",
       "tar": "7.5.13",
       "tough-cookie": "4.1.3",
-      "yauzl": "3.2.1"
+      "yauzl": "3.2.1",
+      "protobufjs": "7.5.5"
     },
     "onlyBuiltDependencies": [
       "@discordjs/opus",
@@ -1507,6 +1546,9 @@
           "strip-ansi": "^7.2.0"
         }
       }
+    },
+    "patchedDependencies": {
+      "@whiskeysockets/baileys@7.0.0-rc.9": "patches/@whiskeysockets__baileys@7.0.0-rc.9.patch"
     }
   }
 }

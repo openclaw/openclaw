@@ -9,7 +9,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
-import { createMatrixRoomMessageHandler } from "./handler.js";
+import { createMatrixRoomMessageHandler, MatrixRetryableInboundError } from "./handler.js";
 import {
   createMatrixHandlerTestHarness,
   createMatrixReactionEvent,
@@ -445,6 +445,38 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
+  it("blocks room control commands from DM-only paired senders", async () => {
+    const readAllowFromStore = vi.fn(async () => ["@user:example.org"]);
+    const { handler, finalizeInboundContext, recordInboundSession } =
+      createMatrixHandlerTestHarness({
+        isDirectMessage: false,
+        readAllowFromStore,
+        roomsConfig: {
+          "!room:example.org": { requireMention: false },
+        },
+        shouldHandleTextCommands: () => true,
+        hasControlCommand: () => true,
+        cfg: {
+          commands: {
+            useAccessGroups: true,
+          },
+        },
+        getMemberDisplayName: async () => "sender",
+      });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$dm-only-room-command",
+        body: "/config",
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
+    expect(readAllowFromStore).not.toHaveBeenCalled();
+  });
+
   it("processes room messages mentioned via displayName in formatted_body", async () => {
     const recordInboundSession = vi.fn(async () => {});
     const { handler } = createMatrixHandlerTestHarness({
@@ -530,6 +562,32 @@ describe("matrix monitor handler pairing account scope", () => {
 
     expect(recordInboundSession).not.toHaveBeenCalled();
     expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops root events that carry a bundled replacement relation", async () => {
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      mentionRegexes: [/@bot/i],
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$edited-root",
+        body: "@bot please reply",
+        mentions: { user_ids: ["@bot:example.org"] },
+        unsigned: {
+          "m.relations": {
+            "m.replace": {
+              event_id: "$edit",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
   it("skips media downloads for unmentioned group media messages", async () => {
@@ -1845,7 +1903,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("matrix handler failed"));
   });
 
-  it("releases a claimed event when queued final delivery fails", async () => {
+  it("keeps replay committed when queued final delivery fails after a generic error", async () => {
     const inboundDeduper = {
       claimEvent: vi.fn(() => true),
       commitEvent: vi.fn(async () => undefined),
@@ -1882,18 +1940,18 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       }),
     );
 
-    expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
-    expect(inboundDeduper.releaseEvent).toHaveBeenCalledWith({
+    expect(inboundDeduper.commitEvent).toHaveBeenCalledWith({
       roomId: "!room:example.org",
       eventId: "$release-on-final-delivery-error",
     });
+    expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("matrix final reply failed"),
     );
   });
 
   it.each(["tool", "block"] as const)(
-    "releases a claimed event when queued %s delivery fails and no final reply exists",
+    "keeps replay committed when queued %s delivery fails after a generic error and no final reply exists",
     async (kind) => {
       const inboundDeduper = {
         claimEvent: vi.fn(() => true),
@@ -1935,14 +1993,105 @@ describe("matrix monitor handler durable inbound dedupe", () => {
         }),
       );
 
-      expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
-      expect(inboundDeduper.releaseEvent).toHaveBeenCalledWith({
+      expect(inboundDeduper.commitEvent).toHaveBeenCalledWith({
         roomId: "!room:example.org",
         eventId: `$release-on-${kind}-delivery-error`,
       });
+      expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
       expect(runtime.error).toHaveBeenCalledWith(
         expect.stringContaining(`matrix ${kind} reply failed`),
       );
+    },
+  );
+
+  it("releases a claimed event when queued final delivery fails with an explicit retryable error", async () => {
+    const inboundDeduper = {
+      claimEvent: vi.fn(() => true),
+      commitEvent: vi.fn(async () => undefined),
+      releaseEvent: vi.fn(),
+    };
+    const runtime = {
+      error: vi.fn(),
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      inboundDeduper,
+      runtime: runtime as never,
+      dispatchReplyFromConfig: vi.fn(async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      })),
+      createReplyDispatcherWithTyping: (params) => ({
+        dispatcher: {
+          markComplete: () => {},
+          waitForIdle: async () => {
+            params?.onError?.(new MatrixRetryableInboundError("retry send"), { kind: "final" });
+          },
+        },
+        replyOptions: {},
+        markDispatchIdle: () => {},
+        markRunComplete: () => {},
+      }),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$retryable-final-delivery-error",
+        body: "hello",
+      }),
+    );
+
+    expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
+    expect(inboundDeduper.releaseEvent).toHaveBeenCalledWith({
+      roomId: "!room:example.org",
+      eventId: "$retryable-final-delivery-error",
+    });
+  });
+
+  it.each(["tool", "block"] as const)(
+    "releases a claimed event when queued %s delivery fails with an explicit retryable error and no final reply exists",
+    async (kind) => {
+      const inboundDeduper = {
+        claimEvent: vi.fn(() => true),
+        commitEvent: vi.fn(async () => undefined),
+        releaseEvent: vi.fn(),
+      };
+      const { handler } = createMatrixHandlerTestHarness({
+        inboundDeduper,
+        dispatchReplyFromConfig: vi.fn(async () => ({
+          queuedFinal: false,
+          counts: {
+            final: 0,
+            block: kind === "block" ? 1 : 0,
+            tool: kind === "tool" ? 1 : 0,
+          },
+        })),
+        createReplyDispatcherWithTyping: (params) => ({
+          dispatcher: {
+            markComplete: () => {},
+            waitForIdle: async () => {
+              params?.onError?.(new MatrixRetryableInboundError("retry send"), { kind });
+            },
+          },
+          replyOptions: {},
+          markDispatchIdle: () => {},
+          markRunComplete: () => {},
+        }),
+      });
+
+      await handler(
+        "!room:example.org",
+        createMatrixTextMessageEvent({
+          eventId: `$retryable-${kind}-delivery-error`,
+          body: "hello",
+        }),
+      );
+
+      expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
+      expect(inboundDeduper.releaseEvent).toHaveBeenCalledWith({
+        roomId: "!room:example.org",
+        eventId: `$retryable-${kind}-delivery-error`,
+      });
     },
   );
 

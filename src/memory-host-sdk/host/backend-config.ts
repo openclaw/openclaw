@@ -89,9 +89,9 @@ const DEFAULT_QMD_COMMAND_TIMEOUT_MS = 30_000;
 const DEFAULT_QMD_UPDATE_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_EMBED_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_LIMITS: ResolvedQmdLimitsConfig = {
-  maxResults: 6,
-  maxSnippetChars: 700,
-  maxInjectedChars: 4_000,
+  maxResults: 4,
+  maxSnippetChars: 450,
+  maxInjectedChars: 2_200,
   timeoutMs: DEFAULT_QMD_TIMEOUT_MS,
 };
 const DEFAULT_QMD_MCPORTER: ResolvedQmdMcporterConfig = {
@@ -242,14 +242,6 @@ function resolveSearchMode(raw?: MemoryQmdConfig["searchMode"]): MemoryQmdSearch
 function resolveSearchTool(raw?: MemoryQmdConfig["searchTool"]): string | undefined {
   const value = raw?.trim();
   return value ? value : undefined;
-}
-
-function normalizeQmdCommand(command: string): string {
-  const normalized = path.normalize(command);
-  if (normalized === "/opt/homebrew/bin/qmd" || normalized === "/usr/local/bin/qmd") {
-    return "qmd";
-  }
-  return command;
 }
 
 function resolveSessionConfig(
@@ -405,7 +397,7 @@ export function resolveMemoryBackendConfig(params: {
 
   const rawCommand = normalizeOptionalString(qmdCfg?.command) || "qmd";
   const parsedCommand = splitShellArgs(rawCommand);
-  const command = normalizeQmdCommand(parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd");
+  const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
   const resolved: ResolvedQmdConfig = {
     command,
     mcporter: resolveMcporterConfig(qmdCfg?.mcporter),

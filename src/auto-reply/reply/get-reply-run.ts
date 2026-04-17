@@ -97,6 +97,7 @@ let sessionUpdatesRuntimePromise: Promise<typeof import("./session-updates.runti
 let sessionStoreRuntimePromise: Promise<
   typeof import("../../config/sessions/store.runtime.js")
 > | null = null;
+const UNTRUSTED_SYSTEM_EVENT_LINE_RE = /^System \(untrusted\):/m;
 
 function loadPiEmbeddedRuntime() {
   piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.runtime.js");
@@ -344,23 +345,29 @@ export async function runPreparedReply(
   const baseBodyForPrompt = isBareSessionReset
     ? [startupContextPrelude, baseBodyFinal].filter(Boolean).join("\n\n")
     : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
-  const baseBodyTrimmed = baseBodyForPrompt.trim();
+  const hasUserBody = baseBodyFinal.trim().length > 0;
   const hasMediaAttachment = Boolean(
     sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
   );
-  if (!baseBodyTrimmed && !hasMediaAttachment) {
-    await typing.onReplyStart();
+  if (!hasUserBody && !hasMediaAttachment) {
+    // Skip onReplyStart when typing is suppressed (e.g. sendPolicy deny) —
+    // otherwise channels that wire onReplyStart to typing indicators leak
+    // visible signals even though outbound delivery is suppressed.
+    if (!suppressTyping) {
+      await typing.onReplyStart();
+    }
     logVerbose("Inbound body empty after normalization; skipping agent run");
     typing.cleanup();
     return {
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     };
   }
-  // When the user sends media without text, provide a minimal body so the agent
-  // run proceeds and the image/document is injected by the embedded runner.
-  const effectiveBaseBody = baseBodyTrimmed
+  // Prefix-only inbound metadata should not force a run on empty turns. When media
+  // arrives without text, keep the contextual prefix but append a minimal placeholder
+  // so the embedded runner can inject the attachment.
+  const effectiveBaseBody = hasUserBody
     ? baseBodyForPrompt
-    : "[User sent media without caption]";
+    : [inboundUserContext, "[User sent media without caption]"].filter(Boolean).join("\n\n");
   let prefixedBodyBase = await applySessionHints({
     baseBody: effectiveBaseBody,
     abortedLastRun,
@@ -392,6 +399,7 @@ export async function runPreparedReply(
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
   const drainedSystemEventBlocks: string[] = [];
+  let forceSenderIsOwnerFalseFromSystemEvents = false;
   const rebuildPromptBodies = async (): Promise<{
     prefixedCommandBody: string;
     queuedBody: string;
@@ -405,6 +413,9 @@ export async function runPreparedReply(
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
+        if (UNTRUSTED_SYSTEM_EVENT_LINE_RE.test(eventsBlock)) {
+          forceSenderIsOwnerFalseFromSystemEvents = true;
+        }
       }
     }
     return buildReplyPromptBodies({
@@ -628,7 +639,10 @@ export async function runPreparedReply(
       senderName: normalizeOptionalString(sessionCtx.SenderName),
       senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
       senderE164: normalizeOptionalString(sessionCtx.SenderE164),
-      senderIsOwner: command.senderIsOwner,
+      senderIsOwner: forceSenderIsOwnerFalseFromSystemEvents ? false : command.senderIsOwner,
+      traceAuthorized:
+        (forceSenderIsOwnerFalseFromSystemEvents ? false : command.senderIsOwner) ||
+        (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
       config: cfg,

@@ -20,7 +20,10 @@ import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-help
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { isRateLimitErrorMessage } from "./pi-embedded-helpers/errors.js";
+import {
+  isCloudflareOrHtmlErrorPage,
+  isRateLimitErrorMessage,
+} from "./pi-embedded-helpers/errors.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
 const LIVE = isLiveTestEnabled();
@@ -162,6 +165,24 @@ describe("isModelNotFoundErrorMessage", () => {
   });
 });
 
+describe("isProviderUnavailableErrorMessage", () => {
+  it("matches raw HTML provider error pages from transient upstreams", () => {
+    expect(
+      isProviderUnavailableErrorMessage(
+        "Error: <html><head><title>Service Unavailable</title></head><body>try again</body></html>",
+      ),
+    ).toBe(true);
+  });
+
+  it("matches status-prefixed Cloudflare HTML pages", () => {
+    expect(
+      isProviderUnavailableErrorMessage(
+        "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
+      ),
+    ).toBe(true);
+  });
+});
+
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
   const msg = raw.toLowerCase();
   return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
@@ -171,8 +192,20 @@ function isRefreshTokenReused(raw: string): boolean {
   return /refresh_token_reused/i.test(raw);
 }
 
+function isAccountIdExtractionError(raw: string): boolean {
+  return /failed to extract accountid from token/i.test(raw);
+}
+
 function isInstructionsRequiredError(raw: string): boolean {
   return /instructions are required/i.test(raw);
+}
+
+function isOpenAiCodexHtmlInterruption(raw: string): boolean {
+  const trimmed = raw.trim().replace(/^Error:\s*/i, "");
+  return (
+    /^(?:<!doctype\s+html\b|<html\b)/i.test(trimmed) &&
+    (/<meta\s+name=["']viewport["']/i.test(trimmed) || /<body\b/i.test(trimmed))
+  );
 }
 
 function isModelTimeoutError(raw: string): boolean {
@@ -182,6 +215,8 @@ function isModelTimeoutError(raw: string): boolean {
 function isProviderUnavailableErrorMessage(raw: string): boolean {
   const msg = raw.toLowerCase();
   return (
+    isRawHtmlProviderErrorPage(raw) ||
+    isCloudflareOrHtmlErrorPage(raw) ||
     msg.includes("no allowed providers are available") ||
     msg.includes("provider unavailable") ||
     msg.includes("upstream provider unavailable") ||
@@ -191,6 +226,14 @@ function isProviderUnavailableErrorMessage(raw: string): boolean {
     msg.includes("create and start a new dedicated endpoint") ||
     msg.includes("no available capacity was found for the model")
   );
+}
+
+function isRawHtmlProviderErrorPage(raw: string): boolean {
+  const normalized = raw
+    .trim()
+    .replace(/^error:\s*/i, "")
+    .trim();
+  return /^(?:<!doctype\s+html\b|<html\b)/i.test(normalized) && /<\/html>/i.test(normalized);
 }
 
 function isOllamaUnavailableErrorMessage(raw: string): boolean {
@@ -276,6 +319,15 @@ describe("resolveLiveSystemPrompt", () => {
         provider: "openai",
       } as Model<Api>),
     ).toBeUndefined();
+  });
+
+  it("matches OpenAI Codex HTML interruption pages", () => {
+    expect(
+      isOpenAiCodexHtmlInterruption(
+        'Error: <html><head><meta name="viewport" content="width=device-width" /></head><body>Try again</body></html>',
+      ),
+    ).toBe(true);
+    expect(isOpenAiCodexHtmlInterruption("Error: connection reset")).toBe(false);
   });
 });
 
@@ -749,6 +801,15 @@ describeLive("live models (profile keys)", () => {
             if (
               allowNotFoundSkip &&
               model.provider === "openai-codex" &&
+              isAccountIdExtractionError(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (codex account id extraction)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "openai-codex" &&
               isChatGPTUsageLimitErrorMessage(message)
             ) {
               skipped.push({ model: id, reason: message });
@@ -762,6 +823,15 @@ describeLive("live models (profile keys)", () => {
             ) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (instructions required)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "openai-codex" &&
+              isOpenAiCodexHtmlInterruption(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (codex html interruption)`);
               break;
             }
             if (allowNotFoundSkip && isModelTimeoutError(message)) {
