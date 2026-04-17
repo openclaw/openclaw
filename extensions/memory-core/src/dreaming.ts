@@ -625,18 +625,26 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
           snippets: candidates.map((c) => c.snippet).filter(Boolean),
           promotions: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
         };
-        const task = generateAndAppendDreamNarrative({
-          subagent: params.subagent,
-          workspaceDir,
-          data,
-          nowMs: sweepNowMs,
-          timezone: params.config.timezone,
-          logger: params.logger,
-        });
         if (detachNarratives) {
-          void task.catch(() => undefined);
+          queueMicrotask(() => {
+            void generateAndAppendDreamNarrative({
+              subagent: params.subagent!,
+              workspaceDir,
+              data,
+              nowMs: sweepNowMs,
+              timezone: params.config.timezone,
+              logger: params.logger,
+            }).catch(() => undefined);
+          });
         } else {
-          await task;
+          await generateAndAppendDreamNarrative({
+            subagent: params.subagent,
+            workspaceDir,
+            data,
+            nowMs: sweepNowMs,
+            timezone: params.config.timezone,
+            logger: params.logger,
+          });
         }
       }
     } catch (err) {

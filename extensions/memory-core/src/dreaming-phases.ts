@@ -1562,18 +1562,26 @@ async function runLightDreaming(params: {
       snippets: capped.map((e) => e.snippet).filter(Boolean),
       ...(themes.length > 0 ? { themes } : {}),
     };
-    const task = generateAndAppendDreamNarrative({
-      subagent: params.subagent,
-      workspaceDir: params.workspaceDir,
-      data,
-      nowMs,
-      timezone: params.config.timezone,
-      logger: params.logger,
-    });
     if (params.detachNarratives) {
-      void task.catch(() => undefined);
+      queueMicrotask(() => {
+        void generateAndAppendDreamNarrative({
+          subagent: params.subagent!,
+          workspaceDir: params.workspaceDir,
+          data,
+          nowMs,
+          timezone: params.config.timezone,
+          logger: params.logger,
+        }).catch(() => undefined);
+      });
     } else {
-      await task;
+      await generateAndAppendDreamNarrative({
+        subagent: params.subagent,
+        workspaceDir: params.workspaceDir,
+        data,
+        nowMs,
+        timezone: params.config.timezone,
+        logger: params.logger,
+      });
     }
   }
 }
@@ -1647,18 +1655,26 @@ async function runRemDreaming(params: {
               .filter(Boolean),
       ...(themes.length > 0 ? { themes } : {}),
     };
-    const task = generateAndAppendDreamNarrative({
-      subagent: params.subagent,
-      workspaceDir: params.workspaceDir,
-      data,
-      nowMs,
-      timezone: params.config.timezone,
-      logger: params.logger,
-    });
     if (params.detachNarratives) {
-      void task.catch(() => undefined);
+      queueMicrotask(() => {
+        void generateAndAppendDreamNarrative({
+          subagent: params.subagent!,
+          workspaceDir: params.workspaceDir,
+          data,
+          nowMs,
+          timezone: params.config.timezone,
+          logger: params.logger,
+        }).catch(() => undefined);
+      });
     } else {
-      await task;
+      await generateAndAppendDreamNarrative({
+        subagent: params.subagent,
+        workspaceDir: params.workspaceDir,
+        data,
+        nowMs,
+        timezone: params.config.timezone,
+        logger: params.logger,
+      });
     }
   }
 }
