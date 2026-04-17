@@ -26,6 +26,10 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "baseUrl": {
+        "type": "string",
+        "description": "Base URL of the Ollama API endpoint (e.g. http://100.x.y.z:11434). Overrides the default http://127.0.0.1:11434."
+      },
       "discovery": {
         "type": "object",
         "additionalProperties": false,
@@ -36,6 +40,10 @@
     }
   },
   "uiHints": {
+    "baseUrl": {
+      "label": "API Base URL",
+      "help": "Base URL for the Ollama API. Use this to point OpenClaw at a remote or Tailscale-accessible Ollama instance instead of localhost."
+    },
     "discovery": {
       "label": "Model Discovery",
       "help": "Plugin-owned controls for Ollama model auto-discovery."
