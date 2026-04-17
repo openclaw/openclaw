@@ -295,7 +295,9 @@ export function createSessionsSendTool(opts?: {
         ? { status: "skipped" as const, mode: "announce" as const }
         : { status: "pending" as const, mode: "announce" as const };
       const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
-        if (skipA2A) return;
+        if (skipA2A) {
+          return;
+        }
         void runSessionsSendA2AFlow({
           targetSessionKey: resolvedKey,
           displayKey,
