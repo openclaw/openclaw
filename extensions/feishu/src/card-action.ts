@@ -2,6 +2,7 @@ import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { decodeFeishuCardAction, buildFeishuCardActionTextFallback } from "./card-interaction.js";
+import { createFeishuClient } from "./client.js";
 import {
   createApprovalCard,
   FEISHU_APPROVAL_CANCEL_ACTION,
@@ -104,7 +105,7 @@ function releaseFeishuCardActionToken(params: { token: string; accountId: string
 function buildSyntheticMessageEvent(
   event: FeishuCardActionEvent,
   content: string,
-  chatType?: "p2p" | "group",
+  chatType: "p2p" | "group",
 ): FeishuMessageEvent {
   return {
     sender: {
@@ -117,7 +118,7 @@ function buildSyntheticMessageEvent(
     message: {
       message_id: `card-action-${event.token}`,
       chat_id: event.context.chat_id || event.operator.open_id,
-      chat_type: chatType ?? (event.context.chat_id ? "group" : "p2p"),
+      chat_type: chatType,
       message_type: "text",
       content: JSON.stringify({ text: content }),
     },
@@ -136,18 +137,79 @@ async function dispatchSyntheticCommand(params: {
   cfg: ClawdbotConfig;
   event: FeishuCardActionEvent;
   command: string;
+  account: ReturnType<typeof resolveFeishuRuntimeAccount>;
   botOpenId?: string;
   runtime?: RuntimeEnv;
   accountId?: string;
   chatType?: "p2p" | "group";
 }): Promise<void> {
+  const resolvedChatType = await resolveCardActionChatType({
+    event: params.event,
+    account: params.account,
+    chatType: params.chatType,
+    log: params.runtime?.log ?? console.log,
+  });
   await handleFeishuMessage({
     cfg: params.cfg,
-    event: buildSyntheticMessageEvent(params.event, params.command, params.chatType),
+    event: buildSyntheticMessageEvent(params.event, params.command, resolvedChatType),
     botOpenId: params.botOpenId,
     runtime: params.runtime,
     accountId: params.accountId,
   });
+}
+
+function normalizeResolvedCardActionChatType(value: unknown): "p2p" | "group" | undefined {
+  if (value === "group") {
+    return "group";
+  }
+  if (value === "p2p" || value === "private") {
+    return "p2p";
+  }
+  return undefined;
+}
+
+async function resolveCardActionChatType(params: {
+  event: FeishuCardActionEvent;
+  account: ReturnType<typeof resolveFeishuRuntimeAccount>;
+  chatType?: "p2p" | "group";
+  log: (message: string) => void;
+}): Promise<"p2p" | "group"> {
+  const explicitChatType = normalizeResolvedCardActionChatType(params.chatType);
+  if (explicitChatType) {
+    return explicitChatType;
+  }
+
+  const chatId = params.event.context.chat_id?.trim();
+  if (!chatId) {
+    return "p2p";
+  }
+
+  try {
+    const response = (await createFeishuClient(params.account).im.chat.get({
+      path: { chat_id: chatId },
+    })) as { code?: number; msg?: string; data?: { chat_type?: unknown; chat_mode?: unknown } };
+    if (response.code === 0) {
+      const resolvedChatType =
+        normalizeResolvedCardActionChatType(response.data?.chat_type) ??
+        normalizeResolvedCardActionChatType(response.data?.chat_mode);
+      if (resolvedChatType) {
+        return resolvedChatType;
+      }
+      params.log(
+        `feishu[${params.account.accountId}]: card action ${params.event.token} missing chat type for ${chatId}; defaulting to p2p`,
+      );
+    } else {
+      params.log(
+        `feishu[${params.account.accountId}]: failed to resolve chat type for ${chatId}: ${response.msg ?? "unknown error"}; defaulting to p2p`,
+      );
+    }
+  } catch (err) {
+    params.log(
+      `feishu[${params.account.accountId}]: failed to resolve chat type for ${chatId}: ${String(err)}; defaulting to p2p`,
+    );
+  }
+
+  return "p2p";
 }
 
 async function sendInvalidInteractionNotice(params: {
@@ -246,7 +308,12 @@ export async function handleFeishuCardAction(params: {
             prompt,
             sessionKey: envelope.c?.s,
             expiresAt: Date.now() + FEISHU_APPROVAL_CARD_TTL_MS,
-            chatType: envelope.c?.t ?? (event.context.chat_id ? "group" : "p2p"),
+            chatType: await resolveCardActionChatType({
+              event,
+              account,
+              chatType: envelope.c?.t,
+              log,
+            }),
             confirmLabel: command === "/reset" ? "Reset" : "Confirm",
           }),
           accountId,
@@ -282,10 +349,11 @@ export async function handleFeishuCardAction(params: {
           cfg,
           event,
           command,
+          account,
           botOpenId: params.botOpenId,
           runtime,
           accountId,
-          chatType: envelope.c?.t ?? (event.context.chat_id ? "group" : "p2p"),
+          chatType: envelope.c?.t,
         });
         completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
         return;
@@ -311,6 +379,7 @@ export async function handleFeishuCardAction(params: {
       cfg,
       event,
       command: content,
+      account,
       botOpenId: params.botOpenId,
       runtime,
       accountId,
