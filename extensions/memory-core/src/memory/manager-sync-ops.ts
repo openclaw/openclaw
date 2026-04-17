@@ -191,6 +191,14 @@ export abstract class MemoryManagerSyncOps {
     options: { source: MemorySource; content?: string },
   ): Promise<void>;
 
+  protected resetVectorState(): void {
+    this.vectorReady = null;
+    this.vector.available = null;
+    this.vector.loadError = undefined;
+    this.vector.dims = undefined;
+    this.vectorDegradedWriteWarningShown = false;
+  }
+
   protected async ensureVectorReady(dimensions?: number): Promise<boolean> {
     if (!this.vector.enabled) {
       return false;
@@ -1141,10 +1149,7 @@ export abstract class MemoryManagerSyncOps {
     };
 
     this.db = tempDb;
-    this.vectorReady = null;
-    this.vector.available = null;
-    this.vector.loadError = undefined;
-    this.vector.dims = undefined;
+    this.resetVectorState();
     this.fts.available = false;
     this.fts.loadError = undefined;
     this.ensureSchema();
@@ -1212,9 +1217,7 @@ export abstract class MemoryManagerSyncOps {
       });
 
       this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
-      this.vectorReady = null;
-      this.vector.available = null;
-      this.vector.loadError = undefined;
+      this.resetVectorState();
       this.ensureSchema();
       this.vector.dims = nextMeta?.vectorDims;
     } catch (err) {
