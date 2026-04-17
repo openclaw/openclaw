@@ -56,6 +56,13 @@ export function readSessionStoreCache(params: {
   storePath: string;
   mtimeMs?: number;
   sizeBytes?: number;
+  /**
+   * When true, return the cached object by reference instead of cloning.
+   * The caller MUST NOT mutate the returned store. Use for read-only paths
+   * (iteration, lookups) to avoid a deep clone of potentially large stores
+   * on every cache hit.
+   */
+  readonly?: boolean;
 }): Record<string, SessionEntry> | null {
   const cached = SESSION_STORE_CACHE.get(params.storePath);
   if (!cached) {
@@ -65,7 +72,7 @@ export function readSessionStoreCache(params: {
     invalidateSessionStoreCache(params.storePath);
     return null;
   }
-  return structuredClone(cached.store);
+  return params.readonly ? cached.store : structuredClone(cached.store);
 }
 
 export function writeSessionStoreCache(params: {

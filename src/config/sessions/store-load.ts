@@ -12,6 +12,13 @@ import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.j
 
 export type LoadSessionStoreOptions = {
   skipCache?: boolean;
+  /**
+   * When true, the returned store may be a shared reference to the cached
+   * object. The caller MUST NOT mutate it. This avoids a deep clone of
+   * potentially large stores and is safe for read-only use (iteration,
+   * lookups). Default false preserves existing mutate-safe semantics.
+   */
+  readonly?: boolean;
 };
 
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
@@ -73,6 +80,7 @@ export function loadSessionStore(
       storePath,
       mtimeMs: currentFileStat?.mtimeMs,
       sizeBytes: currentFileStat?.sizeBytes,
+      readonly: opts.readonly,
     });
     if (cached) {
       return cached;
@@ -127,6 +135,9 @@ export function loadSessionStore(
       sizeBytes: fileStat?.sizeBytes,
       serialized: serializedFromDisk,
     });
+    if (opts.readonly) {
+      return store;
+    }
   }
 
   return structuredClone(store);

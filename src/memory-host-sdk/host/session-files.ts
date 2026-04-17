@@ -129,7 +129,7 @@ export function loadDreamingNarrativeTranscriptPathSetForSessionsDir(
   sessionsDir: string,
 ): ReadonlySet<string> {
   const storePath = path.join(sessionsDir, "sessions.json");
-  const store = loadSessionStore(storePath);
+  const store = loadSessionStore(storePath, { readonly: true });
   const dreamingTranscriptPaths = new Set<string>();
   for (const [sessionKey, entry] of Object.entries(store)) {
     if (!isDreamingNarrativeSessionStoreKey(sessionKey)) {
