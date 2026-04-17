@@ -101,7 +101,12 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
-.claude/
+# Keep .claude/ user-local, but check in generated sub-agent files so CI can
+# gate drift via `pnpm skills:subagents:check`.
+.claude/*
+!.claude/agents/
+.claude/agents/*
+!.claude/agents/*.md
 .agent/
 skills-lock.json
 
