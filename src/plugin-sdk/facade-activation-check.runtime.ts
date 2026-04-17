@@ -21,11 +21,6 @@ import {
   normalizeBundledPluginArtifactSubpath,
 } from "../plugins/public-surface-runtime.js";
 
-const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
-  "image-generation-core",
-  "media-understanding-core",
-  "speech-core",
-]);
 const EMPTY_FACADE_BOUNDARY_CONFIG: OpenClawConfig = {};
 
 let cachedBoundaryRawConfig: OpenClawConfig | undefined;
@@ -210,17 +205,18 @@ function readBundledPluginManifestRecordFromDir(params: {
         enabledByDefault?: unknown;
         channels?: unknown;
       };
-      if (typeof raw.id === "string" && raw.id.trim().length > 0) {
-        return {
-          id: raw.id,
-          origin: "bundled",
-          enabledByDefault: raw.enabledByDefault === true,
-          rootDir: pluginRoot,
-          channels: Array.isArray(raw.channels)
-            ? raw.channels.filter((entry): entry is string => typeof entry === "string")
-            : [],
-        };
+      if (typeof raw.id !== "string" || raw.id.trim().length === 0) {
+        return null;
       }
+      return {
+        id: raw.id,
+        origin: "bundled",
+        enabledByDefault: raw.enabledByDefault === true,
+        rootDir: pluginRoot,
+        channels: Array.isArray(raw.channels)
+          ? raw.channels.filter((entry): entry is string => typeof entry === "string")
+          : [],
+      };
     } catch {
       return null;
     }
@@ -233,8 +229,12 @@ function readBundledPluginManifestRecordFromDir(params: {
   try {
     const raw = JSON5.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
       name?: unknown;
+      openclaw?: { alwaysAllowedRuntimeApi?: unknown };
     };
     if (typeof raw.name !== "string" || raw.name.trim().length === 0) {
+      return null;
+    }
+    if (raw.openclaw?.alwaysAllowedRuntimeApi !== true) {
       return null;
     }
     const packageName = raw.name.trim();
@@ -367,19 +367,20 @@ export function resolveBundledPluginPublicSurfaceAccess(params: {
     return cached;
   }
 
+  const manifestRecord = resolveBundledPluginManifestRecord(params);
   if (
     params.artifactBasename === "runtime-api.js" &&
-    ALWAYS_ALLOWED_RUNTIME_DIR_NAMES.has(params.dirName)
+    manifestRecord &&
+    manifestRecord.rootDir.startsWith(`${params.sourceExtensionsRoot}${path.sep}`) &&
+    manifestRecord.channels.length === 0
   ) {
     const resolved = {
       allowed: true,
-      pluginId: params.dirName,
+      pluginId: manifestRecord.id,
     };
     cachedFacadePublicSurfaceAccessByKey.set(params.resolutionKey, resolved);
     return resolved;
   }
-
-  const manifestRecord = resolveBundledPluginManifestRecord(params);
   if (!manifestRecord) {
     const resolved = {
       allowed: false,

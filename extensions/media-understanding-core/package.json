@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw media understanding runtime package",
   "type": "module",
+  "openclaw": {
+    "alwaysAllowedRuntimeApi": true
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   }
