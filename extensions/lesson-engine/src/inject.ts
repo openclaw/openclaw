@@ -161,7 +161,35 @@ export function injectLessons(opts: InjectOptions): InjectResult {
     });
   }
 
-  // 6. Write output
+  // 6. Best-effort injection logging (skip on dry-run).
+  //    Append one JSON line per run to {agentDataRoot}/{agent}/memory/lesson-injection-log.jsonl.
+  //    Failures must not break the inject path.
+  if (!dryRun) {
+    try {
+      const logPath = path.join(
+        agentDataRoot(opts.root),
+        opts.agent,
+        "memory",
+        "lesson-injection-log.jsonl",
+      );
+      fs.mkdirSync(path.dirname(logPath), { recursive: true });
+      const entry = {
+        timestamp: nowIso(now),
+        agent: opts.agent,
+        selectedLessonIds: selected.map((s) => s.id),
+        selectedCount: selected.length,
+        estimatedTokens: estimatedTotal,
+        totalActiveLessons: totalLessons,
+        maxLessons,
+        maxTokens,
+      };
+      fs.appendFileSync(logPath, `${JSON.stringify(entry)}\n`, "utf8");
+    } catch {
+      // best-effort: swallow any logging error
+    }
+  }
+
+  // 7. Write output
   let outputPath: string | null = null;
   if (!dryRun && selected.length > 0) {
     const outPath = injectedLessonsPath(opts.agent, opts.root);

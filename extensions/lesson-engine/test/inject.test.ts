@@ -207,6 +207,63 @@ describe("injectLessons", () => {
     }
   });
 
+  test("apply appends a JSON line to lesson-injection-log.jsonl with required fields", () => {
+    const fx = makeFixture();
+    try {
+      const lessons = [
+        makeLesson({
+          id: "L1",
+          severity: "critical",
+          hitCount: 5,
+          tags: ["git"],
+          lesson: "critical lesson text",
+          fix: "fix text",
+        }),
+        makeLesson({
+          id: "L2",
+          severity: "high",
+          hitCount: 2,
+          tags: ["git"],
+          lesson: "high lesson text",
+        }),
+      ];
+      writeLessons(fx, "builder", makeFile(lessons));
+      const result = injectLessons({ agent: "builder", root: fx.root, dryRun: false });
+      const logPath = path.join(fx.root, "builder", "memory", "lesson-injection-log.jsonl");
+      expect(fs.existsSync(logPath)).toBe(true);
+      const raw = fs.readFileSync(logPath, "utf8");
+      const lines = raw.split("\n").filter((l: string) => l.length > 0);
+      expect(lines).toHaveLength(1);
+      const entry = JSON.parse(lines[0]);
+      expect(typeof entry.timestamp).toBe("string");
+      expect(entry.agent).toBe("builder");
+      expect(Array.isArray(entry.selectedLessonIds)).toBe(true);
+      expect(entry.selectedLessonIds).toEqual(result.selected.map((s) => s.id));
+      expect(entry.selectedCount).toBe(result.selected.length);
+      expect(entry.estimatedTokens).toBe(result.estimatedTokens);
+      expect(entry.totalActiveLessons).toBe(result.totalLessons);
+      expect(entry.maxLessons).toBe(10);
+      expect(entry.maxTokens).toBe(2000);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("dry-run skips lesson-injection-log.jsonl write", () => {
+    const fx = makeFixture();
+    try {
+      const lessons = [
+        makeLesson({ id: "L1", severity: "critical", hitCount: 5, lesson: "critical lesson text" }),
+      ];
+      writeLessons(fx, "builder", makeFile(lessons));
+      injectLessons({ agent: "builder", root: fx.root, dryRun: true });
+      const logPath = path.join(fx.root, "builder", "memory", "lesson-injection-log.jsonl");
+      expect(fs.existsSync(logPath)).toBe(false);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
   test("apply writes injected-lessons.md", () => {
     const fx = makeFixture();
     try {
