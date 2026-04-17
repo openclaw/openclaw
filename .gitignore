@@ -221,3 +221,4 @@ extensions/**/.openclaw-runtime-deps-stamp.json
 /.opengrep-out/
 /.crabbox-artifacts
 *.bak
+.serena/
