@@ -290,6 +290,57 @@ describe("control UI routing", () => {
     expect(window.location.search).toBe("?session=agent%3Amain%3Asubagent%3Atask-123");
   });
 
+  it("keeps focus mode scoped to the chat tab", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    const shell = app.querySelector(".shell");
+    expect(shell).not.toBeNull();
+    expect(shell?.classList.contains("shell--chat-focus")).toBe(false);
+
+    const toggle = app.querySelector<HTMLButtonElement>('button[title^="Toggle focus mode"]');
+    expect(toggle).not.toBeNull();
+    toggle?.click();
+
+    await app.updateComplete;
+    expect(shell?.classList.contains("shell--chat-focus")).toBe(true);
+
+    const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/channels"]');
+    expect(link).not.toBeNull();
+    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+
+    await app.updateComplete;
+    expect(app.tab).toBe("channels");
+    expect(shell?.classList.contains("shell--chat-focus")).toBe(false);
+
+    const chatLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/chat"]');
+    chatLink?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }),
+    );
+
+    await app.updateComplete;
+    expect(app.tab).toBe("chat");
+    expect(shell?.classList.contains("shell--chat-focus")).toBe(true);
+  });
+
+  it("shows one online status dot next to the sidebar version", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    app.hello = {
+      ok: true,
+      server: { version: "1.2.3" },
+    } as never;
+    app.requestUpdate();
+    await app.updateComplete;
+
+    const version = app.querySelector<HTMLElement>(".sidebar-version");
+    const statusDot = app.querySelector<HTMLElement>(".sidebar-version__status");
+    expect(version).not.toBeNull();
+    expect(statusDot).not.toBeNull();
+    expect(statusDot?.getAttribute("aria-label")).toContain("Online");
+  });
+
   it("auto-scrolls chat history to the latest message", async () => {
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       queueMicrotask(() => callback(performance.now()));
