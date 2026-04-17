@@ -168,13 +168,14 @@ const SYSTEM_EVENT_LINE_RE = /^System(?: \(untrusted\))?: \[/;
 
 function extractUserMessageText(
   entry: Record<string, unknown>,
-): { text: string; field: "content-array" | "content-string" | "text" } | null {
+): { text: string; field: "content-array" | "content-string" | "text"; blockIndex?: number } | null {
   if (Array.isArray(entry.content)) {
-    for (const item of entry.content) {
+    for (let i = 0; i < entry.content.length; i++) {
+      const item = entry.content[i];
       if (item && typeof item === "object") {
         const block = item as Record<string, unknown>;
         if (block.type === "text" && typeof block.text === "string") {
-          return { text: block.text, field: "content-array" };
+          return { text: block.text, field: "content-array", blockIndex: i };
         }
       }
     }
@@ -194,6 +195,43 @@ function stripStartupContextBlock(text: string): string {
   if (startIdx < 0) {
     return text;
   }
+  // Find end of startup block (double newline followed by non-startup content)
+  const afterPrefix = text.slice(startIdx);
+  const lines = afterPrefix.split("\n");
+  let endOfBlockIdx = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() === "" && i + 1 < lines.length) {
+      const nextLine = lines[i + 1].trim();
+      // Check if next line is startup content marker
+      if (nextLine &&
+          !nextLine.startsWith("[") &&
+          !nextLine.startsWith("BEGIN_") &&
+          !nextLine.startsWith("END_") &&
+          !nextLine.startsWith("```") &&
+          !nextLine.startsWith("Bootstrap ") &&
+          !nextLine.startsWith("Recent ") &&
+          !nextLine.startsWith("Treat ") &&
+          !nextLine.startsWith("Do not ") &&
+          !nextLine.startsWith("You are starting")) {
+        // Found user content after blank line
+        endOfBlockIdx = lines.slice(0, i + 1).join("\n").length;
+        break;
+      }
+    }
+  }
+
+  if (endOfBlockIdx >= 0) {
+    // Keep text before startup block + text after blank line separator
+    const beforeBlock = text.slice(0, startIdx).trim();
+    const afterBlock = afterPrefix.slice(endOfBlockIdx).trim();
+    if (beforeBlock && afterBlock) {
+      return `${beforeBlock}\n\n${afterBlock}`;
+    }
+    return beforeBlock || afterBlock;
+  }
+
+  // No user content after - entire rest is startup block, keep only text before
   return text.slice(0, startIdx).trim();
 }
 
@@ -254,8 +292,8 @@ function stripRuntimeContentFromMessage(
   }
   const updated = { ...entry };
   if (extracted.field === "content-array") {
-    updated.content = (entry.content as unknown[]).map((item) => {
-      if (item && typeof item === "object") {
+    updated.content = (entry.content as unknown[]).map((item, idx) => {
+      if (idx === extracted.blockIndex && item && typeof item === "object") {
         const block = item as Record<string, unknown>;
         if (block.type === "text" && typeof block.text === "string") {
           return { ...block, text: stripped };
