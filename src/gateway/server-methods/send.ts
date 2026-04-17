@@ -546,14 +546,23 @@ export const sendHandlers: GatewayRequestHandlers = {
       idempotencyKey: string;
     };
     const idem = request.idempotencyKey;
-    const cached = context.dedupe.get(`poll:${idem}`);
+    const dedupeKey = `poll:${idem}`;
+    const cached = context.dedupe.get(dedupeKey);
     if (cached) {
       respond(cached.ok, cached.payload, cached.error, {
         cached: true,
       });
       return;
     }
-    const to = request.to.trim();
+    const inflightMap = getInflightMap(context);
+    const inflight = inflightMap.get(dedupeKey);
+    if (inflight) {
+      const result = await inflight;
+      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
+      respond(result.ok, result.payload, result.error, meta);
+      return;
+    }
+    const to = (normalizeOptionalString(request.to) ?? "").trim();
     const resolvedChannel = await resolveRequestedChannel({
       requestChannel: request.channel,
       unsupportedMessage: (input) => `unsupported poll channel: ${input}`,
@@ -596,56 +605,55 @@ export const sendHandlers: GatewayRequestHandlers = {
     };
     const threadId = normalizeOptionalString(request.threadId);
     const accountId = normalizeOptionalString(request.accountId);
+
+    const work = (async (): Promise<InflightResult> => {
+      try {
+        if (!outbound?.sendPoll) {
+          const error = errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `unsupported poll channel: ${channel}`,
+          );
+          cacheGatewayDedupeFailure({ context, dedupeKey, error });
+          return { ok: false, error, meta: { channel } };
+        }
+        const resolvedTarget = resolveGatewayOutboundTarget({
+          channel: channel,
+          to,
+          cfg,
+          accountId,
+        });
+        if (!resolvedTarget.ok) {
+          return { ok: false, error: resolvedTarget.error, meta: { channel } };
+        }
+        const normalized = outbound.pollMaxOptions
+          ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
+          : normalizePollInput(poll);
+        const result = await outbound.sendPoll({
+          cfg,
+          to: resolvedTarget.to,
+          poll: normalized,
+          accountId,
+          threadId,
+          silent: request.silent,
+          isAnonymous: request.isAnonymous,
+          gatewayClientScopes: client?.connect?.scopes ?? [],
+        });
+        const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
+        cacheGatewayDedupeSuccess({ context, dedupeKey, payload });
+        return { ok: true, payload, meta: { channel } };
+      } catch (err) {
+        const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+        cacheGatewayDedupeFailure({ context, dedupeKey, error });
+        return { ok: false, error, meta: { channel, error: formatForLog(err) } };
+      }
+    })();
+
+    inflightMap.set(dedupeKey, work);
     try {
-      if (!outbound?.sendPoll) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`),
-        );
-        return;
-      }
-      const resolvedTarget = resolveGatewayOutboundTarget({
-        channel: channel,
-        to,
-        cfg,
-        accountId,
-      });
-      if (!resolvedTarget.ok) {
-        respond(false, undefined, resolvedTarget.error);
-        return;
-      }
-      const normalized = outbound.pollMaxOptions
-        ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
-        : normalizePollInput(poll);
-      const result = await outbound.sendPoll({
-        cfg,
-        to: resolvedTarget.to,
-        poll: normalized,
-        accountId,
-        threadId,
-        silent: request.silent,
-        isAnonymous: request.isAnonymous,
-        gatewayClientScopes: client?.connect?.scopes ?? [],
-      });
-      const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
-      cacheGatewayDedupeSuccess({
-        context,
-        dedupeKey: `poll:${idem}`,
-        payload,
-      });
-      respond(true, payload, undefined, { channel });
-    } catch (err) {
-      const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
-      cacheGatewayDedupeFailure({
-        context,
-        dedupeKey: `poll:${idem}`,
-        error,
-      });
-      respond(false, undefined, error, {
-        channel,
-        error: formatForLog(err),
-      });
+      const result = await work;
+      respond(result.ok, result.payload, result.error, result.meta);
+    } finally {
+      inflightMap.delete(dedupeKey);
     }
   },
 };
