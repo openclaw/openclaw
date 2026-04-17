@@ -25,6 +25,7 @@ const {
   resolveExecApprovalSpy,
   sendMessageSpy,
   setMyCommandsSpy,
+  resetTelegramHarnessStateForTest,
   telegramBotDepsForTest,
   telegramBotRuntimeForTest,
   wasSentByBot,
@@ -94,6 +95,7 @@ describe("createTelegramBot", () => {
   });
 
   beforeEach(() => {
+    resetTelegramHarnessStateForTest();
     setMyCommandsSpy.mockClear();
     clearPluginInteractiveHandlers();
     loadConfig.mockReturnValue({
