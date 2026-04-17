@@ -17,6 +17,7 @@ import {
   resolveUnknownToolGuardThreshold,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  shouldStripBootstrapFromEmbeddedContext,
   shouldWarnOnOrphanedUserRepair,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
@@ -215,6 +216,29 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession(undefined)).toBe("full");
     expect(resolvePromptModeForSession("agent:main")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
+  });
+});
+
+describe("shouldStripBootstrapFromEmbeddedContext", () => {
+  it("strips BOOTSTRAP.md only when a read tool is actually available", () => {
+    expect(
+      shouldStripBootstrapFromEmbeddedContext({
+        toolsEnabled: true,
+        toolNames: ["read", "write"],
+      }),
+    ).toBe(true);
+    expect(
+      shouldStripBootstrapFromEmbeddedContext({
+        toolsEnabled: true,
+        toolNames: ["write"],
+      }),
+    ).toBe(false);
+    expect(
+      shouldStripBootstrapFromEmbeddedContext({
+        toolsEnabled: false,
+        toolNames: ["read"],
+      }),
+    ).toBe(false);
   });
 });
 
@@ -444,9 +468,7 @@ describe("resolveUnknownToolGuardThreshold", () => {
   it("falls back to the default threshold when the override is non-positive", () => {
     expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: 0 })).toBe(10);
     expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: -5 })).toBe(10);
-    expect(
-      resolveUnknownToolGuardThreshold({ unknownToolThreshold: Number.NaN }),
-    ).toBe(10);
+    expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: Number.NaN })).toBe(10);
   });
 
   it("floors fractional overrides", () => {
@@ -1739,9 +1761,11 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     );
 
     const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
-    const stream = wrapped({ api: "google-gemini" } as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
+    const stream = wrapped(
+      { api: "google-gemini" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
