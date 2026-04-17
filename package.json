@@ -1346,6 +1346,8 @@
     "test:parallels:windows": "bash scripts/e2e/parallels-windows-smoke.sh",
     "test:perf:budget": "node scripts/test-perf-budget.mjs",
     "test:perf:changed:bench": "node scripts/bench-test-changed.mjs",
+    "test:perf:groups": "node scripts/test-group-report.mjs",
+    "test:perf:groups:compare": "node scripts/test-group-report.mjs --compare",
     "test:perf:hotspots": "node scripts/test-hotspots.mjs",
     "test:perf:imports": "OPENCLAW_VITEST_IMPORT_DURATIONS=1 OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN=1 node scripts/test-projects.mjs",
     "test:perf:imports:changed": "OPENCLAW_VITEST_IMPORT_DURATIONS=1 OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN=1 node scripts/test-projects.mjs --changed origin/main",
