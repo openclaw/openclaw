@@ -34,12 +34,22 @@ const defaultSessionsSendOpenClawHelpers = {
 
 let sessionsSendOpenClawHelpers = defaultSessionsSendOpenClawHelpers;
 
+export type SessionsSendA2ATaskSubscriptionResult = {
+  finalStatus: A2ATaskProtocolStatus | undefined;
+  endedReason: "terminal" | "stream_ended" | "aborted";
+};
+
 export type SessionsSendA2AAdapter = {
   runTaskRequest(params: { request: A2AExchangeRequest; taskId?: string }): Promise<A2ATaskRecord>;
   reconcileTaskStatus?(params: {
     sessionKey: string;
     taskId: string;
   }): Promise<A2ATaskProtocolStatus | undefined>;
+  subscribeTaskStatus?(params: {
+    sessionKey: string;
+    taskId: string;
+    signal?: AbortSignal;
+  }): Promise<SessionsSendA2ATaskSubscriptionResult>;
   cancelTask?(params: {
     sessionKey: string;
     taskId: string;

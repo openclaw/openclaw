@@ -3,13 +3,18 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { loadA2ATaskRecordFromEventLog } from "../a2a/log.js";
-import { A2ABrokerClientError, type A2ABrokerTaskRecord } from "../a2a/standalone-broker-client.js";
+import { loadA2ATaskRecordFromEventLog, readA2ATaskEvents } from "../a2a/log.js";
+import {
+  A2ABrokerClientError,
+  type A2ABrokerTaskRecord,
+  type A2ABrokerTaskSseEvent,
+} from "../a2a/standalone-broker-client.js";
 import type { A2AExchangeRequest } from "./sessions-send-broker.js";
 import {
   __testing,
   createStandaloneBrokerSessionsSendA2AAdapter,
   shouldUseStandaloneBrokerSessionsSendAdapter,
+  subscribeStandaloneBrokerA2ATask,
 } from "./sessions-send-standalone-broker-adapter.js";
 
 const tempDirs: string[] = [];
@@ -528,5 +533,443 @@ describe("standalone broker sessions_send adapter", () => {
       abortStatus: "aborted",
       executionStatus: "cancelled",
     });
+  });
+
+  it("drives reconcile from broker SSE events and stops on the terminal frame", async () => {
+    const taskId = "task-broker-stream-1";
+    const request = createRequest(taskId);
+
+    function buildSseEvent(
+      name: A2ABrokerTaskSseEvent["name"],
+      reason: string,
+      internalStatus: A2ABrokerTaskRecord["status"],
+      final: boolean,
+    ): A2ABrokerTaskSseEvent {
+      const projection = {
+        id: taskId,
+        kind: "task" as const,
+        status: {
+          state: internalStatus === "succeeded" ? "completed" : "working",
+          timestamp: "2026-04-15T00:00:10.000Z",
+        },
+        metadata: {
+          internalStatus,
+          intent: "chat",
+          requester: { id: "hub-a", kind: "service", role: "hub" },
+          target: { id: "worker-a", kind: "node" },
+          targetNodeId: "worker-a",
+          assignedWorkerId: "worker-a",
+          createdAt: "2026-04-15T00:00:00.000Z",
+          updatedAt: "2026-04-15T00:00:10.000Z",
+        },
+        artifacts: [],
+      };
+      return {
+        name,
+        data: {
+          task: projection,
+          reason: reason as never,
+          final,
+        } as never,
+      };
+    }
+
+    const events: A2ABrokerTaskSseEvent[] = [
+      buildSseEvent("task-snapshot", "snapshot", "queued", false),
+      buildSseEvent("task-status-update", "started", "running", false),
+      buildSseEvent("task-status-update", "succeeded", "succeeded", true),
+    ];
+
+    async function* streamTaskEvents(): AsyncGenerator<A2ABrokerTaskSseEvent> {
+      for (const event of events) {
+        yield event;
+      }
+    }
+
+    // First reconcile after snapshot still sees "queued"; second sees "running"; third sees terminal "succeeded".
+    const getTask = vi
+      .fn()
+      .mockResolvedValueOnce(createBrokerTaskRecord(taskId, "queued"))
+      .mockResolvedValueOnce(
+        createBrokerTaskRecord(taskId, "running", {
+          claimedAt: "2026-04-15T00:00:05.000Z",
+          updatedAt: "2026-04-15T00:00:10.000Z",
+        }),
+      )
+      .mockResolvedValueOnce(
+        createBrokerTaskRecord(taskId, "succeeded", {
+          claimedAt: "2026-04-15T00:00:05.000Z",
+          updatedAt: "2026-04-15T00:00:20.000Z",
+          completedAt: "2026-04-15T00:00:20.000Z",
+          result: {
+            summary: "Streamed completion",
+          },
+        }),
+      );
+
+    __testing.setCreateClientForTest(
+      () =>
+        ({
+          createTask: vi.fn().mockResolvedValue(createBrokerTaskRecord(taskId, "queued")),
+          getTask,
+          cancelTask: vi.fn(),
+          streamTaskEvents,
+        }) as never,
+    );
+
+    // Seed the event log so reconcile has something to update.
+    const adapter = createStandaloneBrokerSessionsSendA2AAdapter({ config: createConfig() });
+    await adapter.runTaskRequest({ request, taskId: request.waitRunId });
+
+    const observedEvents: A2ABrokerTaskSseEvent[] = [];
+    const result = await subscribeStandaloneBrokerA2ATask({
+      config: createConfig(),
+      sessionKey: request.target.sessionKey,
+      taskId,
+      onEvent: (event) => observedEvents.push(event),
+    });
+
+    expect(observedEvents).toHaveLength(3);
+    expect(result).toMatchObject({
+      eventsSeen: 3,
+      endedReason: "terminal",
+    });
+    expect(result.finalStatus).toMatchObject({
+      executionStatus: "completed",
+      summary: "Streamed completion",
+    });
+    // Reconcile fires once per SSE event - getTask is invoked exactly that many times.
+    expect(getTask).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops reconciling when the abort signal fires before the broker terminates", async () => {
+    const taskId = "task-broker-stream-abort-1";
+    const request = createRequest(taskId);
+    const controller = new AbortController();
+
+    async function* streamTaskEvents(
+      _id: string,
+      options?: { signal?: AbortSignal },
+    ): AsyncGenerator<A2ABrokerTaskSseEvent> {
+      yield {
+        name: "task-snapshot",
+        data: {
+          task: {
+            id: taskId,
+            kind: "task",
+            status: { state: "submitted", timestamp: "2026-04-15T00:00:00.000Z" },
+            metadata: { internalStatus: "queued" },
+            artifacts: [],
+          },
+          reason: "snapshot",
+          final: false,
+        } as never,
+      };
+      // Caller aborts after the first event; the next yield should not be observed.
+      if (options?.signal?.aborted) {
+        return;
+      }
+      yield {
+        name: "task-status-update",
+        data: {
+          task: {
+            id: taskId,
+            kind: "task",
+            status: { state: "working", timestamp: "2026-04-15T00:00:01.000Z" },
+            metadata: { internalStatus: "claimed" },
+            artifacts: [],
+          },
+          reason: "claimed",
+          final: false,
+        } as never,
+      };
+    }
+
+    const getTask = vi.fn().mockResolvedValue(createBrokerTaskRecord(taskId, "queued"));
+    __testing.setCreateClientForTest(
+      () =>
+        ({
+          createTask: vi.fn().mockResolvedValue(createBrokerTaskRecord(taskId, "queued")),
+          getTask,
+          cancelTask: vi.fn(),
+          streamTaskEvents,
+        }) as never,
+    );
+
+    const adapter = createStandaloneBrokerSessionsSendA2AAdapter({ config: createConfig() });
+    await adapter.runTaskRequest({ request, taskId: request.waitRunId });
+
+    const result = await subscribeStandaloneBrokerA2ATask({
+      config: createConfig(),
+      sessionKey: request.target.sessionKey,
+      taskId,
+      signal: controller.signal,
+      onEvent: () => {
+        controller.abort();
+      },
+    });
+
+    expect(result.endedReason).toBe("aborted");
+    expect(result.eventsSeen).toBe(1);
+    expect(getTask).toHaveBeenCalledTimes(1);
+  });
+  it("returns not-attempted when cancelling an already-completed task without writing new events", async () => {
+    const taskId = "task-broker-cancel-terminal";
+    const request = createRequest(taskId);
+
+    __testing.setCreateClientForTest(
+      () =>
+        ({
+          createTask: vi.fn().mockResolvedValue(createBrokerTaskRecord(taskId, "queued")),
+          getTask: vi.fn().mockResolvedValue(
+            createBrokerTaskRecord(taskId, "succeeded", {
+              claimedAt: "2026-04-15T00:00:05.000Z",
+              updatedAt: "2026-04-15T00:00:20.000Z",
+              completedAt: "2026-04-15T00:00:20.000Z",
+              result: { summary: "done" },
+            }),
+          ),
+          cancelTask: vi.fn(),
+        }) as never,
+    );
+
+    const adapter = createStandaloneBrokerSessionsSendA2AAdapter({ config: createConfig() });
+    await adapter.runTaskRequest({ request, taskId: request.waitRunId });
+
+    // Reconcile to terminal first
+    await adapter.reconcileTaskStatus?.({ sessionKey: request.target.sessionKey, taskId });
+
+    const eventsBefore = await readA2ATaskEvents({
+      sessionKey: request.target.sessionKey,
+      taskId,
+    });
+
+    const cancelResult = await adapter.cancelTask?.({
+      sessionKey: request.target.sessionKey,
+      taskId,
+      reason: "too late",
+    });
+
+    expect(cancelResult).toMatchObject({
+      abortStatus: "not-attempted",
+      executionStatus: "completed",
+    });
+
+    // No new events should have been written
+    const eventsAfter = await readA2ATaskEvents({
+      sessionKey: request.target.sessionKey,
+      taskId,
+    });
+    expect(eventsAfter).toHaveLength(eventsBefore.length);
+  });
+
+  it("records error abortStatus when broker cancelTask rejects", async () => {
+    const taskId = "task-broker-cancel-reject";
+    const request = createRequest(taskId);
+
+    __testing.setCreateClientForTest(
+      () =>
+        ({
+          createTask: vi.fn().mockResolvedValue(
+            createBrokerTaskRecord(taskId, "running", {
+              claimedAt: "2026-04-15T00:00:05.000Z",
+              updatedAt: "2026-04-15T00:00:10.000Z",
+            }),
+          ),
+          getTask: vi.fn(),
+          cancelTask: vi
+            .fn()
+            .mockRejectedValue(new A2ABrokerClientError("worker refused cancel", 409, "conflict")),
+        }) as never,
+    );
+
+    const adapter = createStandaloneBrokerSessionsSendA2AAdapter({ config: createConfig() });
+    await adapter.runTaskRequest({ request, taskId: request.waitRunId });
+
+    const eventsBefore = await readA2ATaskEvents({
+      sessionKey: request.target.sessionKey,
+      taskId,
+    });
+
+    const cancelResult = await adapter.cancelTask?.({
+      sessionKey: request.target.sessionKey,
+      taskId,
+      reason: "operator cancel",
+    });
+
+    expect(cancelResult).toMatchObject({
+      abortStatus: "error",
+      executionStatus: "cancelled",
+    });
+
+    // Cancel event was still written locally despite remote failure
+    const eventsAfter = await readA2ATaskEvents({
+      sessionKey: request.target.sessionKey,
+      taskId,
+    });
+    expect(eventsAfter).toHaveLength(eventsBefore.length + 1);
+    expect(eventsAfter[eventsAfter.length - 1].type).toBe("task.cancelled");
+  });
+
+  it("does not write duplicate events on repeated reconcile with identical broker state", async () => {
+    const taskId = "task-broker-dedup";
+    const request = createRequest(taskId);
+
+    const brokerTask = createBrokerTaskRecord(taskId, "running", {
+      claimedAt: "2026-04-15T00:00:05.000Z",
+      updatedAt: "2026-04-15T00:00:10.000Z",
+    });
+
+    __testing.setCreateClientForTest(
+      () =>
+        ({
+          createTask: vi.fn().mockResolvedValue(createBrokerTaskRecord(taskId, "queued")),
+          getTask: vi.fn().mockResolvedValue(brokerTask),
+          cancelTask: vi.fn(),
+        }) as never,
+    );
+
+    const adapter = createStandaloneBrokerSessionsSendA2AAdapter({ config: createConfig() });
+    await adapter.runTaskRequest({ request, taskId: request.waitRunId });
+
+    // First reconcile
+    const r1 = await adapter.reconcileTaskStatus?.({
+      sessionKey: request.target.sessionKey,
+      taskId,
+    });
+    expect(r1?.executionStatus).toBe("running");
+
+    const eventsAfterFirst = await readA2ATaskEvents({
+      sessionKey: request.target.sessionKey,
+      taskId,
+    });
+
+    // Second reconcile with identical state
+    const r2 = await adapter.reconcileTaskStatus?.({
+      sessionKey: request.target.sessionKey,
+      taskId,
+    });
+    expect(r2?.executionStatus).toBe("running");
+
+    const eventsAfterSecond = await readA2ATaskEvents({
+      sessionKey: request.target.sessionKey,
+      taskId,
+    });
+
+    // No new events written
+    expect(eventsAfterSecond).toHaveLength(eventsAfterFirst.length);
+  });
+
+  it("preserves cancelled status when broker still reports active after local cancel", async () => {
+    const taskId = "task-broker-cancel-then-active";
+    const request = createRequest(taskId);
+
+    const getTask = vi
+      .fn()
+      .mockResolvedValueOnce(
+        createBrokerTaskRecord(taskId, "running", {
+          claimedAt: "2026-04-15T00:00:05.000Z",
+          updatedAt: "2026-04-15T00:00:10.000Z",
+        }),
+      )
+      // After cancel, broker still says running (stale propagation)
+      .mockResolvedValue(
+        createBrokerTaskRecord(taskId, "running", {
+          claimedAt: "2026-04-15T00:00:05.000Z",
+          updatedAt: "2026-04-15T00:00:15.000Z",
+        }),
+      );
+
+    __testing.setCreateClientForTest(
+      () =>
+        ({
+          createTask: vi.fn().mockResolvedValue(
+            createBrokerTaskRecord(taskId, "running", {
+              claimedAt: "2026-04-15T00:00:05.000Z",
+              updatedAt: "2026-04-15T00:00:10.000Z",
+            }),
+          ),
+          getTask,
+          cancelTask: vi.fn().mockResolvedValue(
+            createBrokerTaskRecord(taskId, "canceled", {
+              updatedAt: "2026-04-15T00:00:30.000Z",
+              completedAt: "2026-04-15T00:00:30.000Z",
+            }),
+          ),
+        }) as never,
+    );
+
+    const adapter = createStandaloneBrokerSessionsSendA2AAdapter({ config: createConfig() });
+    await adapter.runTaskRequest({ request, taskId: request.waitRunId });
+
+    // Cancel the task
+    const cancelResult = await adapter.cancelTask?.({
+      sessionKey: request.target.sessionKey,
+      taskId,
+      reason: "operator cancel",
+    });
+    expect(cancelResult?.executionStatus).toBe("cancelled");
+
+    // Reconcile should preserve cancelled status (terminal early-return guard)
+    const afterReconcile = await adapter.reconcileTaskStatus?.({
+      sessionKey: request.target.sessionKey,
+      taskId,
+    });
+    expect(afterReconcile?.executionStatus).toBe("cancelled");
+
+    // Event log should not have regressed to running
+    const record = await loadA2ATaskRecordFromEventLog({
+      sessionKey: request.target.sessionKey,
+      taskId,
+    });
+    expect(record?.execution.status).toBe("cancelled");
+  });
+
+  it("preserves error codes and completedAt on active-to-failed transition", async () => {
+    const taskId = "task-broker-active-to-failed";
+    const request = createRequest(taskId);
+
+    __testing.setCreateClientForTest(
+      () =>
+        ({
+          createTask: vi.fn().mockResolvedValue(createBrokerTaskRecord(taskId, "queued")),
+          getTask: vi.fn().mockResolvedValue(
+            createBrokerTaskRecord(taskId, "failed", {
+              claimedAt: "2026-04-15T00:00:05.000Z",
+              updatedAt: "2026-04-15T00:00:15.000Z",
+              completedAt: "2026-04-15T00:00:15.000Z",
+              error: {
+                code: "WORKER_ERROR",
+                message: "worker node unreachable",
+              },
+            }),
+          ),
+          cancelTask: vi.fn(),
+        }) as never,
+    );
+
+    const adapter = createStandaloneBrokerSessionsSendA2AAdapter({ config: createConfig() });
+    await adapter.runTaskRequest({ request, taskId: request.waitRunId });
+
+    const result = await adapter.reconcileTaskStatus?.({
+      sessionKey: request.target.sessionKey,
+      taskId,
+    });
+
+    expect(result).toMatchObject({
+      executionStatus: "failed",
+      deliveryStatus: "skipped",
+      error: {
+        code: "WORKER_ERROR",
+        message: "worker node unreachable",
+      },
+    });
+
+    const record = await loadA2ATaskRecordFromEventLog({
+      sessionKey: request.target.sessionKey,
+      taskId,
+    });
+    expect(record?.execution.completedAt).toBe(Date.parse("2026-04-15T00:00:15.000Z"));
+    expect(record?.execution.errorCode).toBe("WORKER_ERROR");
   });
 });

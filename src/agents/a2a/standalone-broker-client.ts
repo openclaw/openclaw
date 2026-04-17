@@ -154,6 +154,66 @@ const A2ABrokerHealthSchema = z
   })
   .passthrough();
 
+const A2ABrokerTaskSseEventNameSchema = z.enum(["task-snapshot", "task-status-update"]);
+
+const A2ABrokerTaskProjectionStateSchema = z.enum([
+  "submitted",
+  "working",
+  "completed",
+  "failed",
+  "canceled",
+]);
+
+const A2ABrokerTaskProjectionSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: z.literal("task"),
+    status: z
+      .object({
+        state: A2ABrokerTaskProjectionStateSchema,
+        timestamp: z.string().min(1),
+        message: z
+          .object({
+            role: z.literal("agent"),
+            parts: z.array(z.object({ text: z.string() })),
+          })
+          .optional(),
+      })
+      .strict(),
+    metadata: z.record(z.string(), z.unknown()),
+    artifacts: z.array(z.object({ id: z.string().min(1) })),
+  })
+  .strict();
+
+const A2ABrokerTaskSseSnapshotReasonSchema = z.literal("snapshot");
+const A2ABrokerTaskSseStatusUpdateReasonSchema = z.enum([
+  "created",
+  "claimed",
+  "started",
+  "succeeded",
+  "failed",
+  "canceled",
+  "reassigned",
+  "requeued",
+  "dead_lettered",
+]);
+
+const A2ABrokerTaskSseSnapshotSchema = z
+  .object({
+    task: A2ABrokerTaskProjectionSchema,
+    reason: A2ABrokerTaskSseSnapshotReasonSchema,
+    final: z.boolean(),
+  })
+  .strict();
+
+const A2ABrokerTaskSseStatusUpdateSchema = z
+  .object({
+    task: A2ABrokerTaskProjectionSchema,
+    reason: A2ABrokerTaskSseStatusUpdateReasonSchema,
+    final: z.boolean(),
+  })
+  .strict();
+
 const OpenClawA2ABrokerTaskBridgeRequestSchema = z
   .object({
     taskId: z.string().min(1).optional(),
@@ -189,6 +249,13 @@ export type A2ABrokerTaskCancelRequest = z.infer<typeof A2ABrokerTaskCancelReque
 export type A2ABrokerTaskCreateRequest = z.infer<typeof A2ABrokerTaskCreateRequestSchema>;
 export type A2ABrokerTaskRecord = z.infer<typeof A2ABrokerTaskRecordSchema>;
 export type A2ABrokerHealth = z.infer<typeof A2ABrokerHealthSchema>;
+export type A2ABrokerTaskSseEventName = z.infer<typeof A2ABrokerTaskSseEventNameSchema>;
+export type A2ABrokerTaskProjection = z.infer<typeof A2ABrokerTaskProjectionSchema>;
+export type A2ABrokerTaskSseSnapshot = z.infer<typeof A2ABrokerTaskSseSnapshotSchema>;
+export type A2ABrokerTaskSseStatusUpdate = z.infer<typeof A2ABrokerTaskSseStatusUpdateSchema>;
+export type A2ABrokerTaskSseEvent =
+  | { name: "task-snapshot"; id?: string; data: A2ABrokerTaskSseSnapshot }
+  | { name: "task-status-update"; id?: string; data: A2ABrokerTaskSseStatusUpdate };
 export type OpenClawA2ABrokerTaskBridgeRequest = z.infer<
   typeof OpenClawA2ABrokerTaskBridgeRequestSchema
 >;
@@ -400,6 +467,197 @@ export function buildBrokerCreateTaskRequestFromOpenClaw(
   };
 }
 
+type SseFrame = {
+  id?: string;
+  event?: string;
+  data: string;
+};
+
+export type A2ABrokerSseChunk = string | Uint8Array;
+
+export type A2ABrokerStreamTaskEventsOptions = {
+  signal?: AbortSignal;
+};
+
+/**
+ * Parses an async iterable of SSE chunks (text or bytes) into framed events.
+ * Strict to the broker's SSE format: `id:`/`event:`/`data:` fields and `\n\n`
+ * frame boundaries. Comment lines (`:` prefix, e.g. heartbeats) are skipped.
+ * Exposed for unit testing alongside `streamTaskEvents`.
+ */
+export async function* parseA2ABrokerTaskSseFrames(
+  source: AsyncIterable<A2ABrokerSseChunk> | Iterable<A2ABrokerSseChunk>,
+): AsyncIterable<SseFrame> {
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  const flush = (raw: string): SseFrame | undefined => {
+    const trimmed = raw.replace(/^\r?\n+|\r?\n+$/g, "");
+    if (!trimmed) {
+      return undefined;
+    }
+    const frame: SseFrame = { data: "" };
+    const dataParts: string[] = [];
+    for (const line of trimmed.split(/\r?\n/)) {
+      if (!line || line.startsWith(":")) {
+        continue;
+      }
+      const colonIdx = line.indexOf(":");
+      const field = colonIdx === -1 ? line : line.slice(0, colonIdx);
+      const rawValue = colonIdx === -1 ? "" : line.slice(colonIdx + 1);
+      const value = rawValue.startsWith(" ") ? rawValue.slice(1) : rawValue;
+      switch (field) {
+        case "id":
+          frame.id = value;
+          break;
+        case "event":
+          frame.event = value;
+          break;
+        case "data":
+          dataParts.push(value);
+          break;
+        default:
+          break;
+      }
+    }
+    if (dataParts.length === 0) {
+      return undefined;
+    }
+    frame.data = dataParts.join("\n");
+    return frame;
+  };
+
+  for await (const chunk of source as AsyncIterable<A2ABrokerSseChunk>) {
+    buffer += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+    let boundary = buffer.search(/\r?\n\r?\n/);
+    while (boundary !== -1) {
+      const raw = buffer.slice(0, boundary);
+      const matched = buffer.slice(boundary).match(/^\r?\n\r?\n/);
+      const advance = boundary + (matched ? matched[0].length : 2);
+      buffer = buffer.slice(advance);
+      const frame = flush(raw);
+      if (frame) {
+        yield frame;
+      }
+      boundary = buffer.search(/\r?\n\r?\n/);
+    }
+  }
+
+  buffer += decoder.decode();
+  const tail = flush(buffer);
+  if (tail) {
+    yield tail;
+  }
+}
+
+function decodeBrokerTaskSseFrame(frame: SseFrame): A2ABrokerTaskSseEvent | undefined {
+  if (!frame.event) {
+    return undefined;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(frame.data) as unknown;
+  } catch {
+    throw new A2ABrokerMalformedResponseError(
+      `Broker SSE frame contained malformed JSON for event ${frame.event}`,
+      200,
+      frame.data,
+    );
+  }
+  switch (frame.event) {
+    case "task-snapshot":
+      return {
+        name: "task-snapshot",
+        ...(frame.id ? { id: frame.id } : {}),
+        data: A2ABrokerTaskSseSnapshotSchema.parse(payload),
+      };
+    case "task-status-update":
+      return {
+        name: "task-status-update",
+        ...(frame.id ? { id: frame.id } : {}),
+        data: A2ABrokerTaskSseStatusUpdateSchema.parse(payload),
+      };
+    default:
+      return undefined;
+  }
+}
+
+function isWebReadableStream(
+  body: ReadableStream<Uint8Array> | NodeJS.ReadableStream,
+): body is ReadableStream<Uint8Array> {
+  return "getReader" in body && typeof body.getReader === "function";
+}
+
+function isAsyncIterableNodeStream(
+  body: NodeJS.ReadableStream,
+): body is NodeJS.ReadableStream & AsyncIterable<A2ABrokerSseChunk> {
+  return Symbol.asyncIterator in body && typeof body[Symbol.asyncIterator] === "function";
+}
+
+function destroyNodeReadableStream(body: NodeJS.ReadableStream) {
+  if ("destroy" in body && typeof body.destroy === "function") {
+    body.destroy();
+  }
+}
+
+async function* readBodyAsChunks(
+  body: ReadableStream<Uint8Array> | NodeJS.ReadableStream,
+  signal?: AbortSignal,
+): AsyncIterable<A2ABrokerSseChunk> {
+  if (isWebReadableStream(body)) {
+    const reader = body.getReader();
+    const onAbort = () => {
+      reader.cancel().catch(() => {});
+    };
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+      } else {
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        if (value) {
+          yield value;
+        }
+      }
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+      try {
+        reader.releaseLock();
+      } catch {}
+    }
+    return;
+  }
+
+  if (!isAsyncIterableNodeStream(body)) {
+    throw new Error("Broker SSE response body is not async iterable");
+  }
+
+  const nodeStream = body;
+  const onAbort = () => {
+    destroyNodeReadableStream(nodeStream);
+  };
+  if (signal) {
+    if (signal.aborted) {
+      onAbort();
+    } else {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  }
+  try {
+    for await (const chunk of nodeStream) {
+      yield chunk;
+    }
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
 export function createA2ABrokerClient(options: A2ABrokerClientOptions) {
   const baseUrl = normalizeA2ABrokerBaseUrl(options.baseUrl);
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -450,6 +708,52 @@ export function createA2ABrokerClient(options: A2ABrokerClientOptions) {
         },
       );
       return await parseBrokerJson(response, A2ABrokerTaskRecordSchema);
+    },
+
+    async *streamTaskEvents(
+      taskId: string,
+      streamOptions?: A2ABrokerStreamTaskEventsOptions,
+    ): AsyncGenerator<A2ABrokerTaskSseEvent, void, void> {
+      const normalizedTaskId = normalizeRequiredTaskId(taskId);
+      const headers = buildRequestHeaders({
+        requester: options.requester,
+        edgeSecret,
+        userAgent,
+      });
+      headers.set("accept", "text/event-stream");
+      const init: RequestInit = {
+        method: "GET",
+        headers,
+      };
+      if (streamOptions?.signal) {
+        init.signal = streamOptions.signal;
+      }
+      const response = await fetchImpl(
+        buildEndpointUrl(baseUrl, `a2a/tasks/${encodeURIComponent(normalizedTaskId)}/events`),
+        init,
+      );
+      if (!response.ok) {
+        const body = await readBrokerJson(response).catch(() => undefined);
+        throw buildClientError(response, body);
+      }
+      if (!response.body) {
+        throw new A2ABrokerClientError(
+          "Broker SSE response missing body",
+          response.status,
+          "broker_sse_missing_body",
+        );
+      }
+      const chunks = readBodyAsChunks(response.body, streamOptions?.signal);
+      for await (const frame of parseA2ABrokerTaskSseFrames(chunks)) {
+        const event = decodeBrokerTaskSseFrame(frame);
+        if (!event) {
+          continue;
+        }
+        yield event;
+        if (event.data.final) {
+          return;
+        }
+      }
     },
 
     async cancelTask(

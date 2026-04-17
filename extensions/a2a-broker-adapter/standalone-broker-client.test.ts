@@ -213,6 +213,62 @@ describe("plugin-local createA2ABrokerClient", () => {
     expect(record.status).toBe("canceled");
   });
 
+  it("completes broker tasks with the configured worker identity", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ...createTaskRecord("task-complete-1"),
+          status: "succeeded",
+          claimedBy: "worker-a",
+          claimedAt: "2026-04-14T00:01:00.000Z",
+          completedAt: "2026-04-14T00:05:00.000Z",
+          updatedAt: "2026-04-14T00:05:00.000Z",
+          result: {
+            summary: "Done",
+            output: { ok: true },
+          },
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        },
+      ),
+    );
+    const client = createA2ABrokerClient({
+      baseUrl: "https://broker.example.com",
+      requester: {
+        id: "worker-a",
+        kind: "node",
+      },
+      fetchImpl,
+    });
+
+    const record = await client.completeTask("task-complete-1", {
+      result: {
+        summary: "Done",
+        output: { ok: true },
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://broker.example.com/tasks/task-complete-1/complete",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const init = fetchImpl.mock.calls[0]?.[1];
+    const headers = new Headers(init?.headers);
+    expect(headers.get("x-a2a-requester-id")).toBe("worker-a");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      workerId: "worker-a",
+      result: {
+        summary: "Done",
+        output: { ok: true },
+      },
+    });
+    expect(record.status).toBe("succeeded");
+  });
+
   it("throws a malformed-response error when an ok response body is not JSON", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response("not-json", {
