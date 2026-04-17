@@ -1,8 +1,9 @@
 ---
-summary: "Use NVIDIA's OpenAI-compatible API in OpenClaw"
+summary: "Use NVIDIA's OpenAI-compatible API in OpenClaw, or point at a self-hosted NIM endpoint"
 read_when:
   - You want to use open models in OpenClaw for free
   - You need NVIDIA_API_KEY setup
+  - You want to point OpenClaw at a self-hosted NVIDIA NIM endpoint
 title: "NVIDIA"
 ---
 
@@ -65,6 +66,28 @@ If you pass `--token` instead of the env var, the value lands in shell history a
 | `nvidia/moonshotai/kimi-k2.5`              | Kimi K2.5                    | 262,144 | 8,192      |
 | `nvidia/minimaxai/minimax-m2.5`            | Minimax M2.5                 | 196,608 | 8,192      |
 | `nvidia/z-ai/glm5`                         | GLM 5                        | 202,752 | 8,192      |
+
+## On-prem with NIM
+
+To point OpenClaw at a self-hosted NVIDIA NIM endpoint, override the `baseUrl` for the `nvidia` provider. Replace the placeholders below with values from your NIM deployment — refer to the NIM documentation for the endpoint URL, and the model IDs your deployment serves.
+
+```json5
+{
+  models: {
+    providers: {
+      nvidia: {
+        baseUrl: "<your-nim-base-url>",
+        api: "openai-completions",
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      model: { primary: "nvidia/<your-model-id>" },
+    },
+  },
+}
+```
 
 ## Advanced notes
 
