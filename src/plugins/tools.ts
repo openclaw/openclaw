@@ -1,11 +1,7 @@
 import { normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
-import {
-  loadOpenClawPlugins,
-  resolveCompatibleRuntimePluginRegistry,
-  type PluginLoadOptions,
-} from "./loader.js";
+import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
@@ -57,10 +53,11 @@ function resolvePluginToolRegistry(params: {
   loadOptions: PluginLoadOptions;
   allowGatewaySubagentBinding?: boolean;
 }) {
-  const compatible = resolveCompatibleRuntimePluginRegistry(params.loadOptions);
-  if (compatible) {
-    return compatible;
-  }
+  // Always perform a fresh non-activating plugin load for tool factories.
+  // Long-lived agent/tool server processes can otherwise retain stale plugin
+  // tool closures from an older active runtime registry across rebuilds or
+  // gateway restarts, which makes live tool execution diverge from the current
+  // code on disk.
   return loadOpenClawPlugins({
     ...params.loadOptions,
     activate: false,

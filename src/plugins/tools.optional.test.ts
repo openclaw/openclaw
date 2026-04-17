@@ -339,9 +339,10 @@ describe("resolvePluginTools optional tools", () => {
     expectAutoEnabledOptionalLoad(autoEnabledConfig);
   });
 
-  it("reuses a compatible active registry instead of loading again", () => {
+  it("reloads plugin tool factories instead of reusing a compatible active registry", () => {
     const activeRegistry = createOptionalDemoActiveRegistry();
     resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
+    setOptionalDemoRegistry();
 
     const tools = resolvePluginTools(
       createResolveToolsParams({
@@ -350,13 +351,19 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expectResolvedToolNames(tools, ["optional_tool"]);
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activate: false,
+        cache: false,
+      }),
+    );
   });
 
-  it("reuses the active registry for gateway-bindable tool loads before reloading", () => {
+  it("reloads plugin tool factories for gateway-bindable tool loads too", () => {
     const activeRegistry = createOptionalDemoActiveRegistry();
     setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable");
     resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
+    setOptionalDemoRegistry();
 
     const tools = resolvePluginTools(
       createResolveToolsParams({
@@ -366,7 +373,15 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expectResolvedToolNames(tools, ["optional_tool"]);
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
+        activate: false,
+        cache: false,
+      }),
+    );
   });
 
   it("loads plugin tools when gateway-bindable tool loads have no active registry", () => {
@@ -446,5 +461,4 @@ describe("resolvePluginTools optional tools", () => {
       }),
     );
   });
-
 });
