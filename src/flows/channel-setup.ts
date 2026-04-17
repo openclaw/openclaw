@@ -112,6 +112,7 @@ export async function setupChannels(
 ): Promise<OpenClawConfig> {
   let next = cfg;
   const deferStatusUntilSelection = options?.deferStatusUntilSelection === true;
+  const includeRegistryBeforeSelection = !deferStatusUntilSelection;
   const forceAllowFromChannels = new Set(options?.forceAllowFromChannels ?? []);
   const accountOverrides: Partial<Record<ChannelChoice, string>> = {
     ...options?.accountIds,
@@ -129,7 +130,7 @@ export async function setupChannels(
   const listVisibleInstalledPlugins = (params?: {
     includeRegistry?: boolean;
   }): ChannelSetupPlugin[] => {
-    const includeRegistry = params?.includeRegistry ?? !deferStatusUntilSelection;
+    const includeRegistry = params?.includeRegistry ?? includeRegistryBeforeSelection;
     const merged = new Map<string, ChannelSetupPlugin>();
     if (includeRegistry) {
       for (const plugin of listChannelSetupPlugins()) {
@@ -231,7 +232,7 @@ export async function setupChannels(
   }
 
   const primerChannels = resolveVisibleChannelEntries({
-    includeRegistry: !deferStatusUntilSelection,
+    includeRegistry: includeRegistryBeforeSelection,
   }).entries.map((entry) => ({
     id: entry.id,
     label: entry.meta.label,
@@ -299,7 +300,7 @@ export async function setupChannels(
 
   const getChannelEntries = () => {
     const resolved = resolveVisibleChannelEntries({
-      includeRegistry: !deferStatusUntilSelection,
+      includeRegistry: includeRegistryBeforeSelection,
     });
     return {
       entries: resolved.entries,
@@ -608,7 +609,7 @@ export async function setupChannels(
   const selectedLines = resolveChannelSelectionNoteLines({
     cfg: next,
     installedPlugins: listVisibleInstalledPlugins({
-      includeRegistry: !deferStatusUntilSelection,
+      includeRegistry: includeRegistryBeforeSelection,
     }),
     selection,
   });
