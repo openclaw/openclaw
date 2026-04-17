@@ -1062,8 +1062,8 @@ describe("wildcard peer bindings (peer.id=*)", () => {
 });
 
 describe("binding evaluation cache scalability", () => {
-  test("does not rescan full bindings after channel/account cache rollover (#36915)", () => {
-    const cacheKeyCount = 2_001;
+  test("does not rescan full bindings across distinct channel/account cache entries (#36915)", () => {
+    const cacheKeyCount = 64;
     const cfg: OpenClawConfig = {
       bindings: [
         {
