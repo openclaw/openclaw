@@ -58,6 +58,14 @@ const wasSentByBot = vi.hoisted(() => vi.fn(() => false));
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
 const generateTopicLabel = vi.hoisted(() => vi.fn());
+const describeStickerImage = vi.hoisted(() => vi.fn(async () => null));
+const loadModelCatalog = vi.hoisted(() => vi.fn(async () => ({})));
+const findModelInCatalog = vi.hoisted(() => vi.fn(() => null));
+const modelSupportsVision = vi.hoisted(() => vi.fn(() => false));
+const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent"));
+const resolveDefaultModelForAgent = vi.hoisted(() =>
+  vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
+);
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
@@ -95,13 +103,21 @@ vi.mock("./bot-message-dispatch.runtime.js", () => ({
   resolveStorePath,
 }));
 
+vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
+  findModelInCatalog,
+  loadModelCatalog,
+  modelSupportsVision,
+  resolveAgentDir,
+  resolveDefaultModelForAgent,
+}));
+
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: vi.fn(),
   getCachedSticker: () => null,
   getCacheStats: () => ({ count: 0 }),
   searchStickers: () => [],
   getAllCachedStickers: () => [],
-  describeStickerImage: vi.fn(),
+  describeStickerImage,
 }));
 
 let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
@@ -162,6 +178,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     loadSessionStore.mockReset();
     resolveStorePath.mockReset();
     generateTopicLabel.mockReset();
+    describeStickerImage.mockReset();
+    loadModelCatalog.mockReset();
+    findModelInCatalog.mockReset();
+    modelSupportsVision.mockReset();
+    resolveAgentDir.mockReset();
+    resolveDefaultModelForAgent.mockReset();
     loadConfig.mockReturnValue({});
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
@@ -199,6 +221,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
     loadSessionStore.mockReturnValue({});
     generateTopicLabel.mockResolvedValue("Topic label");
+    describeStickerImage.mockResolvedValue(null);
+    loadModelCatalog.mockResolvedValue({});
+    findModelInCatalog.mockReturnValue(null);
+    modelSupportsVision.mockReturnValue(false);
+    resolveAgentDir.mockReturnValue("/tmp/agent");
+    resolveDefaultModelForAgent.mockReturnValue({
+      provider: "openai",
+      model: "gpt-test",
+    });
   });
 
   const createDraftStream = (messageId?: number) => createTestDraftStream({ messageId });
@@ -2766,6 +2797,78 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(firstAnswerDraft.clear).not.toHaveBeenCalled();
   });
 
+  it("suppresses stale replies when abort lands during async pre-dispatch work", async () => {
+    let releaseCatalogLoad!: () => void;
+    const catalogLoadGate = new Promise<Record<string, never>>((resolve) => {
+      releaseCatalogLoad = () => resolve({});
+    });
+    let resolveCatalogLoadStarted!: () => void;
+    const catalogLoadStarted = new Promise<void>((resolve) => {
+      resolveCatalogLoadStarted = resolve;
+    });
+
+    loadModelCatalog.mockImplementationOnce(async () => {
+      resolveCatalogLoadStarted();
+      return await catalogLoadGate;
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ ctx, dispatcherOptions }) => {
+        if (ctx.CommandBody === "abort") {
+          await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
+          return { queuedFinal: true };
+        }
+        await dispatcherOptions.deliver({ text: "Old reply final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const firstPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "earlier request",
+          RawBody: "earlier request",
+          MediaPath: "/tmp/sticker.png",
+          Sticker: {
+            fileId: "file-id",
+            fileUniqueId: "file-unique-id",
+          },
+        } as never,
+      }),
+    });
+
+    await catalogLoadStarted;
+
+    const abortPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "abort",
+          RawBody: "abort",
+          CommandBody: "abort",
+        } as never,
+      }),
+    });
+
+    await vi.waitFor(() => {
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [{ text: "⚙️ Agent was aborted." }],
+        }),
+      );
+    });
+
+    releaseCatalogLoad();
+    await Promise.all([firstPromise, abortPromise]);
+
+    expect(deliverReplies).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [{ text: "Old reply final" }],
+      }),
+    );
+  });
+
   it("keeps older answer finalization when abort targets a different session", async () => {
     let releaseFirstFinal!: () => void;
     const firstFinalGate = new Promise<void>((resolve) => {
@@ -2935,6 +3038,96 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(statusReactionController.setDone).toHaveBeenCalledTimes(1);
     expect(statusReactionController.setError).not.toHaveBeenCalled();
+  });
+
+  it("keeps an existing preview when abort arrives during queued draft-lane cleanup", async () => {
+    let releaseMaterialize!: () => void;
+    const materializeGate = new Promise<void>((resolve) => {
+      releaseMaterialize = resolve;
+    });
+    let resolveMaterializeStarted!: () => void;
+    const materializeStarted = new Promise<void>((resolve) => {
+      resolveMaterializeStarted = resolve;
+    });
+    let resolvePreviewVisible!: () => void;
+    const previewVisible = new Promise<void>((resolve) => {
+      resolvePreviewVisible = resolve;
+    });
+
+    const firstAnswerDraft = createTestDraftStream({
+      messageId: 1001,
+      clearMessageIdOnForceNew: true,
+      onUpdate: (text) => {
+        if (text === "Old reply partial") {
+          resolvePreviewVisible();
+        }
+      },
+    });
+    firstAnswerDraft.materialize.mockImplementation(async () => {
+      resolveMaterializeStarted();
+      await materializeGate;
+      return 1001;
+    });
+    const firstReasoningDraft = createDraftStream();
+    const abortAnswerDraft = createDraftStream();
+    const abortReasoningDraft = createDraftStream();
+    const bot = createBot();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => firstAnswerDraft)
+      .mockImplementationOnce(() => firstReasoningDraft)
+      .mockImplementationOnce(() => abortAnswerDraft)
+      .mockImplementationOnce(() => abortReasoningDraft);
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Old reply partial" });
+        void replyOptions?.onAssistantMessageStart?.();
+        return { queuedFinal: false };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const firstPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "earlier request",
+          RawBody: "earlier request",
+        } as never,
+      }),
+      bot,
+    });
+
+    await previewVisible;
+    await materializeStarted;
+
+    const abortPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "abort",
+          RawBody: "abort",
+          CommandBody: "abort",
+        } as never,
+      }),
+      bot,
+    });
+
+    await vi.waitFor(() => {
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [{ text: "⚙️ Agent was aborted." }],
+        }),
+      );
+    });
+
+    releaseMaterialize();
+    await Promise.all([firstPromise, abortPromise]);
+
+    expect(firstAnswerDraft.clear).not.toHaveBeenCalled();
+    expect(bot.api.deleteMessage as ReturnType<typeof vi.fn>).not.toHaveBeenCalledWith(123, 1001);
   });
 
   it("ignores stale answer finalization when abort targets the session via CommandTargetSessionKey", async () => {

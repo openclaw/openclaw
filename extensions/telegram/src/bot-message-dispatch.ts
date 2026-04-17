@@ -260,6 +260,12 @@ export const dispatchTelegramMessage = async ({
       key: dispatchFenceKey,
       generation: abortFenceGeneration,
     });
+  abortFenceGeneration = beginTelegramAbortFence({
+    key: dispatchFenceKey,
+    supersede: isAbortRequestText(
+      ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body ?? "",
+    ),
+  });
   const draftMaxChars = Math.min(textLimit, 4096);
   const tableMode = resolveMarkdownTableMode({
     cfg,
@@ -694,12 +700,6 @@ export const dispatchTelegramMessage = async ({
   });
 
   let dispatchError: unknown;
-  abortFenceGeneration = beginTelegramAbortFence({
-    key: dispatchFenceKey,
-    supersede: isAbortRequestText(
-      ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body ?? "",
-    ),
-  });
   try {
     ({ queuedFinal } = await telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
@@ -969,6 +969,9 @@ export const dispatchTelegramMessage = async ({
     runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
   } finally {
     try {
+      // Upstream assistant callbacks are fire-and-forget; drain queued lane work
+      // before stream cleanup so boundary rotations/materialization complete first.
+      await draftLaneEventQueue;
       if (isDispatchSuperseded()) {
         if (answerLane.hasStreamedMessage || typeof answerLane.stream?.messageId() === "number") {
           retainPreviewOnCleanupByLane.answer = true;
@@ -977,9 +980,6 @@ export const dispatchTelegramMessage = async ({
           archivedPreview.deleteIfUnused = false;
         }
       }
-      // Upstream assistant callbacks are fire-and-forget; drain queued lane work
-      // before stream cleanup so boundary rotations/materialization complete first.
-      await draftLaneEventQueue;
       // Must stop() first to flush debounced content before clear() wipes state.
       const streamCleanupStates = new Map<
         NonNullable<DraftLaneState["stream"]>,
@@ -1014,11 +1014,14 @@ export const dispatchTelegramMessage = async ({
       }
       for (const [stream, cleanupState] of streamCleanupStates) {
         await stream.stop();
-        if (cleanupState.shouldClear) {
+        if (cleanupState.shouldClear && !isDispatchSuperseded()) {
           await stream.clear();
         }
       }
       for (const archivedPreview of archivedAnswerPreviews) {
+        if (isDispatchSuperseded()) {
+          break;
+        }
         if (archivedPreview.deleteIfUnused === false) {
           continue;
         }
@@ -1031,6 +1034,9 @@ export const dispatchTelegramMessage = async ({
         }
       }
       for (const messageId of archivedReasoningPreviewIds) {
+        if (isDispatchSuperseded()) {
+          break;
+        }
         try {
           await bot.api.deleteMessage(chatId, messageId);
         } catch (err) {
