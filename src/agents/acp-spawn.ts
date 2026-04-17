@@ -1054,12 +1054,13 @@ export async function spawnAcpDirect(
         params: { label: params.label, agentId: targetAgentId },
         timeoutMs: 5000,
       });
-      if (resolved?.ok && resolved.key) {
+      const resolvedKey = typeof resolved?.key === "string" ? resolved.key : undefined;
+      if (resolved?.ok && resolvedKey) {
         const storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
         const store = loadSessionStore(storePath);
-        const entry = store[resolved.key] as SessionEntry | undefined;
+        const entry = store[resolvedKey] as SessionEntry | undefined;
         if (entry && (!entry.acp?.mode || entry.acp.mode === "persistent")) {
-          sessionKey = resolved.key;
+          sessionKey = resolvedKey;
           wasResolved = true;
         }
       }
