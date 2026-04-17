@@ -3,13 +3,12 @@ import * as authModule from "../../agents/model-auth.js";
 import {
   buildGeminiEmbeddingRequest,
   buildGeminiTextEmbeddingRequest,
-  createGeminiEmbeddingProvider,
   DEFAULT_GEMINI_EMBEDDING_MODEL,
   GEMINI_EMBEDDING_2_MODELS,
   isGeminiEmbedding2Model,
   normalizeGeminiModel,
   resolveGeminiOutputDimensionality,
-} from "./embeddings-gemini.js";
+} from "./embeddings-gemini-request.js";
 import {
   createGeminiBatchFetchMock,
   createJsonResponseFetchMock,
@@ -47,12 +46,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+type GeminiProviderOptions = Parameters<
+  typeof import("./embeddings-gemini.js").createGeminiEmbeddingProvider
+>[0];
+
 async function createProviderWithFetch(
   fetchMock: JsonFetchMock,
-  options: Partial<Parameters<typeof createGeminiEmbeddingProvider>[0]> & { model: string },
+  options: Partial<GeminiProviderOptions> & { model: string },
 ) {
   installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
   mockResolvedProviderKey(authModule.resolveApiKeyForProvider);
+  const { createGeminiEmbeddingProvider } = await import("./embeddings-gemini.js");
   const { provider } = await createGeminiEmbeddingProvider({
     config: {} as never,
     provider: "gemini",
@@ -63,7 +67,7 @@ async function createProviderWithFetch(
 }
 
 describe("Gemini embedding request helpers", () => {
-  it("builds text and multimodal requests", () => {
+  it("builds requests and resolves model settings", () => {
     expect(
       buildGeminiTextEmbeddingRequest({
         text: "hello",
@@ -101,16 +105,10 @@ describe("Gemini embedding request helpers", () => {
       taskType: "RETRIEVAL_DOCUMENT",
       outputDimensionality: 1536,
     });
-  });
-
-  it("detects v2 model names", () => {
     expect(GEMINI_EMBEDDING_2_MODELS.has("gemini-embedding-2-preview")).toBe(true);
     expect(isGeminiEmbedding2Model("gemini-embedding-2-preview")).toBe(true);
     expect(isGeminiEmbedding2Model("gemini-embedding-001")).toBe(false);
     expect(isGeminiEmbedding2Model("text-embedding-004")).toBe(false);
-  });
-
-  it("resolves v2 dimensions and rejects invalid values", () => {
     expect(resolveGeminiOutputDimensionality("gemini-embedding-001")).toBeUndefined();
     expect(resolveGeminiOutputDimensionality("text-embedding-004")).toBeUndefined();
     expect(resolveGeminiOutputDimensionality("gemini-embedding-2-preview")).toBe(3072);
@@ -123,9 +121,6 @@ describe("Gemini embedding request helpers", () => {
     expect(() => resolveGeminiOutputDimensionality("gemini-embedding-2-preview", 1024)).toThrow(
       /Valid values: 768, 1536, 3072/,
     );
-  });
-
-  it("normalizes known model prefixes and default model", () => {
     expect(normalizeGeminiModel("models/gemini-embedding-2-preview")).toBe(
       "gemini-embedding-2-preview",
     );
