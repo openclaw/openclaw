@@ -135,7 +135,6 @@ import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderLoginGate } from "./views/login-gate.ts";
 import { renderOverview } from "./views/overview.ts";
-import { renderPlanApprovalOverlay } from "./views/plan-approval.ts";
 
 // Lazy-loaded view modules – deferred so the initial bundle stays small.
 // Each loader resolves once; subsequent calls return the cached module.
@@ -1974,6 +1973,37 @@ export function renderApp(state: AppViewState) {
                   },
                 );
               },
+              // PR-8 follow-up: inline plan approval card lives above
+              // the chat input. Replaces the modal overlay so the rest
+              // of the UI stays interactive while a plan is pending.
+              planApprovalRequest: state.planApprovalRequest,
+              planApprovalBusy: state.planApprovalBusy,
+              planApprovalError: state.planApprovalError,
+              onPlanApprovalDecision: (decision, feedback) =>
+                state.handlePlanApprovalDecision(decision, feedback),
+              onOpenPlanInSidebar: (request) => {
+                // Render the proposed plan as a markdown document and
+                // hand it to the existing markdown-sidebar viewer (same
+                // surface tool-output details use).
+                const stepLines = request.plan
+                  .map((step, i) => {
+                    const marker =
+                      step.status === "completed"
+                        ? "[x]"
+                        : step.status === "cancelled"
+                          ? "[ ] ~~"
+                          : "[ ]";
+                    const close = step.status === "cancelled" ? "~~" : "";
+                    const label =
+                      step.status === "in_progress" && step.activeForm
+                        ? step.activeForm
+                        : step.step;
+                    return `${i + 1}. ${marker} ${label}${close}`;
+                  })
+                  .join("\n");
+                const md = `# ${request.summary || "Proposed plan"}\n\n${stepLines}\n`;
+                state.handleOpenSidebar({ kind: "markdown", content: md });
+              },
             })
           : nothing}
         ${renderConfigTabForActiveTab()}
@@ -2082,8 +2112,7 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
       </main>
-      ${renderExecApprovalPrompt(state)} ${renderPlanApprovalOverlay(state)}
-      ${renderGatewayUrlConfirmation(state)} ${nothing}
+      ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)} ${nothing}
     </div>
   `;
 }

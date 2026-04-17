@@ -3,6 +3,7 @@ import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
+import type { PlanApprovalRequest } from "../app-tool-stream.ts";
 import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentMimeType,
@@ -54,6 +55,7 @@ import type { ChatItem, MessageGroup, ToolCard } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { agentLogoUrl, resolveAgentAvatarUrl } from "./agents-utils.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
+import { renderInlinePlanApproval } from "./plan-approval-inline.ts";
 import "../components/resizable-divider.ts";
 
 export type ChatProps = {
@@ -130,6 +132,17 @@ export type ChatProps = {
    * Optional so existing callers that don't yet wire it stay compiling.
    */
   onSetMode?: (mode: ModeDefinition) => void;
+  // PR-8 follow-up: inline plan approval card wiring. Optional so non-
+  // plan-mode embeddings of renderChat (tests, alt apps) keep compiling.
+  planApprovalRequest?: PlanApprovalRequest | null;
+  planApprovalBusy?: boolean;
+  planApprovalError?: string | null;
+  onPlanApprovalDecision?: (
+    decision: "approve" | "reject" | "edit",
+    feedback?: string,
+  ) => void | Promise<void>;
+  /** Open the full plan content in the right sidebar (read-only viewer). */
+  onOpenPlanInSidebar?: (request: PlanApprovalRequest) => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -1543,6 +1556,24 @@ export function renderChat(props: ChatProps) {
             </button>
           `
         : nothing}
+      ${props.planApprovalRequest && props.onPlanApprovalDecision
+        ? renderInlinePlanApproval({
+            request: props.planApprovalRequest,
+            busy: props.planApprovalBusy ?? false,
+            error: props.planApprovalError ?? null,
+            onApprove: () => void props.onPlanApprovalDecision!("approve"),
+            onEdit: () => void props.onPlanApprovalDecision!("edit"),
+            onReject: () => {
+              const feedback = window.prompt("Feedback for revision (optional):") ?? undefined;
+              void props.onPlanApprovalDecision!("reject", feedback || undefined);
+            },
+            onOpenPlan: () => {
+              if (props.planApprovalRequest && props.onOpenPlanInSidebar) {
+                props.onOpenPlanInSidebar(props.planApprovalRequest);
+              }
+            },
+          })
+        : nothing}
 
       <!-- Input bar -->
       <div class="agent-chat__input">
@@ -1574,6 +1605,32 @@ export function renderChat(props: ChatProps) {
 
         <div class="agent-chat__toolbar">
           <div class="agent-chat__toolbar-left">
+            ${(() => {
+              // PR-8 / #67721: mode chip lives at the LEFT edge of the
+              // toolbar (before paperclip) per user feedback — it's the
+              // most-frequently-touched control on the input row.
+              if (!props.onSetMode) {
+                return nothing;
+              }
+              const currentMode = resolveCurrentMode(
+                activeSession?.execSecurity,
+                activeSession?.execAsk,
+                activeSession?.planMode?.mode,
+              );
+              return renderModeSwitcher({
+                currentMode,
+                menuOpen: vs.modeMenuOpen,
+                onToggleMenu: () => {
+                  vs.modeMenuOpen = !vs.modeMenuOpen;
+                  requestUpdate();
+                },
+                onSelectMode: (mode) => {
+                  vs.modeMenuOpen = false;
+                  props.onSetMode!(mode);
+                  requestUpdate();
+                },
+              });
+            })()}
             <button
               class="agent-chat__input-btn"
               @click=${() => {
@@ -1639,34 +1696,6 @@ export function renderChat(props: ChatProps) {
                   </button>
                 `
               : nothing}
-            ${(() => {
-              // PR-8 / #67721: render the mode chip when the host wired
-              // `onSetMode`. Reads the current mode from the active
-              // session row (planMode wins; falls back to permission
-              // pair; falls back to a synthesized "Custom" chip when
-              // neither matches a preset).
-              if (!props.onSetMode) {
-                return nothing;
-              }
-              const currentMode = resolveCurrentMode(
-                activeSession?.execSecurity,
-                activeSession?.execAsk,
-                activeSession?.planMode?.mode,
-              );
-              return renderModeSwitcher({
-                currentMode,
-                menuOpen: vs.modeMenuOpen,
-                onToggleMenu: () => {
-                  vs.modeMenuOpen = !vs.modeMenuOpen;
-                  requestUpdate();
-                },
-                onSelectMode: (mode) => {
-                  vs.modeMenuOpen = false;
-                  props.onSetMode!(mode);
-                  requestUpdate();
-                },
-              });
-            })()}
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
           </div>
 
