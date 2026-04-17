@@ -528,6 +528,7 @@ describeLive("gateway live (Codex harness)", () => {
             "`codex models` did not run in this environment.",
             "`codex models` failed in this sandbox",
             "`codex models` could not be run in this sandbox.",
+            "`codex models` is not runnable in this sandboxed session.",
             "I couldn’t get a direct `codex models` CLI listing because the local sandbox blocked that command.",
             "I couldn’t list all installed/available Codex models from the local CLI because the sandboxed `codex` command failed to start in this environment.",
             "I couldn’t get `codex models` from the CLI because the sandbox blocks the namespace setup it needs",
@@ -564,7 +565,9 @@ describeLive("gateway live (Codex harness)", () => {
                 text.includes("failed with:") ||
                 text.includes("repo-local fallback") ||
                 text.includes("sandbox blocks") ||
-                text.includes("interactive in this environment"));
+                text.includes("interactive in this environment") ||
+                text.includes("sandboxed session") ||
+                text.includes("required user namespace"));
             const mentionsConfiguredModels =
               normalized.includes("configured model") ||
               normalized.includes("configured codex model") ||

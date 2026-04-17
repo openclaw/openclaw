@@ -123,6 +123,40 @@ describe("gateway cli backend live helpers", () => {
     expect(shouldRunCliModelSwitchProbe("claude-cli", "claude-cli/claude-sonnet-4-6")).toBe(false);
   });
 
+  it("allows live env overrides for fresh and resume CLI args", async () => {
+    const { resolveCliBackendLiveArgs } = await import("./gateway-cli-backend.live-helpers.js");
+
+    process.env.OPENCLAW_LIVE_CLI_BACKEND_ARGS = JSON.stringify([
+      "exec",
+      "--sandbox",
+      "danger-full-access",
+    ]);
+    process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS = JSON.stringify([
+      "exec",
+      "resume",
+      "{sessionId}",
+      "-c",
+      'sandbox_mode="danger-full-access"',
+    ]);
+
+    expect(
+      resolveCliBackendLiveArgs({
+        providerId: "codex-cli",
+        defaultArgs: ["exec", "--sandbox", "workspace-write"],
+        defaultResumeArgs: [
+          "exec",
+          "resume",
+          "{sessionId}",
+          "-c",
+          'sandbox_mode="workspace-write"',
+        ],
+      }),
+    ).toEqual({
+      args: ["exec", "--sandbox", "danger-full-access"],
+      resumeArgs: ["exec", "resume", "{sessionId}", "-c", 'sandbox_mode="danger-full-access"'],
+    });
+  });
+
   it("retries cancelled cron MCP replies", async () => {
     const { shouldRetryCliCronMcpProbeReply } =
       await import("./gateway-cli-backend.live-helpers.js");

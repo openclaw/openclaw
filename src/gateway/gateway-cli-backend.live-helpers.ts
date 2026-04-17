@@ -103,6 +103,29 @@ export function shouldRunCliMcpProbe(providerId: string): boolean {
   return resolveCliBackendLiveTest(providerId)?.defaultMcpProbe === true;
 }
 
+export function resolveCliBackendLiveArgs(params: {
+  providerId: string;
+  defaultArgs?: string[];
+  defaultResumeArgs?: string[];
+}): { args: string[]; resumeArgs?: string[] } {
+  const args =
+    parseJsonStringArray(
+      "OPENCLAW_LIVE_CLI_BACKEND_ARGS",
+      process.env.OPENCLAW_LIVE_CLI_BACKEND_ARGS,
+    ) ?? params.defaultArgs;
+  if (!args || args.length === 0) {
+    throw new Error(
+      `OPENCLAW_LIVE_CLI_BACKEND_ARGS is required for provider "${params.providerId}".`,
+    );
+  }
+  const resumeArgs =
+    parseJsonStringArray(
+      "OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS",
+      process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS,
+    ) ?? params.defaultResumeArgs;
+  return { args, resumeArgs };
+}
+
 export function resolveCliModelSwitchProbeTarget(
   providerId: string,
   modelRef: string,

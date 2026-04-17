@@ -15,8 +15,9 @@ import {
   getFreeGatewayPort,
   matchesCliBackendReply,
   parseImageMode,
-  parseJsonStringArray,
   resolveCliModelSwitchProbeTarget,
+  resolveCliBackendLiveArgs,
+  parseJsonStringArray,
   restoreCliBackendLiveEnv,
   shouldRunCliImageProbe,
   shouldRunCliModelSwitchProbe,
@@ -106,14 +107,11 @@ describeLive("gateway live (cli backend)", () => {
         );
       }
 
-      const baseCliArgs =
-        parseJsonStringArray(
-          "OPENCLAW_LIVE_CLI_BACKEND_ARGS",
-          process.env.OPENCLAW_LIVE_CLI_BACKEND_ARGS,
-        ) ?? providerDefaults?.args;
-      if (!baseCliArgs || baseCliArgs.length === 0) {
-        throw new Error(`OPENCLAW_LIVE_CLI_BACKEND_ARGS is required for provider "${providerId}".`);
-      }
+      const { args: baseCliArgs, resumeArgs: baseCliResumeArgs } = resolveCliBackendLiveArgs({
+        providerId,
+        defaultArgs: providerDefaults?.args,
+        defaultResumeArgs: providerDefaults?.resumeArgs,
+      });
 
       const cliClearEnv =
         parseJsonStringArray(
@@ -192,6 +190,7 @@ describeLive("gateway live (cli backend)", () => {
               [providerId]: {
                 command: cliCommand,
                 args: cliArgs,
+                resumeArgs: baseCliResumeArgs,
                 clearEnv: filteredCliClearEnv.length > 0 ? filteredCliClearEnv : undefined,
                 env: Object.keys(preservedCliEnv).length > 0 ? preservedCliEnv : undefined,
                 systemPromptWhen: providerDefaults?.systemPromptWhen ?? "never",
