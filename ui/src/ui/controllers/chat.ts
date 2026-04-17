@@ -114,6 +114,9 @@ export type ChatState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   lastError: string | null;
+  // Track optimistically-added user messages that haven't been confirmed by the server yet.
+  // Maps client-generated temp ID -> the pending message object.
+  pendingChatMessagesById: Map<string, unknown>;
 };
 
 export type ChatEventPayload = {
@@ -177,7 +180,37 @@ export async function loadChatHistory(state: ChatState) {
       return;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    const filteredMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+
+    // Restore any pending local messages that aren't in the server history yet.
+    // This prevents optimistic user messages from being lost when loadChatHistory
+    // replaces chatMessages with server history (which may not include the message
+    // if context compaction occurred before the message was committed).
+    if (state.pendingChatMessagesById && state.pendingChatMessagesById.size > 0) {
+      // Build a fingerprint set from server messages to detect duplicates
+      const serverFingerprints = new Set<string>();
+      for (const m of filteredMessages) {
+        const msg = m as Record<string, unknown>;
+        const content = msg.content;
+        serverFingerprints.add(Array.isArray(content) ? JSON.stringify(content) : String(content));
+      }
+
+      // Find pending messages that need to be preserved (not yet in server history)
+      const pendingToKeep: unknown[] = [];
+      for (const pendingMsg of state.pendingChatMessagesById.values()) {
+        const pending = pendingMsg as Record<string, unknown>;
+        const content = pending.content;
+        const fingerprint = Array.isArray(content) ? JSON.stringify(content) : String(content);
+        if (!serverFingerprints.has(fingerprint)) {
+          pendingToKeep.push(pending);
+        }
+      }
+
+      state.chatMessages = [...filteredMessages, ...pendingToKeep];
+      state.pendingChatMessagesById.clear();
+    } else {
+      state.chatMessages = filteredMessages;
+    }
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
@@ -194,6 +227,14 @@ export async function loadChatHistory(state: ChatState) {
       state.lastError = formatMissingOperatorReadScopeMessage("existing chat history");
     } else {
       state.lastError = String(err);
+    }
+    // Preserve any pending messages even on error (strip their _tempId)
+    if (state.pendingChatMessagesById && state.pendingChatMessagesById.size > 0) {
+      const pendingMsgs = [...state.pendingChatMessagesById.values()].map(
+        ({ _tempId: _1, ...msg }) => msg,
+      );
+      state.chatMessages = [...state.chatMessages, ...pendingMsgs];
+      state.pendingChatMessagesById.clear();
     }
   } finally {
     if (isLatestChatHistoryRequest(state, requestVersion)) {
@@ -322,14 +363,20 @@ export async function sendChatMessage(
     }
   }
 
-  state.chatMessages = [
-    ...state.chatMessages,
-    {
-      role: "user",
-      content: contentBlocks,
-      timestamp: now,
-    },
-  ];
+  const tempId = generateUUID();
+  const userMessage = {
+    role: "user",
+    content: contentBlocks,
+    timestamp: now,
+    _tempId: tempId,
+  };
+  state.chatMessages = [...state.chatMessages, userMessage];
+
+  // Track as pending so loadChatHistory doesn't lose it
+  if (!state.pendingChatMessagesById) {
+    state.pendingChatMessagesById = new Map();
+  }
+  state.pendingChatMessagesById.set(tempId, userMessage);
 
   state.chatSending = true;
   state.lastError = null;
