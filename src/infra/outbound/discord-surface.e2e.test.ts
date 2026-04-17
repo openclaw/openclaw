@@ -189,6 +189,16 @@ async function withLiveHarness<T>(
       discord: {
         ...baseCfg.channels?.discord,
         enabled: true,
+        threadBindings: {
+          ...baseCfg.channels?.discord?.threadBindings,
+          // Required so `/acp spawn ... --bind here` actually creates a
+          // Discord thread for the spawned child and routes emissions to
+          // it. Without `enabled`+`spawnAcpSessions`, the child runs but
+          // the Discord delivery surface is never wired up.
+          enabled: true,
+          spawnAcpSessions: true,
+          spawnSubagentSessions: true,
+        },
         accounts: {
           ...baseCfg.channels?.discord?.accounts,
           [liveEnv.accountId]: {
@@ -285,6 +295,15 @@ describeLive("discord surface e2e (smoke)", () => {
           discord: {
             ...baseCfg.channels?.discord,
             enabled: true,
+            threadBindings: {
+              ...baseCfg.channels?.discord?.threadBindings,
+              // Required so `/acp spawn ... --thread here` actually creates
+              // a Discord thread for the spawned child and routes emissions
+              // to it.
+              enabled: true,
+              spawnAcpSessions: true,
+              spawnSubagentSessions: true,
+            },
             accounts: {
               ...baseCfg.channels?.discord?.accounts,
               [liveEnv.accountId]: {

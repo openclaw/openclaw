@@ -39,6 +39,16 @@ const LIVE_DISCORD_VARS = [
   "OPENCLAW_LIVE_DISCORD_PARENT_CHANNEL_ID",
 ] as const;
 
+// Trace logging for the live Discord E2E harness. Enabled whenever
+// `OPENCLAW_E2E_VERBOSE=1`, which is the same flag the e2e vitest config
+// uses to set `silent: false`. Tracing is test-diagnostic only — without it
+// the harness hangs silently because vitest buffers stdout until failure.
+function e2eTrace(message: string): void {
+  if (process.env.OPENCLAW_E2E_VERBOSE === "1") {
+    console.info(`[discord-e2e] ${message}`);
+  }
+}
+
 function readEnv(name: string): string | undefined {
   const raw = process.env[name];
   if (typeof raw !== "string") {
@@ -226,47 +236,112 @@ export async function spawnAcpWithMarker(params: {
 
   // Post the spawn request into the parent channel. The production classifier
   // and spawn path will create a thread for the new ACP session.
-  const messageContent = `/acp spawn ${params.agentId} --bind here\n${params.task}\n${params.marker}`;
+  //
+  // Note: we use `--thread auto`. For Discord (a child-placement channel),
+  // `--thread here` requires already being in a thread; `--bind here` would
+  // bind to the parent channel without creating a child thread. Only
+  // `--thread auto` auto-creates a new Discord thread when issued from the
+  // parent channel, which is exactly what this surface test needs.
+  const messageContent = `/acp spawn ${params.agentId} --thread auto\n${params.task}\n${params.marker}`;
+  e2eTrace(`spawnAcpWithMarker: posting Discord message (agent=${params.agentId})`);
   const request = await withDiscordRetry(() =>
     postDiscordMessage(params.env, params.env.parentChannelId, messageContent),
   );
   const requestMessageId = request.id;
+  e2eTrace(`spawnAcpWithMarker: parent message posted id=${requestMessageId}`);
 
   // Trigger the gateway-side spawn over RPC. We piggyback on chat.send with
   // the parent channel as originatingTo so routing replicates real Discord flow.
   const sessionKey = `discord:parent:${params.env.parentChannelId}`;
+
+  // Wait for the ACP backend to be healthy before spawning. The acpx plugin
+  // registers its backend on start, but `probeAvailability()` runs async —
+  // spawning immediately races the probe and hits ACP_BACKEND_UNAVAILABLE.
+  // Mirror the known-working gateway-acp-bind.live.test.ts approach: await
+  // the probe explicitly and retry until healthy (or timeout).
+  e2eTrace("spawnAcpWithMarker: waiting for acpx backend healthy");
+  await waitForAcpBackendHealthy({ timeoutMs: Math.min(60_000, timeoutMs) });
+  e2eTrace("spawnAcpWithMarker: backend healthy, sending spawn chat.send");
+
   const spawnResult: { runId?: string; status?: string } = await params.gateway.request(
     "chat.send",
     {
       sessionKey,
-      message: `/acp spawn ${params.agentId} --bind here`,
+      message: `/acp spawn ${params.agentId} --thread auto`,
       idempotencyKey: `idem-spawn-${randomUUID()}`,
       originatingChannel: "discord",
       originatingTo: params.env.parentChannelId,
       originatingAccountId: params.env.accountId,
     },
   );
+  e2eTrace(
+    `spawnAcpWithMarker: spawn chat.send returned status=${String(spawnResult?.status)} runId=${String(spawnResult?.runId)}`,
+  );
   if (spawnResult?.status !== "started" || typeof spawnResult.runId !== "string") {
     throw new Error(`chat.send for spawn did not start correctly: ${JSON.stringify(spawnResult)}`);
   }
+  e2eTrace(`spawnAcpWithMarker: awaiting spawn agent.wait runId=${spawnResult.runId}`);
   await params.gateway.request(
     "agent.wait",
     { runId: spawnResult.runId, timeoutMs: Math.max(30_000, timeoutMs - (Date.now() - startedAt)) },
     { timeoutMs: Math.max(35_000, timeoutMs - (Date.now() - startedAt) + 5_000) },
   );
+  e2eTrace("spawnAcpWithMarker: spawn agent.wait completed");
 
   // Pull history for the main session so we can extract the spawned session key.
+  e2eTrace("spawnAcpWithMarker: fetching chat.history for spawned session key");
   const history: { messages?: unknown[] } = await params.gateway.request("chat.history", {
     sessionKey,
     limit: 16,
   });
   const spawnedSessionKey = extractSpawnedAcpSessionKey(history.messages ?? []);
+  e2eTrace(`spawnAcpWithMarker: spawnedSessionKey=${String(spawnedSessionKey)}`);
   if (!spawnedSessionKey) {
-    throw new Error("could not extract spawned ACP session key from chat.history");
+    // Surface the most recent assistant text so operators can tell whether
+    // the failure is "backend unavailable" vs "backend healthy but spawn
+    // rejected" vs a transport regression.
+    const preview = extractFirstAssistantTextPreview(history.messages ?? []);
+    throw new Error(
+      `could not extract spawned ACP session key from chat.history${preview ? ` (last assistant text: ${preview})` : ""}`,
+    );
+  }
+
+  // After bind, drive the ACP session with the task prompt so the child
+  // agent produces the marker. The `/acp spawn` command only creates the
+  // session; the actual task needs a separate turn on the spawned session
+  // key. Without this second turn the child has nothing to echo into the
+  // bound Discord thread and findThreadWithMarker below will always time
+  // out. We dispatch via `chat.send` on the spawned session key and await
+  // completion (best effort — some scenarios want to inspect mid-run state,
+  // so we cap the wait here to the remaining budget).
+  const taskRemainingMs = Math.max(30_000, timeoutMs - (Date.now() - startedAt));
+  e2eTrace(`spawnAcpWithMarker: dispatching task prompt (remainingMs=${taskRemainingMs})`);
+  const taskResult: { runId?: string; status?: string } = await params.gateway.request(
+    "chat.send",
+    {
+      sessionKey: spawnedSessionKey,
+      message: params.task,
+      idempotencyKey: `idem-task-${randomUUID()}`,
+      originatingChannel: "discord",
+      originatingTo: params.env.parentChannelId,
+      originatingAccountId: params.env.accountId,
+    },
+  );
+  e2eTrace(
+    `spawnAcpWithMarker: task chat.send status=${String(taskResult?.status)} runId=${String(taskResult?.runId)}`,
+  );
+  if (taskResult?.status === "started" && typeof taskResult.runId === "string") {
+    await params.gateway.request(
+      "agent.wait",
+      { runId: taskResult.runId, timeoutMs: taskRemainingMs },
+      { timeoutMs: taskRemainingMs + 5_000 },
+    );
+    e2eTrace("spawnAcpWithMarker: task agent.wait completed");
   }
 
   // Find the newly created thread containing our marker. ACP spawn creates a
   // thread via the Discord extension; we poll until it shows up.
+  e2eTrace(`spawnAcpWithMarker: looking for thread with marker ${params.marker}`);
   const threadId = await withDiscordRetry(() =>
     findThreadWithMarker({
       env: params.env,
@@ -274,6 +349,7 @@ export async function spawnAcpWithMarker(params: {
       timeoutMs: Math.max(15_000, timeoutMs - (Date.now() - startedAt)),
     }),
   );
+  e2eTrace(`spawnAcpWithMarker: found threadId=${threadId}`);
 
   return { threadId, spawnedSessionKey, requestMessageId };
 }
@@ -878,20 +954,30 @@ async function findThreadWithMarker(params: {
   const { env, marker, timeoutMs } = params;
   const startedAt = Date.now();
   const rest = getRestClient(env.botToken);
+  let pollAttempt = 0;
   while (Date.now() - startedAt < timeoutMs) {
+    pollAttempt += 1;
     const active = (await rest.get(Routes.guildActiveThreads(env.guildId))) as {
       threads?: Array<{ id: string; parent_id?: string; name?: string }>;
     };
     const threads = active.threads ?? [];
-    for (const thread of threads) {
-      if (thread.parent_id && thread.parent_id !== env.parentChannelId) {
-        continue;
-      }
+    const candidateThreads = threads.filter(
+      (t) => !t.parent_id || t.parent_id === env.parentChannelId,
+    );
+    // Log candidate threads periodically (every 10 polls plus first two)
+    // so operators can see progress without drowning logs.
+    if (pollAttempt <= 2 || pollAttempt % 10 === 0) {
+      e2eTrace(
+        `findThreadWithMarker poll=${pollAttempt}: ${threads.length} active thread(s), ${candidateThreads.length} under parent ${env.parentChannelId}; names=${JSON.stringify(candidateThreads.map((t) => t.name ?? t.id))}`,
+      );
+    }
+    for (const thread of candidateThreads) {
       // Scan the thread's messages for the marker.
       const messages = (await rest.get(Routes.channelMessages(thread.id), {
         limit: 25,
       })) as APIMessage[];
       if (messages.some((msg) => msg.content?.includes(marker))) {
+        e2eTrace(`findThreadWithMarker: matched thread ${thread.id} (${thread.name ?? ""})`);
         return thread.id;
       }
     }
@@ -915,4 +1001,106 @@ function extractSpawnedAcpSessionKey(messages: unknown[]): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Pull the first assistant text chunk out of a chat.history response so
+ * `spawnAcpWithMarker` can surface diagnostic context when the Spawned-ACP
+ * session line is missing. Keeps us from debugging blind against
+ * `ACP_BACKEND_UNAVAILABLE` vs genuine transport failures.
+ */
+function extractFirstAssistantTextPreview(messages: unknown[]): string | null {
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const role = (entry as { role?: unknown }).role;
+    if (role !== "assistant") {
+      continue;
+    }
+    const content = (entry as { content?: unknown }).content;
+    if (typeof content === "string") {
+      const trimmed = content.trim();
+      return trimmed.length > 240 ? `${trimmed.slice(0, 240)}...` : trimmed;
+    }
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (!block || typeof block !== "object") {
+          continue;
+        }
+        const text = (block as { text?: unknown }).text;
+        if (typeof text === "string" && text.trim().length > 0) {
+          const trimmed = text.trim();
+          return trimmed.length > 240 ? `${trimmed.slice(0, 240)}...` : trimmed;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Wait until the acpx runtime backend reports healthy. The acpx plugin
+ * registers its backend synchronously during plugin startup, but the
+ * `probeAvailability()` call that flips `healthy()` from false to true runs
+ * asynchronously. A test that spawns immediately after gateway startup can
+ * lose that race and see `ACP_BACKEND_UNAVAILABLE`, which surfaces here as
+ * "could not extract spawned ACP session key from chat.history".
+ *
+ * We mirror the approach in `src/gateway/gateway-acp-bind.live.test.ts`:
+ * look up the acpx backend, explicitly drive `probeAvailability()` until
+ * `healthy()` returns true, retrying with backoff until `timeoutMs` elapses.
+ *
+ * Kept in the harness (not in production) because the retry is a test-only
+ * expectation: real gateway clients should not be driving lifecycle probes.
+ */
+async function waitForAcpBackendHealthy(params: { timeoutMs: number }): Promise<void> {
+  const timeoutMs = Math.max(1_000, params.timeoutMs);
+  const startedAt = Date.now();
+  // Lazy import so module consumers in non-test contexts do not pay the
+  // registry import cost.
+  const { getAcpRuntimeBackend } = await import("../../acp/runtime/registry.js");
+  let lastError: unknown;
+  let attempt = 0;
+  while (Date.now() - startedAt < timeoutMs) {
+    attempt += 1;
+    const backend = getAcpRuntimeBackend("acpx");
+    if (!backend) {
+      e2eTrace(`waitForAcpBackendHealthy: acpx backend not yet registered (attempt ${attempt})`);
+      await sleep(500);
+      continue;
+    }
+    if (backend.healthy?.()) {
+      e2eTrace(`waitForAcpBackendHealthy: backend healthy after ${attempt} attempt(s)`);
+      return;
+    }
+    const runtime = backend.runtime as { probeAvailability?: () => Promise<void> } | undefined;
+    if (runtime?.probeAvailability) {
+      try {
+        await runtime.probeAvailability();
+      } catch (err) {
+        lastError = err;
+        e2eTrace(
+          `waitForAcpBackendHealthy: probeAvailability threw (attempt ${attempt}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    if (backend.healthy?.()) {
+      e2eTrace(`waitForAcpBackendHealthy: backend healthy after probe (attempt ${attempt})`);
+      return;
+    }
+    e2eTrace(`waitForAcpBackendHealthy: still not healthy after attempt ${attempt}`);
+    await sleep(1_500 + Math.floor(Math.random() * 500));
+  }
+  const detail =
+    lastError instanceof Error
+      ? `: ${lastError.message}`
+      : typeof lastError === "string" && lastError.length > 0
+        ? `: ${lastError}`
+        : lastError !== undefined && lastError !== null
+          ? `: ${JSON.stringify(lastError)}`
+          : "";
+  throw new Error(
+    `waitForAcpBackendHealthy: acpx backend did not become healthy within ${String(timeoutMs)}ms${detail}`,
+  );
 }

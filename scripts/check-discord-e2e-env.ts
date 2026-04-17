@@ -29,6 +29,23 @@ const OPTIONAL_VARS = [
   "OPENCLAW_LIVE_DISCORD_SECONDARY_CHANNEL_ID",
 ] as const;
 
+// Provider API keys the ACP children will need. These are not hard-required
+// because the Claude / Codex CLIs can also authenticate via OAuth state under
+// the user's HOME (the live harness stages those dirs into the isolated test
+// home), but if neither the OAuth state nor the key is present the spawn
+// will fail and the surface of the failure is easy to misread. Surface this
+// as an advisory check rather than a hard gate.
+const PROVIDER_KEY_CHECKS: Array<{ label: string; vars: readonly string[] }> = [
+  {
+    label: "Anthropic (Claude scenarios)",
+    vars: ["OPENCLAW_LIVE_ANTHROPIC_KEY", "ANTHROPIC_API_KEY"],
+  },
+  {
+    label: "OpenAI (Codex scenarios)",
+    vars: ["OPENCLAW_LIVE_OPENAI_KEY", "OPENAI_API_KEY"],
+  },
+];
+
 // Permissions the harness needs to create threads, write via webhooks,
 // and archive cleanup. See the Phase 7 plan for the full rationale.
 const REQUIRED_PERMISSION_BITS: Array<{ name: string; bit: bigint }> = [
@@ -152,6 +169,16 @@ async function main(): Promise<number> {
   for (const name of OPTIONAL_VARS) {
     const value = getenv(name);
     printCheck(`${name} (optional)`, true, value ?? "(default)");
+  }
+  for (const provider of PROVIDER_KEY_CHECKS) {
+    const matchedVar = provider.vars.find((name) => getenv(name));
+    printCheck(
+      `${provider.label} auth (advisory)`,
+      true,
+      matchedVar
+        ? `${matchedVar} set`
+        : `no key var set (${provider.vars.join(" / ")}); CLI OAuth under $HOME may still work`,
+    );
   }
 
   if (missing > 0) {
