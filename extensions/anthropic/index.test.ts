@@ -269,7 +269,12 @@ describe("anthropic provider replay hooks", () => {
       });
     });
 
-    it.each(["claude-opus-4-7", "claude-sonnet-4-7"])(
+    it.each([
+      "claude-opus-4-7",
+      "claude-opus-4.7",
+      "claude-sonnet-4-7",
+      "claude-sonnet-4.7",
+    ])(
       "marks %s as a modern model",
       async (modelId) => {
         const provider = await registerSingleProviderPlugin(anthropicPlugin);
@@ -303,6 +308,44 @@ describe("anthropic provider replay hooks", () => {
           modelId: "claude-sonnet-4-7",
         } as never),
       ).toBe("adaptive");
+    });
+
+    it("uses adaptive thinking for dot-form claude-sonnet-4.7", async () => {
+      const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+      expect(
+        provider.resolveDefaultThinkingLevel?.({
+          provider: "anthropic",
+          modelId: "claude-sonnet-4.7",
+        } as never),
+      ).toBe("adaptive");
+    });
+
+    it("resolves sonnet-4-7 from 4.5 template when only 4.5 is available", async () => {
+      const provider = await registerSingleProviderPlugin(anthropicPlugin);
+      const resolved = provider.resolveDynamicModel?.({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-7",
+        modelRegistry: createModelRegistry([
+          {
+            id: "claude-sonnet-4-5",
+            name: "Claude Sonnet 4.5",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            reasoning: true,
+            input: ["text", "image"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 200_000,
+            maxTokens: 32_000,
+          } as ProviderRuntimeModel,
+        ]),
+      } as ProviderResolveDynamicModelContext);
+
+      expect(resolved).toMatchObject({
+        provider: "anthropic",
+        id: "claude-sonnet-4-7",
+        api: "anthropic-messages",
+      });
     });
 
     it("does not resolve unrecognized model variants", async () => {

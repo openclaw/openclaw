@@ -57,7 +57,9 @@ const ANTHROPIC_SONNET_47_DOT_MODEL_ID = "claude-sonnet-4.7";
 const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet-4.5"] as const;
 const ANTHROPIC_MODERN_MODEL_PREFIXES = [
   "claude-opus-4-7",
+  "claude-opus-4.7",
   "claude-sonnet-4-7",
+  "claude-sonnet-4.7",
   "claude-opus-4-6",
   "claude-sonnet-4-6",
   "claude-opus-4-5",
@@ -247,7 +249,11 @@ function resolveAnthropicForwardCompatModel(
       dotModelId: ANTHROPIC_SONNET_47_DOT_MODEL_ID,
       dashTemplateId: ANTHROPIC_SONNET_46_MODEL_ID,
       dotTemplateId: ANTHROPIC_SONNET_46_DOT_MODEL_ID,
-      fallbackTemplateIds: [ANTHROPIC_SONNET_46_MODEL_ID, ANTHROPIC_SONNET_46_DOT_MODEL_ID],
+      fallbackTemplateIds: [
+        ANTHROPIC_SONNET_46_MODEL_ID,
+        ANTHROPIC_SONNET_46_DOT_MODEL_ID,
+        ...ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS,
+      ],
     }) ??
     resolveAnthropic46ForwardCompatModel({
       ctx,
