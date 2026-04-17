@@ -215,7 +215,6 @@
   "matrix-surface",
   "matrix-thread-bindings",
   "qa-runner-runtime",
-  "qa-runtime",
   "mattermost",
   "mattermost-policy",
   "memory-core",

@@ -14,8 +14,12 @@ const OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES = [`dist/plugin-sdk/extensions/${LE
 const OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES = new Set([
   `dist/plugin-sdk/${LEGACY_QA_LAB_DIR}.d.ts`,
   `dist/plugin-sdk/${LEGACY_QA_LAB_DIR}.js`,
+  "dist/plugin-sdk/qa-runtime.d.ts",
+  "dist/plugin-sdk/qa-runtime.js",
   `dist/plugin-sdk/src/plugin-sdk/${LEGACY_QA_LAB_DIR}.d.ts`,
+  "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
 ]);
+const OMITTED_PRIVATE_QA_DIST_PREFIXES = ["dist/qa-runtime-"];
 const OMITTED_DIST_SUBTREE_PATTERNS = [
   /^dist\/extensions\/node_modules(?:\/|$)/u,
   /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u,
@@ -46,7 +50,8 @@ function isPackagedDistPath(relativePath: string): boolean {
   }
   if (
     OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES.some((prefix) => relativePath.startsWith(prefix)) ||
-    OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES.has(relativePath)
+    OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES.has(relativePath) ||
+    OMITTED_PRIVATE_QA_DIST_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
   ) {
     return false;
   }

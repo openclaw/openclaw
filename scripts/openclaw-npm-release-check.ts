@@ -69,6 +69,7 @@ const LEGACY_UPDATE_COMPAT_PACKED_PATHS = [
 const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   "dist/control-ui/index.html",
+  ...LEGACY_UPDATE_COMPAT_PACKED_PATHS,
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
@@ -94,6 +95,21 @@ const FORBIDDEN_PACKED_PATH_RULES = [
       `npm package must not include private QA lab type artifact "${packedPath}".`,
   },
   {
+    prefix: "dist/plugin-sdk/qa-runtime.",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA runtime artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA runtime type artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/qa-runtime-",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA runtime chunk "${packedPath}".`,
+  },
+  {
     prefix: "qa/",
     describe: (packedPath: string) =>
       `npm package must not include private QA suite artifact "${packedPath}".`,
@@ -101,7 +117,6 @@ const FORBIDDEN_PACKED_PATH_RULES = [
 ] as const;
 const FORBIDDEN_PRIVATE_QA_CONTENT_MARKERS = [
   "//#region extensions/qa-lab/",
-  "qa-channel/runtime-api.js",
   "qa-lab/cli.js",
   "qa-lab/runtime-api.js",
 ] as const;

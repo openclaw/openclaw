@@ -85,14 +85,16 @@ const forbiddenPrefixes = [
   "dist/extensions/qa-lab/",
   "dist/plugin-sdk/extensions/qa-lab/",
   "dist/plugin-sdk/qa-lab.",
+  "dist/plugin-sdk/qa-runtime.",
   "dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
+  "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
+  "dist/qa-runtime-",
   "dist/plugin-sdk/.tsbuildinfo",
   "docs/.generated/",
   "qa/",
 ];
 const forbiddenPrivateQaContentMarkers = [
   "//#region extensions/qa-lab/",
-  "qa-channel/runtime-api.js",
   "qa-lab/cli.js",
   "qa-lab/runtime-api.js",
 ] as const;

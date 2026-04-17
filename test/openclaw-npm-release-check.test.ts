@@ -28,6 +28,7 @@ const LEGACY_UPDATE_COMPAT_PACKED_PATHS = [
 ].toSorted() as readonly string[];
 const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  ...LEGACY_UPDATE_COMPAT_PACKED_PATHS,
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;
 
@@ -348,6 +349,8 @@ describe("collectForbiddenPackedPathErrors", () => {
         "dist/extensions/qa-lab/runtime-api.js",
         "dist/extensions/qa-lab/src/cli.js",
         "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
+        "dist/plugin-sdk/qa-runtime.js",
+        "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
         "dist/qa-runtime-B9LDtssJ.js",
         "qa/scenarios/index.md",
       ]),
@@ -355,20 +358,20 @@ describe("collectForbiddenPackedPathErrors", () => {
       'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
       'npm package must not include private QA lab type artifact "dist/plugin-sdk/extensions/qa-lab/cli.d.ts".',
+      'npm package must not include private QA runtime artifact "dist/plugin-sdk/qa-runtime.js".',
+      'npm package must not include private QA runtime chunk "dist/qa-runtime-B9LDtssJ.js".',
+      'npm package must not include private QA runtime type artifact "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts".',
       'npm package must not include private QA suite artifact "qa/scenarios/index.md".',
     ]);
   });
 
-  it("allows only the legacy update verifier runtime sidecars", () => {
+  it("allows legacy update verifier QA runtime sidecars", () => {
     expect(
       collectForbiddenPackedPathErrors([
         "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-lab/runtime-api.js",
-        "dist/extensions/qa-lab/src/runtime-api.js",
       ]),
-    ).toEqual([
-      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/runtime-api.js".',
-    ]);
+    ).toEqual([]);
   });
 
   it("rejects root dist chunks that still reference the private qa lab", () => {

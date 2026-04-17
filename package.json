@@ -46,7 +46,10 @@
     "!dist/extensions/qa-matrix/**",
     "!dist/plugin-sdk/extensions/qa-lab/**",
     "!dist/plugin-sdk/qa-lab.*",
+    "!dist/plugin-sdk/qa-runtime.*",
     "!dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
+    "!dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
+    "!dist/qa-runtime-*.js",
     "docs/",
     "!docs/.generated/**",
     "skills/",
@@ -922,10 +925,6 @@
     "./plugin-sdk/qa-runner-runtime": {
       "types": "./dist/plugin-sdk/qa-runner-runtime.d.ts",
       "default": "./dist/plugin-sdk/qa-runner-runtime.js"
-    },
-    "./plugin-sdk/qa-runtime": {
-      "types": "./dist/plugin-sdk/qa-runtime.d.ts",
-      "default": "./dist/plugin-sdk/qa-runtime.js"
     },
     "./plugin-sdk/mattermost": {
       "types": "./dist/plugin-sdk/mattermost.d.ts",
