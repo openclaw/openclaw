@@ -52,7 +52,9 @@ const cachedFacadePublicSurfaceAccessByKey = new Map<
 export type FacadePluginManifestLike = Pick<
   PluginManifestRecord,
   "id" | "origin" | "enabledByDefault" | "rootDir" | "channels"
->;
+> & {
+  alwaysAllowedRuntimeApi?: boolean;
+};
 
 type FacadeModuleLocation = {
   modulePath: string;
@@ -250,6 +252,7 @@ function readBundledPluginManifestRecordFromDir(params: {
       enabledByDefault: false,
       rootDir: pluginRoot,
       channels: [],
+      alwaysAllowedRuntimeApi: true,
     };
   } catch {
     return null;
@@ -368,11 +371,12 @@ export function resolveBundledPluginPublicSurfaceAccess(params: {
   }
 
   const manifestRecord = resolveBundledPluginManifestRecord(params);
+  const metadataRecord = resolveBundledMetadataManifestRecord(params);
   if (
     params.artifactBasename === "runtime-api.js" &&
     manifestRecord &&
-    manifestRecord.rootDir.startsWith(`${params.sourceExtensionsRoot}${path.sep}`) &&
-    manifestRecord.channels.length === 0
+    metadataRecord?.id === manifestRecord.id &&
+    metadataRecord.alwaysAllowedRuntimeApi === true
   ) {
     const resolved = {
       allowed: true,

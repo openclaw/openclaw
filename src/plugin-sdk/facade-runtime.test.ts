@@ -391,4 +391,43 @@ describe("plugin-sdk facade runtime", () => {
       }),
     ).toBe(true);
   });
+
+  it("allows runtime-api facade loads for manifestless runtime packages only when explicitly tagged", () => {
+    const access = __testing.resolveBundledPluginPublicSurfaceAccess({
+      dirName: "speech-core",
+      artifactBasename: "runtime-api.js",
+      location: {
+        modulePath: path.join(process.cwd(), "extensions", "speech-core", "runtime-api.js"),
+        boundaryRoot: path.join(process.cwd(), "extensions"),
+      },
+      sourceExtensionsRoot: path.join(process.cwd(), "extensions"),
+      resolutionKey: `speech-core:${Date.now()}`,
+    });
+
+    expect(access.allowed).toBe(true);
+    expect(access.pluginId).toBe("speech-core");
+  });
+
+  it("still reports activated plugins as allowed even when they expose no channels", () => {
+    const access = __testing.evaluateBundledPluginPublicSurfaceAccess({
+      params: {
+        dirName: "memory-core",
+        artifactBasename: "runtime-api.js",
+      },
+      manifestRecord: {
+        id: "memory-core",
+        origin: "bundled",
+        enabledByDefault: true,
+        rootDir: "/tmp/memory-core",
+        channels: [],
+      },
+      config: {},
+      normalizedPluginsConfig: normalizePluginsConfig(),
+      activationSource: createPluginActivationSource({ config: {} }),
+      autoEnabledReasons: {},
+    });
+
+    expect(access.allowed).toBe(true);
+    expect(access.pluginId).toBe("memory-core");
+  });
 });
