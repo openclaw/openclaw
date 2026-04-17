@@ -25,9 +25,8 @@ export async function loginOpenAICodexOAuth(params: {
   const preflight = await runOpenAIOAuthTlsPreflight();
   if (!preflight.ok && preflight.kind === "tls-cert") {
     const hint = formatOpenAIOAuthTlsPreflightFix(preflight);
-    runtime.error(hint);
+    runtime.log(hint);
     await prompter.note(hint, "OAuth prerequisites");
-    throw new Error(preflight.message);
   }
 
   await prompter.note(
