@@ -651,18 +651,31 @@ export async function cleanupBinding(params: {
 }
 
 /**
- * Rebind an existing parent session to a new thread (future P2 scenario).
+ * Rebind an existing parent session to a new thread (Phase 7 P2 scenario 10).
  * Creates a new public thread in the secondary channel and issues a bind
  * RPC to point the existing parent session at it.
+ *
+ * Requires `env.secondaryChannelId` (or an explicit `newParentChannelId`) so
+ * the new thread lives in a channel DIFFERENT from the original binding.
+ * Without a secondary channel the scenario cannot prove "different channel"
+ * — it would just create a sibling thread under the same parent. The mid-run
+ * rebinding contract is specifically about moving parent -> different
+ * channel, so we fail loudly if the env is incomplete.
  */
 export async function rebindParentToNewThread(params: {
   parentSessionKey: string;
-  newParentChannelId: string;
+  newParentChannelId?: string;
   env: DiscordE2EEnv;
   gateway: GatewayClient;
-}): Promise<{ newThreadId: string }> {
+}): Promise<{ newThreadId: string; newParentChannelId: string }> {
+  const newParentChannelId = params.newParentChannelId ?? params.env.secondaryChannelId;
+  if (!newParentChannelId) {
+    throw new Error(
+      "rebindParentToNewThread: missing newParentChannelId and env.secondaryChannelId; set OPENCLAW_LIVE_DISCORD_SECONDARY_CHANNEL_ID or pass newParentChannelId",
+    );
+  }
   const thread = await withDiscordRetry(() =>
-    createDiscordThread(params.env, params.newParentChannelId, {
+    createDiscordThread(params.env, newParentChannelId, {
       name: `openclaw-e2e-rebind-${randomUUID().slice(0, 8)}`,
     }),
   );
@@ -675,7 +688,129 @@ export async function rebindParentToNewThread(params: {
     originatingTo: threadId,
     originatingAccountId: params.env.accountId,
   });
-  return { newThreadId: threadId };
+  return { newThreadId: threadId, newParentChannelId };
+}
+
+/**
+ * Archive a Discord thread (public helper for Phase 7 P2 scenario 9).
+ *
+ * Unlike `cleanupBinding` (which swallows errors because cleanup is
+ * best-effort), this helper surfaces failures so the archived-thread
+ * recovery scenario can tell the difference between "archive failed" and
+ * "archive succeeded but Phase 11 respawn did not fire".
+ */
+export async function archiveThreadDiscord(params: {
+  threadId: string;
+  env: DiscordE2EEnv;
+  locked?: boolean;
+}): Promise<void> {
+  await withDiscordRetry(() =>
+    archiveThreadRaw(params.env, params.threadId, { locked: params.locked === true }),
+  );
+}
+
+/**
+ * List every active thread under the configured parent channel. Used by
+ * Phase 7 P2 scenario 9 (archived-thread recovery) to discover a NEW thread
+ * that the Phase 11 respawn path creates after the original is archived.
+ */
+export async function listActiveThreadsInParent(params: {
+  env: DiscordE2EEnv;
+  parentChannelId?: string;
+}): Promise<Array<{ id: string; parent_id?: string; name?: string }>> {
+  const parentChannelId = params.parentChannelId ?? params.env.parentChannelId;
+  const rest = getRestClient(params.env.botToken);
+  const active = (await rest.get(Routes.guildActiveThreads(params.env.guildId))) as {
+    threads?: Array<{ id: string; parent_id?: string; name?: string }>;
+  };
+  const threads = active.threads ?? [];
+  return threads.filter((t) => !t.parent_id || t.parent_id === parentChannelId);
+}
+
+/**
+ * Wait for the marker to appear in a NEW thread after `excludeThreadId`
+ * was archived. This is the assertion for Phase 11 respawn: after we
+ * archive the original bound thread, the child agent's next emission must
+ * cause the gateway to create a fresh thread and deliver there.
+ *
+ * Returns the new thread id and the matching message. Throws if no new
+ * thread with the marker appears within `timeoutMs`.
+ */
+export async function waitForMarkerInNewThread(params: {
+  env: DiscordE2EEnv;
+  marker: string;
+  excludeThreadId: string;
+  parentChannelId?: string;
+  timeoutMs?: number;
+}): Promise<{ newThreadId: string; message: APIMessage }> {
+  const timeoutMs = params.timeoutMs ?? 90_000;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const threads = await withDiscordRetry(() =>
+      listActiveThreadsInParent({ env: params.env, parentChannelId: params.parentChannelId }),
+    );
+    for (const thread of threads) {
+      if (thread.id === params.excludeThreadId) {
+        continue;
+      }
+      try {
+        const messages = await withDiscordRetry(() =>
+          readThreadMessages(params.env, thread.id, 25),
+        );
+        const match = messages.find((m) => m.content?.includes(params.marker));
+        if (match) {
+          return { newThreadId: thread.id, message: match };
+        }
+      } catch {
+        // Skip threads we cannot read (e.g. just archived by a racing test).
+      }
+    }
+    const jitter = 300 + Math.floor(Math.random() * 700);
+    await sleep(1_500 + jitter);
+  }
+  throw new Error(
+    `waitForMarkerInNewThread: marker ${JSON.stringify(params.marker)} not seen in any thread other than ${params.excludeThreadId} within ${String(timeoutMs)}ms`,
+  );
+}
+
+/**
+ * Trigger an emission in the bound session without expecting a new
+ * delivery (best-effort nudge used by scenarios that archive the bound
+ * thread mid-run). Returns after the nudge's chat.send resolves — we do
+ * NOT wait on `agent.wait` because after archival the runner's next post
+ * is the interesting side-effect, not the ack.
+ */
+export async function nudgeBoundSession(params: {
+  spawnedSessionKey: string;
+  text: string;
+  boundTarget: string;
+  env: DiscordE2EEnv;
+  gateway: GatewayClient;
+}): Promise<void> {
+  await params.gateway.request("chat.send", {
+    sessionKey: params.spawnedSessionKey,
+    message: params.text,
+    idempotencyKey: `idem-nudge-${randomUUID()}`,
+    originatingChannel: "discord",
+    originatingTo: params.boundTarget,
+    originatingAccountId: params.env.accountId,
+  });
+}
+
+/**
+ * Raw read of the most recent messages in a Discord thread / channel.
+ * Unlike `assertVisibleInThread` this helper does not assert anything —
+ * it just returns whatever REST returns. Used by Scenario 10 to run a
+ * NEGATIVE control ("marker2 must NOT appear in the old thread") which
+ * cannot be expressed via the assertion helpers.
+ */
+export async function readMessagesInThread(params: {
+  threadId: string;
+  env: DiscordE2EEnv;
+  limit?: number;
+}): Promise<APIMessage[]> {
+  const limit = Math.max(1, Math.min(params.limit ?? 50, 100));
+  return withDiscordRetry(() => readThreadMessages(params.env, params.threadId, limit));
 }
 
 // --- REST helpers (internal) --------------------------------------------------
@@ -705,9 +840,17 @@ async function readThreadMessages(
 }
 
 async function archiveThread(env: DiscordE2EEnv, threadId: string): Promise<void> {
+  await archiveThreadRaw(env, threadId, { locked: false });
+}
+
+async function archiveThreadRaw(
+  env: DiscordE2EEnv,
+  threadId: string,
+  opts: { locked: boolean },
+): Promise<void> {
   const rest = getRestClient(env.botToken);
   await rest.patch(Routes.channel(threadId), {
-    body: { archived: true, locked: false },
+    body: { archived: true, locked: opts.locked },
   });
 }
 

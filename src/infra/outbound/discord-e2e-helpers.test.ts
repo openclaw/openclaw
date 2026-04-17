@@ -44,12 +44,18 @@ vi.mock("@buape/carbon", () => {
 import {
   FORBIDDEN_CHATTER_DEFAULT,
   LEAK_PATTERNS_DEFAULT,
+  archiveThreadDiscord,
   assertAuthorIdentity,
   assertContentScrubbed,
   assertNoForbiddenChatter,
   assertNoLeaksInThread,
   isDiscordE2EEnabled,
+  listActiveThreadsInParent,
+  nudgeBoundSession,
+  readMessagesInThread,
+  rebindParentToNewThread,
   resolveDiscordE2EEnv,
+  waitForMarkerInNewThread,
   withDiscordRetry,
 } from "./discord-e2e-helpers.js";
 
@@ -543,6 +549,388 @@ describe("assertNoLeaksInThread", () => {
         leaks: ["something-else"],
       }),
     ).resolves.toBeUndefined();
+  });
+});
+
+// --- Phase 7 P2 matrix helpers ------------------------------------------------
+//
+// These tests cover the helpers added for the 10-scenario Phase 7 P2 matrix.
+// They are all pure unit tests that mock `@buape/carbon`'s RequestClient and
+// verify the helpers hit the expected Discord REST routes with the expected
+// payload shape, and that gateway RPCs are issued correctly. No network I/O.
+
+describe("archiveThreadDiscord", () => {
+  const env = {
+    botToken: "tok",
+    guildId: "g",
+    parentChannelId: "c",
+    accountId: "default",
+  };
+
+  it("patches the thread with archived=true and default locked=false", async () => {
+    await archiveThreadDiscord({ threadId: "thread-42", env });
+    expect(restHandlers.patch).toHaveBeenCalledTimes(1);
+    const [route, payload] = restHandlers.patch.mock.calls[0] as [string, { body: unknown }];
+    expect(typeof route).toBe("string");
+    expect(route).toContain("thread-42");
+    expect(payload.body).toEqual({ archived: true, locked: false });
+  });
+
+  it("patches the thread with locked=true when requested", async () => {
+    await archiveThreadDiscord({ threadId: "thread-43", env, locked: true });
+    const [, payload] = restHandlers.patch.mock.calls[0] as [string, { body: unknown }];
+    expect(payload.body).toEqual({ archived: true, locked: true });
+  });
+
+  it("surfaces the underlying REST error (not swallowed like cleanup)", async () => {
+    // archiveThreadDiscord wraps in withDiscordRetry, so we must reject on
+    // every attempt to prove the final error propagates up (vs cleanupBinding
+    // which swallows failures by design).
+    restHandlers.patch.mockImplementation(async () => {
+      throw new Error("forbidden");
+    });
+    await expect(archiveThreadDiscord({ threadId: "thread-err", env })).rejects.toThrow(
+      /forbidden/,
+    );
+  }, 15_000);
+});
+
+describe("listActiveThreadsInParent", () => {
+  const env = {
+    botToken: "tok",
+    guildId: "g-1",
+    parentChannelId: "chan-main",
+    accountId: "default",
+  };
+
+  it("returns threads whose parent_id matches the configured parent", async () => {
+    restHandlers.get.mockImplementation(async () => ({
+      threads: [
+        { id: "t-1", parent_id: "chan-main", name: "a" },
+        { id: "t-2", parent_id: "chan-other", name: "b" },
+        { id: "t-3", parent_id: "chan-main", name: "c" },
+      ],
+    }));
+    const result = await listActiveThreadsInParent({ env });
+    expect(result.map((t) => t.id)).toEqual(["t-1", "t-3"]);
+  });
+
+  it("honors explicit parentChannelId override", async () => {
+    restHandlers.get.mockImplementation(async () => ({
+      threads: [
+        { id: "t-1", parent_id: "chan-main", name: "a" },
+        { id: "t-2", parent_id: "chan-alt", name: "b" },
+      ],
+    }));
+    const result = await listActiveThreadsInParent({ env, parentChannelId: "chan-alt" });
+    expect(result.map((t) => t.id)).toEqual(["t-2"]);
+  });
+
+  it("returns threads with missing parent_id alongside matches", async () => {
+    // Some Discord payloads omit parent_id for certain thread shapes. The
+    // helper accepts those as matches so they are not silently filtered out.
+    restHandlers.get.mockImplementation(async () => ({
+      threads: [
+        { id: "t-1", name: "no-parent" },
+        { id: "t-2", parent_id: "chan-main", name: "matches" },
+      ],
+    }));
+    const result = await listActiveThreadsInParent({ env });
+    expect(result.map((t) => t.id)).toEqual(["t-1", "t-2"]);
+  });
+
+  it("returns empty array when guild has no active threads", async () => {
+    restHandlers.get.mockImplementation(async () => ({}));
+    const result = await listActiveThreadsInParent({ env });
+    expect(result).toEqual([]);
+  });
+});
+
+describe("readMessagesInThread", () => {
+  const env = {
+    botToken: "tok",
+    guildId: "g",
+    parentChannelId: "c",
+    accountId: "default",
+  };
+
+  it("returns raw messages without asserting anything", async () => {
+    restHandlers.get.mockImplementation(async () => [
+      { id: "m1", content: "one", author: {}, timestamp: "t" },
+      { id: "m2", content: "two", author: {}, timestamp: "t" },
+    ]);
+    const result = await readMessagesInThread({ threadId: "thread-x", env });
+    expect(result.map((m) => m.id)).toEqual(["m1", "m2"]);
+  });
+
+  it("clamps limit to [1, 100]", async () => {
+    restHandlers.get.mockImplementation(async () => []);
+    await readMessagesInThread({ threadId: "t", env, limit: 1000 });
+    // carbon's RequestClient signature passes query as the second arg
+    const call = restHandlers.get.mock.calls[0] as [string, { limit: number }];
+    expect(call[1].limit).toBe(100);
+    await readMessagesInThread({ threadId: "t", env, limit: 0 });
+    const second = restHandlers.get.mock.calls[1] as [string, { limit: number }];
+    expect(second[1].limit).toBe(1);
+  });
+
+  it("defaults to 50 when limit is omitted", async () => {
+    restHandlers.get.mockImplementation(async () => []);
+    await readMessagesInThread({ threadId: "t", env });
+    const call = restHandlers.get.mock.calls[0] as [string, { limit: number }];
+    expect(call[1].limit).toBe(50);
+  });
+});
+
+describe("nudgeBoundSession", () => {
+  const env = {
+    botToken: "tok",
+    guildId: "g",
+    parentChannelId: "c",
+    accountId: "alt-account",
+  };
+
+  it("issues chat.send with originating target = boundTarget and returns promptly", async () => {
+    const request = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({
+      status: "started",
+      runId: "run-1",
+    }));
+    const gateway = { request } as unknown as import("../../gateway/client.js").GatewayClient;
+    await nudgeBoundSession({
+      spawnedSessionKey: "acp:claude:abc",
+      text: "nudge body",
+      boundTarget: "thread-archived",
+      env,
+      gateway,
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    const [method, payload] = request.mock.calls[0] as [string, Record<string, unknown>];
+    expect(method).toBe("chat.send");
+    expect(payload.sessionKey).toBe("acp:claude:abc");
+    expect(payload.message).toBe("nudge body");
+    expect(payload.originatingChannel).toBe("discord");
+    expect(payload.originatingTo).toBe("thread-archived");
+    expect(payload.originatingAccountId).toBe("alt-account");
+    expect(typeof payload.idempotencyKey).toBe("string");
+  });
+
+  it("does NOT call agent.wait (fire-and-observe pattern)", async () => {
+    const request = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({
+      status: "started",
+      runId: "run-1",
+    }));
+    const gateway = { request } as unknown as import("../../gateway/client.js").GatewayClient;
+    await nudgeBoundSession({
+      spawnedSessionKey: "k",
+      text: "t",
+      boundTarget: "x",
+      env,
+      gateway,
+    });
+    const methods = request.mock.calls.map((c) => c[0]);
+    expect(methods).not.toContain("agent.wait");
+    expect(methods).toEqual(["chat.send"]);
+  });
+});
+
+describe("rebindParentToNewThread", () => {
+  const envWithSecondary = {
+    botToken: "tok",
+    guildId: "g",
+    parentChannelId: "chan-main",
+    accountId: "default",
+    secondaryChannelId: "chan-secondary",
+  };
+  const envWithoutSecondary = {
+    botToken: "tok",
+    guildId: "g",
+    parentChannelId: "chan-main",
+    accountId: "default",
+  };
+
+  it("creates a new thread in the secondary channel and issues a rebind RPC", async () => {
+    restHandlers.post.mockImplementation(async () => ({ id: "new-thread-1" }));
+    const request = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({
+      status: "started",
+      runId: "r",
+    }));
+    const gateway = { request } as unknown as import("../../gateway/client.js").GatewayClient;
+    const out = await rebindParentToNewThread({
+      parentSessionKey: "parent-key",
+      env: envWithSecondary,
+      gateway,
+    });
+    expect(out.newThreadId).toBe("new-thread-1");
+    expect(out.newParentChannelId).toBe("chan-secondary");
+    // Thread creation hit the threads route.
+    expect(restHandlers.post).toHaveBeenCalledTimes(1);
+    const [route] = restHandlers.post.mock.calls[0] as [string, { body: unknown }];
+    expect(typeof route).toBe("string");
+    expect(route).toContain("chan-secondary");
+    // Rebind RPC was dispatched with the new thread id.
+    expect(request).toHaveBeenCalledTimes(1);
+    const [method, payload] = request.mock.calls[0] as [string, Record<string, unknown>];
+    expect(method).toBe("chat.send");
+    expect(payload.message).toBe("/acp rebind --thread new-thread-1");
+    expect(payload.originatingTo).toBe("new-thread-1");
+  });
+
+  it("accepts explicit newParentChannelId override", async () => {
+    restHandlers.post.mockImplementation(async () => ({ id: "new-thread-2" }));
+    const request = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({}));
+    const gateway = { request } as unknown as import("../../gateway/client.js").GatewayClient;
+    const out = await rebindParentToNewThread({
+      parentSessionKey: "k",
+      newParentChannelId: "explicit-chan",
+      env: envWithoutSecondary,
+      gateway,
+    });
+    expect(out.newParentChannelId).toBe("explicit-chan");
+    const [route] = restHandlers.post.mock.calls[0] as [string, { body: unknown }];
+    expect(route).toContain("explicit-chan");
+  });
+
+  it("throws a clear error when neither newParentChannelId nor secondaryChannelId is set", async () => {
+    const request = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({}));
+    const gateway = { request } as unknown as import("../../gateway/client.js").GatewayClient;
+    await expect(
+      rebindParentToNewThread({
+        parentSessionKey: "k",
+        env: envWithoutSecondary,
+        gateway,
+      }),
+    ).rejects.toThrow(/OPENCLAW_LIVE_DISCORD_SECONDARY_CHANNEL_ID|newParentChannelId/);
+    // No thread creation should have happened.
+    expect(restHandlers.post).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+  });
+});
+
+describe("waitForMarkerInNewThread", () => {
+  const env = {
+    botToken: "tok",
+    guildId: "g",
+    parentChannelId: "chan-main",
+    accountId: "default",
+  };
+
+  it("returns the first thread other than excludeThreadId that contains the marker", async () => {
+    // First REST call: list active threads.
+    // Second REST call: read thread-a messages (has marker).
+    // Test uses mockImplementation that responds by route via url inspection.
+    restHandlers.get.mockImplementation(async (...args: unknown[]) => {
+      const route = typeof args[0] === "string" ? args[0] : "";
+      if (route.includes("/threads/active")) {
+        return {
+          threads: [
+            { id: "thread-old", parent_id: "chan-main", name: "old" },
+            { id: "thread-new", parent_id: "chan-main", name: "new" },
+          ],
+        };
+      }
+      if (route.includes("thread-new")) {
+        return [
+          {
+            id: "m-1",
+            content: "hello MARK-42 world",
+            author: {},
+            timestamp: "2026-04-17T00:00:00Z",
+          },
+        ];
+      }
+      // thread-old reads would return empty
+      return [];
+    });
+    const result = await waitForMarkerInNewThread({
+      env,
+      marker: "MARK-42",
+      excludeThreadId: "thread-old",
+      timeoutMs: 5_000,
+    });
+    expect(result.newThreadId).toBe("thread-new");
+    expect(result.message.id).toBe("m-1");
+  });
+
+  it("throws when no new thread carries the marker before timeout", async () => {
+    restHandlers.get.mockImplementation(async (...args: unknown[]) => {
+      const route = typeof args[0] === "string" ? args[0] : "";
+      if (route.includes("/threads/active")) {
+        return {
+          threads: [{ id: "thread-old", parent_id: "chan-main", name: "old" }],
+        };
+      }
+      return [];
+    });
+    await expect(
+      waitForMarkerInNewThread({
+        env,
+        marker: "UNFOUND",
+        excludeThreadId: "thread-old",
+        timeoutMs: 100,
+      }),
+    ).rejects.toThrow(/not seen in any thread other than thread-old/);
+  });
+
+  it("ignores excluded thread even if it contains the marker", async () => {
+    restHandlers.get.mockImplementation(async (...args: unknown[]) => {
+      const route = typeof args[0] === "string" ? args[0] : "";
+      if (route.includes("/threads/active")) {
+        return {
+          threads: [{ id: "thread-old", parent_id: "chan-main", name: "old-has-marker" }],
+        };
+      }
+      // thread-old has the marker — helper must still NOT return it.
+      if (route.includes("thread-old")) {
+        return [{ id: "m-old", content: "MARK-x is here", author: {}, timestamp: "t" }];
+      }
+      return [];
+    });
+    await expect(
+      waitForMarkerInNewThread({
+        env,
+        marker: "MARK-x",
+        excludeThreadId: "thread-old",
+        timeoutMs: 100,
+      }),
+    ).rejects.toThrow(/not seen in any thread other than thread-old/);
+  });
+
+  it("survives transient read failures on individual threads", async () => {
+    let messageCallCount = 0;
+    restHandlers.get.mockImplementation(async (...args: unknown[]) => {
+      const route = typeof args[0] === "string" ? args[0] : "";
+      if (route.includes("/threads/active")) {
+        return {
+          threads: [
+            { id: "thread-broken", parent_id: "chan-main", name: "broken" },
+            { id: "thread-ok", parent_id: "chan-main", name: "ok" },
+          ],
+        };
+      }
+      if (route.includes("thread-broken")) {
+        // Always fail. Helper should skip it and try thread-ok next.
+        throw new Error("read forbidden");
+      }
+      if (route.includes("thread-ok")) {
+        messageCallCount += 1;
+        return [
+          {
+            id: `m-${messageCallCount}`,
+            content: "FOUND-marker here",
+            author: {},
+            timestamp: "t",
+          },
+        ];
+      }
+      return [];
+    });
+    const result = await waitForMarkerInNewThread({
+      env,
+      marker: "FOUND-marker",
+      excludeThreadId: "thread-other",
+      timeoutMs: 10_000,
+    });
+    expect(result.newThreadId).toBe("thread-ok");
   });
 });
 
