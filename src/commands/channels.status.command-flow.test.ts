@@ -120,6 +120,56 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     listChannelPlugins.mockReturnValue([createTokenOnlyPlugin()]);
   });
 
+  it("uses a longer default timeout for live probe mode", async () => {
+    callGateway.mockResolvedValue({
+      ts: Date.now(),
+      channelOrder: [],
+      channelLabels: {},
+      channelDetailLabels: {},
+      channelSystemImages: {},
+      channelMeta: {},
+      channels: {},
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    const { runtime } = createRuntimeCapture();
+
+    await channelsStatusCommand({ probe: true }, runtime as never);
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "channels.status",
+        params: { probe: true, timeoutMs: 30_000 },
+        timeoutMs: 30_000,
+      }),
+    );
+  });
+
+  it("keeps explicit timeout overrides for live probe mode", async () => {
+    callGateway.mockResolvedValue({
+      ts: Date.now(),
+      channelOrder: [],
+      channelLabels: {},
+      channelDetailLabels: {},
+      channelSystemImages: {},
+      channelMeta: {},
+      channels: {},
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    const { runtime } = createRuntimeCapture();
+
+    await channelsStatusCommand({ probe: true, timeout: "5000" }, runtime as never);
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "channels.status",
+        params: { probe: true, timeoutMs: 5000 },
+        timeoutMs: 5000,
+      }),
+    );
+  });
+
   it("keeps read-only fallback output when SecretRefs are unresolved", async () => {
     callGateway.mockRejectedValue(new Error("gateway closed"));
     requireValidConfigSnapshot.mockResolvedValue({ secretResolved: false, channels: {} });

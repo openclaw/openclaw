@@ -133,4 +133,110 @@ describe("channelsHandlers channels.status", () => {
       undefined,
     );
   });
+
+  it("probes channels concurrently while preserving account order", async () => {
+    vi.useFakeTimers();
+    try {
+      const respond = vi.fn();
+      mocks.listChannelPlugins.mockReturnValue([
+        {
+          id: "whatsapp",
+          config: {
+            listAccountIds: () => ["alpha", "beta"],
+            resolveAccount: (_cfg: unknown, accountId: string) => ({ accountId }),
+            isEnabled: () => true,
+            isConfigured: async () => true,
+          },
+          status: {
+            probeAccount: async ({ account }: { account: { accountId: string } }) => {
+              await new Promise((resolve) => setTimeout(resolve, 1_000));
+              return { ok: true, probeFor: account.accountId };
+            },
+            auditAccount: async ({
+              account,
+              probe,
+            }: {
+              account: { accountId: string };
+              probe?: { probeFor?: string };
+            }) => {
+              await new Promise((resolve) => setTimeout(resolve, 1_000));
+              return { ok: true, auditFor: account.accountId, sawProbeFor: probe?.probeFor };
+            },
+          },
+        },
+        {
+          id: "telegram",
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: (_cfg: unknown, accountId: string) => ({ accountId }),
+            isEnabled: () => true,
+            isConfigured: async () => true,
+          },
+          status: {
+            probeAccount: async ({ account }: { account: { accountId: string } }) => {
+              await new Promise((resolve) => setTimeout(resolve, 1_000));
+              return { ok: true, probeFor: account.accountId };
+            },
+          },
+        },
+      ]);
+      mocks.buildChannelUiCatalog.mockReturnValue({
+        order: ["whatsapp", "telegram"],
+        labels: { whatsapp: "WhatsApp", telegram: "Telegram" },
+        detailLabels: { whatsapp: "WhatsApp", telegram: "Telegram" },
+        systemImages: { whatsapp: undefined, telegram: undefined },
+        entries: { whatsapp: { id: "whatsapp" }, telegram: { id: "telegram" } },
+      });
+      mocks.buildChannelAccountSnapshot.mockImplementation(
+        async ({
+          accountId,
+          probe,
+          audit,
+        }: {
+          accountId: string;
+          probe?: unknown;
+          audit?: unknown;
+        }) => ({
+          accountId,
+          configured: true,
+          probe,
+          audit,
+        }),
+      );
+
+      const request = channelsHandlers["channels.status"](
+        createOptions(
+          { probe: true, timeoutMs: 2_000 },
+          {
+            respond,
+          },
+        ),
+      );
+
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(respond).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await request;
+
+      expect(respond).toHaveBeenCalledTimes(1);
+      const payload = respond.mock.calls[0]?.[1] as {
+        channelAccounts: {
+          whatsapp: Array<{ accountId: string; audit?: { sawProbeFor?: string } }>;
+          telegram: Array<{ accountId: string; probe?: { probeFor?: string } }>;
+        };
+      };
+      expect(payload.channelAccounts.whatsapp.map((entry) => entry.accountId)).toEqual([
+        "alpha",
+        "beta",
+      ]);
+      expect(payload.channelAccounts.whatsapp.map((entry) => entry.audit?.sawProbeFor)).toEqual([
+        "alpha",
+        "beta",
+      ]);
+      expect(payload.channelAccounts.telegram[0]?.probe?.probeFor).toBe("default");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

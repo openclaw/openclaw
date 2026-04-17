@@ -32,6 +32,9 @@ export type ChannelsStatusOptions = {
   timeout?: string;
 };
 
+const DEFAULT_CHANNEL_STATUS_TIMEOUT_MS = 10_000;
+const DEFAULT_CHANNEL_STATUS_PROBE_TIMEOUT_MS = 30_000;
+
 function appendEnabledConfiguredLinkedBits(bits: string[], account: Record<string, unknown>) {
   if (typeof account.enabled === "boolean") {
     bits.push(account.enabled ? "enabled" : "disabled");
@@ -281,7 +284,10 @@ export async function channelsStatusCommand(
   opts: ChannelsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const timeoutMs = Number(opts.timeout ?? 10_000);
+  const timeoutMs = Number(
+    opts.timeout ??
+      (opts.probe ? DEFAULT_CHANNEL_STATUS_PROBE_TIMEOUT_MS : DEFAULT_CHANNEL_STATUS_TIMEOUT_MS),
+  );
   const statusLabel = opts.probe ? "Checking channel status (probe)…" : "Checking channel status…";
   const shouldLogStatus = opts.json !== true && !process.stderr.isTTY;
   if (shouldLogStatus) {
