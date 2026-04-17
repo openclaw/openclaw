@@ -114,6 +114,25 @@ describe("msteams setup surface", () => {
     }
   });
 
+  it("rejects unexpected explorer.exe exit codes on Windows", async () => {
+    const url = "https://login.microsoftonline.com/auth";
+    const child = new EventEmitter();
+    spawn.mockReturnValue(child);
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      const result = openDelegatedOAuthUrl(url);
+      child.emit("exit", 2, null);
+      await expect(result).rejects.toThrow("explorer.exe failed with code 2");
+      expect(spawn).toHaveBeenCalledWith("explorer.exe", [url], {
+        stdio: "ignore",
+        shell: false,
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("enables the msteams channel without dropping existing config", () => {
     expect(
       msteamsSetupAdapter.applyAccountConfig?.({
