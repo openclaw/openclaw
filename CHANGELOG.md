@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.
+- Gateway/hello-ok: always report negotiated auth metadata for successful shared-auth handshakes, including control-ui bypass coverage when no device token is issued. (#67810) Thanks @BunsDev.
 - OpenAI Codex/Responses: unify native Responses API capability detection so Codex OAuth requests emit the required `store: false` field on the native Responses path. (#67918) Thanks @obviyus.
 - WhatsApp/setup: guard personal-phone and allowlist prompt values so setup fails with clear validation errors instead of crashing on undefined prompt text. (#67895) Thanks @lawrence3699.
 - Models/config: preserve an existing `models.json` provider `baseUrl` during merge-mode regeneration so custom endpoints do not get reset on restart. (#67893) Thanks @lawrence3699.
