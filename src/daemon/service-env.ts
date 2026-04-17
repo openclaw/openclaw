@@ -158,6 +158,7 @@ export function resolveLinuxUserBinDirs(
   // Env-configured bin roots (override defaults when present).
   addCommonEnvConfiguredBinDirs(dirs, env);
   addNonEmptyDir(dirs, appendSubdir(env?.NVM_DIR, "current/bin"));
+  addNonEmptyDir(dirs, appendSubdir(env?.FNM_DIR, "aliases/default/bin"));
   addNonEmptyDir(dirs, appendSubdir(env?.FNM_DIR, "current/bin"));
 
   // Common user bin directories
@@ -165,7 +166,8 @@ export function resolveLinuxUserBinDirs(
 
   // Node version managers
   dirs.push(`${home}/.nvm/current/bin`); // nvm with current symlink
-  dirs.push(`${home}/.fnm/current/bin`); // fnm
+  dirs.push(`${home}/.fnm/aliases/default/bin`); // fnm
+  dirs.push(`${home}/.fnm/current/bin`); // fnm legacy
   dirs.push(`${home}/.local/share/pnpm`); // pnpm global bin
 
   return dirs;
