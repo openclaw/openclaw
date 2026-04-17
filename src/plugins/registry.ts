@@ -6,7 +6,10 @@ import {
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import { registerContextEngineForOwner } from "../context-engine/registry.js";
+import {
+  clearContextEnginesForOwner,
+  registerContextEngineForOwner,
+} from "../context-engine/registry.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
@@ -30,7 +33,10 @@ import {
 } from "./compaction-provider.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
-import { registerPluginInteractiveHandler } from "./interactive-registry.js";
+import {
+  clearPluginInteractiveHandlersForPlugin,
+  registerPluginInteractiveHandler,
+} from "./interactive-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   getRegisteredMemoryEmbeddingProvider,
@@ -1430,6 +1436,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
 
     clearPluginCommandsForPlugin(pluginId);
+    clearPluginInteractiveHandlersForPlugin(pluginId);
+    clearContextEnginesForOwner(`plugin:${pluginId}`);
 
     const hookRollbackEntries = pluginHookRollback.get(pluginId) ?? [];
     for (const entry of hookRollbackEntries.toReversed()) {
