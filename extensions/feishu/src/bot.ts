@@ -1478,14 +1478,12 @@ export async function handleFeishuMessage(params: {
         runtime: runtime as RuntimeEnv,
         chatId: ctx.chatId,
         allowReasoningPreview,
-        replyToMessageId: boundSessionKey
-          ? (ctx.rootId ?? replyTargetMessageId)
-          : replyTargetMessageId,
+        replyToMessageId: replyTargetMessageId,
         skipReplyToInMessages: !isGroup,
-        replyInThread: boundSessionKey ? true : dispatchReplyInThread,
-        streamingInThread: boundSessionKey ? true : streamingInThread,
-        rootId: boundSessionKey ? ctx.rootId : dispatchReplyInThread ? ctx.rootId : undefined,
-        threadReply: boundSessionKey ? true : dispatcherThreadReply,
+        replyInThread: dispatchReplyInThread,
+        streamingInThread: streamingInThread,
+        rootId: dispatchReplyInThread ? ctx.rootId : undefined,
+        threadReply: dispatcherThreadReply,
         mentionTargets: ctx.mentionTargets,
         accountId: account.accountId,
         sessionKey: effectiveSessionKey,
@@ -1507,7 +1505,7 @@ export async function handleFeishuMessage(params: {
         const followupReplyToMessageId = queued.messageId;
         const followupThreadId =
           typeof queued.originatingThreadId === "string" ? queued.originatingThreadId : undefined;
-        const followupReplyInThread = Boolean(followupThreadId);
+        const followupReplyInThread = dispatchReplyInThread && Boolean(followupThreadId);
         const followupIdentity = resolveAgentOutboundIdentity(cfg, queued.run.agentId);
         const followupSessionKey = queued.run.sessionKey ?? effectiveSessionKey;
         const followupAllowReasoningPreview = resolveFeishuReasoningPreviewEnabled({

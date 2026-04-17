@@ -2948,6 +2948,50 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("does not force bound thread sessions to reply in thread when replyInThread is disabled", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockResolveBoundConversation.mockReturnValue(createBoundConversation());
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            oc_group_chat: {
+              requireMention: false,
+              groupSessionScope: "group",
+              replyInThread: "disabled",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-bound-thread-user" } },
+      message: {
+        message_id: "msg-bound-thread-reply",
+        root_id: "om_topic_root",
+        chat_id: "oc_group_chat",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "reply from bound thread session" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:codex:acp:binding:feishu:default:feedface",
+        replyToMessageId: "msg-bound-thread-reply",
+        replyInThread: false,
+        streamingInThread: false,
+        rootId: undefined,
+        threadReply: false,
+      }),
+    );
+  });
+
   it("bootstraps topic thread context only for a new thread session", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockGetMessageFeishu.mockResolvedValue({
