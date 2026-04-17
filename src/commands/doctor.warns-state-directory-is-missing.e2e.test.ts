@@ -298,6 +298,56 @@ describe("doctor command", () => {
     expect(warned).toBe(false);
   });
 
+  it("skips gateway auth warning in trusted-proxy mode", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+            },
+          },
+        },
+      },
+    });
+
+    await doctorCommand(createDoctorRuntime(), {
+      nonInteractive: true,
+      workspaceSuggestions: false,
+    });
+
+    const warned = terminalNoteMock.mock.calls.some(([message]) =>
+      String(message).includes("Gateway auth is off or missing a token"),
+    );
+    expect(warned).toBe(false);
+  });
+
+  it("skips gateway auth warning in password mode", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "password",
+            password: "password-value", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    await doctorCommand(createDoctorRuntime(), {
+      nonInteractive: true,
+      workspaceSuggestions: false,
+    });
+
+    const warned = terminalNoteMock.mock.calls.some(([message]) =>
+      String(message).includes("Gateway auth is off or missing a token"),
+    );
+    expect(warned).toBe(false);
+  });
+
   it("warns when token and password are both configured and gateway.auth.mode is unset", async () => {
     mockDoctorConfigSnapshot({
       config: {
