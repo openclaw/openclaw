@@ -13,6 +13,7 @@ export {
 export type {
   A2AAgentRunResult,
   A2AAnnounceTarget,
+  A2ATaskAbortResult,
   A2ABrokerRuntime,
   A2ADeliveryMode,
   A2ADeliveryStatus,
@@ -21,6 +22,7 @@ export type {
   A2APartyRef,
   A2ATaskCancel,
   A2ATaskCancelResult,
+  A2ATaskCancelTarget,
   A2ATaskConstraints,
   A2ATaskEnvelopeV1,
   A2ATaskError,

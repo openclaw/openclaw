@@ -59,7 +59,7 @@ describe("a2a handlers", () => {
     });
   });
 
-  it("reuses one broker runtime across request and cancel handlers", async () => {
+  it("lazily creates and reuses one broker runtime across request and cancel handlers", async () => {
     const { a2aHandlers } = await import("./a2a.js");
     const respond = vi.fn();
     const context = {
@@ -67,6 +67,8 @@ describe("a2a handlers", () => {
         error: vi.fn(),
       },
     };
+
+    expect(createOpenClawA2ABrokerRuntimeMock).not.toHaveBeenCalled();
 
     await a2aHandlers["a2a.task.request"]({
       params: {
@@ -98,6 +100,39 @@ describe("a2a handlers", () => {
     expect(applyA2ATaskProtocolCancelMock).toHaveBeenCalledWith(
       expect.objectContaining({
         runtime: sharedRuntime,
+      }),
+    );
+  });
+
+  it("uses an injected runtime without touching the default runtime factory", async () => {
+    const injectedRuntime = {
+      kind: "injected-runtime",
+    };
+    const { createA2AHandlers } = await import("./a2a.js");
+    const handlers = createA2AHandlers({
+      runtime: injectedRuntime as never,
+    });
+    const respond = vi.fn();
+    const context = {
+      logGateway: {
+        error: vi.fn(),
+      },
+    };
+
+    await handlers["a2a.task.request"]({
+      params: {
+        request: {
+          taskId: "task-1",
+        },
+      },
+      respond,
+      context,
+    } as never);
+
+    expect(createOpenClawA2ABrokerRuntimeMock).not.toHaveBeenCalled();
+    expect(runA2ATaskRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtime: injectedRuntime,
       }),
     );
   });

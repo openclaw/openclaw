@@ -6,6 +6,7 @@ import {
   applyA2ATaskProtocolCancel,
   applyA2ATaskProtocolUpdate,
   buildA2ATaskEnvelopeFromExchange,
+  buildA2ATaskEnvelopeFromRequest,
   buildA2ATaskRequestFromExchange,
   runA2ABrokerExchange,
   runA2ATaskRequest,
@@ -147,6 +148,127 @@ describe("runA2ABrokerExchange", () => {
 });
 
 describe("A2A broker protocol entry points", () => {
+  it("stores a default cancel target in exchange-built envelopes", () => {
+    const request = buildA2ATaskRequestFromExchange({
+      request: {
+        target: {
+          sessionKey: "agent:worker:main",
+          displayKey: "agent:worker:main",
+        },
+        originalMessage: "Investigate the failure and report back",
+        announceTimeoutMs: 15_000,
+        maxPingPongTurns: 1,
+        waitRunId: "run-a2a-1",
+      },
+      taskId: "task-a2a-1",
+    });
+
+    expect(request.runtime?.cancelTarget).toEqual({
+      kind: "session_run",
+      sessionKey: "agent:worker:main",
+      runId: "run-a2a-1",
+    });
+    expect(buildA2ATaskEnvelopeFromRequest({ request })).toMatchObject({
+      runtime: {
+        cancelTarget: {
+          kind: "session_run",
+          sessionKey: "agent:worker:main",
+          runId: "run-a2a-1",
+        },
+      },
+    });
+  });
+
+  it("uses the stored cancel target when cancelling a task", async () => {
+    const env = await makeEnv();
+    const sessionKey = "agent:worker:main";
+    const taskId = "task-cancel-target-1";
+    const sink = createA2ATaskEventLogSink({ sessionKey, taskId, env });
+    const envelope = buildA2ATaskEnvelopeFromRequest({
+      request: {
+        method: "a2a.task.request",
+        taskId,
+        target: { sessionKey, displayKey: sessionKey },
+        task: {
+          intent: "delegate",
+          instructions: "Stop this task",
+        },
+        runtime: {
+          cancelTarget: {
+            kind: "session_run",
+            sessionKey: "agent:worker:override",
+            runId: "run-cancel-override",
+          },
+        },
+      },
+    });
+
+    await sink.append(createA2ATaskCreatedEvent({ envelope, at: 10 }));
+    await sink.append(createA2ATaskAcceptedEvent({ taskId, at: 11 }));
+
+    const runtime = createRuntime();
+    await applyA2ATaskProtocolCancel({
+      sessionKey,
+      env,
+      runtime,
+      cancel: {
+        method: "a2a.task.cancel",
+        taskId,
+      },
+    });
+
+    expect(runtime.abortTaskRun).toHaveBeenCalledWith({
+      sessionKey: "agent:worker:override",
+      runId: "run-cancel-override",
+    });
+  });
+
+  it("prefers runtime.abortTask when available", async () => {
+    const env = await makeEnv();
+    const sessionKey = "agent:worker:main";
+    const taskId = "task-cancel-target-2";
+    const sink = createA2ATaskEventLogSink({ sessionKey, taskId, env });
+    const envelope = buildA2ATaskEnvelopeFromExchange({
+      request: {
+        target: { sessionKey, displayKey: sessionKey },
+        originalMessage: "Stop this task",
+        announceTimeoutMs: 10_000,
+        maxPingPongTurns: 0,
+        waitRunId: "run-cancel-2",
+      },
+      taskId,
+    });
+
+    await sink.append(createA2ATaskCreatedEvent({ envelope, at: 10 }));
+    await sink.append(createA2ATaskAcceptedEvent({ taskId, at: 11 }));
+
+    const abortTask = vi.fn().mockResolvedValue({
+      attempted: true,
+      aborted: true,
+      status: "aborted",
+    });
+    const runtime = createRuntime({ abortTask, abortTaskRun: vi.fn() });
+
+    await applyA2ATaskProtocolCancel({
+      sessionKey,
+      env,
+      runtime,
+      cancel: {
+        method: "a2a.task.cancel",
+        taskId,
+      },
+    });
+
+    expect(abortTask).toHaveBeenCalledWith({
+      target: {
+        kind: "session_run",
+        sessionKey,
+        runId: "run-cancel-2",
+      },
+    });
+    expect(runtime.abortTaskRun).not.toHaveBeenCalled();
+  });
+
   it("runs a task request and returns protocol status with trace linkage", async () => {
     const runtime = createRuntime();
     const events: string[] = [];
@@ -231,6 +353,37 @@ describe("A2A broker protocol entry points", () => {
         message: "announce step crashed",
       },
     });
+  });
+
+  it("bubbles event sink append failures instead of silently continuing", async () => {
+    const runtime = createRuntime();
+    const request = buildA2ATaskRequestFromExchange({
+      request: {
+        target: {
+          sessionKey: "agent:worker:main",
+          displayKey: "agent:worker:main",
+        },
+        originalMessage: "Fail fast when persistence breaks",
+        announceTimeoutMs: 15_000,
+        maxPingPongTurns: 0,
+        waitRunId: "run-a2a-log-fail-1",
+      },
+      taskId: "task-a2a-log-fail-1",
+    });
+
+    await expect(
+      runA2ATaskRequest({
+        request,
+        runtime,
+        eventSink: {
+          append: vi.fn().mockRejectedValue(new Error("disk full")),
+        },
+        buildReplyContext: () => "reply-step",
+        buildAnnounceContext: () => "announce-step",
+        isReplySkip: (text) => text.trim() === "REPLY_SKIP",
+        isAnnounceSkip: (text) => text.trim() === "ANNOUNCE_SKIP",
+      }),
+    ).rejects.toThrow("disk full");
   });
 
   it("records task updates through the event log", async () => {

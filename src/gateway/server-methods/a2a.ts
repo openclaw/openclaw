@@ -5,6 +5,7 @@ import {
   runA2ATaskRequest,
 } from "../../agents/a2a/broker.js";
 import { createOpenClawA2ABrokerRuntime } from "../../agents/a2a/openclaw-runtime.js";
+import type { A2ABrokerRuntime } from "../../agents/a2a/types.js";
 import {
   ErrorCodes,
   errorShape,
@@ -50,129 +51,154 @@ function defaultIsAnnounceSkip(text: string): boolean {
   return !text?.trim();
 }
 
+type CreateA2AHandlersOptions = {
+  runtime?: A2ABrokerRuntime;
+  createRuntime?: () => A2ABrokerRuntime;
+  buildReplyContext?: typeof defaultBuildReplyContext;
+  buildAnnounceContext?: typeof defaultBuildAnnounceContext;
+  isReplySkip?: typeof defaultIsReplySkip;
+  isAnnounceSkip?: typeof defaultIsAnnounceSkip;
+};
+
 // ── Handlers ──
 
-const a2aBrokerRuntime = createOpenClawA2ABrokerRuntime();
-
-export const a2aHandlers: GatewayRequestHandlers = {
-  "a2a.task.request": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateA2ATaskRequestParams, "a2a.task.request", respond)) {
-      return;
+export function createA2AHandlers(options: CreateA2AHandlersOptions = {}): GatewayRequestHandlers {
+  let sharedRuntime = options.runtime;
+  const resolveRuntime = () => {
+    if (sharedRuntime) {
+      return sharedRuntime;
     }
-    try {
-      const result = await runA2ATaskRequest({
-        request: params.request,
-        runtime: a2aBrokerRuntime,
-        buildReplyContext: defaultBuildReplyContext,
-        buildAnnounceContext: defaultBuildAnnounceContext,
-        isReplySkip: defaultIsReplySkip,
-        isAnnounceSkip: defaultIsAnnounceSkip,
-      });
-      respond(true, result.response);
-    } catch (err) {
-      context.logGateway.error(
-        `a2a.task.request failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INTERNAL,
+    sharedRuntime = (options.createRuntime ?? createOpenClawA2ABrokerRuntime)();
+    return sharedRuntime;
+  };
+
+  const buildReplyContext = options.buildReplyContext ?? defaultBuildReplyContext;
+  const buildAnnounceContext = options.buildAnnounceContext ?? defaultBuildAnnounceContext;
+  const isReplySkip = options.isReplySkip ?? defaultIsReplySkip;
+  const isAnnounceSkip = options.isAnnounceSkip ?? defaultIsAnnounceSkip;
+
+  return {
+    "a2a.task.request": async ({ params, respond, context }) => {
+      if (!assertValidParams(params, validateA2ATaskRequestParams, "a2a.task.request", respond)) {
+        return;
+      }
+      try {
+        const result = await runA2ATaskRequest({
+          request: params.request,
+          runtime: resolveRuntime(),
+          buildReplyContext,
+          buildAnnounceContext,
+          isReplySkip,
+          isAnnounceSkip,
+        });
+        respond(true, result.response);
+      } catch (err) {
+        context.logGateway.error(
           `a2a.task.request failed: ${err instanceof Error ? err.message : String(err)}`,
-        ),
-      );
-    }
-  },
-
-  "a2a.task.update": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateA2ATaskUpdateParams, "a2a.task.update", respond)) {
-      return;
-    }
-    try {
-      const result = await applyA2ATaskProtocolUpdate({
-        sessionKey: params.sessionKey,
-        update: params.update,
-      });
-      if (!result) {
+        );
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.NOT_FOUND, `a2a task not found: ${params.update.taskId}`),
+          errorShape(
+            ErrorCodes.INTERNAL,
+            `a2a.task.request failed: ${err instanceof Error ? err.message : String(err)}`,
+          ),
         );
+      }
+    },
+
+    "a2a.task.update": async ({ params, respond, context }) => {
+      if (!assertValidParams(params, validateA2ATaskUpdateParams, "a2a.task.update", respond)) {
         return;
       }
-      respond(true, result);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      context.logGateway.error(`a2a.task.update failed: ${message}`);
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `a2a.task.update failed: ${message}`),
-      );
-    }
-  },
-
-  "a2a.task.cancel": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateA2ATaskCancelParams, "a2a.task.cancel", respond)) {
-      return;
-    }
-    try {
-      const result = await applyA2ATaskProtocolCancel({
-        sessionKey: params.sessionKey,
-        cancel: params.cancel,
-        runtime: a2aBrokerRuntime,
-      });
-      if (!result) {
+      try {
+        const result = await applyA2ATaskProtocolUpdate({
+          sessionKey: params.sessionKey,
+          update: params.update,
+        });
+        if (!result) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.NOT_FOUND, `a2a task not found: ${params.update.taskId}`),
+          );
+          return;
+        }
+        respond(true, result);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        context.logGateway.error(`a2a.task.update failed: ${message}`);
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.NOT_FOUND, `a2a task not found: ${params.cancel.taskId}`),
+          errorShape(ErrorCodes.INVALID_REQUEST, `a2a.task.update failed: ${message}`),
         );
+      }
+    },
+
+    "a2a.task.cancel": async ({ params, respond, context }) => {
+      if (!assertValidParams(params, validateA2ATaskCancelParams, "a2a.task.cancel", respond)) {
         return;
       }
-      respond(true, result);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      context.logGateway.error(`a2a.task.cancel failed: ${message}`);
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `a2a.task.cancel failed: ${message}`),
-      );
-    }
-  },
-
-  "a2a.task.status": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateA2ATaskStatusParams, "a2a.task.status", respond)) {
-      return;
-    }
-    try {
-      const result = await loadA2ATaskProtocolStatusById({
-        sessionKey: params.sessionKey,
-        taskId: params.taskId,
-      });
-      if (!result) {
+      try {
+        const result = await applyA2ATaskProtocolCancel({
+          sessionKey: params.sessionKey,
+          cancel: params.cancel,
+          runtime: resolveRuntime(),
+        });
+        if (!result) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.NOT_FOUND, `a2a task not found: ${params.cancel.taskId}`),
+          );
+          return;
+        }
+        respond(true, result);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        context.logGateway.error(`a2a.task.cancel failed: ${message}`);
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.NOT_FOUND, `a2a task not found: ${params.taskId}`),
+          errorShape(ErrorCodes.INVALID_REQUEST, `a2a.task.cancel failed: ${message}`),
         );
+      }
+    },
+
+    "a2a.task.status": async ({ params, respond, context }) => {
+      if (!assertValidParams(params, validateA2ATaskStatusParams, "a2a.task.status", respond)) {
         return;
       }
-      respond(true, result);
-    } catch (err) {
-      context.logGateway.error(
-        `a2a.task.status failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INTERNAL,
+      try {
+        const result = await loadA2ATaskProtocolStatusById({
+          sessionKey: params.sessionKey,
+          taskId: params.taskId,
+        });
+        if (!result) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.NOT_FOUND, `a2a task not found: ${params.taskId}`),
+          );
+          return;
+        }
+        respond(true, result);
+      } catch (err) {
+        context.logGateway.error(
           `a2a.task.status failed: ${err instanceof Error ? err.message : String(err)}`,
-        ),
-      );
-    }
-  },
-};
+        );
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INTERNAL,
+            `a2a.task.status failed: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
+      }
+    },
+  };
+}
+
+export const a2aHandlers = createA2AHandlers();

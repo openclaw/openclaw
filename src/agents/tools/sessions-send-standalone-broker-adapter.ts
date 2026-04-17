@@ -50,6 +50,7 @@ const BROKER_PROTOCOL_ERROR_CODES = {
 
 type StandaloneBrokerPluginConfig = {
   enabled: boolean;
+  explicitlyActivated: boolean;
   baseUrl?: string;
   edgeSecret?: string;
   requester?: A2ABrokerPartyRef;
@@ -58,10 +59,23 @@ type StandaloneBrokerPluginConfig = {
 function resolveStandaloneBrokerPluginConfig(
   config?: OpenClawConfig,
 ): StandaloneBrokerPluginConfig {
-  const entry = config?.plugins?.entries?.[A2A_BROKER_ADAPTER_PLUGIN_ID];
+  const plugins = config?.plugins;
+  const entry = plugins?.entries?.[A2A_BROKER_ADAPTER_PLUGIN_ID];
   const pluginConfig = entry?.config;
+  const allow = Array.isArray(plugins?.allow) ? plugins.allow : [];
+  const deny = Array.isArray(plugins?.deny) ? plugins.deny : [];
+  const allowlisted = allow.includes(A2A_BROKER_ADAPTER_PLUGIN_ID);
+  const allowlistBlocked = allow.length > 0 && !allowlisted;
+  const explicitlyEnabled = entry?.enabled === true;
+  const disabled =
+    plugins?.enabled === false ||
+    deny.includes(A2A_BROKER_ADAPTER_PLUGIN_ID) ||
+    entry?.enabled === false ||
+    allowlistBlocked;
+
   return {
-    enabled: Boolean(entry && entry.enabled !== false),
+    enabled: !disabled,
+    explicitlyActivated: !disabled && (explicitlyEnabled || allowlisted),
     baseUrl: readOptionalString(pluginConfig?.baseUrl),
     edgeSecret: readOptionalString(pluginConfig?.edgeSecret),
     requester: resolveRequester(pluginConfig?.requester),
@@ -70,7 +84,7 @@ function resolveStandaloneBrokerPluginConfig(
 
 export function shouldUseStandaloneBrokerSessionsSendAdapter(cfg?: OpenClawConfig): boolean {
   const pluginConfig = resolveStandaloneBrokerPluginConfig(cfg);
-  return pluginConfig.enabled && Boolean(pluginConfig.baseUrl);
+  return pluginConfig.enabled && pluginConfig.explicitlyActivated && Boolean(pluginConfig.baseUrl);
 }
 
 export function createStandaloneBrokerSessionsSendA2AAdapter(params: {

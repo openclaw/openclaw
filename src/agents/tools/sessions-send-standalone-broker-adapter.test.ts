@@ -117,8 +117,52 @@ afterEach(async () => {
 });
 
 describe("standalone broker sessions_send adapter", () => {
-  it("uses standalone routing only when plugin is enabled and baseUrl is configured", () => {
+  it("uses standalone routing only when plugin activation is explicit and baseUrl is configured", () => {
     expect(shouldUseStandaloneBrokerSessionsSendAdapter(createConfig())).toBe(true);
+    expect(
+      shouldUseStandaloneBrokerSessionsSendAdapter({
+        plugins: {
+          allow: ["a2a-broker-adapter"],
+          entries: {
+            "a2a-broker-adapter": {
+              config: {
+                baseUrl: "https://broker.example.com",
+              },
+            },
+          },
+        },
+      } as never),
+    ).toBe(true);
+    expect(
+      shouldUseStandaloneBrokerSessionsSendAdapter({
+        plugins: {
+          allow: ["browser"],
+          entries: {
+            "a2a-broker-adapter": {
+              enabled: true,
+              config: {
+                baseUrl: "https://broker.example.com",
+              },
+            },
+          },
+        },
+      } as never),
+    ).toBe(false);
+    expect(
+      shouldUseStandaloneBrokerSessionsSendAdapter({
+        plugins: {
+          enabled: false,
+          entries: {
+            "a2a-broker-adapter": {
+              enabled: true,
+              config: {
+                baseUrl: "https://broker.example.com",
+              },
+            },
+          },
+        },
+      } as never),
+    ).toBe(false);
     expect(
       shouldUseStandaloneBrokerSessionsSendAdapter({
         plugins: {
