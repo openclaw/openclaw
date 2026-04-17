@@ -91,8 +91,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
       next.totalTokens = totalTokens;
       next.totalTokensFresh = true;
     } else {
-      next.totalTokens = undefined;
-      next.totalTokensFresh = false;
+      if (typeof compactionTokensAfter === "number" && compactionTokensAfter > 0) {
+        next.totalTokens = compactionTokensAfter;
+        next.totalTokensFresh = true;
+      } else {
+        next.totalTokens = undefined;
+        next.totalTokensFresh = false;
+      }
     }
     next.cacheRead = usage.cacheRead ?? 0;
     next.cacheWrite = usage.cacheWrite ?? 0;
