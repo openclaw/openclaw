@@ -179,6 +179,14 @@ export async function modelsCustomTestCommand(
           compatibility: target.compatibility,
           status: result.ok ? "ok" : "fail",
           ...(result.status !== undefined ? { statusCode: result.status } : {}),
+          ...(result.error !== undefined
+            ? {
+                error:
+                  result.error instanceof Error
+                    ? result.error.message
+                    : String(result.error),
+              }
+            : {}),
           latencyMs: result.ok ? latencyMs : undefined,
         };
       } catch (err) {
