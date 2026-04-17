@@ -183,6 +183,10 @@ export function shouldRetryCliCronMcpProbeReply(text: string): boolean {
     normalized.includes("tool call was canceled") ||
     normalized.includes("tool call was cancelled before completion") ||
     normalized.includes("tool call was canceled before completion") ||
+    normalized.includes("attempts were cancelled") ||
+    normalized.includes("attempts were canceled") ||
+    normalized.includes("cancelled by the environment") ||
+    normalized.includes("canceled by the environment") ||
     normalized.includes("mcp call was cancelled") ||
     normalized.includes("mcp call was canceled");
   const mentionsUserCancellation = normalized.includes("user cancelled mcp tool call");
@@ -204,12 +208,11 @@ export function shouldRetryCliCronMcpProbeReply(text: string): boolean {
     normalized.includes("nothing was created") ||
     normalized.includes("verify the cron job was created") ||
     normalized.includes("was not created");
+  if (mentionsUserCancellation) {
+    return true;
+  }
   return (
-    mentionsCancellation &&
-    (mentionsMissingJob ||
-      mentionsUserCancellation ||
-      mentionsCreateFailure ||
-      mentionsRetryRequest)
+    mentionsCancellation && (mentionsMissingJob || mentionsCreateFailure || mentionsRetryRequest)
   );
 }
 
