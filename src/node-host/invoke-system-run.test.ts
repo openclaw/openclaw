@@ -19,7 +19,11 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
-import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
+import {
+  loadExecApprovals,
+  resolveExecApprovalsPath,
+  saveExecApprovals,
+} from "../infra/exec-approvals.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke, formatSystemRunAllowlistMissMessage } from "./invoke-system-run.js";
@@ -72,6 +76,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   beforeEach(() => {
     previousOpenClawHome = process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_HOME = sharedOpenClawHome;
+    fs.rmSync(resolveExecApprovalsPath(), { force: true });
     clearRuntimeConfigSnapshot();
   });
 
@@ -267,7 +272,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     approvals: Parameters<typeof saveExecApprovals>[0];
     run: (ctx: { tempHome: string }) => Promise<T>;
   }): Promise<T> {
-    const tempHome = createFixtureDir("openclaw-exec-approvals-");
+    const tempHome = sharedOpenClawHome;
     const previousOpenClawHome = process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_HOME = tempHome;
     saveExecApprovals(params.approvals);
