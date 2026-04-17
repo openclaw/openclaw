@@ -358,6 +358,7 @@ actor MacNodeRuntime {
         let params = (try? Self.decodeParams(MacNodeScreenSnapshotParams.self, from: req.paramsJSON)) ??
             MacNodeScreenSnapshotParams()
         let services = await self.mainActorServices()
+        let capturedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         let res = try await services.snapshotScreen(
             screenIndex: params.screenIndex,
             maxWidth: params.maxWidth,
@@ -377,7 +378,7 @@ actor MacNodeRuntime {
             width: res.width,
             height: res.height,
             screenIndex: params.screenIndex,
-            capturedAtMs: Int64(Date().timeIntervalSince1970 * 1000)))
+            capturedAtMs: capturedAtMs))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 

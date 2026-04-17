@@ -143,6 +143,8 @@ struct MacNodeRuntimeTests {
     @Test func `handle invoke screen snapshot uses injected services`() async throws {
         @MainActor
         final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            var snapshotCalledAtMs: Int64?
+
             func snapshotScreen(
                 screenIndex: Int?,
                 maxWidth: Int?,
@@ -150,6 +152,7 @@ struct MacNodeRuntimeTests {
                 format: OpenClawScreenSnapshotFormat?) async throws
                 -> (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
             {
+                self.snapshotCalledAtMs = Int64(Date().timeIntervalSince1970 * 1000)
                 #expect(screenIndex == 0)
                 #expect(maxWidth == 800)
                 #expect(quality == 0.5)
@@ -199,7 +202,10 @@ struct MacNodeRuntimeTests {
             format: .jpeg)
         let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
         let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(id: "req-screen-snapshot", command: MacNodeScreenCommand.snapshot.rawValue, paramsJSON: json))
+            BridgeInvokeRequest(
+                id: "req-screen-snapshot",
+                command: MacNodeScreenCommand.snapshot.rawValue,
+                paramsJSON: json))
         #expect(response.ok == true)
         let payloadJSON = try #require(response.payloadJSON)
 
@@ -217,6 +223,9 @@ struct MacNodeRuntimeTests {
         #expect(payload.width == 800)
         #expect(payload.height == 450)
         #expect(payload.capturedAtMs > 0)
+        let snapshotCalledAtMs = await MainActor.run { services.snapshotCalledAtMs }
+        #expect(snapshotCalledAtMs != nil)
+        #expect(payload.capturedAtMs <= snapshotCalledAtMs!)
     }
 
     @Test func `handle invoke browser proxy uses injected request`() async {

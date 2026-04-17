@@ -376,6 +376,8 @@ describe("resolveNodeCommandAllowlist", () => {
       },
     );
 
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).not.toContain("screen.snapshot");
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("screen.record");
     expect(allow.has("screen.snapshot")).toBe(true);
     expect(allow.has("screen.record")).toBe(false);
   });
