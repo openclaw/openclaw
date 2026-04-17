@@ -1172,7 +1172,13 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       process.platform === "win32"
         ? ["cmd.exe", "/d", "/s", "/c", "echo ok"]
         : ["/bin/sh", "-lc", "echo ok"];
-    const cases = [
+    const cases: Array<{
+      label: string;
+      command?: string[];
+      env?: Record<string, string>;
+      message: string;
+      details: string[];
+    }> = [
       {
         label: "blocked override",
         env: { CLASSPATH: "/tmp/evil-classpath" },
