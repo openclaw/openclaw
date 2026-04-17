@@ -31,6 +31,9 @@ RUN pnpm ui:build
 
 ENV NODE_ENV=production
 
+# Make `openclaw` available as a command in PATH
+RUN npm link
+
 # Allow non-root user to write temp files during runtime/tests.
 RUN chown -R node:node /app
 
