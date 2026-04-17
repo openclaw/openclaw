@@ -119,12 +119,12 @@ describe("auth external oauth helpers", () => {
     expect(shouldPersist).toBe(true);
   });
 
-  it("overlays fresher external CLI OAuth credentials without treating them as persisted store state", () => {
+  it("overlays external CLI OAuth only when the stored credential is no longer usable", () => {
     readCodexCliCredentialsCachedMock.mockReturnValue(
       createCredential({
         access: "fresh-cli-access-token",
         refresh: "fresh-cli-refresh-token",
-        expires: 456,
+        expires: Date.now() + 60_000,
       }),
     );
 
@@ -133,7 +133,7 @@ describe("auth external oauth helpers", () => {
         "openai-codex:default": createCredential({
           access: "stale-store-access-token",
           refresh: "stale-store-refresh-token",
-          expires: 123,
+          expires: Date.now() - 60_000,
         }),
       }),
     );
@@ -141,15 +141,32 @@ describe("auth external oauth helpers", () => {
     expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
       access: "fresh-cli-access-token",
       refresh: "fresh-cli-refresh-token",
-      expires: 456,
+      expires: expect.any(Number),
     });
+  });
 
-    const shouldPersist = shouldPersistExternalOAuthProfile({
-      store: overlaid,
-      profileId: "openai-codex:default",
-      credential: overlaid.profiles["openai-codex:default"] as OAuthCredential,
+  it("keeps healthy local oauth even when external cli has a fresher token", () => {
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({
+        access: "fresh-cli-access-token",
+        refresh: "fresh-cli-refresh-token",
+        expires: Date.now() + 5 * 24 * 60 * 60_000,
+      }),
+    );
+
+    const overlaid = overlayExternalOAuthProfiles(
+      createStore({
+        "openai-codex:default": createCredential({
+          access: "healthy-local-access-token",
+          refresh: "healthy-local-refresh-token",
+          expires: Date.now() + 60_000,
+        }),
+      }),
+    );
+
+    expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
+      access: "healthy-local-access-token",
+      refresh: "healthy-local-refresh-token",
     });
-
-    expect(shouldPersist).toBe(false);
   });
 });

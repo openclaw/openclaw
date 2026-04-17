@@ -192,10 +192,6 @@ export function buildPersistedAuthProfileSecretsStore(
       if (shouldPersistProfile && !shouldPersistProfile({ profileId, credential })) {
         return [];
       }
-      if (credential.type === "oauth" && credential.managedBy) {
-        const { managedBy: _managedBy, ...canonicalCredential } = credential;
-        return [[profileId, canonicalCredential]];
-      }
       if (credential.type === "api_key" && credential.keyRef && credential.key !== undefined) {
         const sanitized = { ...credential } as Record<string, unknown>;
         delete sanitized.key;

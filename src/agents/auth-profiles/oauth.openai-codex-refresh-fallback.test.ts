@@ -314,15 +314,51 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
     expect(persisted.profiles[profileId]).not.toEqual(
       expect.objectContaining({
-        managedBy: "codex-cli",
-      }),
-    );
-    expect(persisted.profiles[profileId]).not.toEqual(
-      expect.objectContaining({
         provider: "openai-codex",
         access: "expired-access-token",
       }),
     );
+  });
+
+  it("keeps healthy local Codex OAuth over fresher imported CLI credentials", async () => {
+    const profileId = "openai-codex:default";
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "healthy-local-access-token",
+            refresh: "healthy-local-refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    readCodexCliCredentialsCachedMock.mockReturnValueOnce({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "fresher-cli-access-token",
+      refresh: "fresher-cli-refresh-token",
+      expires: Date.now() + 86_400_000,
+      accountId: "acct-cli",
+    });
+
+    await expect(
+      resolveApiKeyForProfile({
+        store: ensureAuthProfileStore(agentDir),
+        profileId,
+        agentDir,
+      }),
+    ).resolves.toEqual({
+      apiKey: "healthy-local-access-token",
+      provider: "openai-codex",
+      email: undefined,
+    });
+
+    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
   });
 
   it("keeps the canonical refresh token when imported Codex CLI state is stale", async () => {

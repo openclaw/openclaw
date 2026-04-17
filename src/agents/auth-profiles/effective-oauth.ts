@@ -1,6 +1,7 @@
 import {
+  hasUsableOAuthCredential,
   readManagedExternalCliCredential,
-  shouldReplaceStoredOAuthCredential,
+  shouldBootstrapFromExternalCliCredential,
 } from "./external-cli-sync.js";
 import type { OAuthCredential } from "./types.js";
 
@@ -15,7 +16,13 @@ export function resolveEffectiveOAuthCredential(params: {
   if (!imported) {
     return params.credential;
   }
-  return shouldReplaceStoredOAuthCredential(params.credential, imported)
+  if (hasUsableOAuthCredential(params.credential)) {
+    return params.credential;
+  }
+  return shouldBootstrapFromExternalCliCredential({
+    existing: params.credential,
+    imported,
+  })
     ? imported
     : params.credential;
 }

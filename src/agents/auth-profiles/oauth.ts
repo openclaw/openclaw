@@ -152,13 +152,6 @@ function hasOAuthCredentialChanged(
   );
 }
 
-function clearExternalOAuthManager(
-  credential: OAuthCredential,
-): OAuthCredentials & { type: "oauth"; provider: string; email?: string } {
-  const { managedBy: _managedBy, ...canonicalCredential } = credential;
-  return canonicalCredential;
-}
-
 async function loadFreshStoredOAuthCredential(params: {
   profileId: string;
   agentDir?: string;
@@ -656,7 +649,7 @@ async function doRefreshOAuthTokenWithLock(params: {
       );
       if (pluginRefreshed) {
         const refreshedCredentials: OAuthCredential = {
-          ...clearExternalOAuthManager(cred),
+          ...cred,
           ...pluginRefreshed,
           type: "oauth",
         };

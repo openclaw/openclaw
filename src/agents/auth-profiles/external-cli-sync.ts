@@ -7,6 +7,7 @@ import {
   MINIMAX_CLI_PROFILE_ID,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./constants.js";
+import { resolveTokenExpiryState } from "./credential-state.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 export type ExternalCliResolvedProfile = {
@@ -67,6 +68,31 @@ export function shouldReplaceStoredOAuthCredential(
   return !hasNewerStoredOAuthCredential(existing, incoming);
 }
 
+export function hasUsableOAuthCredential(
+  credential: OAuthCredential | undefined,
+  now = Date.now(),
+): boolean {
+  if (!credential || credential.type !== "oauth") {
+    return false;
+  }
+  if (typeof credential.access !== "string" || credential.access.trim().length === 0) {
+    return false;
+  }
+  return resolveTokenExpiryState(credential.expires, now) === "valid";
+}
+
+export function shouldBootstrapFromExternalCliCredential(params: {
+  existing: OAuthCredential | undefined;
+  imported: OAuthCredential;
+  now?: number;
+}): boolean {
+  const now = params.now ?? Date.now();
+  if (hasUsableOAuthCredential(params.existing, now)) {
+    return false;
+  }
+  return hasUsableOAuthCredential(params.imported, now);
+}
+
 const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   {
     profileId: MINIMAX_CLI_PROFILE_ID,
@@ -111,6 +137,7 @@ export function resolveExternalCliAuthProfiles(
   store: AuthProfileStore,
 ): ExternalCliResolvedProfile[] {
   const profiles: ExternalCliResolvedProfile[] = [];
+  const now = Date.now();
   for (const providerConfig of EXTERNAL_CLI_SYNC_PROVIDERS) {
     const creds = providerConfig.readCredentials();
     if (!creds) {
@@ -119,8 +146,11 @@ export function resolveExternalCliAuthProfiles(
     const existing = store.profiles[providerConfig.profileId];
     const existingOAuth = existing?.type === "oauth" ? existing : undefined;
     if (
-      !shouldReplaceStoredOAuthCredential(existingOAuth, creds) &&
-      !areOAuthCredentialsEquivalent(existingOAuth, creds)
+      !shouldBootstrapFromExternalCliCredential({
+        existing: existingOAuth,
+        imported: creds,
+        now,
+      })
     ) {
       continue;
     }
