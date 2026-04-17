@@ -40,10 +40,13 @@ import {
   emitSessionLifecycleEvent,
   getGlobalHookRunner,
   loadConfig,
+  getSessionBindingService,
   mergeSessionEntry,
+  mergeDeliveryContext,
   normalizeDeliveryContext,
   pruneLegacyStoreKeys,
   resolveAgentConfig,
+  resolveConversationDeliveryTarget,
   resolveDisplaySessionKey,
   resolveGatewaySessionStoreTarget,
   resolveInternalSessionKey,
@@ -69,6 +72,13 @@ type SubagentSpawnDeps = {
   getGlobalHookRunner: () => SubagentLifecycleHookRunner | null;
   loadConfig: typeof loadConfig;
   updateSessionStore: typeof updateSessionStore;
+};
+
+type SubagentDeliveryOrigin = {
+  channel?: string;
+  accountId?: string;
+  to?: string;
+  threadId?: string | number;
 };
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
@@ -295,7 +305,9 @@ async function ensureThreadBindingForSubagentSpawn(params: {
     to?: string;
     threadId?: string | number;
   };
-}): Promise<{ status: "ok" } | { status: "error"; error: string }> {
+}): Promise<
+  { status: "ok"; deliveryOrigin?: SubagentDeliveryOrigin } | { status: "error"; error: string }
+> {
   const hookRunner = params.hookRunner;
   if (!hookRunner?.hasHooks("subagent_spawning")) {
     return {
@@ -334,13 +346,45 @@ async function ensureThreadBindingForSubagentSpawn(params: {
           "Unable to create or bind a thread for this subagent session. Session mode is unavailable for this target.",
       };
     }
-    return { status: "ok" };
+    const deliveryOrigin =
+      normalizeDeliveryContext(result.deliveryOrigin) ??
+      resolveThreadBindingDeliveryOrigin(params.childSessionKey);
+    return {
+      status: "ok",
+      ...(deliveryOrigin ? { deliveryOrigin } : {}),
+    };
   } catch (err) {
     return {
       status: "error",
       error: `Thread bind failed: ${summarizeError(err)}`,
     };
   }
+}
+
+function resolveThreadBindingDeliveryOrigin(
+  childSessionKey: string,
+): SubagentDeliveryOrigin | undefined {
+  const activeBindings = getSessionBindingService()
+    .listBySession(childSessionKey)
+    .filter((binding) => binding.status === "active");
+  if (activeBindings.length !== 1) {
+    return undefined;
+  }
+  const binding = activeBindings[0];
+  if (!binding) {
+    return undefined;
+  }
+  const target = resolveConversationDeliveryTarget({
+    channel: binding.conversation.channel,
+    conversationId: binding.conversation.conversationId,
+    parentConversationId: binding.conversation.parentConversationId,
+  });
+  return normalizeDeliveryContext({
+    channel: binding.conversation.channel,
+    accountId: binding.conversation.accountId,
+    to: target.to,
+    threadId: target.threadId,
+  }) as SubagentDeliveryOrigin | undefined;
 }
 
 export async function spawnSubagentDirect(
@@ -387,7 +431,8 @@ export async function spawnSubagentDirect(
     accountId: ctx.agentAccountId,
     to: ctx.agentTo,
     threadId: ctx.agentThreadId,
-  });
+  }) as SubagentDeliveryOrigin | undefined;
+  let childSessionOrigin = requesterOrigin;
   const hookRunner = subagentSpawnDeps.getGlobalHookRunner();
   const cfg = loadSubagentConfig();
 
@@ -597,12 +642,14 @@ export async function spawnSubagentDirect(
       };
     }
     threadBindingReady = true;
+    childSessionOrigin =
+      mergeDeliveryContext(bindResult.deliveryOrigin, requesterOrigin) ?? childSessionOrigin;
   }
   const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
 
   let childSystemPrompt = buildSubagentSystemPrompt({
     requesterSessionKey,
-    requesterOrigin,
+    requesterOrigin: childSessionOrigin,
     childSessionKey,
     label: label || undefined,
     task,
@@ -698,6 +745,13 @@ export async function spawnSubagentDirect(
 
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
+  const deliverInitialChildRunDirectly =
+    requestThreadBinding &&
+    spawnMode === "session" &&
+    Boolean(childSessionOrigin?.channel && childSessionOrigin.to);
+  const shouldAnnounceCompletion = deliverInitialChildRunDirectly
+    ? false
+    : expectsCompletionMessage;
   try {
     const {
       spawnedBy: _spawnedBy,
@@ -709,12 +763,13 @@ export async function spawnSubagentDirect(
       params: {
         message: childTaskMessage,
         sessionKey: childSessionKey,
-        channel: requesterOrigin?.channel,
-        to: requesterOrigin?.to ?? undefined,
-        accountId: requesterOrigin?.accountId ?? undefined,
-        threadId: requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
+        channel: childSessionOrigin?.channel,
+        to: childSessionOrigin?.to ?? undefined,
+        accountId: childSessionOrigin?.accountId ?? undefined,
+        threadId:
+          childSessionOrigin?.threadId != null ? String(childSessionOrigin.threadId) : undefined,
         idempotencyKey: childIdem,
-        deliver: false,
+        deliver: deliverInitialChildRunDirectly,
         lane: AGENT_LANE_SUBAGENT,
         extraSystemPrompt: childSystemPrompt,
         thinking: thinkingOverride,
@@ -754,7 +809,7 @@ export async function spawnSubagentDirect(
               targetKind: "subagent",
               reason: "spawn-failed",
               sendFarewell: true,
-              accountId: requesterOrigin?.accountId,
+              accountId: childSessionOrigin?.accountId,
               runId: childRunId,
               outcome: "error",
               error: "Session failed to start",
@@ -802,7 +857,7 @@ export async function spawnSubagentDirect(
       childSessionKey,
       controllerSessionKey: requesterInternalKey,
       requesterSessionKey: requesterInternalKey,
-      requesterOrigin,
+      requesterOrigin: childSessionOrigin,
       requesterDisplayKey,
       task,
       cleanup,
@@ -810,7 +865,7 @@ export async function spawnSubagentDirect(
       model: resolvedModel,
       workspaceDir: spawnedMetadata.workspaceDir,
       runTimeoutSeconds,
-      expectsCompletionMessage,
+      expectsCompletionMessage: shouldAnnounceCompletion,
       spawnMode,
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,

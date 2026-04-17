@@ -42,7 +42,16 @@ type MatrixSubagentDeliveryTargetEvent = {
 };
 
 type SpawningResult =
-  | { status: "ok"; threadBindingReady?: boolean }
+  | {
+      status: "ok";
+      threadBindingReady?: boolean;
+      deliveryOrigin?: {
+        channel: string;
+        accountId: string;
+        to: string;
+        threadId?: string;
+      };
+    }
   | { status: "error"; error: string };
 
 type DeliveryTargetResult = {
@@ -109,7 +118,7 @@ export async function handleMatrixSubagentSpawning(
       status: "error",
       error:
         "Matrix thread bindings are disabled (set channels.matrix.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).",
-    };
+    } satisfies SpawningResult;
   }
   if (!flags.spawnSubagentSessions) {
     return {
@@ -152,7 +161,7 @@ export async function handleMatrixSubagentSpawning(
     //
     // We do NOT call setBindingRecord here — the adapter's bind() handles
     // record creation, thread creation, and persistence atomically.
-    await getSessionBindingService().bind({
+    const binding = await getSessionBindingService().bind({
       targetSessionKey: event.childSessionKey,
       targetKind: "subagent",
       conversation: {
@@ -167,14 +176,30 @@ export async function handleMatrixSubagentSpawning(
         boundBy: "system",
       },
     });
+    const boundRoomId =
+      binding.conversation.parentConversationId ?? binding.conversation.conversationId;
+    const threadId =
+      binding.conversation.parentConversationId &&
+      binding.conversation.parentConversationId !== binding.conversation.conversationId
+        ? binding.conversation.conversationId
+        : undefined;
+    const result = {
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: {
+        channel: "matrix",
+        accountId: binding.conversation.accountId ?? accountId,
+        to: `room:${boundRoomId}`,
+        ...(threadId ? { threadId } : {}),
+      },
+    } satisfies SpawningResult;
+    return result;
   } catch (err) {
     return {
       status: "error",
       error: `Matrix thread bind failed: ${summarizeError(err)}`,
     };
   }
-
-  return { status: "ok", threadBindingReady: true };
 }
 
 export async function handleMatrixSubagentEnded(event: MatrixSubagentEndedEvent): Promise<void> {
