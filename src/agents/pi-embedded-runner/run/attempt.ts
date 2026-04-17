@@ -2042,6 +2042,16 @@ export async function runEmbeddedAttempt(
                   prompt: effectivePrompt,
                   historyMessages: activeSession.messages,
                   imagesCount: imageResult.images.length,
+                  tools: effectiveTools.map((tool) => ({
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: tool.parameters,
+                  })),
+                  clientTools: clientTools?.map((tool) => ({
+                    name: tool.function.name,
+                    description: tool.function.description,
+                    parameters: tool.function.parameters,
+                  })),
                 },
                 {
                   runId: params.runId,
