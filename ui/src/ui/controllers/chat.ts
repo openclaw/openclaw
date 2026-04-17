@@ -233,8 +233,7 @@ export async function loadChatHistory(state: ChatState) {
       const pendingMsgs: unknown[] = [];
       for (const pendingMsg of state.pendingChatMessagesById.values()) {
         const msg = pendingMsg as Record<string, unknown>;
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { _tempId: _1, ...rest } = msg;
+        const { _tempId: _, ...rest } = msg;
         pendingMsgs.push(rest);
       }
       state.chatMessages = [...state.chatMessages, ...pendingMsgs];
