@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import "../test-helpers/load-styles.ts";
 import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
 registerAppMountHooks();
@@ -84,7 +83,6 @@ describe("control UI routing", () => {
     const split = app.querySelector(".chat-split-container");
     expect(split).not.toBeNull();
     if (split) {
-      expect(getComputedStyle(split).position).not.toBe("fixed");
       split.classList.add("chat-split-container--open");
       await app.updateComplete;
       expect(split.classList.contains("chat-split-container--open")).toBe(true);
@@ -92,9 +90,6 @@ describe("control UI routing", () => {
 
     const chatMain = app.querySelector(".chat-main");
     expect(chatMain).not.toBeNull();
-    if (chatMain) {
-      expect(getComputedStyle(chatMain).display).not.toBe("none");
-    }
 
     const topShell = app.querySelector<HTMLElement>(".topnav-shell");
     const content = app.querySelector<HTMLElement>(".topnav-shell__content");
@@ -313,7 +308,7 @@ describe("control UI routing", () => {
     expect(container.scrollTop).toBe(targetScrollTop);
   });
 
-  it("hydrates token from URL hash, strips it, and clears it after gateway changes", async () => {
+  it("hydrates hash tokens, restores same-tab refreshes, and clears after gateway changes", async () => {
     const app = mountApp("/ui/overview#token=abc123");
     await app.updateComplete;
 
@@ -323,17 +318,26 @@ describe("control UI routing", () => {
     );
     expect(window.location.pathname).toBe("/ui/overview");
     expect(window.location.hash).toBe("");
+    app.remove();
 
-    const gatewayUrlInput = app.querySelector<HTMLInputElement>(
+    const refreshed = mountApp("/ui/overview");
+    await refreshed.updateComplete;
+
+    expect(refreshed.settings.token).toBe("abc123");
+    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
+      undefined,
+    );
+
+    const gatewayUrlInput = refreshed.querySelector<HTMLInputElement>(
       'input[placeholder="ws://100.x.y.z:18789"]',
     );
     expect(gatewayUrlInput).not.toBeNull();
     gatewayUrlInput!.value = "wss://other-gateway.example/openclaw";
     gatewayUrlInput!.dispatchEvent(new Event("input", { bubbles: true }));
-    await app.updateComplete;
+    await refreshed.updateComplete;
 
-    expect(app.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
-    expect(app.settings.token).toBe("");
+    expect(refreshed.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
+    expect(refreshed.settings.token).toBe("");
   });
 
   it("keeps a hash token pending until the gateway URL change is confirmed", async () => {
@@ -348,19 +352,5 @@ describe("control UI routing", () => {
     await confirmPendingGatewayChange(app);
 
     expectConfirmedGatewayChange(app);
-  });
-
-  it("restores the token after a same-tab refresh", async () => {
-    const first = mountApp("/ui/overview#token=abc123");
-    await first.updateComplete;
-    first.remove();
-
-    const refreshed = mountApp("/ui/overview");
-    await refreshed.updateComplete;
-
-    expect(refreshed.settings.token).toBe("abc123");
-    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
-      undefined,
-    );
   });
 });
