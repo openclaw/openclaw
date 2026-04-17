@@ -142,6 +142,14 @@ describe("CronService start() error resilience", () => {
 });
 
 describe("CronService onTimer() zombie detection", () => {
+  /**
+   * Write the current in-memory store state to disk so that
+   * `ensureLoaded({ forceReload: true })` inside `onTimer` picks it up.
+   */
+  async function flushStoreToDisk(statePath: string, store: { version: number; jobs: any[] }) {
+    await fs.writeFile(statePath, JSON.stringify(store, null, 2), "utf-8");
+  }
+
   it("clears zombie runningAtMs markers for jobs that exceeded their timeout", async () => {
     const { storePath, cleanup } = await makeStorePath();
 
@@ -150,34 +158,27 @@ describe("CronService onTimer() zombie detection", () => {
     const overdueNextRunAtMs = Date.now() - 300_000; // 5 min overdue
 
     await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
+    const storeData = {
+      version: 1,
+      jobs: [
         {
-          version: 1,
-          jobs: [
-            {
-              id: "zombie-job",
-              name: "zombie-job",
-              enabled: true,
-              createdAtMs: overdueNextRunAtMs - 60_000,
-              updatedAtMs: overdueNextRunAtMs,
-              schedule: { kind: "every", everyMs: 60_000, anchorMs: overdueNextRunAtMs - 60_000 },
-              sessionTarget: "main",
-              wakeMode: "next-heartbeat",
-              payload: { kind: "systemEvent", text: "tick", timeoutSeconds: 60 },
-              state: {
-                nextRunAtMs: overdueNextRunAtMs,
-                runningAtMs: zombieRunningAtMs,
-              },
-            },
-          ],
+          id: "zombie-job",
+          name: "zombie-job",
+          enabled: true,
+          createdAtMs: overdueNextRunAtMs - 60_000,
+          updatedAtMs: overdueNextRunAtMs,
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: overdueNextRunAtMs - 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "tick", timeoutSeconds: 60 },
+          state: {
+            nextRunAtMs: overdueNextRunAtMs,
+            runningAtMs: zombieRunningAtMs,
+          },
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      ],
+    };
+    await fs.writeFile(storePath, JSON.stringify(storeData, null, 2), "utf-8");
 
     const state = createCronServiceState({
       storePath,
@@ -189,22 +190,25 @@ describe("CronService onTimer() zombie detection", () => {
     });
 
     try {
-      // Load the store first (start would clear markers, so we simulate
-      // the state where a job is stuck as running after the scheduler has
-      // already started)
+      // start() will clear the stale runningAtMs marker — that's the
+      // existing startup cleanup path, not what we're testing here.
+      // After start, re-inject a zombie marker and write it to disk so
+      // onTimer's forceReload will see it.
       await start(state);
 
-      // Now simulate a zombie: set runningAtMs to a past value
       state.store!.jobs[0].state.runningAtMs = zombieRunningAtMs;
-      state.running = false; // reset running flag so onTimer proceeds
-
-      // Set a due nextRunAtMs so the job would be picked up
       state.store!.jobs[0].state.nextRunAtMs = Date.now() - 1000;
+      state.running = false;
+      await flushStoreToDisk(storePath, state.store!);
 
       await onTimer(state);
 
-      // The zombie marker should have been cleared and the job executed
+      // The zombie marker should have been cleared (not the stale value)
+      // and the job should have been picked up as due and executed
       expect(state.store!.jobs[0].state.runningAtMs).not.toBe(zombieRunningAtMs);
+      // The runningAtMs should now be set to a recent timestamp (the new run)
+      expect(typeof state.store!.jobs[0].state.runningAtMs).toBe("number");
+      expect(state.store!.jobs[0].state.runningAtMs).toBeGreaterThan(zombieRunningAtMs);
     } finally {
       await cleanup();
     }
@@ -217,34 +221,27 @@ describe("CronService onTimer() zombie detection", () => {
     const longRunningMs = Date.now() - 7_200_000;
 
     await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
+    const storeData = {
+      version: 1,
+      jobs: [
         {
-          version: 1,
-          jobs: [
-            {
-              id: "unlimited-job",
-              name: "unlimited-timeout-job",
-              enabled: true,
-              createdAtMs: longRunningMs - 60_000,
-              updatedAtMs: longRunningMs,
-              schedule: { kind: "cron", expr: "0 * * * *" },
-              sessionTarget: "main",
-              wakeMode: "next-heartbeat",
-              payload: { kind: "systemEvent", text: "tick", timeoutSeconds: 0 },
-              state: {
-                nextRunAtMs: Date.now() + 60_000,
-                runningAtMs: longRunningMs,
-              },
-            },
-          ],
+          id: "unlimited-job",
+          name: "unlimited-timeout-job",
+          enabled: true,
+          createdAtMs: longRunningMs - 60_000,
+          updatedAtMs: longRunningMs,
+          schedule: { kind: "cron", expr: "0 * * * *" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "tick", timeoutSeconds: 0 },
+          state: {
+            nextRunAtMs: Date.now() + 60_000,
+            runningAtMs: longRunningMs,
+          },
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      ],
+    };
+    await fs.writeFile(storePath, JSON.stringify(storeData, null, 2), "utf-8");
 
     const state = createCronServiceState({
       storePath,
@@ -256,11 +253,13 @@ describe("CronService onTimer() zombie detection", () => {
     });
 
     try {
+      // start() clears the stale marker — that's fine, we re-inject
+      // after start and flush to disk so onTimer sees it.
       await start(state);
 
-      // Set up for onTimer tick
       state.store!.jobs[0].state.runningAtMs = longRunningMs;
       state.running = false;
+      await flushStoreToDisk(storePath, state.store!);
 
       await onTimer(state);
 
