@@ -940,130 +940,80 @@ describe("onboard (non-interactive): provider auth", () => {
     clearPluginManifestRegistryCache();
   });
 
-  it("stores MiniMax API key in the global auth profile", async () => {
+  it("stores MiniMax API keys for global and CN endpoint choices", async () => {
+    const scenarios = [
+      { authChoice: "minimax-global-api", profileId: "minimax:global" },
+      { authChoice: "minimax-cn-api", profileId: "minimax:cn" },
+    ] as const;
+
     await withOnboardEnv("openclaw-onboard-minimax-", async (env) => {
-      const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "minimax-global-api",
-        minimaxApiKey: "sk-minimax-test", // pragma: allowlist secret
-      });
+      for (const scenario of scenarios) {
+        await fs.rm(env.configPath, { force: true });
+        resetProviderAuthTestState();
+        const cfg = await runOnboardingAndReadConfig(env, {
+          authChoice: scenario.authChoice,
+          minimaxApiKey: "sk-minimax-test", // pragma: allowlist secret
+        });
 
-      expect(cfg.auth?.profiles?.["minimax:global"]?.provider).toBe("minimax");
-      expect(cfg.auth?.profiles?.["minimax:global"]?.mode).toBe("api_key");
-      await expectApiKeyProfile({
-        profileId: "minimax:global",
-        provider: "minimax",
-        key: "sk-minimax-test",
-      });
+        expect(cfg.auth?.profiles?.[scenario.profileId]?.provider).toBe("minimax");
+        expect(cfg.auth?.profiles?.[scenario.profileId]?.mode).toBe("api_key");
+        await expectApiKeyProfile({
+          profileId: scenario.profileId,
+          provider: "minimax",
+          key: "sk-minimax-test",
+        });
+      }
     });
   });
 
-  it("supports MiniMax CN API endpoint auth choice", async () => {
-    await withOnboardEnv("openclaw-onboard-minimax-cn-", async (env) => {
-      const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "minimax-cn-api",
-        minimaxApiKey: "sk-minimax-test", // pragma: allowlist secret
-      });
+  it("stores Z.AI API keys across global and coding endpoint choices", async () => {
+    const scenarios = [
+      {
+        authChoice: "zai-api-key",
+        responses: { [`${ZAI_GLOBAL_BASE_URL}/chat/completions::glm-5.1`]: 200 },
+        expectedCalls: [{ url: `${ZAI_GLOBAL_BASE_URL}/chat/completions`, modelId: "glm-5.1" }],
+      },
+      {
+        authChoice: "zai-coding-cn",
+        responses: {
+          [`${ZAI_CODING_CN_BASE_URL}/chat/completions::glm-5.1`]: 404,
+          [`${ZAI_CODING_CN_BASE_URL}/chat/completions::glm-4.7`]: 200,
+        },
+        expectedCalls: [
+          { url: `${ZAI_CODING_CN_BASE_URL}/chat/completions`, modelId: "glm-5.1" },
+          { url: `${ZAI_CODING_CN_BASE_URL}/chat/completions`, modelId: "glm-4.7" },
+        ],
+      },
+      {
+        authChoice: "zai-coding-global",
+        responses: { [`${ZAI_CODING_GLOBAL_BASE_URL}/chat/completions::glm-5.1`]: 200 },
+        expectedCalls: [
+          { url: `${ZAI_CODING_GLOBAL_BASE_URL}/chat/completions`, modelId: "glm-5.1" },
+        ],
+      },
+    ] as const;
 
-      expect(cfg.auth?.profiles?.["minimax:cn"]?.provider).toBe("minimax");
-      expect(cfg.auth?.profiles?.["minimax:cn"]?.mode).toBe("api_key");
-      await expectApiKeyProfile({
-        profileId: "minimax:cn",
-        provider: "minimax",
-        key: "sk-minimax-test",
-      });
+    await withOnboardEnv("openclaw-onboard-zai-", async (env) => {
+      for (const scenario of scenarios) {
+        await fs.rm(env.configPath, { force: true });
+        resetProviderAuthTestState();
+        await withZaiProbeFetch(scenario.responses, async (fetchMock) => {
+          const cfg = await runOnboardingAndReadConfig(env, {
+            authChoice: scenario.authChoice,
+            zaiApiKey: "zai-test-key", // pragma: allowlist secret
+          });
+
+          expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
+          expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
+          expectZaiProbeCalls(fetchMock, scenario.expectedCalls);
+          await expectApiKeyProfile({
+            profileId: "zai:default",
+            provider: "zai",
+            key: "zai-test-key",
+          });
+        });
+      }
     });
-  });
-
-  it("stores Z.AI API key after probing the global endpoint", async () => {
-    await withZaiProbeFetch(
-      {
-        [`${ZAI_GLOBAL_BASE_URL}/chat/completions::glm-5.1`]: 200,
-      },
-      async (fetchMock) =>
-        await withOnboardEnv("openclaw-onboard-zai-", async (env) => {
-          const cfg = await runOnboardingAndReadConfig(env, {
-            authChoice: "zai-api-key",
-            zaiApiKey: "zai-test-key", // pragma: allowlist secret
-          });
-
-          expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
-          expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
-          expectZaiProbeCalls(fetchMock, [
-            {
-              url: `${ZAI_GLOBAL_BASE_URL}/chat/completions`,
-              modelId: "glm-5.1",
-            },
-          ]);
-          await expectApiKeyProfile({
-            profileId: "zai:default",
-            provider: "zai",
-            key: "zai-test-key",
-          });
-        }),
-    );
-  });
-
-  it("supports Z.AI CN coding endpoint auth choice", async () => {
-    await withZaiProbeFetch(
-      {
-        [`${ZAI_CODING_CN_BASE_URL}/chat/completions::glm-5.1`]: 404,
-        [`${ZAI_CODING_CN_BASE_URL}/chat/completions::glm-4.7`]: 200,
-      },
-      async (fetchMock) =>
-        await withOnboardEnv("openclaw-onboard-zai-cn-", async (env) => {
-          const cfg = await runOnboardingAndReadConfig(env, {
-            authChoice: "zai-coding-cn",
-            zaiApiKey: "zai-test-key", // pragma: allowlist secret
-          });
-
-          expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
-          expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
-          expectZaiProbeCalls(fetchMock, [
-            {
-              url: `${ZAI_CODING_CN_BASE_URL}/chat/completions`,
-              modelId: "glm-5.1",
-            },
-            {
-              url: `${ZAI_CODING_CN_BASE_URL}/chat/completions`,
-              modelId: "glm-4.7",
-            },
-          ]);
-          await expectApiKeyProfile({
-            profileId: "zai:default",
-            provider: "zai",
-            key: "zai-test-key",
-          });
-        }),
-    );
-  });
-
-  it("supports Z.AI Coding Plan global endpoint detection", async () => {
-    await withZaiProbeFetch(
-      {
-        [`${ZAI_CODING_GLOBAL_BASE_URL}/chat/completions::glm-5.1`]: 200,
-      },
-      async (fetchMock) =>
-        await withOnboardEnv("openclaw-onboard-zai-coding-global-", async (env) => {
-          const cfg = await runOnboardingAndReadConfig(env, {
-            authChoice: "zai-coding-global",
-            zaiApiKey: "zai-test-key", // pragma: allowlist secret
-          });
-
-          expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
-          expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
-          expectZaiProbeCalls(fetchMock, [
-            {
-              url: `${ZAI_CODING_GLOBAL_BASE_URL}/chat/completions`,
-              modelId: "glm-5.1",
-            },
-          ]);
-          await expectApiKeyProfile({
-            profileId: "zai:default",
-            provider: "zai",
-            key: "zai-test-key",
-          });
-        }),
-    );
   });
 
   it("handles common provider API key onboarding choices", async () => {
