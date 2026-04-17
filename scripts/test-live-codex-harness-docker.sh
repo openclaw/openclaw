@@ -140,6 +140,9 @@ fi
 if [ ! -x "$NPM_CONFIG_PREFIX/bin/codex" ]; then
   npm install -g @openai/codex
 fi
+if [ "${OPENCLAW_LIVE_CODEX_HARNESS_AUTH:-codex-auth}" = "api-key" ]; then
+  printf '%s\n' "$OPENAI_API_KEY" | "$NPM_CONFIG_PREFIX/bin/codex" login --with-api-key >/dev/null
+fi
 tmp_dir="$(mktemp -d)"
 cleanup() {
   rm -rf "$tmp_dir"
