@@ -28,9 +28,11 @@ import type { TwitchAccountConfig } from "./types.js";
 // Mock the helpers we're testing
 const mockPromptText = vi.fn();
 const mockPromptConfirm = vi.fn();
+const mockPromptNote = vi.fn();
 const mockPrompter: WizardPrompter = {
   text: mockPromptText,
   confirm: mockPromptConfirm,
+  note: mockPromptNote,
 } as unknown as WizardPrompter;
 const originalEnvToken = process.env.OPENCLAW_TWITCH_ACCESS_TOKEN;
 
@@ -259,6 +261,35 @@ describe("setup surface helpers", () => {
       expect(lines).toEqual(["Twitch (secondary): configured"]);
     });
 
+    it("reports status for the requested account override", async () => {
+      const lines = twitchSetupWizard.status?.resolveStatusLines?.({
+        cfg: {
+          channels: {
+            twitch: {
+              accounts: {
+                default: {
+                  username: "default-bot",
+                  accessToken: "oauth:default",
+                  clientId: "default-client",
+                  channel: "#default",
+                },
+                secondary: {
+                  username: "secondary-bot",
+                  accessToken: "oauth:secondary",
+                  clientId: "secondary-client",
+                  channel: "#secondary",
+                },
+              },
+            },
+          },
+        },
+        accountId: "secondary",
+        configured: true,
+      } as never);
+
+      expect(lines).toEqual(["Twitch (secondary): configured"]);
+    });
+
     it("reports env-token default account setup as configured", async () => {
       process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = "oauth:fromenv";
 
@@ -280,6 +311,47 @@ describe("setup surface helpers", () => {
       expect(twitchSetupWizard.status?.resolveConfigured({ cfg })).toBe(true);
       const account = twitchSetupPlugin.config.resolveAccount(cfg, "default");
       expect(await twitchSetupPlugin.config.isConfigured?.(account, cfg)).toBe(true);
+    });
+  });
+
+  describe("setup wizard account routing", () => {
+    it("writes to the requested account when defaultAccount is not created yet", async () => {
+      mockPromptText
+        .mockReset()
+        .mockResolvedValueOnce("secondary-bot" as never)
+        .mockResolvedValueOnce("oauth:secondary" as never)
+        .mockResolvedValueOnce("secondary-client" as never)
+        .mockResolvedValueOnce("#secondary" as never);
+      mockPromptConfirm.mockReset().mockResolvedValue(false as never);
+
+      const result = await twitchSetupWizard.finalize?.({
+        cfg: {
+          channels: {
+            twitch: {
+              defaultAccount: "secondary",
+              accounts: {
+                default: {
+                  username: "default-bot",
+                  accessToken: "oauth:default",
+                  clientId: "default-client",
+                  channel: "#default",
+                },
+              },
+            },
+          },
+        } as Parameters<NonNullable<typeof twitchSetupWizard.finalize>>[0]["cfg"],
+        accountId: "secondary",
+        credentialValues: {},
+        runtime: {} as Parameters<NonNullable<typeof twitchSetupWizard.finalize>>[0]["runtime"],
+        prompter: mockPrompter,
+        options: {},
+        forceAllowFrom: false,
+      });
+
+      const twitch = result?.cfg?.channels?.twitch;
+      expect(twitch?.accounts?.secondary?.username).toBe("secondary-bot");
+      expect(twitch?.accounts?.secondary?.accessToken).toBe("oauth:secondary");
+      expect(twitch?.accounts?.default?.username).toBe("default-bot");
     });
   });
 
