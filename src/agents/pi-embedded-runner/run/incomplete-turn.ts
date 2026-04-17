@@ -189,7 +189,8 @@ export function resolveIncompleteTurnPayloadText(params: {
     !incompleteTerminalAssistant &&
     !reasoningOnlyAssistant &&
     !emptyResponseAssistant &&
-    stopReason !== "error"
+    stopReason !== "error" &&
+    stopReason !== "stop"
   ) {
     return null;
   }
