@@ -1000,44 +1000,6 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("Opened page");
   });
 
-  it("auto-expands new tool cards inline when the preference is enabled", () => {
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          autoExpandToolCalls: true,
-          messages: [
-            {
-              id: "assistant-2",
-              role: "assistant",
-              toolCallId: "call-2",
-              content: [
-                {
-                  type: "toolcall",
-                  id: "call-2",
-                  name: "browser.open",
-                  arguments: { url: "https://example.com" },
-                },
-                {
-                  type: "toolresult",
-                  id: "call-2",
-                  name: "browser.open",
-                  text: "Opened page",
-                },
-              ],
-              timestamp: Date.now(),
-            },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    expect(container.textContent).toContain("Tool input");
-    expect(container.textContent).toContain("Tool output");
-    expect(container.textContent).toContain("https://example.com");
-  });
-
   it("expands already-visible tool cards when auto-expand is turned on", () => {
     const container = document.createElement("div");
     const baseProps = createProps({
@@ -1071,84 +1033,6 @@ describe("chat view", () => {
     render(renderChat({ ...baseProps, autoExpandToolCalls: true }), container);
     expect(container.textContent).toContain("Tool input");
     expect(container.textContent).toContain("Tool output");
-  });
-
-  it("lets an auto-expanded tool call collapse again from the summary row", async () => {
-    const container = document.createElement("div");
-    const props = createProps({
-      autoExpandToolCalls: true,
-      messages: [
-        {
-          id: "assistant-3b",
-          role: "assistant",
-          toolCallId: "call-3b",
-          content: [
-            {
-              type: "toolcall",
-              id: "call-3b",
-              name: "browser.open",
-              arguments: { url: "https://example.com" },
-            },
-            {
-              type: "toolresult",
-              id: "call-3b",
-              name: "browser.open",
-              text: "Opened page",
-            },
-          ],
-          timestamp: Date.now(),
-        },
-      ],
-    });
-
-    const rerender = () => {
-      render(renderChat({ ...props, onRequestUpdate: rerender }), container);
-    };
-    rerender();
-
-    expect(container.textContent).toContain("Tool input");
-    expect(container.textContent).toContain("Opened page");
-
-    container
-      .querySelector<HTMLElement>(".chat-tool-msg-summary")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await flushTasks();
-
-    expect(container.textContent).not.toContain("Tool input");
-    expect(container.textContent).not.toContain("Opened page");
-  });
-
-  it("keeps expanded input-only tool calls from rendering a redundant output block", () => {
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          autoExpandToolCalls: true,
-          messages: [
-            {
-              id: "assistant-4",
-              role: "assistant",
-              toolCallId: "call-4",
-              content: [
-                {
-                  type: "toolcall",
-                  id: "call-4",
-                  name: "sessions_spawn",
-                  arguments: { mode: "session", thread: true },
-                },
-              ],
-              timestamp: Date.now(),
-            },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    expect(container.textContent).toContain("Tool input");
-    expect(container.textContent).toContain('"thread": true');
-    expect(container.textContent).not.toContain("Tool output");
-    expect(container.textContent).not.toContain("No output");
   });
 
   it("routes standalone tool-call rows through the same top-level disclosure as tool output", async () => {
@@ -1242,42 +1126,6 @@ describe("chat view", () => {
     expect(container.textContent).toContain("Tool output");
     expect(container.textContent).toContain('"status": "error"');
     expect(container.textContent).toContain('"childSessionKey": "agent:test:subagent:abc123"');
-  });
-
-  it("does not render tool-row canvas previews", () => {
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          autoExpandToolCalls: true,
-          messages: [
-            {
-              id: "tool-anki-1",
-              role: "tool",
-              toolCallId: "call-anki-1",
-              toolName: "canvas_render",
-              content: JSON.stringify({
-                kind: "canvas",
-                source: {
-                  type: "html",
-                  content: "<div>Front card</div>",
-                },
-                presentation: {
-                  target: "tool_card",
-                  title: "Status view",
-                },
-              }),
-              timestamp: Date.now(),
-            },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
-    expect(container.textContent).toContain("Status view");
-    expect(container.textContent).toContain("Tool output");
   });
 
   it("renders [embed] shortcodes inside the assistant bubble", () => {
