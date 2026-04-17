@@ -760,7 +760,6 @@ describe("connectGateway", () => {
 
   it("reloads chat history on session.message when no run is active", () => {
     const { host, client } = connectHostGateway();
-    host.chatRunId = null;
 
     client.emitEvent({
       event: "session.message",
