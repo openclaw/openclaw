@@ -564,32 +564,41 @@ export async function applyMediaUnderstanding(params: {
       (output) => !audioOutputAttachmentIndexes.has(output.attachmentIndex),
     );
 
-    // Merge synthetic placeholders into the audio outputs only — sorted by
-    // attachmentIndex within the audio slice — then splice them back into
-    // their original position in the outputs array. This preserves:
-    //  1. Cross-capability ordering (image → audio → video from CAPABILITY_ORDER)
-    //  2. Per-capability `attachments.prefer` ordering for non-audio outputs
-    //  3. Correct attachment-index ordering for audio (real + synthetic mixed)
+    // Merge synthetic placeholders into the audio slice while preserving the
+    // selected audio attachment order from `runCapability()` / `attachments.prefer`.
+    // When audio produced no real outputs, insert the synthetic slice at the
+    // audio capability slot (before video) instead of appending at the end.
     if (syntheticSkippedAudioOutputs.length > 0) {
+      const audioDecision = decisions.find((decision) => decision.capability === "audio");
+      const audioAttachmentOrder = audioDecision?.attachments.map((attachment) => attachment.attachmentIndex) ?? [];
+      const audioOutputsByAttachmentIndex = new Map<number, MediaUnderstandingOutput>();
+      for (const output of outputs) {
+        if (output.kind === "audio.transcription") {
+          audioOutputsByAttachmentIndex.set(output.attachmentIndex, output);
+        }
+      }
+      for (const output of syntheticSkippedAudioOutputs) {
+        audioOutputsByAttachmentIndex.set(output.attachmentIndex, output);
+      }
+      const mergedAudio = audioAttachmentOrder
+        .map((attachmentIndex) => audioOutputsByAttachmentIndex.get(attachmentIndex))
+        .filter((output): output is MediaUnderstandingOutput => Boolean(output));
+
       const firstAudioIdx = outputs.findIndex((o) => o.kind === "audio.transcription");
       if (firstAudioIdx >= 0) {
-        // Split: keep non-audio in place, replace audio slice with merged+sorted version
         const before = outputs.slice(0, firstAudioIdx);
-        const existingAudio = outputs.filter((o) => o.kind === "audio.transcription");
         const afterLastAudio = outputs.slice(
           outputs.reduce(
             (last, o, i) => (o.kind === "audio.transcription" ? i : last),
             firstAudioIdx,
           ) + 1,
         );
-        const mergedAudio = [...existingAudio, ...syntheticSkippedAudioOutputs].toSorted(
-          (a, b) => a.attachmentIndex - b.attachmentIndex,
-        );
         outputs.length = 0;
         outputs.push(...before, ...mergedAudio, ...afterLastAudio);
       } else {
-        // No real audio outputs — append synthetic at end
-        outputs.push(...syntheticSkippedAudioOutputs);
+        const firstVideoIdx = outputs.findIndex((o) => o.kind === "video.description");
+        const audioInsertIdx = firstVideoIdx >= 0 ? firstVideoIdx : outputs.length;
+        outputs.splice(audioInsertIdx, 0, ...mergedAudio);
       }
     }
 
