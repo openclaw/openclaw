@@ -1412,6 +1412,8 @@
     "test:docker:plugins": "bash scripts/e2e/plugins-docker.sh",
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
     "test:e2e": "node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts",
+    "test:e2e:discord": "OPENCLAW_LIVE_DISCORD=1 OPENCLAW_LIVE_TEST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts src/infra/outbound/discord-surface.e2e.test.ts",
+    "test:e2e:discord:preflight": "bunx tsx scripts/check-discord-e2e-env.ts",
     "test:e2e:openshell": "OPENCLAW_E2E_OPENSHELL=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/openshell/src/backend.e2e.test.ts",
     "test:extension": "node scripts/test-extension.mjs",
     "test:extensions": "node scripts/run-vitest.mjs run --config test/vitest/vitest.extensions.config.ts",
