@@ -44,6 +44,12 @@ function rememberBootstrapWarning(key: string): boolean {
   return true;
 }
 
+/** @internal Reset the bootstrap warning cache. Exported for tests only. */
+export function _resetBootstrapWarningCacheForTest(): void {
+  seenBootstrapWarnings.clear();
+  bootstrapWarningOrder.length = 0;
+}
+
 export function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection {
   return config?.agents?.defaults?.contextInjection ?? "always";
 }
@@ -121,13 +127,14 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
 
 export function makeBootstrapWarn(params: {
   sessionLabel: string;
+  workspaceDir?: string;
   warn?: (message: string) => void;
 }): ((message: string) => void) | undefined {
   if (!params.warn) {
     return undefined;
   }
   return (message: string) => {
-    const key = `${params.sessionLabel}\u0000${message}`;
+    const key = `${params.workspaceDir ?? ""}\u0000${params.sessionLabel}\u0000${message}`;
     if (!rememberBootstrapWarning(key)) {
       return;
     }
