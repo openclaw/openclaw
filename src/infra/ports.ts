@@ -91,5 +91,6 @@ export {
   classifyPortListener,
   formatPortDiagnostics,
   isDualStackLoopbackGatewayListeners,
+  isGatewayOwnedLocalPortUsage,
 } from "./ports-format.js";
 export { inspectPortUsage } from "./ports-inspect.js";

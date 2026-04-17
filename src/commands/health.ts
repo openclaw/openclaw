@@ -111,6 +111,33 @@ const formatDurationParts = (ms: number): string => {
   return parts.join(" ");
 };
 
+function normalizeAgentHeartbeatSummary(heartbeat: AgentHeartbeatSummary): AgentHeartbeatSummary {
+  if (typeof heartbeat.everyMs === "number" && heartbeat.everyMs > 0) {
+    return heartbeat;
+  }
+  return {
+    ...heartbeat,
+    enabled: false,
+    every: "disabled",
+    everyMs: null,
+  };
+}
+
+function normalizeHealthSummary(summary: HealthSummary): HealthSummary {
+  const agents = summary.agents.map((agent) => ({
+    ...agent,
+    heartbeat: normalizeAgentHeartbeatSummary(agent.heartbeat),
+  }));
+  const defaultAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
+  return {
+    ...summary,
+    agents,
+    heartbeatSeconds: defaultAgent?.heartbeat.everyMs
+      ? Math.round(defaultAgent.heartbeat.everyMs / 1000)
+      : 0,
+  };
+}
+
 const resolveHeartbeatSummary = (cfg: ReturnType<typeof loadConfig>, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
 
@@ -599,19 +626,21 @@ export async function healthCommand(
 ) {
   const cfg = opts.config ?? (await readBestEffortConfig());
   // Always query the running gateway; do not open a direct Baileys socket here.
-  const summary = await withProgress(
-    {
-      label: "Checking gateway health…",
-      indeterminate: true,
-      enabled: opts.json !== true,
-    },
-    async () =>
-      await callGateway<HealthSummary>({
-        method: "health",
-        params: opts.verbose ? { probe: true } : undefined,
-        timeoutMs: opts.timeoutMs,
-        config: cfg,
-      }),
+  const summary = normalizeHealthSummary(
+    await withProgress(
+      {
+        label: "Checking gateway health…",
+        indeterminate: true,
+        enabled: opts.json !== true,
+      },
+      async () =>
+        await callGateway<HealthSummary>({
+          method: "health",
+          params: opts.verbose ? { probe: true } : undefined,
+          timeoutMs: opts.timeoutMs,
+          config: cfg,
+        }),
+    ),
   );
   // Gateway reachability defines success; channel issues are reported but not fatal here.
   const fatal = false;

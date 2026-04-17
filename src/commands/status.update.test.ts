@@ -65,6 +65,29 @@ describe("resolveUpdateAvailability", () => {
   });
 });
 
+describe("install-state detection surface", () => {
+  it("preserves structured install-state data on update results", () => {
+    const update = buildUpdate({
+      root: "/Users/test/workspace/tmp/openclaw-src",
+      installKind: "git",
+      installState: {
+        activeRoot: "/Users/test/workspace/tmp/openclaw-src",
+        resolvedRoot: "/Users/test/workspace/tmp/openclaw-src",
+        rootIsSymlink: false,
+        suspicious: true,
+        reasons: ["active package root resolves into a restore/tmp-like path"],
+        recoveryHint:
+          "Reinstall or relink to the intended package root, restart the gateway service, then rerun status.",
+      },
+    });
+
+    expect(update.installState?.suspicious).toBe(true);
+    expect(update.installState?.reasons).toContain(
+      "active package root resolves into a restore/tmp-like path",
+    );
+  });
+});
+
 describe("formatUpdateOneLiner", () => {
   it("renders git status and registry summary without duplicating up to date", () => {
     const update = buildUpdate({

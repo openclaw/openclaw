@@ -1,5 +1,6 @@
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { readGatewayServiceState, type GatewayService } from "../daemon/service.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 
 export type ServiceStatusSummary = {
   label: string;
@@ -9,7 +10,34 @@ export type ServiceStatusSummary = {
   externallyManaged: boolean;
   loadedText: string;
   runtime: GatewayServiceRuntime | undefined;
+  packageRoot?: string | null;
+  sourcePath?: string | null;
 };
+
+async function resolveServicePackageRoot(
+  command: Awaited<ReturnType<typeof readGatewayServiceState>>["command"],
+): Promise<string | null> {
+  if (!command) {
+    return null;
+  }
+  const candidates = command.programArguments.filter((value) => /[/\\]/.test(value));
+  for (const candidate of candidates) {
+    const root = await resolveOpenClawPackageRoot({
+      argv1: candidate,
+      cwd: command.workingDirectory,
+    }).catch(() => null);
+    if (root) {
+      return root;
+    }
+  }
+  if (command.workingDirectory) {
+    return (
+      (await resolveOpenClawPackageRoot({ cwd: command.workingDirectory }).catch(() => null)) ??
+      null
+    );
+  }
+  return null;
+}
 
 export async function readServiceStatusSummary(
   service: GatewayService,
@@ -25,6 +53,7 @@ export async function readServiceStatusSummary(
       : state.loaded
         ? service.loadedText
         : service.notLoadedText;
+    const packageRoot = await resolveServicePackageRoot(state.command).catch(() => null);
     return {
       label: service.label,
       installed,
@@ -33,6 +62,8 @@ export async function readServiceStatusSummary(
       externallyManaged,
       loadedText,
       runtime: state.runtime,
+      packageRoot,
+      sourcePath: state.command?.sourcePath ?? null,
     };
   } catch {
     return {
@@ -43,6 +74,8 @@ export async function readServiceStatusSummary(
       externallyManaged: false,
       loadedText: "unknown",
       runtime: undefined,
+      packageRoot: null,
+      sourcePath: null,
     };
   }
 }

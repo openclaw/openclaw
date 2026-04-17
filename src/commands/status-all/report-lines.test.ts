@@ -46,6 +46,14 @@ describe("buildStatusAllReportLines", () => {
       diagnosis: {
         snap: null,
         remoteUrlMissing: false,
+        update: {
+          root: null,
+          installKind: "unknown",
+          packageManager: "unknown",
+        },
+        gatewayService: {
+          label: "dev.openclaw.gateway",
+        },
         secretDiagnostics: [],
         sentinel: null,
         lastErr: null,

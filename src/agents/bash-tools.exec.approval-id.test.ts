@@ -60,8 +60,8 @@ function expectPendingApprovalText(
     content: Array<{ type?: string; text?: string }>;
   },
   options: {
-    command: string;
-    host: "gateway" | "node";
+    command?: string;
+    host?: "gateway" | "node";
     nodeId?: string;
     interactive?: boolean;
     allowedDecisions?: string;
@@ -71,25 +71,17 @@ function expectPendingApprovalText(
   expect(result.details.status).toBe("approval-pending");
   const details = result.details as { approvalId: string; approvalSlug: string };
   const pendingText = getResultText(result);
-  expect(pendingText).toContain(
-    `Reply with: /approve ${details.approvalSlug} ${options.allowedDecisions ?? "allow-once|allow-always|deny"}`,
+  const primaryDecision = (options.allowedDecisions ?? "allow-once|allow-always|deny").split(
+    "|",
+  )[0];
+  expect(pendingText).toBe(
+    `Approval needed to continue with that command.\n\n\`\`\`txt\n/approve ${details.approvalSlug} ${primaryDecision}\n\`\`\``,
   );
-  expect(pendingText).toContain(`full ${details.approvalId}`);
-  expect(pendingText).toContain(`Host: ${options.host}`);
-  if (options.nodeId) {
-    expect(pendingText).toContain(`Node: ${options.nodeId}`);
-  }
-  expect(pendingText).toContain(`CWD: ${options.cwdText ?? process.cwd()}`);
-  expect(pendingText).toContain("Command:\n```sh\n");
-  expect(pendingText).toContain(options.command);
-  if (options.interactive) {
-    expect(pendingText).toContain("Mode: foreground (interactive approvals available).");
-    expect(pendingText).toContain(
-      (options.allowedDecisions ?? "").includes("allow-always")
-        ? "Background mode requires pre-approved policy"
-        : "Background mode requires an effective policy that allows pre-approval",
-    );
-  }
+  expect(pendingText).not.toContain(details.approvalId);
+  expect(pendingText).not.toContain("Host:");
+  expect(pendingText).not.toContain("Node:");
+  expect(pendingText).not.toContain("CWD:");
+  expect(pendingText).not.toContain("Command:");
   return details;
 }
 
@@ -98,12 +90,13 @@ function expectPendingCommandText(
     details: { status?: string };
     content: Array<{ type?: string; text?: string }>;
   },
-  command: string,
+  _expectedCommandText?: string,
 ) {
   expect(result.details.status).toBe("approval-pending");
   const text = getResultText(result);
-  expect(text).toContain("Command:\n```sh\n");
-  expect(text).toContain(command);
+  expect(text).toContain("Approval needed to continue with that command.");
+  expect(text).toContain("```txt\n/approve ");
+  expect(text).not.toContain("Command:\n```sh\n");
 }
 
 function mockGatewayOkCalls(calls: string[]) {
@@ -545,10 +538,10 @@ describe("exec approvals", () => {
     expect(result.details).toMatchObject({
       allowedDecisions: ["allow-once", "deny"],
     });
-    expect(getResultText(result)).toContain("Reply with: /approve ");
-    expect(getResultText(result)).toContain("allow-once|deny");
-    expect(getResultText(result)).not.toContain("allow-once|allow-always|deny");
-    expect(getResultText(result)).toContain("Allow Always is unavailable");
+    expect(getResultText(result)).toContain("Approval needed to continue with that command.");
+    expect(getResultText(result)).toContain("```txt\n/approve ");
+    expect(getResultText(result)).toContain("allow-once\n```");
+    expect(getResultText(result)).not.toContain("allow-always");
   });
 
   it("keeps ask=always prompts for static allowlist entries without allow-always trust", async () => {
@@ -782,7 +775,10 @@ describe("exec approvals", () => {
     );
     expect(typeof agentCalls[0]?.message).toBe("string");
     expect(agentCalls[0]?.message).toContain(
-      "An async command the user already approved has completed.",
+      "An async command the user already approved has finished.",
+    );
+    expect(agentCalls[0]?.message).toContain(
+      "continue silently and do not send a status-only reply.",
     );
   });
 
@@ -828,8 +824,9 @@ describe("exec approvals", () => {
     );
     expect(typeof agentCalls[0]?.message).toBe("string");
     expect(agentCalls[0]?.message).toContain(
-      "If the task requires more steps, continue from this result before replying to the user.",
+      "Reply only if the result changed user-visible state, unblocked the task, or you are actually blocked.",
     );
+    expect(agentCalls[0]?.message).toContain("Do not mention gateway ids, session ids, exit codes");
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -905,7 +902,10 @@ describe("exec approvals", () => {
     );
     expect(typeof agentCalls[0]?.message).toBe("string");
     expect(agentCalls[0]?.message).toContain(
-      "If the task requires more steps, continue from this result before replying to the user.",
+      "Reply only if the result changed user-visible state, unblocked the task, or you are actually blocked.",
+    );
+    expect(agentCalls[0]?.message).toContain(
+      "continue silently and do not send a status-only reply.",
     );
     expect(sendMessage).not.toHaveBeenCalled();
 
@@ -1005,11 +1005,10 @@ describe("exec approvals", () => {
     await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 20 }).toBe(1);
     expect(typeof agentCalls[0]?.message).toBe("string");
     expect(agentCalls[0]?.message).toContain("An async command did not run.");
-    expect(agentCalls[0]?.message).toContain(
-      "Do not mention, summarize, or reuse output from any earlier run in this session.",
-    );
+    expect(agentCalls[0]?.message).toContain("continue silently");
+    expect(agentCalls[0]?.message).toContain("what the user should do next");
     expect(agentCalls[0]?.message).not.toContain(
-      "An async command the user already approved has completed.",
+      "An async command the user already approved has finished.",
     );
   });
 

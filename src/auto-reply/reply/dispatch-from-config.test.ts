@@ -1072,7 +1072,7 @@ describe("dispatchReplyFromConfig", () => {
       _cfg?: OpenClawConfig,
     ) => {
       await opts?.onToolResult?.({
-        text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
+        text: "Approval needed to continue with that command.\n\n```txt\n/approve 117ba06d allow-once\n```",
         channelData: {
           execApproval: {
             approvalId: "117ba06d-1111-2222-3333-444444444444",
@@ -1089,7 +1089,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
     expect(firstToolResultPayload(dispatcher)).toEqual(
       expect.objectContaining({
-        text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
+        text: "Approval needed to continue with that command.\n\n```txt\n/approve 117ba06d allow-once\n```",
         channelData: {
           execApproval: {
             approvalId: "117ba06d-1111-2222-3333-444444444444",
@@ -1316,7 +1316,7 @@ describe("dispatchReplyFromConfig", () => {
       _cfg?: OpenClawConfig,
     ) => {
       await opts?.onToolResult?.({
-        text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
+        text: "Approval needed to continue with that command.\n\n```txt\n/approve 117ba06d allow-once\n```",
         channelData: {
           execApproval: {
             approvalId: "117ba06d-1111-2222-3333-444444444444",

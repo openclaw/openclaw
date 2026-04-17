@@ -37,6 +37,7 @@ function resolveStatusAllConfigPath(path: string | null | undefined): string {
 
 async function resolveStatusAllLocalDiagnosis(params: {
   overview: StatusScanOverviewResult;
+  gatewayService: StatusGatewayServiceSummary;
   progress: StatusAllProgress;
   gatewayReachable: boolean;
   gatewayProbe: StatusScanOverviewResult["gatewaySnapshot"]["gatewayProbe"];
@@ -49,6 +50,8 @@ async function resolveStatusAllLocalDiagnosis(params: {
   diagnosis: {
     snap: ConfigFileSnapshot | null;
     remoteUrlMissing: boolean;
+    update: StatusScanOverviewResult["update"];
+    gatewayService: Pick<StatusGatewayServiceSummary, "label" | "packageRoot" | "sourcePath">;
     secretDiagnostics: StatusScanOverviewResult["secretDiagnostics"];
     sentinel: Awaited<ReturnType<typeof readRestartSentinel>> | null;
     lastErr: string | null;
@@ -125,6 +128,12 @@ async function resolveStatusAllLocalDiagnosis(params: {
     diagnosis: {
       snap,
       remoteUrlMissing: overview.gatewaySnapshot.remoteUrlMissing,
+      update: overview.update,
+      gatewayService: {
+        label: params.gatewayService.label,
+        packageRoot: params.gatewayService.packageRoot ?? null,
+        sourcePath: params.gatewayService.sourcePath ?? null,
+      },
       secretDiagnostics: overview.secretDiagnostics,
       sentinel,
       lastErr,
@@ -160,6 +169,7 @@ export async function buildStatusAllReportData(params: {
   const gatewaySnapshot = params.overview.gatewaySnapshot;
   const { configPath, health, diagnosis } = await resolveStatusAllLocalDiagnosis({
     overview: params.overview,
+    gatewayService: params.daemon,
     progress: params.progress,
     gatewayReachable: gatewaySnapshot.gatewayReachable,
     gatewayProbe: gatewaySnapshot.gatewayProbe,

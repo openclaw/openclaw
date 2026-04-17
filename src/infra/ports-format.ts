@@ -96,13 +96,41 @@ export function isDualStackLoopbackGatewayListeners(
   return pids.size === 1 && families.has("ipv4") && families.has("ipv6");
 }
 
+export function isGatewayOwnedLocalPortUsage(listeners: PortListener[], port: number): boolean {
+  if (listeners.length === 0) {
+    return false;
+  }
+  return listeners.every((listener) => {
+    if (classifyPortListener(listener, port) !== "gateway") {
+      return false;
+    }
+    if (typeof listener.address !== "string") {
+      return true;
+    }
+    const parsedAddress = parseListenerAddress(listener.address);
+    if (!parsedAddress || parsedAddress.port !== port) {
+      return false;
+    }
+    if (
+      parsedAddress.host === "0.0.0.0" ||
+      parsedAddress.host === "::" ||
+      parsedAddress.host === "*"
+    ) {
+      return true;
+    }
+    return classifyLoopbackAddressFamily(parsedAddress.host) !== null;
+  });
+}
+
 export function buildPortHints(listeners: PortListener[], port: number): string[] {
   if (listeners.length === 0) {
     return [];
   }
   const kinds = new Set(listeners.map((listener) => classifyPortListener(listener, port)));
   const hints: string[] = [];
-  if (kinds.has("gateway")) {
+  if (isGatewayOwnedLocalPortUsage(listeners, port)) {
+    hints.push("Gateway is already listening on its configured local port.");
+  } else if (kinds.has("gateway")) {
     hints.push(
       `Gateway already running locally. Stop it (${formatCliCommand("openclaw gateway stop")}) or use a different port.`,
     );
@@ -115,7 +143,11 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   if (kinds.has("unknown")) {
     hints.push("Another process is listening on this port.");
   }
-  if (listeners.length > 1 && !isDualStackLoopbackGatewayListeners(listeners, port)) {
+  if (
+    listeners.length > 1 &&
+    !isGatewayOwnedLocalPortUsage(listeners, port) &&
+    !isDualStackLoopbackGatewayListeners(listeners, port)
+  ) {
     hints.push(
       "Multiple listeners detected; ensure only one gateway/tunnel per port unless intentionally running isolated profiles.",
     );
@@ -135,7 +167,11 @@ export function formatPortDiagnostics(diagnostics: PortUsage): string[] {
   if (diagnostics.status !== "busy") {
     return [`Port ${diagnostics.port} is free.`];
   }
-  const lines = [`Port ${diagnostics.port} is already in use.`];
+  const lines = [
+    isGatewayOwnedLocalPortUsage(diagnostics.listeners, diagnostics.port)
+      ? `Port ${diagnostics.port} is in use by the local gateway.`
+      : `Port ${diagnostics.port} is already in use.`,
+  ];
   for (const listener of diagnostics.listeners) {
     lines.push(`- ${formatPortListener(listener)}`);
   }

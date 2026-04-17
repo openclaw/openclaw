@@ -164,6 +164,48 @@ function shouldMarkLost(task: TaskRecord, now: number): boolean {
   return !hasBackingSession(task);
 }
 
+function loadSessionEntryByKey(sessionKey: string): unknown {
+  const key = sessionKey.trim();
+  if (!key) {
+    return undefined;
+  }
+  const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(key)?.agentId;
+  const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
+  const store = taskRegistryMaintenanceRuntime.loadSessionStore(storePath);
+  return findSessionEntryByKey(store, key);
+}
+
+function hasClosedRequesterSession(task: TaskRecord): boolean {
+  if (task.scopeKind !== "session") {
+    return false;
+  }
+  const requesterSessionKey = task.requesterSessionKey.trim();
+  if (!requesterSessionKey) {
+    return false;
+  }
+  const entry = loadSessionEntryByKey(requesterSessionKey);
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const endedAt = (entry as { endedAt?: unknown }).endedAt;
+  return typeof endedAt === "number" && Number.isFinite(endedAt) && endedAt > 0;
+}
+
+function projectTaskDeliveryForOperatorInspection(task: TaskRecord): TaskRecord {
+  if (
+    task.status !== "succeeded" ||
+    task.terminalOutcome === "blocked" ||
+    task.deliveryStatus !== "failed" ||
+    !hasClosedRequesterSession(task)
+  ) {
+    return task;
+  }
+  return {
+    ...task,
+    deliveryStatus: "parent_missing",
+  };
+}
+
 function shouldPruneTerminalTask(task: TaskRecord, now: number): boolean {
   if (!isTerminalTask(task)) {
     return false;
@@ -216,10 +258,8 @@ function projectTaskLost(task: TaskRecord, now: number): TaskRecord {
 
 export function reconcileTaskRecordForOperatorInspection(task: TaskRecord): TaskRecord {
   const now = Date.now();
-  if (!shouldMarkLost(task, now)) {
-    return task;
-  }
-  return projectTaskLost(task, now);
+  const reconciled = shouldMarkLost(task, now) ? projectTaskLost(task, now) : task;
+  return projectTaskDeliveryForOperatorInspection(reconciled);
 }
 
 export function reconcileInspectableTasks(): TaskRecord[] {

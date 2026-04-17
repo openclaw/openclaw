@@ -47,6 +47,15 @@ export type NpmPackageTargetStatus = {
   error?: string;
 };
 
+export type InstallStateStatus = {
+  activeRoot: string;
+  resolvedRoot: string;
+  rootIsSymlink: boolean;
+  suspicious: boolean;
+  reasons: string[];
+  recoveryHint?: string;
+};
+
 export type UpdateCheckResult = {
   root: string | null;
   installKind: "git" | "package" | "unknown";
@@ -54,6 +63,7 @@ export type UpdateCheckResult = {
   git?: GitUpdateStatus;
   deps?: DepsStatus;
   registry?: RegistryStatus;
+  installState?: InstallStateStatus;
 };
 
 export function formatGitInstallLabel(update: UpdateCheckResult): string | null {
@@ -375,6 +385,34 @@ export function compareSemverStrings(a: string | null, b: string | null): number
   );
 }
 
+function isSuspiciousInstallPath(root: string): boolean {
+  return /(^|[/\\])(\.tmp|tmp|temp|restore|restored|backup)([/\\]|$)/i.test(root);
+}
+
+async function detectInstallState(root: string): Promise<InstallStateStatus> {
+  const stat = await fs.lstat(root).catch(() => null);
+  const resolvedRoot = await fs.realpath(root).catch(() => root);
+  const rootIsSymlink = stat?.isSymbolicLink() ?? false;
+  const reasons: string[] = [];
+  if (rootIsSymlink) {
+    reasons.push("active package root is symlinked");
+  }
+  if (isSuspiciousInstallPath(root) || isSuspiciousInstallPath(resolvedRoot)) {
+    reasons.push("active package root resolves into a restore/tmp-like path");
+  }
+  return {
+    activeRoot: root,
+    resolvedRoot,
+    rootIsSymlink,
+    suspicious: reasons.length > 0,
+    reasons,
+    recoveryHint:
+      reasons.length > 0
+        ? "Reinstall or relink to the intended package root, restart the gateway service, then rerun status."
+        : undefined,
+  };
+}
+
 export async function checkUpdateStatus(params: {
   root: string | null;
   timeoutMs?: number;
@@ -392,10 +430,11 @@ export async function checkUpdateStatus(params: {
     };
   }
 
-  const [pm, gitRoot, registry] = await Promise.all([
+  const [pm, gitRoot, registry, installState] = await Promise.all([
     detectPackageManager(root),
     detectGitRoot(root),
     params.includeRegistry ? fetchNpmLatestVersion({ timeoutMs }) : Promise.resolve(undefined),
+    detectInstallState(root),
   ]);
   const isGit = gitRoot && path.resolve(gitRoot) === root;
 
@@ -418,5 +457,6 @@ export async function checkUpdateStatus(params: {
     git,
     deps,
     registry,
+    installState,
   };
 }

@@ -100,15 +100,6 @@ function resolveAllowedDecisions(params: {
   return params.allowedDecisions ?? resolveExecApprovalAllowedDecisions({ ask: params.ask });
 }
 
-function buildApprovalCommandFence(
-  descriptors: readonly ExecApprovalActionDescriptor[],
-): string | null {
-  if (descriptors.length === 0) {
-    return null;
-  }
-  return buildFence(descriptors.map((descriptor) => descriptor.command).join("\n"), "txt");
-}
-
 export function buildExecApprovalCommandText(params: {
   approvalCommandId: string;
   decision: ExecApprovalReplyDecision;
@@ -305,44 +296,15 @@ export function buildExecApprovalPendingReplyPayload(
     allowedDecisions,
   });
   const primaryAction = descriptors[0] ?? null;
-  const secondaryActions = descriptors.slice(1);
   const lines: string[] = [];
   const warningText = params.warningText?.trim();
   if (warningText) {
     lines.push(warningText);
   }
-  lines.push("Approval required.");
+  lines.push("Approval needed to continue with that command.");
   if (primaryAction) {
-    lines.push("Run:");
     lines.push(buildFence(primaryAction.command, "txt"));
   }
-  lines.push("Pending command:");
-  lines.push(buildFence(params.command, "sh"));
-  const secondaryFence = buildApprovalCommandFence(secondaryActions);
-  if (secondaryFence) {
-    lines.push("Other options:");
-    lines.push(secondaryFence);
-  }
-  if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
-    );
-  }
-  const info: string[] = [];
-  info.push(`Host: ${params.host}`);
-  if (params.nodeId) {
-    info.push(`Node: ${params.nodeId}`);
-  }
-  if (params.cwd) {
-    info.push(`CWD: ${params.cwd}`);
-  }
-  if (typeof params.expiresAtMs === "number" && Number.isFinite(params.expiresAtMs)) {
-    info.push(
-      `Expires in: ${formatExecApprovalExpiresIn(params.expiresAtMs, params.nowMs ?? Date.now())}`,
-    );
-  }
-  info.push(`Full id: \`${params.approvalId}\``);
-  lines.push(info.join("\n"));
 
   return {
     text: lines.join("\n\n"),
