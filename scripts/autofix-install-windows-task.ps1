@@ -59,22 +59,31 @@ $LauncherArg = '-NoProfile -ExecutionPolicy Bypass -File "' + $LauncherPath + '"
 
 $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $LauncherArg -WorkingDirectory $RepoRoot
 
-# Build the trigger. AtLogOn (NOT AtStartup) so the user session, env
-# vars, and ~/.claude/ credentials are available. The Repetition
-# property is populated by constructing a sacrificial one-off trigger
-# and stealing its Repetition struct.
-$LogonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+# Build two triggers so the task runs reliably whether the user is
+# already logged in at registration time, or logs in later:
+#
+#  * OnceTrigger - fires 1 minute from NOW, then repeats every N min
+#    for 1 year. This is the primary driver of the autonomy loop; it
+#    doesn't depend on a logon event, so NextRunTime populates
+#    immediately on registration.
+#
+#  * LogonTrigger - fires on each user logon, also with repetition.
+#    Belt-and-suspenders for post-reboot / re-login scenarios, and
+#    ensures the task keeps running even if the Once trigger's window
+#    ever closes.
 $Repeat = New-TimeSpan -Minutes $IntervalMinutes
 $RepeatFor = New-TimeSpan -Days 365
-$DonorTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval $Repeat -RepetitionDuration $RepeatFor
-$LogonTrigger.Repetition = $DonorTrigger.Repetition
+$StartAt = (Get-Date).AddMinutes(1)
+$OnceTrigger = New-ScheduledTaskTrigger -Once -At $StartAt -RepetitionInterval $Repeat -RepetitionDuration $RepeatFor
+$LogonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$LogonTrigger.Repetition = $OnceTrigger.Repetition
 
 $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RunOnlyIfNetworkAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 
 $Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
 $Description = "Runs autofix.py against the configured OpenClaw PR every $IntervalMinutes minutes. See scripts/autofix-loop.ps1."
-$Task = New-ScheduledTask -Action $Action -Trigger $LogonTrigger -Settings $Settings -Principal $Principal -Description $Description
+$Task = New-ScheduledTask -Action $Action -Trigger @($OnceTrigger, $LogonTrigger) -Settings $Settings -Principal $Principal -Description $Description
 
 if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
     Write-Host "Existing task '$TaskName' found - replacing."
