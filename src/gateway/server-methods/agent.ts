@@ -847,6 +847,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs: runTimeoutMs }),
       ownerConnId: normalizeOptionalString(client?.connId),
       ownerDeviceId: normalizeOptionalString(client?.connect?.device?.id),
+      kind: "agent",
     };
     context.chatAbortControllers.set(runId, abortEntry);
 
@@ -1015,13 +1016,22 @@ export const agentHandlers: GatewayRequestHandlers = {
       typeof p.timeoutMs === "number" && Number.isFinite(p.timeoutMs)
         ? Math.max(0, Math.floor(p.timeoutMs))
         : 30_000;
-    const hasActiveChatRun = context.chatAbortControllers.has(runId);
+    const activeRunEntry = context.chatAbortControllers.get(runId);
+    // When a chat.send run is active with the same runId, ignore cached
+    // agent terminal snapshots so stale agent results do not preempt it.
+    // When an agent RPC run is active, all cached terminal snapshots (both
+    // chat and agent) are stale by definition — ignore everything.
+    const hasActiveChatRun =
+      activeRunEntry !== undefined && activeRunEntry.kind !== "agent";
+    const hasActiveAgentRun = activeRunEntry?.kind === "agent";
 
-    const cachedGatewaySnapshot = readTerminalSnapshotFromGatewayDedupe({
-      dedupe: context.dedupe,
-      runId,
-      ignoreAgentTerminalSnapshot: hasActiveChatRun,
-    });
+    const cachedGatewaySnapshot = hasActiveAgentRun
+      ? null
+      : readTerminalSnapshotFromGatewayDedupe({
+          dedupe: context.dedupe,
+          runId,
+          ignoreAgentTerminalSnapshot: hasActiveChatRun,
+        });
     if (cachedGatewaySnapshot) {
       respond(true, {
         runId,
@@ -1033,22 +1043,21 @@ export const agentHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const ignoreStaleSnapshots = hasActiveChatRun || hasActiveAgentRun;
     const lifecycleAbortController = new AbortController();
     const dedupeAbortController = new AbortController();
     const lifecyclePromise = waitForAgentJob({
       runId,
       timeoutMs,
       signal: lifecycleAbortController.signal,
-      // When chat.send is active with the same runId, ignore cached lifecycle
-      // snapshots so stale agent results do not preempt the active chat run.
-      ignoreCachedSnapshot: hasActiveChatRun,
+      ignoreCachedSnapshot: ignoreStaleSnapshots,
     });
     const dedupePromise = waitForTerminalGatewayDedupe({
       dedupe: context.dedupe,
       runId,
       timeoutMs,
       signal: dedupeAbortController.signal,
-      ignoreAgentTerminalSnapshot: hasActiveChatRun,
+      ignoreAgentTerminalSnapshot: ignoreStaleSnapshots,
     });
 
     const first = await Promise.race([

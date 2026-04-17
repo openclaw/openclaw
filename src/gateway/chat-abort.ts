@@ -8,6 +8,13 @@ export type ChatAbortControllerEntry = {
   expiresAtMs: number;
   ownerConnId?: string;
   ownerDeviceId?: string;
+  /**
+   * Which RPC started this run. Used by `agent.wait` so a `chat.send`-active
+   * run and an `agent`-RPC-active run can make different decisions about
+   * stale dedupe snapshots. Undefined is treated as "chat" for backward
+   * compatibility with entries registered before this field existed.
+   */
+  kind?: "chat" | "agent";
 };
 
 export function isChatStopCommandText(text: string): boolean {
