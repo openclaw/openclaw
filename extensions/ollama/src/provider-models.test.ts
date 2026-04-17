@@ -3,6 +3,7 @@ import { jsonResponse, requestBodyText, requestUrl } from "../../../src/test-hel
 import {
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
+  isReasoningModelHeuristic,
   resetOllamaModelShowInfoCacheForTest,
   resolveOllamaApiBase,
   type OllamaTagModel,
@@ -196,6 +197,53 @@ describe("ollama provider models", () => {
 
     expect(first).toEqual(second);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  describe("isReasoningModelHeuristic", () => {
+    it.each([
+      ["deepseek-r1", true],
+      ["deepseek-r1:7b", true],
+      ["qwen3:thinking", true],
+      ["some-reasoning-model", true],
+      ["model-with-think", true],
+      ["my-reasoner", true],
+      ["gemma4", true],
+      ["gemma4:27b", true],
+      ["gemma4:12b", true],
+      ["gemma4:31b-q4_K_M", true],
+      ["GEMMA4:27B", true],
+      ["llama3:8b", false],
+      ["mistral:7b", false],
+      ["gemma:7b", false],
+      ["gemma2:9b", false],
+      ["gemma3:27b", false],
+      ["codellama:13b", false],
+      ["phi3:mini", false],
+    ])("returns %s for %s", (modelId, expected) => {
+      expect(isReasoningModelHeuristic(modelId)).toBe(expected);
+    });
+  });
+
+  it("buildOllamaModelDefinition sets reasoning from thinking capability", () => {
+    const withThinking = buildOllamaModelDefinition("custom-local-model", undefined, [
+      "thinking",
+      "tools",
+    ]);
+    expect(withThinking.reasoning).toBe(true);
+
+    const withoutThinking = buildOllamaModelDefinition("custom-local-model", undefined, [
+      "completion",
+      "tools",
+    ]);
+    expect(withoutThinking.reasoning).toBe(false);
+  });
+
+  it("buildOllamaModelDefinition sets reasoning for gemma4 via heuristic", () => {
+    const gemma4 = buildOllamaModelDefinition("gemma4:27b");
+    expect(gemma4.reasoning).toBe(true);
+
+    const gemma3 = buildOllamaModelDefinition("gemma3:27b");
+    expect(gemma3.reasoning).toBe(false);
   });
 
   it("buildOllamaModelDefinition sets input to text+image when vision capability is present", () => {

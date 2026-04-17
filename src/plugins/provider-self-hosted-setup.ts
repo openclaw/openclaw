@@ -37,7 +37,7 @@ type OpenAICompatModelsResponse = {
 };
 
 function isReasoningModelHeuristic(modelId: string): boolean {
-  return /r1|reasoning|think|reason/i.test(modelId);
+  return /r1|reasoning|think|reason|gemma4/i.test(modelId);
 }
 
 export async function discoverOpenAICompatibleLocalModels(params: {

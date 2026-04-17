@@ -206,7 +206,7 @@ export async function enrichOllamaModelsWithContext(
 }
 
 export function isReasoningModelHeuristic(modelId: string): boolean {
-  return /r1|reasoning|think|reason/i.test(modelId);
+  return /r1|reasoning|think|reason|gemma4/i.test(modelId);
 }
 
 export function buildOllamaModelDefinition(
@@ -215,11 +215,12 @@ export function buildOllamaModelDefinition(
   capabilities?: string[],
 ): ModelDefinitionConfig {
   const hasVision = capabilities?.includes("vision") ?? false;
+  const hasThinking = capabilities?.includes("thinking") ?? false;
   const input: ("text" | "image")[] = hasVision ? ["text", "image"] : ["text"];
   return {
     id: modelId,
     name: modelId,
-    reasoning: isReasoningModelHeuristic(modelId),
+    reasoning: hasThinking || isReasoningModelHeuristic(modelId),
     input,
     cost: OLLAMA_DEFAULT_COST,
     contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
