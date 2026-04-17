@@ -91,6 +91,7 @@
   "account-core",
   "account-id",
   "account-resolution",
+  "account-resolution-runtime",
   "agent-config-primitives",
   "allow-from",
   "allowlist-config-edit",

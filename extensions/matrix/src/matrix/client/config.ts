@@ -3,7 +3,7 @@ import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   coerceSecretRef,
   normalizeResolvedSecretInputString,
-} from "openclaw/plugin-sdk/secret-input";
+} from "openclaw/plugin-sdk/secret-input-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
   requiresExplicitMatrixDefaultAccount,

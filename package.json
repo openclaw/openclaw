@@ -420,6 +420,10 @@
       "types": "./dist/plugin-sdk/account-resolution.d.ts",
       "default": "./dist/plugin-sdk/account-resolution.js"
     },
+    "./plugin-sdk/account-resolution-runtime": {
+      "types": "./dist/plugin-sdk/account-resolution-runtime.d.ts",
+      "default": "./dist/plugin-sdk/account-resolution-runtime.js"
+    },
     "./plugin-sdk/agent-config-primitives": {
       "types": "./dist/plugin-sdk/agent-config-primitives.d.ts",
       "default": "./dist/plugin-sdk/agent-config-primitives.js"
