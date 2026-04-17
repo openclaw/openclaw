@@ -1176,7 +1176,7 @@ describe("model-selection", () => {
       expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
     });
 
-    it("uses adaptive fallback for explicitly configured Anthropic Opus 4.7", () => {
+    it("keeps thinking off by default for explicitly configured Anthropic Opus 4.7", () => {
       const cfg = {
         agents: {
           defaults: {
@@ -1185,7 +1185,7 @@ describe("model-selection", () => {
         },
       } as OpenClawConfig;
 
-      expect(resolveAnthropicOpus47Thinking(cfg)).toBe("adaptive");
+      expect(resolveAnthropicOpus47Thinking(cfg)).toBe("off");
     });
 
     it("falls back to low when no provider thinking hook is active", () => {
