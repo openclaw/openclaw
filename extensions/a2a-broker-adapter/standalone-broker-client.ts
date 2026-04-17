@@ -114,6 +114,20 @@ const A2ABrokerTaskCancelRequestSchema = z
   })
   .strict();
 
+const A2ABrokerTaskWorkerRequestSchema = z
+  .object({
+    workerId: z.string().min(1),
+  })
+  .strict();
+
+const A2ABrokerTaskCompleteRequestSchema = A2ABrokerTaskWorkerRequestSchema.extend({
+  result: A2ABrokerTaskResultSchema.optional(),
+}).strict();
+
+const A2ABrokerTaskFailRequestSchema = A2ABrokerTaskWorkerRequestSchema.extend({
+  error: A2ABrokerTaskErrorSchema.optional(),
+}).strict();
+
 const A2ABrokerTaskCreateRequestSchema = z
   .object({
     id: z.string().min(1).optional(),
@@ -447,6 +461,112 @@ export function createA2ABrokerClient(options: A2ABrokerClientOptions) {
             edgeSecret,
             userAgent,
           }),
+        },
+      );
+      return await parseBrokerJson(response, A2ABrokerTaskRecordSchema);
+    },
+
+    async claimTask(taskId: string, request?: { workerId?: string }): Promise<A2ABrokerTaskRecord> {
+      const normalizedTaskId = normalizeRequiredTaskId(taskId);
+      const workerId = normalizeOptionalString(request?.workerId) ?? options.requester?.id;
+      if (!workerId) {
+        throw new Error("workerId or configured requester.id is required to claim a broker task");
+      }
+      const parsedRequest = A2ABrokerTaskWorkerRequestSchema.parse({ workerId });
+      const response = await fetchImpl(
+        buildEndpointUrl(baseUrl, `tasks/${encodeURIComponent(normalizedTaskId)}/claim`),
+        {
+          method: "POST",
+          headers: buildRequestHeaders({
+            requester: options.requester,
+            edgeSecret,
+            userAgent,
+            contentType: "application/json",
+          }),
+          body: JSON.stringify(parsedRequest),
+        },
+      );
+      return await parseBrokerJson(response, A2ABrokerTaskRecordSchema);
+    },
+
+    async startTask(taskId: string, request?: { workerId?: string }): Promise<A2ABrokerTaskRecord> {
+      const normalizedTaskId = normalizeRequiredTaskId(taskId);
+      const workerId = normalizeOptionalString(request?.workerId) ?? options.requester?.id;
+      if (!workerId) {
+        throw new Error("workerId or configured requester.id is required to start a broker task");
+      }
+      const parsedRequest = A2ABrokerTaskWorkerRequestSchema.parse({ workerId });
+      const response = await fetchImpl(
+        buildEndpointUrl(baseUrl, `tasks/${encodeURIComponent(normalizedTaskId)}/start`),
+        {
+          method: "POST",
+          headers: buildRequestHeaders({
+            requester: options.requester,
+            edgeSecret,
+            userAgent,
+            contentType: "application/json",
+          }),
+          body: JSON.stringify(parsedRequest),
+        },
+      );
+      return await parseBrokerJson(response, A2ABrokerTaskRecordSchema);
+    },
+
+    async completeTask(
+      taskId: string,
+      request?: { workerId?: string; result?: unknown },
+    ): Promise<A2ABrokerTaskRecord> {
+      const normalizedTaskId = normalizeRequiredTaskId(taskId);
+      const workerId = normalizeOptionalString(request?.workerId) ?? options.requester?.id;
+      if (!workerId) {
+        throw new Error(
+          "workerId or configured requester.id is required to complete a broker task",
+        );
+      }
+      const parsedRequest = A2ABrokerTaskCompleteRequestSchema.parse({
+        workerId,
+        ...(request?.result ? { result: request.result } : {}),
+      });
+      const response = await fetchImpl(
+        buildEndpointUrl(baseUrl, `tasks/${encodeURIComponent(normalizedTaskId)}/complete`),
+        {
+          method: "POST",
+          headers: buildRequestHeaders({
+            requester: options.requester,
+            edgeSecret,
+            userAgent,
+            contentType: "application/json",
+          }),
+          body: JSON.stringify(parsedRequest),
+        },
+      );
+      return await parseBrokerJson(response, A2ABrokerTaskRecordSchema);
+    },
+
+    async failTask(
+      taskId: string,
+      request?: { workerId?: string; error?: unknown },
+    ): Promise<A2ABrokerTaskRecord> {
+      const normalizedTaskId = normalizeRequiredTaskId(taskId);
+      const workerId = normalizeOptionalString(request?.workerId) ?? options.requester?.id;
+      if (!workerId) {
+        throw new Error("workerId or configured requester.id is required to fail a broker task");
+      }
+      const parsedRequest = A2ABrokerTaskFailRequestSchema.parse({
+        workerId,
+        ...(request?.error ? { error: request.error } : {}),
+      });
+      const response = await fetchImpl(
+        buildEndpointUrl(baseUrl, `tasks/${encodeURIComponent(normalizedTaskId)}/fail`),
+        {
+          method: "POST",
+          headers: buildRequestHeaders({
+            requester: options.requester,
+            edgeSecret,
+            userAgent,
+            contentType: "application/json",
+          }),
+          body: JSON.stringify(parsedRequest),
         },
       );
       return await parseBrokerJson(response, A2ABrokerTaskRecordSchema);
