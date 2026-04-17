@@ -236,7 +236,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
   maxMediaBytes: number;
   maxMediaTextChunkLimit?: number;
   msg: WebInboundMsg;
-  onModelSelected?: ChannelReplyOnModelSelected | undefined;
+  onModelSelected?: ChannelReplyOnModelSelected;
   rememberSentText: (
     text: string | undefined,
     opts: {
@@ -269,6 +269,21 @@ export async function dispatchWhatsAppBufferedReply(params: {
     replyResolver: params.replyResolver,
     dispatcherOptions: {
       ...params.replyPipeline,
+      onError: (error: unknown, info: { kind: ReplyLifecycleKind }) => {
+        try {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          params.replyLogger.warn("Failed to deliver WhatsApp auto-reply payload", {
+            dispatchKind: info.kind,
+            error: errorMessage,
+            connectionId: params.connectionId,
+            conversationId: params.conversationId,
+            chatType: params.msg.chatType,
+            chatId: params.msg.chatId,
+          });
+        } catch {
+          // Avoid throwing from dispatcher error handling.
+        }
+      },
       onHeartbeatStrip: () => {
         if (!didLogHeartbeatStrip) {
           didLogHeartbeatStrip = true;

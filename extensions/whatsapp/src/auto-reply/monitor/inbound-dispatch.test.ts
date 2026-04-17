@@ -99,6 +99,16 @@ function getCapturedDeliver() {
   )?.dispatcherOptions?.deliver;
 }
 
+function getCapturedOnError() {
+  return (
+    capturedDispatchParams as {
+      dispatcherOptions?: {
+        onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
+      };
+    }
+  )?.dispatcherOptions?.onError;
+}
+
 type BufferedReplyParams = Parameters<typeof dispatchWhatsAppBufferedReply>[0];
 
 function makeReplyLogger(): BufferedReplyParams["replyLogger"] {
@@ -374,6 +384,87 @@ describe("whatsapp inbound dispatch", () => {
         }
       )?.dispatcherOptions?.onReplyStart,
     ).toBe(sendComposing);
+  });
+
+  it("logs dispatcher delivery errors instead of silent drop", async () => {
+    const warn = vi.fn();
+    const replyLogger = {
+      info: vi.fn(),
+      warn,
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as BufferedReplyParams["replyLogger"];
+
+    await dispatchBufferedReply({
+      replyLogger,
+      msg: makeMsg({
+        chatType: "group",
+      }),
+      conversationId: "120363409562661799@g.us",
+      connectionId: "conn-42",
+    });
+
+    const onError = getCapturedOnError();
+    expect(onError).toBeTypeOf("function");
+
+    onError?.(new Error("send failed"), { kind: "final" });
+
+    expect(warn).toHaveBeenCalledWith(
+      "Failed to deliver WhatsApp auto-reply payload",
+      expect.objectContaining({
+        dispatchKind: "final",
+        error: "send failed",
+        connectionId: "conn-42",
+        conversationId: "120363409562661799@g.us",
+      }),
+    );
+  });
+
+  it("logs non-Error dispatcher failures using string coercion", async () => {
+    const warn = vi.fn();
+    const replyLogger = {
+      info: vi.fn(),
+      warn,
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as BufferedReplyParams["replyLogger"];
+
+    await dispatchBufferedReply({ replyLogger });
+
+    const onError = getCapturedOnError();
+    expect(onError).toBeTypeOf("function");
+
+    onError?.("send failed as string", { kind: "block" });
+
+    expect(warn).toHaveBeenCalledWith(
+      "Failed to deliver WhatsApp auto-reply payload",
+      expect.objectContaining({
+        dispatchKind: "block",
+        error: "send failed as string",
+        connectionId: "conn",
+        conversationId: "+1000",
+      }),
+    );
+  });
+
+  it("does not throw when error logger fails inside dispatcher onError", async () => {
+    const warn = vi.fn(() => {
+      throw new Error("logger failed");
+    });
+    const replyLogger = {
+      info: vi.fn(),
+      warn,
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as BufferedReplyParams["replyLogger"];
+
+    await dispatchBufferedReply({ replyLogger });
+
+    const onError = getCapturedOnError();
+    expect(onError).toBeTypeOf("function");
+
+    expect(() => onError?.(new Error("send failed"), { kind: "final" })).not.toThrow();
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it("updates main last route for DM when session key matches main session key", () => {
