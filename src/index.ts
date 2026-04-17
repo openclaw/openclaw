@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { captureException, initErrorTracking } from "./infra/error-tracking.js";
 import { formatUncaughtError } from "./infra/errors.js";
 import { isMainModule } from "./infra/is-main.js";
 import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
@@ -85,18 +86,24 @@ if (!isMain) {
 if (isMain) {
   const { restoreTerminalState } = await import("./terminal/restore.js");
 
+  // Initialize error tracking before installing rejection handlers so that any
+  // early-startup classified errors are captured. No-op when DSN is unset.
+  await initErrorTracking();
+
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
     console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+    captureException(error, { classification: "uncaught-exception" });
     restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
     process.exit(1);
   });
 
   void runLegacyCliEntry(process.argv).catch((err) => {
     console.error("[openclaw] CLI failed:", formatUncaughtError(err));
+    captureException(err, { classification: "cli-entry" });
     restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
     process.exit(1);
   });

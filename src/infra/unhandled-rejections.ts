@@ -1,6 +1,7 @@
 import process from "node:process";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { restoreTerminalState } from "../terminal/restore.js";
+import { captureException } from "./error-tracking.js";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -356,12 +357,14 @@ export function installUnhandledRejectionHandler(): void {
 
     if (isFatalError(reason)) {
       console.error("[openclaw] FATAL unhandled rejection:", formatUncaughtError(reason));
+      captureException(reason, { classification: "fatal" });
       exitWithTerminalRestore("fatal unhandled rejection");
       return;
     }
 
     if (isConfigError(reason)) {
       console.error("[openclaw] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
+      captureException(reason, { classification: "config" });
       exitWithTerminalRestore("configuration error");
       return;
     }
@@ -375,6 +378,7 @@ export function installUnhandledRejectionHandler(): void {
     }
 
     console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
+    captureException(reason, { classification: "unhandled" });
     exitWithTerminalRestore("unhandled rejection");
   });
 }

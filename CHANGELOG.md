@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Observability: optional error tracking. Set `OPENCLAW_ERROR_TRACKING_DSN` (Sentry SaaS or any Sentry-compatible endpoint such as a self-hosted GlitchTip) to forward classified unhandled rejections, uncaught exceptions, and `error`/`fatal` log records. Optional `OPENCLAW_ERROR_TRACKING_ENVIRONMENT` and `OPENCLAW_ERROR_TRACKING_RELEASE` enrich events. The integration is a no-op when no DSN is set; transient network and SQLite rejections are still suppressed locally and not forwarded.
+
 ### Fixes
 
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.
