@@ -41,13 +41,11 @@ import {
   emitSessionLifecycleEvent,
   getGlobalHookRunner,
   loadConfig,
-  getSessionBindingService,
   mergeSessionEntry,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   pruneLegacyStoreKeys,
   resolveAgentConfig,
-  resolveConversationDeliveryTarget,
   resolveDisplaySessionKey,
   resolveGatewaySessionStoreTarget,
   resolveInternalSessionKey,
@@ -340,9 +338,7 @@ async function ensureThreadBindingForSubagentSpawn(params: {
           "Unable to create or bind a thread for this subagent session. Session mode is unavailable for this target.",
       };
     }
-    const deliveryOrigin =
-      normalizeDeliveryContext(result.deliveryOrigin) ??
-      resolveThreadBindingDeliveryOrigin(params.childSessionKey);
+    const deliveryOrigin = normalizeDeliveryContext(result.deliveryOrigin);
     return {
       status: "ok",
       ...(deliveryOrigin ? { deliveryOrigin } : {}),
@@ -353,30 +349,6 @@ async function ensureThreadBindingForSubagentSpawn(params: {
       error: `Thread bind failed: ${summarizeError(err)}`,
     };
   }
-}
-
-function resolveThreadBindingDeliveryOrigin(childSessionKey: string): DeliveryContext | undefined {
-  const activeBindings = getSessionBindingService()
-    .listBySession(childSessionKey)
-    .filter((binding) => binding.status === "active");
-  if (activeBindings.length !== 1) {
-    return undefined;
-  }
-  const binding = activeBindings[0];
-  if (!binding) {
-    return undefined;
-  }
-  const target = resolveConversationDeliveryTarget({
-    channel: binding.conversation.channel,
-    conversationId: binding.conversation.conversationId,
-    parentConversationId: binding.conversation.parentConversationId,
-  });
-  return normalizeDeliveryContext({
-    channel: binding.conversation.channel,
-    accountId: binding.conversation.accountId,
-    to: target.to,
-    threadId: target.threadId,
-  });
 }
 
 function hasRoutableDeliveryOrigin(

@@ -60,11 +60,6 @@ describe("spawnSubagentDirect thread binding delivery", () => {
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
       hookRunner: hoisted.hookRunner,
-      getSessionBindingService: () => ({ listBySession: () => [] }),
-      resolveConversationDeliveryTarget: () => ({
-        to: "room:!room:example",
-        threadId: "$thread-root",
-      }),
       resolveSubagentSpawnModelSelection: () => "openai-codex/gpt-5.4",
       resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
     });
@@ -108,7 +103,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     );
   });
 
-  it("keeps completion announcements when no bound delivery origin is resolved", async () => {
+  it("keeps completion announcements when only a generic binding is available", async () => {
     hoisted.hookRunner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "subagent_spawning",
     );
@@ -131,7 +126,21 @@ describe("spawnSubagentDirect thread binding delivery", () => {
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
       hookRunner: hoisted.hookRunner,
-      getSessionBindingService: () => ({ listBySession: () => [] }),
+      getSessionBindingService: () => ({
+        listBySession: () => [
+          {
+            status: "active",
+            conversation: {
+              channel: "feishu",
+              accountId: "work",
+              conversationId: "oc_dm_chat_1",
+            },
+          },
+        ],
+      }),
+      resolveConversationDeliveryTarget: () => ({
+        to: "channel:oc_dm_chat_1",
+      }),
       resolveSubagentSpawnModelSelection: () => "openai-codex/gpt-5.4",
       resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
     });
