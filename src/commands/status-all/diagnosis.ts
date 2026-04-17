@@ -137,7 +137,7 @@ export async function appendStatusAllDiagnosis(params: {
     activeRoot && servicePackageRoot
       ? path.resolve(activeRoot) !== path.resolve(servicePackageRoot)
       : false;
-  const installStateWarn = Boolean(installState?.suspicious || serviceMismatch);
+  const installStateWarn = installState?.suspicious || serviceMismatch;
   emitCheck("Install state integrity", installStateWarn ? "warn" : "ok");
   if (activeRoot) {
     lines.push(`  ${muted(`active root: ${activeRoot}`)}`);
