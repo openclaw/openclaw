@@ -17,6 +17,7 @@ import type {
   WebSearchProviderPlugin,
 } from "../types.js";
 import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
+import { loadVitestProviderContractRegistry } from "./provider-vitest-registry.js";
 import { uniqueStrings } from "./shared.js";
 import {
   loadVitestImageGenerationProviderContractRegistry,
@@ -314,6 +315,16 @@ function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContr
     return cached;
   }
 
+  if (process.env.VITEST) {
+    const vitestEntries = loadVitestProviderContractRegistry().filter(
+      (entry) => entry.pluginId === pluginId,
+    );
+    if (vitestEntries.length > 0) {
+      cache.set(pluginId, vitestEntries);
+      return vitestEntries;
+    }
+  }
+
   try {
     providerContractLoadError = undefined;
     const entries = loadScopedCapabilityRuntimeRegistryEntries({
@@ -344,13 +355,22 @@ function loadProviderContractRegistry(): ProviderContractEntry[] {
   if (!providerContractRegistryCache) {
     try {
       providerContractLoadError = undefined;
-      providerContractRegistryCache = loadBundledCapabilityRuntimeRegistry({
-        pluginIds: resolveBundledProviderContractPluginIds(),
-        pluginSdkResolution: "dist",
-      }).providers.map((entry) => ({
-        pluginId: entry.pluginId,
-        provider: entry.provider,
-      }));
+      const vitestEntries = process.env.VITEST ? loadVitestProviderContractRegistry() : [];
+      const coveredPluginIds = new Set(vitestEntries.map((entry) => entry.pluginId));
+      const remainingPluginIds = resolveBundledProviderContractPluginIds().filter(
+        (pluginId) => !coveredPluginIds.has(pluginId),
+      );
+      const runtimeEntries =
+        remainingPluginIds.length > 0
+          ? loadBundledCapabilityRuntimeRegistry({
+              pluginIds: remainingPluginIds,
+              pluginSdkResolution: "dist",
+            }).providers.map((entry) => ({
+              pluginId: entry.pluginId,
+              provider: entry.provider,
+            }))
+          : [];
+      providerContractRegistryCache = [...vitestEntries, ...runtimeEntries];
     } catch (error) {
       providerContractLoadError = error instanceof Error ? error : new Error(String(error));
       providerContractRegistryCache = [];

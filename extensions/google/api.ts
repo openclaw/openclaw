@@ -24,6 +24,8 @@ export {
   shouldNormalizeGoogleGenerativeAiProviderConfig,
   shouldNormalizeGoogleProviderConfig,
 } from "./provider-policy.js";
+export { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+export { buildGoogleProvider } from "./provider-registration.js";
 
 export function parseGeminiAuth(apiKey: string): { headers: Record<string, string> } {
   const parsed = apiKey.startsWith("{") ? parseGoogleOauthApiKey(apiKey) : null;
