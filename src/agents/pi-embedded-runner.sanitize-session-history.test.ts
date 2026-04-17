@@ -1154,7 +1154,7 @@ describe("sanitizeSessionHistory", () => {
     ]);
   });
 
-  it("keeps mutable thinking turns outside exact anthropic replay", async () => {
+  it("drops mutable thinking turns for github-copilot even with tool calls", async () => {
     setNonGoogleModelApi();
 
     const messages = castAgentMessages([
@@ -1171,12 +1171,9 @@ describe("sanitizeSessionHistory", () => {
 
     const result = await sanitizeGithubCopilotHistory({ messages });
     const assistant = getAssistantMessage(result);
+    // Copilot Claude rejects replayed plain thinking blocks, so they must be
+    // stripped — only the toolCall should survive.
     expect(assistant.content).toEqual([
-      {
-        type: "thinking",
-        thinking: "I should use the read tool",
-        thinkingSignature: "reasoning_text",
-      },
       { type: "toolCall", id: "tool_123", name: "read", arguments: { path: "/tmp/test" } },
     ]);
   });
