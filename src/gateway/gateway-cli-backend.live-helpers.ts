@@ -189,8 +189,11 @@ export function shouldRetryCliCronMcpProbeReply(text: string): boolean {
   const mentionsCreateFailure =
     normalized.includes("could not create the job") ||
     normalized.includes("couldn't create the job") ||
+    normalized.includes("couldn’t create the job") ||
     normalized.includes("could not create job") ||
-    normalized.includes("couldn't create job");
+    normalized.includes("couldn't create job") ||
+    normalized.includes("couldn’t create job");
+  const mentionsRetryRequest = normalized.includes("please retry");
   const mentionsMissingJob =
     normalized.includes("job was not created") ||
     normalized.includes("job still was not created") ||
@@ -199,7 +202,10 @@ export function shouldRetryCliCronMcpProbeReply(text: string): boolean {
     normalized.includes("was not created");
   return (
     mentionsCancellation &&
-    (mentionsMissingJob || mentionsUserCancellation || mentionsCreateFailure)
+    (mentionsMissingJob ||
+      mentionsUserCancellation ||
+      mentionsCreateFailure ||
+      mentionsRetryRequest)
   );
 }
 
