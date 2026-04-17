@@ -50,16 +50,27 @@ export function logGatewayStartup(params: {
   }
 }
 
-function isLocalProviderUrl(baseUrl: string): boolean {
+function isLocalOrPrivateProviderUrl(baseUrl: string): boolean {
   try {
     const host = new URL(baseUrl).hostname.toLowerCase();
-    return (
+    if (
       host === "localhost" ||
       host === "127.0.0.1" ||
       host === "[::1]" ||
       host === "::1" ||
       host.endsWith(".local")
-    );
+    ) {
+      return true;
+    }
+    // RFC 1918 private networks — proxying LAN providers is typically undesired
+    if (
+      host.startsWith("10.") ||
+      host.startsWith("192.168.") ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+    ) {
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -74,7 +85,7 @@ export function collectProxyEnvMismatch(cfg: OpenClawConfig): string | null {
   const unconfigured: string[] = [];
 
   for (const [name, provider] of Object.entries(providers)) {
-    if (isLocalProviderUrl(provider.baseUrl)) {
+    if (isLocalOrPrivateProviderUrl(provider.baseUrl)) {
       continue;
     }
     if (!provider.request?.proxy) {
@@ -87,7 +98,7 @@ export function collectProxyEnvMismatch(cfg: OpenClawConfig): string | null {
   }
 
   return (
-    `proxy env detected (HTTP_PROXY/HTTPS_PROXY) but not used by providers: ${unconfigured.join(", ")}. ` +
+    `proxy env detected (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY) but not used by providers: ${unconfigured.join(", ")}. ` +
     `Consider setting models.providers.<name>.request.proxy.mode = "env-proxy"`
   );
 }

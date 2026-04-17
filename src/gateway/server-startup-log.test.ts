@@ -157,5 +157,27 @@ describe("gateway startup log", () => {
 
       expect(result).toBeNull();
     });
+
+    it("does not warn for RFC 1918 private LAN providers", async () => {
+      const { hasProxyEnvConfigured } = await import("../infra/net/proxy-env.js");
+      vi.mocked(hasProxyEnvConfigured).mockReturnValue(true);
+
+      const result = collectProxyEnvMismatch({
+        models: {
+          providers: {
+            "lan-ollama": {
+              baseUrl: "http://192.168.1.100:11434",
+              models: [],
+            },
+            "lan-vllm": {
+              baseUrl: "http://10.0.0.50:8000",
+              models: [],
+            },
+          },
+        },
+      });
+
+      expect(result).toBeNull();
+    });
   });
 });
