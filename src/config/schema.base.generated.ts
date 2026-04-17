@@ -7189,6 +7189,234 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
                 },
+                tts: {
+                  type: "object",
+                  properties: {
+                    auto: {
+                      type: "string",
+                      enum: ["off", "always", "inbound", "tagged"],
+                      title: "Agent TTS Auto Mode",
+                      description:
+                        "Per-agent TTS auto mode override (off, always, inbound, tagged). Controls when this agent automatically generates voice replies.",
+                    },
+                    enabled: {
+                      type: "boolean",
+                      title: "Agent TTS Enabled",
+                      description:
+                        "Per-agent override to enable or disable TTS for this agent independently of the global setting.",
+                    },
+                    mode: {
+                      type: "string",
+                      enum: ["final", "all"],
+                      title: "Agent TTS Mode",
+                      description:
+                        "Per-agent TTS mode override (final or all). Controls whether TTS runs on the final reply or all reply blocks.",
+                    },
+                    provider: {
+                      type: "string",
+                      minLength: 1,
+                      title: "Agent TTS Provider",
+                      description:
+                        "Speech provider override for this agent (for example openai, elevenlabs, microsoft). Falls back to global messages.tts.provider when unset.",
+                    },
+                    summaryModel: {
+                      type: "string",
+                    },
+                    modelOverrides: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        allowText: {
+                          type: "boolean",
+                        },
+                        allowProvider: {
+                          type: "boolean",
+                        },
+                        allowVoice: {
+                          type: "boolean",
+                        },
+                        allowModelId: {
+                          type: "boolean",
+                        },
+                        allowVoiceSettings: {
+                          type: "boolean",
+                        },
+                        allowNormalization: {
+                          type: "boolean",
+                        },
+                        allowSeed: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    providers: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          apiKey: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                        },
+                        additionalProperties: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              type: "number",
+                            },
+                            {
+                              type: "boolean",
+                            },
+                            {
+                              type: "null",
+                            },
+                            {
+                              type: "array",
+                              items: {},
+                            },
+                            {
+                              type: "object",
+                              propertyNames: {
+                                type: "string",
+                              },
+                              additionalProperties: {},
+                            },
+                          ],
+                        },
+                      },
+                      title: "Agent TTS Provider Settings",
+                      description:
+                        "Per-agent provider-specific TTS settings keyed by speech provider id. Merged onto global messages.tts.providers for this agent.",
+                    },
+                    prefsPath: {
+                      type: "string",
+                    },
+                    maxTextLength: {
+                      type: "integer",
+                      minimum: 1,
+                      maximum: 9007199254740991,
+                    },
+                    timeoutMs: {
+                      type: "integer",
+                      minimum: 1000,
+                      maximum: 120000,
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "Agent TTS Config",
+                  description:
+                    "Per-agent TTS configuration overrides. When set, these values are merged onto the global messages.tts config for this agent. Use this to give different agents different voices, providers, or speech behavior.",
+                },
+                stt: {
+                  type: "object",
+                  properties: {
+                    enabled: {
+                      type: "boolean",
+                      title: "Agent STT Enabled",
+                      description:
+                        "Per-agent override to enable or disable audio understanding for this agent independently of the global setting.",
+                    },
+                    language: {
+                      type: "string",
+                      title: "Agent STT Language",
+                      description:
+                        "Per-agent language hint for audio transcription. Set this to improve recognition accuracy when this agent handles a specific language.",
+                    },
+                    prompt: {
+                      type: "string",
+                      title: "Agent STT Prompt",
+                      description:
+                        "Per-agent instruction template guiding audio understanding output style for this agent.",
+                    },
+                    echoTranscript: {
+                      type: "boolean",
+                      title: "Agent STT Echo Transcript",
+                      description:
+                        "Per-agent override for echoing the audio transcript back to the originating chat before agent processing.",
+                    },
+                    echoFormat: {
+                      type: "string",
+                      title: "Agent STT Echo Format",
+                      description:
+                        "Per-agent format string for the echoed transcript message. Use {transcript} as a placeholder.",
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "Agent STT Config",
+                  description:
+                    "Per-agent STT/audio understanding overrides. When set, these values are merged onto the global tools.media.audio config for this agent. Use this for per-agent language, prompt, or echo behavior.",
+                },
               },
               required: ["id"],
               additionalProperties: false,
@@ -26676,6 +26904,66 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       placeholder: "avatars/openclaw.png",
       tags: ["advanced"],
     },
+    "agents.list[].tts": {
+      label: "Agent TTS Config",
+      help: "Per-agent TTS configuration overrides. When set, these values are merged onto the global messages.tts config for this agent. Use this to give different agents different voices, providers, or speech behavior.",
+      tags: ["media"],
+    },
+    "agents.list[].tts.provider": {
+      label: "Agent TTS Provider",
+      help: "Speech provider override for this agent (for example openai, elevenlabs, microsoft). Falls back to global messages.tts.provider when unset.",
+      tags: ["media"],
+    },
+    "agents.list[].tts.auto": {
+      label: "Agent TTS Auto Mode",
+      help: "Per-agent TTS auto mode override (off, always, inbound, tagged). Controls when this agent automatically generates voice replies.",
+      tags: ["media"],
+    },
+    "agents.list[].tts.enabled": {
+      label: "Agent TTS Enabled",
+      help: "Per-agent override to enable or disable TTS for this agent independently of the global setting.",
+      tags: ["media"],
+    },
+    "agents.list[].tts.mode": {
+      label: "Agent TTS Mode",
+      help: "Per-agent TTS mode override (final or all). Controls whether TTS runs on the final reply or all reply blocks.",
+      tags: ["media"],
+    },
+    "agents.list[].tts.providers": {
+      label: "Agent TTS Provider Settings",
+      help: "Per-agent provider-specific TTS settings keyed by speech provider id. Merged onto global messages.tts.providers for this agent.",
+      tags: ["media"],
+    },
+    "agents.list[].stt": {
+      label: "Agent STT Config",
+      help: "Per-agent STT/audio understanding overrides. When set, these values are merged onto the global tools.media.audio config for this agent. Use this for per-agent language, prompt, or echo behavior.",
+      tags: ["media"],
+    },
+    "agents.list[].stt.enabled": {
+      label: "Agent STT Enabled",
+      help: "Per-agent override to enable or disable audio understanding for this agent independently of the global setting.",
+      tags: ["media"],
+    },
+    "agents.list[].stt.language": {
+      label: "Agent STT Language",
+      help: "Per-agent language hint for audio transcription. Set this to improve recognition accuracy when this agent handles a specific language.",
+      tags: ["media"],
+    },
+    "agents.list[].stt.prompt": {
+      label: "Agent STT Prompt",
+      help: "Per-agent instruction template guiding audio understanding output style for this agent.",
+      tags: ["media"],
+    },
+    "agents.list[].stt.echoTranscript": {
+      label: "Agent STT Echo Transcript",
+      help: "Per-agent override for echoing the audio transcript back to the originating chat before agent processing.",
+      tags: ["media"],
+    },
+    "agents.list[].stt.echoFormat": {
+      label: "Agent STT Echo Format",
+      help: "Per-agent format string for the echoed transcript message. Use {transcript} as a placeholder.",
+      tags: ["media"],
+    },
     "agents.list[].heartbeat.suppressToolErrorWarnings": {
       label: "Agent Heartbeat Suppress Tool Error Warnings",
       help: "Suppress tool error warning payloads during heartbeat runs.",
@@ -26911,6 +27199,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.list[].sandbox.ssh.knownHostsData": {
       sensitive: true,
       tags: ["security", "storage"],
+    },
+    "agents.list[].tts.providers.*.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth", "media"],
     },
     "tools.web.search.apiKey": {
       sensitive: true,

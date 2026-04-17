@@ -1,6 +1,7 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isParentOwnedBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { mergeAgentTtsIntoConfig } from "../../agents/agent-speech-config.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -265,6 +266,7 @@ export async function dispatchReplyFromConfig(
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
   const sessionAgentId = resolveSessionAgentId({ sessionKey: acpDispatchSessionKey, config: cfg });
   const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
+  const ttsCfg = mergeAgentTtsIntoConfig(cfg, sessionAgentCfg?.tts);
   const shouldEmitVerboseProgress = createShouldEmitVerboseProgress({
     sessionKey: acpDispatchSessionKey,
     storePath: sessionStoreEntry.storePath,
@@ -604,7 +606,7 @@ export async function dispatchReplyFromConfig(
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
       const ttsPayload = await maybeApplyTtsToReplyPayload({
         payload,
-        cfg,
+        cfg: ttsCfg,
         channel: ttsChannel,
         kind: "final",
         inboundAudio,
@@ -862,7 +864,7 @@ export async function dispatchReplyFromConfig(
             }
             const ttsPayload = await maybeApplyTtsToReplyPayload({
               payload,
-              cfg,
+              cfg: ttsCfg,
               channel: ttsChannel,
               kind: "tool",
               inboundAudio,
@@ -941,7 +943,7 @@ export async function dispatchReplyFromConfig(
             await params.replyOptions?.onBlockReplyQueued?.(payload, queuedContext);
             const ttsPayload = await maybeApplyTtsToReplyPayload({
               payload,
-              cfg,
+              cfg: ttsCfg,
               channel: ttsChannel,
               kind: "block",
               inboundAudio,
@@ -1027,7 +1029,7 @@ export async function dispatchReplyFromConfig(
         try {
           const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
             payload: { text: accumulatedBlockText },
-            cfg,
+            cfg: ttsCfg,
             channel: ttsChannel,
             kind: "final",
             inboundAudio,

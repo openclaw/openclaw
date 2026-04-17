@@ -13,6 +13,7 @@ import {
   SecretInputSchema,
   ToolsLinksSchema,
   ToolsMediaSchema,
+  TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -841,6 +842,17 @@ export const AgentEntrySchema = z
     params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
+    tts: TtsConfigSchema,
+    stt: z
+      .object({
+        enabled: z.boolean().optional(),
+        language: z.string().optional(),
+        prompt: z.string().optional(),
+        echoTranscript: z.boolean().optional(),
+        echoFormat: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

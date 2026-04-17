@@ -220,6 +220,30 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional default working directory for this agent's ACP sessions.",
   "agents.list[].identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
+  "agents.list[].tts":
+    "Per-agent TTS configuration overrides. When set, these values are merged onto the global messages.tts config for this agent. Use this to give different agents different voices, providers, or speech behavior.",
+  "agents.list[].tts.provider":
+    "Speech provider override for this agent (for example openai, elevenlabs, microsoft). Falls back to global messages.tts.provider when unset.",
+  "agents.list[].tts.auto":
+    "Per-agent TTS auto mode override (off, always, inbound, tagged). Controls when this agent automatically generates voice replies.",
+  "agents.list[].tts.enabled":
+    "Per-agent override to enable or disable TTS for this agent independently of the global setting.",
+  "agents.list[].tts.mode":
+    "Per-agent TTS mode override (final or all). Controls whether TTS runs on the final reply or all reply blocks.",
+  "agents.list[].tts.providers":
+    "Per-agent provider-specific TTS settings keyed by speech provider id. Merged onto global messages.tts.providers for this agent.",
+  "agents.list[].stt":
+    "Per-agent STT/audio understanding overrides. When set, these values are merged onto the global tools.media.audio config for this agent. Use this for per-agent language, prompt, or echo behavior.",
+  "agents.list[].stt.enabled":
+    "Per-agent override to enable or disable audio understanding for this agent independently of the global setting.",
+  "agents.list[].stt.language":
+    "Per-agent language hint for audio transcription. Set this to improve recognition accuracy when this agent handles a specific language.",
+  "agents.list[].stt.prompt":
+    "Per-agent instruction template guiding audio understanding output style for this agent.",
+  "agents.list[].stt.echoTranscript":
+    "Per-agent override for echoing the audio transcript back to the originating chat before agent processing.",
+  "agents.list[].stt.echoFormat":
+    "Per-agent format string for the echoed transcript message. Use {transcript} as a placeholder.",
   "agents.defaults.heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
   "agents.list[].heartbeat.suppressToolErrorWarnings":

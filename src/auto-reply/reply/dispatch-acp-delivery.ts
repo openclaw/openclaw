@@ -1,4 +1,6 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { mergeAgentTtsIntoConfig } from "../../agents/agent-speech-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -183,6 +185,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     },
     toolMessageByCallId: new Map(),
   };
+  const sessionKey = normalizeOptionalString(params.ctx.SessionKey);
+  const agentId = sessionKey
+    ? resolveSessionAgentId({ sessionKey, config: params.cfg })
+    : undefined;
+  const agentCfg = agentId ? resolveAgentConfig(params.cfg, agentId) : undefined;
+  const ttsCfg = mergeAgentTtsIntoConfig(params.cfg, agentCfg?.tts);
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
   const explicitAccountId = normalizeOptionalString(params.ctx.AccountId);
@@ -294,7 +302,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
 
     const ttsPayload = await maybeApplyAcpTts({
       payload,
-      cfg: params.cfg,
+      cfg: ttsCfg,
       channel: params.ttsChannel,
       kind,
       inboundAudio: params.inboundAudio,

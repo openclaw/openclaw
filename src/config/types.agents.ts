@@ -8,6 +8,7 @@ import type {
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
+import type { TtsConfig } from "./types.tts.js";
 
 export type AgentRuntimeAcpConfig = {
   /** ACP harness adapter id (for example codex, claude). */
@@ -110,6 +111,23 @@ export type AgentConfig = {
   tools?: AgentToolsConfig;
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;
+  /** Optional per-agent TTS overrides merged onto global messages.tts. */
+  tts?: TtsConfig;
+  /** Optional per-agent STT/audio understanding overrides merged onto global tools.media.audio. */
+  stt?: AgentSttConfig;
+};
+
+export type AgentSttConfig = {
+  /** Enable or disable audio understanding for this agent. */
+  enabled?: boolean;
+  /** Language hint for audio transcription. */
+  language?: string;
+  /** Instruction template guiding transcription output style. */
+  prompt?: string;
+  /** Echo the transcript back to originating chat before agent processing. */
+  echoTranscript?: boolean;
+  /** Format string for the echoed transcript message. */
+  echoFormat?: string;
 };
 
 export type AgentsConfig = {

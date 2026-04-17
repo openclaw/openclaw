@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import {
+  resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
+import { mergeAgentSttIntoConfig } from "../../agents/agent-speech-config.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
@@ -233,9 +235,11 @@ export async function getReplyFromConfig(
   const finalized = finalizeInboundContext(ctx);
 
   if (!isFastTestEnv) {
+    const sessionAgentSttCfg = resolveAgentConfig(cfg, agentId);
+    const sttCfg = mergeAgentSttIntoConfig(cfg, sessionAgentSttCfg?.stt);
     await applyMediaUnderstandingIfNeeded({
       ctx: finalized,
-      cfg,
+      cfg: sttCfg,
       agentDir,
       activeModel: { provider, model },
     });

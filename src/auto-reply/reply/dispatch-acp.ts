@@ -6,6 +6,11 @@ import {
   isSessionIdentityPending,
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
+import { resolveAgentConfig } from "../../agents/agent-scope.js";
+import {
+  mergeAgentSttIntoConfig,
+  mergeAgentTtsIntoConfig,
+} from "../../agents/agent-speech-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -207,10 +212,13 @@ async function finalizeAcpTurnOutput(params: {
   let finalMediaDelivered = false;
   if (ttsMode === "final" && hasAccumulatedBlockText && canAttemptFinalTts) {
     try {
+      const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+      const agentCfg = agentId ? resolveAgentConfig(params.cfg, agentId) : undefined;
+      const ttsCfg = mergeAgentTtsIntoConfig(params.cfg, agentCfg?.tts);
       const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
       const ttsSyntheticReply = await maybeApplyTtsToPayload({
         payload: { text: accumulatedBlockText },
-        cfg: params.cfg,
+        cfg: ttsCfg,
         channel: params.ttsChannel,
         kind: "final",
         inboundAudio: params.inboundAudio,
@@ -398,10 +406,13 @@ export async function tryDispatchAcpReply(params: {
     }
     if (hasInboundMediaForAcp(params.ctx) && !params.ctx.MediaUnderstanding?.length) {
       try {
+        const acpAgentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
+        const acpAgentCfg = acpAgentId ? resolveAgentConfig(params.cfg, acpAgentId) : undefined;
+        const sttCfg = mergeAgentSttIntoConfig(params.cfg, acpAgentCfg?.stt);
         const { applyMediaUnderstanding } = await loadDispatchAcpMediaRuntime();
         await applyMediaUnderstanding({
           ctx: params.ctx,
-          cfg: params.cfg,
+          cfg: sttCfg,
         });
       } catch (err) {
         logVerbose(
