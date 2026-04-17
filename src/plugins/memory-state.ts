@@ -311,17 +311,27 @@ export async function listActiveMemoryPublicArtifacts(params: {
 }
 
 export function restoreMemoryPluginState(state: MemoryPluginState): void {
-  memoryPluginState.capability = state.capability
-    ? {
-        pluginId: state.capability.pluginId,
-        capability: { ...state.capability.capability },
-      }
-    : undefined;
-  memoryPluginState.corpusSupplements = [...state.corpusSupplements];
-  memoryPluginState.promptBuilder = state.promptBuilder;
-  memoryPluginState.promptSupplements = [...state.promptSupplements];
-  memoryPluginState.flushPlanResolver = state.flushPlanResolver;
-  memoryPluginState.runtime = state.runtime;
+  if (state.capability) {
+    memoryPluginState.capability = {
+      pluginId: state.capability.pluginId,
+      capability: { ...state.capability.capability },
+    };
+  }
+  if (state.corpusSupplements && state.corpusSupplements.length > 0) {
+    memoryPluginState.corpusSupplements = [...state.corpusSupplements];
+  }
+  if (state.promptBuilder) {
+    memoryPluginState.promptBuilder = state.promptBuilder;
+  }
+  if (state.promptSupplements && state.promptSupplements.length > 0) {
+    memoryPluginState.promptSupplements = [...state.promptSupplements];
+  }
+  if (state.flushPlanResolver) {
+    memoryPluginState.flushPlanResolver = state.flushPlanResolver;
+  }
+  if (state.runtime) {
+    memoryPluginState.runtime = state.runtime;
+  }
 }
 
 export function clearMemoryPluginState(): void {
