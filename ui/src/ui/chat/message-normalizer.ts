@@ -58,6 +58,22 @@ function isRenderableAssistantAttachment(url: string): boolean {
   );
 }
 
+function shouldPreserveRelativeAssistantAttachment(url: string): boolean {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    !/^https?:\/\//i.test(trimmed) &&
+    !/^data:(?:image|audio|video)\//i.test(trimmed) &&
+    !/^\/(?:__openclaw__|media)\//.test(trimmed) &&
+    !trimmed.startsWith("file://") &&
+    !trimmed.startsWith("~") &&
+    !trimmed.startsWith("/") &&
+    !/^[a-zA-Z]:[\\/]/.test(trimmed)
+  );
+}
+
 const MIME_BY_EXT: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -155,20 +171,22 @@ function expandTextContent(text: string): {
 
   for (const segment of segments) {
     if (segment.type === "media") {
-      // FIX: Only create attachment if it's renderable. Never create MEDIA: text.
-      if (isRenderableAssistantAttachment(segment.url)) {
-        const inferred = inferAttachmentKind(segment.url);
-        parts.push({
-          type: "attachment",
-          attachment: {
-            url: segment.url,
-            kind: inferred.kind,
-            label: inferred.label,
-            mimeType: inferred.mimeType,
-          },
-        });
+      if (!isRenderableAssistantAttachment(segment.url)) {
+        if (shouldPreserveRelativeAssistantAttachment(segment.url)) {
+          parts.push({ type: "text", text: `MEDIA:${segment.url}` });
+        }
+        continue;
       }
-      // If not renderable, just skip it entirely - no MEDIA: text!
+      const inferred = inferAttachmentKind(segment.url);
+      parts.push({
+        type: "attachment",
+        attachment: {
+          url: segment.url,
+          kind: inferred.kind,
+          label: inferred.label,
+          mimeType: inferred.mimeType,
+        },
+      });
       continue;
     }
 
@@ -205,14 +223,17 @@ function expandTextContent(text: string): {
     }),
   );
 
-  // FIX: Return empty array instead of MEDIA: text fallbacks
   return {
     content:
       content.length > 0
         ? content
-        : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
-          ? [{ type: "text", text: parsed.text }]
-          : [],
+        : (parsed.mediaUrls ?? []).some((url) => shouldPreserveRelativeAssistantAttachment(url))
+          ? (parsed.mediaUrls ?? [])
+              .filter((url) => shouldPreserveRelativeAssistantAttachment(url))
+              .map((url) => ({ type: "text" as const, text: `MEDIA:${url}` }))
+          : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
+            ? [{ type: "text", text: parsed.text }]
+            : [],
     audioAsVoice,
     replyTarget,
   };
