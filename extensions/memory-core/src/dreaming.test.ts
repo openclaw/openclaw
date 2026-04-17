@@ -567,6 +567,74 @@ describe("short-term dreaming cron reconciliation", () => {
     expect(logger.error).toHaveBeenCalledWith(
       expect.not.stringContaining("Timezone must be set via dreaming.timezone"),
     );
+    // Regression guard for the follow-up lint: if the upstream validator error
+    // already ends with a period, the reconciler must not append a second one
+    // before the optional timezone hint.
+    expect(logger.error).toHaveBeenCalledWith(expect.not.stringMatching(/\.\./));
+  });
+
+  it("still migrates legacy phase jobs and prunes duplicates when frequency is invalid", async () => {
+    // Before the cleanup/validation split, an invalid dreaming.frequency froze
+    // the reconciler before it could reach the legacy migration and duplicate
+    // prune loop, leaving stale phase-owned jobs running. Assert both kinds of
+    // cleanup still happen even when we return "invalid".
+    const managedPrimary: CronJobLike = {
+      id: "job-primary",
+      name: constants.MANAGED_DREAMING_CRON_NAME,
+      description: `${constants.MANAGED_DREAMING_CRON_TAG} test`,
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 3 * * *" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      createdAtMs: 10,
+    };
+    const managedDuplicate: CronJobLike = {
+      ...managedPrimary,
+      id: "job-duplicate",
+      createdAtMs: 20,
+    };
+    const legacyLightJob: CronJobLike = {
+      id: "job-light",
+      name: "Memory Light Dreaming",
+      description: "[managed-by=memory-core.dreaming.light] legacy",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 */6 * * *" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "__openclaw_memory_core_light_sleep__" },
+      createdAtMs: 8,
+    };
+    const harness = createCronHarness([managedPrimary, managedDuplicate, legacyLightJob]);
+    const logger = createLogger();
+
+    const result = await reconcileShortTermDreamingCronJob({
+      cron: harness.cron,
+      config: {
+        enabled: true,
+        cron: "not a cron",
+        timezone: "UTC",
+        limit: constants.DEFAULT_DREAMING_LIMIT,
+        minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
+        minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
+        minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result.status).toBe("invalid");
+    expect(result.removed).toBe(2);
+    expect(harness.removeCalls).toEqual(["job-light", "job-duplicate"]);
+    // Primary managed job stays put so the last-known-good schedule keeps
+    // running until the configured frequency is fixed.
+    expect(harness.jobs.map((entry) => entry.id)).toEqual(["job-primary"]);
+    expect(harness.addCalls).toHaveLength(0);
+    expect(harness.updateCalls).toHaveLength(0);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("memory-core: dreaming.frequency contains invalid cron expression:"),
+    );
   });
 
   it("removes managed dreaming jobs when disabled", async () => {

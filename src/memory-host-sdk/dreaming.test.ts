@@ -148,6 +148,21 @@ describe("memory dreaming host helpers", () => {
       reason: "timezone",
       error: expect.stringMatching(/\S/),
     });
+
+    // An invalid IANA timezone combined with an inline-TZ cron expression
+    // must still report `reason: "timezone"`. The classification comes from
+    // which validation step rejected the input, not from regex-matching the
+    // error message — that tag order keeps callers from rendering a misleading
+    // inline-timezone hint when the real fix is the configured timezone.
+    const invalidTimezoneWithInline = validateMemoryDreamingFrequency(
+      "TZ=UTC 15 */8 * * *",
+      "Not/Real",
+    );
+    expect(invalidTimezoneWithInline).toMatchObject({
+      valid: false,
+      reason: "timezone",
+      error: expect.stringMatching(/\S/),
+    });
   });
 
   it("dedupes shared workspaces across all configured agents", () => {

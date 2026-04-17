@@ -436,45 +436,24 @@ export async function reconcileShortTermDreamingCronJob(params: {
     return { status: "disabled", removed };
   }
 
-  const validation = validateMemoryDreamingFrequency(params.config.cron, params.config.timezone);
-  if (!validation.valid) {
-    const timezoneHint =
-      validation.reason === "inline-timezone"
-        ? " Timezone must be set via dreaming.timezone, not inline in the expression."
-        : "";
-    params.logger.error(
-      `memory-core: dreaming.frequency contains invalid cron expression: ${validation.error}.${timezoneHint}`,
-    );
-    // Leave existing jobs untouched so the last-known-good schedule keeps running
-    // until the configured frequency is fixed.
-    return { status: "invalid", removed: 0 };
-  }
-
-  const desired = buildManagedDreamingCronJob(params.config);
-  if (managed.length === 0) {
-    await cron.add(desired);
-    const migratedLegacy = await migrateLegacyPhaseDreamingCronJobs({
-      cron,
-      legacyJobs: legacyPhaseJobs,
-      logger: params.logger,
-      mode: "enabled",
-    });
-    params.logger.info("memory-core: created managed dreaming cron job.");
-    return { status: "added", removed: migratedLegacy };
-  }
-
-  const [primary, ...duplicates] = sortManagedJobs(managed);
-  let removed = await migrateLegacyPhaseDreamingCronJobs({
+  // Reconcile legacy/duplicate cleanup before the frequency validation gate so
+  // a stale invalid frequency does not block us from pruning jobs that should
+  // have been migrated or collapsed already. The legacy migration and
+  // duplicate-prune loop are both safe no-ops when there is nothing to clean
+  // up, and they do not depend on the new frequency being valid.
+  let cleanupRemoved = await migrateLegacyPhaseDreamingCronJobs({
     cron,
     legacyJobs: legacyPhaseJobs,
     logger: params.logger,
     mode: "enabled",
   });
+  const sortedManaged = sortManagedJobs(managed);
+  const [primary, ...duplicates] = sortedManaged;
   for (const duplicate of duplicates) {
     try {
       const result = await cron.remove(duplicate.id);
       if (result.removed === true) {
-        removed += 1;
+        cleanupRemoved += 1;
       }
     } catch (err) {
       params.logger.warn(
@@ -483,17 +462,41 @@ export async function reconcileShortTermDreamingCronJob(params: {
     }
   }
 
+  const validation = validateMemoryDreamingFrequency(params.config.cron, params.config.timezone);
+  if (!validation.valid) {
+    const timezoneHint =
+      validation.reason === "inline-timezone"
+        ? " Timezone must be set via dreaming.timezone, not inline in the expression."
+        : "";
+    // Strip any trailing period on the upstream error so the "." we append
+    // here never doubles up.
+    const errorText = validation.error.replace(/\.+$/, "");
+    params.logger.error(
+      `memory-core: dreaming.frequency contains invalid cron expression: ${errorText}.${timezoneHint}`,
+    );
+    // Leave the remaining primary managed job untouched so the last-known-good
+    // schedule keeps running until the configured frequency is fixed.
+    return { status: "invalid", removed: cleanupRemoved };
+  }
+
+  const desired = buildManagedDreamingCronJob(params.config);
+  if (!primary) {
+    await cron.add(desired);
+    params.logger.info("memory-core: created managed dreaming cron job.");
+    return { status: "added", removed: cleanupRemoved };
+  }
+
   const patch = buildManagedDreamingPatch(primary, desired);
   if (!patch) {
-    if (removed > 0) {
+    if (cleanupRemoved > 0) {
       params.logger.info("memory-core: pruned duplicate managed dreaming cron jobs.");
     }
-    return { status: "noop", removed };
+    return { status: "noop", removed: cleanupRemoved };
   }
 
   await cron.update(primary.id, patch);
   params.logger.info("memory-core: updated managed dreaming cron job.");
-  return { status: "updated", removed };
+  return { status: "updated", removed: cleanupRemoved };
 }
 
 export async function runShortTermDreamingPromotionIfTriggered(params: {

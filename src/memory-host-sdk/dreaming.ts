@@ -173,48 +173,63 @@ function formatValidationError(error: unknown): string {
   return "unknown error";
 }
 
-function resolveMemoryDreamingCronTimezone(timezone?: string): string {
-  const resolved =
-    normalizeTrimmedString(timezone) ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-  Intl.DateTimeFormat(undefined, { timeZone: resolved }).format(0);
-  return resolved;
-}
-
 function containsInlineCronTimezone(frequency: string): boolean {
   return /(?:^|\s)(?:TZ|CRON_TZ)=\S+/.test(frequency);
-}
-
-function resolveMemoryDreamingFrequencyValidationReason(
-  frequency: string,
-  timezone: string | undefined,
-  error: string,
-): Exclude<MemoryDreamingFrequencyValidationResult, { valid: true }>["reason"] {
-  if (containsInlineCronTimezone(frequency)) {
-    return "inline-timezone";
-  }
-  if (timezone && /time\s*zone|timezone/i.test(error)) {
-    return "timezone";
-  }
-  return "parse";
 }
 
 export function validateMemoryDreamingFrequency(
   frequency: string,
   timezone?: string,
 ): MemoryDreamingFrequencyValidationResult {
+  // Validate the timezone first so an unknown IANA zone is tagged as a
+  // timezone failure even when the cron expression itself is also malformed
+  // (e.g. carries an inline TZ=... prefix). Croner is lazy about timezone
+  // validation, so force a dependency-free IANA check via Intl before we
+  // hand the value off.
+  const resolvedTimezone =
+    normalizeTrimmedString(timezone) ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   try {
-    const cron = new Cron(frequency, {
-      timezone: resolveMemoryDreamingCronTimezone(timezone),
-      catch: false,
-    });
+    Intl.DateTimeFormat(undefined, { timeZone: resolvedTimezone }).format(0);
+  } catch (error) {
+    return {
+      valid: false,
+      error: formatValidationError(error),
+      reason: "timezone",
+    };
+  }
+
+  // Inline TZ=/CRON_TZ= prefixes are not supported here; surface them as a
+  // distinct reason so callers can render a targeted configuration hint
+  // instead of a generic parse error.
+  if (containsInlineCronTimezone(frequency)) {
+    try {
+      const cron = new Cron(frequency, { timezone: resolvedTimezone, catch: false });
+      cron.nextRun(new Date());
+    } catch (error) {
+      return {
+        valid: false,
+        error: formatValidationError(error),
+        reason: "inline-timezone",
+      };
+    }
+    // Croner accepted it, but the inline prefix is still ambiguous for our
+    // managed job shape. Reject with a stable placeholder message.
+    return {
+      valid: false,
+      error: "inline timezone prefixes are not supported in dreaming.frequency",
+      reason: "inline-timezone",
+    };
+  }
+
+  try {
+    const cron = new Cron(frequency, { timezone: resolvedTimezone, catch: false });
     cron.nextRun(new Date());
     return { valid: true };
   } catch (error) {
-    const errorMessage = formatValidationError(error);
     return {
       valid: false,
-      error: errorMessage,
-      reason: resolveMemoryDreamingFrequencyValidationReason(frequency, timezone, errorMessage),
+      error: formatValidationError(error),
+      reason: "parse",
     };
   }
 }
