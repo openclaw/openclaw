@@ -692,9 +692,9 @@ function armRunningRecheckTimer(state: CronServiceState) {
  *
  * Returns true if any markers were cleared.
  */
-export function clearZombieRunningMarkers(state: CronServiceState): boolean {
+export function clearZombieRunningMarkers(state: CronServiceState): Set<string> {
   const now = state.deps.nowMs();
-  let cleared = false;
+  const clearedIds = new Set<string>();
   for (const job of state.store?.jobs ?? []) {
     if (typeof job.state.runningAtMs !== "number") {
       continue;
@@ -711,6 +711,7 @@ export function clearZombieRunningMarkers(state: CronServiceState): boolean {
         "cron: clearing zombie running marker",
       );
       job.state.runningAtMs = undefined;
+      clearedIds.add(job.id);
       // For one-shot jobs, also clear nextRunAtMs to prevent
       // re-execution. A one-shot with a past-due nextRunAtMs and no
       // runningAtMs will be selected for execution again, duplicating
@@ -718,10 +719,9 @@ export function clearZombieRunningMarkers(state: CronServiceState): boolean {
       if (job.schedule.kind === "at" && typeof job.state.nextRunAtMs === "number") {
         job.state.nextRunAtMs = undefined;
       }
-      cleared = true;
     }
   }
-  return cleared;
+  return clearedIds;
 }
 
 export async function onTimer(state: CronServiceState) {
@@ -755,8 +755,8 @@ export async function onTimer(state: CronServiceState) {
       // Jobs with no configured timeout (timeoutSeconds <= 0) are exempt —
       // they are intentionally unbounded and should never be treated as
       // zombies.  See: https://github.com/openclaw/openclaw/issues/59056
-      const clearedZombies = clearZombieRunningMarkers(state);
-      if (clearedZombies) {
+      const clearedZombieIds = clearZombieRunningMarkers(state);
+      if (clearedZombieIds.size > 0) {
         await persist(state);
       }
 
@@ -774,9 +774,12 @@ export async function onTimer(state: CronServiceState) {
         // one-shot jobs whose zombie markers were just cleared (kind=at
         // jobs where lastStatus !== "ok" always return atMs). Re-clear
         // them so interrupted one-shots aren't re-executed.
-        if (clearedZombies) {
+        // Scoped to only the jobs whose zombie markers were actually
+        // cleared to avoid wiping scheduled retry backoff for unrelated jobs.
+        if (clearedZombieIds.size > 0) {
           for (const job of state.store?.jobs ?? []) {
             if (
+              clearedZombieIds.has(job.id) &&
               job.schedule.kind === "at" &&
               typeof job.state.runningAtMs !== "number" &&
               typeof job.state.nextRunAtMs === "number" &&

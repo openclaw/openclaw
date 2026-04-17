@@ -342,7 +342,7 @@ describe("clearZombieRunningMarkers", () => {
 
     const result = clearZombieRunningMarkers(state);
 
-    expect(result).toBe(true);
+    expect(result.size).toBeGreaterThan(0);
     expect(job.state.runningAtMs).toBeUndefined();
   });
 
@@ -363,7 +363,7 @@ describe("clearZombieRunningMarkers", () => {
 
     const result = clearZombieRunningMarkers(state);
 
-    expect(result).toBe(false);
+    expect(result.size).toBe(0);
     expect(job.state.runningAtMs).toBe(now - 300_000);
   });
 
@@ -384,7 +384,7 @@ describe("clearZombieRunningMarkers", () => {
 
     const result = clearZombieRunningMarkers(state);
 
-    expect(result).toBe(false);
+    expect(result.size).toBe(0);
     expect(job.state.runningAtMs).toBe(now - 7_200_000);
   });
 
@@ -404,6 +404,6 @@ describe("clearZombieRunningMarkers", () => {
 
     const result = clearZombieRunningMarkers(state);
 
-    expect(result).toBe(false);
+    expect(result.size).toBe(0);
   });
 });
