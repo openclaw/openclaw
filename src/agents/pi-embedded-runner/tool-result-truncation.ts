@@ -269,11 +269,17 @@ export function applyToolResultDetailsPolicy(
     return rest as AgentMessage;
   }
   // truncated
-  let serialized: string;
+  let serialized: string | undefined;
   try {
     serialized = JSON.stringify(withDetails.details);
   } catch {
     // Circular or unserializable details — fall back to drop.
+    const { details: _omitted, ...rest } = withDetails;
+    return rest as AgentMessage;
+  }
+  // JSON.stringify returns undefined for top-level function/symbol values
+  // without throwing. Treat like unserializable and drop.
+  if (typeof serialized !== "string") {
     const { details: _omitted, ...rest } = withDetails;
     return rest as AgentMessage;
   }

@@ -220,15 +220,8 @@ export function installSessionToolResultGuard(
         pendingState.delete(id);
       }
       const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
-      // Apply hard size cap before persistence to prevent oversized tool results
-      // from consuming the entire context window on subsequent LLM calls.
-      const capped = capToolResultSize(
-        persistMessage(normalizedToolResult),
-        maxToolResultChars,
-        detailsPolicy,
-      );
       const persisted = applyBeforeWriteHook(
-        persistToolResult(capped, {
+        persistToolResult(persistMessage(normalizedToolResult), {
           toolCallId: id ?? undefined,
           toolName,
           isSynthetic: false,
@@ -237,6 +230,10 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
+      // Apply hard size cap + details policy exactly once, after hook/transforms,
+      // to prevent oversized tool results from consuming the entire context
+      // window. Capping twice would re-truncate the `{__truncated, preview}`
+      // marker into a marker-of-marker and lose the breadcrumb.
       return originalAppend(
         capToolResultSize(persisted, maxToolResultChars, detailsPolicy) as never,
       );

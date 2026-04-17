@@ -641,5 +641,37 @@ describe("installSessionToolResultGuard", () => {
       appendToolResultWithDetails(sm, original);
       expect(getPersistedDetails(sm)).toEqual(original);
     });
+
+    it("drops details whose JSON.stringify returns undefined under 'truncated'", () => {
+      const sm = SessionManager.inMemory();
+      installSessionToolResultGuard(sm, {
+        toolResultDetailsPersist: { mode: "truncated", maxChars: 4000 },
+      });
+      // Top-level function serializes to undefined without throwing.
+      appendToolResultWithDetails(sm, (() => undefined) as unknown);
+      expect(getPersistedDetails(sm)).toBeUndefined();
+    });
+
+    it("preserves the original preview/originalChars marker (no marker-of-marker)", () => {
+      const sm = SessionManager.inMemory();
+      installSessionToolResultGuard(sm, {
+        // Deliberately tiny cap: a naive second capToolResultSize pass would
+        // re-truncate the marker because JSON.stringify({__truncated,...}) > cap.
+        toolResultDetailsPersist: { mode: "truncated", maxChars: 50 },
+      });
+      const big = { stdout: "y".repeat(10_000) };
+      appendToolResultWithDetails(sm, big);
+      const persisted = getPersistedDetails(sm) as {
+        __truncated: boolean;
+        originalChars: number;
+        preview: string;
+      };
+      expect(persisted.__truncated).toBe(true);
+      expect(persisted.preview.length).toBe(50);
+      // Marker preview starts with the original JSON prefix, not a nested
+      // {"__truncated":true,...} wrapper.
+      expect(persisted.preview.startsWith('{"stdout":"')).toBe(true);
+      expect(persisted.originalChars).toBeGreaterThan(10_000);
+    });
   });
 });
