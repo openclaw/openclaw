@@ -264,6 +264,9 @@ function isEmptyResponseAssistantTurn(params: {
   if (assistant.stopReason === "error") {
     return false;
   }
+  if (assistant.stopReason === "stop") {
+    return false;
+  }
   if (
     isIncompleteTerminalAssistantTurn({
       hasAssistantVisibleText: false,
