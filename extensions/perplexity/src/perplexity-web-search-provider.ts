@@ -25,33 +25,30 @@ import {
   setProviderWebSearchPluginConfigValue,
   throwWebSearchApiError,
   type SearchConfigRecord,
-  type WebSearchCredentialResolutionSource,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
   withTrustedWebSearchEndpoint,
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+  DEFAULT_PERPLEXITY_BASE_URL,
+  inferPerplexityBaseUrlFromApiKey,
+  isDirectPerplexityBaseUrl,
+  PERPLEXITY_DIRECT_BASE_URL,
+  resolvePerplexityRuntimeTransport,
+  type PerplexityTransport,
+} from "./perplexity-web-search-provider.shared.js";
 
-const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
-const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
-const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
-const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 type PerplexityConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
 };
-
-type PerplexityTransport = "search_api" | "chat_completions";
-type PerplexityBaseUrlHint = "direct" | "openrouter";
 
 type PerplexitySearchResponse = {
   choices?: Array<{
@@ -83,20 +80,6 @@ function resolvePerplexityConfig(searchConfig?: SearchConfigRecord): PerplexityC
   return perplexity && typeof perplexity === "object" && !Array.isArray(perplexity)
     ? (perplexity as PerplexityConfig)
     : {};
-}
-
-function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHint | undefined {
-  if (!apiKey) {
-    return undefined;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(apiKey);
-  if (PERPLEXITY_KEY_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
-    return "direct";
-  }
-  if (OPENROUTER_KEY_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
-    return "openrouter";
-  }
-  return undefined;
 }
 
 function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
@@ -147,16 +130,6 @@ function resolvePerplexityBaseUrl(
 function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
   const model = normalizeOptionalString(perplexity?.model) ?? "";
   return model || DEFAULT_PERPLEXITY_MODEL;
-}
-
-function isDirectPerplexityBaseUrl(baseUrl: string): boolean {
-  try {
-    return (
-      normalizeLowercaseStringOrEmpty(new URL(baseUrl.trim()).hostname) === "api.perplexity.ai"
-    );
-  } catch {
-    return false;
-  }
 }
 
 function resolvePerplexityRequestModel(baseUrl: string, model: string): string {
@@ -334,43 +307,6 @@ async function runPerplexitySearch(params: {
       };
     },
   );
-}
-
-function resolveRuntimeTransport(params: {
-  searchConfig?: Record<string, unknown>;
-  resolvedKey?: string;
-  keySource: WebSearchCredentialResolutionSource;
-  fallbackEnvVar?: string;
-}): PerplexityTransport | undefined {
-  const perplexity = params.searchConfig?.perplexity;
-  const scoped =
-    perplexity && typeof perplexity === "object" && !Array.isArray(perplexity)
-      ? (perplexity as { baseUrl?: string; model?: string })
-      : undefined;
-  const configuredBaseUrl = normalizeOptionalString(scoped?.baseUrl) ?? "";
-  const configuredModel = normalizeOptionalString(scoped?.model) ?? "";
-  const baseUrl = (() => {
-    if (configuredBaseUrl) {
-      return configuredBaseUrl;
-    }
-    if (params.keySource === "env") {
-      if (params.fallbackEnvVar === "PERPLEXITY_API_KEY") {
-        return PERPLEXITY_DIRECT_BASE_URL;
-      }
-      if (params.fallbackEnvVar === "OPENROUTER_API_KEY") {
-        return DEFAULT_PERPLEXITY_BASE_URL;
-      }
-    }
-    if ((params.keySource === "config" || params.keySource === "secretRef") && params.resolvedKey) {
-      return inferPerplexityBaseUrlFromApiKey(params.resolvedKey) === "openrouter"
-        ? DEFAULT_PERPLEXITY_BASE_URL
-        : PERPLEXITY_DIRECT_BASE_URL;
-    }
-    return DEFAULT_PERPLEXITY_BASE_URL;
-  })();
-  return configuredBaseUrl || configuredModel || !isDirectPerplexityBaseUrl(baseUrl)
-    ? "chat_completions"
-    : "search_api";
 }
 
 function createPerplexitySchema(transport?: PerplexityTransport) {
@@ -697,7 +633,7 @@ export function createPerplexityWebSearchProvider(): WebSearchProviderPlugin {
       setProviderWebSearchPluginConfigValue(configTarget, "perplexity", "apiKey", value);
     },
     resolveRuntimeMetadata: (ctx) => ({
-      perplexityTransport: resolveRuntimeTransport({
+      perplexityTransport: resolvePerplexityRuntimeTransport({
         searchConfig: mergeScopedSearchConfig(
           ctx.searchConfig,
           "perplexity",

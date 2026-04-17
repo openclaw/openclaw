@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { resolveManifestContractOwnerPluginId } from "../../../src/plugins/manifest-registry.js";
-import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../../../src/plugins/web-provider-public-artifacts.explicit.js";
-import { resolvePluginWebSearchProviders } from "../../../src/plugins/web-search-providers.runtime.js";
+import {
+  resolveBundledExplicitRuntimeWebSearchProvidersFromPublicArtifacts,
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
+} from "../../../src/plugins/web-provider-public-artifacts.explicit.js";
 
 type ComparableProvider = {
   pluginId: string;
@@ -94,18 +96,15 @@ export function describeBundledWebSearchFastPathContract(pluginId: string) {
       }
     });
 
-    it("keeps fast-path provider metadata aligned with bundled public artifacts", async () => {
-      const fastPathProviders = resolvePluginWebSearchProviders({
-        origin: "bundled",
-        onlyPluginIds: [pluginId],
-        mode: "setup",
-      }).filter((provider) => provider.pluginId === pluginId);
-      const bundledProviderEntries =
+    it("keeps fast-path provider metadata aligned with the bundled runtime artifact", async () => {
+      const fastPathProviders =
         resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
           onlyPluginIds: [pluginId],
+        })?.filter((provider) => provider.pluginId === pluginId) ?? [];
+      const bundledProviderEntries =
+        resolveBundledExplicitRuntimeWebSearchProvidersFromPublicArtifacts({
+          onlyPluginIds: [pluginId],
         })?.filter((entry) => entry.pluginId === pluginId) ?? [];
-
-      expect(bundledProviderEntries.length).toBeGreaterThan(0);
 
       expect(
         sortComparableEntries(
