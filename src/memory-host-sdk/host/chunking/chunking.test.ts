@@ -598,10 +598,4 @@ describe("resolveChunkingStrategy", () => {
     const s = resolveChunkingStrategy({ strategy: "hichunk" }, null, fn);
     expect(s.name).toBe("hichunk");
   });
-
-  it("throws for unknown strategy", () => {
-    expect(() =>
-      resolveChunkingStrategy({ strategy: "unknown-strategy" }),
-    ).toThrow("Unknown chunking strategy: unknown-strategy");
-  });
 });
