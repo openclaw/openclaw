@@ -568,8 +568,8 @@ export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
   try {
     const sharp = await loadSharp();
     return await sharp(buffer).jpeg({ quality: 90, mozjpeg: true }).toBuffer();
-  } catch {
-    return buffer;
+  } catch (err) {
+    throw new Error(`HEIC to JPEG conversion failed: ${String(err)}`, { cause: err });
   }
 }
 
