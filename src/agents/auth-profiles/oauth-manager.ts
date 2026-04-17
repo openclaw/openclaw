@@ -36,10 +36,10 @@ export type ResolvedOAuthAccess = {
 };
 
 export class OAuthManagerRefreshError extends Error {
-  readonly credential: OAuthCredential;
   readonly profileId: string;
   readonly provider: string;
-  readonly refreshedStore: AuthProfileStore;
+  readonly #refreshedStore: AuthProfileStore;
+  readonly #credential: OAuthCredential;
 
   constructor(params: {
     credential: OAuthCredential;
@@ -52,10 +52,27 @@ export class OAuthManagerRefreshError extends Error {
       { cause: params.cause },
     );
     this.name = "OAuthManagerRefreshError";
-    this.credential = params.credential;
+    this.#credential = params.credential;
     this.profileId = params.profileId;
     this.provider = params.credential.provider;
-    this.refreshedStore = params.refreshedStore;
+    this.#refreshedStore = params.refreshedStore;
+  }
+
+  getRefreshedStore(): AuthProfileStore {
+    return this.#refreshedStore;
+  }
+
+  getCredential(): OAuthCredential {
+    return this.#credential;
+  }
+
+  toJSON(): { name: string; message: string; profileId: string; provider: string } {
+    return {
+      name: this.name,
+      message: this.message,
+      profileId: this.profileId,
+      provider: this.provider,
+    };
   }
 }
 
@@ -120,6 +137,60 @@ export function hasUsableOAuthCredential(
     return false;
   }
   return resolveTokenExpiryState(credential.expires, now) === "valid";
+}
+
+function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeAuthEmailToken(value: string | undefined): string | undefined {
+  return normalizeAuthIdentityToken(value)?.toLowerCase();
+}
+
+function hasOAuthIdentity(credential: Pick<OAuthCredential, "accountId" | "email">): boolean {
+  return (
+    normalizeAuthIdentityToken(credential.accountId) !== undefined ||
+    normalizeAuthEmailToken(credential.email) !== undefined
+  );
+}
+
+function hasMatchingOAuthIdentity(
+  existing: Pick<OAuthCredential, "accountId" | "email">,
+  incoming: Pick<OAuthCredential, "accountId" | "email">,
+): boolean {
+  const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
+  const incomingAccountId = normalizeAuthIdentityToken(incoming.accountId);
+  if (existingAccountId !== undefined && incomingAccountId !== undefined) {
+    return existingAccountId === incomingAccountId;
+  }
+
+  const existingEmail = normalizeAuthEmailToken(existing.email);
+  const incomingEmail = normalizeAuthEmailToken(incoming.email);
+  if (existingEmail !== undefined && incomingEmail !== undefined) {
+    return existingEmail === incomingEmail;
+  }
+
+  return false;
+}
+
+export function isSafeToOverwriteStoredOAuthIdentity(
+  existing: OAuthCredential | undefined,
+  incoming: OAuthCredential,
+): boolean {
+  if (!existing || existing.type !== "oauth") {
+    return true;
+  }
+  if (existing.provider !== incoming.provider) {
+    return false;
+  }
+  if (areOAuthCredentialsEquivalent(existing, incoming)) {
+    return true;
+  }
+  if (!hasOAuthIdentity(existing)) {
+    return false;
+  }
+  return hasMatchingOAuthIdentity(existing, incoming);
 }
 
 export function shouldBootstrapFromExternalCliCredential(params: {
@@ -224,6 +295,13 @@ export function resolveEffectiveOAuthCredential(params: {
     });
     return params.credential;
   }
+  if (!isSafeToOverwriteStoredOAuthIdentity(params.credential, imported)) {
+    log.warn("refused external oauth bootstrap credential: identity mismatch or missing binding", {
+      profileId: params.profileId,
+      provider: params.credential.provider,
+    });
+    return params.credential;
+  }
   const shouldBootstrap = shouldBootstrapFromExternalCliCredential({
     existing: params.credential,
     imported,
@@ -322,7 +400,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           if (existing && existing.provider !== params.refreshed.provider) {
             return false;
           }
-          if (existing && !adapter.isSafeToCopyOAuthIdentity(existing, params.refreshed)) {
+          if (existing && !isSafeToOverwriteStoredOAuthIdentity(existing, params.refreshed)) {
             log.warn("refused to mirror OAuth credential: identity mismatch or regression", {
               profileId: params.profileId,
             });
@@ -423,18 +501,33 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           credential: cred,
         });
         if (externallyManaged) {
-          if (
-            shouldReplaceStoredOAuthCredential(cred, externallyManaged) &&
-            !areOAuthCredentialsEquivalent(cred, externallyManaged)
-          ) {
-            store.profiles[params.profileId] = externallyManaged;
-            saveAuthProfileStore(store, params.agentDir);
-          }
-          if (hasUsableOAuthCredential(externallyManaged)) {
-            return {
-              apiKey: await adapter.buildApiKey(externallyManaged.provider, externallyManaged),
-              credential: externallyManaged,
-            };
+          if (externallyManaged.provider !== cred.provider) {
+            log.warn("refused external oauth bootstrap credential: provider mismatch", {
+              profileId: params.profileId,
+              provider: cred.provider,
+            });
+          } else if (!isSafeToOverwriteStoredOAuthIdentity(cred, externallyManaged)) {
+            log.warn(
+              "refused external oauth bootstrap credential: identity mismatch or missing binding",
+              {
+                profileId: params.profileId,
+                provider: cred.provider,
+              },
+            );
+          } else {
+            if (
+              shouldReplaceStoredOAuthCredential(cred, externallyManaged) &&
+              !areOAuthCredentialsEquivalent(cred, externallyManaged)
+            ) {
+              store.profiles[params.profileId] = { ...externallyManaged };
+              saveAuthProfileStore(store, params.agentDir);
+            }
+            if (hasUsableOAuthCredential(externallyManaged)) {
+              return {
+                apiKey: await adapter.buildApiKey(externallyManaged.provider, externallyManaged),
+                credential: externallyManaged,
+              };
+            }
           }
         }
 

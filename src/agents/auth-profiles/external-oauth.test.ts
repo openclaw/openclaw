@@ -130,6 +130,8 @@ describe("auth external oauth helpers", () => {
         access: "fresh-cli-access-token",
         refresh: "fresh-cli-refresh-token",
         expires: createUsableOAuthExpiry(),
+        accountId: "acct-cli",
+        expires: createUsableOAuthExpiry(),
       }),
     );
 
@@ -139,6 +141,7 @@ describe("auth external oauth helpers", () => {
           access: "stale-store-access-token",
           refresh: "stale-store-refresh-token",
           expires: Date.now() - 60_000,
+          accountId: "acct-cli",
         }),
       }),
     );
