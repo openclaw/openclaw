@@ -218,12 +218,22 @@ export const sendHandlers: GatewayRequestHandlers = {
       idempotencyKey: string;
     };
     // Owner status is an authorization signal used to unlock owner-only
-    // channel actions and owner-only tool policy. Derive it from the
-    // authenticated gateway client scopes so a non-admin caller cannot
-    // spoof owner identity by setting `senderIsOwner: true` on the wire.
-    // Any `senderIsOwner` on the request payload is ignored.
+    // channel actions and owner-only tool policy. The legitimate propagation
+    // path is the trusted runtime forwarding a real channel-sender ownership
+    // bit through the gateway RPC — but that wire value must not be honored
+    // for callers who are not already full operators. Per SECURITY.md,
+    // shared-secret bearer and admin-scoped callers get the full default
+    // operator scope set (including `operator.admin`); those callers are
+    // trusted to forward `senderIsOwner`. Narrowly-scoped callers
+    // (e.g. `operator.write`-only, including the gateway-forwarding
+    // least-privilege path) are not trusted to assert ownership, so their
+    // wire value is forced to `false` to prevent a non-admin scoped caller
+    // from unlocking owner-only channel actions by setting
+    // `senderIsOwner: true` on the request.
     const callerScopes = client?.connect?.scopes ?? [];
-    const senderIsOwner = Array.isArray(callerScopes) && callerScopes.includes(ADMIN_SCOPE);
+    const callerIsFullOperator =
+      Array.isArray(callerScopes) && callerScopes.includes(ADMIN_SCOPE);
+    const senderIsOwner = callerIsFullOperator && request.senderIsOwner === true;
     const idem = request.idempotencyKey;
     const dedupeKey = `message.action:${idem}`;
     const cached = context.dedupe.get(dedupeKey);

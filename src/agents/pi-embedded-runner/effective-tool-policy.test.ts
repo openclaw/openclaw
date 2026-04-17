@@ -61,4 +61,35 @@ describe("applyFinalEffectiveToolPolicy", () => {
       "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
     );
   });
+
+  it("drops caller-provided groupId when session encodes no group context (fail-closed)", () => {
+    const warnings: string[] = [];
+    applyFinalEffectiveToolPolicy({
+      bundledTools: [makeTool("mcp__bundle__read")],
+      // Direct/non-group session key: no session-derived group ids. A caller
+      // supplying a groupId here has no server-verified ground truth; it
+      // must be dropped so a spoofed group cannot reach a permissive policy.
+      sessionKey: "agent:alice:main",
+      groupId: "admin-group",
+      groupChannel: "#admin",
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings).toContain(
+      "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
+    );
+  });
+
+  it("leaves groupId untouched when caller did not supply one", () => {
+    const warnings: string[] = [];
+    applyFinalEffectiveToolPolicy({
+      bundledTools: [makeTool("mcp__bundle__read")],
+      sessionKey: "agent:alice:main",
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings).not.toContain(
+      "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
+    );
+  });
 });

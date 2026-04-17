@@ -958,7 +958,7 @@ describe("gateway send mirroring", () => {
     );
   });
 
-  it("ignores client-provided senderIsOwner and derives it from authenticated scopes", async () => {
+  it("forces senderIsOwner=false for narrowly-scoped callers but honors it for full operators", async () => {
     const capture = { senderIsOwner: undefined as boolean | undefined };
     const reactPlugin: ChannelPlugin = {
       id: "whatsapp",
@@ -985,13 +985,17 @@ describe("gateway send mirroring", () => {
       },
     };
     mocks.getChannelPlugin.mockReturnValue(reactPlugin);
+
+    // Narrowly-scoped caller (e.g. gateway-forwarding least-privilege path
+    // that only requests operator.write): wire senderIsOwner=true must be
+    // forced to false so a non-admin scoped caller cannot unlock owner-only
+    // channel actions.
     setActivePluginRegistry(
       createTestRegistry([
         { pluginId: "whatsapp", source: "test", plugin: reactPlugin },
       ]),
       "send-test-owner-derive-non-admin",
     );
-
     await runMessageActionRequest(
       {
         channel: "whatsapp",
@@ -1004,22 +1008,44 @@ describe("gateway send mirroring", () => {
     );
     expect(capture.senderIsOwner).toBe(false);
 
+    // Full operator (admin-scoped): the trusted runtime is allowed to
+    // forward the real channel-sender ownership bit. Wire true → true.
     setActivePluginRegistry(
       createTestRegistry([
         { pluginId: "whatsapp", source: "test", plugin: reactPlugin },
       ]),
-      "send-test-owner-derive-admin",
+      "send-test-owner-derive-admin-true",
     );
     await runMessageActionRequest(
       {
         channel: "whatsapp",
         action: "react",
         params: { chatJid: "+15551234567", messageId: "wamid.y", emoji: "✅" },
-        senderIsOwner: false,
-        idempotencyKey: "idem-owner-derive-admin",
+        senderIsOwner: true,
+        idempotencyKey: "idem-owner-derive-admin-true",
       },
       { connect: { scopes: ["operator.admin"] } },
     );
     expect(capture.senderIsOwner).toBe(true);
+
+    // Full operator forwarding a non-owner sender: wire false → false
+    // (admin scope does not inflate ownership on its own).
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "whatsapp", source: "test", plugin: reactPlugin },
+      ]),
+      "send-test-owner-derive-admin-false",
+    );
+    await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "react",
+        params: { chatJid: "+15551234567", messageId: "wamid.z", emoji: "✅" },
+        senderIsOwner: false,
+        idempotencyKey: "idem-owner-derive-admin-false",
+      },
+      { connect: { scopes: ["operator.admin"] } },
+    );
+    expect(capture.senderIsOwner).toBe(false);
   });
 });
