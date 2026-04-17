@@ -58,6 +58,11 @@ export function shouldUseShellForCommand(cmd, platform = process.platform) {
     return false;
   }
   const extension = path.extname(cmd).toLowerCase();
+  // Use shell if the command path contains spaces (common on Windows with
+  // user directories like "C:\Users\First Last\...") or if it's a batch file.
+  if (cmd.includes(" ")) {
+    return true;
+  }
   return WINDOWS_SHELL_EXTENSIONS.has(extension);
 }
 
