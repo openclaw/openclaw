@@ -190,6 +190,14 @@ async function resolveWorkflowFile(candidate: string, cwd: string) {
   return resolved;
 }
 
+function looksLikeWorkflowFileCandidate(candidate: string) {
+  if (!candidate || /\s/.test(candidate)) {
+    return false;
+  }
+  const ext = path.extname(candidate).toLowerCase();
+  return [".lobster", ".yaml", ".yml", ".json"].includes(ext) || /[\\/]/.test(candidate);
+}
+
 async function detectWorkflowFile(candidate: string, cwd: string) {
   const trimmed = candidate.trim();
   if (!trimmed || trimmed.includes("|")) {
@@ -197,7 +205,10 @@ async function detectWorkflowFile(candidate: string, cwd: string) {
   }
   try {
     return await resolveWorkflowFile(trimmed, cwd);
-  } catch {
+  } catch (error) {
+    if (looksLikeWorkflowFileCandidate(trimmed)) {
+      throw error;
+    }
     return null;
   }
 }

@@ -105,6 +105,67 @@ describe("createEmbeddedLobsterRunner", () => {
     }
   });
 
+  it("surfaces missing file errors for file-like workflow paths", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-runner-"));
+
+    try {
+      const runtime = {
+        runToolRequest: vi.fn(),
+        resumeToolRequest: vi.fn(),
+      };
+
+      const runner = createEmbeddedLobsterRunner({
+        loadRuntime: vi.fn().mockResolvedValue(runtime),
+      });
+
+      await expect(
+        runner.run({
+          action: "run",
+          pipeline: "lobster/missing-workflow.lobster",
+          cwd: tempDir,
+          timeoutMs: 2000,
+          maxStdoutBytes: 4096,
+        }),
+      ).rejects.toThrow(/ENOENT|no such file or directory/i);
+      expect(runtime.runToolRequest).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps inline pipelines with slash-containing args on the pipeline path", async () => {
+    const runtime = {
+      runToolRequest: vi.fn().mockResolvedValue({
+        ok: true,
+        protocolVersion: 1,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+      resumeToolRequest: vi.fn(),
+    };
+
+    const runner = createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(runtime),
+    });
+
+    await runner.run({
+      action: "run",
+      pipeline: "exec --json=true echo docs/tools/lobster.md",
+      cwd: process.cwd(),
+      timeoutMs: 2000,
+      maxStdoutBytes: 4096,
+    });
+
+    expect(runtime.runToolRequest).toHaveBeenCalledWith({
+      pipeline: "exec --json=true echo docs/tools/lobster.md",
+      ctx: expect.objectContaining({
+        cwd: process.cwd(),
+        mode: "tool",
+      }),
+    });
+  });
+
   it("returns a parse error when workflow args are invalid JSON", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-runner-"));
     const workflowPath = path.join(tempDir, "workflow.lobster");
