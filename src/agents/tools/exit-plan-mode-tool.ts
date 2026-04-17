@@ -112,8 +112,17 @@ export function createExitPlanModeTool(_options?: CreateExitPlanModeToolOptions)
       const params = args as Record<string, unknown>;
       const summary = readStringParam(params, "summary");
       const plan = readPlanSteps(params);
+      // PR-8 follow-up: return non-empty content. Empty content arrays
+      // trip third-party transcript-pairing extensions (lossless-claw)
+      // which inject `[lossless-claw] missing tool result` placeholders
+      // into the agent's read-time context. Non-empty content satisfies
+      // the pairing check and keeps the agent's view of past turns clean.
+      const stepCount = plan.length;
+      const text = summary
+        ? `Plan submitted for approval — ${summary} (${stepCount} ${stepCount === 1 ? "step" : "steps"}).`
+        : `Plan submitted for approval (${stepCount} ${stepCount === 1 ? "step" : "steps"}).`;
       return {
-        content: [],
+        content: [{ type: "text" as const, text }],
         details: {
           status: "approval_requested" as const,
           ...(summary ? { summary } : {}),

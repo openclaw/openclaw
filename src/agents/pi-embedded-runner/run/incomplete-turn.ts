@@ -144,6 +144,48 @@ export const AUTO_CONTINUE_FAST_PATH_INSTRUCTION =
 export const STRICT_AGENTIC_BLOCKED_TEXT =
   "Agent stopped after repeated plan-only turns without taking a concrete action. No concrete tool action or external side effect advanced the task.";
 
+// PR-8 follow-up: when the session is in plan mode, the agent must
+// either submit a plan via exit_plan_mode, investigate read-only, or
+// genuinely act. A chat-only acknowledgement ("opening a fresh plan
+// cycle" / "submitting now") followed by no tool call is a
+// behavior-selection drift Eva self-diagnosed across multiple test
+// rounds: conversational reflex winning over plan-mode workflow.
+const PLAN_MODE_ACK_ONLY_MAX_VISIBLE_TEXT = 1500;
+
+// Read-only / planning-supportive tools whose presence proves the
+// agent is genuinely investigating and is allowed to defer
+// exit_plan_mode another turn. update_plan and enter_plan_mode are
+// listed but treated specially below — they do NOT satisfy the
+// "submit a plan" requirement.
+const PLAN_MODE_INVESTIGATIVE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "read",
+  "lcm_grep",
+  "grep",
+  "glob",
+  "ls",
+  "find",
+  "web_search",
+  "web_fetch",
+  "update_plan",
+  "enter_plan_mode",
+]);
+
+export const PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION =
+  "Plan mode is active. Your previous response acknowledged the request but did " +
+  "not call exit_plan_mode. The next response MUST call exit_plan_mode(plan=[...]) " +
+  "with the proposed plan steps. Brief acknowledgement is fine, but the plan body " +
+  "belongs inside the tool call — do not write the plan as chat text. If you need " +
+  "to investigate first, call a read-only tool (read, lcm_grep, web_search) this " +
+  "turn instead of stopping.";
+
+export const PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION_FIRM =
+  "CRITICAL: plan mode is active and you have acknowledged twice without calling " +
+  "exit_plan_mode. You MUST call exit_plan_mode(plan=[...]) in this turn. No more " +
+  "chat-only acknowledgements. If a real blocker prevents producing a plan, state " +
+  "the exact blocker in one sentence so the user can unblock you.";
+
+export const DEFAULT_PLAN_MODE_ACK_ONLY_RETRY_LIMIT = 2;
+
 export type PlanningOnlyPlanDetails = {
   explanation: string;
   steps: string[];
@@ -620,4 +662,116 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     return null;
   }
   return PLANNING_ONLY_RETRY_INSTRUCTION;
+}
+
+/**
+ * PR-8 follow-up: detect "session in plan mode + agent's response had
+ * no exit_plan_mode tool call + no investigative tool call + clean
+ * stop" — the action-selection drift Eva self-diagnosed across
+ * multiple test rounds. Returns a corrective steer for the next
+ * attempt, escalating tone on the second retry.
+ *
+ * The existing planning-only retry mechanism short-circuits in plan
+ * mode (incomplete-turn.ts:568) because "planning IS the desired
+ * state" there. This detector is the sister mechanism specifically
+ * for the plan-mode case: planning IS desired, but the agent must
+ * eventually submit the plan via exit_plan_mode.
+ *
+ * Sister to resolvePlanningOnlyRetryInstruction. Same injection slot
+ * (planningOnlyRetryInstruction in run.ts), one slot multiple
+ * producers — the established pattern.
+ */
+type PlanModeAckOnlyAttempt = Pick<
+  PlanningOnlyAttempt,
+  | "assistantTexts"
+  | "clientToolCall"
+  | "yieldDetected"
+  | "didSendDeterministicApprovalPrompt"
+  | "didSendViaMessagingTool"
+  | "lastToolError"
+  | "lastAssistant"
+  | "toolMetas"
+  | "replayMetadata"
+>;
+
+export function resolvePlanModeAckOnlyRetryInstruction(params: {
+  planModeActive?: boolean;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: PlanModeAckOnlyAttempt;
+  /** 0 = first retry (standard tone), >=1 = firm */
+  retryAttemptIndex: number;
+}): string | null {
+  if (!params.planModeActive) {
+    return null;
+  }
+  if (params.aborted || params.timedOut) {
+    return null;
+  }
+  if (params.attempt.clientToolCall) {
+    return null;
+  }
+  if (params.attempt.yieldDetected) {
+    return null;
+  }
+  if (params.attempt.didSendDeterministicApprovalPrompt) {
+    return null;
+  }
+  if (params.attempt.didSendViaMessagingTool) {
+    return null;
+  }
+  if (params.attempt.lastToolError) {
+    return null;
+  }
+  if (params.attempt.replayMetadata.hadPotentialSideEffects) {
+    return null;
+  }
+
+  const stopReason = params.attempt.lastAssistant?.stopReason;
+  if (stopReason && stopReason !== "stop") {
+    return null;
+  }
+
+  const tools = params.attempt.toolMetas;
+  if (tools.some((t) => t.toolName === "exit_plan_mode")) {
+    return null;
+  }
+
+  // Genuine investigation phase — let the agent keep working.
+  // update_plan and enter_plan_mode do NOT count as investigation.
+  const calledInvestigativeTool = tools.some(
+    (t) =>
+      PLAN_MODE_INVESTIGATIVE_TOOL_NAMES.has(t.toolName) &&
+      t.toolName !== "update_plan" &&
+      t.toolName !== "enter_plan_mode",
+  );
+  if (calledInvestigativeTool) {
+    return null;
+  }
+
+  // Any non-plan tool means the agent is acting (likely shouldn't be
+  // in plan mode at all — let it through, mutation gate will block
+  // bad actions, no need to add re-prompt pressure).
+  const calledNonPlanTool = tools.some((t) => !PLAN_MODE_INVESTIGATIVE_TOOL_NAMES.has(t.toolName));
+  if (calledNonPlanTool) {
+    return null;
+  }
+
+  const text = params.attempt.assistantTexts.join("\n\n").trim();
+  if (text.length === 0) {
+    // Empty-response handler owns this — its own retry mechanism
+    // covers it without our help. Bail to avoid double-fire.
+    return null;
+  }
+  if (text.length > PLAN_MODE_ACK_ONLY_MAX_VISIBLE_TEXT) {
+    // Already-substantive text; agent likely wrote the plan inline as
+    // markdown rather than calling exit_plan_mode. Different failure
+    // mode — out of scope for this detector. The system prompt's
+    // ACTION CONTRACT block is the right surface for that case.
+    return null;
+  }
+
+  return params.retryAttemptIndex >= 1
+    ? PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION_FIRM
+    : PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION;
 }
