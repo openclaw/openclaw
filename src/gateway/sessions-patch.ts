@@ -6,6 +6,7 @@ import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
+import { resolvePlanApproval } from "../agents/plan-mode/index.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -421,6 +422,45 @@ export async function applySessionsPatchToStore(params: {
       }
     } else if (raw !== undefined) {
       return invalid('invalid planMode (use "plan"|"normal" or null)');
+    }
+  }
+
+  // PR-8 follow-up: resolve a pending plan approval. The mode-toggle
+  // pathway above handles user-driven enter/exit; this handles the
+  // user clicking Approve/Reject/Edit on an approval card emitted by
+  // `exit_plan_mode`. Goes through `resolvePlanApproval` from #67538
+  // for the state-machine semantics (rejection cycle counter, terminal-
+  // state guards, approvalId mismatch as no-op, etc.).
+  if ("planApproval" in patch && patch.planApproval !== undefined) {
+    if (!next.planMode) {
+      return invalid("planApproval requires an active plan-mode session");
+    }
+    const planModeEnabled = cfg.agents?.defaults?.planMode?.enabled === true;
+    if (!planModeEnabled) {
+      return invalid(
+        "plan mode is disabled — set `agents.defaults.planMode.enabled: true` to enable",
+      );
+    }
+    const action = patch.planApproval.action;
+    const feedback = normalizeOptionalString(patch.planApproval.feedback) || undefined;
+    const expectedApprovalId = normalizeOptionalString(patch.planApproval.approvalId) || undefined;
+    const resolved = resolvePlanApproval(next.planMode, action, feedback, expectedApprovalId);
+    // resolvePlanApproval returns the same reference when the action is
+    // a no-op (stale approvalId, terminal-state guard, etc.). Detecting
+    // this lets the client distinguish "applied" from "ignored" without
+    // querying the resulting state shape.
+    if (resolved === next.planMode) {
+      return invalid(
+        "planApproval ignored: stale approvalId or session is in a terminal approval state",
+      );
+    }
+    next.planMode = { ...resolved, updatedAt: now };
+    // Approve / edit transition the mode to "normal" — the approval
+    // resolution unlocks mutations. Clear the per-session planMode entry
+    // so subsequent reads see no active plan state (matches the
+    // sessions.patch { planMode: "normal" } semantics).
+    if (next.planMode.mode === "normal") {
+      delete next.planMode;
     }
   }
 

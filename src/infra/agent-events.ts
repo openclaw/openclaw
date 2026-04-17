@@ -56,6 +56,17 @@ export type AgentApprovalEventPhase = "requested" | "resolved";
 export type AgentApprovalEventStatus = "pending" | "unavailable" | "approved" | "denied" | "failed";
 export type AgentApprovalEventKind = "exec" | "plugin" | "unknown";
 
+/**
+ * Plan-step shape carried by plan-kind approval events (PR-8 follow-up).
+ * Mirrors the runtime `update_plan` step shape but kept independent so
+ * `agent-events.ts` doesn't depend on the agents layer.
+ */
+export type AgentApprovalPlanStep = {
+  step: string;
+  status: string;
+  activeForm?: string;
+};
+
 export type AgentApprovalEventData = {
   phase: AgentApprovalEventPhase;
   kind: AgentApprovalEventKind;
@@ -69,6 +80,14 @@ export type AgentApprovalEventData = {
   host?: string;
   reason?: string;
   message?: string;
+  /**
+   * Plan-mode approval payload (PR-8). Present only when `kind === "plugin"`
+   * and the underlying tool was `exit_plan_mode`. The UI/channel renderers
+   * use this to show the plan checklist with Approve/Reject/Edit buttons.
+   */
+  plan?: AgentApprovalPlanStep[];
+  /** One-line summary the agent included with the proposed plan. */
+  summary?: string;
 };
 
 export type AgentCommandOutputEventData = {
@@ -105,6 +124,19 @@ export type AgentEventPayload = {
   sessionKey?: string;
 };
 
+/**
+ * Snapshot of a plan step persisted on the run context for #67514's
+ * merge mode. Stored as a structural type to avoid pulling agent/tool
+ * types into the infra layer. The string-typed `status` matches the
+ * runtime `PLAN_STEP_STATUSES` union exported from
+ * `src/agents/tools/update-plan-tool.ts`.
+ */
+export type PlanStepSnapshot = {
+  step: string;
+  status: string;
+  activeForm?: string;
+};
+
 export type AgentRunContext = {
   sessionKey?: string;
   verboseLevel?: VerboseLevel;
@@ -115,6 +147,13 @@ export type AgentRunContext = {
   registeredAt?: number;
   /** Timestamp of last activity (updated on every emitAgentEvent). */
   lastActiveAt?: number;
+  /**
+   * Last plan steps seen by `update_plan` in this run (#67514). Used by
+   * merge mode to compute the merged plan against the previous state.
+   * In-memory only — survives within a run, cleared with the context.
+   * Disk-persistence (cross-session) is owned by `PlanStore` (#67542).
+   */
+  lastPlanSteps?: PlanStepSnapshot[];
 };
 
 type AgentEventState = {
