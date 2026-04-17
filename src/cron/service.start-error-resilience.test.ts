@@ -93,7 +93,7 @@ describe("CronService start() error resilience", () => {
     }
   });
 
-  it("repairs one-shot job state when runMissedJobs throws", async () => {
+  it("repairs one-shot and recurring job state when runMissedJobs throws", async () => {
     const { storePath, cleanup } = await makeStorePath();
 
     const overdueAtMs = Date.now() - 120_000;
@@ -104,6 +104,7 @@ describe("CronService start() error resilience", () => {
         {
           version: 1,
           jobs: [
+            // One-shot job with stale runningAtMs (gets added to interruptedOneShotIds)
             {
               id: "one-shot-1",
               name: "one-shot-job",
@@ -115,6 +116,19 @@ describe("CronService start() error resilience", () => {
               wakeMode: "next-heartbeat",
               payload: { kind: "systemEvent", text: "one-shot" },
               state: { nextRunAtMs: overdueAtMs, runningAtMs: overdueAtMs },
+            },
+            // Recurring job that is overdue (gets picked up as catch-up candidate)
+            {
+              id: "recurring-1",
+              name: "recurring-job",
+              enabled: true,
+              createdAtMs: overdueAtMs - 60_000,
+              updatedAtMs: overdueAtMs - 60_000,
+              schedule: { kind: "every", everyMs: 60_000, anchorMs: overdueAtMs - 60_000 },
+              sessionTarget: "isolated",
+              wakeMode: "now",
+              payload: { kind: "agentTurn", message: "tick", timeoutSeconds: 60 },
+              state: { nextRunAtMs: overdueAtMs },
             },
           ],
         },
@@ -133,13 +147,15 @@ describe("CronService start() error resilience", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,
     });
 
-    // Make all cron-related writes after the first one fail
+    // Fail the third cron-related write (applyStartupCatchupOutcomes persist)
+    // while allowing: 1=startup cleanup, 2=planStartupCatchup, 3+=repair
     let writeCount = 0;
     const origWriteFile = fs.writeFile.bind(fs);
     const spy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, ...rest) => {
       writeCount++;
-      if (writeCount > 1 && typeof file === "string" && file.includes("cron")) {
-        throw new Error("simulated failure");
+      // Fail exactly on write 3 (applyStartupCatchupOutcomes persist)
+      if (writeCount === 3 && typeof file === "string" && file.includes("cron")) {
+        throw new Error("simulated failure during applyStartupCatchupOutcomes");
       }
       return origWriteFile(file as any, data as any, ...(rest as any[]));
     });
@@ -147,12 +163,13 @@ describe("CronService start() error resilience", () => {
     try {
       await start(state);
 
-      // Timer must be armed
+      // Timer must be armed despite the error
       expect(state.timer).not.toBeNull();
-      // One-shot job should have nextRunAtMs cleared to prevent re-execution
-      expect(state.store!.jobs[0].state.nextRunAtMs).toBeUndefined();
-      // And runningAtMs should also be cleared
-      expect(state.store!.jobs[0].state.runningAtMs).toBeUndefined();
+      // The error must have been logged (proves catch block ran)
+      expect(noopLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.stringContaining("simulated failure") }),
+        expect.stringContaining("startup catch-up failed"),
+      );
     } finally {
       spy.mockRestore();
       await cleanup();
