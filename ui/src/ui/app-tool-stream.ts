@@ -447,6 +447,80 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
   }, FALLBACK_TOAST_DURATION_MS);
 }
 
+/**
+ * PR-8 / #67721: plan approval request emitted from the runtime when
+ * the agent calls `exit_plan_mode`. Stored on the host so the chat
+ * view can render an Approve/Reject/Edit overlay tied to the active
+ * session.
+ */
+export type PlanApprovalRequest = {
+  approvalId: string;
+  sessionKey: string;
+  toolCallId?: string;
+  title: string;
+  summary?: string;
+  plan: Array<{ step: string; status: string; activeForm?: string }>;
+  receivedAt: number;
+};
+
+type PlanApprovalHost = ToolStreamHost & {
+  planApprovalRequest: PlanApprovalRequest | null;
+};
+
+function handlePlanApprovalEvent(host: PlanApprovalHost, payload: AgentEventPayload): void {
+  const data = payload.data ?? {};
+  if (data.kind !== "plugin" || data.phase !== "requested") {
+    return;
+  }
+  const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
+  if (!sessionKey || sessionKey !== host.sessionKey) {
+    return;
+  }
+  const rawPlan = data.plan;
+  if (!Array.isArray(rawPlan) || rawPlan.length === 0) {
+    return;
+  }
+  const plan: PlanApprovalRequest["plan"] = [];
+  for (const entry of rawPlan) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const step = (entry as Record<string, unknown>).step;
+    const status = (entry as Record<string, unknown>).status;
+    const activeForm = (entry as Record<string, unknown>).activeForm;
+    if (typeof step !== "string" || typeof status !== "string") {
+      continue;
+    }
+    plan.push({
+      step,
+      status,
+      ...(typeof activeForm === "string" && activeForm.trim() ? { activeForm } : {}),
+    });
+  }
+  if (plan.length === 0) {
+    return;
+  }
+  const approvalId =
+    typeof data.approvalId === "string" && data.approvalId.trim() ? data.approvalId : "";
+  if (!approvalId) {
+    return;
+  }
+  const title = typeof data.title === "string" && data.title.trim() ? data.title : "Plan approval";
+  const summary =
+    typeof data.summary === "string" && data.summary.trim() ? data.summary : undefined;
+  const toolCallId =
+    typeof data.toolCallId === "string" && data.toolCallId.trim() ? data.toolCallId : undefined;
+  host.planApprovalRequest = {
+    approvalId,
+    sessionKey,
+    title,
+    plan,
+    receivedAt: Date.now(),
+    ...(summary ? { summary } : {}),
+    ...(toolCallId ? { toolCallId } : {}),
+  };
+}
+
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
   if (!payload) {
     return;
@@ -466,6 +540,11 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
 
   if (payload.stream === "fallback") {
     handleLifecycleFallbackEvent(host as CompactionHost, payload);
+    return;
+  }
+
+  if (payload.stream === "approval") {
+    handlePlanApprovalEvent(host as PlanApprovalHost, payload);
     return;
   }
 
