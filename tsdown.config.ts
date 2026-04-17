@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
@@ -27,6 +28,27 @@ type OnLogFunction = InputOptionsArg extends { onLog?: infer OnLog } ? NonNullab
 
 const env = {
   NODE_ENV: "production",
+};
+
+function resolveBuildTimeCommit(): string | undefined {
+  const envCommit = process.env.GIT_COMMIT?.trim() || process.env.GIT_SHA?.trim();
+  let raw = envCommit ?? "";
+  if (!raw) {
+    try {
+      raw = execSync("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] })
+        .toString()
+        .trim();
+    } catch {
+      raw = "";
+    }
+  }
+  const match = raw.match(/[0-9a-fA-F]{7,40}/);
+  return match ? match[0].slice(0, 7).toLowerCase() : undefined;
+}
+
+const BUILD_TIME_COMMIT = resolveBuildTimeCommit();
+const BUILD_TIME_DEFINES: Record<string, string> = {
+  __OPENCLAW_GIT_COMMIT__: BUILD_TIME_COMMIT ? JSON.stringify(BUILD_TIME_COMMIT) : "undefined",
 };
 
 const SUPPRESSED_EVAL_WARNING_PATHS = [
@@ -85,6 +107,7 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
   return {
     ...config,
     env,
+    define: { ...BUILD_TIME_DEFINES, ...config.define },
     fixedExtension: false,
     platform: "node",
     inputOptions: buildInputOptions,

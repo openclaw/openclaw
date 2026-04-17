@@ -383,4 +383,70 @@ describe("git commit resolution", () => {
 
     expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("ccccccc");
   });
+
+  it("prefers injected build-time commit over live git and build-info", async () => {
+    const temp = await makeTempDir("git-commit-injected-priority");
+    const repoRoot = path.join(temp, "repo");
+    await makeFakeGitRepo(repoRoot, {
+      head: "0123456789abcdef0123456789abcdef01234567\n",
+    });
+
+    expect(
+      resolveCommitHash({
+        cwd: repoRoot,
+        env: {},
+        readers: {
+          readInjectedCommit: () => "abc1234",
+          readBuildInfoCommit: () => "deadbee",
+        },
+      }),
+    ).toBe("abc1234");
+  });
+
+  it("env GIT_COMMIT still overrides an injected build-time commit", async () => {
+    const temp = await makeTempDir("git-commit-injected-env-override");
+    expect(
+      resolveCommitHash({
+        cwd: temp,
+        env: { GIT_COMMIT: "feedfac" },
+        readers: {
+          readInjectedCommit: () => "abc1234",
+        },
+      }),
+    ).toBe("feedfac");
+  });
+
+  it("falls through to live git when no build-time commit was injected", async () => {
+    const temp = await makeTempDir("git-commit-injected-absent");
+    const repoRoot = path.join(temp, "repo");
+    await makeFakeGitRepo(repoRoot, {
+      head: "0123456789abcdef0123456789abcdef01234567\n",
+    });
+
+    expect(
+      resolveCommitHash({
+        cwd: repoRoot,
+        env: {},
+        readers: {
+          readInjectedCommit: () => null,
+          readBuildInfoCommit: () => "deadbee",
+        },
+      }),
+    ).toBe("0123456");
+  });
+
+  it("caches injected build-time commit results per resolved search directory", async () => {
+    const temp = await makeTempDir("git-commit-injected-cache");
+    const readInjectedCommit = vi.fn(() => "abc1234");
+
+    expect(resolveCommitHash({ cwd: temp, env: {}, readers: { readInjectedCommit } })).toBe(
+      "abc1234",
+    );
+    const firstCallReads = readInjectedCommit.mock.calls.length;
+    expect(firstCallReads).toBeGreaterThan(0);
+    expect(resolveCommitHash({ cwd: temp, env: {}, readers: { readInjectedCommit } })).toBe(
+      "abc1234",
+    );
+    expect(readInjectedCommit.mock.calls.length).toBe(firstCallReads);
+  });
 });
