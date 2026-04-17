@@ -36,11 +36,8 @@ type MockedSendExecFinishedEvent = Mock<HandleSystemRunInvokeOptions["sendExecFi
 type MockedSendNodeEvent = Mock<HandleSystemRunInvokeOptions["sendNodeEvent"]>;
 
 describe("formatSystemRunAllowlistMissMessage", () => {
-  it("returns legacy allowlist miss message by default", () => {
+  it("returns the default message and cmd.exe guidance variant", () => {
     expect(formatSystemRunAllowlistMissMessage()).toBe("SYSTEM_RUN_DENIED: allowlist miss");
-  });
-
-  it("adds Windows shell-wrapper guidance when blocked by cmd.exe policy", () => {
     expect(
       formatSystemRunAllowlistMissMessage({
         windowsShellWrapperBlocked: true,
@@ -955,8 +952,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
-  for (const runtime of ["bun", "deno", "tsx", "jiti"] as const) {
-    it(`validates approved ${runtime} script operand stability`, async () => {
+  it("validates approved runtime script operand stability", async () => {
+    for (const runtime of ["bun", "deno", "tsx", "jiti"] as const) {
       await withFakeRuntimeOnPath({
         runtime,
         run: async () => {
@@ -1024,8 +1021,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           }
         },
       });
-    });
-  }
+    }
+  });
 
   it("denies approval-based execution when tsx is missing a required mutable script binding", async () => {
     await withFakeRuntimeOnPath({
@@ -1172,7 +1169,13 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       process.platform === "win32"
         ? ["cmd.exe", "/d", "/s", "/c", "echo ok"]
         : ["/bin/sh", "-lc", "echo ok"];
-    const cases = [
+    const cases: Array<{
+      label: string;
+      command?: string[];
+      env?: Record<string, string>;
+      message: string;
+      details: string[];
+    }> = [
       {
         label: "blocked override",
         env: { CLASSPATH: "/tmp/evil-classpath" },
@@ -1286,26 +1289,24 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
   }
 
-  it("denies env-wrapped shell payloads at the dispatch depth boundary", async () => {
+  it("denies env-wrapped shell payloads at and past the dispatch depth boundary", async () => {
     if (process.platform === "win32") {
       return;
     }
-    await expectNestedEnvShellDenied({
-      depth: 4,
-      markerName: "depth4-pwned.txt",
-      errorLabel: "runCommand should not be called for depth-boundary shell wrappers",
-    });
-  });
-
-  it("denies nested env shell payloads when wrapper depth is exceeded", async () => {
-    if (process.platform === "win32") {
-      return;
+    for (const testCase of [
+      {
+        depth: 4,
+        markerName: "depth4-pwned.txt",
+        errorLabel: "runCommand should not be called for depth-boundary shell wrappers",
+      },
+      {
+        depth: 5,
+        markerName: "pwned.txt",
+        errorLabel: "runCommand should not be called for nested env depth overflow",
+      },
+    ]) {
+      await expectNestedEnvShellDenied(testCase);
     }
-    await expectNestedEnvShellDenied({
-      depth: 5,
-      markerName: "pwned.txt",
-      errorLabel: "runCommand should not be called for nested env depth overflow",
-    });
   });
 
   it("requires explicit approval for strict inline-eval carriers", async () => {
