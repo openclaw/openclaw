@@ -1,31 +1,78 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const listChatChannels = vi.hoisted(() => vi.fn(() => [{ id: "discord" }, { id: "bluebubbles" }]));
-
-vi.mock("../channels/chat-meta.js", () => ({
-  listChatChannels: () => listChatChannels(),
-}));
-
-vi.mock("../channels/registry.js", () => ({
-  formatChannelPrimerLine: vi.fn(() => ""),
-  formatChannelSelectionLine: vi.fn(() => ""),
-}));
-
-vi.mock("../commands/channel-setup/discovery.js", () => ({
-  resolveChannelSetupEntries: vi.fn(() => ({
+const listChatChannels = vi.hoisted(() =>
+  vi.fn(() => [
+    { id: "discord", label: "Discord" },
+    { id: "bluebubbles", label: "BlueBubbles" },
+  ]),
+);
+const resolveChannelSetupEntries = vi.hoisted(() =>
+  vi.fn(() => ({
     entries: [],
     installedCatalogEntries: [],
     installableCatalogEntries: [],
     installedCatalogById: new Map(),
     installableCatalogById: new Map(),
   })),
+);
+const formatChannelPrimerLine = vi.hoisted(() =>
+  vi.fn((meta: { label: string; blurb: string }) => `${meta.label}: ${meta.blurb}`),
+);
+const formatChannelSelectionLine = vi.hoisted(() =>
+  vi.fn((meta: { label: string; blurb: string }) => `${meta.label} — ${meta.blurb}`),
+);
+const isChannelConfigured = vi.hoisted(() => vi.fn(() => false));
+
+vi.mock("../channels/chat-meta.js", () => ({
+  listChatChannels: () => listChatChannels(),
+}));
+
+vi.mock("../channels/registry.js", () => ({
+  formatChannelPrimerLine: (meta: unknown) => formatChannelPrimerLine(meta),
+  formatChannelSelectionLine: (meta: unknown, docsLink: unknown) =>
+    formatChannelSelectionLine(meta, docsLink),
+}));
+
+vi.mock("../commands/channel-setup/discovery.js", () => ({
+  resolveChannelSetupEntries: (params: unknown) => resolveChannelSetupEntries(params),
   shouldShowChannelInSetup: (meta: { exposure?: { setup?: boolean }; showInSetup?: boolean }) =>
     meta.showInSetup !== false && meta.exposure?.setup !== false,
 }));
 
-import { resolveChannelSetupSelectionContributions } from "./channel-setup.status.js";
+vi.mock("../config/channel-configured.js", () => ({
+  isChannelConfigured: (cfg: unknown, channelId: string) => isChannelConfigured(cfg, channelId),
+}));
+
+import {
+  collectChannelStatus,
+  noteChannelPrimer,
+  resolveChannelSelectionNoteLines,
+  resolveChannelSetupSelectionContributions,
+} from "./channel-setup.status.js";
 
 describe("resolveChannelSetupSelectionContributions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listChatChannels.mockReturnValue([
+      { id: "discord", label: "Discord" },
+      { id: "bluebubbles", label: "BlueBubbles" },
+    ]);
+    resolveChannelSetupEntries.mockReturnValue({
+      entries: [],
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
+    });
+    formatChannelPrimerLine.mockImplementation(
+      (meta: { label: string; blurb: string }) => `${meta.label}: ${meta.blurb}`,
+    );
+    formatChannelSelectionLine.mockImplementation(
+      (meta: { label: string; blurb: string }) => `${meta.label} — ${meta.blurb}`,
+    );
+    isChannelConfigured.mockReturnValue(false);
+  });
+
   it("sorts channels alphabetically by picker label", () => {
     const contributions = resolveChannelSetupSelectionContributions({
       entries: [
@@ -134,5 +181,131 @@ describe("resolveChannelSetupSelectionContributions", () => {
       label: "Zalo\\nBot",
       hint: "configured\\nnow · disabled",
     });
+  });
+
+  it("sanitizes the picker fallback label when metadata sanitizes to empty", () => {
+    const contributions = resolveChannelSetupSelectionContributions({
+      entries: [
+        {
+          id: "bad\u001B[31m\nid",
+          meta: {
+            id: "bad\u001B[31m\nid",
+            label: "\u001B[31m\u0007",
+          },
+        },
+      ] as never,
+      statusByChannel: new Map(),
+      resolveDisabledHint: () => undefined,
+    });
+
+    expect(contributions[0]?.option).toEqual({
+      value: "bad\u001B[31m\nid",
+      label: "bad\\nid",
+    });
+  });
+
+  it("sanitizes channel labels in status note lines", async () => {
+    listChatChannels.mockReturnValue([{ id: "discord", label: "Discord\u001B[31m\nCore\u0007" }]);
+    resolveChannelSetupEntries.mockReturnValue({
+      entries: [],
+      installedCatalogEntries: [
+        {
+          id: "matrix",
+          pluginId: "matrix",
+          meta: { id: "matrix", label: "Matrix\u001B[2K\nPlugin\u0007" },
+        },
+      ],
+      installableCatalogEntries: [
+        {
+          id: "zalo",
+          pluginId: "zalo",
+          meta: { id: "zalo", label: "Zalo\u001B[2K\nPlugin\u0007" },
+        },
+      ],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
+    });
+
+    const summary = await collectChannelStatus({
+      cfg: {} as never,
+      accountOverrides: {},
+      installedPlugins: [],
+    });
+
+    expect(summary.statusLines).toEqual([
+      "Discord\\nCore: not configured",
+      "Matrix\\nPlugin: installed",
+      "Zalo\\nPlugin: install plugin to enable",
+    ]);
+  });
+
+  it("sanitizes channel metadata before primer notes", async () => {
+    const note = vi.fn(async () => undefined);
+
+    await noteChannelPrimer(
+      { note } as never,
+      [
+        {
+          id: "bad\u001B[31m\nid",
+          label: "\u001B[31m\u0007",
+          blurb: "Blurb\u001B[2K\nline\u0007",
+        },
+      ] as never,
+    );
+
+    expect(formatChannelPrimerLine).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "bad\\nid",
+        label: "bad\\nid",
+        selectionLabel: "bad\\nid",
+        blurb: "Blurb\\nline",
+      }),
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("bad\\nid: Blurb\\nline"),
+      "How channels work",
+    );
+  });
+
+  it("sanitizes channel metadata before selection notes", () => {
+    resolveChannelSetupEntries.mockReturnValue({
+      entries: [
+        {
+          id: "zalo",
+          meta: {
+            id: "zalo",
+            label: "Zalo\u001B[31m\nBot\u0007",
+            selectionLabel: "Zalo",
+            docsPath: "/channels/zalo",
+            docsLabel: "Docs\u001B[2K\nLabel",
+            blurb: "Setup\u001B[2K\nhelp\u0007",
+            selectionDocsPrefix: "Docs\u001B[2K\nPrefix",
+            selectionExtras: ["Extra\u001B[2K\nOne", "\u001B[31m\u0007"],
+          },
+        },
+      ],
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
+    });
+
+    const lines = resolveChannelSelectionNoteLines({
+      cfg: {} as never,
+      installedPlugins: [],
+      selection: ["zalo"],
+    });
+
+    expect(formatChannelSelectionLine).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: "Zalo\\nBot",
+        blurb: "Setup\\nhelp",
+        docsLabel: "Docs\\nLabel",
+        selectionDocsPrefix: "Docs\\nPrefix",
+        selectionExtras: ["Extra\\nOne"],
+      }),
+      expect.any(Function),
+    );
+    expect(lines).toEqual(["Zalo\\nBot — Setup\\nhelp"]);
   });
 });

@@ -3,6 +3,7 @@ import { listChatChannels } from "../channels/chat-meta.js";
 import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
 import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
+import type { ChannelMeta } from "../channels/plugins/types.core.js";
 import { formatChannelPrimerLine, formatChannelSelectionLine } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveChannelSetupEntries } from "../commands/channel-setup/discovery.js";
@@ -69,7 +70,11 @@ function buildChannelSetupSelectionContribution(params: {
 }
 
 function formatSetupSelectionLabel(label: string, fallback: string): string {
-  return sanitizeTerminalText(label) || fallback;
+  return (
+    sanitizeTerminalText(label).trim() ||
+    sanitizeTerminalText(fallback).trim() ||
+    "<invalid channel>"
+  );
 }
 
 function formatSetupSelectionHint(hint: string | undefined): string | undefined {
@@ -77,6 +82,49 @@ function formatSetupSelectionHint(hint: string | undefined): string | undefined 
     return undefined;
   }
   return sanitizeTerminalText(hint) || undefined;
+}
+
+function formatSetupDisplayText(value: string | undefined, fallback = ""): string {
+  return (
+    sanitizeTerminalText(value ?? "").trim() ||
+    sanitizeTerminalText(fallback).trim() ||
+    "<invalid channel>"
+  );
+}
+
+function formatSetupFreeText(value: string | undefined): string {
+  return sanitizeTerminalText(value ?? "").trim();
+}
+
+function formatSetupOptionalDisplayText(value: string | undefined): string | undefined {
+  const safe = sanitizeTerminalText(value ?? "").trim();
+  return safe || undefined;
+}
+
+function formatSetupDisplayList(values: readonly string[] | undefined): string[] | undefined {
+  const safe = (values ?? []).flatMap((value) => {
+    const sanitized = formatSetupOptionalDisplayText(value);
+    return sanitized ? [sanitized] : [];
+  });
+  return safe.length > 0 ? safe : undefined;
+}
+
+function formatSetupDisplayMeta(meta: ChannelMeta): ChannelMeta {
+  const safeId = formatSetupDisplayText(meta.id, "<invalid channel>");
+  const safeLabel = formatSetupDisplayText(meta.label, safeId);
+  const safeSelectionDocsPrefix = formatSetupOptionalDisplayText(meta.selectionDocsPrefix);
+  const safeSelectionExtras = formatSetupDisplayList(meta.selectionExtras);
+  return {
+    ...meta,
+    id: safeId,
+    label: safeLabel,
+    selectionLabel: formatSetupDisplayText(meta.selectionLabel, safeLabel),
+    docsPath: formatSetupDisplayText(meta.docsPath, "/"),
+    ...(meta.docsLabel ? { docsLabel: formatSetupDisplayText(meta.docsLabel, safeId) } : {}),
+    blurb: formatSetupFreeText(meta.blurb),
+    ...(safeSelectionDocsPrefix ? { selectionDocsPrefix: safeSelectionDocsPrefix } : {}),
+    ...(safeSelectionExtras ? { selectionExtras: safeSelectionExtras } : {}),
+  };
 }
 
 export async function collectChannelStatus(params: {
@@ -125,7 +173,7 @@ export async function collectChannelStatus(params: {
       return {
         channel: meta.id,
         configured,
-        statusLines: [`${meta.label}: ${statusLabel}`],
+        statusLines: [`${formatSetupSelectionLabel(meta.label, meta.id)}: ${statusLabel}`],
         selectionHint: configured ? "configured · plugin disabled" : "not configured",
         quickstartScore: 0,
       };
@@ -146,7 +194,7 @@ export async function collectChannelStatus(params: {
       return {
         channel: entry.id as ChannelChoice,
         configured,
-        statusLines: [`${entry.meta.label}: ${statusLabel}`],
+        statusLines: [`${formatSetupSelectionLabel(entry.meta.label, entry.id)}: ${statusLabel}`],
         selectionHint: statusLabel,
         quickstartScore: 0,
       };
@@ -154,7 +202,9 @@ export async function collectChannelStatus(params: {
   const catalogStatuses = installableCatalogEntries.map((entry) => ({
     channel: entry.id,
     configured: false,
-    statusLines: [`${entry.meta.label}: install plugin to enable`],
+    statusLines: [
+      `${formatSetupSelectionLabel(entry.meta.label, entry.id)}: install plugin to enable`,
+    ],
     selectionHint: "plugin · install",
     quickstartScore: 0,
   }));
@@ -200,13 +250,15 @@ export async function noteChannelPrimer(
   channels: Array<{ id: ChannelChoice; blurb: string; label: string }>,
 ): Promise<void> {
   const channelLines = channels.map((channel) =>
-    formatChannelPrimerLine({
-      id: channel.id,
-      label: channel.label,
-      selectionLabel: channel.label,
-      docsPath: "/",
-      blurb: channel.blurb,
-    }),
+    formatChannelPrimerLine(
+      formatSetupDisplayMeta({
+        id: channel.id,
+        label: channel.label,
+        selectionLabel: channel.label,
+        docsPath: "/",
+        blurb: channel.blurb,
+      }),
+    ),
   );
   await prompter.note(
     [
@@ -251,7 +303,10 @@ export function resolveChannelSelectionNoteLines(params: {
   });
   const selectionNotes = new Map<string, string>();
   for (const entry of entries) {
-    selectionNotes.set(entry.id, formatChannelSelectionLine(entry.meta, formatDocsLink));
+    selectionNotes.set(
+      entry.id,
+      formatChannelSelectionLine(formatSetupDisplayMeta(entry.meta), formatDocsLink),
+    );
   }
   return params.selection
     .map((channel) => selectionNotes.get(channel))
