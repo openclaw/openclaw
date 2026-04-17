@@ -2,10 +2,11 @@ import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { TableColumn } from "../terminal/table.js";
+import { resolvePreferredStatusA2AInput } from "./status.a2a-input.js";
+import type { SessionStatus, StatusContributorSummary, StatusSummary } from "./status.types.js";
 import type { HealthSummary } from "./health.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import type { MemoryStatusSnapshot, MemoryPluginStatus } from "./status.scan.shared.js";
-import type { A2AStatusSummary, SessionStatus, StatusContributorSummary, StatusSummary } from "./status.types.js";
 
 type AgentStatusLike = {
   defaultId?: string | null;
@@ -109,22 +110,6 @@ function listStatusContributorDetails(contributor: StatusContributorSummary): st
     : [];
 }
 
-function findStatusContributor(params: {
-  contributors: StatusContributorSummary[] | undefined;
-  id?: string;
-  label?: string;
-}): StatusContributorSummary | undefined {
-  const contributors = Array.isArray(params.contributors) ? params.contributors : [];
-  const targetId = normalizeLowercaseStringOrEmpty(params.id);
-  const targetLabel = normalizeLowercaseStringOrEmpty(params.label);
-  return contributors.find((contributor) => {
-    const idMatches = targetId.length > 0 && normalizeLowercaseStringOrEmpty(contributor.id) === targetId;
-    const labelMatches =
-      targetLabel.length > 0 && normalizeLowercaseStringOrEmpty(contributor.label) === targetLabel;
-    return idMatches || labelMatches;
-  });
-}
-
 function buildStatusContributorOverviewValue(params: {
   contributor: StatusContributorSummary;
   ok: (value: string) => string;
@@ -138,70 +123,6 @@ function buildStatusContributorOverviewValue(params: {
     muted: params.muted,
   });
   return [summary, ...listStatusContributorDetails(params.contributor)].filter(Boolean).join(" · ");
-}
-
-function buildStatusA2AFallbackContributor(params: {
-  summary: Pick<SummaryLike, "a2a">;
-  warn: (value: string) => string;
-  muted: (value: string) => string;
-}): StatusContributorSummary {
-  const a2a = params.summary.a2a;
-  const state: StatusContributorSummary["state"] =
-    a2a.state === "ok"
-      ? "ok"
-      : a2a.state === "delayed" || a2a.state === "waiting_external"
-        ? "warn"
-        : a2a.state === "failed" || a2a.state === "config_error"
-          ? "error"
-          : "info";
-  const labelByState: Record<A2AStatusSummary["state"], string> = {
-    ok: "ok",
-    delayed: "delayed",
-    waiting_external: "waiting external",
-    failed: "failed",
-    config_error: "config error",
-  };
-  const details = [`broker ${a2a.broker.adapterEnabled ? "on" : "off"}`];
-  if (a2a.tasks.active > 0) {
-    details.push(`${a2a.tasks.active} active`);
-  } else {
-    details.push(params.muted("no active"));
-  }
-  if (a2a.tasks.waitingExternal > 0) {
-    details.push(`${a2a.tasks.waitingExternal} waiting external`);
-  }
-  if (a2a.tasks.delayed > 0) {
-    details.push(`${a2a.tasks.delayed} delayed`);
-  }
-  if (a2a.tasks.failed > 0) {
-    details.push(params.warn(`${a2a.tasks.failed} failed`));
-  }
-  if (a2a.state === "config_error") {
-    const configHints: string[] = [];
-    if (!a2a.broker.baseUrlPresent) {
-      configHints.push("baseUrl missing");
-    }
-    if (!a2a.broker.methodScopesOk) {
-      configHints.push("scope map missing");
-    }
-    if (configHints.length > 0) {
-      details.push(configHints.join(", "));
-    }
-  } else if (a2a.tasks.latestFailed) {
-    const detail =
-      a2a.tasks.latestFailed.errorMessage ??
-      a2a.tasks.latestFailed.errorCode ??
-      a2a.tasks.latestFailed.summary ??
-      a2a.tasks.latestFailed.taskId;
-    details.push(`latest ${detail}`);
-  }
-  return {
-    id: "a2a",
-    label: "A2A",
-    state,
-    summary: labelByState[a2a.state],
-    details,
-  };
 }
 
 export function buildStatusContributorOverviewRows(params: {
@@ -240,19 +161,30 @@ export function buildStatusA2AValue(params: {
   warn: (value: string) => string;
   muted: (value: string) => string;
 }) {
-  const contributor =
-    findStatusContributor({
-      contributors: params.summary.contributors,
+  const input = resolvePreferredStatusA2AInput({ summary: params.summary });
+  if (!input) {
+    return "";
+  }
+  const details =
+    input.source === "summary.a2a"
+      ? input.details.map((detail) => {
+          if (detail === "no active") {
+            return params.muted(detail);
+          }
+          if (/^\d+ failed$/.test(detail)) {
+            return params.warn(detail);
+          }
+          return detail;
+        })
+      : input.details;
+  return buildStatusContributorOverviewValue({
+    contributor: {
       id: "a2a",
       label: "A2A",
-    }) ??
-    buildStatusA2AFallbackContributor({
-      summary: params.summary,
-      warn: params.warn,
-      muted: params.muted,
-    });
-  return buildStatusContributorOverviewValue({
-    contributor,
+      state: input.state,
+      summary: input.summary,
+      details,
+    },
     ok: params.ok,
     warn: params.warn,
     muted: params.muted,

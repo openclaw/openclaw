@@ -39,6 +39,35 @@ const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() =>
   vi.fn((_params?: { provider?: string }) => null as { apiKey: string; source: string } | null),
 );
 
+const defaultStatusSummary = () => ({
+  contributors: [],
+  a2a: {
+    state: "ok",
+    tasks: {
+      total: 0,
+      active: 0,
+      failed: 0,
+      waitingExternal: 0,
+      delayed: 0,
+      latestFailed: null,
+    },
+    issues: {
+      brokerUnreachable: 0,
+      reconcileFailed: 0,
+      deliveryFailed: 0,
+      cancelNotAttempted: 0,
+      sessionAbortFailed: 0,
+    },
+    broker: {
+      pluginEnabled: true,
+      adapterEnabled: true,
+      baseUrlPresent: true,
+      edgeSecretPresent: true,
+      methodScopesOk: true,
+    },
+  },
+});
+
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
   agents: {
@@ -660,6 +689,62 @@ describe("session_status tool", () => {
     expect(text).toContain("🔁 A2A: broker off, 1 recent failure");
     expect(text).toContain("[failed]");
     expect(text).toContain("Permission denied by operator policy");
+  });
+
+
+  it("prefers injected contributor-first A2A summary over legacy session index output", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    });
+    const env = await makeA2AEnv();
+    await writeA2ATaskLog({
+      env,
+      sessionKey: "agent:main:main",
+      taskId: "task-active",
+      at: 10,
+      events: [
+        createA2ATaskAcceptedEvent({ taskId: "task-active", at: 11 }),
+        createA2AWorkerStartedEvent({ taskId: "task-active", at: 12 }),
+      ],
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:main:main",
+      statusSummary: {
+        ...defaultStatusSummary(),
+        contributors: [
+          {
+            id: "a2a",
+            label: "A2A",
+            state: "info",
+            summary: "plugin-owned broker status",
+            details: ["1 active"],
+          },
+        ],
+        a2a: {
+          ...defaultStatusSummary().a2a,
+          state: "failed",
+          broker: {
+            ...defaultStatusSummary().a2a.broker,
+            adapterEnabled: false,
+          },
+          tasks: {
+            ...defaultStatusSummary().a2a.tasks,
+            failed: 1,
+          },
+        },
+      },
+    });
+    const result = await tool.execute("tc-a2a-summary", { sessionKey: "agent:main:main" });
+    const firstContent = result.content?.[0];
+    const text = (firstContent as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("🔁 A2A: plugin-owned broker status · 1 active");
+    expect(text).not.toContain("[running]");
+    expect(text).not.toContain("broker off");
   });
 
   it("hides stale completed task rows from session_status output", async () => {

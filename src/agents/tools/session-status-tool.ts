@@ -7,6 +7,11 @@ import type {
 } from "../../auto-reply/thinking.js";
 import { loadConfig } from "../../config/config.js";
 import {
+  resolvePreferredStatusA2AInput,
+  type NormalizedStatusA2AInput,
+} from "../../commands/status.a2a-input.js";
+import type { StatusSummary } from "../../commands/status.types.js";
+import {
   loadSessionStore,
   resolveStorePath,
   type SessionEntry,
@@ -249,6 +254,15 @@ function formatA2AHeartbeatAge(entry: A2ATaskStatusIndexEntry, now = Date.now())
   return `heartbeat ${formatRelativeDuration(entry.heartbeatAt, now)} ago`;
 }
 
+function formatSessionA2AContributorLine(input: NormalizedStatusA2AInput): string | undefined {
+  const summary = input.summary.trim();
+  if (!summary) {
+    return undefined;
+  }
+  const details = input.details.filter((detail) => typeof detail === "string" && detail.trim().length > 0);
+  return [`🔁 A2A: ${summary}`, ...details].join(" · ");
+}
+
 function formatSessionA2ATaskLine(params: {
   index: A2ATaskStatusIndexEntry[];
   cfg: OpenClawConfig;
@@ -357,7 +371,14 @@ async function reconcileSessionA2ATaskIndex(params: {
 async function resolveSessionA2ATaskLine(params: {
   sessionKey: string;
   cfg: OpenClawConfig;
+  statusSummary?: Pick<StatusSummary, "contributors" | "a2a">;
 }): Promise<string | undefined> {
+  const preferredInput = params.statusSummary
+    ? resolvePreferredStatusA2AInput({ summary: params.statusSummary })
+    : undefined;
+  if (preferredInput) {
+    return formatSessionA2AContributorLine(preferredInput);
+  }
   try {
     const initialIndex = await loadSessionA2ATaskIndex({ sessionKey: params.sessionKey });
     const index = await reconcileSessionA2ATaskIndex({
@@ -439,6 +460,7 @@ export function createSessionStatusTool(opts?: {
   agentSessionKey?: string;
   config?: OpenClawConfig;
   sandboxed?: boolean;
+  statusSummary?: Pick<StatusSummary, "contributors" | "a2a">;
 }): AnyAgentTool {
   return {
     label: "Session Status",
@@ -708,6 +730,7 @@ export function createSessionStatusTool(opts?: {
       const a2aTaskLine = await resolveSessionA2ATaskLine({
         sessionKey: resolved.key,
         cfg,
+        statusSummary: opts?.statusSummary,
       });
       const { buildStatusText } = await loadCommandsStatusRuntime();
       const statusText = await buildStatusText({
