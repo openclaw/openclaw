@@ -208,7 +208,7 @@ export async function enrichOllamaModelsWithContext(
 }
 
 export function isReasoningModelHeuristic(modelId: string): boolean {
-  return /r1|reasoning|think|reason/i.test(modelId);
+  return /r1|reasoning|think|reason|qwen3|qwq/i.test(modelId);
 }
 
 export function buildOllamaModelDefinition(
