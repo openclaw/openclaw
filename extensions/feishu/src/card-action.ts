@@ -175,6 +175,9 @@ function normalizeResolvedCardActionChatType(value: unknown): "p2p" | "group" | 
   return undefined;
 }
 
+const resolvedChatTypeCache = new Map<string, { value: "p2p" | "group"; expiresAt: number }>();
+const CHAT_TYPE_CACHE_TTL_MS = 30 * 60_000;
+
 async function resolveCardActionChatType(params: {
   event: FeishuCardActionEvent;
   account: ReturnType<typeof resolveFeishuRuntimeAccount>;
@@ -191,6 +194,12 @@ async function resolveCardActionChatType(params: {
     return "p2p";
   }
 
+  const now = Date.now();
+  const cached = resolvedChatTypeCache.get(chatId);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
   try {
     const response = (await createFeishuClient(params.account).im.chat.get({
       path: { chat_id: chatId },
@@ -200,19 +209,21 @@ async function resolveCardActionChatType(params: {
         normalizeResolvedCardActionChatType(response.data?.chat_mode) ??
         normalizeResolvedCardActionChatType(response.data?.chat_type);
       if (resolvedChatType) {
+        resolvedChatTypeCache.set(chatId, { value: resolvedChatType, expiresAt: now + CHAT_TYPE_CACHE_TTL_MS });
         return resolvedChatType;
       }
       params.log(
-        `feishu[${params.account.accountId}]: card action ${params.event.token} missing chat type for ${chatId}; defaulting to p2p`,
+        `feishu[${params.account.accountId}]: card action missing chat type for chat; defaulting to p2p`,
       );
     } else {
       params.log(
-        `feishu[${params.account.accountId}]: failed to resolve chat type for ${chatId}: ${response.msg ?? "unknown error"}; defaulting to p2p`,
+        `feishu[${params.account.accountId}]: failed to resolve chat type: ${response.msg ?? "unknown error"}; defaulting to p2p`,
       );
     }
   } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown";
     params.log(
-      `feishu[${params.account.accountId}]: failed to resolve chat type for ${chatId}: ${String(err)}; defaulting to p2p`,
+      `feishu[${params.account.accountId}]: failed to resolve chat type: ${message}; defaulting to p2p`,
     );
   }
 
