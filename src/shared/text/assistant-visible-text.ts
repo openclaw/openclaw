@@ -220,8 +220,27 @@ const LITERAL_TOOL_PAYLOAD_SENTENCE_END_BEFORE_RE =
   /(?:^|[\n.!?]\s*)(?:example|literal(?:ly)?|syntax)\b[^.!?\n]*$/i;
 const LITERAL_TOOL_SENTENCE_END_AFTER_RE = /^[\s)"'`.,:;!?]*(?:$|\n)/;
 
-function looksLikeLiteralToolTagContext(text: string, start: number, end: number): boolean {
+function getCurrentToolTagLeadIn(text: string, start: number): string {
   const before = text.slice(Math.max(0, start - 80), start);
+  let leadInStart = 0;
+
+  for (let idx = 0; idx < before.length; idx += 1) {
+    if (before[idx] !== "<") {
+      continue;
+    }
+    const tag = parseToolCallTagAt(before, idx);
+    if (!tag) {
+      continue;
+    }
+    leadInStart = tag.end;
+    idx = Math.max(idx, tag.end - 1);
+  }
+
+  return before.slice(leadInStart);
+}
+
+function looksLikeLiteralToolTagContext(text: string, start: number, end: number): boolean {
+  const before = getCurrentToolTagLeadIn(text, start);
   const after = text.slice(end, Math.min(text.length, end + 80));
   return (
     (LITERAL_TOOL_TAG_BEFORE_RE.test(before) ||
@@ -231,7 +250,7 @@ function looksLikeLiteralToolTagContext(text: string, start: number, end: number
 }
 
 function looksLikeLiteralToolPayloadContext(text: string, start: number, end: number): boolean {
-  const before = text.slice(Math.max(0, start - 80), start);
+  const before = getCurrentToolTagLeadIn(text, start);
   const after = text.slice(end, Math.min(text.length, end + 80));
   const hasLiteralPayloadCueBefore =
     LITERAL_TOOL_PAYLOAD_INLINE_BEFORE_RE.test(before) ||

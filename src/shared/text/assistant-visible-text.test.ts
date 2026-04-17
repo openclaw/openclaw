@@ -263,6 +263,17 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
+    it("does not apply one literal cue to later tool-call payloads", () => {
+      expectVisibleText(
+        'Example: <tool_call>{"name":"exec"}</tool_call> and then <tool_call>{"name":"read","arguments":{"path":"/secret"}}</tool_call>',
+        "Example:  and then ",
+      );
+      expectVisibleText(
+        'Example: <tool_call>{"name":"exec"}</tool_call>.\nThen <tool_call>{"name":"read","arguments":{"path":"/secret"}}</tool_call>',
+        'Example: <tool_call>{"name":"exec"}</tool_call>.\nThen ',
+      );
+    });
+
     it("preserves newline-formatted literal JSON tool-call examples", () => {
       expectVisibleText(
         'Use this syntax:\n<tool_call>{"name":"exec"}</tool_call>',
