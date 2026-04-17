@@ -186,18 +186,24 @@ export function shouldRetryCliCronMcpProbeReply(text: string): boolean {
     normalized.includes("mcp call was cancelled") ||
     normalized.includes("mcp call was canceled");
   const mentionsUserCancellation = normalized.includes("user cancelled mcp tool call");
+  const mentionsCreateFailure =
+    normalized.includes("could not create the job") ||
+    normalized.includes("couldn't create the job") ||
+    normalized.includes("could not create job") ||
+    normalized.includes("couldn't create job");
   const mentionsMissingJob =
     normalized.includes("job was not created") ||
     normalized.includes("job still was not created") ||
     normalized.includes("nothing was created") ||
     normalized.includes("verify the cron job was created") ||
     normalized.includes("was not created");
-  return mentionsCancellation && (mentionsMissingJob || mentionsUserCancellation);
+  return (
+    mentionsCancellation &&
+    (mentionsMissingJob || mentionsUserCancellation || mentionsCreateFailure)
+  );
 }
 
-function getCliBackendProbeThinking(
-  providerId: string,
-): "low" | undefined {
+function getCliBackendProbeThinking(providerId: string): "low" | undefined {
   return normalizeLowercaseStringOrEmpty(providerId) === "codex-cli" ? "low" : undefined;
 }
 

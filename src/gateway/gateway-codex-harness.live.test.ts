@@ -562,7 +562,9 @@ describeLive("gateway live (Codex harness)", () => {
                 text.includes("sandbox blocks") ||
                 text.includes("interactive in this environment"));
             const mentionsConfiguredModels =
-              normalized.includes("configured model") || normalized.includes("configured models");
+              normalized.includes("configured model") ||
+              normalized.includes("configured codex model") ||
+              normalized.includes("configured models");
             const mentionsSessionModel =
               normalized.includes("current session is using") ||
               normalized.includes("current session model") ||
