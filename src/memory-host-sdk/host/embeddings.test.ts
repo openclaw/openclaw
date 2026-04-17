@@ -17,6 +17,7 @@ const {
   bedrockSendMock,
   createOllamaEmbeddingProviderMock,
   defaultProviderMock,
+  resolveApiKeyForProviderMock,
   resolveCredentialsMock,
 } = vi.hoisted(() => ({
   bedrockSendMock: vi.fn(),
@@ -25,11 +26,19 @@ const {
   }),
   defaultProviderMock: vi.fn(),
   resolveCredentialsMock: vi.fn(),
+  resolveApiKeyForProviderMock: vi.fn(),
 }));
 
-vi.mock("../../agents/model-auth.js", async () => {
-  const { createModelAuthMockModule } = await import("../../test-utils/model-auth-mock.js");
-  return createModelAuthMockModule();
+vi.mock("../../agents/model-auth.js", () => {
+  return {
+    resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+    requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
+      if (auth.apiKey) {
+        return auth.apiKey;
+      }
+      throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth.mode}).`);
+    },
+  };
 });
 
 vi.mock("./embeddings-ollama.js", () => ({
