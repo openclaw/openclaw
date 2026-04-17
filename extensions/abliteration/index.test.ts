@@ -44,6 +44,12 @@ describe("abliteration provider plugin", () => {
     expect(catalog.provider.baseUrl).toBe("https://api.abliteration.ai");
     expect(catalog.provider.models?.map((model) => model.id)).toEqual(["abliterated-model"]);
     expect(catalog.provider.models?.[0]).toMatchObject({
+      cost: {
+        input: 5,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
       input: ["text", "image"],
       maxTokens: 8192,
       contextWindow: 128000,

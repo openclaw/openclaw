@@ -253,14 +253,14 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/duckduckgo/**"
-"extensions: acpx":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/acpx/**"
 "extensions: abliteration":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/abliteration/**"
+"extensions: acpx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/acpx/**"
 "extensions: arcee":
   - changed-files:
       - any-glob-to-any-file:

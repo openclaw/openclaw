@@ -4,9 +4,12 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-s
 export const ABLITERATION_BASE_URL = "https://api.abliteration.ai";
 export const ABLITERATION_DEFAULT_MODEL_ID = "abliterated-model";
 export const ABLITERATION_DEFAULT_MODEL_REF = `abliteration/${ABLITERATION_DEFAULT_MODEL_ID}`;
+const ABLITERATION_FLAT_COST_PER_MILLION_TOKENS = 5;
 export const ABLITERATION_DEFAULT_COST = {
-  input: 5,
-  output: 5,
+  // Abliteration bills on total tokens at about $5 / 1M, so each counted
+  // input/output token uses the same per-million rate in OpenClaw.
+  input: ABLITERATION_FLAT_COST_PER_MILLION_TOKENS,
+  output: ABLITERATION_FLAT_COST_PER_MILLION_TOKENS,
   cacheRead: 0,
   cacheWrite: 0,
 };
