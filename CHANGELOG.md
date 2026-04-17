@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.
+- Agents/image tool: honor `tools.media.image.timeoutSeconds` when the agent invokes the `image` tool (and plumb it through to the MiniMax VLM path), instead of silently capping every call at a hardcoded 30s. Brings the agent-tool path in line with the auto-attachment image-understanding path and lets slower local/self-hosted vision models finish. (#67889) Thanks @neeravmakwana.
 
 ## 2026.4.15
 

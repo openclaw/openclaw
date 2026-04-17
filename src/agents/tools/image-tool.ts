@@ -2,10 +2,12 @@ import { resolve, isAbsolute } from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  DEFAULT_TIMEOUT_SECONDS,
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
 } from "../../media-understanding/defaults.js";
 import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
+import { resolveTimeoutMs } from "../../media-understanding/resolve.js";
 import { buildProviderRegistry } from "../../media-understanding/runner.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import {
@@ -91,6 +93,21 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
     return requestedMaxTokens;
   }
   return Math.min(requestedMaxTokens, modelMaxTokens);
+}
+
+/**
+ * Resolve the effective per-call timeout (ms) for the `image` tool.
+ *
+ * Order of precedence, matching the auto-attachment image-understanding path
+ * in `media-understanding/runner.entries.ts`:
+ *   1. `cfg.tools.media.image.timeoutSeconds`
+ *   2. `DEFAULT_TIMEOUT_SECONDS.image` (60s)
+ *
+ * Previously hardcoded to 30_000, which silently overrode any user timeout
+ * configuration and starved local/self-hosted vision models (#67889).
+ */
+function resolveImageToolTimeoutMs(cfg: OpenClawConfig | undefined): number {
+  return resolveTimeoutMs(cfg?.tools?.media?.image?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS.image);
 }
 
 /**
@@ -191,6 +208,7 @@ async function runImagePrompt(params: {
   const effectiveCfg = applyImageModelConfigDefaults(params.cfg, params.imageModelConfig);
   const providerCfg: OpenClawConfig = effectiveCfg ?? {};
   const providerRegistry = imageToolProviderDeps.buildProviderRegistry(undefined, providerCfg);
+  const timeoutMs = resolveImageToolTimeoutMs(effectiveCfg);
 
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
@@ -216,7 +234,7 @@ async function runImagePrompt(params: {
           model: modelId,
           prompt: params.prompt,
           maxTokens: resolveImageToolMaxTokens(undefined),
-          timeoutMs: 30_000,
+          timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
         });
@@ -234,7 +252,7 @@ async function runImagePrompt(params: {
           model: modelId,
           prompt: params.prompt,
           maxTokens: resolveImageToolMaxTokens(undefined),
-          timeoutMs: 30_000,
+          timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
         });
@@ -251,7 +269,7 @@ async function runImagePrompt(params: {
           model: modelId,
           prompt: `${params.prompt}\n\nDescribe image ${index + 1} of ${params.images.length}.`,
           maxTokens: resolveImageToolMaxTokens(undefined),
-          timeoutMs: 30_000,
+          timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
         });

@@ -45,12 +45,21 @@ function pickString(rec: Record<string, unknown>, key: string): string {
   return typeof v === "string" ? v : "";
 }
 
+/**
+ * Default abort timeout applied to the MiniMax VLM HTTP call when the caller
+ * does not supply a timeout. Kept aligned with the media-understanding image
+ * default (see `DEFAULT_TIMEOUT_SECONDS.image`) so callers that forward the
+ * user-configured `tools.media.image.timeoutSeconds` can override this.
+ */
+const MINIMAX_VLM_DEFAULT_TIMEOUT_MS = 60_000;
+
 export async function minimaxUnderstandImage(params: {
   apiKey: string;
   prompt: string;
   imageDataUrl: string;
   apiHost?: string;
   modelBaseUrl?: string;
+  timeoutMs?: number;
 }): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
@@ -78,6 +87,13 @@ export async function minimaxUnderstandImage(params: {
   // Without this, HTTP_PROXY/HTTPS_PROXY env vars are silently ignored (#51619).
   ensureGlobalUndiciEnvProxyDispatcher();
 
+  const timeoutMs =
+    typeof params.timeoutMs === "number" &&
+    Number.isFinite(params.timeoutMs) &&
+    params.timeoutMs > 0
+      ? params.timeoutMs
+      : MINIMAX_VLM_DEFAULT_TIMEOUT_MS;
+
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -85,7 +101,7 @@ export async function minimaxUnderstandImage(params: {
       "Content-Type": "application/json",
       "MM-API-Source": "OpenClaw",
     },
-    signal: AbortSignal.timeout(60_000),
+    signal: AbortSignal.timeout(timeoutMs),
     body: JSON.stringify({
       prompt,
       image_url: imageDataUrl,

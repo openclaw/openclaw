@@ -1440,3 +1440,179 @@ describe("image tool response validation", () => {
     expect(text).toBe("hello");
   });
 });
+
+// Regression guard for #67889: the `image` tool previously hardcoded a 30s
+// timeout for describeImage/describeImages, which silently overrode the user's
+// `tools.media.image.timeoutSeconds` configuration and starved local/self-hosted
+// vision models. These tests lock in that the configured capability-level
+// timeout (and the 60s default, aligned with DEFAULT_TIMEOUT_SECONDS.image) is
+// plumbed through to the underlying describe calls.
+describe("image tool timeout configuration (#67889)", () => {
+  const priorFetch = global.fetch;
+  registerImageToolEnvReset(priorFetch, ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]);
+
+  let capturedTimeouts: number[];
+
+  function installCapturingProviderStubs(): void {
+    capturedTimeouts = [];
+    const defaultImageModels = new Map<string, string>([
+      ["anthropic", "claude-opus-4-6"],
+      ["openai", "gpt-5.4-mini"],
+    ]);
+    imageProviderHarness.setProviders([]);
+    __testing.setProviderDepsForTest({
+      buildProviderRegistry: () => new Map(),
+      getMediaUnderstandingProvider: () => undefined,
+      describeImageWithModel: async (params: ImageDescriptionRequest) => {
+        capturedTimeouts.push(params.timeoutMs);
+        return { text: "ok", model: params.model };
+      },
+      describeImagesWithModel: async (params: ImagesDescriptionRequest) => {
+        capturedTimeouts.push(params.timeoutMs);
+        return { text: "ok", model: params.model };
+      },
+      resolveAutoMediaKeyProviders: ({ capability }) =>
+        capability === "image" ? ["openai", "anthropic"] : [],
+      resolveDefaultMediaModel: ({ providerId, capability }) =>
+        capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
+    });
+  }
+
+  beforeEach(() => {
+    installCapturingProviderStubs();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+  });
+
+  afterEach(() => {
+    imageProviderHarness.reset();
+    __testing.setProviderDepsForTest();
+  });
+
+  function createConfigWith(timeoutSeconds?: number): OpenClawConfig {
+    return {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4-mini" },
+          imageModel: { primary: "openai/gpt-5.4-mini" },
+        },
+      },
+      ...(typeof timeoutSeconds === "number"
+        ? {
+            tools: {
+              media: {
+                image: {
+                  timeoutSeconds,
+                },
+              },
+            },
+          }
+        : {}),
+    };
+  }
+
+  it("defaults to DEFAULT_TIMEOUT_SECONDS.image (60s) when no config is set", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({ config: createConfigWith(), agentDir });
+      await tool.execute("t1", {
+        prompt: "Describe.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+      expect(capturedTimeouts).toEqual([60_000]);
+    });
+  });
+
+  it("honors tools.media.image.timeoutSeconds for single-image requests", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({ config: createConfigWith(180), agentDir });
+      await tool.execute("t1", {
+        prompt: "Describe.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+      expect(capturedTimeouts).toEqual([180_000]);
+    });
+  });
+
+  it("honors tools.media.image.timeoutSeconds for multi-image requests", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({ config: createConfigWith(300), agentDir });
+      await tool.execute("t1", {
+        prompt: "Compare.",
+        images: [
+          `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+          `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`,
+        ],
+      });
+      expect(capturedTimeouts).toEqual([300_000]);
+    });
+  });
+
+  it("clamps sub-second timeoutSeconds to the resolveTimeoutMs 1000ms floor", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({ config: createConfigWith(0.2), agentDir });
+      await tool.execute("t1", {
+        prompt: "Describe.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+      expect(capturedTimeouts).toEqual([1_000]);
+    });
+  });
+});
+
+// Regression guard for #67889: the MiniMax VLM HTTP call previously used a
+// hardcoded `AbortSignal.timeout(60_000)` regardless of caller-supplied
+// timeouts. The helper now accepts and honors an explicit `timeoutMs`.
+describe("minimaxUnderstandImage timeout plumbing (#67889)", () => {
+  const priorFetch = global.fetch;
+  const priorAbortTimeout = AbortSignal.timeout;
+  let capturedTimeouts: number[];
+
+  beforeEach(() => {
+    capturedTimeouts = [];
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    AbortSignal.timeout = ((ms: number) => {
+      capturedTimeouts.push(ms);
+      return priorAbortTimeout.call(AbortSignal, ms);
+    }) as typeof AbortSignal.timeout;
+  });
+
+  afterEach(() => {
+    AbortSignal.timeout = priorAbortTimeout;
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+  });
+
+  async function invoke(timeoutMs?: number): Promise<void> {
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers(),
+      json: async () => ({ content: "ok", base_resp: { status_code: 0, status_msg: "" } }),
+    });
+    global.fetch = withFetchPreconnect(fetch);
+    await minimaxUnderstandImage({
+      apiKey: "minimax-test",
+      prompt: "Describe.",
+      imageDataUrl: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  }
+
+  it("uses the caller-supplied timeoutMs when provided", async () => {
+    await invoke(200_000);
+    expect(capturedTimeouts).toEqual([200_000]);
+  });
+
+  it("falls back to 60s when no timeoutMs is supplied", async () => {
+    await invoke();
+    expect(capturedTimeouts).toEqual([60_000]);
+  });
+
+  it("falls back to 60s when timeoutMs is non-finite or non-positive", async () => {
+    await invoke(0);
+    await invoke(Number.NaN);
+    await invoke(-1_000);
+    expect(capturedTimeouts).toEqual([60_000, 60_000, 60_000]);
+  });
+});
