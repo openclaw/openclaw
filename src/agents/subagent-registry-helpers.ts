@@ -53,6 +53,20 @@ export function resolveAnnounceRetryDelayMs(retryCount: number) {
   return Math.min(baseDelay, MAX_ANNOUNCE_RETRY_DELAY_MS);
 }
 
+export function hasResumedAnnounceExpired(
+  entry: Pick<SubagentRunRecord, "endedAt" | "expectsCompletionMessage">,
+  now = Date.now(),
+): boolean {
+  if (typeof entry.endedAt !== "number") {
+    return false;
+  }
+  const expiryMs =
+    entry.expectsCompletionMessage === true
+      ? ANNOUNCE_COMPLETION_HARD_EXPIRY_MS
+      : ANNOUNCE_EXPIRY_MS;
+  return now - entry.endedAt > expiryMs;
+}
+
 export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit" | "expiry") {
   const retryCount = entry.announceRetryCount ?? 0;
   const endedAgoMs =

@@ -34,6 +34,10 @@ vi.mock("../config/sessions.js", () => ({
     "agent:main:subagent:child-1": { sessionId: "sess-child-1", updatedAt: 1 },
     "agent:main:subagent:expired-child": { sessionId: "sess-expired", updatedAt: 1 },
     "agent:main:subagent:retry-budget": { sessionId: "sess-retry", updatedAt: 1 },
+    "agent:main:subagent:recent-completion-child": {
+      sessionId: "sess-recent-completion",
+      updatedAt: 1,
+    },
   }),
   resolveAgentIdFromSessionKey: (key: string) => {
     const match = key.match(/^agent:([^:]+)/);
@@ -181,7 +185,7 @@ describe("announce loop guard (#18264)", () => {
     expect(entry.cleanupCompletedAt).toBeDefined();
   });
 
-  test("expired completion-message entries are still resumed for announce", async () => {
+  test("expired completion-message entries are skipped by resumeSubagentRun", async () => {
     mocks.runSubagentAnnounceFlow.mockReset();
     mocks.runSubagentAnnounceFlow.mockResolvedValueOnce(true);
     registry.resetSubagentRegistryForTests();
@@ -202,6 +206,41 @@ describe("announce loop guard (#18264)", () => {
             createdAt: now - 20 * 60_000,
             startedAt: now - 19 * 60_000,
             endedAt: now - 10 * 60_000,
+            cleanupHandled: false,
+            expectsCompletionMessage: true,
+          },
+        ],
+      ]),
+    );
+
+    registry.initSubagentRegistry();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
+  test("recent completion-message entries still resume for announce", async () => {
+    mocks.runSubagentAnnounceFlow.mockReset();
+    mocks.runSubagentAnnounceFlow.mockResolvedValueOnce(true);
+    registry.resetSubagentRegistryForTests();
+
+    const now = Date.now();
+    const runId = "test-recent-completion-message";
+    mocks.loadSubagentRegistryFromDisk.mockReturnValue(
+      new Map([
+        [
+          runId,
+          {
+            runId,
+            childSessionKey: "agent:main:subagent:recent-completion-child",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "agent:main:main",
+            task: "completion announce after recent finish",
+            cleanup: "keep" as const,
+            createdAt: now - 10 * 60_000,
+            startedAt: now - 9 * 60_000,
+            endedAt: now - 5 * 60_000,
             cleanupHandled: false,
             expectsCompletionMessage: true,
           },

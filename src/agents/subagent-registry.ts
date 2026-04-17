@@ -21,8 +21,8 @@ import {
   resolveLifecycleOutcomeFromRunOutcome,
 } from "./subagent-registry-completion.js";
 import {
-  ANNOUNCE_EXPIRY_MS,
   MAX_ANNOUNCE_RETRY_COUNT,
+  hasResumedAnnounceExpired,
   reconcileOrphanedRestoredRuns,
   reconcileOrphanedRun,
   resolveAnnounceRetryDelayMs,
@@ -335,11 +335,7 @@ function resumeSubagentRun(runId: string) {
     });
     return;
   }
-  if (
-    entry.expectsCompletionMessage !== true &&
-    typeof entry.endedAt === "number" &&
-    Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS
-  ) {
+  if (hasResumedAnnounceExpired(entry)) {
     void finalizeResumedAnnounceGiveUp({
       runId,
       entry,
