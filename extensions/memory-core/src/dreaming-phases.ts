@@ -26,7 +26,7 @@ import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./drea
 import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
 import {
   readDreamingShadowTouchEnabled,
-  touchSidecarFromLightEntries,
+  touchSidecarFromDreamingEntries,
 } from "./memory-v2/dreaming-wiring.js";
 import {
   readShortTermRecallEntries,
@@ -1556,7 +1556,7 @@ async function runLightDreaming(params: {
   }
   const shadowPluginConfig = params.cfg ? resolveMemoryCorePluginConfig(params.cfg) : undefined;
   if (readDreamingShadowTouchEnabled(shadowPluginConfig)) {
-    touchSidecarFromLightEntries({}, capped, params.workspaceDir);
+    touchSidecarFromDreamingEntries({}, capped, params.workspaceDir);
   }
 }
 
@@ -1639,6 +1639,14 @@ async function runRemDreaming(params: {
       timezone: params.config.timezone,
       logger: params.logger,
     });
+  }
+  const shadowPluginConfig = params.cfg ? resolveMemoryCorePluginConfig(params.cfg) : undefined;
+  if (readDreamingShadowTouchEnabled(shadowPluginConfig)) {
+    const citedKeys = new Set(preview.candidateKeys);
+    const citedEntries = entries.filter((entry) => citedKeys.has(entry.key));
+    if (citedEntries.length > 0) {
+      touchSidecarFromDreamingEntries({}, citedEntries, params.workspaceDir);
+    }
   }
 }
 

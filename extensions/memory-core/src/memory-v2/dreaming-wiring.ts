@@ -44,9 +44,11 @@ export type DreamingWiringDeps = {
 
 // Adapts cited short-term entries into TouchableHit[] and delegates to the
 // existing shadow-touch primitive shared with the Slice 2b/3a rerank path.
-// A cited entry whose `source` is not "memory" is skipped; a dreaming sweep
-// with no qualifying entries opens no db and writes nothing.
-export function touchSidecarFromLightEntries(
+// Phase-neutral: callers in both light and REM dreaming pass their own
+// already-narrowed "cited" set. A cited entry whose `source` is not "memory"
+// is skipped; a dreaming sweep with no qualifying entries opens no db and
+// writes nothing.
+export function touchSidecarFromDreamingEntries(
   deps: DreamingWiringDeps,
   entries: readonly ShortTermRecallEntry[],
   workspaceDir: string,

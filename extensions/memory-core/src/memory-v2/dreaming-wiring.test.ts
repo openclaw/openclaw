@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ShortTermRecallEntry } from "../short-term-promotion.js";
-import { readDreamingShadowTouchEnabled, touchSidecarFromLightEntries } from "./dreaming-wiring.js";
+import {
+  readDreamingShadowTouchEnabled,
+  touchSidecarFromDreamingEntries,
+} from "./dreaming-wiring.js";
 
 describe("readDreamingShadowTouchEnabled", () => {
   it("returns false for null/undefined/non-object configs", () => {
@@ -71,11 +74,11 @@ const baseEntry: ShortTermRecallEntry = {
   conceptTags: [],
 };
 
-describe("touchSidecarFromLightEntries", () => {
+describe("touchSidecarFromDreamingEntries", () => {
   it("is a no-op on empty entries — does not open the db", () => {
     const openDb = vi.fn();
     const touch = vi.fn();
-    touchSidecarFromLightEntries({ openDb, touch }, [], "/ws");
+    touchSidecarFromDreamingEntries({ openDb, touch }, [], "/ws");
     expect(openDb).not.toHaveBeenCalled();
     expect(touch).not.toHaveBeenCalled();
   });
@@ -83,7 +86,7 @@ describe("touchSidecarFromLightEntries", () => {
   it('is a no-op when no entry has source === "memory" — does not open the db', () => {
     const openDb = vi.fn();
     const touch = vi.fn();
-    touchSidecarFromLightEntries(
+    touchSidecarFromDreamingEntries(
       { openDb, touch },
       // `source` is typed as the literal "memory" today; the filter guards
       // future source expansion. Force the non-memory branch via cast.
@@ -99,7 +102,7 @@ describe("touchSidecarFromLightEntries", () => {
     const openDb = vi.fn().mockReturnValue(db);
     const touch = vi.fn().mockReturnValue({ inspected: 2, inserted: 1, refreshed: 1 });
     const now = vi.fn().mockReturnValue(1234);
-    touchSidecarFromLightEntries(
+    touchSidecarFromDreamingEntries(
       { openDb, touch, now },
       [baseEntry, { ...baseEntry, key: "k2", startLine: 30, endLine: 40 }],
       "/ws",
@@ -122,7 +125,7 @@ describe("touchSidecarFromLightEntries", () => {
     const touch = vi.fn();
     const logWarn = vi.fn();
     expect(() =>
-      touchSidecarFromLightEntries({ openDb, touch, logWarn }, [baseEntry], "/ws"),
+      touchSidecarFromDreamingEntries({ openDb, touch, logWarn }, [baseEntry], "/ws"),
     ).not.toThrow();
     expect(touch).not.toHaveBeenCalled();
     expect(logWarn).toHaveBeenCalledTimes(1);
@@ -136,7 +139,7 @@ describe("touchSidecarFromLightEntries", () => {
     });
     const logWarn = vi.fn();
     expect(() =>
-      touchSidecarFromLightEntries({ openDb, touch, logWarn }, [baseEntry], "/ws"),
+      touchSidecarFromDreamingEntries({ openDb, touch, logWarn }, [baseEntry], "/ws"),
     ).not.toThrow();
     expect(logWarn).toHaveBeenCalledTimes(1);
   });
