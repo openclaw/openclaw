@@ -8,6 +8,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { importRuntimeModule } from "../shared/runtime-import.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
+import { resolveSubagentAnnounceTimeoutMs } from "./subagent-announce-delivery.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import * as subagentAnnounceModule from "./subagent-announce.js";
@@ -132,7 +133,10 @@ let listenerStop: (() => void) | null = null;
 var restoreAttempted = false;
 const ORPHAN_RECOVERY_DEBOUNCE_MS = 1_000;
 let lastOrphanRecoveryScheduleAt = 0;
-const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
+// Single source of truth for the announce timeout lives in
+// subagent-announce-delivery.ts (mode-aware: loopback=30s, remote=120s).
+// We resolve lazily per-flow via the controller's function form so config
+// changes and gateway mode are honored without restart.
 /**
  * Embedded runs can emit transient lifecycle `error` events while provider/model
  * retry is still in progress. Defer terminal error cleanup briefly so a
@@ -356,7 +360,8 @@ async function emitSubagentEndedHookForRun(params: {
 const subagentLifecycleController = createSubagentRegistryLifecycleController({
   runs: subagentRuns,
   resumedRuns,
-  subagentAnnounceTimeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
+  subagentAnnounceTimeoutMs: () =>
+    resolveSubagentAnnounceTimeoutMs(subagentRegistryDeps.loadConfig()),
   persist: persistSubagentRuns,
   clearPendingLifecycleError,
   countPendingDescendantRuns,

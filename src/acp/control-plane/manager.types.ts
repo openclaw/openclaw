@@ -110,6 +110,17 @@ export type AcpManagerObservabilitySnapshot = {
     maxLatencyMs: number;
   };
   errorsByCode: Record<string, number>;
+  /**
+   * Subagent announce delivery counters. Populated from
+   * `src/agents/subagent-announce-counters.ts` so `/acp doctor` surfaces
+   * retry/timeout/budget-exhaustion rates without extra plumbing.
+   */
+  announce?: {
+    retriesTotal: number;
+    timeoutsTotal: number;
+    budgetExhaustedTotal: number;
+    lastTimeoutAt?: number;
+  };
 };
 
 export type AcpStartupIdentityReconcileResult = {

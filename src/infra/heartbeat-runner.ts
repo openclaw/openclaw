@@ -910,7 +910,7 @@ export async function runHeartbeatOnce(opts: {
       return;
     }
 
-    const store = loadSessionStore(storePath);
+    const store = loadSessionStore(storePath, { mutable: true });
     const current = store[sessionKey];
     // Initialize stub entry on first run when current doesn't exist
     const base = current ?? {
@@ -1214,7 +1214,7 @@ export async function runHeartbeatOnce(opts: {
 
     // Record last delivered heartbeat payload for dedupe.
     if (!shouldSkipMain && normalized.text.trim()) {
-      const store = loadSessionStore(storePath);
+      const store = loadSessionStore(storePath, { mutable: true });
       const current = store[sessionKey];
       if (current) {
         store[sessionKey] = {

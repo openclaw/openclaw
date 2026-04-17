@@ -20,7 +20,9 @@ export function resolveCronSession(params: {
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: params.agentId,
   });
-  const store = loadSessionStore(storePath);
+  // Mutable: caller (heartbeat runner) mutates `store` to add/remove session
+  // entries and persists via `saveSessionStore`.
+  const store = loadSessionStore(storePath, { mutable: true });
   const entry = store[params.sessionKey];
 
   // Check if we can reuse an existing session

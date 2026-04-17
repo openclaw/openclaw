@@ -51,6 +51,16 @@ export async function handleAcpDoctorAction(
       .map(([code, count]) => `${code}=${count}`)
       .join(", ") || "(none)";
   lines.push(`errorCodes: ${errorStatsText}`);
+  if (managerSnapshot.announce) {
+    const announce = managerSnapshot.announce;
+    const lastTimeoutText =
+      announce.lastTimeoutAt != null
+        ? `, lastTimeoutAt=${new Date(announce.lastTimeoutAt).toISOString()}`
+        : "";
+    lines.push(
+      `announce: retries=${announce.retriesTotal}, timeouts=${announce.timeoutsTotal}, budgetExhausted=${announce.budgetExhaustedTotal}${lastTimeoutText}`,
+    );
+  }
   if (registeredBackend) {
     lines.push(`registeredBackend: ${registeredBackend.id}`);
   } else {

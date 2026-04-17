@@ -22,6 +22,11 @@ import {
 import { buildAnnounceIdempotencyKey, resolveQueueAnnounceId } from "./announce-idempotency.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import {
+  recordAnnounceBudgetExhausted,
+  recordAnnounceRetry,
+  recordAnnounceTimeout,
+} from "./subagent-announce-counters.js";
+import {
   callGateway,
   createBoundDeliveryRouter,
   getGlobalHookRunner,
@@ -47,8 +52,55 @@ import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 export { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 
-const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
+// Per-attempt gateway call timeout for subagent announce delivery. Loopback
+// (non-"remote") mode can starve the event loop on large session stores, so we
+// keep the per-attempt timeout tight there; remote mode needs the longer
+// tolerance for real network latency.
+const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_LOOPBACK_MS = 30_000;
+const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_REMOTE_MS = 120_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
+
+/**
+ * Wall-clock budget for the entire announce retry cycle. Bounds total time
+ * spent across attempts + sleeps to avoid ~8.5min worst-case stalls that can
+ * wedge the queue under event-loop starvation.
+ */
+const DEFAULT_ANNOUNCE_RETRY_BUDGET_MS = 60_000;
+
+function resolveAnnounceRetryBudgetMs(): number {
+  const raw = process.env.OPENCLAW_ANNOUNCE_RETRY_BUDGET_MS;
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return DEFAULT_ANNOUNCE_RETRY_BUDGET_MS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_ANNOUNCE_RETRY_BUDGET_MS;
+  }
+  return Math.min(parsed, MAX_TIMER_SAFE_TIMEOUT_MS);
+}
+
+/**
+ * Marker thrown by the retry loop when the wall-clock budget is exhausted.
+ * Classified as permanent so outer layers do not retry again.
+ */
+export class AnnounceRetryBudgetExhaustedError extends Error {
+  readonly elapsedMs: number;
+  readonly budgetMs: number;
+  constructor(elapsedMs: number, budgetMs: number, cause?: unknown) {
+    super(`announce retry budget exhausted after ${elapsedMs}ms (budget=${budgetMs}ms)`);
+    this.name = "AnnounceRetryBudgetExhaustedError";
+    this.elapsedMs = elapsedMs;
+    this.budgetMs = budgetMs;
+    if (cause !== undefined) {
+      (this as { cause?: unknown }).cause = cause;
+    }
+  }
+}
+
+function isAnnounceGatewayTimeoutError(err: unknown): boolean {
+  const message = summarizeDeliveryError(err);
+  return /gateway timeout/i.test(message);
+}
 
 type SubagentAnnounceDeliveryDeps = {
   callGateway: typeof callGateway;
@@ -72,7 +124,12 @@ function resolveDirectAnnounceTransientRetryDelaysMs() {
 export function resolveSubagentAnnounceTimeoutMs(cfg: OpenClawConfig): number {
   const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
   if (typeof configured !== "number" || !Number.isFinite(configured)) {
-    return DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS;
+    // Pick the mode-appropriate default. Loopback mode is latency-bounded by
+    // our own event loop (no real network hop) so a shorter per-attempt
+    // timeout lets the wall-clock budget retry instead of stalling.
+    return cfg.gateway?.mode === "remote"
+      ? DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_REMOTE_MS
+      : DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_LOOPBACK_MS;
   }
   return Math.min(Math.max(1, Math.floor(configured)), MAX_TIMER_SAFE_TIMEOUT_MS);
 }
@@ -119,6 +176,7 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
+  /announce retry budget exhausted/i,
 ];
 
 function isTransientAnnounceDeliveryError(error: unknown): boolean {
@@ -157,12 +215,23 @@ async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Prom
   });
 }
 
+function applyAnnounceRetryJitter(delayMs: number): number {
+  // Test-fast mode needs deterministic timing; skip jitter.
+  if (process.env.OPENCLAW_TEST_FAST === "1") {
+    return delayMs;
+  }
+  // 25% upward jitter so concurrent clients don't synchronize their retries.
+  return Math.round(delayMs * (1 + Math.random() * 0.25));
+}
+
 export async function runAnnounceDeliveryWithRetry<T>(params: {
   operation: string;
   signal?: AbortSignal;
   run: () => Promise<T>;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectAnnounceTransientRetryDelaysMs();
+  const budgetMs = resolveAnnounceRetryBudgetMs();
+  const startedAt = Date.now();
   let retryIndex = 0;
   for (;;) {
     if (params.signal?.aborted) {
@@ -171,15 +240,31 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
     try {
       return await params.run();
     } catch (err) {
-      const delayMs = retryDelaysMs[retryIndex];
-      if (delayMs == null || !isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
+      if (isAnnounceGatewayTimeoutError(err)) {
+        recordAnnounceTimeout();
+      }
+      const baseDelayMs = retryDelaysMs[retryIndex];
+      if (baseDelayMs == null || !isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
         throw err;
+      }
+      const delayMs = applyAnnounceRetryJitter(baseDelayMs);
+      const elapsedMs = Date.now() - startedAt;
+      // Stop retrying when the next sleep would exceed the wall-clock budget.
+      // This caps the total retry time (attempts + sleeps) so a stalled gateway
+      // cannot wedge the caller for ~8.5min in the worst case.
+      if (elapsedMs + delayMs > budgetMs) {
+        recordAnnounceBudgetExhausted();
+        defaultRuntime.log(
+          `[warn] Subagent announce ${params.operation} retry budget exhausted after ${elapsedMs}ms (budget=${budgetMs}ms); giving up: ${summarizeDeliveryError(err)}`,
+        );
+        throw new AnnounceRetryBudgetExhaustedError(elapsedMs, budgetMs, err);
       }
       const nextAttempt = retryIndex + 2;
       const maxAttempts = retryDelaysMs.length + 1;
       defaultRuntime.log(
         `[warn] Subagent announce ${params.operation} transient failure, retrying ${nextAttempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDeliveryError(err)}`,
       );
+      recordAnnounceRetry();
       retryIndex += 1;
       await waitForAnnounceRetryDelay(delayMs, params.signal);
     }

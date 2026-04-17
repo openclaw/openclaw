@@ -39,7 +39,12 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 export function createSubagentRegistryLifecycleController(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
-  subagentAnnounceTimeoutMs: number;
+  /**
+   * Resolves the per-announce-flow settlement timeout. Accepts a number
+   * (legacy callers) or a lazy function; the function form lets production
+   * pick up a config-driven, gateway-mode-aware timeout at flow start.
+   */
+  subagentAnnounceTimeoutMs: number | (() => number);
   persist(): void;
   clearPendingLifecycleError(runId: string): void;
   countPendingDescendantRuns(rootSessionKey: string): number;
@@ -530,7 +535,10 @@ export function createSubagentRegistryLifecycleController(params: {
         requesterOrigin,
         requesterDisplayKey: entry.requesterDisplayKey,
         task: entry.task,
-        timeoutMs: params.subagentAnnounceTimeoutMs,
+        timeoutMs:
+          typeof params.subagentAnnounceTimeoutMs === "function"
+            ? params.subagentAnnounceTimeoutMs()
+            : params.subagentAnnounceTimeoutMs,
         cleanup: entry.cleanup,
         roundOneReply: entry.frozenResultText ?? undefined,
         fallbackReply: entry.fallbackFrozenResultText ?? undefined,

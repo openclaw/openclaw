@@ -52,6 +52,15 @@ export function dropSessionStoreObjectCache(storePath: string): void {
   SESSION_STORE_CACHE.delete(storePath);
 }
 
+/**
+ * Returns the cached store reference directly without cloning.
+ *
+ * PERFORMANCE: cloning every cache read was O(store-size) synchronous work
+ * per call; on large stores this starved the event loop (measured: 120s+
+ * under concurrent announce load). Callers that intend to MUTATE the
+ * returned store must pass `mutable: true` to `loadSessionStore` (which
+ * will clone on their behalf). Treat the returned reference as read-only.
+ */
 export function readSessionStoreCache(params: {
   storePath: string;
   mtimeMs?: number;
@@ -65,9 +74,13 @@ export function readSessionStoreCache(params: {
     invalidateSessionStoreCache(params.storePath);
     return null;
   }
-  return structuredClone(cached.store);
+  return cached.store;
 }
 
+/**
+ * Stores the reference directly; the cache now OWNS the passed object.
+ * Callers must not mutate the object after calling this function.
+ */
 export function writeSessionStoreCache(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
@@ -76,7 +89,7 @@ export function writeSessionStoreCache(params: {
   serialized?: string;
 }): void {
   SESSION_STORE_CACHE.set(params.storePath, {
-    store: structuredClone(params.store),
+    store: params.store,
     mtimeMs: params.mtimeMs,
     sizeBytes: params.sizeBytes,
     serialized: params.serialized,

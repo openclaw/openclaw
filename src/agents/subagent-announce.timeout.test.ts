@@ -129,7 +129,11 @@ vi.mock("./subagent-announce-delivery.js", () => ({
             Math.max(1, Math.floor(configOverride.agents.defaults.subagents.announceTimeoutMs)),
             2_147_000_000,
           )
-        : 120_000;
+        : // Mirror resolveSubagentAnnounceTimeoutMs: loopback (default) = 30s,
+          // remote = 120s. Tests default to loopback mode.
+          configOverride.gateway?.mode === "remote"
+          ? 120_000
+          : 30_000;
     const retryDelaysMs =
       process.env.OPENCLAW_TEST_FAST === "1" ? [8, 16, 32] : [5_000, 10_000, 20_000];
     let retryIndex = 0;
@@ -162,7 +166,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   resolveSubagentAnnounceTimeoutMs: (cfg: typeof configOverride) => {
     const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
     if (typeof configured !== "number" || !Number.isFinite(configured)) {
-      return 120_000;
+      return cfg.gateway?.mode === "remote" ? 120_000 : 30_000;
     }
     return Math.min(Math.max(1, Math.floor(configured)), 2_147_000_000);
   },
@@ -278,8 +282,21 @@ describe("subagent announce timeout config", () => {
     fallbackRequesterResolution = null;
   });
 
-  it("uses 120s timeout by default for direct announce agent call", async () => {
+  it("uses 30s loopback default timeout for direct announce agent call", async () => {
     await runAnnounceFlowForTest("run-default-timeout");
+
+    const directAgentCall = findGatewayCall(
+      (call) => call.method === "agent" && call.expectFinal === true,
+    );
+    expect(directAgentCall?.timeoutMs).toBe(30_000);
+  });
+
+  it("uses 120s remote default timeout when gateway.mode=remote", async () => {
+    configOverride = {
+      ...configOverride,
+      gateway: { mode: "remote" },
+    };
+    await runAnnounceFlowForTest("run-default-timeout-remote");
 
     const directAgentCall = findGatewayCall(
       (call) => call.method === "agent" && call.expectFinal === true,

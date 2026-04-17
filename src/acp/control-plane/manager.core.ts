@@ -1,5 +1,6 @@
 import { syncAcpManagedFlowTerminalState } from "../../agents/acp-taskflow-orchestrator.js";
 import { verifyAcpWorktreeDiff } from "../../agents/acp-verification-gate.js";
+import { getSubagentAnnounceCounters } from "../../agents/subagent-announce-counters.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -229,6 +230,7 @@ export class AcpSessionManager {
       errorsByCode: Object.fromEntries(
         [...this.errorCountsByCode.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
       ),
+      announce: getSubagentAnnounceCounters(),
     };
   }
 

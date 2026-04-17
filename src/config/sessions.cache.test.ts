@@ -83,7 +83,10 @@ describe("Session Store Cache", () => {
     readSpy.mockRestore();
   });
 
-  it("should not allow cached session mutations to leak across loads", async () => {
+  it("should not allow cached session mutations to leak across loads when caller opts into mutable copy", async () => {
+    // Contract: the default load path returns the cached reference directly
+    // (read-only). Callers that need to mutate pass `mutable: true`, which
+    // deep-clones at return time so the cache entry stays pristine.
     const testStore = createSingleSessionStore(
       createSessionEntry({
         origin: { provider: "openai" },
@@ -96,7 +99,7 @@ describe("Session Store Cache", () => {
 
     await saveSessionStore(storePath, testStore);
 
-    const loaded1 = loadSessionStore(storePath);
+    const loaded1 = loadSessionStore(storePath, { mutable: true });
     loaded1["session:1"].origin = { provider: "mutated" };
     if (loaded1["session:1"].skillsSnapshot?.skills?.length) {
       loaded1["session:1"].skillsSnapshot.skills[0].name = "mutated";
@@ -105,6 +108,17 @@ describe("Session Store Cache", () => {
     const loaded2 = loadSessionStore(storePath);
     expect(loaded2["session:1"].origin?.provider).toBe("openai");
     expect(loaded2["session:1"].skillsSnapshot?.skills?.[0]?.name).toBe("alpha");
+  });
+
+  it("returns the same reference on repeated non-mutable loads (zero-clone hot path)", async () => {
+    // Regression guard for the P2a fix: the hot path must not clone on every
+    // read. Repeated non-mutable loads should yield === identical refs.
+    const testStore = createSingleSessionStore();
+    await saveSessionStore(storePath, testStore);
+
+    const loaded1 = loadSessionStore(storePath);
+    const loaded2 = loadSessionStore(storePath);
+    expect(loaded2).toBe(loaded1);
   });
 
   it("should refresh cache when store file changes on disk", async () => {

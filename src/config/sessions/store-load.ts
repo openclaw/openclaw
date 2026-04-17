@@ -12,6 +12,18 @@ import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.j
 
 export type LoadSessionStoreOptions = {
   skipCache?: boolean;
+  /**
+   * When true, the caller intends to MUTATE the returned store. The cache
+   * write-through path will deep-clone the object before returning so cached
+   * state cannot be corrupted by caller-side mutation.
+   *
+   * Default (false): callers must treat the returned object as read-only;
+   * mutations are a contract violation and may corrupt shared cache state.
+   *
+   * `skipCache: true` always yields a freshly-parsed owned object that is
+   * safe to mutate (equivalent to `mutable: true` but bypasses the cache).
+   */
+  mutable?: boolean;
 };
 
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
@@ -75,7 +87,11 @@ export function loadSessionStore(
       sizeBytes: currentFileStat?.sizeBytes,
     });
     if (cached) {
-      return cached;
+      // Non-mutable: return the cached reference directly (no clone). This is
+      // the hot path and must stay clone-free to avoid event-loop starvation
+      // on large session stores.
+      // Mutable: caller will mutate; clone so the cache entry stays clean.
+      return opts.mutable ? structuredClone(cached) : cached;
     }
   }
 
@@ -120,6 +136,9 @@ export function loadSessionStore(
   normalizeSessionStore(store);
 
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
+    // Cache takes ownership of `store` and must not be mutated by readers.
+    // We write-through before deciding whether to return the same reference
+    // (mutable callers get a clone so the cached entry stays pristine).
     writeSessionStoreCache({
       storePath,
       store,
@@ -127,7 +146,11 @@ export function loadSessionStore(
       sizeBytes: fileStat?.sizeBytes,
       serialized: serializedFromDisk,
     });
+    return opts.mutable ? structuredClone(store) : store;
   }
 
-  return structuredClone(store);
+  // skipCache or cache disabled: `store` is freshly parsed (JSON.parse) and
+  // owned by this call, so it's already safe to return directly with or
+  // without the mutable flag.
+  return store;
 }
