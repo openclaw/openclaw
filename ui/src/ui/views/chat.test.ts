@@ -147,7 +147,7 @@ function createChatHeaderState(
 }
 
 function flushTasks() {
-  return new Promise<void>((resolve) => setTimeout(resolve, 0));
+  return new Promise<void>((resolve) => queueMicrotask(resolve));
 }
 
 function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
