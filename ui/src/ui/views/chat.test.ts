@@ -6,7 +6,7 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import { resetAssistantAttachmentAvailabilityCacheForTest } from "../chat/grouped-render.ts";
 import { normalizeMessage } from "../chat/message-normalizer.ts";
 import type { SessionsListResult } from "../types.ts";
-import { renderChat, type ChatProps } from "./chat.ts";
+import { getContextNoticeViewModel, renderChat, type ChatProps } from "./chat.ts";
 
 function createSessions(): SessionsListResult {
   return {
@@ -162,16 +162,19 @@ describe("chat view", () => {
         container,
       );
 
-    renderWithSession({
-      key: "main",
-      kind: "direct",
-      updatedAt: null,
-      inputTokens: 757_300,
-      totalTokens: 46_000,
-      contextTokens: 200_000,
-    });
-    expect(container.textContent).not.toContain("context used");
-    expect(container.textContent).not.toContain("757.3k / 200k");
+    expect(
+      getContextNoticeViewModel(
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: null,
+          inputTokens: 757_300,
+          totalTokens: 46_000,
+          contextTokens: 200_000,
+        },
+        200_000,
+      ),
+    ).toBeNull();
 
     renderWithSession({
       key: "main",
@@ -201,25 +204,31 @@ describe("chat view", () => {
     document.documentElement.style.removeProperty("--warn");
     document.documentElement.style.removeProperty("--danger");
 
-    renderWithSession({
-      key: "main",
-      kind: "direct",
-      updatedAt: null,
-      inputTokens: 500_000,
-      contextTokens: 200_000,
-    });
-    expect(container.textContent).not.toContain("context used");
-
-    renderWithSession({
-      key: "main",
-      kind: "direct",
-      updatedAt: null,
-      totalTokens: 190_000,
-      totalTokensFresh: false,
-      contextTokens: 200_000,
-    });
-    expect(container.textContent).not.toContain("context used");
-    expect(container.textContent).not.toContain("190k / 200k");
+    expect(
+      getContextNoticeViewModel(
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: null,
+          inputTokens: 500_000,
+          contextTokens: 200_000,
+        },
+        200_000,
+      ),
+    ).toBeNull();
+    expect(
+      getContextNoticeViewModel(
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: null,
+          totalTokens: 190_000,
+          totalTokensFresh: false,
+          contextTokens: 200_000,
+        },
+        200_000,
+      ),
+    ).toBeNull();
   });
 
   it("uses the assistant avatar URL or bundled logo fallbacks", () => {

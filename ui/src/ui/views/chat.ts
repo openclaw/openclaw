@@ -529,21 +529,26 @@ function getThemeNoticeColors() {
   return cachedThemeNoticeColors;
 }
 
-function renderContextNotice(
+export function getContextNoticeViewModel(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
-) {
+): {
+  pct: number;
+  detail: string;
+  color: string;
+  bg: string;
+} | null {
   if (session?.totalTokensFresh === false) {
-    return nothing;
+    return null;
   }
   const used = session?.totalTokens ?? 0;
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
   if (!used || !limit) {
-    return nothing;
+    return null;
   }
   const ratio = used / limit;
   if (ratio < 0.85) {
-    return nothing;
+    return null;
   }
   const pct = Math.min(Math.round(ratio * 100), 100);
   // Read theme semantic tokens so color tracks the active theme (Dash, dark, light …)
@@ -558,8 +563,28 @@ function renderContextNotice(
   const color = `rgb(${r}, ${g}, ${b})`;
   const bgOpacity = 0.08 + 0.08 * t;
   const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
+  return {
+    pct,
+    detail: `${formatTokensCompact(used)} / ${formatTokensCompact(limit)}`,
+    color,
+    bg,
+  };
+}
+
+function renderContextNotice(
+  session: GatewaySessionRow | undefined,
+  defaultContextTokens: number | null,
+) {
+  const model = getContextNoticeViewModel(session, defaultContextTokens);
+  if (!model) {
+    return nothing;
+  }
   return html`
-    <div class="context-notice" role="status" style="--ctx-color:${color};--ctx-bg:${bg}">
+    <div
+      class="context-notice"
+      role="status"
+      style="--ctx-color:${model.color};--ctx-bg:${model.bg}"
+    >
       <svg
         class="context-notice__icon"
         width="16"
@@ -575,10 +600,8 @@ function renderContextNotice(
         <line x1="12" y1="9" x2="12" y2="13" />
         <line x1="12" y1="17" x2="12.01" y2="17" />
       </svg>
-      <span>${pct}% context used</span>
-      <span class="context-notice__detail"
-        >${formatTokensCompact(used)} / ${formatTokensCompact(limit)}</span
-      >
+      <span>${model.pct}% context used</span>
+      <span class="context-notice__detail">${model.detail}</span>
     </div>
   `;
 }

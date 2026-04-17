@@ -65,7 +65,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
 }
 
 describe("sessions view", () => {
-  it("keeps explicit and unknown session setting values selectable", async () => {
+  it("keeps session selects stable and deselects only the current page", async () => {
     const container = document.createElement("div");
     render(
       renderSessions(
@@ -95,13 +95,10 @@ describe("sessions view", () => {
     expect(
       Array.from(reasoning?.options ?? []).some((option) => option.value === "custom-mode"),
     ).toBe(true);
-  });
 
-  it("deselects only the current page from the header checkbox", async () => {
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();
     const onDeselectAll = vi.fn();
-    const container = document.createElement("div");
     render(
       renderSessions({
         ...buildProps(
