@@ -12,6 +12,10 @@ import type { SessionsListResult } from "../types.ts";
 import type { MessageGroup } from "../types/chat-types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
 
+vi.mock("../markdown.ts", () => ({
+  toSanitizedMarkdownHtml: (value: string) => value,
+}));
+
 vi.mock("./markdown-sidebar.ts", async () => {
   const { html } = await import("lit");
   return {

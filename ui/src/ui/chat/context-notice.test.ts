@@ -17,15 +17,16 @@ import { renderSideResult } from "./side-result-render.ts";
 
 describe("context notice", () => {
   afterEach(() => {
-    document.documentElement.style.removeProperty("--warn");
-    document.documentElement.style.removeProperty("--danger");
+    vi.restoreAllMocks();
     resetContextNoticeThemeCacheForTest();
   });
 
   it("renders only for fresh high current usage", () => {
     const container = document.createElement("div");
-    document.documentElement.style.setProperty("--warn", "rgb(1, 2, 3)");
-    document.documentElement.style.setProperty("--danger", "tomato");
+    vi.spyOn(window, "getComputedStyle").mockReturnValue({
+      getPropertyValue: (name: string) =>
+        name === "--warn" ? "#010203" : name === "--danger" ? "#040506" : "",
+    } as CSSStyleDeclaration);
     resetContextNoticeThemeCacheForTest();
 
     expect(
@@ -58,6 +59,7 @@ describe("context notice", () => {
     const notice = container.querySelector<HTMLElement>(".context-notice");
     expect(notice).not.toBeNull();
     expect(notice?.style.getPropertyValue("--ctx-color")).toContain("rgb(");
+    expect(notice?.style.getPropertyValue("--ctx-color")).toContain("4, 5, 6");
     expect(notice?.style.getPropertyValue("--ctx-color")).not.toContain("NaN");
     expect(notice?.style.getPropertyValue("--ctx-bg")).not.toContain("NaN");
 
