@@ -22,7 +22,7 @@ export async function cleanupFailedAcpSpawn(params: {
   runtimeCloseHandle?: AcpSpawnRuntimeCloseHandle;
   preserveExistingSession?: boolean;
 }): Promise<void> {
-  if (params.runtimeCloseHandle) {
+  if (params.runtimeCloseHandle && !params.preserveExistingSession) {
     await params.runtimeCloseHandle.runtime
       .close({
         handle: params.runtimeCloseHandle.handle,
