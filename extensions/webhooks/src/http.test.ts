@@ -69,13 +69,16 @@ function createJsonRequest(params: {
 function createHandler(): {
   handler: ReturnType<typeof createTaskFlowWebhookRequestHandler>;
   target: TaskFlowWebhookTarget;
+  secret: string;
 } {
   const runtime = createRuntimeTaskFlow();
   nextSessionId += 1;
+  const secret = "shared-secret";
   const target: TaskFlowWebhookTarget = {
     routeId: "zapier",
     path: "/plugins/webhooks/zapier",
-    secret: "shared-secret",
+    secretInput: secret,
+    secretConfigPath: "plugins.entries.webhooks.routes.zapier.secret",
     defaultControllerId: "webhooks/zapier",
     taskFlow: runtime.bindSession({
       sessionKey: `agent:main:webhook-test-${String(nextSessionId)}`,
@@ -88,6 +91,7 @@ function createHandler(): {
       targetsByPath,
     }),
     target,
+    secret,
   };
 }
 
@@ -133,11 +137,11 @@ describe("createTaskFlowWebhookRequestHandler", () => {
   });
 
   it("creates flows through the bound session and scrubs owner metadata from responses", async () => {
-    const { handler, target } = createHandler();
+    const { handler, target, secret } = createHandler();
     const res = await dispatchJsonRequest({
       handler,
       path: target.path,
-      secret: target.secret,
+      secret,
       body: {
         action: "create_flow",
         goal: "Review inbound queue",
@@ -158,7 +162,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
   });
 
   it("runs child tasks and scrubs task ownership fields from responses", async () => {
-    const { handler, target } = createHandler();
+    const { handler, target, secret } = createHandler();
     const flow = target.taskFlow.createManaged({
       controllerId: "webhooks/zapier",
       goal: "Triage inbox",
@@ -166,7 +170,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     const res = await dispatchJsonRequest({
       handler,
       path: target.path,
-      secret: target.secret,
+      secret,
       body: {
         action: "run_task",
         flowId: flow.flowId,
@@ -193,11 +197,11 @@ describe("createTaskFlowWebhookRequestHandler", () => {
   });
 
   it("returns 404 for missing flow mutations", async () => {
-    const { handler, target } = createHandler();
+    const { handler, target, secret } = createHandler();
     const res = await dispatchJsonRequest({
       handler,
       path: target.path,
-      secret: target.secret,
+      secret,
       body: {
         action: "set_waiting",
         flowId: "flow-missing",
@@ -219,7 +223,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
   });
 
   it("returns 409 for revision conflicts", async () => {
-    const { handler, target } = createHandler();
+    const { handler, target, secret } = createHandler();
     const flow = target.taskFlow.createManaged({
       controllerId: "webhooks/zapier",
       goal: "Review inbox",
@@ -227,7 +231,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     const res = await dispatchJsonRequest({
       handler,
       path: target.path,
-      secret: target.secret,
+      secret,
       body: {
         action: "set_waiting",
         flowId: flow.flowId,
@@ -252,7 +256,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
   });
 
   it("rejects internal runtimes and running-only metadata from external callers", async () => {
-    const { handler, target } = createHandler();
+    const { handler, target, secret } = createHandler();
     const flow = target.taskFlow.createManaged({
       controllerId: "webhooks/zapier",
       goal: "Review inbox",
@@ -261,7 +265,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     const runtimeRes = await dispatchJsonRequest({
       handler,
       path: target.path,
-      secret: target.secret,
+      secret,
       body: {
         action: "run_task",
         flowId: flow.flowId,
@@ -278,7 +282,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     const queuedMetadataRes = await dispatchJsonRequest({
       handler,
       path: target.path,
-      secret: target.secret,
+      secret,
       body: {
         action: "run_task",
         flowId: flow.flowId,
@@ -297,7 +301,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
   });
 
   it("reuses the same task record when retried with the same runId", async () => {
-    const { handler, target } = createHandler();
+    const { handler, target, secret } = createHandler();
     const flow = target.taskFlow.createManaged({
       controllerId: "webhooks/zapier",
       goal: "Triage inbox",
@@ -306,7 +310,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     const first = await dispatchJsonRequest({
       handler,
       path: target.path,
-      secret: target.secret,
+      secret,
       body: {
         action: "run_task",
         flowId: flow.flowId,
@@ -319,7 +323,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     const second = await dispatchJsonRequest({
       handler,
       path: target.path,
-      secret: target.secret,
+      secret,
       body: {
         action: "run_task",
         flowId: flow.flowId,
@@ -339,7 +343,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
   });
 
   it("returns 409 when cancellation targets a terminal flow", async () => {
-    const { handler, target } = createHandler();
+    const { handler, target, secret } = createHandler();
     const flow = target.taskFlow.createManaged({
       controllerId: "webhooks/zapier",
       goal: "Review inbox",
@@ -353,7 +357,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     const res = await dispatchJsonRequest({
       handler,
       path: target.path,
-      secret: target.secret,
+      secret,
       body: {
         action: "cancel_flow",
         flowId: flow.flowId,

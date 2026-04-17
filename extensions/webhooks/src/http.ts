@@ -8,13 +8,15 @@ import {
   createWebhookInFlightLimiter,
   readJsonWebhookBodyOrReject,
   resolveRequestClientIp,
-  resolveWebhookTargetWithAuthOrRejectSync,
+  resolveConfiguredSecretInputString,
+  resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
   WEBHOOK_IN_FLIGHT_DEFAULTS,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   type OpenClawConfig,
   type WebhookInFlightLimiter,
 } from "../runtime-api.js";
+import type { WebhookSecretInput } from "./config.js";
 
 type BoundTaskFlowRuntime = ReturnType<PluginRuntime["taskFlow"]["bindSession"]>;
 
@@ -174,7 +176,8 @@ type WebhookAction = z.infer<typeof webhookActionSchema>;
 export type TaskFlowWebhookTarget = {
   routeId: string;
   path: string;
-  secret: string;
+  secretInput: WebhookSecretInput;
+  secretConfigPath: string;
   defaultControllerId: string;
   taskFlow: BoundTaskFlowRuntime;
 };
@@ -698,11 +701,23 @@ export function createTaskFlowWebhookRequestHandler(params: {
       inFlightLimiter,
       handle: async ({ targets }) => {
         const presentedSecret = extractSharedSecret(req);
-        const target = resolveWebhookTargetWithAuthOrRejectSync({
+        const target = await resolveWebhookTargetWithAuthOrReject({
           targets,
           res,
-          isMatch: (candidate) =>
-            presentedSecret.length > 0 && timingSafeEquals(candidate.secret, presentedSecret),
+          isMatch: async (candidate) => {
+            if (presentedSecret.length === 0) {
+              return false;
+            }
+            const resolvedSecret = await resolveConfiguredSecretInputString({
+              config: params.cfg,
+              env: process.env,
+              value: candidate.secretInput,
+              path: candidate.secretConfigPath,
+            });
+            return Boolean(
+              resolvedSecret.value && timingSafeEquals(resolvedSecret.value, presentedSecret),
+            );
+          },
         });
         if (!target) {
           return true;
