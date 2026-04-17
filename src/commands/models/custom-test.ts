@@ -148,10 +148,9 @@ export async function modelsCustomTestCommand(
     return;
   }
 
+  const providerCount = new Set(targets.map((t) => t.providerId)).size;
   runtime.log(
-    `Testing ${targets.length} custom model${targets.length === 1 ? "" : "s"} across ${
-      new Set(targets.map((t) => t.providerId)).size
-    } provider${new Set(targets.map((t) => t.providerId)).size === 1 ? "" : "s"}...`,
+    `Testing ${targets.length} custom model${targets.length === 1 ? "" : "s"} across ${providerCount} provider${providerCount === 1 ? "" : "s"}...`,
   );
 
   // Run verifications with bounded concurrency.
@@ -179,6 +178,14 @@ export async function modelsCustomTestCommand(
           compatibility: target.compatibility,
           status: result.ok ? "ok" : "fail",
           ...(result.status !== undefined ? { statusCode: result.status } : {}),
+          ...(result.error !== undefined
+            ? {
+                error:
+                  result.error instanceof Error
+                    ? result.error.message
+                    : String(result.error),
+              }
+            : {}),
           latencyMs: result.ok ? latencyMs : undefined,
         };
       } catch (err) {
