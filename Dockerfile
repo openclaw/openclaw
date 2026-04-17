@@ -37,6 +37,9 @@ RUN set -eux; \
 ENV PATH="/root/.bun/bin:${PATH}"
 RUN bun --version
 
+# Install pnpm globally
+RUN npm install -g pnpm
+
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig.json ./
 COPY scripts ./scripts
