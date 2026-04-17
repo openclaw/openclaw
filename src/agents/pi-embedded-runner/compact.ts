@@ -560,6 +560,7 @@ export async function compactEmbeddedPiSessionDirect(
       config: params.config,
       sandboxToolPolicy: sandbox?.tools,
       sessionKey: sandboxSessionKey,
+      agentId: effectiveSkillAgentId,
       modelProvider: model.provider,
       modelId,
       messageProvider: resolvedMessageProvider,
