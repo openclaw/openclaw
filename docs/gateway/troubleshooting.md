@@ -111,8 +111,8 @@ Fix options:
 Related:
 
 - [/gateway/local-models](/gateway/local-models)
-- [/gateway/gateway/configuration-reference](/gateway/gateway/configuration-reference)
-- [/gateway/gateway/configuration-reference-reference#openai-compatible-endpoints](/gateway/gateway/configuration-reference-reference#openai-compatible-endpoints)
+- [/gateway/gateway/configuration-reference-reference](/gateway/gateway/configuration-reference-reference)
+- [/gateway/gateway/configuration-reference-reference-reference#openai-compatible-endpoints](/gateway/gateway/configuration-reference-reference-reference#openai-compatible-endpoints)
 
 ## No replies
 
@@ -224,7 +224,7 @@ If `openclaw devices rotate` / `revoke` / `remove` is denied unexpectedly:
 Related:
 
 - [/web/control-ui](/web/control-ui)
-- [/gateway/gateway/configuration-reference](/gateway/gateway/configuration-reference) (gateway auth modes)
+- [/gateway/gateway/configuration-reference-reference](/gateway/gateway/configuration-reference-reference) (gateway auth modes)
 - [/gateway/trusted-proxy-auth](/gateway/trusted-proxy-auth)
 - [/gateway/remote](/gateway/remote)
 - [/cli/devices](/cli/devices)
@@ -259,7 +259,7 @@ Common signatures:
 Related:
 
 - [/gateway/background-process](/gateway/background-process)
-- [/gateway/gateway/configuration-reference](/gateway/gateway/configuration-reference)
+- [/gateway/gateway/configuration-reference-reference](/gateway/gateway/configuration-reference-reference)
 - [/gateway/doctor](/gateway/doctor)
 
 ## Gateway probe warnings
