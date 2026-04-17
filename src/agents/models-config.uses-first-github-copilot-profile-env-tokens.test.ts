@@ -124,6 +124,58 @@ describe("models-config", () => {
     });
   });
 
+  it("keeps a non-empty existing models.json baseUrl when merge mode regenerates the provider", async () => {
+    const existingContents = `${JSON.stringify(
+      {
+        providers: {
+          kilocode: {
+            baseUrl: "https://api.kilo.ai/api/gateway",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`;
+
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            providers: {
+              kilocode: {
+                baseUrl: "https://api.kilo.ai/api/gateway/v1",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        },
+        sourceConfigForSecrets: {
+          models: {
+            providers: {
+              kilocode: {
+                baseUrl: "https://api.kilo.ai/api/gateway/v1",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        env: {} as NodeJS.ProcessEnv,
+        existingRaw: existingContents,
+        existingParsed: JSON.parse(existingContents) as unknown,
+      },
+      {
+        resolveImplicitProviders: async () => ({}),
+      },
+    );
+
+    expect(plan).toEqual({ action: "noop" });
+  });
+
   it("uses tokenRef env var when github-copilot profile omits plaintext token", () => {
     const auth = createProviderAuthResolver(
       {
