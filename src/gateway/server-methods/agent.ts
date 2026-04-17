@@ -861,7 +861,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     // the .finally() cleanup below would remove the entry prematurely.
     const alreadyRegistered = context.chatAbortControllers.has(runId);
     // DEBUG: temporary diagnostic for CI — remove before merge
-    console.log(`[agent RPC DEBUG] runId=${runId} alreadyRegistered=${alreadyRegistered}`);
+    process.stderr.write(`[agent RPC DEBUG] runId=${runId} alreadyRegistered=${alreadyRegistered}\n`);
     if (!alreadyRegistered) {
       context.chatAbortControllers.set(runId, abortEntry);
     }
@@ -1033,7 +1033,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         : 30_000;
     const activeRunEntry = context.chatAbortControllers.get(runId);
     // DEBUG: temporary diagnostic for CI — remove before merge
-    console.log(`[agent.wait DEBUG] runId=${runId} hasEntry=${!!activeRunEntry} kind=${activeRunEntry?.kind} mapSize=${context.chatAbortControllers.size} mapKeys=[${[...context.chatAbortControllers.keys()].join(",")}]`);
+    process.stderr.write(`[agent.wait DEBUG] runId=${runId} hasEntry=${!!activeRunEntry} kind=${activeRunEntry?.kind} mapSize=${context.chatAbortControllers.size} mapKeys=[${[...context.chatAbortControllers.keys()].join(",")}]\n`);
     // When a chat.send run is active with the same runId, ignore cached
     // agent terminal snapshots so stale agent results do not preempt it.
     // When an agent RPC run is active, all cached terminal snapshots (both
