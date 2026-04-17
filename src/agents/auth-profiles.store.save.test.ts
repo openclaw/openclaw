@@ -131,6 +131,41 @@ describe("saveAuthProfileStore", () => {
     }
   });
 
+  it("does not persist compatibility-only external oauth ownership metadata", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-managedby-"));
+    try {
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: 123,
+            managedBy: "codex-cli",
+          },
+        },
+      };
+
+      saveAuthProfileStore(store, agentDir);
+
+      const persisted = JSON.parse(await fs.readFile(resolveAuthStorePath(agentDir), "utf8")) as {
+        profiles: Record<string, Record<string, unknown>>;
+      };
+      expect(persisted.profiles["openai-codex:default"]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: 123,
+      });
+      expect(persisted.profiles["openai-codex:default"]?.managedBy).toBeUndefined();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("writes runtime scheduling state to auth-state.json only", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-state-"));
     try {
