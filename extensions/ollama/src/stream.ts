@@ -34,7 +34,10 @@ import {
   parseJsonObjectPreservingUnsafeIntegers,
   parseJsonPreservingUnsafeIntegers,
 } from "./ollama-json.js";
-import { buildOllamaBaseUrlSsrFPolicy } from "./provider-models.js";
+import {
+  buildOllamaBaseUrlSsrFPolicy,
+  isReasoningModelHeuristic,
+} from "./provider-models.js";
 
 const log = createSubsystemLogger("ollama-stream");
 
@@ -153,10 +156,14 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
 
 function createOllamaThinkingWrapper(baseFn: StreamFn | undefined, think: boolean): StreamFn {
   const streamFn = baseFn ?? streamSimple;
-  return (model, context, options) =>
-    streamWithPayloadPatch(streamFn, model, context, options, (payloadRecord) => {
+  return (model, context, options) => {
+    if (model.api !== "ollama") {
+      return streamFn(model, context, options);
+    }
+    return streamWithPayloadPatch(streamFn, model, context, options, (payloadRecord) => {
       payloadRecord.think = think;
     });
+  };
 }
 
 function resolveOllamaCompatNumCtx(model: ProviderRuntimeModel): number {
@@ -174,7 +181,6 @@ export function createConfiguredOllamaCompatStreamWrapper(
   let streamFn = ctx.streamFn;
   const model = ctx.model;
   let injectNumCtx = false;
-  const isNativeOllamaTransport = model?.api === "ollama";
 
   if (model) {
     const providerId =
@@ -196,10 +202,15 @@ export function createConfiguredOllamaCompatStreamWrapper(
     streamFn = wrapOllamaCompatNumCtx(streamFn, resolveOllamaCompatNumCtx(model));
   }
 
-  if (isNativeOllamaTransport && ctx.thinkingLevel === "off") {
+  // Only apply the think parameter for models that are known to support thinking.
+  // Models like qwen2.5:0.5b don't support the think parameter at all and will
+  // return a 400 error if the parameter is sent (even with think=false).
+  const supportsThinking = isReasoningModelHeuristic(ctx.modelId);
+
+  if (supportsThinking && ctx.thinkingLevel === "off") {
     streamFn = createOllamaThinkingWrapper(streamFn, false);
-  } else if (isNativeOllamaTransport && ctx.thinkingLevel) {
-    // Any non-off ThinkLevel (minimal, low, medium, high, xhigh, adaptive, max)
+  } else if (supportsThinking && ctx.thinkingLevel) {
+    // Any non-off ThinkLevel (minimal, low, medium, high, xhigh, adaptive)
     // should enable Ollama's native thinking mode.
     streamFn = createOllamaThinkingWrapper(streamFn, true);
   }

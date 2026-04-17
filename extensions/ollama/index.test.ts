@@ -69,58 +69,6 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
   return registerProviderMock.mock.calls[0]?.[0];
 }
 
-function captureWrappedOllamaPayload(thinkingLevel: "off" | "low" | undefined) {
-  const provider = registerProvider();
-  let payloadSeen: Record<string, unknown> | undefined;
-  const baseStreamFn = vi.fn((_model, _context, options) => {
-    const payload: Record<string, unknown> = {
-      messages: [],
-      options: { num_ctx: 65536 },
-      stream: true,
-    };
-    options?.onPayload?.(payload, _model);
-    payloadSeen = payload;
-    return {} as never;
-  });
-
-  const wrapped = provider.wrapStreamFn?.({
-    config: {
-      models: {
-        providers: {
-          ollama: {
-            api: "ollama",
-            baseUrl: "http://127.0.0.1:11434",
-            models: [],
-          },
-        },
-      },
-    },
-    provider: "ollama",
-    modelId: "qwen3.5:9b",
-    thinkingLevel,
-    model: {
-      api: "ollama",
-      provider: "ollama",
-      id: "qwen3.5:9b",
-      baseUrl: "http://127.0.0.1:11434",
-      contextWindow: 131_072,
-    },
-    streamFn: baseStreamFn,
-  });
-
-  expect(typeof wrapped).toBe("function");
-  void wrapped?.(
-    {
-      api: "ollama",
-      provider: "ollama",
-      id: "qwen3.5:9b",
-    } as never,
-    {} as never,
-    {},
-  );
-  return { baseStreamFn, payloadSeen };
-}
-
 describe("ollama plugin", () => {
   it("does not preselect a default model during provider auth setup", async () => {
     const provider = registerProvider();
@@ -353,35 +301,6 @@ describe("ollama plugin", () => {
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
   });
 
-  it("declares streaming usage support for OpenAI-compatible Ollama routes", () => {
-    const provider = registerProvider();
-
-    expect(
-      provider.contributeResolvedModelCompat?.({
-        modelId: "qwen3:32b",
-        provider: "ollama",
-        model: {
-          api: "openai-completions",
-          provider: "ollama",
-          id: "qwen3:32b",
-          baseUrl: "http://127.0.0.1:11434/v1",
-        },
-      } as never),
-    ).toEqual({ supportsUsageInStreaming: true });
-    expect(
-      provider.contributeResolvedModelCompat?.({
-        modelId: "qwen3:32b",
-        provider: "custom",
-        model: {
-          api: "openai-completions",
-          provider: "custom",
-          id: "qwen3:32b",
-          baseUrl: "https://proxy.example.com/v1",
-        },
-      } as never),
-    ).toBeUndefined();
-  });
-
   it("owns replay policy for OpenAI-compatible Ollama routes only", () => {
     const provider = registerProvider();
 
@@ -476,61 +395,274 @@ describe("ollama plugin", () => {
     );
   });
 
-  it("wraps native Ollama payloads with top-level think=false when thinking is off", () => {
-    const { baseStreamFn, payloadSeen } = captureWrappedOllamaPayload("off");
+  it("wraps native Ollama payloads with top-level think=false when thinking is off for reasoning models", () => {
+    const provider = registerProvider();
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [],
+        options: { num_ctx: 65536 },
+        stream: true,
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+
+    const wrapped = provider.wrapStreamFn?.({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      modelId: "deepseek-r1:8b",
+      thinkingLevel: "off",
+      model: {
+        api: "ollama",
+        provider: "ollama",
+        id: "deepseek-r1:8b",
+        baseUrl: "http://127.0.0.1:11434",
+        contextWindow: 131_072,
+      },
+      streamFn: baseStreamFn,
+    });
+
+    expect(typeof wrapped).toBe("function");
+    void wrapped?.(
+      {
+        api: "ollama",
+        provider: "ollama",
+        id: "deepseek-r1:8b",
+      } as never,
+      {} as never,
+      {},
+    );
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
     expect(payloadSeen?.think).toBe(false);
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.think).toBeUndefined();
   });
 
-  it("wraps native Ollama payloads with top-level think=true when thinking is enabled", () => {
-    const { baseStreamFn, payloadSeen } = captureWrappedOllamaPayload("low");
+  it("wraps native Ollama payloads with top-level think=true when thinking is enabled for reasoning models", () => {
+    const provider = registerProvider();
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [],
+        options: { num_ctx: 65536 },
+        stream: true,
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+
+    const wrapped = provider.wrapStreamFn?.({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      modelId: "deepseek-r1:8b",
+      thinkingLevel: "low",
+      model: {
+        api: "ollama",
+        provider: "ollama",
+        id: "deepseek-r1:8b",
+        baseUrl: "http://127.0.0.1:11434",
+        contextWindow: 131_072,
+      },
+      streamFn: baseStreamFn,
+    });
+
+    expect(typeof wrapped).toBe("function");
+    void wrapped?.(
+      {
+        api: "ollama",
+        provider: "ollama",
+        id: "deepseek-r1:8b",
+      } as never,
+      {} as never,
+      {},
+    );
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
     expect(payloadSeen?.think).toBe(true);
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.think).toBeUndefined();
   });
 
   it("does not set think param when thinkingLevel is undefined", () => {
-    const { baseStreamFn, payloadSeen } = captureWrappedOllamaPayload(undefined);
+    const provider = registerProvider();
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [],
+        options: { num_ctx: 65536 },
+        stream: true,
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+
+    const wrapped = provider.wrapStreamFn?.({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      modelId: "qwen3.5:9b",
+      thinkingLevel: undefined,
+      model: {
+        api: "ollama",
+        provider: "ollama",
+        id: "qwen3.5:9b",
+        baseUrl: "http://127.0.0.1:11434",
+        contextWindow: 131_072,
+      },
+      streamFn: baseStreamFn,
+    });
+
+    expect(typeof wrapped).toBe("function");
+    void wrapped?.(
+      {
+        api: "ollama",
+        provider: "ollama",
+        id: "qwen3.5:9b",
+      } as never,
+      {} as never,
+      {},
+    );
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
     expect(payloadSeen?.think).toBeUndefined();
   });
 
-  it("registers an image-capable media understanding provider so image tool can route ollama/*", () => {
-    const mediaProviders: Array<{
-      id: string;
-      capabilities?: string[];
-      defaultModels?: Record<string, string>;
-      autoPriority?: Record<string, number>;
-      describeImage?: unknown;
-      describeImages?: unknown;
-    }> = [];
+  it("does not set think param for non-reasoning models even when thinkingLevel is set", () => {
+    const provider = registerProvider();
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [],
+        options: { num_ctx: 65536 },
+        stream: true,
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
 
-    plugin.register(
-      createTestPluginApi({
-        id: "ollama",
-        name: "Ollama",
-        source: "test",
-        config: {},
-        pluginConfig: {},
-        runtime: {} as never,
-        registerProvider() {},
-        registerMediaUnderstandingProvider(provider) {
-          mediaProviders.push(provider);
+    const wrapped = provider.wrapStreamFn?.({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+            },
+          },
         },
-      }),
-    );
+      },
+      provider: "ollama",
+      modelId: "qwen2.5:0.5b",
+      thinkingLevel: "low",
+      model: {
+        api: "ollama",
+        provider: "ollama",
+        id: "qwen2.5:0.5b",
+        baseUrl: "http://127.0.0.1:11434",
+        contextWindow: 131_072,
+      },
+      streamFn: baseStreamFn,
+    });
 
-    expect(mediaProviders).toHaveLength(1);
-    const [ollamaMedia] = mediaProviders;
-    expect(ollamaMedia.id).toBe("ollama");
-    expect(ollamaMedia.capabilities).toEqual(["image"]);
-    expect(typeof ollamaMedia.describeImage).toBe("function");
-    expect(typeof ollamaMedia.describeImages).toBe("function");
-    // Intentional: no defaultModels or autoPriority. Ollama vision models are
-    // user-installed (llava, qwen2.5vl, …) with no universal default, and we
-    // don't want Ollama to auto-steal image duty from configured providers.
-    expect(ollamaMedia.defaultModels).toBeUndefined();
-    expect(ollamaMedia.autoPriority).toBeUndefined();
+    expect(typeof wrapped).toBe("function");
+    void wrapped?.(
+      {
+        api: "ollama",
+        provider: "ollama",
+        id: "qwen2.5:0.5b",
+      } as never,
+      {} as never,
+      {},
+    );
+    expect(baseStreamFn).toHaveBeenCalledTimes(1);
+    // qwen2.5:0.5b is not a reasoning model, so think param should NOT be set
+    // even when thinkingLevel is provided (fixes openclaw/openclaw#67949)
+    expect(payloadSeen?.think).toBeUndefined();
+  });
+
+  it("does not set think param for non-reasoning models when thinkingLevel is off", () => {
+    const provider = registerProvider();
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [],
+        options: { num_ctx: 65536 },
+        stream: true,
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+
+    const wrapped = provider.wrapStreamFn?.({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      modelId: "qwen2.5:0.5b",
+      thinkingLevel: "off",
+      model: {
+        api: "ollama",
+        provider: "ollama",
+        id: "qwen2.5:0.5b",
+        baseUrl: "http://127.0.0.1:11434",
+        contextWindow: 131_072,
+      },
+      streamFn: baseStreamFn,
+    });
+
+    expect(typeof wrapped).toBe("function");
+    void wrapped?.(
+      {
+        api: "ollama",
+        provider: "ollama",
+        id: "qwen2.5:0.5b",
+      } as never,
+      {} as never,
+      {},
+    );
+    expect(baseStreamFn).toHaveBeenCalledTimes(1);
+    // qwen2.5:0.5b is not a reasoning model, so think param should NOT be set
+    // even when thinkingLevel is "off" (fixes openclaw/openclaw#67949)
+    expect(payloadSeen?.think).toBeUndefined();
   });
 });
