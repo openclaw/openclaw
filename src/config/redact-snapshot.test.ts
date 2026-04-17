@@ -1163,45 +1163,20 @@ describe("redactConfigSnapshot", () => {
     expect(channels.slack.accounts[1].botToken).toBe(REDACTED_SENTINEL);
   });
 
-  it("redacts credentials embedded in browser.cdpUrl (query token and userinfo)", () => {
+  it("redacts browser cdpUrl secrets while preserving bare endpoints", () => {
     const hints = buildConfigSchema().uiHints;
     const raw = `{
   browser: {
     cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",
-  },
-}`;
-    const snapshot = makeSnapshot(
-      {
-        browser: {
-          cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",
-        },
-      },
-      raw,
-    );
-
-    const result = redactConfigSnapshot(snapshot, hints);
-    const cfg = result.config as typeof snapshot.config;
-    expect(cfg.browser.cdpUrl).toBe(REDACTED_SENTINEL);
-    expect(result.raw).toContain(REDACTED_SENTINEL);
-    expect(result.raw).not.toContain("user:pass@");
-    expect(result.raw).not.toContain("supersecret123");
-
-    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
-    expect(restored.browser.cdpUrl).toBe(
-      "https://user:pass@chrome.browserless.io?token=supersecret123",
-    );
-  });
-
-  it("redacts credentials embedded in browser.profiles.*.cdpUrl", () => {
-    const hints = buildConfigSchema().uiHints;
-    const raw = `{
-  browser: {
     profiles: {
-      staging: {
+      remote: {
         cdpUrl: "https://chrome.staging.example.com?token=staging-secret",
       },
       prod: {
         cdpUrl: "https://alice:secret@chrome.prod.example.com",
+      },
+      local: {
+        cdpUrl: "ws://localhost:9222",
       },
     },
   },
@@ -1209,12 +1184,16 @@ describe("redactConfigSnapshot", () => {
     const snapshot = makeSnapshot(
       {
         browser: {
+          cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",
           profiles: {
-            staging: {
+            remote: {
               cdpUrl: "https://chrome.staging.example.com?token=staging-secret",
             },
             prod: {
               cdpUrl: "https://alice:secret@chrome.prod.example.com",
+            },
+            local: {
+              cdpUrl: "ws://localhost:9222",
             },
           },
         },
@@ -1224,34 +1203,26 @@ describe("redactConfigSnapshot", () => {
 
     const result = redactConfigSnapshot(snapshot, hints);
     const cfg = result.config as typeof snapshot.config;
-    expect(cfg.browser.profiles.staging.cdpUrl).toBe(REDACTED_SENTINEL);
+    expect(cfg.browser.cdpUrl).toBe(REDACTED_SENTINEL);
+    expect(cfg.browser.profiles.remote.cdpUrl).toBe(REDACTED_SENTINEL);
     expect(cfg.browser.profiles.prod.cdpUrl).toBe(REDACTED_SENTINEL);
+    expect(cfg.browser.profiles.local.cdpUrl).toBe("ws://localhost:9222");
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("user:pass@");
+    expect(result.raw).not.toContain("supersecret123");
     expect(result.raw).not.toContain("staging-secret");
     expect(result.raw).not.toContain("alice:secret@");
 
     const restored = restoreRedactedValues(result.config, snapshot.config, hints);
-    expect(restored.browser.profiles.staging.cdpUrl).toBe(
+    expect(restored.browser.cdpUrl).toBe(
+      "https://user:pass@chrome.browserless.io?token=supersecret123",
+    );
+    expect(restored.browser.profiles.remote.cdpUrl).toBe(
       "https://chrome.staging.example.com?token=staging-secret",
     );
     expect(restored.browser.profiles.prod.cdpUrl).toBe(
       "https://alice:secret@chrome.prod.example.com",
     );
-  });
-
-  it("does not redact bare cdpUrl addresses without credentials", () => {
-    const hints = buildConfigSchema().uiHints;
-    const snapshot = makeSnapshot({
-      browser: {
-        cdpUrl: "http://10.0.0.42:9222",
-        profiles: {
-          local: { cdpUrl: "ws://localhost:9222" },
-        },
-      },
-    });
-
-    const result = redactConfigSnapshot(snapshot, hints);
-    const cfg = result.config as typeof snapshot.config;
-    expect(cfg.browser.cdpUrl).toBe("http://10.0.0.42:9222");
-    expect(cfg.browser.profiles.local.cdpUrl).toBe("ws://localhost:9222");
+    expect(restored.browser.profiles.local.cdpUrl).toBe("ws://localhost:9222");
   });
 });
