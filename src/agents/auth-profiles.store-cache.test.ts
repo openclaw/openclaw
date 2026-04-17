@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 
-const resolveExternalAuthProfilesWithPluginsMock = vi.fn(() => []);
+type ExternalAuthProfiles = ReturnType<
+  typeof import("../plugins/provider-runtime.js").resolveExternalAuthProfilesWithPlugins
+>;
+
+const resolveExternalAuthProfilesWithPluginsMock = vi.fn<() => ExternalAuthProfiles>(() => []);
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
