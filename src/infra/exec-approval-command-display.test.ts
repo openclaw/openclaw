@@ -58,6 +58,30 @@ describe("sanitizeExecApprovalDisplayText", () => {
     expect(result).not.toContain("456789012345678");
     expect(result).toContain("remainder");
   });
+
+  it("redacts tokens containing spliced NBSP (Zs) characters", () => {
+    const cmd = "echo sk-abc123\u00A0456789012345678 remainder";
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("sk-abc123");
+    expect(result).not.toContain("456789012345678");
+    expect(result).toContain("remainder");
+  });
+
+  it("redacts tokens containing spliced narrow no-break space", () => {
+    const cmd = "echo sk-abc123\u202F456789012345678 remainder";
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("sk-abc123");
+    expect(result).not.toContain("456789012345678");
+    expect(result).toContain("remainder");
+  });
+
+  it("preserves multi-line boundary context when bypass is detected so approval UI is not spoofed into looking single-line", () => {
+    const cmd = "line1\necho sk-abc123\u00A0456789012345678\nline3";
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("sk-abc123");
+    expect(result).not.toContain("456789012345678");
+    expect(result).toContain("3-line");
+  });
 });
 
 describe("resolveExecApprovalCommandDisplay", () => {
