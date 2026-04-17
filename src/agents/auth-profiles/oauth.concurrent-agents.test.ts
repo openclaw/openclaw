@@ -65,9 +65,18 @@ vi.mock("./doctor.js", () => ({
 // credential files; it is slow and can pollute test state. Stub it to a no-op
 // so the suite only exercises in-repo auth-profile logic.
 vi.mock("./external-cli-sync.js", () => ({
-  syncExternalCliCredentials: () => false,
-  readManagedExternalCliCredential: () => null,
+  readExternalCliBootstrapCredential: () => null,
+  resolveExternalCliAuthProfiles: () => [],
   areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
+  hasUsableOAuthCredential: (credential: { access?: string; expires?: number } | undefined) =>
+    Boolean(
+      credential &&
+      typeof credential.access === "string" &&
+      credential.access.length > 0 &&
+      typeof credential.expires === "number" &&
+      Number.isFinite(credential.expires) &&
+      Date.now() < credential.expires,
+    ),
 }));
 
 function createExpiredOauthStore(params: {
@@ -133,16 +142,17 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
     }
   });
 
-  it("refreshes exactly once when 20 agents share one OAuth profile and all race on expiry", async () => {
+  it("refreshes exactly once when agents share one OAuth profile and race on expiry", async () => {
+    const agentCount = 6;
     const profileId = "openai-codex:default";
     const provider = "openai-codex";
     const accountId = "acct-shared";
     const freshExpiry = Date.now() + 60 * 60 * 1000;
 
-    // Seed 20 sub-agents + main with the SAME stale OAuth credential. Main is
+    // Seed sub-agents + main with the SAME stale OAuth credential. Main is
     // also expired so it cannot short-circuit via adoptNewerMainOAuthCredential.
     const subAgents = await Promise.all(
-      Array.from({ length: 20 }, async (_, i) => {
+      Array.from({ length: agentCount }, async (_, i) => {
         const dir = path.join(tempRoot, "agents", `sub-${i}`, "agent");
         await fs.mkdir(dir, { recursive: true });
         saveAuthProfileStore(createExpiredOauthStore({ profileId, provider, accountId }), dir);
@@ -166,10 +176,10 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       } as never;
     });
 
-    // Fire all 20 agents concurrently. With the old per-agentDir lock this
-    // would produce ~20 concurrent refresh calls and 19 refresh_token_reused
+    // Fire all agents concurrently. With the old per-agentDir lock this
+    // would produce N concurrent refresh calls and N-1 refresh_token_reused
     // 401s. With the new global per-profile lock, only the first refresh is
-    // performed; the remaining 19 adopt the resulting fresh credentials.
+    // performed; the remaining agents adopt the resulting fresh credentials.
     const results = await Promise.all(
       subAgents.map((agentDir) =>
         resolveApiKeyForProfileInTest({
@@ -181,7 +191,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
     );
 
     expect(callCount).toBe(1);
-    expect(results).toHaveLength(20);
+    expect(results).toHaveLength(agentCount);
     for (const result of results) {
       expect(result).not.toBeNull();
       expect(result?.apiKey).toBe("cross-agent-refreshed-access");

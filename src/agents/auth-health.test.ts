@@ -140,6 +140,39 @@ describe("buildAuthHealthSummary", () => {
     expect(statuses["openai-codex:default"]).toBe("ok");
   });
 
+  it("keeps healthy local oauth over fresher imported Codex CLI credentials in health status", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    readCodexCliCredentialsCachedMock.mockReturnValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "fresh-cli-access",
+      refresh: "fresh-cli-refresh",
+      expires: now + 7 * DEFAULT_OAUTH_WARN_MS,
+      accountId: "acct-cli",
+    });
+    const store = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "healthy-local-access",
+          refresh: "healthy-local-refresh",
+          expires: now + DEFAULT_OAUTH_WARN_MS + 10_000,
+        },
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    });
+
+    const profile = summary.profiles.find((entry) => entry.profileId === "openai-codex:default");
+    expect(profile?.status).toBe("ok");
+    expect(profile?.expiresAt).toBe(now + DEFAULT_OAUTH_WARN_MS + 10_000);
+  });
+
   it("marks token profiles with invalid expires as missing with reason code", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const store = {

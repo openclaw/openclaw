@@ -10,8 +10,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 }));
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
-  readManagedExternalCliCredential: () => null,
-  syncExternalCliCredentials: () => false,
+  readExternalCliBootstrapCredential: () => null,
+  resolveExternalCliAuthProfiles: () => [],
 }));
 
 type AuthProfileStore = Parameters<typeof saveAuthProfileStore>[0];
