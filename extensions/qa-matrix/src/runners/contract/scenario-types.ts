@@ -62,6 +62,8 @@ export type MatrixQaScenarioArtifacts = {
   secondDriverEventId?: string;
   secondReply?: MatrixQaReplyArtifact;
   secondToken?: string;
+  subagentCompletion?: MatrixQaReplyArtifact;
+  subagentIntro?: MatrixQaReplyArtifact;
   threadDriverEventId?: string;
   threadReply?: MatrixQaReplyArtifact;
   threadRootEventId?: string;

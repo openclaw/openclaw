@@ -40,6 +40,9 @@ import type { MatrixQaCanaryArtifact, MatrixQaScenarioExecution } from "./scenar
 
 type MatrixQaThreadScenarioResult = Awaited<ReturnType<typeof runThreadScenario>>;
 
+const MATRIX_SUBAGENT_THREAD_HOOK_ERROR_RE =
+  /thread=true is unavailable because no channel plugin registered subagent_spawning hooks/i;
+
 function assertMatrixQaInReplyTarget(params: {
   actualEventId?: string;
   expectedEventId: string;
@@ -69,6 +72,14 @@ function buildMatrixQaThreadArtifacts(result: MatrixQaThreadScenarioResult) {
     rootEventId: result.rootEventId,
     token: result.token,
   };
+}
+
+function failIfMatrixSubagentThreadHookError(event: MatrixQaObservedEvent) {
+  if (MATRIX_SUBAGENT_THREAD_HOOK_ERROR_RE.test(event.body ?? "")) {
+    throw new Error(
+      `Matrix subagent thread spawn hit missing hook error: ${event.body ?? "<empty>"}`,
+    );
+  }
 }
 
 function buildMatrixQaThreadDetailLines(params: {
@@ -277,6 +288,80 @@ export async function runThreadIsolationScenario(context: MatrixQaScenarioContex
       ...buildMatrixReplyDetails("thread reply", threadPhase.reply),
       `top-level driver event: ${topLevelPhase.driverEventId}`,
       ...buildMatrixReplyDetails("top-level reply", topLevelPhase.reply),
+    ].join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
+export async function runSubagentThreadSpawnScenario(context: MatrixQaScenarioContext) {
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
+  const childToken = buildMatrixQaToken("MATRIX_QA_SUBAGENT_CHILD");
+  const triggerBody = [
+    `${context.sutUserId} Use sessions_spawn for this QA check.`,
+    `task="Reply exactly \`${childToken}\`. This is the marker."`,
+    "label=matrix-thread-subagent thread=true mode=session runTimeoutSeconds=30",
+  ].join(" ");
+  const driverEventId = await client.sendTextMessage({
+    body: triggerBody,
+    mentionUserIds: [context.sutUserId],
+    roomId: context.roomId,
+  });
+  const intro = await client.waitForRoomEvent({
+    observedEvents: context.observedEvents,
+    predicate: (event) => {
+      failIfMatrixSubagentThreadHookError(event);
+      return (
+        event.roomId === context.roomId &&
+        event.sender === context.sutUserId &&
+        event.type === "m.room.message" &&
+        isMatrixQaMessageLikeKind(event.kind) &&
+        /\bsession active\b/i.test(event.body ?? "") &&
+        /Messages here go directly to this session/i.test(event.body ?? "")
+      );
+    },
+    roomId: context.roomId,
+    since: startSince,
+    timeoutMs: context.timeoutMs,
+  });
+  const completion = await client.waitForRoomEvent({
+    observedEvents: context.observedEvents,
+    predicate: (event) => {
+      failIfMatrixSubagentThreadHookError(event);
+      return (
+        event.roomId === context.roomId &&
+        event.sender === context.sutUserId &&
+        event.type === "m.room.message" &&
+        isMatrixQaMessageLikeKind(event.kind) &&
+        (event.body ?? "").includes(childToken) &&
+        event.relatesTo?.relType === "m.thread" &&
+        event.relatesTo.eventId === intro.event.eventId
+      );
+    },
+    roomId: context.roomId,
+    since: intro.since,
+    timeoutMs: context.timeoutMs,
+  });
+  advanceMatrixQaActorCursor({
+    actorId: "driver",
+    syncState: context.syncState,
+    nextSince: completion.since,
+    startSince,
+  });
+  const subagentIntro = buildMatrixReplyArtifact(intro.event);
+  const subagentCompletion = buildMatrixReplyArtifact(completion.event, childToken);
+  return {
+    artifacts: {
+      driverEventId,
+      subagentCompletion,
+      subagentIntro,
+      threadRootEventId: intro.event.eventId,
+      threadToken: childToken,
+      triggerBody,
+    },
+    details: [
+      `driver event: ${driverEventId}`,
+      `subagent thread root event: ${intro.event.eventId}`,
+      ...buildMatrixReplyDetails("subagent intro", subagentIntro),
+      ...buildMatrixReplyDetails("subagent completion", subagentCompletion),
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }
