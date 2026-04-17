@@ -38,8 +38,13 @@ const discordComponentSelectSchema = Type.Object({
   options: Type.Optional(Type.Array(discordComponentOptionSchema)),
 });
 
-const discordComponentBlockSchema = Type.Object({
-  type: Type.String(),
+const discordTextBlockSchema = Type.Object({
+  type: Type.Literal("text"),
+  text: Type.String(),
+});
+
+const discordSectionBlockSchema = Type.Object({
+  type: Type.Literal("section"),
   text: Type.Optional(Type.String()),
   texts: Type.Optional(Type.Array(Type.String())),
   accessory: Type.Optional(
@@ -49,22 +54,45 @@ const discordComponentBlockSchema = Type.Object({
       button: Type.Optional(discordComponentButtonSchema),
     }),
   ),
+});
+
+const discordSeparatorBlockSchema = Type.Object({
+  type: Type.Literal("separator"),
   spacing: Type.Optional(stringEnum(["small", "large"])),
   divider: Type.Optional(Type.Boolean()),
+});
+
+const discordActionsBlockSchema = Type.Object({
+  type: Type.Literal("actions"),
   buttons: Type.Optional(Type.Array(discordComponentButtonSchema)),
   select: Type.Optional(discordComponentSelectSchema),
-  items: Type.Optional(
-    Type.Array(
-      Type.Object({
-        url: Type.String(),
-        description: Type.Optional(Type.String()),
-        spoiler: Type.Optional(Type.Boolean()),
-      }),
-    ),
+});
+
+const discordMediaGalleryBlockSchema = Type.Object({
+  type: Type.Literal("media-gallery"),
+  items: Type.Array(
+    Type.Object({
+      url: Type.String(),
+      description: Type.Optional(Type.String()),
+      spoiler: Type.Optional(Type.Boolean()),
+    }),
   ),
-  file: Type.Optional(Type.String()),
+});
+
+const discordFileBlockSchema = Type.Object({
+  type: Type.Literal("file"),
+  file: Type.String(),
   spoiler: Type.Optional(Type.Boolean()),
 });
+
+const discordComponentBlockSchema = Type.Union([
+  discordTextBlockSchema,
+  discordSectionBlockSchema,
+  discordSeparatorBlockSchema,
+  discordActionsBlockSchema,
+  discordMediaGalleryBlockSchema,
+  discordFileBlockSchema,
+]);
 
 const discordComponentModalFieldSchema = Type.Object({
   type: Type.String(),
