@@ -32,8 +32,10 @@ import { extractPayloadText } from "./test-helpers.agent-results.js";
 // Aggregate docker live runs can contend on startup enough that the gateway
 // websocket handshake needs a wider budget than the single-provider reruns.
 const CLI_GATEWAY_CONNECT_TIMEOUT_MS = 60_000;
-const CLI_CRON_MCP_PROBE_MAX_ATTEMPTS = 4;
-const CLI_CRON_MCP_PROBE_VERIFY_POLLS = 8;
+// CI Docker live lanes can see repeated cancelled cron tool calls before a job
+// finally sticks, and the created job may take extra time to surface via the CLI.
+const CLI_CRON_MCP_PROBE_MAX_ATTEMPTS = 5;
+const CLI_CRON_MCP_PROBE_VERIFY_POLLS = 12;
 const CLI_CRON_MCP_PROBE_VERIFY_POLL_MS = 2_000;
 
 export type BootstrapWorkspaceContext = {
@@ -475,7 +477,9 @@ export async function verifyCliCronMcpProbe(params: {
   }
 
   if (!createdJob) {
-    throw new Error(`cron cli verify did not create job ${cronProbe.name}`);
+    throw new Error(
+      `cron cli verify did not create job ${cronProbe.name}: reply=${JSON.stringify(lastCronText)}`,
+    );
   }
   assertCronJobMatches({
     job: createdJob,
