@@ -25,9 +25,13 @@ function listConfiguredChannelRemovalChoices(
   return Object.keys(channels)
     .map((id) => ({
       id,
-      label: labelsById.get(id) ?? sanitizeTerminalText(id),
+      label: labelsById.get(id) ?? formatUnknownChannelRemovalLabel(id),
     }))
     .toSorted(compareChannelRemovalChoices);
+}
+
+function formatUnknownChannelRemovalLabel(id: string): string {
+  return sanitizeTerminalText(id) || "<invalid channel key>";
 }
 
 function compareChannelRemovalChoices(

@@ -112,4 +112,37 @@ describe("removeChannelConfigWizard", () => {
       "Channel removed",
     );
   });
+
+  it("uses a placeholder when an unknown channel key sanitizes to empty", async () => {
+    const unsafeChannel = "\u001B[31m\u0007";
+    select.mockResolvedValueOnce(unsafeChannel).mockResolvedValueOnce("done");
+
+    const next = await removeChannelConfigWizard(
+      {
+        channels: {
+          [unsafeChannel]: { token: "secret" },
+          telegram: { token: "secret" },
+        },
+      } as never,
+      {} as never,
+    );
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.arrayContaining([
+          expect.objectContaining({ value: unsafeChannel, label: "<invalid channel key>" }),
+        ]),
+      }),
+    );
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Delete <invalid channel key> configuration from ~/.openclaw/openclaw.json?",
+      }),
+    );
+    expect(next.channels).toEqual({ telegram: { token: "secret" } });
+    expect(note).toHaveBeenCalledWith(
+      "<invalid channel key> removed from config.\nNote: credentials/sessions on disk are unchanged.",
+      "Channel removed",
+    );
+  });
 });
