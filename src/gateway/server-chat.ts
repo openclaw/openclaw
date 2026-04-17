@@ -840,8 +840,10 @@ export function createAgentEventHandler({
     // Guard against duplicate terminal chat events.  The chat.send .catch()
     // path (broadcastChatError) marks the run in terminalChatSent; if the
     // lifecycle error grace timer fires afterwards we must not emit a second
-    // error event.
-    if (chatRunState.terminalChatSent.has(clientRunId)) {
+    // error event.  However, a successful "done" terminal must always be
+    // allowed through so that a run that recovers after a retryable error is
+    // not stuck in the error state for up to 30 s while the marker persists.
+    if (chatRunState.terminalChatSent.has(clientRunId) && jobState === "error") {
       return;
     }
     chatRunState.terminalChatSent.add(clientRunId);
