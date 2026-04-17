@@ -350,12 +350,25 @@ export async function runClaudeSdkAgent(
     agentDir: params.agentDir,
   });
 
-  // Merge process env with the credential env (credential vars win).
+  // Build the spawn env. Start with the parent process.env, then
+  // explicitly STRIP all ANTHROPIC_* auth vars before overlaying the
+  // credential resolver's env. Without this strip, an ANTHROPIC_API_KEY
+  // accidentally exported in the operator's shell would silently route
+  // a "subscription" mode run through metered API billing — defeating
+  // the safe default. We only allow Anthropic auth vars through if the
+  // credential resolver explicitly chose them.
   const mergedEnv: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (typeof v === "string") {
       mergedEnv[k] = v;
     }
+  }
+  for (const stripKey of [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+  ]) {
+    delete mergedEnv[stripKey];
   }
   for (const [k, v] of Object.entries(credential.env)) {
     mergedEnv[k] = v;
@@ -382,27 +395,11 @@ export async function runClaudeSdkAgent(
       abortController.abort(new Error(`claude-sdk run exceeded timeoutMs=${params.timeoutMs}`));
     }, params.timeoutMs);
   }
-  // Diagnostic: log the mirror path so we can verify writes are landing
-  // where we expect (post-incident debugging on Windows where users
-  // reported the sidecar file was missing).
-  log.info(
-    `[claude-sdk] opening session mirror runId=${params.runId} primaryPath=${params.sessionFile}`,
-  );
-  let mirror: ReturnType<typeof openSessionMirror>;
-  try {
-    mirror = openSessionMirror({
-      primaryPath: params.sessionFile,
-      sdkSessionId: params.sessionId,
-    });
-    log.info(`[claude-sdk] session mirror opened runId=${params.runId}`);
-  } catch (err) {
-    log.error(
-      `[claude-sdk] FAILED to open session mirror runId=${params.runId} err=${(err as Error).message}`,
-    );
-    throw err;
-  }
-
-  const releaseResources = () => {
+  // Define a partial-cleanup helper BEFORE the mirror open so a failed
+  // open can release the timeout + upstream listener it already
+  // installed above. Without this, repeated mirror-init failures
+  // accumulate stale listeners/timers attached to long-lived signals.
+  const releaseTimerAndListener = (): void => {
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
       timeoutHandle = undefined;
@@ -410,15 +407,7 @@ export async function runClaudeSdkAgent(
     if (upstream && onUpstreamAbort) {
       upstream.removeEventListener("abort", onUpstreamAbort);
     }
-    mirror.close();
   };
-
-  // Emit an AssistantMessageStart event on the first assistant SDK message,
-  // then honor onAgentEvent / onPartialReply for subsequent chunks.
-  let assistantStartEmitted = false;
-  const collectedText: string[] = [];
-  let stopReason = "completed";
-  let aborted = false;
 
   // Model selection priority (highest → lowest):
   //   1. agents.runtime.claudeSdk.model (explicit per-agent override)
@@ -441,6 +430,39 @@ export async function runClaudeSdkAgent(
     modelProvider: "anthropic",
     modelId: effectiveModel,
   };
+
+  // Open the session mirror (writes both to the canonical session
+  // file AND a tagged sidecar). Surface any open failure with an
+  // explicit error log + cleanup before re-throwing — silent mirror
+  // failure otherwise hides "the run worked but left no observable
+  // trail" bugs (we hit one on Windows where the configured primary
+  // path was a stale Linux path that Node remapped under C:\).
+  let mirror: ReturnType<typeof openSessionMirror>;
+  try {
+    mirror = openSessionMirror({
+      primaryPath: params.sessionFile,
+      sdkSessionId: params.sessionId,
+      model: effectiveModel,
+    });
+  } catch (err) {
+    log.error(
+      `[claude-sdk] failed to open session mirror runId=${params.runId} primaryPath=${params.sessionFile} err=${(err as Error).message}`,
+    );
+    releaseTimerAndListener();
+    throw err;
+  }
+
+  const releaseResources = (): void => {
+    releaseTimerAndListener();
+    mirror.close();
+  };
+
+  // Emit an AssistantMessageStart event on the first assistant SDK message,
+  // then honor onAgentEvent / onPartialReply for subsequent chunks.
+  let assistantStartEmitted = false;
+  const collectedText: string[] = [];
+  let stopReason = "completed";
+  let aborted = false;
   const thinkBudget = mapThinkBudget(params.thinkLevel);
   const maxTurns = runtimeConfig?.maxTurns;
 
@@ -583,11 +605,17 @@ export async function runClaudeSdkAgent(
         });
       }
     } finally {
+      // Record run end in the sidecar BEFORE closing the stream.
+      // We use stopReason="aborted" if the abort signal fired, else
+      // "error" so the marker gives forensic insight without trying
+      // to serialize the err object itself.
+      mirror.writeStop(aborted ? "aborted" : "error");
       releaseResources();
     }
     throw err;
   }
 
+  mirror.writeStop(stopReason);
   releaseResources();
 
   const finalText = collectedText.join("\n").trim();
@@ -598,11 +626,22 @@ export async function runClaudeSdkAgent(
       aborted: aborted || undefined,
       stopReason,
       finalAssistantVisibleText: finalText || undefined,
-      agentMeta: {
-        sessionId: params.sessionId,
-        provider: "anthropic",
-        model: effectiveModel ?? "",
-      },
+      // Only emit agentMeta when we have a real model id to report.
+      // EmbeddedPiAgentMeta types `model` as a required string, and
+      // forwarding "" would short-circuit downstream
+      // `meta.agentMeta?.model ?? fallback` chains (treating empty
+      // string as a real value). When the SDK picks its own default,
+      // omitting agentMeta lets those chains correctly fall through to
+      // their fallback model id.
+      ...(effectiveModel
+        ? {
+            agentMeta: {
+              sessionId: params.sessionId,
+              provider: "anthropic",
+              model: effectiveModel,
+            },
+          }
+        : {}),
     },
   };
   return result;

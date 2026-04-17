@@ -1,26 +1,28 @@
 // Project Claude Agent SDK messages into OpenClaw's pi-ai JSONL session
-// shape, so an SDK-driven run still writes to
-// `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl` for the
-// existing tooling (session log viewers, /session-logs skill,
-// `openclaw doctor`, etc.) to consume.
+// shape and write them to two destinations:
 //
-// Design notes:
-//   * The SDK already writes its own JSONL to `~/.claude/projects/...` in
-//     Anthropic SDK message shape — that's the "primary" SDK transcript
-//     and is what supports `claude continue`/`claude resume`.
-//   * OpenClaw's existing primary (for pi-ai runs) is the
-//     `~/.openclaw/agents/.../*.jsonl` path. We mirror SDK messages into
-//     that path during the Phase 2 compat window so OpenClaw's session
-//     tooling continues to work without a behavior change visible to the
-//     user.
-//   * Resume reads stay on OpenClaw's primary path; this mirror is
-//     write-only. When Phase 4 retires the legacy runtime we can either
-//     flip the authoritative path to `~/.claude/projects/...` or keep the
-//     mirror and retire it separately.
+//   1. The CANONICAL primary session file (`params.sessionFile`). Frames
+//      are wrapped in the `{ type: "message", message: { role, content,
+//      ... } }` envelope that core readers like
+//      `src/gateway/session-utils.fs.ts` and
+//      `src/memory-host-sdk/host/session-files.ts` consume. Without this
+//      write, those readers would see claude-sdk sessions as empty even
+//      after a successful turn — a regression vs the embedded runtime.
 //
-// Intentionally narrow: this module does not emit every SDK message
+//   2. A SIDECAR file at `<primaryPath>.claude-sdk.jsonl`. This file is
+//      the deterministic on-disk evidence that a turn went through the
+//      claude-sdk runtime: it includes a tagged `{ type: "system",
+//      source: "claude-sdk" }` marker plus a `claudeSdk: true` annotation
+//      on every projected message. Tooling that wants to surface
+//      "this turn ran on claude-sdk" should check the sidecar.
+//
+// Resume reads stay on the canonical file. Future Phase 4 work can
+// either flip the authoritative path to the SDK's own
+// `~/.claude/projects/...` JSONL or retire the sidecar separately.
+//
+// Intentionally narrow: this module does not project every SDK message
 // variant — only the assistant-text and tool-use/tool-result frames that
-// OpenClaw's viewers render today. Unknown SDK message types are dropped
+// existing readers render today. Unknown SDK message types are dropped
 // silently (they're still in the SDK primary, so no data is lost) to
 // keep the projection schema stable.
 
@@ -29,32 +31,68 @@ import * as path from "node:path";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
 /**
- * Minimal pi-ai JSONL entry shape — enough for the current viewer tools.
- * Matches the envelope `{ type: "<role>", ... }` that OpenClaw's existing
- * `.jsonl` files use for assistant/user messages. Tool calls and results
- * are projected as synthetic assistant frames with a `toolCall` payload
- * so the viewer's existing rendering path picks them up.
+ * Canonical pi-ai transcript record envelope. Matches the shape that
+ * `src/gateway/session-utils.fs.ts` walks: a top-level `{ type:
+ * "message", message: { role, content, ... } }`. We add a `claudeSdk:
+ * true` discriminator so tooling can distinguish SDK-driven turns from
+ * pi-ai-driven ones at a glance.
  */
-export type PiJsonlEntry =
+export type CanonicalMessageRecord = {
+  type: "message";
+  /** Optional run-scoped identifier; pi-ai uses `id`, we mirror the convention. */
+  id?: string;
+  /** True iff this record was emitted by the claude-sdk mirror. */
+  claudeSdk: true;
+  message: CanonicalMessage;
+};
+
+export type CanonicalMessage =
+  | {
+      role: "user";
+      content: Array<{ type: "text"; text: string }>;
+      timestamp: number;
+    }
+  | {
+      role: "assistant";
+      content: Array<
+        | { type: "text"; text: string }
+        | { type: "toolCall"; id: string; name: string; input: unknown }
+      >;
+      api: "claude-sdk";
+      provider: "anthropic";
+      model: string;
+      usage: {
+        input: number;
+        output: number;
+        cacheRead: number;
+        cacheWrite: number;
+        total: number;
+      };
+      stopReason: "stop" | "length" | "toolUse" | "error" | "aborted";
+      timestamp: number;
+    }
+  | {
+      role: "tool";
+      content: Array<{
+        type: "toolResult";
+        toolCallId: string;
+        output: unknown;
+        isError?: boolean;
+      }>;
+      timestamp: number;
+    };
+
+/**
+ * Sidecar-only marker entries. Not part of the canonical schema; only
+ * written to the `*.claude-sdk.jsonl` sidecar to give a tagged record
+ * of run lifecycle (open, stop, errors) for runtime-source forensics.
+ */
+export type SidecarMarker =
   | {
       type: "system";
       at: number;
       source: "claude-sdk";
       payload: { sessionId: string; note?: string };
-    }
-  | {
-      type: "user";
-      at: number;
-      source: "claude-sdk";
-      text: string;
-    }
-  | {
-      type: "assistant";
-      at: number;
-      source: "claude-sdk";
-      text?: string;
-      toolCall?: { id: string; name: string; input: unknown };
-      toolResult?: { id: string; output: unknown; isError?: boolean };
     }
   | {
       type: "stop";
@@ -64,30 +102,32 @@ export type PiJsonlEntry =
     };
 
 export type SessionMirror = {
-  writePiFrame(entry: PiJsonlEntry): void;
   writeSdkMessage(msg: SDKMessage): void;
+  writeStop(reason: string): void;
   close(): void;
 };
 
 export type OpenSessionMirrorParams = {
   /**
-   * Absolute path to the OpenClaw primary JSONL file for this run.
-   * The mirror writes to a sidecar file derived from this path, NOT
-   * to the file itself — pi-ai's SessionManager owns the primary
-   * file and may truncate/rewrite it during initialization, which
-   * would clobber any frames we appended. The sidecar path is
-   * `<primaryPath>.claude-sdk.jsonl` so it lives next to the primary
-   * for easy discovery by tooling and is trivially cleanable.
+   * Absolute path to the OpenClaw primary (canonical) JSONL session
+   * file for this run. Canonical envelope records are appended here so
+   * existing gateway/memory readers see SDK turns. A sidecar file at
+   * `<primaryPath>.claude-sdk.jsonl` also receives a tagged copy plus
+   * lifecycle markers.
    */
   primaryPath: string;
-  /** The SDK session id to include in the initial system frame. */
+  /** The SDK session id to include in the initial system marker. */
   sdkSessionId: string;
+  /**
+   * Effective model id resolved by the runtime. Recorded on every
+   * canonical assistant record so downstream `model ?? fallback`
+   * chains see a real value.
+   */
+  model?: string;
 };
 
 /**
  * Resolve the sidecar mirror path for a given primary session-file path.
- * Exposed so tests and tooling can locate the sidecar without
- * recomputing the suffix.
  */
 export function resolveSessionMirrorPath(primaryPath: string): string {
   return `${primaryPath}.claude-sdk.jsonl`;
@@ -101,94 +141,156 @@ export function openSessionMirror(params: OpenSessionMirrorParams): SessionMirro
   const dir = path.dirname(params.primaryPath);
   fs.mkdirSync(dir, { recursive: true });
   const sidecarPath = resolveSessionMirrorPath(params.primaryPath);
-  const stream = fs.createWriteStream(sidecarPath, { flags: "a" });
+  // Both streams are append-only: the canonical primary is shared with
+  // pi-ai's SessionManager (which truncates/rewrites it during its own
+  // open path); appending after pi-ai has finished initialization is
+  // the safe shape because by the time we write our first projected
+  // message, the SDK has already produced its first response — pi-ai's
+  // open-and-rewrite happens earlier in the run lifecycle.
+  const primaryStream = fs.createWriteStream(params.primaryPath, { flags: "a" });
+  const sidecarStream = fs.createWriteStream(sidecarPath, { flags: "a" });
 
-  const writeEntry = (entry: PiJsonlEntry): void => {
-    stream.write(`${JSON.stringify(entry)}\n`);
+  const writeBoth = (line: string): void => {
+    primaryStream.write(line);
+    sidecarStream.write(line);
+  };
+  const writeSidecarOnly = (line: string): void => {
+    sidecarStream.write(line);
   };
 
-  writeEntry({
+  // Sidecar-only system marker: deterministic evidence the run took the
+  // claude-sdk path. NOT written to the canonical file because it isn't
+  // a `{ type: "message" }` envelope and existing readers would skip it
+  // anyway.
+  const sysMarker: SidecarMarker = {
     type: "system",
     at: Date.now(),
     source: "claude-sdk",
     payload: { sessionId: params.sdkSessionId },
-  });
+  };
+  writeSidecarOnly(`${JSON.stringify(sysMarker)}\n`);
 
   return {
-    writePiFrame(entry) {
-      writeEntry(entry);
-    },
     writeSdkMessage(msg) {
-      const projected = projectSdkMessage(msg);
-      for (const p of projected) {
-        writeEntry(p);
+      const projected = projectSdkMessage(msg, { model: params.model });
+      for (const record of projected) {
+        writeBoth(`${JSON.stringify(record)}\n`);
       }
     },
+    writeStop(reason) {
+      const stopMarker: SidecarMarker = {
+        type: "stop",
+        at: Date.now(),
+        source: "claude-sdk",
+        reason,
+      };
+      writeSidecarOnly(`${JSON.stringify(stopMarker)}\n`);
+    },
     close() {
-      stream.end();
+      primaryStream.end();
+      sidecarStream.end();
     },
   };
 }
 
+export type ProjectionContext = {
+  /** Effective model id for stamping assistant records. */
+  model?: string;
+};
+
+const ZERO_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  total: 0,
+} as const;
+
 /**
- * Project a single SDK message into zero-or-more pi-ai JSONL entries.
- *
- * Exported for unit tests so we can exercise the projection without
- * touching the filesystem.
+ * Project a single SDK message into zero-or-more canonical envelope
+ * records. Exported for unit tests so we can exercise the projection
+ * without touching the filesystem.
  */
-export function projectSdkMessage(msg: SDKMessage): PiJsonlEntry[] {
-  const at = Date.now();
+export function projectSdkMessage(
+  msg: SDKMessage,
+  ctx: ProjectionContext = {},
+): CanonicalMessageRecord[] {
+  const now = Date.now();
   // SDKMessage is a tagged union: { type: "assistant" | "user" | "result" | "system" | "partial_assistant" | ... }
   // Narrow the shape via unknown cast to avoid depending on SDK-internal
   // type exports, which vary across 0.x releases.
   const m = msg as unknown as { type?: string; [k: string]: unknown };
   if (m.type === "assistant" || m.type === "partial_assistant") {
-    const content = extractTextContent(m);
-    const entries: PiJsonlEntry[] = [];
-    if (content.text) {
-      entries.push({
-        type: "assistant",
-        at,
-        source: "claude-sdk",
-        text: content.text,
+    const extracted = extractTextContent(m);
+    const content: Array<
+      | { type: "text"; text: string }
+      | { type: "toolCall"; id: string; name: string; input: unknown }
+    > = [];
+    if (extracted.text) {
+      content.push({ type: "text", text: extracted.text });
+    }
+    for (const call of extracted.toolCalls) {
+      content.push({
+        type: "toolCall",
+        id: call.id,
+        name: call.name,
+        input: call.input,
       });
     }
-    for (const call of content.toolCalls) {
-      entries.push({
-        type: "assistant",
-        at,
-        source: "claude-sdk",
-        toolCall: call,
-      });
+    if (content.length === 0) {
+      return [];
     }
-    return entries;
+    return [
+      {
+        type: "message",
+        claudeSdk: true,
+        message: {
+          role: "assistant",
+          content,
+          api: "claude-sdk",
+          provider: "anthropic",
+          model: ctx.model ?? "",
+          usage: { ...ZERO_USAGE },
+          stopReason: "stop",
+          timestamp: now,
+        },
+      },
+    ];
   }
   if (m.type === "user") {
-    const content = extractTextContent(m);
-    const entries: PiJsonlEntry[] = [];
-    if (content.text) {
-      entries.push({
-        type: "user",
-        at,
-        source: "claude-sdk",
-        text: content.text,
+    const extracted = extractTextContent(m);
+    const records: CanonicalMessageRecord[] = [];
+    if (extracted.text) {
+      records.push({
+        type: "message",
+        claudeSdk: true,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: extracted.text }],
+          timestamp: now,
+        },
       });
     }
-    for (const result of content.toolResults) {
-      entries.push({
-        type: "assistant",
-        at,
-        source: "claude-sdk",
-        toolResult: result,
+    if (extracted.toolResults.length > 0) {
+      records.push({
+        type: "message",
+        claudeSdk: true,
+        message: {
+          role: "tool",
+          content: extracted.toolResults.map((r) => ({
+            type: "toolResult" as const,
+            toolCallId: r.id,
+            output: r.output,
+            isError: r.isError,
+          })),
+          timestamp: now,
+        },
       });
     }
-    return entries;
+    return records;
   }
-  if (m.type === "result") {
-    const reason = typeof m.stop_reason === "string" ? m.stop_reason : "completed";
-    return [{ type: "stop", at, source: "claude-sdk", reason }];
-  }
-  // system messages, partial chunks we don't recognize, etc. — drop.
+  // result/system/partial chunks we don't project — the sidecar's
+  // separate `stop` marker (written by writeStop) records run end.
   return [];
 }
 
