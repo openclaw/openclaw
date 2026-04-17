@@ -21,7 +21,7 @@ const CANVAS_COMMANDS = [
 const CAMERA_COMMANDS = ["camera.list"];
 const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
 
-const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
+const SCREEN_DANGEROUS_COMMANDS = ["screen.snapshot", "screen.record"];
 
 const LOCATION_COMMANDS = ["location.get"];
 const NOTIFICATION_COMMANDS = ["notifications.list"];
@@ -111,6 +111,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
     ...SYSTEM_COMMANDS,
+    "screen.snapshot",
   ],
   linux: [...SYSTEM_COMMANDS],
   windows: [...SYSTEM_COMMANDS],

@@ -367,6 +367,19 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("sms.search");
   });
 
+  it("allows macOS screen.snapshot by default but keeps screen.record gated", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "macOS 26.3.1",
+        deviceFamily: "Mac",
+      },
+    );
+
+    expect(allow.has("screen.snapshot")).toBe(true);
+    expect(allow.has("screen.record")).toBe(false);
+  });
+
   it("can explicitly allow dangerous commands via allowCommands", () => {
     const allow = resolveNodeCommandAllowlist(
       {
