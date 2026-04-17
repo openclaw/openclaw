@@ -7,6 +7,7 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isSilentReplyText } from "openclaw/plugin-sdk/reply-chunking";
 import { normalizeOptionalString, redactSensitiveText } from "openclaw/plugin-sdk/text-runtime";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -618,6 +619,11 @@ export async function sendMessageTelegram(
   text: string,
   opts: TelegramSendOpts = {},
 ): Promise<TelegramSendResult> {
+  const trimmedText = normalizeOptionalString(text) ?? "";
+  if (isSilentReplyText(trimmedText) && !opts.mediaUrl) {
+    logVerbose("telegram send: suppressed NO_REPLY token before API call");
+    return { messageId: "suppressed", chatId: "" };
+  }
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
