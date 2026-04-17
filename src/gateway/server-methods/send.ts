@@ -34,6 +34,7 @@ import {
   validatePollParams,
   validateSendParams,
 } from "../protocol/index.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
@@ -185,7 +186,7 @@ function cacheGatewayDedupeFailure(params: {
 }
 
 export const sendHandlers: GatewayRequestHandlers = {
-  "message.action": async ({ params, respond, context }) => {
+  "message.action": async ({ params, respond, context, client }) => {
     const p = params;
     if (!validateMessageActionParams(p)) {
       respond(
@@ -216,6 +217,13 @@ export const sendHandlers: GatewayRequestHandlers = {
       };
       idempotencyKey: string;
     };
+    // Owner status is an authorization signal used to unlock owner-only
+    // channel actions and owner-only tool policy. Derive it from the
+    // authenticated gateway client scopes so a non-admin caller cannot
+    // spoof owner identity by setting `senderIsOwner: true` on the wire.
+    // Any `senderIsOwner` on the request payload is ignored.
+    const callerScopes = client?.connect?.scopes ?? [];
+    const senderIsOwner = Array.isArray(callerScopes) && callerScopes.includes(ADMIN_SCOPE);
     const idem = request.idempotencyKey;
     const dedupeKey = `message.action:${idem}`;
     const cached = context.dedupe.get(dedupeKey);
@@ -265,7 +273,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           params: request.params,
           accountId: normalizeOptionalString(request.accountId) ?? undefined,
           requesterSenderId: normalizeOptionalString(request.requesterSenderId) ?? undefined,
-          senderIsOwner: request.senderIsOwner,
+          senderIsOwner,
           sessionKey: normalizeOptionalString(request.sessionKey) ?? undefined,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
           agentId: normalizeOptionalString(request.agentId) ?? undefined,

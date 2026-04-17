@@ -3,6 +3,7 @@ import { getPluginToolMeta } from "../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import {
   resolveEffectiveToolPolicy,
+  resolveGroupContextFromSessionKey,
   resolveGroupToolPolicy,
   resolveSubagentToolPolicyForSession,
 } from "../pi-tools.policy.js";
@@ -17,6 +18,16 @@ import {
 } from "../tool-policy.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
+/**
+ * Identity inputs used by `resolveGroupToolPolicy` to look up channel/group
+ * tool policy. These fields are an authorization signal (they can widen
+ * bundled-tool availability via a group-scoped allowlist), so callers MUST
+ * pass values derived from server-verified session metadata (session key,
+ * inbound transport event), not from tool-call or model-controlled input.
+ * The helper cross-checks caller-provided `groupId` against session-derived
+ * group ids and drops the caller value when they disagree, but it cannot
+ * detect drift on fields that have no session-bound counterpart.
+ */
 type FinalEffectiveToolPolicyParams = {
   // Tools appended to the core tool set after `createOpenClawCodingTools()`
   // has already applied owner-only and tool-policy filtering (e.g. bundled
@@ -44,11 +55,37 @@ type FinalEffectiveToolPolicyParams = {
   warn: (message: string) => void;
 };
 
+function resolveTrustedGroupId(params: FinalEffectiveToolPolicyParams): {
+  groupId: string | null | undefined;
+  dropped: boolean;
+} {
+  const callerGroupId = (params.groupId ?? "").trim();
+  if (!callerGroupId) {
+    return { groupId: params.groupId, dropped: false };
+  }
+  const sessionGroupIds = resolveGroupContextFromSessionKey(params.sessionKey).groupIds ?? [];
+  const spawnedGroupIds = resolveGroupContextFromSessionKey(params.spawnedBy).groupIds ?? [];
+  const trusted = [...sessionGroupIds, ...spawnedGroupIds];
+  if (trusted.length === 0) {
+    return { groupId: params.groupId, dropped: false };
+  }
+  if (trusted.includes(callerGroupId)) {
+    return { groupId: params.groupId, dropped: false };
+  }
+  return { groupId: null, dropped: true };
+}
+
 export function applyFinalEffectiveToolPolicy(
   params: FinalEffectiveToolPolicyParams,
 ): AnyAgentTool[] {
   if (params.bundledTools.length === 0) {
     return params.bundledTools;
+  }
+  const trustedGroup = resolveTrustedGroupId(params);
+  if (trustedGroup.dropped) {
+    params.warn(
+      "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
+    );
   }
   const {
     agentId,
@@ -73,9 +110,9 @@ export function applyFinalEffectiveToolPolicy(
     sessionKey: params.sessionKey,
     spawnedBy: params.spawnedBy,
     messageProvider: params.messageProvider,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
+    groupId: trustedGroup.groupId,
+    groupChannel: trustedGroup.dropped ? null : params.groupChannel,
+    groupSpace: trustedGroup.dropped ? null : params.groupSpace,
     accountId: params.agentAccountId,
     senderId: params.senderId,
     senderName: params.senderName,

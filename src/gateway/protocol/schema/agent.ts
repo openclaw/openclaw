@@ -70,6 +70,9 @@ export const MessageActionParamsSchema = Type.Object(
     params: Type.Record(Type.String(), Type.Unknown()),
     accountId: Type.Optional(Type.String()),
     requesterSenderId: Type.Optional(Type.String()),
+    // Deprecated on the wire: the gateway derives owner status from the
+    // authenticated caller's scopes and ignores any value sent here. Kept
+    // optional to avoid rejecting existing clients that still include it.
     senderIsOwner: Type.Optional(Type.Boolean()),
     sessionKey: Type.Optional(Type.String()),
     sessionId: Type.Optional(Type.String()),

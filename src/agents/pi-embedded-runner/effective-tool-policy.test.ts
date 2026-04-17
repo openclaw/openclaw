@@ -43,4 +43,22 @@ describe("applyFinalEffectiveToolPolicy", () => {
 
     expect(filtered).toEqual([]);
   });
+
+  it("drops caller-provided groupId when it disagrees with session-derived group context", () => {
+    const warnings: string[] = [];
+    applyFinalEffectiveToolPolicy({
+      bundledTools: [makeTool("mcp__bundle__read")],
+      // Session key encodes a concrete group (discord room 111); caller tries
+      // to override with a different group id so a more permissive group
+      // policy for group 222 could be consulted.
+      sessionKey: "agent:alice:discord:group:111",
+      groupId: "222",
+      groupChannel: "#different",
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings).toContain(
+      "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
+    );
+  });
 });

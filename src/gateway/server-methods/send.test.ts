@@ -156,14 +156,17 @@ async function runPollWithClient(
   return { respond };
 }
 
-async function runMessageActionRequest(params: Record<string, unknown>) {
+async function runMessageActionRequest(
+  params: Record<string, unknown>,
+  client?: { connect?: { scopes?: string[] } } | null,
+) {
   const respond = vi.fn();
   await sendHandlers["message.action"]({
     params: params as never,
     respond,
     context: makeContext(),
     req: { type: "req", id: "1", method: "message.action" },
-    client: null as never,
+    client: (client ?? null) as never,
     isWebchatConnect: () => false,
   });
   return { respond };
@@ -953,5 +956,70 @@ describe("gateway send mirroring", () => {
       undefined,
       { channel: "whatsapp" },
     );
+  });
+
+  it("ignores client-provided senderIsOwner and derives it from authenticated scopes", async () => {
+    const capture = { senderIsOwner: undefined as boolean | undefined };
+    const reactPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "WhatsApp owner-derivation test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"], reactions: true },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["react"] }),
+        supportsAction: ({ action }) => action === "react",
+        handleAction: async ({ senderIsOwner }) => {
+          capture.senderIsOwner = senderIsOwner;
+          return jsonResult({ ok: true });
+        },
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(reactPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "whatsapp", source: "test", plugin: reactPlugin },
+      ]),
+      "send-test-owner-derive-non-admin",
+    );
+
+    await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "react",
+        params: { chatJid: "+15551234567", messageId: "wamid.x", emoji: "✅" },
+        senderIsOwner: true,
+        idempotencyKey: "idem-owner-derive-non-admin",
+      },
+      { connect: { scopes: ["operator.write"] } },
+    );
+    expect(capture.senderIsOwner).toBe(false);
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "whatsapp", source: "test", plugin: reactPlugin },
+      ]),
+      "send-test-owner-derive-admin",
+    );
+    await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "react",
+        params: { chatJid: "+15551234567", messageId: "wamid.y", emoji: "✅" },
+        senderIsOwner: false,
+        idempotencyKey: "idem-owner-derive-admin",
+      },
+      { connect: { scopes: ["operator.admin"] } },
+    );
+    expect(capture.senderIsOwner).toBe(true);
   });
 });
