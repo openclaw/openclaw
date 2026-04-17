@@ -349,6 +349,57 @@ describe("plans gateway handlers", () => {
     ).toBe("number");
   });
 
+  it("keeps archived approved session plans marked completed", async () => {
+    const persisted = setupSessionPersistenceMocks();
+    createPlanRecord({
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      sessionKey: "agent:main:main",
+      title: "Session archive plan",
+      content: "- finish review and archive",
+      status: "ready_for_review",
+      createdAt: 450,
+      updatedAt: 450,
+    });
+
+    const list = listPlansCall();
+    await list.invoke();
+    const listCall = list.respond.mock.calls[0] as RespondCall | undefined;
+    const sessionPlanId = findPlanIdByTitleFromRespond(listCall, "Session archive plan");
+
+    const approve = createInvokeParams("plans.updateStatus", {
+      planId: sessionPlanId,
+      status: "approved",
+    });
+    await approve.invoke();
+    const approveCall = approve.respond.mock.calls[0] as RespondCall | undefined;
+    expect(approveCall?.[0]).toBe(true);
+
+    const archive = createInvokeParams("plans.updateStatus", {
+      planId: sessionPlanId,
+      status: "archived",
+    });
+    await archive.invoke();
+
+    const archiveCall = archive.respond.mock.calls[0] as RespondCall | undefined;
+    expect(archiveCall?.[0]).toBe(true);
+    expect(hoisted.applySessionsPatchToStoreMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        patch: expect.objectContaining({
+          planArtifact: expect.objectContaining({
+            status: "completed",
+          }),
+        }),
+      }),
+    );
+    expect(
+      (persisted.getCurrentEntry().planArtifact as { status?: string; approvedAt?: number }).status,
+    ).toBe("completed");
+    expect(
+      typeof (persisted.getCurrentEntry().planArtifact as { approvedAt?: number }).approvedAt,
+    ).toBe("number");
+  });
+
   it("returns an error when session plan artifact persistence fails", async () => {
     setupSessionPersistenceMocks();
     hoisted.applySessionsPatchToStoreMock.mockResolvedValue({

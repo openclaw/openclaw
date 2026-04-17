@@ -75,6 +75,8 @@ function toSessionPlanArtifactPatch(plan: {
   };
   if (plan.status === "approved") {
     patch.status = "completed";
+  } else if (plan.status === "archived" && typeof plan.approvedAt === "number") {
+    patch.status = "completed";
   } else if (plan.status === "rejected" || plan.status === "archived") {
     patch.status = "cancelled";
   }
