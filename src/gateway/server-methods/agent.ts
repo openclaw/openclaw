@@ -1069,18 +1069,30 @@ export const agentHandlers: GatewayRequestHandlers = {
       signal: lifecycleAbortController.signal,
       ignoreCachedSnapshot: ignoreStaleSnapshots,
     });
-    const dedupePromise = waitForTerminalGatewayDedupe({
-      dedupe: context.dedupe,
-      runId,
-      timeoutMs,
-      signal: dedupeAbortController.signal,
-      ignoreAgentTerminalSnapshot: ignoreStaleSnapshots,
-    });
+    // When an agent RPC run is active, ALL cached terminal snapshots (both
+    // chat and agent) are stale from previous runs with the same idempotency
+    // key. The dedupe watcher would immediately return the stale chat snapshot
+    // and win the race. Skip it entirely — rely only on the lifecycle watcher
+    // to detect the current run's completion.
+    const dedupePromise = hasActiveAgentRun
+      ? null
+      : waitForTerminalGatewayDedupe({
+          dedupe: context.dedupe,
+          runId,
+          timeoutMs,
+          signal: dedupeAbortController.signal,
+          ignoreAgentTerminalSnapshot: ignoreStaleSnapshots,
+        });
 
-    const first = await Promise.race([
+    const racers = [
       lifecyclePromise.then((snapshot) => ({ source: "lifecycle" as const, snapshot })),
-      dedupePromise.then((snapshot) => ({ source: "dedupe" as const, snapshot })),
-    ]);
+    ];
+    if (dedupePromise) {
+      racers.push(
+        dedupePromise.then((snapshot) => ({ source: "dedupe" as const, snapshot })),
+      );
+    }
+    const first = await Promise.race(racers);
 
     let snapshot: AgentWaitTerminalSnapshot | Awaited<ReturnType<typeof waitForAgentJob>> =
       first.snapshot;
@@ -1091,7 +1103,12 @@ export const agentHandlers: GatewayRequestHandlers = {
         lifecycleAbortController.abort();
       }
     } else {
-      snapshot = first.source === "lifecycle" ? await dedupePromise : await lifecyclePromise;
+      snapshot =
+        first.source === "lifecycle" && dedupePromise
+          ? await dedupePromise
+          : first.source === "dedupe"
+            ? await lifecyclePromise
+            : null;
       lifecycleAbortController.abort();
       dedupeAbortController.abort();
     }
