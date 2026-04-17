@@ -13,22 +13,14 @@ const authMocks = vi.hoisted(() => ({
   loadAuthProfileStore: vi.fn(),
 }));
 
-vi.mock("../agents/auth-profiles.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/auth-profiles.js")>(
-    "../agents/auth-profiles.js",
-  );
-  return {
-    ...actual,
-    loadAuthProfileStore: authMocks.loadAuthProfileStore,
-  };
-});
+vi.mock("../agents/auth-profiles.js", () => ({
+  loadAuthProfileStore: authMocks.loadAuthProfileStore,
+}));
 
-import {
-  channelsAddCommand,
-  channelsListCommand,
-  channelsRemoveCommand,
-  formatGatewayChannelsStatusLines,
-} from "./channels.js";
+import { channelsAddCommand } from "./channels/add.js";
+import { channelsListCommand } from "./channels/list.js";
+import { channelsRemoveCommand } from "./channels/remove.js";
+import { formatGatewayChannelsStatusLines } from "./channels/status.js";
 
 const runtime = createTestRuntime();
 let clackPrompterModule: typeof import("../wizard/clack-prompter.js");
