@@ -4,6 +4,7 @@ import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
+import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   resolveSessionFilePath,
@@ -14,7 +15,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
-import { normalizeMainKey } from "../../routing/session-key.js";
+import { isAcpSessionKey, isSubagentSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
@@ -321,11 +322,17 @@ export async function runPreparedReply(
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
   const startupAction = /^\/reset(?:\s|$)/.test(normalizedCommandBody) ? "reset" : "new";
+  const spawnedWorkspaceOverride = resolveIngressWorkspaceOverrideForSpawnedRun({
+    spawnedBy: sessionEntry?.spawnedBy,
+    workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+  });
   const bareResetPromptState =
     isBareSessionReset && workspaceDir
       ? await resolveBareSessionResetPromptState({
           cfg,
           workspaceDir,
+          isPrimaryRun: !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey),
+          isCanonicalWorkspace: !spawnedWorkspaceOverride,
           hasBootstrapFileAccess: resolveBareResetBootstrapFileAccess({
             cfg,
             agentId,
