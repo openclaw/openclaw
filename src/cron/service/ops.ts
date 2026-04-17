@@ -200,7 +200,20 @@ export async function start(state: CronServiceState) {
     // this path runs before the scheduler begins servicing regular timer ticks.
     // Avoid an extra reload/write cycle on startup.
     await ensureLoaded(state, { skipRecompute: true });
-    const changed = recomputeNextRuns(state);
+    let changed = recomputeNextRuns(state);
+    // recomputeNextRuns may repopulate nextRunAtMs for interrupted one-shot
+    // jobs (kind="at" jobs where lastStatus !== "ok" always return atMs).
+    // Clear them again so they aren't re-executed on the first tick after a
+    // failed catch-up.  Without this, the repair in the catch block above is
+    // silently undone by recompute.
+    if (interruptedOneShotIds.size > 0) {
+      for (const job of state.store?.jobs ?? []) {
+        if (interruptedOneShotIds.has(job.id) && typeof job.state.nextRunAtMs === "number") {
+          job.state.nextRunAtMs = undefined;
+          changed = true;
+        }
+      }
+    }
     if (changed) {
       await persist(state);
     }
