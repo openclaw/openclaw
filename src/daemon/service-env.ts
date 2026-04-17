@@ -177,6 +177,13 @@ export function resolveLinuxUserBinDirs(
   // Env-configured bin roots (override defaults when present).
   addCommonEnvConfiguredBinDirs(dirs, env);
   addNonEmptyDir(dirs, appendSubdir(env?.NVM_DIR, "current/bin"));
+  // fnm: modern installs use `aliases/default/bin` as the persistent default
+  // written by `fnm alias <ver> default`. `current/bin` is a session-local
+  // symlink that only exists after `fnm use` runs in an interactive shell,
+  // so it is absent on systemd-managed installs that never enter that shell.
+  // Check the modern path first, keep the legacy one for older installs —
+  // matches the macOS resolver pattern at `resolveDarwinUserBinDirs`.
+  addNonEmptyDir(dirs, appendSubdir(env?.FNM_DIR, "aliases/default/bin"));
   addNonEmptyDir(dirs, appendSubdir(env?.FNM_DIR, "current/bin"));
 
   // Common user bin directories
@@ -184,7 +191,10 @@ export function resolveLinuxUserBinDirs(
 
   // Node version managers
   dirs.push(`${home}/.nvm/current/bin`); // nvm with current symlink
-  dirs.push(`${home}/.fnm/current/bin`); // fnm
+  dirs.push(`${home}/.local/share/fnm/aliases/default/bin`); // fnm modern default
+  dirs.push(`${home}/.local/share/fnm/current/bin`); // fnm legacy session-local
+  dirs.push(`${home}/.fnm/aliases/default/bin`); // fnm customized to ~/.fnm (modern)
+  dirs.push(`${home}/.fnm/current/bin`); // fnm customized to ~/.fnm (legacy)
   dirs.push(`${home}/.local/share/pnpm`); // pnpm global bin
 
   return dirs;

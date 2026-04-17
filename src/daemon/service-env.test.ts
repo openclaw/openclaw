@@ -24,6 +24,14 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/home/testuser/.npm-global/bin");
     expect(result).toContain("/home/testuser/bin");
     expect(result).toContain("/home/testuser/.nvm/current/bin");
+    // fnm: both the modern `aliases/default/bin` path (produced by
+    // `fnm alias <ver> default`) and the legacy `current/bin` session-local
+    // symlink — modern installs that were never `fnm use`d only have the
+    // aliases path, so resolving only `current/bin` leaves Node unreachable
+    // from systemd-managed gateway lifecycles.
+    expect(result).toContain("/home/testuser/.local/share/fnm/aliases/default/bin");
+    expect(result).toContain("/home/testuser/.local/share/fnm/current/bin");
+    expect(result).toContain("/home/testuser/.fnm/aliases/default/bin");
     expect(result).toContain("/home/testuser/.fnm/current/bin");
     expect(result).toContain("/home/testuser/.volta/bin");
     expect(result).toContain("/home/testuser/.asdf/shims");
@@ -96,7 +104,31 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/opt/volta/bin");
     expect(result).toContain("/opt/asdf/shims");
     expect(result).toContain("/opt/nvm/current/bin");
+    // Both the modern aliases/default path and the legacy current path
+    // must be reachable when FNM_DIR is explicitly configured.
+    expect(result).toContain("/opt/fnm/aliases/default/bin");
     expect(result).toContain("/opt/fnm/current/bin");
+  });
+
+  it("resolves modern fnm aliases/default path on Linux even when current/bin is absent (#68169)", () => {
+    // Repro for #68169: fnm install + `fnm alias <ver> default` creates
+    // $FNM_DIR/aliases/default/bin but NOT $FNM_DIR/current/bin. A systemd
+    // user service lifecycle never enters an interactive `fnm use` shell,
+    // so `doctor` would previously warn that the resolved PATH was missing
+    // required dirs. The resolver must include the aliases path so that
+    // modern non-interactive installs are still discoverable.
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/systemduser",
+        FNM_DIR: "/home/systemduser/.local/share/fnm",
+      },
+    });
+
+    expect(result).toContain("/home/systemduser/.local/share/fnm/aliases/default/bin");
+    // Legacy session-local path is kept for backwards compatibility with
+    // older installs that rely on `current/bin` being present.
+    expect(result).toContain("/home/systemduser/.local/share/fnm/current/bin");
   });
 
   it("includes version manager directories on macOS when HOME is set", () => {
