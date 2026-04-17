@@ -52,6 +52,10 @@ These commands sit beside the main test suites when you need QA-lab realism:
     gateway workers, up to 64 workers or the selected scenario count. Use
     `--concurrency <count>` to tune the worker count, or `--concurrency 1` for
     the older serial lane.
+  - Supports provider modes `live-frontier`, `mock-openai`, and `aimock`.
+    `aimock` starts a local AIMock-backed provider server for experimental
+    fixture and protocol-mock coverage without replacing the scenario-aware
+    `mock-openai` lane.
 - `pnpm openclaw qa suite --runner multipass`
   - Runs the same QA suite inside a disposable Multipass Linux VM.
   - Keeps the same scenario-selection behavior as `qa suite` on the host.
@@ -65,6 +69,9 @@ These commands sit beside the main test suites when you need QA-lab realism:
     `.artifacts/qa-e2e/...`.
 - `pnpm qa:lab:up`
   - Starts the Docker-backed QA site for operator-style QA work.
+- `pnpm openclaw qa aimock`
+  - Starts only the local AIMock provider server for direct protocol smoke
+    testing.
 - `pnpm openclaw qa matrix`
   - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel homeserver.
   - This QA host is repo/dev-only today. Packaged OpenClaw installs do not ship
