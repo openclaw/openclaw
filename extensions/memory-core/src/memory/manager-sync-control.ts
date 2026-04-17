@@ -11,12 +11,7 @@ const log = createSubsystemLogger("memory");
 export type MemoryReadonlyRecoveryState = {
   closed: boolean;
   db: DatabaseSync;
-  vectorReady: Promise<boolean> | null;
   vector: {
-    enabled: boolean;
-    available: boolean | null;
-    extensionPath?: string;
-    loadError?: string;
     dims?: number;
   };
   readonlyRecoveryAttempts: number;
@@ -30,6 +25,7 @@ export type MemoryReadonlyRecoveryState = {
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) => Promise<void>;
   openDatabase: () => DatabaseSync;
+  resetVectorState: () => void;
   ensureSchema: () => void;
   readMeta: () => { vectorDims?: number } | undefined;
 };
@@ -107,9 +103,7 @@ export async function runMemorySyncWithReadonlyRecovery(
       state.db.close();
     } catch {}
     state.db = state.openDatabase();
-    state.vectorReady = null;
-    state.vector.available = null;
-    state.vector.loadError = undefined;
+    state.resetVectorState();
     state.ensureSchema();
     const meta = state.readMeta();
     state.vector.dims = meta?.vectorDims;
