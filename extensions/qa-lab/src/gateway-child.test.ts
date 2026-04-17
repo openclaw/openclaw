@@ -714,6 +714,43 @@ describe("qa bundled plugin dir", () => {
     ).toBe(path.join(repoRoot, "extensions", "qa-channel"));
   });
 
+  it("uses a source bundled plugin when the built copy is missing CLI metadata", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-cli-metadata-root-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "memory-core"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "memory-core", "package.json"),
+      "{}",
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "memory-core", "openclaw.plugin.json"),
+      JSON.stringify({ id: "memory-core", kind: "memory" }),
+      "utf8",
+    );
+    await mkdir(path.join(repoRoot, "extensions", "memory-core"), { recursive: true });
+    await writeFile(path.join(repoRoot, "extensions", "memory-core", "package.json"), "{}", "utf8");
+    await writeFile(
+      path.join(repoRoot, "extensions", "memory-core", "openclaw.plugin.json"),
+      JSON.stringify({ id: "memory-core", kind: "memory" }),
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "extensions", "memory-core", "cli-metadata.ts"),
+      "export default { id: 'memory-core' };\n",
+      "utf8",
+    );
+
+    expect(
+      __testing.resolveQaBundledPluginSourceDir({
+        repoRoot,
+        pluginId: "memory-core",
+      }),
+    ).toBe(path.join(repoRoot, "extensions", "memory-core"));
+  });
+
   it("creates a scoped bundled plugin tree for allowed plugins plus always-allowed runtime facades", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-scope-"));
     cleanups.push(async () => {
