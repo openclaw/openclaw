@@ -202,4 +202,32 @@ describe("resolveTwitchAccountContext", () => {
     expect(context.accountId).toBe("secondary");
     expect(context.account?.username).toBe("second-bot");
   });
+
+  it("keeps account and token lookup aligned after account id normalization", () => {
+    const context = resolveTwitchAccountContext(
+      {
+        channels: {
+          twitch: {
+            accounts: {
+              Secondary: {
+                username: "second-bot",
+                accessToken: "oauth:second-token",
+                clientId: "second-client",
+                channel: "#second",
+              },
+            },
+          },
+        },
+      } as Parameters<typeof resolveTwitchAccountContext>[0],
+      "secondary",
+    );
+
+    expect(context.accountId).toBe("secondary");
+    expect(context.account?.username).toBe("second-bot");
+    expect(context.tokenResolution).toEqual({
+      token: "oauth:second-token",
+      source: "config",
+    });
+    expect(context.configured).toBe(true);
+  });
 });
