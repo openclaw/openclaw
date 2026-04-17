@@ -83,8 +83,15 @@ class FilePatch:
 # GitHub API
 # ---------------------------------------------------------------------------
 
-def gh_request(endpoint, method="GET", data=None, *, retries=3):
-    """GitHub API with retry on transient 5xx/429."""
+def gh_request(endpoint, method="GET", data=None, *, retries=3, quiet_codes=()):
+    """GitHub API with retry on transient 5xx/429.
+
+    Args:
+        quiet_codes: HTTP status codes the caller handles gracefully
+            (e.g. 403 on cross-fork PR comment writes when the fine-
+            grained PAT doesn't have write access to the base repo).
+            The raw response body is NOT printed to stderr for these;
+            the error is still raised so callers can soft-fail."""
     token = os.environ.get("GITHUB_TOKEN")
     if not token:
         sys.exit("ERROR: GITHUB_TOKEN env var is required")
@@ -108,7 +115,8 @@ def gh_request(endpoint, method="GET", data=None, *, retries=3):
                 time.sleep(2 ** attempt)
                 last_err = e
                 continue
-            print(f"GitHub API error {e.code} on {url}: {e.read().decode()}", file=sys.stderr)
+            if e.code not in quiet_codes:
+                print(f"GitHub API error {e.code} on {url}: {e.read().decode()}", file=sys.stderr)
             raise
         except urllib.error.URLError as e:
             if attempt < retries - 1:
@@ -167,7 +175,26 @@ def fetch_file_content(repo, ref, path):
 
 
 def post_pr_comment(repo, pr, body):
-    gh_request(f"/repos/{repo}/issues/{pr}/comments", method="POST", data={"body": body})
+    """Post an issue comment to a PR. Soft-fails on 403/404 -- common
+    when the token lacks write access to the base repo on a cross-fork
+    PR (fine-grained PATs can't be scoped to repos the user doesn't
+    own or collaborate on)."""
+    try:
+        gh_request(
+            f"/repos/{repo}/issues/{pr}/comments",
+            method="POST",
+            data={"body": body},
+            quiet_codes=(403, 404),
+        )
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 404):
+            print(
+                f"autofix: cannot post comment to {repo}#{pr} (HTTP {e.code}); "
+                "token lacks write on base repo. Summary comment skipped.",
+                file=sys.stderr,
+            )
+            return
+        raise
 
 
 def reply_to_review_comment(repo, pr, comment_id, body):
@@ -176,6 +203,7 @@ def reply_to_review_comment(repo, pr, comment_id, body):
             f"/repos/{repo}/pulls/{pr}/comments/{comment_id}/replies",
             method="POST",
             data={"body": body},
+            quiet_codes=(403, 404),
         )
     except Exception as e:
         print(f"(non-fatal) could not reply to comment {comment_id}: {e}", file=sys.stderr)
@@ -374,9 +402,14 @@ def _parse_fix_response(raw: str) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 def check_autofix_loop(repo: str, branch: str) -> Optional[str]:
-    """Returns an error message if the last MAX_CONSEC commits are all
-    autofix commits (indicating a probable ping-pong with a reviewer).
-    Returns None if safe to proceed."""
+    """Returns an error message if the last MAX_CONSEC commits on `branch`
+    were all authored by the autofix bot (indicating a probable ping-pong
+    with a reviewer). Returns None if safe to proceed.
+
+    We check the git-level author identity (set by apply_patches to
+    `PR Autofix Bot <autofix-bot@users.noreply.github.com>`) rather than
+    commit-message prefix matching -- humans write "autofix:"-prefixed
+    commits too and we don't want those to block the pipeline."""
     if MAX_CONSEC <= 0:
         return None
     try:
@@ -388,13 +421,15 @@ def check_autofix_loop(repo: str, branch: str) -> Optional[str]:
     if len(commits) < MAX_CONSEC:
         return None
     for commit in commits:
-        msg = (commit.get("commit") or {}).get("message", "")
-        if not msg.lower().startswith("autofix:"):
+        author = ((commit.get("commit") or {}).get("author") or {})
+        name = author.get("name", "")
+        email = author.get("email", "")
+        if name != "PR Autofix Bot" and not email.startswith("autofix-bot@"):
             return None
     return (
-        f"autofix: refusing to run — the last {MAX_CONSEC} commits on `{branch}` "
-        "are all autofix commits, which usually means the autofixer is caught "
-        "in a ping-pong with a reviewer. Human review required."
+        f"autofix: refusing to run -- the last {MAX_CONSEC} commits on `{branch}` "
+        "were all authored by the autofix bot, which usually means the fixer "
+        "is caught in a ping-pong with a reviewer. Human review required."
     )
 
 
