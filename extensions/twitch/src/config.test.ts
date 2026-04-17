@@ -54,6 +54,30 @@ describe("getAccountConfig", () => {
     expect(result?.username).toBe("secondbot");
   });
 
+  it("normalizes account ids without reading inherited account properties", () => {
+    const accounts = Object.create({
+      inherited: {
+        username: "inherited-bot",
+        accessToken: "oauth:inherited",
+      },
+    }) as Record<string, unknown>;
+    accounts.Secondary = {
+      username: "secondbot",
+      accessToken: "oauth:secondary",
+    };
+
+    const cfg = {
+      channels: {
+        twitch: {
+          accounts,
+        },
+      },
+    };
+
+    expect(getAccountConfig(cfg, "SECONDARY\r\n")).toMatchObject({ username: "secondbot" });
+    expect(getAccountConfig(cfg, "inherited")).toBeNull();
+  });
+
   it("returns null for non-existent account ID", () => {
     const result = getAccountConfig(mockMultiAccountConfig, "nonexistent");
 
@@ -119,6 +143,21 @@ describe("listAccountIds", () => {
         },
       } as Parameters<typeof listAccountIds>[0]),
     ).toEqual(["default", "secondary"]);
+  });
+
+  it("normalizes configured account ids", () => {
+    expect(
+      listAccountIds({
+        channels: {
+          twitch: {
+            accounts: {
+              Secondary: { username: "secondbot" },
+              "Alerts\r\n\u001b[31m": { username: "alerts" },
+            },
+          },
+        },
+      } as Parameters<typeof listAccountIds>[0]),
+    ).toEqual(["alerts-31m", "secondary"]);
   });
 });
 

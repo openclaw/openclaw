@@ -208,6 +208,11 @@ export async function configureWithEnvToken(
   dmPolicy: ChannelSetupDmPolicy,
   accountId: string = resolveSetupAccountId(cfg),
 ): Promise<{ cfg: OpenClawConfig } | null> {
+  const resolvedAccountId = normalizeAccountId(accountId);
+  if (resolvedAccountId !== DEFAULT_ACCOUNT_ID) {
+    return null;
+  }
+
   const useEnv = await prompter.confirm({
     message: "Twitch env var OPENCLAW_TWITCH_ACCESS_TOKEN detected. Use env token?",
     initialValue: true,
@@ -227,11 +232,17 @@ export async function configureWithEnvToken(
       accessToken: "",
       enabled: true,
     },
-    accountId,
+    resolvedAccountId,
   );
 
   if (forceAllowFrom && dmPolicy.promptAllowFrom) {
-    return { cfg: await dmPolicy.promptAllowFrom({ cfg: cfgWithAccount, prompter, accountId }) };
+    return {
+      cfg: await dmPolicy.promptAllowFrom({
+        cfg: cfgWithAccount,
+        prompter,
+        accountId: resolvedAccountId,
+      }),
+    };
   }
 
   return { cfg: cfgWithAccount };
@@ -400,7 +411,7 @@ export const twitchSetupWizard: ChannelSetupWizard = {
 
     const envToken = process.env.OPENCLAW_TWITCH_ACCESS_TOKEN?.trim();
 
-    if (envToken && !account?.accessToken) {
+    if (accountId === DEFAULT_ACCOUNT_ID && envToken && !account?.accessToken) {
       const envResult = await configureWithEnvToken(
         cfg,
         prompter,
@@ -469,7 +480,7 @@ export const twitchSetupPlugin: ChannelPlugin<ResolvedTwitchAccount> = {
   config: {
     listAccountIds: (cfg) => listAccountIds(cfg),
     resolveAccount: (cfg, accountId) => {
-      const resolvedAccountId = accountId ?? resolveDefaultTwitchAccountId(cfg);
+      const resolvedAccountId = normalizeAccountId(accountId ?? resolveDefaultTwitchAccountId(cfg));
       const account = getAccountConfig(cfg, resolvedAccountId);
       if (!account) {
         return {

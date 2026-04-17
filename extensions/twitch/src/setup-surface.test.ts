@@ -208,7 +208,7 @@ describe("setup surface helpers", () => {
       expect(defaultAccount?.clientId).toBe("test-client-id");
     });
 
-    it("writes env-token setup to the configured default account", async () => {
+    it("skips env-token shortcut for non-default accounts", async () => {
       mockPromptConfirm.mockReset().mockResolvedValue(true as never);
       mockPromptText
         .mockReset()
@@ -230,12 +230,9 @@ describe("setup surface helpers", () => {
         {} as Parameters<typeof configureWithEnvToken>[5],
       );
 
-      const secondaryAccount = result?.cfg.channels?.twitch?.accounts?.secondary as
-        | { username?: string; clientId?: string }
-        | undefined;
-      expect(secondaryAccount?.username).toBe("secondary-bot");
-      expect(secondaryAccount?.clientId).toBe("secondary-client");
-      expect(result?.cfg.channels?.twitch?.accounts?.default).toBeUndefined();
+      expect(result).toBeNull();
+      expect(mockPromptConfirm).not.toHaveBeenCalled();
+      expect(mockPromptText).not.toHaveBeenCalled();
     });
   });
 
@@ -402,6 +399,41 @@ describe("setup surface helpers", () => {
       expect(twitch?.accounts?.secondary?.accessToken).toBe("oauth:secondary");
       expect(twitch?.accounts?.default?.username).toBe("default-bot");
     });
+
+    it("persists a token instead of using env-token shortcut for non-default finalize", async () => {
+      process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = "oauth:fromenv";
+      mockPromptText
+        .mockReset()
+        .mockResolvedValueOnce("secondary-bot" as never)
+        .mockResolvedValueOnce("oauth:persisted" as never)
+        .mockResolvedValueOnce("secondary-client" as never)
+        .mockResolvedValueOnce("#secondary" as never);
+      mockPromptConfirm.mockReset().mockResolvedValue(false as never);
+
+      const result = await twitchSetupWizard.finalize?.({
+        cfg: {
+          channels: {
+            twitch: {
+              accounts: {},
+            },
+          },
+        } as Parameters<NonNullable<typeof twitchSetupWizard.finalize>>[0]["cfg"],
+        accountId: "secondary",
+        credentialValues: {},
+        runtime: {} as Parameters<NonNullable<typeof twitchSetupWizard.finalize>>[0]["runtime"],
+        prompter: mockPrompter,
+        options: {},
+        forceAllowFrom: false,
+      });
+
+      const twitch = result?.cfg?.channels?.twitch;
+      expect(twitch?.accounts?.secondary?.accessToken).toBe("oauth:persisted");
+      expect(mockPromptConfirm).toHaveBeenCalledTimes(1);
+      expect(mockPromptConfirm).toHaveBeenCalledWith({
+        message: "Enable automatic token refresh (requires client secret and refresh token)?",
+        initialValue: false,
+      });
+    });
   });
 
   describe("setup-only plugin config", () => {
@@ -430,6 +462,32 @@ describe("setup surface helpers", () => {
 
       expect(twitchSetupPlugin.config.listAccountIds(cfg)).toEqual(["default", "secondary"]);
       expect(twitchSetupPlugin.config.defaultAccountId?.(cfg)).toBe("secondary");
+    });
+
+    it("normalizes exposed account ids", () => {
+      const cfg = {
+        channels: {
+          twitch: {
+            accounts: {
+              Secondary: {
+                username: "secondary-bot",
+                accessToken: "oauth:secondary",
+                clientId: "secondary-client",
+                channel: "#secondary",
+              },
+            },
+          },
+        },
+      } as Parameters<typeof twitchSetupPlugin.config.listAccountIds>[0];
+
+      expect(twitchSetupPlugin.config.listAccountIds(cfg)).toEqual(["secondary"]);
+      expect(twitchSetupPlugin.config.defaultAccountId?.(cfg)).toBe("secondary");
+      expect(twitchSetupPlugin.config.resolveAccount(cfg, "SECONDARY\r\n").accountId).toBe(
+        "secondary",
+      );
+      expect(twitchSetupPlugin.config.resolveAccount(cfg, "SECONDARY\r\n").username).toBe(
+        "secondary-bot",
+      );
     });
   });
 });
