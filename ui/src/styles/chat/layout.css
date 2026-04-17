@@ -1441,3 +1441,22 @@
 .plan-inline-card__btn--danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
+
+.plan-inline-card__revise-input {
+  width: 100%;
+  min-height: 64px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.plan-inline-card__revise-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}

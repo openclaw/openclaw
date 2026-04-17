@@ -2386,8 +2386,14 @@ export function renderApp(state: AppViewState) {
               planApprovalRequest: state.planApprovalRequest,
               planApprovalBusy: state.planApprovalBusy,
               planApprovalError: state.planApprovalError,
+              planApprovalReviseOpen: state.planApprovalReviseOpen,
+              planApprovalReviseDraft: state.planApprovalReviseDraft,
               onPlanApprovalDecision: (decision, feedback) =>
                 state.handlePlanApprovalDecision(decision, feedback),
+              onPlanApprovalReviseOpen: () => state.handlePlanApprovalReviseOpen(),
+              onPlanApprovalReviseCancel: () => state.handlePlanApprovalReviseCancel(),
+              onPlanApprovalReviseDraftChange: (text) =>
+                state.handlePlanApprovalReviseDraftChange(text),
               onOpenPlanInSidebar: (request) => {
                 // Render the proposed plan as a markdown document and
                 // hand it to the existing markdown-sidebar viewer (same

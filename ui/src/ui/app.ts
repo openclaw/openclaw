@@ -134,6 +134,42 @@ function resolveOnboardingMode(): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
+/**
+ * Build the synthetic user-turn message sent to the agent after the
+ * user resolves a plan-approval card. The agent sees this as a normal
+ * user message with a structured tag at the top so it knows the plan
+ * lifecycle outcome.
+ *
+ * - approve: agent should execute the plan as-proposed.
+ * - edit: agent has license to make minor edits during execution.
+ * - reject: agent stays in plan mode and revises (the runtime keeps
+ *   planMode armed; rejection feedback is in the message body).
+ */
+function buildPlanDecisionUserMessage(
+  decision: "approve" | "reject" | "edit",
+  summary: string | null,
+  feedback: string | null,
+): string {
+  const trimmedSummary = summary?.trim();
+  const summaryClause = trimmedSummary ? ` (${trimmedSummary})` : "";
+  switch (decision) {
+    case "approve":
+      return `[PLAN_DECISION] decision: approved${summaryClause}\n\nThe plan you proposed via exit_plan_mode is approved. Plan mode is now off and mutating tools are unlocked. Execute the plan now without re-proposing.`;
+    case "edit":
+      return `[PLAN_DECISION] decision: approved-with-edits${summaryClause}\n\nThe plan is approved with the understanding that you may make minor edits during execution if you discover something. Plan mode is now off and mutating tools are unlocked. Execute the plan now.`;
+    case "reject":
+      return feedback?.trim()
+        ? `[PLAN_DECISION] decision: rejected${summaryClause}\n\nThe user wants you to revise the plan. Their feedback:\n\n${feedback.trim()}\n\nYou are still in plan mode. Update the plan and call exit_plan_mode again with the revised steps.`
+        : `[PLAN_DECISION] decision: rejected${summaryClause}\n\nThe user rejected the plan and did not provide specific feedback — ask them what they want changed, or revise based on what you think the gap was. You are still in plan mode; revise and call exit_plan_mode again.`;
+    default: {
+      const _exhaustive: never = decision;
+      // _exhaustive is `never` — TS catches new variants at compile
+      // time. Fallback string only fires if someone bypasses typing.
+      return `[PLAN_DECISION] decision: ${String(_exhaustive)}`;
+    }
+  }
+}
+
 @customElement("openclaw-app")
 export class OpenClawApp extends LitElement {
   private i18nController = new I18nController(this);
@@ -237,6 +273,10 @@ export class OpenClawApp extends LitElement {
   @state() planApprovalRequest: import("./app-tool-stream.ts").PlanApprovalRequest | null = null;
   @state() planApprovalBusy = false;
   @state() planApprovalError: string | null = null;
+  // Inline-revise textarea state (no popup). Open + draft live on the
+  // host so the textarea survives chat re-renders.
+  @state() planApprovalReviseOpen = false;
+  @state() planApprovalReviseDraft = "";
   @state() pendingGatewayUrl: string | null = null;
   pendingGatewayToken: string | null = null;
 
@@ -901,9 +941,21 @@ export class OpenClawApp extends LitElement {
   }
 
   /**
-   * PR-8 / #67721: resolve a pending plan-approval card. Sends the
-   * decision via `sessions.patch { planApproval: ... }` which routes
-   * through `resolvePlanApproval` server-side.
+   * PR-8 / #67721: resolve a pending plan-approval card.
+   *
+   * Flow:
+   *   1. Snapshot the active request + clear UI state OPTIMISTICALLY so
+   *      the card disappears immediately. Avoids the stale-card-double-click
+   *      scenario where users click Accept twice and the second click
+   *      hits "planApproval requires an active plan-mode session".
+   *   2. POST sessions.patch { planApproval } so the server transitions
+   *      SessionEntry.planMode via resolvePlanApproval (#67538).
+   *   3. On success, send a follow-up message to the agent so it
+   *      auto-continues without the user having to type "go". This is
+   *      the [APPROVED_PLAN] / [PLAN_DECISION] context injection
+   *      from the original PR-8 design, delivered via sessions.send
+   *      (which the chat surface already uses for user messages).
+   *   4. On failure, restore the card so the user can retry.
    */
   async handlePlanApprovalDecision(
     decision: "approve" | "reject" | "edit",
@@ -915,6 +967,13 @@ export class OpenClawApp extends LitElement {
     }
     this.planApprovalBusy = true;
     this.planApprovalError = null;
+    // Optimistic dismissal — clear card BEFORE the round-trip so a
+    // second click can't fire while the first is in-flight.
+    const snapshotRequest = active;
+    const snapshotReviseDraft = this.planApprovalReviseDraft;
+    this.planApprovalRequest = null;
+    this.planApprovalReviseOpen = false;
+    this.planApprovalReviseDraft = "";
     try {
       const params: Record<string, unknown> = {
         key: active.sessionKey,
@@ -925,16 +984,50 @@ export class OpenClawApp extends LitElement {
         },
       };
       await this.client.request("sessions.patch", params);
-      // Clear the active card so the overlay dismisses. The agent's
-      // next turn will pick up the resolution via the new session
-      // state (mode flipped to "normal" on approve/edit, or stays
-      // "plan" with rejectionCount++ on reject).
-      this.planApprovalRequest = null;
+      // Send a synthetic "decision" message so the agent gets a user
+      // turn to react to. Without this the agent sits idle waiting
+      // for input even though the runtime has flipped mode → normal.
+      // We use handleSendChat (the same path the user types into) so
+      // the message appears in chat history and triggers a normal
+      // agent run with the same session key.
+      const decisionMessage = buildPlanDecisionUserMessage(
+        decision,
+        active.summary ?? null,
+        feedback ?? null,
+      );
+      // Fire-and-forget; the agent run is its own lifecycle and
+      // shouldn't block the approval flow's success state.
+      void handleSendChatInternal(this, decisionMessage).catch((err: unknown) => {
+        this.lastError = `Plan accepted but failed to notify agent: ${String(err)}`;
+      });
     } catch (err) {
+      // Restore card so the user can retry.
+      this.planApprovalRequest = snapshotRequest;
+      this.planApprovalReviseDraft = snapshotReviseDraft;
       this.planApprovalError = `Plan approval failed: ${String(err)}`;
     } finally {
       this.planApprovalBusy = false;
     }
+  }
+
+  /** Open the inline revise textarea (no popup). */
+  handlePlanApprovalReviseOpen(): void {
+    if (!this.planApprovalRequest) {
+      return;
+    }
+    this.planApprovalReviseOpen = true;
+    this.planApprovalError = null;
+  }
+
+  /** Cancel the inline revise textarea WITHOUT submitting. */
+  handlePlanApprovalReviseCancel(): void {
+    this.planApprovalReviseOpen = false;
+    this.planApprovalReviseDraft = "";
+    this.planApprovalError = null;
+  }
+
+  handlePlanApprovalReviseDraftChange(text: string): void {
+    this.planApprovalReviseDraft = text;
   }
 
   handleGatewayUrlConfirm() {
