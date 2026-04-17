@@ -76,7 +76,9 @@ async function captureHandlerResponse(
   const res = {
     statusCode: 200,
     setHeader(name: string, value: number | string | readonly string[]) {
-      response.headers[name.toLowerCase()] = Array.isArray(value) ? [...value] : value;
+      const headerValue: number | string | string[] =
+        typeof value === "object" ? [...value] : value;
+      response.headers[name.toLowerCase()] = headerValue;
       return this;
     },
     end(chunk?: string | Buffer) {
