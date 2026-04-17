@@ -25,6 +25,7 @@ function createDefaultSessionStoreEntry() {
     cacheRead: 2_000,
     cacheWrite: 1_000,
     totalTokens: 5_000,
+    totalTokensFresh: true,
     contextTokens: 10_000,
     model: "pi:opus",
     sessionId: "abc123",
@@ -198,9 +199,7 @@ function createSessionStatusRows() {
     const recent = Object.entries(store).map(([key, entry]) => {
       const contextTokens = typeof entry.contextTokens === "number" ? entry.contextTokens : null;
       const freshTotal =
-        typeof entry.totalTokens === "number" && entry.totalTokensFresh !== false
-          ? entry.totalTokens
-          : null;
+        typeof entry.totalTokens === "number" && entry.totalTokensFresh ? entry.totalTokens : null;
       return {
         agentId: agent.id,
         key,
@@ -234,9 +233,9 @@ function createSessionStatusRows() {
     });
     return { agentId: agent.id, path, count: recent.length, recent };
   });
-  const recent = byAgent.flatMap((entry) => entry.recent);
+  const recent = byAgent.flatMap((entry: (typeof byAgent)[number]) => entry.recent);
   return {
-    paths: byAgent.map((entry) => entry.path),
+    paths: byAgent.map((entry: (typeof byAgent)[number]) => entry.path),
     count: recent.length,
     defaults: {
       model: recent[0]?.model ?? "pi:opus",

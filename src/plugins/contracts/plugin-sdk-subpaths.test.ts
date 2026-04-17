@@ -346,7 +346,6 @@ describe("plugin-sdk subpath exports", () => {
       "pairing-access",
       "provider-model-definitions",
       "reply-prefix",
-      "secret-input-runtime",
       "secret-input-schema",
       "signal-core",
       "synology-chat",
