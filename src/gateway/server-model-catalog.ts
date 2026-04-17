@@ -5,6 +5,7 @@ import {
   type ModelCatalogEntry,
   resetModelCatalogCacheForTest,
 } from "../agents/model-catalog.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { getRuntimeConfig } from "../config/config.js";
 
 export type GatewayModelChoice = ModelCatalogEntry;
@@ -30,9 +31,13 @@ export async function loadGatewayModelCatalog(params?: {
   for (const entry of catalog) {
     if (entry.contextWindow) {
       discoveredModels.push({ id: entry.id, contextWindow: entry.contextWindow });
-      if (entry.provider) {
+      // Match the normalization used by resolveContextTokensForModel at lookup
+      // time, so aliased providers (e.g. "z.ai", "modelstudio") populate the
+      // same qualified key the lookup probes ("zai/...", "qwen/...").
+      const normalizedProvider = entry.provider ? normalizeProviderId(entry.provider) : "";
+      if (normalizedProvider) {
         discoveredModels.push({
-          id: `${entry.provider}/${entry.id}`,
+          id: `${normalizedProvider}/${entry.id}`,
           contextWindow: entry.contextWindow,
         });
       }
