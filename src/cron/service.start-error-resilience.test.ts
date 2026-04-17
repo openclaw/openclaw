@@ -13,7 +13,7 @@ const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
 });
 
 describe("CronService start() error resilience", () => {
-  it("arms timer even when runMissedJobs throws", async () => {
+  it("arms timer and repairs partial state when runMissedJobs throws", async () => {
     const { storePath, cleanup } = await makeStorePath();
 
     // Write a store with one overdue isolated agentTurn job
@@ -65,7 +65,10 @@ describe("CronService start() error resilience", () => {
     const origWriteFile = fs.writeFile.bind(fs);
     const spy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, ...rest) => {
       writeCount++;
-      if (writeCount > 1 && typeof file === "string" && file.includes("cron")) {
+      // Allow the first write (startup stale-marker cleanup) and the second
+      // write (planStartupCatchup sets runningAtMs). Fail the third write
+      // (applyStartupCatchupOutcomes persist) to trigger the catch path.
+      if (writeCount > 2 && typeof file === "string" && file.includes("cron")) {
         throw new Error("simulated disk failure during persist");
       }
       return origWriteFile(file as any, data as any, ...(rest as any[]));
@@ -80,6 +83,76 @@ describe("CronService start() error resilience", () => {
       // The store should still be loaded
       expect(state.store).not.toBeNull();
       expect(state.store!.jobs.length).toBe(1);
+      // The catch block must have repaired partial state: any runningAtMs
+      // set by planStartupCatchup should be cleared so the job can run on
+      // the next tick instead of being stuck until zombie detection fires.
+      expect(state.store!.jobs[0].state.runningAtMs).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+      await cleanup();
+    }
+  });
+
+  it("repairs one-shot job state when runMissedJobs throws", async () => {
+    const { storePath, cleanup } = await makeStorePath();
+
+    const overdueAtMs = Date.now() - 120_000;
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "one-shot-1",
+              name: "one-shot-job",
+              enabled: true,
+              createdAtMs: overdueAtMs - 60_000,
+              updatedAtMs: overdueAtMs - 60_000,
+              schedule: { kind: "at", at: new Date(overdueAtMs).toISOString() },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "one-shot" },
+              state: { nextRunAtMs: overdueAtMs, runningAtMs: overdueAtMs },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn() as never,
+      requestHeartbeatNow: vi.fn() as never,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,
+    });
+
+    // Make all cron-related writes after the first one fail
+    let writeCount = 0;
+    const origWriteFile = fs.writeFile.bind(fs);
+    const spy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, ...rest) => {
+      writeCount++;
+      if (writeCount > 1 && typeof file === "string" && file.includes("cron")) {
+        throw new Error("simulated failure");
+      }
+      return origWriteFile(file as any, data as any, ...(rest as any[]));
+    });
+
+    try {
+      await start(state);
+
+      // Timer must be armed
+      expect(state.timer).not.toBeNull();
+      // One-shot job should have nextRunAtMs cleared to prevent re-execution
+      expect(state.store!.jobs[0].state.nextRunAtMs).toBeUndefined();
+      // And runningAtMs should also be cleared
+      expect(state.store!.jobs[0].state.runningAtMs).toBeUndefined();
     } finally {
       spy.mockRestore();
       await cleanup();
@@ -165,7 +238,7 @@ describe("clearZombieRunningMarkers", () => {
 
   it("clears runningAtMs for jobs that exceeded their timeout", () => {
     const now = Date.now();
-    const job = makeJob({ timeoutSeconds: 60 }); // 60s timeout → zombie threshold = 120s
+    const job = makeJob({ timeoutSeconds: 60 }); // 60s timeout -> zombie threshold = 120s
     job.state.runningAtMs = now - 300_000; // 5 min ago, way past 120s threshold
 
     const state = createCronServiceState({
@@ -186,7 +259,7 @@ describe("clearZombieRunningMarkers", () => {
 
   it("does NOT clear runningAtMs for jobs still within their timeout", () => {
     const now = Date.now();
-    const job = makeJob({ timeoutSeconds: 600 }); // 10 min timeout → zombie threshold = 20 min
+    const job = makeJob({ timeoutSeconds: 600 }); // 10 min timeout -> zombie threshold = 20 min
     job.state.runningAtMs = now - 300_000; // 5 min ago, within 20 min threshold
 
     const state = createCronServiceState({

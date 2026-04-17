@@ -143,6 +143,35 @@ export async function start(state: CronServiceState) {
       { err: String(err) },
       "cron: startup catch-up failed; arming timer anyway to keep scheduler alive",
     );
+    // Repair partial state left by the failed catch-up.
+    //
+    // planStartupCatchup() persists runningAtMs markers before execution.
+    // If a later step (execution or applyStartupCatchupOutcomes) throws,
+    // those markers remain on disk and subsequent ticks will skip those jobs
+    // until the runtime zombie detector clears them.  Clear them now so
+    // jobs can run on the very next tick.
+    //
+    // Similarly, interruptedOneShotIds was computed above but never
+    // persisted.  One-shot jobs with past-due nextRunAtMs and no runningAtMs
+    // would be re-executed on the first tick.  Clear their nextRunAtMs to
+    // prevent double-execution.
+    await locked(state, async () => {
+      await ensureLoaded(state, { skipRecompute: true });
+      let dirty = false;
+      for (const job of state.store?.jobs ?? []) {
+        if (typeof job.state.runningAtMs === "number") {
+          job.state.runningAtMs = undefined;
+          dirty = true;
+        }
+        if (interruptedOneShotIds.has(job.id) && typeof job.state.nextRunAtMs === "number") {
+          job.state.nextRunAtMs = undefined;
+          dirty = true;
+        }
+      }
+      if (dirty) {
+        await persist(state);
+      }
+    });
   }
 
   await locked(state, async () => {
