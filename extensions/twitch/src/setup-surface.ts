@@ -2,6 +2,7 @@
  * Twitch setup wizard surface for CLI setup.
  */
 
+import { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   formatDocsLink,
   type ChannelSetupAdapter,
@@ -425,4 +426,38 @@ export const twitchSetupWizard: ChannelSetupWizard = {
       },
     };
   },
+};
+
+type ResolvedTwitchAccount = TwitchAccountConfig & { accountId?: string | null };
+
+export const twitchSetupPlugin: ChannelPlugin<ResolvedTwitchAccount> = {
+  id: channel,
+  meta: getChatChannelMeta(channel),
+  capabilities: {
+    chatTypes: ["group"],
+  },
+  config: {
+    listAccountIds: (cfg) => {
+      const accountId = resolveSetupAccountId(cfg);
+      return getAccountConfig(cfg, accountId) ? [accountId] : [];
+    },
+    resolveAccount: (cfg, accountId) => {
+      const resolvedAccountId = accountId ?? resolveSetupAccountId(cfg);
+      const account = getAccountConfig(cfg, resolvedAccountId);
+      const fallback = {
+        accountId: resolvedAccountId,
+        username: "",
+        accessToken: "",
+        clientId: "",
+        channel: "",
+        enabled: false,
+      };
+      return account ? { ...fallback, ...account } : fallback;
+    },
+    defaultAccountId: (cfg) => resolveSetupAccountId(cfg),
+    isConfigured: (account) => isAccountConfigured(account),
+    isEnabled: (account) => account.enabled !== false,
+  },
+  setup: twitchSetupAdapter,
+  setupWizard: twitchSetupWizard,
 };
