@@ -213,6 +213,21 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
 
   it("includes enabled Claude bundle markdown commands as native OpenClaw slash commands", async () => {
     const workspaceDir = await makeWorkspace();
+    const config = {
+      plugins: {
+        entries: {
+          "compound-bundle": { enabled: true },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    // Prime plugin discovery before the bundle exists so command loading proves
+    // it sees the current filesystem state instead of a stale cached snapshot.
+    buildWorkspaceSkillCommandSpecs(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      config,
+    });
+
     const pluginRoot = path.join(tempHome!.home, ".openclaw", "extensions", "compound-bundle");
     await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
     await fs.mkdir(path.join(pluginRoot, "commands"), { recursive: true });
@@ -236,13 +251,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
 
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       ...resolveTestSkillDirs(workspaceDir),
-      config: {
-        plugins: {
-          entries: {
-            "compound-bundle": { enabled: true },
-          },
-        },
-      },
+      config,
     });
 
     expect(commands).toEqual(
