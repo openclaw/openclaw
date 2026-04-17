@@ -10,7 +10,8 @@ metadata:
 
 # Blink Gmail
 
-Access the user's Gmail inbox. Provider key: `google_gmail`.
+Access the user's Gmail inbox. Provider key: `google_gmail` or `composio_gmail` (check `blink connector status` for the exact key).
+Base URL: `https://gmail.googleapis.com/gmail/v1/` — endpoints below are relative to this.
 
 ## List messages (inbox)
 ```bash

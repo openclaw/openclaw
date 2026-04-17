@@ -6,7 +6,9 @@ description: >
   HubSpot, Airtable, Microsoft (Outlook, Teams, OneDrive, Calendar), LinkedIn,
   Salesforce, GitHub, Jira, Asana, Linear, Attio, Pipedrive, Zoom, Stripe,
   Shopify, Figma, Twitter, Instagram, TikTok, YouTube, Loom, Mailchimp,
-  Typeform, Calendly, Etsy, Vercel, Reddit.
+  Typeform, Calendly, Etsy, Vercel, Reddit, Facebook, Monday, Amplitude,
+  Google Analytics, Zendesk, Apollo, Datagma, Mixpanel, PeopleDataLabs,
+  Google BigQuery, Supabase.
   Use when the user asks you to interact with a connected third-party service.
 metadata:
   { "blink": { "requires_env": ["BLINK_API_KEY", "BLINK_AGENT_ID"] } }
@@ -74,6 +76,26 @@ A missing provider means it's not linked — ask the user to connect it in the A
 | Vercel | `vercel` | `https://api.vercel.com/` |
 | Reddit | `reddit` | `https://oauth.reddit.com/` |
 | ClickUp | `clickup` | `https://api.clickup.com/api/v2/` |
+| **Composio connectors** — same APIs, different auth. Use the `composio_*` key shown by `blink connector status`. ||
+| Gmail (Composio) | `composio_gmail` | `https://gmail.googleapis.com/gmail/v1/` |
+| Google Drive (Composio) | `composio_drive` | `https://www.googleapis.com/drive/v3/` |
+| Google Calendar (Composio) | `composio_calendar` | `https://www.googleapis.com/calendar/v3/` |
+| YouTube (Composio) | `composio_youtube` | `https://www.googleapis.com/youtube/v3/` |
+| Figma (Composio) | `composio_figma` | `https://api.figma.com/v1/` |
+| Stripe (Composio) | `composio_stripe` | `https://api.stripe.com/v1/` |
+| Instagram (Composio) | `composio_instagram` | `https://graph.instagram.com/v22.0/` |
+| Reddit (Composio) | `composio_reddit` | `https://oauth.reddit.com/` |
+| Facebook | `composio_facebook` | `https://graph.facebook.com/v19.0/` |
+| Monday | `composio_monday` | `https://api.monday.com/v2/` |
+| Amplitude | `composio_amplitude` | `https://amplitude.com/api/` |
+| Google Analytics | `composio_googleanalytics` | `https://analyticsadmin.googleapis.com/v1beta/` |
+| Zendesk | `composio_zendesk` | `https://api.zendesk.com/api/v2/` |
+| Apollo | `composio_apollo` | `https://api.apollo.io/v1/` |
+| Datagma | `composio_datagma` | `https://gateway.datagma.net/api/ingestion/v2/` |
+| Mixpanel | `composio_mixpanel` | `https://mixpanel.com/api/` |
+| PeopleDataLabs | `composio_peopledatalabs` | `https://api.peopledatalabs.com/v5/` |
+| Google BigQuery | `composio_bigquery` | `https://bigquery.googleapis.com/bigquery/v2/` |
+| Supabase | `composio_supabase` | `https://api.supabase.com/v1/` |
 
 ## Examples by Provider
 
@@ -636,6 +658,90 @@ blink connector exec etsy application/users/me/shops GET
 
 # List shop listings
 blink connector exec etsy application/shops/SHOP_ID/listings GET '{"limit":"25"}'
+```
+
+### Composio Connectors
+
+**IMPORTANT**: When `blink connector status` shows a `composio_*` provider (e.g. `composio_figma` instead of `figma`), use that exact key. The endpoints are the same as the legacy connector — just swap the provider key.
+
+```bash
+# If status shows composio_figma:
+blink connector exec composio_figma me GET              # NOT figma
+# If status shows composio_youtube:
+blink connector exec composio_youtube channels GET '{"part":"snippet,statistics","mine":"true"}'
+# If status shows composio_reddit:
+blink connector exec composio_reddit api/v1/me GET
+# If status shows composio_gmail:
+blink connector exec composio_gmail users/me/messages GET '{"q":"is:unread","maxResults":"10"}'
+```
+
+### Facebook
+```bash
+# Get my profile
+blink connector exec composio_facebook me GET '{"fields":"id,name,email"}'
+
+# List my pages
+blink connector exec composio_facebook me/accounts GET
+
+# Get page posts
+blink connector exec composio_facebook PAGE_ID/feed GET '{"limit":"10"}'
+```
+
+### Monday (GraphQL)
+```bash
+# List boards
+blink connector exec composio_monday "" POST '{"query":"{ boards(limit:10) { id name } }"}'
+
+# Get board items
+blink connector exec composio_monday "" POST '{"query":"{ boards(ids: BOARD_ID) { items_page(limit:20) { items { id name } } } }"}'
+```
+
+### Google Analytics
+```bash
+# List account summaries
+blink connector exec composio_googleanalytics accountSummaries GET
+
+# List accounts
+blink connector exec composio_googleanalytics accounts GET
+```
+
+### Zendesk
+```bash
+# List tickets
+blink connector exec composio_zendesk tickets GET
+
+# Get a ticket
+blink connector exec composio_zendesk tickets/TICKET_ID GET
+
+# Search tickets
+blink connector exec composio_zendesk search GET '{"query":"status:open type:ticket"}'
+```
+
+### Apollo
+```bash
+# Search people
+blink connector exec composio_apollo people/match POST '{"email":"user@example.com"}'
+
+# Search organizations
+blink connector exec composio_apollo organizations/search POST '{"q_organization_name":"Acme"}'
+```
+
+### Supabase
+```bash
+# List organizations
+blink connector exec composio_supabase organizations GET
+
+# List projects
+blink connector exec composio_supabase projects GET
+```
+
+### Amplitude
+```bash
+# List charts
+blink connector exec composio_amplitude 2/charts GET
+
+# Get active users
+blink connector exec composio_amplitude 2/users/search GET '{"user":"user@example.com"}'
 ```
 
 ## Scripting — capture output

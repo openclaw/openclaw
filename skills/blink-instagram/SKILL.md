@@ -10,7 +10,8 @@ metadata:
 
 # Blink Instagram
 
-Access the user's linked Instagram Business account. Provider key: `instagram`.
+Access the user's linked Instagram Business account. Provider key: `instagram` or `composio_instagram` (check `blink connector status` for the exact key).
+Base URL: `https://graph.instagram.com/v22.0/` — endpoints below are relative to this.
 
 ## Get my account info
 ```bash

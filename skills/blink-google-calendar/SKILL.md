@@ -10,7 +10,7 @@ metadata:
 
 # Blink Google Calendar
 
-Access the user's Google Calendar. Provider key: `google_calendar`.
+Access the user's Google Calendar. Provider key: `google_calendar` or `composio_calendar` (check `blink connector status` for the exact key).
 
 ## List calendars
 ```bash

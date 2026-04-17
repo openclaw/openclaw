@@ -10,7 +10,8 @@ metadata:
 
 # Blink Figma
 
-Access the user's linked Figma account. Provider key: `figma`.
+Access the user's linked Figma account. Provider key: `figma` or `composio_figma` (check `blink connector status` for the exact key).
+Base URL: `https://api.figma.com/v1/` — endpoints below are relative to this (do NOT prepend `v1/`).
 
 ## Get my profile
 ```bash
