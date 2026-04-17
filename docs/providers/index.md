@@ -11,7 +11,7 @@ title: "Provider Directory"
 OpenClaw can use many LLM providers. Pick a provider, authenticate, then set the
 default model as `provider/model`.
 
-Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/etc.)? See [Channels](/docs/channels).
+Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/etc.)? See [Channels](/channels).
 
 ## Quick start
 
@@ -26,66 +26,66 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 
 ## Provider docs
 
-- [Alibaba Model Studio](/docs/providers/alibaba)
-- [Amazon Bedrock](/docs/providers/bedrock)
-- [Anthropic (API + Claude CLI)](/docs/providers/anthropic)
-- [Arcee AI (Trinity models)](/docs/providers/arcee)
-- [BytePlus (International)](/docs/concepts/model-providers#byteplus-international)
-- [Chutes](/docs/providers/chutes)
-- [ComfyUI](/docs/providers/comfy)
-- [Cloudflare AI Gateway](/docs/providers/cloudflare-ai-gateway)
-- [DeepSeek](/docs/providers/deepseek)
-- [fal](/docs/providers/fal)
-- [Fireworks](/docs/providers/fireworks)
-- [GitHub Copilot](/docs/providers/github-copilot)
-- [GLM models](/docs/providers/glm)
-- [Google (Gemini)](/docs/providers/google)
-- [Groq (LPU inference)](/docs/providers/groq)
-- [Hugging Face (Inference)](/docs/providers/huggingface)
-- [inferrs (local models)](/docs/providers/inferrs)
-- [Kilocode](/docs/providers/kilocode)
-- [LiteLLM (unified gateway)](/docs/providers/litellm)
-- [LM Studio (local models)](/docs/providers/lmstudio)
-- [MiniMax](/docs/providers/minimax)
-- [Mistral](/docs/providers/mistral)
-- [Moonshot AI (Kimi + Kimi Coding)](/docs/providers/moonshot)
-- [NVIDIA](/docs/providers/nvidia)
-- [Ollama (cloud + local models)](/docs/providers/ollama)
-- [OpenAI (API + Codex)](/docs/providers/openai)
-- [OpenCode](/docs/providers/opencode)
-- [OpenCode Go](/docs/providers/opencode-go)
-- [OpenRouter](/docs/providers/openrouter)
-- [Perplexity (web search)](/docs/providers/perplexity-provider)
-- [Qianfan](/docs/providers/qianfan)
-- [Qwen Cloud](/docs/providers/qwen)
-- [Runway](/docs/providers/runway)
-- [SGLang (local models)](/docs/providers/sglang)
-- [StepFun](/docs/providers/stepfun)
-- [Synthetic](/docs/providers/synthetic)
-- [Together AI](/docs/providers/together)
-- [Venice (Venice AI, privacy-focused)](/docs/providers/venice)
-- [Vercel AI Gateway](/docs/providers/vercel-ai-gateway)
-- [Vydra](/docs/providers/vydra)
-- [vLLM (local models)](/docs/providers/vllm)
-- [Volcengine (Doubao)](/docs/providers/volcengine)
-- [xAI](/docs/providers/xai)
-- [Xiaomi](/docs/providers/xiaomi)
-- [Z.AI](/docs/providers/zai)
+- [Alibaba Model Studio](/providers/alibaba)
+- [Amazon Bedrock](/providers/bedrock)
+- [Anthropic (API + Claude CLI)](/providers/anthropic)
+- [Arcee AI (Trinity models)](/providers/arcee)
+- [BytePlus (International)](/concepts/model-providers#byteplus-international)
+- [Chutes](/providers/chutes)
+- [ComfyUI](/providers/comfy)
+- [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
+- [DeepSeek](/providers/deepseek)
+- [fal](/providers/fal)
+- [Fireworks](/providers/fireworks)
+- [GitHub Copilot](/providers/github-copilot)
+- [GLM models](/providers/glm)
+- [Google (Gemini)](/providers/google)
+- [Groq (LPU inference)](/providers/groq)
+- [Hugging Face (Inference)](/providers/huggingface)
+- [inferrs (local models)](/providers/inferrs)
+- [Kilocode](/providers/kilocode)
+- [LiteLLM (unified gateway)](/providers/litellm)
+- [LM Studio (local models)](/providers/lmstudio)
+- [MiniMax](/providers/minimax)
+- [Mistral](/providers/mistral)
+- [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
+- [NVIDIA](/providers/nvidia)
+- [Ollama (cloud + local models)](/providers/ollama)
+- [OpenAI (API + Codex)](/providers/openai)
+- [OpenCode](/providers/opencode)
+- [OpenCode Go](/providers/opencode-go)
+- [OpenRouter](/providers/openrouter)
+- [Perplexity (web search)](/providers/perplexity-provider)
+- [Qianfan](/providers/qianfan)
+- [Qwen Cloud](/providers/qwen)
+- [Runway](/providers/runway)
+- [SGLang (local models)](/providers/sglang)
+- [StepFun](/providers/stepfun)
+- [Synthetic](/providers/synthetic)
+- [Together AI](/providers/together)
+- [Venice (Venice AI, privacy-focused)](/providers/venice)
+- [Vercel AI Gateway](/providers/vercel-ai-gateway)
+- [Vydra](/providers/vydra)
+- [vLLM (local models)](/providers/vllm)
+- [Volcengine (Doubao)](/providers/volcengine)
+- [xAI](/providers/xai)
+- [Xiaomi](/providers/xiaomi)
+- [Z.AI](/providers/zai)
 
 ## Shared overview pages
 
-- [Additional bundled variants](/docs/providers/models#additional-bundled-provider-variants) - Anthropic Vertex, Copilot Proxy, and Gemini CLI OAuth
-- [Image Generation](/docs/tools/image-generation) - Shared `image_generate` tool, provider selection, and failover
-- [Music Generation](/docs/tools/music-generation) - Shared `music_generate` tool, provider selection, and failover
-- [Video Generation](/docs/tools/video-generation) - Shared `video_generate` tool, provider selection, and failover
+- [Additional bundled variants](/providers/models#additional-bundled-provider-variants) - Anthropic Vertex, Copilot Proxy, and Gemini CLI OAuth
+- [Image Generation](/tools/image-generation) - Shared `image_generate` tool, provider selection, and failover
+- [Music Generation](/tools/music-generation) - Shared `music_generate` tool, provider selection, and failover
+- [Video Generation](/tools/video-generation) - Shared `video_generate` tool, provider selection, and failover
 
 ## Transcription providers
 
-- [Deepgram (audio transcription)](/docs/providers/deepgram)
+- [Deepgram (audio transcription)](/providers/deepgram)
 
 ## Community tools
 
-- [Claude Max API Proxy](/docs/providers/claude-max-api-proxy) - Community proxy for Claude subscription credentials (verify Anthropic policy/terms before use)
+- [Claude Max API Proxy](/providers/claude-max-api-proxy) - Community proxy for Claude subscription credentials (verify Anthropic policy/terms before use)
 
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
-see [Model providers](/docs/concepts/model-providers).
+see [Model providers](/concepts/model-providers).

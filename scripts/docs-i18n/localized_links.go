@@ -343,9 +343,9 @@ func splitURLSuffix(raw string) (string, string) {
 
 func prefixLocaleRoute(lang, route string) string {
 	if route == "/" {
-		return "/" + lang
+		return "/" + lang + "/docs"
 	}
-	return "/" + lang + route
+	return "/" + lang + "/docs" + route
 }
 
 func (ri *routeIndex) routeHasLocalePrefix(route string) bool {
