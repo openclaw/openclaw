@@ -20,6 +20,7 @@ import type { AgentLocalStatus } from "./status.agent-local.js";
 import {
   buildStatusA2AValue,
   buildStatusAgentsValue,
+  buildStatusContributorOverviewRows,
   buildStatusHeartbeatValue,
   buildStatusLastHeartbeatValue,
   buildStatusMemoryValue,
@@ -77,6 +78,15 @@ export function buildStatusCommandOverviewRows(params: {
     warn: params.warn,
     muted: params.muted,
   });
+  const contributorRows = buildStatusContributorOverviewRows({
+    summary: params.summary,
+    ok: params.ok,
+    warn: params.warn,
+    muted: params.muted,
+  });
+  const hasA2AContributor = contributorRows.some(
+    (row) => row.id.trim().toLowerCase() === "a2a" || row.label.trim().toLowerCase() === "a2a",
+  );
   const a2aValue = buildStatusA2AValue({
     summary: params.summary,
     ok: params.ok,
@@ -127,7 +137,8 @@ export function buildStatusCommandOverviewRows(params: {
       { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
       { Item: "Probes", Value: probesValue },
       { Item: "Events", Value: eventsValue },
-      { Item: "A2A", Value: a2aValue },
+      ...contributorRows.map((row) => ({ Item: row.label, Value: row.value })),
+      ...(hasA2AContributor ? [] : [{ Item: "A2A", Value: a2aValue }]),
       { Item: "Tasks", Value: tasksValue },
       { Item: "Heartbeat", Value: heartbeatValue },
       ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),

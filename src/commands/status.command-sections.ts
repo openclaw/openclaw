@@ -5,7 +5,7 @@ import type { TableColumn } from "../terminal/table.js";
 import type { HealthSummary } from "./health.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import type { MemoryStatusSnapshot, MemoryPluginStatus } from "./status.scan.shared.js";
-import type { A2AStatusSummary, SessionStatus, StatusSummary } from "./status.types.js";
+import type { A2AStatusSummary, SessionStatus, StatusContributorSummary, StatusSummary } from "./status.types.js";
 
 type AgentStatusLike = {
   defaultId?: string | null;
@@ -14,7 +14,7 @@ type AgentStatusLike = {
   agents: AgentLocalStatus[];
 };
 
-type SummaryLike = Pick<StatusSummary, "a2a" | "tasks" | "taskAudit" | "heartbeat" | "sessions">;
+type SummaryLike = Pick<StatusSummary, "a2a" | "contributors" | "tasks" | "taskAudit" | "heartbeat" | "sessions">;
 type MemoryLike = MemoryStatusSnapshot | null;
 type MemoryPluginLike = MemoryPluginStatus;
 type SessionsRecentLike = SessionStatus;
@@ -74,6 +74,67 @@ export function buildStatusTasksValue(params: {
         : params.muted("audit clean"),
     `${params.summary.tasks.total} tracked`,
   ].join(" · ");
+}
+
+export type StatusContributorOverviewRow = {
+  id: string;
+  label: string;
+  value: string;
+};
+
+function decorateStatusContributorSummary(params: {
+  contributor: StatusContributorSummary;
+  ok: (value: string) => string;
+  warn: (value: string) => string;
+  muted: (value: string) => string;
+}) {
+  const summary = params.contributor.summary.trim();
+  if (!summary) {
+    return "";
+  }
+  if (params.contributor.state === "ok") {
+    return params.ok(summary);
+  }
+  if (params.contributor.state === "warn" || params.contributor.state === "error") {
+    return params.warn(summary);
+  }
+  return params.muted(summary);
+}
+
+export function buildStatusContributorOverviewRows(params: {
+  summary: Pick<SummaryLike, "contributors">;
+  ok: (value: string) => string;
+  warn: (value: string) => string;
+  muted: (value: string) => string;
+}): StatusContributorOverviewRow[] {
+  const contributors = Array.isArray(params.summary.contributors)
+    ? params.summary.contributors
+    : [];
+  return contributors
+    .map((contributor) => {
+      const label = contributor.label.trim();
+      const summary = decorateStatusContributorSummary({
+        contributor,
+        ok: params.ok,
+        warn: params.warn,
+        muted: params.muted,
+      });
+      const details = Array.isArray(contributor.details)
+        ? contributor.details
+            .filter((detail): detail is string => typeof detail === "string" && detail.trim().length > 0)
+            .map((detail) => detail.trim())
+        : [];
+      const parts = [summary, ...details].filter(Boolean);
+      if (!label || parts.length === 0) {
+        return null;
+      }
+      return {
+        id: contributor.id,
+        label,
+        value: parts.join(" · "),
+      } satisfies StatusContributorOverviewRow;
+    })
+    .filter((row): row is StatusContributorOverviewRow => row !== null);
 }
 
 export function buildStatusA2AValue(params: {
