@@ -65,7 +65,7 @@ function parsePositiveIntegerOption(value: string | undefined, flag: string): nu
   return parsed;
 }
 
-export class MemoryDB {
+class MemoryDB {
   private db: LanceDB.Connection | null = null;
   private table: LanceDB.Table | null = null;
   private initPromise: Promise<void> | null = null;
@@ -155,9 +155,13 @@ export class MemoryDB {
   async list(limit?: number, options: MemoryListOptions = {}): Promise<MemoryListEntry[]> {
     await this.ensureInitialized();
 
-    const rows = await this.table!.query()
-      .select(["id", "text", "importance", "category", "createdAt"])
-      .toArray();
+    let query = this.table!.query().select(["id", "text", "importance", "category", "createdAt"]);
+    // Push limit to LanceDB only when we don't need to sort in-memory.
+    if (!options.orderByCreatedAt && limit !== undefined) {
+      query = query.limit(limit);
+    }
+
+    const rows = await query.toArray();
 
     const entries = rows.map((row) => ({
       id: row.id as string,
