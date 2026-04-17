@@ -20,6 +20,7 @@ import {
   promptRefreshTokenSetup,
   promptToken,
   promptUsername,
+  twitchSetupPlugin,
   twitchSetupWizard,
 } from "./setup-surface.js";
 import type { TwitchAccountConfig } from "./types.js";
@@ -31,6 +32,7 @@ const mockPrompter: WizardPrompter = {
   text: mockPromptText,
   confirm: mockPromptConfirm,
 } as unknown as WizardPrompter;
+const originalEnvToken = process.env.OPENCLAW_TWITCH_ACCESS_TOKEN;
 
 const mockAccount: TwitchAccountConfig = {
   username: "testbot",
@@ -45,6 +47,11 @@ describe("setup surface helpers", () => {
   });
 
   afterEach(() => {
+    if (originalEnvToken === undefined) {
+      delete process.env.OPENCLAW_TWITCH_ACCESS_TOKEN;
+    } else {
+      process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = originalEnvToken;
+    }
     // Don't restoreAllMocks as it breaks module-level mocks
   });
 
@@ -250,6 +257,58 @@ describe("setup surface helpers", () => {
       } as never);
 
       expect(lines).toEqual(["Twitch (secondary): configured"]);
+    });
+
+    it("reports env-token default account setup as configured", async () => {
+      process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = "oauth:fromenv";
+
+      const cfg = {
+        channels: {
+          twitch: {
+            accounts: {
+              default: {
+                username: "env-bot",
+                accessToken: "",
+                clientId: "env-client",
+                channel: "#env",
+              },
+            },
+          },
+        },
+      } as Parameters<NonNullable<typeof twitchSetupWizard.status>["resolveConfigured"]>[0]["cfg"];
+
+      expect(twitchSetupWizard.status?.resolveConfigured({ cfg })).toBe(true);
+      const account = twitchSetupPlugin.config.resolveAccount(cfg, "default");
+      expect(await twitchSetupPlugin.config.isConfigured?.(account, cfg)).toBe(true);
+    });
+  });
+
+  describe("setup-only plugin config", () => {
+    it("lists all configured Twitch accounts", () => {
+      const cfg = {
+        channels: {
+          twitch: {
+            defaultAccount: "secondary",
+            accounts: {
+              default: {
+                username: "default-bot",
+                accessToken: "oauth:default",
+                clientId: "default-client",
+                channel: "#default",
+              },
+              secondary: {
+                username: "secondary-bot",
+                accessToken: "oauth:secondary",
+                clientId: "secondary-client",
+                channel: "#secondary",
+              },
+            },
+          },
+        },
+      } as Parameters<typeof twitchSetupPlugin.config.listAccountIds>[0];
+
+      expect(twitchSetupPlugin.config.listAccountIds(cfg)).toEqual(["default", "secondary"]);
+      expect(twitchSetupPlugin.config.defaultAccountId?.(cfg)).toBe("secondary");
     });
   });
 });

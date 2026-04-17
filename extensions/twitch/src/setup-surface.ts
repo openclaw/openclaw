@@ -11,7 +11,13 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
-import { DEFAULT_ACCOUNT_ID, getAccountConfig, resolveDefaultTwitchAccountId } from "./config.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  getAccountConfig,
+  listAccountIds,
+  resolveDefaultTwitchAccountId,
+  resolveTwitchAccountContext,
+} from "./config.js";
 import type { TwitchAccountConfig, TwitchRole } from "./types.js";
 import { isAccountConfigured } from "./utils/twitch.js";
 
@@ -348,13 +354,11 @@ export const twitchSetupWizard: ChannelSetupWizard = {
     configuredHint: "configured",
     unconfiguredHint: "needs setup",
     resolveConfigured: ({ cfg }) => {
-      const account = getAccountConfig(cfg, resolveSetupAccountId(cfg));
-      return account ? isAccountConfigured(account) : false;
+      return resolveTwitchAccountContext(cfg, resolveSetupAccountId(cfg)).configured;
     },
     resolveStatusLines: ({ cfg }) => {
       const accountId = resolveSetupAccountId(cfg);
-      const account = getAccountConfig(cfg, accountId);
-      const configured = account ? isAccountConfigured(account) : false;
+      const configured = resolveTwitchAccountContext(cfg, accountId).configured;
       return [
         `Twitch${accountId !== DEFAULT_ACCOUNT_ID ? ` (${accountId})` : ""}: ${configured ? "configured" : "needs username, token, and clientId"}`,
       ];
@@ -437,25 +441,27 @@ export const twitchSetupPlugin: ChannelPlugin<ResolvedTwitchAccount> = {
     chatTypes: ["group"],
   },
   config: {
-    listAccountIds: (cfg) => {
-      const accountId = resolveSetupAccountId(cfg);
-      return getAccountConfig(cfg, accountId) ? [accountId] : [];
-    },
+    listAccountIds: (cfg) => listAccountIds(cfg),
     resolveAccount: (cfg, accountId) => {
-      const resolvedAccountId = accountId ?? resolveSetupAccountId(cfg);
+      const resolvedAccountId = accountId ?? resolveDefaultTwitchAccountId(cfg);
       const account = getAccountConfig(cfg, resolvedAccountId);
-      const fallback = {
+      if (!account) {
+        return {
+          accountId: resolvedAccountId,
+          username: "",
+          accessToken: "",
+          clientId: "",
+          channel: "",
+          enabled: false,
+        };
+      }
+      return {
         accountId: resolvedAccountId,
-        username: "",
-        accessToken: "",
-        clientId: "",
-        channel: "",
-        enabled: false,
+        ...account,
       };
-      return account ? { ...fallback, ...account } : fallback;
     },
-    defaultAccountId: (cfg) => resolveSetupAccountId(cfg),
-    isConfigured: (account) => isAccountConfigured(account),
+    defaultAccountId: (cfg) => resolveDefaultTwitchAccountId(cfg),
+    isConfigured: (account, cfg) => resolveTwitchAccountContext(cfg, account?.accountId).configured,
     isEnabled: (account) => account.enabled !== false,
   },
   setup: twitchSetupAdapter,
