@@ -132,10 +132,11 @@ exit 0
     writeFileSync(path.join(dir, "tracked.txt"), "hello\n", "utf8");
     run(dir, "git", ["add", "--", "tracked.txt"]);
 
-    run(dir, "bash", ["git-hooks/pre-commit"], {
+    const output = run(dir, "bash", ["git-hooks/pre-commit"], {
       PATH: `${fakeBinDir}:/usr/bin:/bin`,
     });
 
+    expect(output).not.toContain("Neither pnpm nor corepack is available on PATH");
     expect(existsSync(markerFile)).toBe(true);
     const marker = readFileSync(markerFile, "utf8").trim();
     expect(marker).toBe("ok");
