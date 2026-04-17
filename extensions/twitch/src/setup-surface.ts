@@ -285,8 +285,15 @@ function setTwitchGroupPolicy(
 const twitchDmPolicy: ChannelSetupDmPolicy = {
   label: "Twitch",
   channel,
-  policyKey: "channels.twitch.allowedRoles",
-  allowFromKey: "channels.twitch.accounts.<default>.allowFrom",
+  policyKey: "channels.twitch.accounts.default.allowedRoles",
+  allowFromKey: "channels.twitch.accounts.default.allowFrom",
+  resolveConfigKeys: (cfg, accountId) => {
+    const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
+    return {
+      policyKey: `channels.twitch.accounts.${resolvedAccountId}.allowedRoles`,
+      allowFromKey: `channels.twitch.accounts.${resolvedAccountId}.allowFrom`,
+    };
+  },
   getCurrent: (cfg, accountId) => {
     const account = getAccountConfig(cfg, resolveSetupAccountId(cfg, accountId));
     if (account?.allowedRoles?.includes("all")) {

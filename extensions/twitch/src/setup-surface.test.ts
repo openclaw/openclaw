@@ -315,6 +315,31 @@ describe("setup surface helpers", () => {
   });
 
   describe("setup wizard account routing", () => {
+    it("reports account-scoped DM policy config keys", () => {
+      expect(
+        twitchSetupWizard.dmPolicy?.resolveConfigKeys?.(
+          {
+            channels: {
+              twitch: {
+                defaultAccount: "secondary",
+              },
+            },
+          } as Parameters<
+            NonNullable<NonNullable<typeof twitchSetupWizard.dmPolicy>["resolveConfigKeys"]>
+          >[0],
+          undefined,
+        ),
+      ).toEqual({
+        policyKey: "channels.twitch.accounts.secondary.allowedRoles",
+        allowFromKey: "channels.twitch.accounts.secondary.allowFrom",
+      });
+
+      expect(twitchSetupWizard.dmPolicy?.resolveConfigKeys?.({} as never, "alerts")).toEqual({
+        policyKey: "channels.twitch.accounts.alerts.allowedRoles",
+        allowFromKey: "channels.twitch.accounts.alerts.allowFrom",
+      });
+    });
+
     it("writes to the requested account when defaultAccount is not created yet", async () => {
       mockPromptText
         .mockReset()
