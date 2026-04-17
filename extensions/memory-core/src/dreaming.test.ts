@@ -1859,7 +1859,7 @@ describe("short-term dreaming trigger", () => {
     expect(memoryText).toContain("Move backups to S3 Glacier.");
   });
 
-  it("skips optional narrative subagents for managed cron dreaming", async () => {
+  it("writes dream diary prose for managed cron dreaming", async () => {
     const logger = createLogger();
     const workspaceDir = await createTempWorkspace("memory-dreaming-cron-no-narrative-");
     await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Move backups to S3 Glacier."]);
@@ -1907,9 +1907,14 @@ describe("short-term dreaming trigger", () => {
     });
 
     expect(result?.handled).toBe(true);
-    expect(subagent.run).not.toHaveBeenCalled();
+    expect(subagent.run).toHaveBeenCalled();
+    expect(subagent.waitForRun).toHaveBeenCalled();
+    expect(subagent.getSessionMessages).toHaveBeenCalled();
+    expect(subagent.deleteSession).toHaveBeenCalled();
     const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
     expect(memoryText).toContain("Move backups to S3 Glacier.");
+    const dreamsText = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(dreamsText).toContain("A diary entry.");
   });
 
   it("skips dreaming promotion cleanly when limit is zero", async () => {
