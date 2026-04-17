@@ -353,6 +353,9 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
     }
   }
   
+  // Track whether we've downloaded a new binary that needs cleanup on failure
+  let downloadedNewBinary = false;
+  
   try {
     // Check if binary exists first
     let exists = false;
@@ -401,18 +404,13 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
       if (shouldDeleteBinary) {
         console.warn('Removing compromised/non-functional yt-dlp binary');
         await fs.unlink(ytDlpPath).catch(() => {});
+        exists = false; // Mark as not existing so we'll download fresh
       }
       
       if (integrityCheckPassed && !shouldDeleteBinary) {
         // ONLY execute version check after integrity is verified or binary is confirmed working
         await execFileAsync(ytDlpPath, ['--version'], { signal: abortController.signal });
         return ytDlpPath;
-      }
-      
-      // Integrity check failed - delete the compromised binary if not already deleted
-      if (!shouldDeleteBinary) {
-        console.warn('Removing unverified yt-dlp binary');
-        await fs.unlink(ytDlpPath).catch(() => {});
       }
     }
     
@@ -431,6 +429,7 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
     
     // Download to temp file first, then atomically rename
     await downloadFileWithVerification(url, ytDlpPath, expectedHash, signal);
+    downloadedNewBinary = true;
     
     // Final verification of downloaded binary
     const isValid = await verifyFileChecksum(ytDlpPath, expectedHash);
@@ -444,11 +443,18 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
     console.log('yt-dlp binary downloaded and verified successfully');
     return ytDlpPath;
   } catch (error) {
-    // Clean up on any error
-    try {
-      await fs.unlink(ytDlpPath).catch(() => {});
-    } catch {
-      // Ignore cleanup errors
+    // Only delete the binary if we downloaded it during this execution and it's corrupted
+    // Don't delete existing verified binaries on transient errors (abort, timeout, network issues)
+    if (downloadedNewBinary) {
+      console.warn('Deleting newly downloaded yt-dlp binary due to error during setup');
+      try {
+        await fs.unlink(ytDlpPath).catch(() => {});
+      } catch {
+        // Ignore cleanup errors
+      }
+    } else {
+      // For transient errors with existing binary, preserve it
+      console.warn('Preserving existing yt-dlp binary despite error (transient failure)');
     }
     throw error;
   } finally {
