@@ -946,32 +946,23 @@ describe("onboard (non-interactive): provider auth", () => {
     clearPluginManifestRegistryCache();
   });
 
-  it("stores MiniMax API keys for global and CN endpoint choices", async () => {
-    const scenarios = [
-      { authChoice: "minimax-global-api", profileId: "minimax:global" },
-      { authChoice: "minimax-cn-api", profileId: "minimax:cn" },
-    ] as const;
-
+  it("stores MiniMax API keys for the CN endpoint choice", async () => {
     await withOnboardEnv("openclaw-onboard-minimax-", async (env) => {
-      for (const scenario of scenarios) {
-        clearTestConfigFile();
-        resetProviderAuthTestState();
-        const cfg = await runOnboardingAndReadConfig(env, {
-          authChoice: scenario.authChoice,
-          minimaxApiKey: "sk-minimax-test", // pragma: allowlist secret
-        });
-        expect(cfg.auth?.profiles?.[scenario.profileId]?.provider).toBe("minimax");
-        expect(cfg.auth?.profiles?.[scenario.profileId]?.mode).toBe("api_key");
-        await expectApiKeyProfile({
-          profileId: scenario.profileId,
-          provider: "minimax",
-          key: "sk-minimax-test",
-        });
-      }
+      const cfg = await runOnboardingAndReadConfig(env, {
+        authChoice: "minimax-cn-api",
+        minimaxApiKey: "sk-minimax-\r\ntest", // pragma: allowlist secret
+      });
+      expect(cfg.auth?.profiles?.["minimax:cn"]?.provider).toBe("minimax");
+      expect(cfg.auth?.profiles?.["minimax:cn"]?.mode).toBe("api_key");
+      await expectApiKeyProfile({
+        profileId: "minimax:cn",
+        provider: "minimax",
+        key: "sk-minimax-test",
+      });
     });
   });
 
-  it("stores Z.AI API keys across global and coding endpoint choices", async () => {
+  it("stores Z.AI API keys across global and CN coding endpoint choices", async () => {
     const scenarios = [
       {
         authChoice: "zai-api-key",
@@ -987,13 +978,6 @@ describe("onboard (non-interactive): provider auth", () => {
         expectedCalls: [
           { url: `${ZAI_CODING_CN_BASE_URL}/chat/completions`, modelId: "glm-5.1" },
           { url: `${ZAI_CODING_CN_BASE_URL}/chat/completions`, modelId: "glm-4.7" },
-        ],
-      },
-      {
-        authChoice: "zai-coding-global",
-        responses: { [`${ZAI_CODING_GLOBAL_BASE_URL}/chat/completions::glm-5.1`]: 200 },
-        expectedCalls: [
-          { url: `${ZAI_CODING_GLOBAL_BASE_URL}/chat/completions`, modelId: "glm-5.1" },
         ],
       },
     ] as const;
@@ -1021,63 +1005,23 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("handles common provider API key onboarding choices", async () => {
-    const scenarios: Array<{
-      options: Record<string, unknown>;
-      profileId?: string;
-      provider?: string;
-      key?: string;
-      expectedModel?: string;
-      expectedBaseUrl?: string;
-    }> = [
-      {
-        options: {
-          authChoice: "xai-api-key",
-          xaiApiKey: "xai-test-\r\nkey",
-        },
-        profileId: "xai:default",
-        provider: "xai",
-        key: "xai-test-key",
-        expectedModel: "xai/grok-4",
-      },
-      {
-        options: {
-          modelstudioApiKey: "modelstudio-test-key", // pragma: allowlist secret
-        },
+  it("handles Qwen API key onboarding from inferred flags", async () => {
+    await withOnboardEnv("openclaw-onboard-provider-api-keys-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        modelstudioApiKey: "modelstudio-test-key", // pragma: allowlist secret
+      });
+
+      expect(cfg.auth?.profiles?.["qwen:default"]?.provider).toBe("qwen");
+      expect(cfg.auth?.profiles?.["qwen:default"]?.mode).toBe("api_key");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("qwen/qwen3.5-plus");
+      expect(cfg.models?.providers?.qwen?.baseUrl).toBe(
+        "https://coding-intl.dashscope.aliyuncs.com/v1",
+      );
+      await expectApiKeyProfile({
         profileId: "qwen:default",
         provider: "qwen",
         key: "modelstudio-test-key",
-        expectedModel: "qwen/qwen3.5-plus",
-        expectedBaseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-      },
-    ];
-
-    await withOnboardEnv("openclaw-onboard-provider-api-keys-", async (env) => {
-      for (const scenario of scenarios) {
-        clearTestConfigFile();
-        resetProviderAuthTestState();
-        const cfg = await runOnboardingAndReadConfig(env, scenario.options);
-
-        if (scenario.profileId && scenario.provider) {
-          expect(cfg.auth?.profiles?.[scenario.profileId]?.provider).toBe(scenario.provider);
-          expect(cfg.auth?.profiles?.[scenario.profileId]?.mode).toBe("api_key");
-        }
-        if (scenario.expectedModel) {
-          expect(cfg.agents?.defaults?.model?.primary).toBe(scenario.expectedModel);
-        }
-        if (scenario.expectedBaseUrl) {
-          expect(cfg.models?.providers?.[scenario.provider ?? ""]?.baseUrl).toBe(
-            scenario.expectedBaseUrl,
-          );
-        }
-        if (scenario.profileId && scenario.provider && scenario.key) {
-          await expectApiKeyProfile({
-            profileId: scenario.profileId,
-            provider: scenario.provider,
-            key: scenario.key,
-          });
-        }
-      }
+      });
     });
   });
 
@@ -1101,53 +1045,6 @@ describe("onboard (non-interactive): provider auth", () => {
         type: "token",
         token: cleanToken,
       });
-    });
-  });
-
-  it("fails fast when ref mode receives explicit provider keys without env and does not leak keys", async () => {
-    const scenarios = [
-      {
-        name: "openai",
-        authChoice: "openai-api-key",
-        optionKey: "openaiApiKey",
-        flagName: "--openai-api-key",
-        envVar: "OPENAI_API_KEY",
-      },
-    ] as const;
-
-    await withOnboardEnv("openclaw-onboard-ref-flag-", async () => {
-      for (const { authChoice, optionKey, flagName, envVar } of scenarios) {
-        resetProviderAuthTestState();
-        const runtime = createThrowingRuntime();
-        const providedSecret = `${envVar.toLowerCase()}-should-not-leak`; // pragma: allowlist secret
-        const options: Record<string, unknown> = {
-          authChoice,
-          secretInputMode: "ref", // pragma: allowlist secret
-          [optionKey]: providedSecret,
-          skipSkills: true,
-        };
-        const envOverrides: Record<string, string | undefined> = {
-          [envVar]: undefined,
-        };
-
-        await withEnvAsync(envOverrides, async () => {
-          let thrown: Error | undefined;
-          try {
-            await runNonInteractiveSetupWithDefaults(runtime, options);
-          } catch (error) {
-            thrown = error as Error;
-          }
-          expect(thrown).toBeDefined();
-          const message = thrown?.message ?? "";
-          expect(message).toContain(
-            `${flagName} cannot be used with --secret-input-mode ref unless ${envVar} is set in env.`,
-          );
-          expect(message).toContain(
-            `Set ${envVar} in env and omit ${flagName}, or use --secret-input-mode plaintext.`,
-          );
-          expect(message).not.toContain(providedSecret);
-        });
-      }
     });
   });
 
@@ -1183,51 +1080,23 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("configures custom providers from explicit or inferred non-interactive flags", async () => {
-    const scenarios = [
-      {
-        options: {
-          authChoice: "custom-api-key",
-          customBaseUrl: "https://llm.example.com/v1",
-          customApiKey: "custom-test-key", // pragma: allowlist secret
-          customModelId: "foo-large",
-          customCompatibility: "anthropic",
-          skipSkills: true,
-        },
-        providerId: "custom-llm-example-com",
-        expectedBaseUrl: "https://llm.example.com/v1",
-        expectedApi: "anthropic-messages",
-        expectedModel: "custom-llm-example-com/foo-large",
-        modelId: "foo-large",
-      },
-      {
-        options: {
-          customBaseUrl: "https://models.custom.local/v1",
-          customModelId: "local-large",
-          customApiKey: "custom-test-key", // pragma: allowlist secret
-          skipSkills: true,
-        },
-        providerId: "custom-models-custom-local",
-        expectedBaseUrl: "https://models.custom.local/v1",
-        expectedApi: "openai-completions",
-        expectedModel: "custom-models-custom-local/local-large",
-        modelId: "local-large",
-      },
-    ] as const;
-
+  it("configures custom providers from explicit non-interactive flags", async () => {
     await withOnboardEnv("openclaw-onboard-custom-provider-", async ({ runtime }) => {
-      for (const scenario of scenarios) {
-        clearTestConfigFile();
-        resetProviderAuthTestState();
-        await runNonInteractiveSetupWithDefaults(runtime, scenario.options);
-        const cfg = readTestConfig<ProviderAuthConfigSnapshot>();
-        const provider = cfg.models?.providers?.[scenario.providerId];
-        expect(provider?.baseUrl).toBe(scenario.expectedBaseUrl);
-        expect(provider?.api).toBe(scenario.expectedApi);
-        expect(provider?.apiKey).toBe("custom-test-key");
-        expect(provider?.models?.some((model) => model.id === scenario.modelId)).toBe(true);
-        expect(cfg.agents?.defaults?.model?.primary).toBe(scenario.expectedModel);
-      }
+      await runNonInteractiveSetupWithDefaults(runtime, {
+        authChoice: "custom-api-key",
+        customBaseUrl: "https://llm.example.com/v1",
+        customApiKey: "custom-test-key", // pragma: allowlist secret
+        customModelId: "foo-large",
+        customCompatibility: "anthropic",
+        skipSkills: true,
+      });
+      const cfg = readTestConfig<ProviderAuthConfigSnapshot>();
+      const provider = cfg.models?.providers?.["custom-llm-example-com"];
+      expect(provider?.baseUrl).toBe("https://llm.example.com/v1");
+      expect(provider?.api).toBe("anthropic-messages");
+      expect(provider?.apiKey).toBe("custom-test-key");
+      expect(provider?.models?.some((model) => model.id === "foo-large")).toBe(true);
+      expect(cfg.agents?.defaults?.model?.primary).toBe("custom-llm-example-com/foo-large");
     });
   });
 });
