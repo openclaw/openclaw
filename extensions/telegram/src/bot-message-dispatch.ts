@@ -1116,7 +1116,11 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (statusReactionController) {
-    void Promise.resolve(statusReactionController.setDone())
+    void statusReactionController
+      .setDone()
+      .catch((err: unknown) => {
+        logVerbose(`telegram: status reaction done failed: ${String(err)}`);
+      })
       .then(async () => {
         if (!removeAckAfterReply) return;
         if (!msg.message_id || !reactionApi) return;
