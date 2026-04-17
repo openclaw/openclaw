@@ -105,13 +105,13 @@ describe("mcp loopback server", () => {
         sessionKey: "agent:main:telegram:group:chat123",
         accountId: "work",
         messageProvider: "telegram",
-        senderIsOwner: undefined,
+        senderIsOwner: true,
         surface: "loopback",
       }),
     );
   });
 
-  it("threads senderIsOwner through loopback request context and cache separation", async () => {
+  it("forces senderIsOwner to true for all loopback requests regardless of headers", async () => {
     server = await startMcpLoopbackServer(0);
     const activeServer = server;
     const runtime = getActiveMcpLoopbackRuntime();
@@ -132,22 +132,13 @@ describe("mcp loopback server", () => {
     expect((await sendToolsList("true")).status).toBe(200);
     expect((await sendToolsList("false")).status).toBe(200);
 
-    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(1);
     expect(resolveGatewayScopedToolsMock).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         sessionKey: "agent:main:matrix:dm:test",
         messageProvider: "matrix",
         senderIsOwner: true,
-        surface: "loopback",
-      }),
-    );
-    expect(resolveGatewayScopedToolsMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        sessionKey: "agent:main:matrix:dm:test",
-        messageProvider: "matrix",
-        senderIsOwner: false,
         surface: "loopback",
       }),
     );
