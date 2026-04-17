@@ -893,4 +893,63 @@ describe("rotateTranscriptFile", () => {
       vi.restoreAllMocks();
     }
   });
+
+  it("restores original file when writeFile fails after O_EXCL create (partial write)", async () => {
+    const jsonlPath = path.join(sessionsDir, "session.jsonl");
+    await writeJsonlLines(jsonlPath, 50, 80);
+
+    const contentBefore = await fs.readFile(jsonlPath, "utf-8");
+    const statBefore = await fs.stat(jsonlPath);
+    const maintenance = makeMaintenance({
+      transcriptRotateBytes: Math.floor(statBefore.size / 2),
+      transcriptMaxLines: 5,
+    });
+
+    // Mock: O_EXCL open succeeds (file is created) but writeFile throws ENOSPC,
+    // leaving a partially-written/empty replacement file on disk.
+    const origOpen = fs.open;
+    vi.spyOn(fs, "open").mockImplementation(async (...args: unknown[]) => {
+      const flags = args[1];
+      if (typeof flags === "number" && flags & fs.constants.O_EXCL) {
+        const realFd = await origOpen.apply(fs, args as Parameters<typeof origOpen>);
+        // Replace writeFile on the handle to simulate a write failure
+        const origWriteFile = realFd.writeFile.bind(realFd);
+        realFd.writeFile = async (..._writeArgs: unknown[]) => {
+          // Write partial content to simulate a truncated file
+          await origWriteFile("partial-garbage\n", "utf-8");
+          await realFd.close();
+          const err = new Error("No space left on device") as NodeJS.ErrnoException;
+          err.code = "ENOSPC";
+          throw err;
+        };
+        // Prevent double-close in the finally block
+        const origClose = realFd.close.bind(realFd);
+        let closed = false;
+        realFd.close = async () => {
+          if (!closed) {
+            closed = true;
+            await origClose();
+          }
+        };
+        return realFd;
+      }
+      return origOpen.apply(fs, args as Parameters<typeof origOpen>);
+    });
+
+    try {
+      const rotated = await rotateTranscriptFile({ transcriptPath: jsonlPath, maintenance });
+      expect(rotated).toBe(false);
+
+      // Original file should be fully restored — not the partial garbage
+      const restoredContent = await fs.readFile(jsonlPath, "utf-8");
+      expect(restoredContent).toBe(contentBefore);
+
+      // No .bak file should remain
+      const files = await fs.readdir(sessionsDir);
+      const bakFiles = files.filter((f) => f.startsWith("session.jsonl.bak."));
+      expect(bakFiles).toHaveLength(0);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
 });

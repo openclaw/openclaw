@@ -465,11 +465,12 @@ export async function rotateTranscriptFile(params: {
   // attempt to restore the original file from the archive to avoid data loss.
   if (!replacementWritten) {
     try {
-      // Only restore if the transcript file still does not exist
-      await fs.promises.access(transcriptPath).then(
-        () => undefined, // file exists — a concurrent writer saved us, nothing to do
-        () => fs.promises.rename(backupPath, transcriptPath),
-      );
+      // Remove any partially-written replacement file before restoring the
+      // original.  Without this, a truncated/corrupt file left behind by a
+      // failed writeFile (e.g. ENOSPC) would satisfy an existence check and
+      // prevent the restore.
+      await fs.promises.unlink(transcriptPath).catch(() => undefined);
+      await fs.promises.rename(backupPath, transcriptPath);
       log.warn(
         "transcript rotation: restored original file from archive after replacement failure",
         {
