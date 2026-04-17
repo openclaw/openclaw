@@ -65,6 +65,8 @@ interface ParsedArgs {
   minCluster?: number;
   confidence?: number;
   domainTags?: string[];
+  maxLessons?: number;
+  maxTokens?: number;
   root?: string;
   help: boolean;
 }
@@ -94,6 +96,8 @@ Options:
   --min-cluster <N>   Minimum cluster size for distill (default ${DEFAULT_MIN_CLUSTER_SIZE}).
   --confidence <N>    Confidence threshold for gate (default ${DEFAULT_CONFIDENCE_THRESHOLD}).
   --domain-tags <t>   Comma-separated tag list for inject filtering.
+  --max-lessons <N>   Max lessons to inject (default 10).
+  --max-tokens <N>    Token budget for inject (default 2000).
   --root <path>       Override AGENT_DATA_ROOT for this invocation.
   -h, --help          Print this help.
 `;
@@ -134,6 +138,12 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--domain-tags":
         out.domainTags = rest[++i]?.split(",").filter(Boolean);
+        break;
+      case "--max-lessons":
+        out.maxLessons = Number(rest[++i]);
+        break;
+      case "--max-tokens":
+        out.maxTokens = Number(rest[++i]);
         break;
       case "--root":
         out.root = rest[++i];
@@ -428,6 +438,8 @@ async function run(argv: string[], opts: MainOptions = {}): Promise<CliResult> {
         });
         const inject = injectLessons({
           agent: agent as AgentName,
+          maxLessons: args.maxLessons,
+          maxTokens: args.maxTokens,
           root: args.root,
           dryRun,
           now,
@@ -583,6 +595,8 @@ async function run(argv: string[], opts: MainOptions = {}): Promise<CliResult> {
         const result = injectLessons({
           agent: agent as AgentName,
           domainTags: args.domainTags,
+          maxLessons: args.maxLessons,
+          maxTokens: args.maxTokens,
           root: args.root,
           dryRun,
           now,

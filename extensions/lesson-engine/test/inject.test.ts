@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { main } from "../cli/lesson-engine.js";
 import { injectLessons } from "../src/inject.js";
 import { makeFile, makeFixture, makeLesson, writeLessons } from "./helpers.js";
@@ -31,7 +31,7 @@ describe("injectLessons", () => {
     }
   });
 
-  test("selects top-3 by severity + hitCount (no domainTags)", () => {
+  test("selects top-10 by severity + hitCount (no domainTags)", () => {
     const fx = makeFixture();
     try {
       const lessons = [
@@ -43,11 +43,36 @@ describe("injectLessons", () => {
       ];
       writeLessons(fx, "builder", makeFile(lessons));
       const result = injectLessons({ agent: "builder", root: fx.root, dryRun: true });
-      expect(result.selected).toHaveLength(3);
-      // Order: critical → high(8) → high(3)
+      // MAX_LESSONS=10 > fixture size (5), so all 5 are selected
+      expect(result.selected).toHaveLength(5);
+      // Priority order: critical → high(8) → high(3) → important → minor
       expect(result.selected[0].id).toBe("L2");
       expect(result.selected[1].id).toBe("L3");
       expect(result.selected[2].id).toBe("L4");
+      expect(result.selected[3].id).toBe("L5");
+      expect(result.selected[4].id).toBe("L1");
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("maxLessons option overrides default cap", () => {
+    const fx = makeFixture();
+    try {
+      const lessons = [
+        makeLesson({ id: "L1", severity: "critical", hitCount: 5, lesson: "critical lesson" }),
+        makeLesson({ id: "L2", severity: "high", hitCount: 3, lesson: "high lesson" }),
+        makeLesson({ id: "L3", severity: "important", hitCount: 1, lesson: "important lesson" }),
+      ];
+      writeLessons(fx, "builder", makeFile(lessons));
+      const result = injectLessons({
+        agent: "builder",
+        root: fx.root,
+        maxLessons: 1,
+        dryRun: true,
+      });
+      expect(result.selected).toHaveLength(1);
+      expect(result.selected[0].id).toBe("L1");
     } finally {
       fx.cleanup();
     }
@@ -182,6 +207,119 @@ describe("injectLessons", () => {
     }
   });
 
+  test("apply appends a JSON line to lesson-injection-log.jsonl with required fields", () => {
+    const fx = makeFixture();
+    try {
+      const lessons = [
+        makeLesson({
+          id: "L1",
+          severity: "critical",
+          hitCount: 5,
+          tags: ["git"],
+          lesson: "critical lesson text",
+          fix: "fix text",
+        }),
+        makeLesson({
+          id: "L2",
+          severity: "high",
+          hitCount: 2,
+          tags: ["git"],
+          lesson: "high lesson text",
+        }),
+      ];
+      writeLessons(fx, "builder", makeFile(lessons));
+      const result = injectLessons({ agent: "builder", root: fx.root, dryRun: false });
+      const logPath = path.join(fx.root, "builder", "memory", "lesson-injection-log.jsonl");
+      expect(fs.existsSync(logPath)).toBe(true);
+      const raw = fs.readFileSync(logPath, "utf8");
+      const lines = raw.split("\n").filter((l: string) => l.length > 0);
+      expect(lines).toHaveLength(1);
+      const entry = JSON.parse(lines[0]);
+      expect(typeof entry.timestamp).toBe("string");
+      expect(entry.agent).toBe("builder");
+      expect(Array.isArray(entry.selectedLessonIds)).toBe(true);
+      expect(entry.selectedLessonIds).toEqual(result.selected.map((s) => s.id));
+      expect(entry.selectedCount).toBe(result.selected.length);
+      expect(entry.estimatedTokens).toBe(result.estimatedTokens);
+      expect(entry.totalActiveLessons).toBe(result.totalLessons);
+      expect(entry.maxLessons).toBe(10);
+      expect(entry.maxTokens).toBe(2000);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("dry-run skips lesson-injection-log.jsonl write", () => {
+    const fx = makeFixture();
+    try {
+      const lessons = [
+        makeLesson({ id: "L1", severity: "critical", hitCount: 5, lesson: "critical lesson text" }),
+      ];
+      writeLessons(fx, "builder", makeFile(lessons));
+      injectLessons({ agent: "builder", root: fx.root, dryRun: true });
+      const logPath = path.join(fx.root, "builder", "memory", "lesson-injection-log.jsonl");
+      expect(fs.existsSync(logPath)).toBe(false);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("renderMarkdown header reflects custom maxLessons (e.g. Top 5)", () => {
+    const fx = makeFixture();
+    try {
+      const lessons = [
+        makeLesson({ id: "L1", severity: "critical", hitCount: 5, lesson: "critical lesson" }),
+        makeLesson({ id: "L2", severity: "high", hitCount: 3, lesson: "high lesson" }),
+      ];
+      writeLessons(fx, "builder", makeFile(lessons));
+      const result = injectLessons({
+        agent: "builder",
+        root: fx.root,
+        maxLessons: 5,
+        dryRun: false,
+      });
+      expect(result.outputPath).not.toBeNull();
+      const content = fs.readFileSync(result.outputPath!, "utf8");
+      expect(content).toContain("Top 5");
+      expect(content).not.toContain("Top 10");
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("jsonl injection-log write failure warns but does not throw", () => {
+    const fx = makeFixture();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const lessons = [
+        makeLesson({ id: "L1", severity: "critical", hitCount: 5, lesson: "critical lesson text" }),
+      ];
+      writeLessons(fx, "builder", makeFile(lessons));
+      // Force the jsonl append to fail by pre-creating the log path as a directory
+      // (EISDIR). Best-effort writes must warn and continue instead of throwing.
+      const memoryDir = path.join(fx.root, "builder", "memory");
+      fs.mkdirSync(memoryDir, { recursive: true });
+      fs.mkdirSync(path.join(memoryDir, "lesson-injection-log.jsonl"), { recursive: true });
+
+      let result: ReturnType<typeof injectLessons> | undefined;
+      expect(() => {
+        result = injectLessons({ agent: "builder", root: fx.root, dryRun: false });
+      }).not.toThrow();
+
+      // Main path still completed (markdown written).
+      expect(result).toBeDefined();
+      expect(result!.outputPath).not.toBeNull();
+
+      // console.warn must have surfaced the failure (match /injection log/i).
+      expect(warnSpy).toHaveBeenCalled();
+      const calls = warnSpy.mock.calls.map((c) => String(c[0]));
+      expect(calls.some((m) => /injection log/i.test(m))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+      fx.cleanup();
+    }
+  });
+
   test("apply writes injected-lessons.md", () => {
     const fx = makeFixture();
     try {
@@ -306,6 +444,69 @@ describe("CLI inject", () => {
       expect(exitCode).toBe(0);
       const out = stdout as { results: { selected: number }[] };
       expect(out.results[0].selected).toBe(1);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("inject --max-lessons overrides default cap", async () => {
+    const fx = makeFixture();
+    try {
+      const lessons = [
+        makeLesson({ id: "L1", severity: "critical", hitCount: 5, lesson: "critical lesson" }),
+        makeLesson({ id: "L2", severity: "high", hitCount: 3, lesson: "high lesson" }),
+        makeLesson({ id: "L3", severity: "important", hitCount: 1, lesson: "important lesson" }),
+      ];
+      writeLessons(fx, "builder", makeFile(lessons));
+      const { stdout, exitCode } = await main([
+        "inject",
+        "--agent",
+        "builder",
+        "--max-lessons",
+        "1",
+        "--dry-run",
+        "--root",
+        fx.root,
+      ]);
+      expect(exitCode).toBe(0);
+      const out = stdout as { results: { selected: number }[] };
+      // --max-lessons 1 → only top 1 lesson selected
+      expect(out.results[0].selected).toBe(1);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("inject --max-tokens overrides default budget", async () => {
+    const fx = makeFixture();
+    try {
+      const longText = "a".repeat(200);
+      const lessons = [
+        makeLesson({
+          id: "L1",
+          severity: "critical",
+          hitCount: 5,
+          lesson: longText,
+          fix: longText,
+        }),
+        makeLesson({ id: "L2", severity: "high", hitCount: 3, lesson: longText, fix: longText }),
+      ];
+      writeLessons(fx, "builder", makeFile(lessons));
+      const { stdout, exitCode } = await main([
+        "inject",
+        "--agent",
+        "builder",
+        "--max-tokens",
+        "50",
+        "--dry-run",
+        "--root",
+        fx.root,
+      ]);
+      expect(exitCode).toBe(0);
+      const out = stdout as { results: { selected: number; estimatedTokens: number }[] };
+      // Each lesson ~103 tokens; budget=50 → none fit
+      expect(out.results[0].selected).toBe(0);
+      expect(out.results[0].estimatedTokens).toBe(0);
     } finally {
       fx.cleanup();
     }

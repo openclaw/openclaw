@@ -8,7 +8,8 @@ import { agentDataRoot, lessonsFilePath, nowIso, readJson } from "./utils.js";
 export interface InjectOptions {
   agent: AgentName;
   domainTags?: string[];
-  maxTokens?: number; // default 600
+  maxTokens?: number; // default 2000
+  maxLessons?: number; // default 10
   now?: Date;
   root?: string;
   dryRun?: boolean;
@@ -34,8 +35,8 @@ export interface InjectResult {
 
 // ── Constants ──
 
-const DEFAULT_MAX_TOKENS = 600;
-const MAX_LESSONS = 3;
+const DEFAULT_MAX_TOKENS = 2000;
+const MAX_LESSONS = 10;
 
 const SEVERITY_ORDER: Record<Severity, number> = {
   critical: 0,
@@ -77,6 +78,7 @@ function renderMarkdown(
   selected: InjectedLesson[],
   tokens: number,
   now: Date,
+  maxLessons: number,
 ): string {
   const lines: string[] = [];
   lines.push(
@@ -84,7 +86,7 @@ function renderMarkdown(
   );
   lines.push(`<!-- agent: ${agent} | generated: ${nowIso(now)} | tokens: ~${tokens} -->`);
   lines.push("");
-  lines.push("## 注入教训（Top 3 / Active）");
+  lines.push(`## 注入教训（Top ${maxLessons} / Active）`);
   lines.push("");
 
   for (const item of selected) {
@@ -106,6 +108,7 @@ function renderMarkdown(
 
 export function injectLessons(opts: InjectOptions): InjectResult {
   const maxTokens = opts.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const maxLessons = opts.maxLessons ?? MAX_LESSONS;
   const now = opts.now ?? new Date();
   const dryRun = opts.dryRun ?? false;
 
@@ -138,12 +141,12 @@ export function injectLessons(opts: InjectOptions): InjectResult {
     return (b.hitCount ?? 0) - (a.hitCount ?? 0);
   });
 
-  // 5. Greedy selection: up to MAX_LESSONS, within maxTokens
+  // 5. Greedy selection: up to maxLessons, within maxTokens
   const selected: InjectedLesson[] = [];
   let estimatedTotal = 0;
 
   for (const l of active) {
-    if (selected.length >= MAX_LESSONS) break;
+    if (selected.length >= maxLessons) break;
     const text = lessonText(l);
     const tokens = estimateTokens(text);
     if (estimatedTotal + tokens > maxTokens) continue;
@@ -159,13 +162,44 @@ export function injectLessons(opts: InjectOptions): InjectResult {
     });
   }
 
-  // 6. Write output
+  // 6. Best-effort injection logging (skip on dry-run).
+  //    Append one JSON line per run to {agentDataRoot}/{agent}/memory/lesson-injection-log.jsonl.
+  //    Failures must not break the inject path.
+  if (!dryRun) {
+    const logPath = path.join(
+      agentDataRoot(opts.root),
+      opts.agent,
+      "memory",
+      "lesson-injection-log.jsonl",
+    );
+    try {
+      fs.mkdirSync(path.dirname(logPath), { recursive: true });
+      const entry = {
+        timestamp: nowIso(now),
+        agent: opts.agent,
+        selectedLessonIds: selected.map((s) => s.id),
+        selectedCount: selected.length,
+        estimatedTokens: estimatedTotal,
+        totalActiveLessons: totalLessons,
+        maxLessons,
+        maxTokens,
+      };
+      fs.appendFileSync(logPath, `${JSON.stringify(entry)}\n`, "utf8");
+    } catch (err) {
+      // best-effort: do not throw, but surface the failure so permission/disk/path
+      // problems don't silently kill observability.
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[lesson-engine] injection log write failed: ${msg} (path: ${logPath})`);
+    }
+  }
+
+  // 7. Write output
   let outputPath: string | null = null;
   if (!dryRun && selected.length > 0) {
     const outPath = injectedLessonsPath(opts.agent, opts.root);
     const dir = path.dirname(outPath);
     fs.mkdirSync(dir, { recursive: true });
-    const md = renderMarkdown(opts.agent, selected, estimatedTotal, now);
+    const md = renderMarkdown(opts.agent, selected, estimatedTotal, now, maxLessons);
     fs.writeFileSync(outPath, md, "utf8");
     outputPath = outPath;
   } else if (!dryRun && selected.length === 0) {
@@ -173,7 +207,7 @@ export function injectLessons(opts: InjectOptions): InjectResult {
     const outPath = injectedLessonsPath(opts.agent, opts.root);
     const dir = path.dirname(outPath);
     fs.mkdirSync(dir, { recursive: true });
-    const md = renderMarkdown(opts.agent, selected, 0, now);
+    const md = renderMarkdown(opts.agent, selected, 0, now, maxLessons);
     fs.writeFileSync(outPath, md, "utf8");
     outputPath = outPath;
   }
