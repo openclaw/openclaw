@@ -152,9 +152,9 @@ describe("clearZombieRunningMarkers", () => {
       createdAtMs: Date.now() - 60_000,
       updatedAtMs: Date.now(),
       schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() - 60_000 },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "tick", timeoutSeconds },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "tick", timeoutSeconds },
       state: {
         nextRunAtMs: Date.now() - 10_000,
         runningAtMs: undefined,
