@@ -7,7 +7,6 @@ import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createThrowingRuntime,
-  readJsonFile,
   type NonInteractiveRuntime,
 } from "./onboard-non-interactive.test-helpers.js";
 
@@ -27,20 +26,14 @@ const TEST_AUTH_STORE_VERSION = 1;
 const TEST_MAIN_AUTH_STORE_KEY = "__main__";
 
 const ensureWorkspaceAndSessionsMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
+const testConfigFile = vi.hoisted(() => ({ raw: null as string | null }));
 const readConfigFileSnapshotMock = vi.hoisted(() =>
   vi.fn(async () => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
       throw new Error("OPENCLAW_CONFIG_PATH must be set for provider auth onboarding tests");
     }
-    let raw: string | null = null;
-    try {
-      raw = await fs.readFile(configPath, "utf-8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    }
+    const raw = testConfigFile.raw;
     const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
     const hash = raw === null ? undefined : crypto.createHash("sha256").update(raw).digest("hex");
     return {
@@ -61,8 +54,7 @@ const replaceConfigFileMock = vi.hoisted(() =>
     if (!configPath) {
       throw new Error("OPENCLAW_CONFIG_PATH must be set for provider auth onboarding tests");
     }
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, `${JSON.stringify(params.nextConfig, null, 2)}\n`, "utf-8");
+    testConfigFile.raw = `${JSON.stringify(params.nextConfig, null, 2)}\n`;
     return {
       path: configPath,
       previousHash: null,
@@ -143,6 +135,11 @@ function upsertAuthProfile(params: {
   }
   writeRuntimeAuthSnapshots();
 }
+
+vi.mock("../config/io.js", () => ({
+  createConfigIO: () => ({ configPath: process.env.OPENCLAW_CONFIG_PATH ?? "openclaw.json" }),
+  readConfigFileSnapshot: readConfigFileSnapshotMock,
+}));
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
@@ -837,6 +834,7 @@ async function withOnboardEnv(
   const runtime = createThrowingRuntime();
 
   try {
+    clearTestConfigFile();
     await withEnvAsync(
       {
         HOME: tempHome,
@@ -862,6 +860,14 @@ async function withOnboardEnv(
   }
 }
 
+function clearTestConfigFile(): void {
+  testConfigFile.raw = null;
+}
+
+function readTestConfig<T>(): T {
+  return (testConfigFile.raw ? JSON.parse(testConfigFile.raw) : {}) as T;
+}
+
 async function runNonInteractiveSetupWithDefaults(
   runtime: NonInteractiveRuntime,
   options: Record<string, unknown>,
@@ -883,7 +889,7 @@ async function runOnboardingAndReadConfig(
     skipSkills: true,
     ...options,
   });
-  return readJsonFile<ProviderAuthConfigSnapshot>(env.configPath);
+  return readTestConfig<ProviderAuthConfigSnapshot>();
 }
 
 async function expectApiKeyProfile(params: {
@@ -948,13 +954,12 @@ describe("onboard (non-interactive): provider auth", () => {
 
     await withOnboardEnv("openclaw-onboard-minimax-", async (env) => {
       for (const scenario of scenarios) {
-        await fs.rm(env.configPath, { force: true });
+        clearTestConfigFile();
         resetProviderAuthTestState();
         const cfg = await runOnboardingAndReadConfig(env, {
           authChoice: scenario.authChoice,
           minimaxApiKey: "sk-minimax-test", // pragma: allowlist secret
         });
-
         expect(cfg.auth?.profiles?.[scenario.profileId]?.provider).toBe("minimax");
         expect(cfg.auth?.profiles?.[scenario.profileId]?.mode).toBe("api_key");
         await expectApiKeyProfile({
@@ -995,7 +1000,7 @@ describe("onboard (non-interactive): provider auth", () => {
 
     await withOnboardEnv("openclaw-onboard-zai-", async (env) => {
       for (const scenario of scenarios) {
-        await fs.rm(env.configPath, { force: true });
+        clearTestConfigFile();
         resetProviderAuthTestState();
         await withZaiProbeFetch(scenario.responses, async (fetchMock) => {
           const cfg = await runOnboardingAndReadConfig(env, {
@@ -1049,7 +1054,7 @@ describe("onboard (non-interactive): provider auth", () => {
 
     await withOnboardEnv("openclaw-onboard-provider-api-keys-", async (env) => {
       for (const scenario of scenarios) {
-        await fs.rm(env.configPath, { force: true });
+        clearTestConfigFile();
         resetProviderAuthTestState();
         const cfg = await runOnboardingAndReadConfig(env, scenario.options);
 
@@ -1077,7 +1082,7 @@ describe("onboard (non-interactive): provider auth", () => {
   });
 
   it("stores legacy Anthropic setup-token onboarding again when explicitly selected", async () => {
-    await withOnboardEnv("openclaw-onboard-token-", async ({ configPath, runtime }) => {
+    await withOnboardEnv("openclaw-onboard-token-", async ({ runtime }) => {
       const cleanToken = `sk-ant-oat01-${"a".repeat(80)}`;
       const token = `${cleanToken.slice(0, 30)}\r${cleanToken.slice(30)}`;
 
@@ -1087,7 +1092,7 @@ describe("onboard (non-interactive): provider auth", () => {
         tokenProfileId: "anthropic:default",
       });
 
-      const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
+      const cfg = readTestConfig<ProviderAuthConfigSnapshot>();
       expect(cfg.auth?.profiles?.["anthropic:default"]?.provider).toBe("anthropic");
       expect(cfg.auth?.profiles?.["anthropic:default"]?.mode).toBe("token");
       expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic/claude-sonnet-4-6");
@@ -1210,12 +1215,12 @@ describe("onboard (non-interactive): provider auth", () => {
       },
     ] as const;
 
-    await withOnboardEnv("openclaw-onboard-custom-provider-", async ({ configPath, runtime }) => {
+    await withOnboardEnv("openclaw-onboard-custom-provider-", async ({ runtime }) => {
       for (const scenario of scenarios) {
-        await fs.rm(configPath, { force: true });
+        clearTestConfigFile();
         resetProviderAuthTestState();
         await runNonInteractiveSetupWithDefaults(runtime, scenario.options);
-        const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
+        const cfg = readTestConfig<ProviderAuthConfigSnapshot>();
         const provider = cfg.models?.providers?.[scenario.providerId];
         expect(provider?.baseUrl).toBe(scenario.expectedBaseUrl);
         expect(provider?.api).toBe(scenario.expectedApi);
