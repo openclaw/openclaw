@@ -1380,6 +1380,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/zai:
+    dependencies:
+      '@mariozechner/pi-ai':
+        specifier: 0.69.0
+        version: 0.69.0(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
