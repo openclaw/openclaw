@@ -1328,6 +1328,54 @@ describe("memory-core dreaming phases", () => {
     });
   });
 
+  it("keeps legitimate daily snippets that include JSON examples with metadata keys", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await withDreamingTestClock(async () => {
+      await writeDailyNote(workspaceDir, [
+        `# ${DREAMING_TEST_DAY}`,
+        "",
+        "Review the retry payload format:",
+        "```json",
+        '{"message_id":"evt_123","type":"webhook","content":"Hello"}',
+        "```",
+        "Notes: use the id to correlate retries.",
+      ]);
+
+      const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+
+      const snippets = await readCandidateSnippets(workspaceDir, "2026-04-05T10:05:00.000Z");
+      expect(snippets.some((snippet) => snippet.includes("Review the retry payload format:"))).toBe(
+        true,
+      );
+      expect(snippets.some((snippet) => snippet.includes('"message_id":"evt_123"'))).toBe(true);
+      expect(
+        snippets.some((snippet) => snippet.includes("Notes: use the id to correlate retries.")),
+      ).toBe(true);
+    });
+  });
+
+  it("sanitizes mixed daily snippets before they become recall candidates", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await withDreamingTestClock(async () => {
+      await writeDailyNote(workspaceDir, [
+        `# ${DREAMING_TEST_DAY}`,
+        "",
+        "Conversation info (untrusted metadata):",
+        "```json",
+        '{"message_id":"5417","sender_id":"289522496"}',
+        "```",
+        "Keep gateway on localhost only.",
+      ]);
+
+      const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+
+      const snippets = await readCandidateSnippets(workspaceDir, "2026-04-05T10:05:00.000Z");
+      expect(snippets).toEqual(["Keep gateway on localhost only."]);
+    });
+  });
+
   it("blocks metadata contamination from reaching MEMORY.md in a dreaming sweep", async () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");

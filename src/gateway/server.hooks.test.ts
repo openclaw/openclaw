@@ -116,7 +116,7 @@ async function expectHookAgentSessionRouting(params: {
     sessionKey: params.requestSessionKey,
   });
   expect(resAgent.status).toBe(200);
-  await waitForSystemEvent();
+  await waitForSystemEvent(5_000);
 
   const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
     | { sessionKey?: string; job?: { agentId?: string } }

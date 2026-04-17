@@ -1136,6 +1136,17 @@ describe("short-term promotion", () => {
         "Conversation info (untrusted metadata): wrappers should be stripped before indexing.",
       ),
     ).toBe(false);
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        [
+          "Review the retry payload format:",
+          "```json",
+          '{"message_id":"evt_123","type":"webhook","content":"Hello"}',
+          "```",
+          "Notes: use the id to correlate retries.",
+        ].join("\n"),
+      ),
+    ).toBe(false);
   });
 
   it("does not record transport metadata snippets as short-term recalls", async () => {

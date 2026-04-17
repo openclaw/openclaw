@@ -52,13 +52,15 @@ type RunPhaseIfTriggeredParams = {
 } & (
   | {
       phase: "light";
-      config: MemoryLightDreamingConfig & DreamingPhaseStorageConfig;
+      config: DreamingPhaseLightConfig;
     }
   | {
       phase: "rem";
-      config: MemoryRemDreamingConfig & DreamingPhaseStorageConfig;
+      config: DreamingPhaseRemConfig;
     }
 );
+interface DreamingPhaseLightConfig extends MemoryLightDreamingConfig, DreamingPhaseStorageConfig {}
+interface DreamingPhaseRemConfig extends MemoryRemDreamingConfig, DreamingPhaseStorageConfig {}
 const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
 const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
 const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
@@ -166,6 +168,9 @@ function normalizeDailySnippet(line: string): string | null {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("<!--")) {
     return null;
+  }
+  if (trimmed === "```json" || trimmed === "```") {
+    return trimmed;
   }
   const withoutListMarker = normalizeDailyListMarker(trimmed);
   if (withoutListMarker.length < DAILY_INGESTION_MIN_SNIPPET_CHARS) {
@@ -612,10 +617,7 @@ function buildSessionRenderedLine(params: {
   return `[${source}] ${params.snippet}`.slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS + 64);
 }
 
-function resolveSessionAgentsForWorkspace(
-  cfg: OpenClawConfig | undefined,
-  workspaceDir: string,
-): string[] {
+function resolveSessionAgentsForWorkspace(workspaceDir: string, cfg?: OpenClawConfig): string[] {
   if (!cfg) {
     return [];
   }
@@ -692,7 +694,7 @@ async function collectSessionIngestionBatches(params: {
         Object.keys(params.state.seenMessages).length > 0,
     };
   }
-  const agentIds = resolveSessionAgentsForWorkspace(params.cfg, params.workspaceDir);
+  const agentIds = resolveSessionAgentsForWorkspace(params.workspaceDir, params.cfg);
   const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
   const batchByDay = new Map<string, SessionIngestionMessage[]>();
   const nextFiles: Record<string, SessionIngestionFileState> = {};
@@ -1081,7 +1083,8 @@ async function collectDailyIngestionBatches(params: {
     const chunks = buildDailySnippetChunks(lines, perFileCap);
     const results: MemorySearchResult[] = [];
     for (const chunk of chunks) {
-      if (isMetadataGarbageText(chunk.snippet)) {
+      const snippet = sanitizeDreamingMetadataText(chunk.snippet);
+      if (!snippet || isMetadataGarbageText(snippet)) {
         continue;
       }
       results.push({
@@ -1089,7 +1092,7 @@ async function collectDailyIngestionBatches(params: {
         startLine: chunk.startLine,
         endLine: chunk.endLine,
         score: DAILY_INGESTION_SCORE,
-        snippet: chunk.snippet,
+        snippet,
         source: "memory",
       });
       if (results.length >= perFileCap || total + results.length >= totalCap) {
@@ -1231,7 +1234,8 @@ export async function seedHistoricalDailyMemorySignals(params: {
     const chunks = buildDailySnippetChunks(lines, perFileCap);
     const results: MemorySearchResult[] = [];
     for (const chunk of chunks) {
-      if (isMetadataGarbageText(chunk.snippet)) {
+      const snippet = sanitizeDreamingMetadataText(chunk.snippet);
+      if (!snippet || isMetadataGarbageText(snippet)) {
         continue;
       }
       results.push({
@@ -1239,7 +1243,7 @@ export async function seedHistoricalDailyMemorySignals(params: {
         startLine: chunk.startLine,
         endLine: chunk.endLine,
         score: DAILY_INGESTION_SCORE,
-        snippet: chunk.snippet,
+        snippet,
         source: "memory",
       });
       if (results.length >= perFileCap || importedSignalCount + results.length >= totalCap) {
@@ -1489,10 +1493,7 @@ export function previewRemDreaming(params: {
 async function runLightDreaming(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
-  config: MemoryLightDreamingConfig & {
-    timezone?: string;
-    storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
-  };
+  config: DreamingPhaseLightConfig;
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   nowMs?: number;
@@ -1569,10 +1570,7 @@ async function runLightDreaming(params: {
 async function runRemDreaming(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
-  config: MemoryRemDreamingConfig & {
-    timezone?: string;
-    storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
-  };
+  config: DreamingPhaseRemConfig;
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   nowMs?: number;
