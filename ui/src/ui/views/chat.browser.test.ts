@@ -93,9 +93,11 @@ async function renderContextNoticeChat() {
 describe("chat context notice", () => {
   afterEach(() => {
     document.body.innerHTML = "";
+    document.documentElement.style.removeProperty("--warn");
+    document.documentElement.style.removeProperty("--danger");
   });
 
-  it("falls back to default notice colors when theme vars are not hex", async () => {
+  it("renders robust notice colors and badge-sized warning icon", async () => {
     document.documentElement.style.setProperty("--warn", "rgb(1, 2, 3)");
     document.documentElement.style.setProperty("--danger", "tomato");
     const container = await renderContextNoticeChat();
@@ -105,13 +107,6 @@ describe("chat context notice", () => {
     expect(notice?.style.getPropertyValue("--ctx-color")).toContain("rgb(");
     expect(notice?.style.getPropertyValue("--ctx-color")).not.toContain("NaN");
     expect(notice?.style.getPropertyValue("--ctx-bg")).not.toContain("NaN");
-
-    document.documentElement.style.removeProperty("--warn");
-    document.documentElement.style.removeProperty("--danger");
-  });
-
-  it("keeps the warning icon badge-sized", async () => {
-    const container = await renderContextNoticeChat();
 
     const icon = container.querySelector<SVGElement>(".context-notice__icon");
     expect(icon).not.toBeNull();
