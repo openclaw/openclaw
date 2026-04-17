@@ -50,6 +50,30 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
   it("drops non-Latin1 characters from apiKey before sending Authorization header", async () => {
     await runNormalizationCase("minimax-\u0417\u2502test-key");
   });
+
+  it("uses caller-provided timeout when set", async () => {
+    const timeoutSignal = new AbortController().signal;
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutSignal);
+    const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.signal).toBe(timeoutSignal);
+      return new Response(apiResponse, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    await minimaxUnderstandImage({
+      apiKey: "minimax-test-key",
+      prompt: "hi",
+      imageDataUrl: "data:image/png;base64,AAAA",
+      apiHost: "https://api.minimax.io",
+      timeoutMs: 180_000,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(180_000);
+    expect(fetchSpy).toHaveBeenCalled();
+  });
 });
 
 describe("isMinimaxVlmModel", () => {

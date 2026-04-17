@@ -51,6 +51,7 @@ export async function minimaxUnderstandImage(params: {
   imageDataUrl: string;
   apiHost?: string;
   modelBaseUrl?: string;
+  timeoutMs?: number;
 }): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
@@ -73,6 +74,12 @@ export async function minimaxUnderstandImage(params: {
     modelBaseUrl: params.modelBaseUrl,
   });
   const url = new URL("/v1/coding_plan/vlm", host).toString();
+  const timeoutMs =
+    typeof params.timeoutMs === "number" &&
+    Number.isFinite(params.timeoutMs) &&
+    params.timeoutMs > 0
+      ? Math.floor(params.timeoutMs)
+      : 60_000;
 
   // Ensure env-based proxy dispatcher is active before the outbound fetch call.
   // Without this, HTTP_PROXY/HTTPS_PROXY env vars are silently ignored (#51619).
@@ -85,7 +92,7 @@ export async function minimaxUnderstandImage(params: {
       "Content-Type": "application/json",
       "MM-API-Source": "OpenClaw",
     },
-    signal: AbortSignal.timeout(60_000),
+    signal: AbortSignal.timeout(timeoutMs),
     body: JSON.stringify({
       prompt,
       image_url: imageDataUrl,

@@ -94,6 +94,7 @@ async function describeImagesWithMinimax(params: {
   modelBaseUrl?: string;
   prompt: string;
   images: Array<{ buffer: Buffer; mime?: string }>;
+  timeoutMs?: number;
 }): Promise<ImagesDescriptionResult> {
   const responses: string[] = [];
   for (const [index, image] of params.images.entries()) {
@@ -106,6 +107,7 @@ async function describeImagesWithMinimax(params: {
       prompt,
       imageDataUrl: `data:${image.mime ?? "image/jpeg"};base64,${image.buffer.toString("base64")}`,
       modelBaseUrl: params.modelBaseUrl,
+      timeoutMs: params.timeoutMs,
     });
     responses.push(params.images.length > 1 ? `Image ${index + 1}:\n${text.trim()}` : text.trim());
   }
@@ -172,6 +174,7 @@ export async function describeImagesWithModel(
       modelBaseUrl: fallback.modelBaseUrl,
       prompt,
       images: params.images,
+      timeoutMs: params.timeoutMs,
     });
   }
 
@@ -182,6 +185,7 @@ export async function describeImagesWithModel(
       modelBaseUrl: model.baseUrl,
       prompt,
       images: params.images,
+      timeoutMs: params.timeoutMs,
     });
   }
 
