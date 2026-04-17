@@ -2310,6 +2310,124 @@ index f93ef00f6f..6c61b8724a 100644
 +    truncated,
 +  };
 +}
+diff --git a/src/agents/pi-embedded-subscribe.handlers.tools.ts b/src/agents/pi-embedded-subscribe.handlers.tools.ts
+index 7f765fb5f0..1b4eeaee9a 100644
+--- a/src/agents/pi-embedded-subscribe.handlers.tools.ts
++++ b/src/agents/pi-embedded-subscribe.handlers.tools.ts
+@@ -11,6 +11,7 @@ import {
+   emitAgentEvent,
+   emitAgentItemEvent,
+   emitAgentPatchSummaryEvent,
++  type AgentApprovalPlanStep,
+ } from "../infra/agent-events.js";
+ import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+ import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+@@ -37,6 +38,7 @@ import {
+   sanitizeToolResult,
+ } from "./pi-embedded-subscribe.tools.js";
+ import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
++import { newPlanApprovalId } from "./plan-mode/index.js";
+ import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
+ import { normalizeToolName } from "./tool-policy.js";
+ 
+@@ -189,6 +191,50 @@ function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
+   return { added, modified, deleted };
+ }
+ 
++/**
++ * Reads the `exit_plan_mode` tool result into a typed plan-proposal
++ * shape suitable for the approval event payload (PR-8 follow-up).
++ * Returns null if the tool result doesn't carry a plan (e.g. tool
++ * raised before producing one).
++ */
++function readPlanProposalDetails(
++  result: unknown,
++): { plan: AgentApprovalPlanStep[]; summary?: string } | null {
++  const details = readToolResultDetailsRecord(result);
++  if (!details || details.status !== "approval_requested") {
++    return null;
++  }
++  const rawPlan = details.plan;
++  if (!Array.isArray(rawPlan)) {
++    return null;
++  }
++  const plan: AgentApprovalPlanStep[] = [];
++  for (const entry of rawPlan) {
++    if (!entry || typeof entry !== "object") {
++      continue;
++    }
++    const step = (entry as Record<string, unknown>).step;
++    const status = (entry as Record<string, unknown>).status;
++    const activeForm = (entry as Record<string, unknown>).activeForm;
++    if (typeof step !== "string" || typeof status !== "string") {
++      continue;
++    }
++    plan.push({
++      step,
++      status,
++      ...(typeof activeForm === "string" && activeForm.trim() ? { activeForm } : {}),
++    });
++  }
++  if (plan.length === 0) {
++    return null;
++  }
++  const rawSummary = details.summary;
++  return {
++    plan,
++    ...(typeof rawSummary === "string" && rawSummary.trim() ? { summary: rawSummary } : {}),
++  };
++}
++
+ function buildPatchSummaryText(summary: ApplyPatchSummary): string {
+   const parts: string[] = [];
+   if (summary.added.length > 0) {
+@@ -1102,6 +1148,46 @@ export async function handleToolExecutionEnd(
+     }
+   }
+ 
++  // PR-8 follow-up: plan-mode tool dispatch.
++  //
++  // `exit_plan_mode` proposes a plan for user approval. The runtime
++  // emits a plugin-kind approval event with the plan payload + a fresh
++  // approvalId; UI surfaces (Control UI overlay, channel renderers) read
++  // this to render Approve/Reject/Edit buttons. The user-facing approval
++  // response flows back through `sessions.patch { planApproval }` which
++  // calls `resolvePlanApproval` to transition `SessionEntry.planMode`.
++  //
++  // `enter_plan_mode` is a transition signal — actual mode-state writes
++  // happen via the user-driven `sessions.patch { planMode: "plan" }`
++  // pathway. We don't auto-enter plan mode from a tool call alone (that
++  // would let the agent escape the user's opt-in gate).
++  if (toolName === "exit_plan_mode" && !isToolError) {
++    const details = readPlanProposalDetails(result);
++    if (details && details.plan.length > 0) {
++      const approvalId = newPlanApprovalId();
++      const approvalData: AgentApprovalEventData = {
++        phase: "requested",
++        kind: "plugin",
++        status: "pending",
++        title: details.summary ? `Plan approval — ${details.summary}` : "Plan approval requested",
++        itemId,
++        toolCallId,
++        approvalId,
++        plan: details.plan,
++        ...(details.summary ? { summary: details.summary } : {}),
++      };
++      emitAgentApprovalEvent({
++        runId: ctx.params.runId,
++        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
++        data: approvalData,
++      });
++      void ctx.params.onAgentEvent?.({
++        stream: "approval",
++        data: approvalData,
++      });
++    }
++  }
++
+   ctx.log.debug(
+     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
+   );
 diff --git a/src/agents/pi-tools.before-tool-call.ts b/src/agents/pi-tools.before-tool-call.ts
 index 6f27346c46..d0face55ac 100644
 --- a/src/agents/pi-tools.before-tool-call.ts
@@ -6863,10 +6981,10 @@ index f80b9f7c89..9baf50335a 100644
            .strict()
            .optional(),
 diff --git a/src/gateway/protocol/schema/sessions.ts b/src/gateway/protocol/schema/sessions.ts
-index e11194d8d7..ab91fc6c5b 100644
+index e11194d8d7..d1e2945c91 100644
 --- a/src/gateway/protocol/schema/sessions.ts
 +++ b/src/gateway/protocol/schema/sessions.ts
-@@ -168,6 +168,24 @@ export const SessionsPatchParamsSchema = Type.Object(
+@@ -168,6 +168,55 @@ export const SessionsPatchParamsSchema = Type.Object(
      groupActivation: Type.Optional(
        Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
      ),
@@ -6888,14 +7006,105 @@ index e11194d8d7..ab91fc6c5b 100644
 +    planMode: Type.Optional(
 +      Type.Union([Type.Literal("plan"), Type.Literal("normal"), Type.Null()]),
 +    ),
++    /**
++     * PR-8 follow-up: resolve a pending plan approval emitted by
++     * `exit_plan_mode`. The action transitions
++     * `SessionEntry.planMode.approval` via `resolvePlanApproval` from
++     * the plan-mode lib (#67538):
++     *
++     * - `"approve"` / `"edit"` → mode flips to `"normal"`, mutations unlock.
++     * - `"reject"` → mode stays `"plan"`, rejectionCount++, optional
++     *   `feedback` is persisted for the agent's next-turn injection.
++     *
++     * `approvalId` is the version token the runtime emitted with the
++     * approval event; the server uses it to ignore stale clicks (e.g.
++     * the user clicking Approve on a plan that was already rejected on
++     * another surface). When omitted, the server still applies the
++     * action — surfaces that don't carry the version token (CLI prompts,
++     * legacy channels) get best-effort behavior.
++     */
++    planApproval: Type.Optional(
++      Type.Object(
++        {
++          action: Type.Union([
++            Type.Literal("approve"),
++            Type.Literal("reject"),
++            Type.Literal("edit"),
++          ]),
++          feedback: Type.Optional(NonEmptyString),
++          approvalId: Type.Optional(NonEmptyString),
++        },
++        { additionalProperties: false },
++      ),
++    ),
    },
    { additionalProperties: false },
  );
+diff --git a/src/gateway/server-methods/sessions.ts b/src/gateway/server-methods/sessions.ts
+index 9919464ad8..79adb67c6b 100644
+--- a/src/gateway/server-methods/sessions.ts
++++ b/src/gateway/server-methods/sessions.ts
+@@ -204,6 +204,12 @@ function emitSessionsChanged(
+             runtimeMs: sessionRow.runtimeMs,
+             compactionCheckpointCount: sessionRow.compactionCheckpointCount,
+             latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
++            // PR-8 / #67721: surface mode-state to the UI so the chat
++            // chip renders the current selection rather than always
++            // defaulting to Ask.
++            execSecurity: sessionRow.execSecurity,
++            execAsk: sessionRow.execAsk,
++            planMode: sessionRow.planMode,
+           }
+         : {}),
+     },
+diff --git a/src/gateway/session-utils.ts b/src/gateway/session-utils.ts
+index 6e1e8f1f86..d48920e2d9 100644
+--- a/src/gateway/session-utils.ts
++++ b/src/gateway/session-utils.ts
+@@ -1302,6 +1302,11 @@ export function buildGatewaySessionRow(params: {
+     lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
+     compactionCheckpointCount: entry?.compactionCheckpoints?.length,
+     latestCompactionCheckpoint,
++    // PR-8 / #67721: surface permission-mode + plan-mode state on the
++    // session row so the UI mode chip can render the current state.
++    execSecurity: entry?.execSecurity,
++    execAsk: entry?.execAsk,
++    planMode: entry?.planMode,
+   };
+ }
+ 
+diff --git a/src/gateway/session-utils.types.ts b/src/gateway/session-utils.types.ts
+index 2133ccbfd3..e522acd8ad 100644
+--- a/src/gateway/session-utils.types.ts
++++ b/src/gateway/session-utils.types.ts
+@@ -67,6 +67,14 @@ export type GatewaySessionRow = {
+   lastThreadId?: SessionEntry["lastThreadId"];
+   compactionCheckpointCount?: number;
+   latestCompactionCheckpoint?: SessionCompactionCheckpoint;
++  // PR-8 / #67721: surface mode-state on the session row so the UI
++  // mode chip can render the current selection rather than always
++  // defaulting to Ask. Backend writes these via `sessions.patch`;
++  // gateway includes them on `sessions.list` payloads.
++  execHost?: SessionEntry["execHost"];
++  execSecurity?: SessionEntry["execSecurity"];
++  execAsk?: SessionEntry["execAsk"];
++  planMode?: SessionEntry["planMode"];
+ };
+ 
+ export type GatewayAgentRow = SharedGatewayAgentRow;
 diff --git a/src/gateway/sessions-patch.ts b/src/gateway/sessions-patch.ts
-index 66b821172d..2629a47984 100644
+index 66b821172d..4f9e2b058a 100644
 --- a/src/gateway/sessions-patch.ts
 +++ b/src/gateway/sessions-patch.ts
-@@ -385,6 +385,45 @@ export async function applySessionsPatchToStore(params: {
+@@ -6,6 +6,7 @@ import {
+   resolveDefaultModelForAgent,
+   resolveSubagentConfiguredModelSelection,
+ } from "../agents/model-selection.js";
++import { resolvePlanApproval } from "../agents/plan-mode/index.js";
+ import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
+ import {
+   formatThinkingLevels,
+@@ -385,6 +386,84 @@ export async function applySessionsPatchToStore(params: {
      }
    }
  
@@ -6938,14 +7147,86 @@ index 66b821172d..2629a47984 100644
 +    }
 +  }
 +
++  // PR-8 follow-up: resolve a pending plan approval. The mode-toggle
++  // pathway above handles user-driven enter/exit; this handles the
++  // user clicking Approve/Reject/Edit on an approval card emitted by
++  // `exit_plan_mode`. Goes through `resolvePlanApproval` from #67538
++  // for the state-machine semantics (rejection cycle counter, terminal-
++  // state guards, approvalId mismatch as no-op, etc.).
++  if ("planApproval" in patch && patch.planApproval !== undefined) {
++    if (!next.planMode) {
++      return invalid("planApproval requires an active plan-mode session");
++    }
++    const planModeEnabled = cfg.agents?.defaults?.planMode?.enabled === true;
++    if (!planModeEnabled) {
++      return invalid(
++        "plan mode is disabled — set `agents.defaults.planMode.enabled: true` to enable",
++      );
++    }
++    const action = patch.planApproval.action;
++    const feedback = normalizeOptionalString(patch.planApproval.feedback) || undefined;
++    const expectedApprovalId = normalizeOptionalString(patch.planApproval.approvalId) || undefined;
++    const resolved = resolvePlanApproval(next.planMode, action, feedback, expectedApprovalId);
++    // resolvePlanApproval returns the same reference when the action is
++    // a no-op (stale approvalId, terminal-state guard, etc.). Detecting
++    // this lets the client distinguish "applied" from "ignored" without
++    // querying the resulting state shape.
++    if (resolved === next.planMode) {
++      return invalid(
++        "planApproval ignored: stale approvalId or session is in a terminal approval state",
++      );
++    }
++    next.planMode = { ...resolved, updatedAt: now };
++    // Approve / edit transition the mode to "normal" — the approval
++    // resolution unlocks mutations. Clear the per-session planMode entry
++    // so subsequent reads see no active plan state (matches the
++    // sessions.patch { planMode: "normal" } semantics).
++    if (next.planMode.mode === "normal") {
++      delete next.planMode;
++    }
++  }
++
    if ("model" in patch) {
      const raw = patch.model;
      if (raw === null) {
 diff --git a/src/infra/agent-events.ts b/src/infra/agent-events.ts
-index 70ae8d0c45..9190e7867e 100644
+index 70ae8d0c45..ad6190b4aa 100644
 --- a/src/infra/agent-events.ts
 +++ b/src/infra/agent-events.ts
-@@ -105,6 +105,19 @@ export type AgentEventPayload = {
+@@ -56,6 +56,17 @@ export type AgentApprovalEventPhase = "requested" | "resolved";
+ export type AgentApprovalEventStatus = "pending" | "unavailable" | "approved" | "denied" | "failed";
+ export type AgentApprovalEventKind = "exec" | "plugin" | "unknown";
+ 
++/**
++ * Plan-step shape carried by plan-kind approval events (PR-8 follow-up).
++ * Mirrors the runtime `update_plan` step shape but kept independent so
++ * `agent-events.ts` doesn't depend on the agents layer.
++ */
++export type AgentApprovalPlanStep = {
++  step: string;
++  status: string;
++  activeForm?: string;
++};
++
+ export type AgentApprovalEventData = {
+   phase: AgentApprovalEventPhase;
+   kind: AgentApprovalEventKind;
+@@ -69,6 +80,14 @@ export type AgentApprovalEventData = {
+   host?: string;
+   reason?: string;
+   message?: string;
++  /**
++   * Plan-mode approval payload (PR-8). Present only when `kind === "plugin"`
++   * and the underlying tool was `exit_plan_mode`. The UI/channel renderers
++   * use this to show the plan checklist with Approve/Reject/Edit buttons.
++   */
++  plan?: AgentApprovalPlanStep[];
++  /** One-line summary the agent included with the proposed plan. */
++  summary?: string;
+ };
+ 
+ export type AgentCommandOutputEventData = {
+@@ -105,6 +124,19 @@ export type AgentEventPayload = {
    sessionKey?: string;
  };
  
@@ -6965,7 +7246,7 @@ index 70ae8d0c45..9190e7867e 100644
  export type AgentRunContext = {
    sessionKey?: string;
    verboseLevel?: VerboseLevel;
-@@ -115,6 +128,13 @@ export type AgentRunContext = {
+@@ -115,6 +147,13 @@ export type AgentRunContext = {
    registeredAt?: number;
    /** Timestamp of last activity (updated on every emitAgentEvent). */
    lastActiveAt?: number;
@@ -7208,6 +7489,265 @@ index 0000000000..6edd452518
 +  text-align: center;
 +  font-size: 14px;
 +}
+diff --git a/ui/src/ui/app-render.ts b/ui/src/ui/app-render.ts
+index 8ac9cb457f..95ad33abd1 100644
+--- a/ui/src/ui/app-render.ts
++++ b/ui/src/ui/app-render.ts
+@@ -135,6 +135,7 @@ import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
+ import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
+ import { renderLoginGate } from "./views/login-gate.ts";
+ import { renderOverview } from "./views/overview.ts";
++import { renderPlanApprovalOverlay } from "./views/plan-approval.ts";
+ 
+ // Lazy-loaded view modules – deferred so the initial bundle stays small.
+ // Each loader resolves once; subsequent calls return the cached module.
+@@ -1933,6 +1934,46 @@ export function renderApp(state: AppViewState) {
+               allowExternalEmbedUrls: state.allowExternalEmbedUrls,
+               assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
+               basePath: state.basePath ?? "",
++              onSetMode: (mode) => {
++                // PR-8 / #67721: translate the chip selection into the
++                // appropriate sessions.patch call. Plan mode is its own
++                // dimension and does NOT touch execSecurity/execAsk; the
++                // permission modes (Ask/Accept/Bypass) toggle execSecurity
++                // + execAsk while leaving plan-mode state untouched. If
++                // the user picks anything-but-plan while a plan-mode
++                // session is active, also clear plan mode so the chip
++                // labels match the actual runtime state.
++                if (!state.client || !state.connected) {
++                  return;
++                }
++                const sessionKey = state.sessionKey;
++                const planAction: "plan" | "normal" | null =
++                  mode.planMode === "plan" ? "plan" : "normal";
++                const patch: Record<string, unknown> = { key: sessionKey };
++                if (mode.planMode === "plan") {
++                  patch.planMode = "plan";
++                } else {
++                  // Clear any active plan mode so the chip + backend agree.
++                  patch.planMode = "normal";
++                  if (mode.execSecurity !== undefined) {
++                    patch.execSecurity = mode.execSecurity;
++                  }
++                  if (mode.execAsk !== undefined) {
++                    patch.execAsk = mode.execAsk;
++                  }
++                }
++                void state.client.request("sessions.patch", patch).then(
++                  () => {
++                    state.lastError = null;
++                  },
++                  (err: unknown) => {
++                    state.lastError =
++                      planAction === "plan"
++                        ? `Failed to enter plan mode: ${String(err)}`
++                        : `Failed to set mode: ${String(err)}`;
++                  },
++                );
++              },
+             })
+           : nothing}
+         ${renderConfigTabForActiveTab()}
+@@ -2041,7 +2082,8 @@ export function renderApp(state: AppViewState) {
+             })
+           : nothing}
+       </main>
+-      ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)} ${nothing}
++      ${renderExecApprovalPrompt(state)} ${renderPlanApprovalOverlay(state)}
++      ${renderGatewayUrlConfirmation(state)} ${nothing}
+     </div>
+   `;
+ }
+diff --git a/ui/src/ui/app-tool-stream.ts b/ui/src/ui/app-tool-stream.ts
+index 6727b00d82..bbbfa229ea 100644
+--- a/ui/src/ui/app-tool-stream.ts
++++ b/ui/src/ui/app-tool-stream.ts
+@@ -447,6 +447,80 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
+   }, FALLBACK_TOAST_DURATION_MS);
+ }
+ 
++/**
++ * PR-8 / #67721: plan approval request emitted from the runtime when
++ * the agent calls `exit_plan_mode`. Stored on the host so the chat
++ * view can render an Approve/Reject/Edit overlay tied to the active
++ * session.
++ */
++export type PlanApprovalRequest = {
++  approvalId: string;
++  sessionKey: string;
++  toolCallId?: string;
++  title: string;
++  summary?: string;
++  plan: Array<{ step: string; status: string; activeForm?: string }>;
++  receivedAt: number;
++};
++
++type PlanApprovalHost = ToolStreamHost & {
++  planApprovalRequest: PlanApprovalRequest | null;
++};
++
++function handlePlanApprovalEvent(host: PlanApprovalHost, payload: AgentEventPayload): void {
++  const data = payload.data ?? {};
++  if (data.kind !== "plugin" || data.phase !== "requested") {
++    return;
++  }
++  const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
++  if (!sessionKey || sessionKey !== host.sessionKey) {
++    return;
++  }
++  const rawPlan = data.plan;
++  if (!Array.isArray(rawPlan) || rawPlan.length === 0) {
++    return;
++  }
++  const plan: PlanApprovalRequest["plan"] = [];
++  for (const entry of rawPlan) {
++    if (!entry || typeof entry !== "object") {
++      continue;
++    }
++    const step = (entry as Record<string, unknown>).step;
++    const status = (entry as Record<string, unknown>).status;
++    const activeForm = (entry as Record<string, unknown>).activeForm;
++    if (typeof step !== "string" || typeof status !== "string") {
++      continue;
++    }
++    plan.push({
++      step,
++      status,
++      ...(typeof activeForm === "string" && activeForm.trim() ? { activeForm } : {}),
++    });
++  }
++  if (plan.length === 0) {
++    return;
++  }
++  const approvalId =
++    typeof data.approvalId === "string" && data.approvalId.trim() ? data.approvalId : "";
++  if (!approvalId) {
++    return;
++  }
++  const title = typeof data.title === "string" && data.title.trim() ? data.title : "Plan approval";
++  const summary =
++    typeof data.summary === "string" && data.summary.trim() ? data.summary : undefined;
++  const toolCallId =
++    typeof data.toolCallId === "string" && data.toolCallId.trim() ? data.toolCallId : undefined;
++  host.planApprovalRequest = {
++    approvalId,
++    sessionKey,
++    title,
++    plan,
++    receivedAt: Date.now(),
++    ...(summary ? { summary } : {}),
++    ...(toolCallId ? { toolCallId } : {}),
++  };
++}
++
+ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
+   if (!payload) {
+     return;
+@@ -469,6 +543,11 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
+     return;
+   }
+ 
++  if (payload.stream === "approval") {
++    handlePlanApprovalEvent(host as PlanApprovalHost, payload);
++    return;
++  }
++
+   if (payload.stream !== "tool") {
+     return;
+   }
+diff --git a/ui/src/ui/app-view-state.ts b/ui/src/ui/app-view-state.ts
+index c6f75a0154..3078b9aafd 100644
+--- a/ui/src/ui/app-view-state.ts
++++ b/ui/src/ui/app-view-state.ts
+@@ -114,6 +114,15 @@ export type AppViewState = {
+   execApprovalQueue: ExecApprovalRequest[];
+   execApprovalBusy: boolean;
+   execApprovalError: string | null;
++  /**
++   * PR-8 / #67721: pending plan-approval request emitted by the runtime
++   * when the agent calls `exit_plan_mode`. Exactly one approval is
++   * tracked at a time per session — re-emits replace the prior request
++   * (the agent just minted a fresh approvalId so the old card is stale).
++   */
++  planApprovalRequest: import("./app-tool-stream.ts").PlanApprovalRequest | null;
++  planApprovalBusy: boolean;
++  planApprovalError: string | null;
+   pendingGatewayUrl: string | null;
+   configLoading: boolean;
+   configRaw: string;
+@@ -387,6 +396,11 @@ export type AppViewState = {
+     handleNostrProfileImport: () => Promise<void>;
+     handleNostrProfileToggleAdvanced: () => void;
+     handleExecApprovalDecision: (decision: "allow-once" | "allow-always" | "deny") => Promise<void>;
++    /** PR-8 / #67721: resolve a pending plan-approval. */
++    handlePlanApprovalDecision: (
++      decision: "approve" | "reject" | "edit",
++      feedback?: string,
++    ) => Promise<void>;
+     handleGatewayUrlConfirm: () => void;
+     handleGatewayUrlCancel: () => void;
+     handleConfigLoad: () => Promise<void>;
+diff --git a/ui/src/ui/app.ts b/ui/src/ui/app.ts
+index db46425a8f..c63977ca5f 100644
+--- a/ui/src/ui/app.ts
++++ b/ui/src/ui/app.ts
+@@ -214,6 +214,12 @@ export class OpenClawApp extends LitElement {
+   @state() execApprovalQueue: ExecApprovalRequest[] = [];
+   @state() execApprovalBusy = false;
+   @state() execApprovalError: string | null = null;
++  // PR-8 / #67721: plan approval card state — populated by handleAgentEvent
++  // when the runtime emits an `approval` stream event with kind:"plugin"
++  // and a plan payload.
++  @state() planApprovalRequest: import("./app-tool-stream.ts").PlanApprovalRequest | null = null;
++  @state() planApprovalBusy = false;
++  @state() planApprovalError: string | null = null;
+   @state() pendingGatewayUrl: string | null = null;
+   pendingGatewayToken: string | null = null;
+ 
+@@ -757,6 +763,43 @@ export class OpenClawApp extends LitElement {
+     }
+   }
+ 
++  /**
++   * PR-8 / #67721: resolve a pending plan-approval card. Sends the
++   * decision via `sessions.patch { planApproval: ... }` which routes
++   * through `resolvePlanApproval` server-side.
++   */
++  async handlePlanApprovalDecision(
++    decision: "approve" | "reject" | "edit",
++    feedback?: string,
++  ): Promise<void> {
++    const active = this.planApprovalRequest;
++    if (!active || !this.client || this.planApprovalBusy) {
++      return;
++    }
++    this.planApprovalBusy = true;
++    this.planApprovalError = null;
++    try {
++      const params: Record<string, unknown> = {
++        key: active.sessionKey,
++        planApproval: {
++          action: decision,
++          ...(active.approvalId ? { approvalId: active.approvalId } : {}),
++          ...(feedback && feedback.trim() ? { feedback: feedback.trim() } : {}),
++        },
++      };
++      await this.client.request("sessions.patch", params);
++      // Clear the active card so the overlay dismisses. The agent's
++      // next turn will pick up the resolution via the new session
++      // state (mode flipped to "normal" on approve/edit, or stays
++      // "plan" with rejectionCount++ on reject).
++      this.planApprovalRequest = null;
++    } catch (err) {
++      this.planApprovalError = `Plan approval failed: ${String(err)}`;
++    } finally {
++      this.planApprovalBusy = false;
++    }
++  }
++
+   handleGatewayUrlConfirm() {
+     const nextGatewayUrl = this.pendingGatewayUrl;
+     if (!nextGatewayUrl) {
 diff --git a/ui/src/ui/chat/mode-switcher.test.ts b/ui/src/ui/chat/mode-switcher.test.ts
 new file mode 100644
 index 0000000000..264fd18997
@@ -8255,3 +8795,213 @@ index 9f3f2e271d..23434a62cc 100644
  async function executeUsage(
    client: GatewayBrowserClient,
    sessionKey: string,
+diff --git a/ui/src/ui/types.ts b/ui/src/ui/types.ts
+index defa2b6d81..08ce28bf8f 100644
+--- a/ui/src/ui/types.ts
++++ b/ui/src/ui/types.ts
+@@ -429,6 +429,22 @@ export type GatewaySessionRow = {
+   contextTokens?: number;
+   compactionCheckpointCount?: number;
+   latestCompactionCheckpoint?: SessionCompactionCheckpoint;
++  // PR-8 / #67721: permission-mode + plan-mode fields exposed to the UI
++  // so the chat toolbar's mode chip can render the current session
++  // state. Backend writes these via `sessions.patch`; gateway includes
++  // them in `sessions.list` payloads when present on `SessionEntry`.
++  execSecurity?: "deny" | "allowlist" | "full";
++  execAsk?: "off" | "on-miss" | "always";
++  planMode?: {
++    mode: "plan" | "normal";
++    approval: "none" | "pending" | "approved" | "edited" | "rejected" | "timed_out";
++    approvalId?: string;
++    enteredAt?: number;
++    confirmedAt?: number;
++    updatedAt?: number;
++    feedback?: string;
++    rejectionCount?: number;
++  };
+ };
+ 
+ export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
+diff --git a/ui/src/ui/views/chat.ts b/ui/src/ui/views/chat.ts
+index 4a4c46d7b3..f56a282cd6 100644
+--- a/ui/src/ui/views/chat.ts
++++ b/ui/src/ui/views/chat.ts
+@@ -21,6 +21,15 @@ import {
+   normalizeMessage,
+   normalizeRoleForGrouping,
+ } from "../chat/message-normalizer.ts";
++import {
++  // handleModeShortcut TODO(PR-8 follow-up): wire Ctrl+1-4 keyboard
++  // shortcuts on the chat surface. Skipping in this iteration since the
++  // chip menu + /plan slash command already cover the path; the
++  // shortcut needs a window-level keydown listener wired in app.ts.
++  type ModeDefinition,
++  renderModeSwitcher,
++  resolveCurrentMode,
++} from "../chat/mode-switcher.ts";
+ import { PinnedMessages } from "../chat/pinned-messages.ts";
+ import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
+ import { messageMatchesSearchQuery } from "../chat/search-match.ts";
+@@ -113,6 +122,14 @@ export type ChatProps = {
+   onSplitRatioChange?: (ratio: number) => void;
+   onChatScroll?: (event: Event) => void;
+   basePath?: string;
++  /**
++   * PR-8 / #67721: invoked when the user picks a mode from the chip menu
++   * (or hits the Ctrl+1-4 keyboard shortcut). The host translates the
++   * `ModeDefinition` into the appropriate `sessions.patch` calls
++   * (planMode for plan, execSecurity/execAsk for permission modes).
++   * Optional so existing callers that don't yet wire it stay compiling.
++   */
++  onSetMode?: (mode: ModeDefinition) => void;
+ };
+ 
+ const COMPACTION_TOAST_DURATION_MS = 5000;
+@@ -295,6 +312,8 @@ interface ChatEphemeralState {
+   searchOpen: boolean;
+   searchQuery: string;
+   pinnedExpanded: boolean;
++  /** PR-8 / #67721: mode-switcher chip menu open state. */
++  modeMenuOpen: boolean;
+ }
+ 
+ function createChatEphemeralState(): ChatEphemeralState {
+@@ -310,6 +329,7 @@ function createChatEphemeralState(): ChatEphemeralState {
+     searchOpen: false,
+     searchQuery: "",
+     pinnedExpanded: false,
++    modeMenuOpen: false,
+   };
+ }
+ 
+@@ -1619,6 +1639,34 @@ export function renderChat(props: ChatProps) {
+                   </button>
+                 `
+               : nothing}
++            ${(() => {
++              // PR-8 / #67721: render the mode chip when the host wired
++              // `onSetMode`. Reads the current mode from the active
++              // session row (planMode wins; falls back to permission
++              // pair; falls back to a synthesized "Custom" chip when
++              // neither matches a preset).
++              if (!props.onSetMode) {
++                return nothing;
++              }
++              const currentMode = resolveCurrentMode(
++                activeSession?.execSecurity,
++                activeSession?.execAsk,
++                activeSession?.planMode?.mode,
++              );
++              return renderModeSwitcher({
++                currentMode,
++                menuOpen: vs.modeMenuOpen,
++                onToggleMenu: () => {
++                  vs.modeMenuOpen = !vs.modeMenuOpen;
++                  requestUpdate();
++                },
++                onSelectMode: (mode) => {
++                  vs.modeMenuOpen = false;
++                  props.onSetMode!(mode);
++                  requestUpdate();
++                },
++              });
++            })()}
+             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
+           </div>
+ 
+diff --git a/ui/src/ui/views/plan-approval.ts b/ui/src/ui/views/plan-approval.ts
+new file mode 100644
+index 0000000000..67344adadb
+--- /dev/null
++++ b/ui/src/ui/views/plan-approval.ts
+@@ -0,0 +1,90 @@
++/**
++ * Plan-approval overlay (PR-8 follow-up).
++ *
++ * Rendered when the agent calls `exit_plan_mode`, surfacing the proposed
++ * plan to the user with Approve / Reject / Edit buttons. Reuses the
++ * exec-approval overlay shell + plan-cards renderer for visual
++ * consistency.
++ *
++ * The decision flows back to the gateway via
++ * `sessions.patch { planApproval: { action, feedback?, approvalId } }`,
++ * which calls `resolvePlanApproval` from the plan-mode lib (#67538).
++ */
++import { html, nothing } from "lit";
++import type { AppViewState } from "../app-view-state.ts";
++import { renderPlanCard, type PlanCardStep } from "../chat/plan-cards.ts";
++
++const PLAN_STEP_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
++
++function coercePlanStep(raw: { step: string; status: string; activeForm?: string }): PlanCardStep {
++  const status = (PLAN_STEP_STATUSES as readonly string[]).includes(raw.status)
++    ? (raw.status as PlanCardStep["status"])
++    : "pending";
++  return {
++    text: raw.step,
++    status,
++    ...(raw.activeForm ? { activeForm: raw.activeForm } : {}),
++  };
++}
++
++export function renderPlanApprovalOverlay(state: AppViewState) {
++  const active = state.planApprovalRequest;
++  if (!active) {
++    return nothing;
++  }
++  const planSteps = active.plan.map(coercePlanStep);
++  const planTitle = active.summary || "Proposed plan";
++  return html`
++    <div class="exec-approval-overlay" role="dialog" aria-live="polite">
++      <div class="exec-approval-card">
++        <div class="exec-approval-header">
++          <div>
++            <div class="exec-approval-title">${active.title}</div>
++            <div class="exec-approval-sub">
++              ${active.plan.length} ${active.plan.length === 1 ? "step" : "steps"} proposed
++            </div>
++          </div>
++        </div>
++        <div class="exec-approval-meta" style="margin-top: 8px;">
++          ${renderPlanCard({
++            title: planTitle,
++            steps: planSteps,
++            ...(active.summary ? { explanation: active.summary } : {}),
++          })}
++        </div>
++        ${state.planApprovalError
++          ? html`<div class="exec-approval-error">${state.planApprovalError}</div>`
++          : nothing}
++        <div class="exec-approval-actions">
++          <button
++            class="btn primary"
++            ?disabled=${state.planApprovalBusy}
++            @click=${() => state.handlePlanApprovalDecision("approve")}
++            title="Execute the plan now"
++          >
++            Approve
++          </button>
++          <button
++            class="btn"
++            ?disabled=${state.planApprovalBusy}
++            @click=${() => state.handlePlanApprovalDecision("edit")}
++            title="Treat as approved with edits in mind"
++          >
++            Approve with edits
++          </button>
++          <button
++            class="btn danger"
++            ?disabled=${state.planApprovalBusy}
++            @click=${async () => {
++              const feedback = window.prompt("Reason for rejection (optional):") ?? undefined;
++              await state.handlePlanApprovalDecision("reject", feedback || undefined);
++            }}
++            title="Send back for revision; agent stays in plan mode"
++          >
++            Reject
++          </button>
++        </div>
++      </div>
++    </div>
++  `;
++}
