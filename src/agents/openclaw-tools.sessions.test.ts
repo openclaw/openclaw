@@ -1,5 +1,5 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -35,6 +35,7 @@ import { __testing as agentStepTesting } from "./tools/agent-step.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { __testing as sessionsResolutionTesting } from "./tools/sessions-resolution.js";
+import { createA2ADelegatedTaskHook } from "./tools/sessions-send-tool.a2a-hook.js";
 import { __testing as sessionsSendA2ATesting } from "./tools/sessions-send-tool.a2a.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
@@ -142,6 +143,7 @@ function createOpenClawTools(options?: {
       sandboxed: options?.sandboxed,
       config,
       callGateway: gatewayCall,
+      delegatedTaskHook: createA2ADelegatedTaskHook(),
     }),
   ];
 }
@@ -168,6 +170,16 @@ describe("sessions tools", () => {
     sessionsSendA2ATesting.setDepsForTest({
       callGateway: (opts: unknown) => callGatewayMock(opts),
     });
+    sessionsSendA2ATesting.setHelpersForTest({
+      createEventSink: () => ({ append: async () => {} }),
+    });
+    sessionsSendA2ATesting.setAdapterFactoryForTest();
+    sessionsSendA2ATesting.setAdapterSelectionForTest();
+  });
+
+  afterEach(() => {
+    sessionsSendA2ATesting.setAdapterFactoryForTest();
+    sessionsSendA2ATesting.setAdapterSelectionForTest();
   });
 
   it("uses number (not integer) in tool schemas for Gemini compatibility", () => {
@@ -844,6 +856,63 @@ describe("sessions tools", () => {
     expect(agentCall?.[0]).toMatchObject({
       method: "agent",
       params: { sessionKey: targetKey },
+    });
+  });
+
+  it("sessions_send keeps the same accepted UX when standalone broker dispatch fails in the background", async () => {
+    const runTaskRequest = vi.fn().mockRejectedValue(new Error("broker unavailable"));
+    sessionsSendA2ATesting.setAdapterSelectionForTest({
+      shouldUseBrokerAdapter: () => true,
+      createBrokerAdapter: () => ({
+        runTaskRequest,
+      }),
+    });
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as {
+        method?: string;
+      };
+      if (request.method === "agent") {
+        return { runId: "run-broker-bg-1", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "discord:group:req",
+      agentChannel: "discord",
+      config: {
+        ...TEST_CONFIG,
+        plugins: {
+          entries: {
+            "a2a-broker-adapter": {
+              enabled: true,
+              config: {
+                baseUrl: "https://broker.example.com",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-broker-bg", {
+      sessionKey: "main",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      runId: "run-broker-bg-1",
+      status: "accepted",
+      delivery: { status: "pending", mode: "announce" },
+    });
+    await vi.waitFor(() => {
+      expect(runTaskRequest).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -29,8 +29,8 @@ import {
   resolveSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
-import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
-import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
+import type { DelegatedTaskHook } from "./sessions-send-delegated-task.js";
+import { NOOP_DELEGATED_TASK_HOOK, startDelegatedTask } from "./sessions-send-delegated-task.js";
 
 const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -80,6 +80,7 @@ export function createSessionsSendTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  delegatedTaskHook?: DelegatedTaskHook;
 }): AnyAgentTool {
   return {
     label: "Session Send",
@@ -233,7 +234,6 @@ export function createSessionsSendTool(opts?: {
           ? Math.max(0, Math.floor(params.timeoutSeconds))
           : 30;
       const timeoutMs = timeoutSeconds * 1000;
-      const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
       const visibilityGuard = await createSessionVisibilityGuard({
@@ -265,10 +265,15 @@ export function createSessionsSendTool(opts?: {
               callGateway: gatewayCall,
             });
 
-      const agentMessageContext = buildAgentToAgentMessageContext({
-        requesterSessionKey: opts?.agentSessionKey,
-        requesterChannel: opts?.agentChannel,
+      const requesterSessionKey = opts?.agentSessionKey;
+      const requesterChannel = opts?.agentChannel;
+      const delegatedHook = opts?.delegatedTaskHook ?? NOOP_DELEGATED_TASK_HOOK;
+      const delivery = { status: "pending", mode: "announce" as const };
+      const agentMessageContext = delegatedHook.buildContext?.({
         targetSessionKey: displayKey,
+        displayKey,
+        requesterSessionKey,
+        requesterChannel,
       });
       const sendParams = {
         message,
@@ -277,30 +282,13 @@ export function createSessionsSendTool(opts?: {
         deliver: false,
         channel: INTERNAL_MESSAGE_CHANNEL,
         lane: AGENT_LANE_NESTED,
-        extraSystemPrompt: agentMessageContext,
+        ...(agentMessageContext ? { extraSystemPrompt: agentMessageContext } : {}),
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: opts?.agentSessionKey,
           sourceChannel: opts?.agentChannel,
           sourceTool: "sessions_send",
         },
-      };
-      const requesterSessionKey = opts?.agentSessionKey;
-      const requesterChannel = opts?.agentChannel;
-      const maxPingPongTurns = resolvePingPongTurns(cfg);
-      const delivery = { status: "pending", mode: "announce" as const };
-      const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
-        void runSessionsSendA2AFlow({
-          targetSessionKey: resolvedKey,
-          displayKey,
-          message,
-          announceTimeoutMs,
-          maxPingPongTurns,
-          requesterSessionKey,
-          requesterChannel,
-          roundOneReply,
-          waitRunId,
-        });
       };
 
       if (timeoutSeconds === 0) {
@@ -314,7 +302,18 @@ export function createSessionsSendTool(opts?: {
           return start.result;
         }
         runId = start.runId;
-        startA2AFlow(undefined, runId);
+        startDelegatedTask({
+          hook: delegatedHook,
+          task: {
+            targetSessionKey: resolvedKey,
+            displayKey,
+            message,
+            requesterSessionKey,
+            requesterChannel,
+            waitRunId: runId,
+            config: cfg,
+          },
+        });
         return jsonResult({
           runId,
           status: "accepted",
@@ -359,7 +358,19 @@ export function createSessionsSendTool(opts?: {
         });
       }
       const reply = result.replyText;
-      startA2AFlow(reply ?? undefined);
+      startDelegatedTask({
+        hook: delegatedHook,
+        task: {
+          targetSessionKey: resolvedKey,
+          displayKey,
+          message,
+          requesterSessionKey,
+          requesterChannel,
+          roundOneReply: reply ?? undefined,
+          waitRunId: runId,
+          config: cfg,
+        },
+      });
 
       return jsonResult({
         runId,

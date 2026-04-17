@@ -27,6 +27,8 @@ import { createPdfTool } from "./tools/pdf-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
+import type { DelegatedTaskHook } from "./tools/sessions-send-delegated-task.js";
+import { createA2ADelegatedTaskHook } from "./tools/sessions-send-tool.a2a-hook.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
@@ -40,10 +42,12 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 type OpenClawToolsDeps = {
   callGateway: typeof callGateway;
   config?: OpenClawConfig;
+  createDelegatedTaskHook: () => DelegatedTaskHook;
 };
 
 const defaultOpenClawToolsDeps: OpenClawToolsDeps = {
   callGateway,
+  createDelegatedTaskHook: createA2ADelegatedTaskHook,
 };
 
 let openClawToolsDeps: OpenClawToolsDeps = defaultOpenClawToolsDeps;
@@ -110,6 +114,8 @@ export function createOpenClawTools(
     onYield?: (message: string) => Promise<void> | void;
     /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
     allowGatewaySubagentBinding?: boolean;
+    /** Optional delegated-task hook override for sessions_send registration. */
+    delegatedTaskHook?: DelegatedTaskHook;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const resolvedConfig = options?.config ?? openClawToolsDeps.config;
@@ -193,6 +199,8 @@ export function createOpenClawTools(
     sandboxed: options?.sandboxed,
     runtimeWebFetch: runtimeWebTools?.fetch,
   });
+  const delegatedTaskHook =
+    options?.delegatedTaskHook ?? openClawToolsDeps.createDelegatedTaskHook();
   const messageTool = options?.disableMessageTool
     ? null
     : createMessageTool({
@@ -274,6 +282,7 @@ export function createOpenClawTools(
       sandboxed: options?.sandboxed,
       config: resolvedConfig,
       callGateway: openClawToolsDeps.callGateway,
+      delegatedTaskHook,
     }),
     createSessionsYieldTool({
       sessionId: options?.sessionId,
