@@ -1,4 +1,4 @@
-import { redactSensitiveText } from "../logging/redact.js";
+import { redactSensitiveText, resolveRedactOptions } from "../logging/redact.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 
 // Escape control characters, Unicode format/line/paragraph separators, and non-ASCII space
@@ -6,13 +6,16 @@ import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 // intentionally excluded so normal command text renders unchanged.
 const EXEC_APPROVAL_INVISIBLE_CHAR_REGEX =
   /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]/gu;
+const EXEC_APPROVAL_INVISIBLE_CHAR_SINGLE =
+  /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]/u;
 
-// Stripping set for the redaction-bypass detection pass. Includes non-ASCII Unicode space
-// separators so splicing an NBSP, narrow NBSP, ideographic space, etc. into a secret cannot
-// defeat token regexes that rely on word boundaries. Ordinary ASCII space (U+0020) is kept so
-// stripping does not destroy the word boundaries that those same token regexes rely on.
-const EXEC_APPROVAL_BYPASS_STRIP_REGEX =
-  /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]/gu;
+// Upper bound on input size for display sanitization to avoid unbounded regex work on huge
+// attacker-controlled command payloads. Commands longer than this are truncated for display
+// only; execution decisions are made from the raw payload elsewhere.
+const EXEC_APPROVAL_MAX_DISPLAY_INPUT = 16 * 1024;
+const EXEC_APPROVAL_TRUNCATION_MARKER = "…[truncated]";
+
+const BYPASS_MASK = "***";
 
 function formatCodePointEscape(char: string): string {
   return `\\u{${char.codePointAt(0)?.toString(16).toUpperCase() ?? "FFFD"}}`;
@@ -22,46 +25,109 @@ function escapeInvisibles(text: string): string {
   return text.replace(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX, formatCodePointEscape);
 }
 
+// Build a boolean bitmap of positions in `text` that ANY redaction pattern would match.
+// Patterns are applied independently to the raw text (not sequentially against a
+// progressively-redacted view) so later patterns can still find matches that the in-place
+// redaction would have replaced first. That is conservative — it may over-count overlapping
+// matches — but that is acceptable for a coverage check.
+function computeRedactionBitmap(text: string, patterns: RegExp[]): boolean[] {
+  const bitmap = new Array<boolean>(text.length).fill(false);
+  for (const pattern of patterns) {
+    const iter = pattern.flags.includes("g")
+      ? new RegExp(pattern.source, pattern.flags)
+      : new RegExp(pattern.source, `${pattern.flags}g`);
+    for (const match of text.matchAll(iter)) {
+      if (match.index === undefined) {
+        continue;
+      }
+      const end = match.index + match[0].length;
+      for (let i = match.index; i < end; i++) {
+        bitmap[i] = true;
+      }
+    }
+  }
+  return bitmap;
+}
+
+function buildStrippedView(original: string): { stripped: string; strippedToOrig: number[] } {
+  const strippedChars: string[] = [];
+  const strippedToOrig: number[] = [];
+  for (let i = 0; i < original.length; i++) {
+    const ch = original[i];
+    if (EXEC_APPROVAL_INVISIBLE_CHAR_SINGLE.test(ch)) {
+      continue;
+    }
+    strippedChars.push(ch);
+    strippedToOrig.push(i);
+  }
+  return { stripped: strippedChars.join(""), strippedToOrig };
+}
+
 export function sanitizeExecApprovalDisplayText(commandText: string): string {
-  // Redact against the raw text first so verbatim secrets are masked in place and the original
-  // positions of invisible/control characters can still be shown to the operator as escape
-  // markers.
-  const rawRedacted = redactSensitiveText(commandText, { mode: "tools" });
-  // Also redact against a view with invisible/control/non-ASCII space characters stripped so an
-  // attacker cannot defeat token regexes (e.g. `\b(sk-[A-Za-z0-9_-]{8,})\b`) by splicing a
-  // zero-width character, NBSP, or other Unicode space into the middle of a secret.
-  const stripped = commandText.replace(EXEC_APPROVAL_BYPASS_STRIP_REGEX, "");
+  // Truncate oversized input before any regex work to bound CPU/memory on attacker-controlled
+  // payloads. The sanitizer runs the full token pattern set over the text multiple times, so
+  // we cap the work at a constant multiple of a reasonable display size.
+  const input =
+    commandText.length > EXEC_APPROVAL_MAX_DISPLAY_INPUT
+      ? commandText.slice(0, EXEC_APPROVAL_MAX_DISPLAY_INPUT) + EXEC_APPROVAL_TRUNCATION_MARKER
+      : commandText;
+  const rawRedacted = redactSensitiveText(input, { mode: "tools" });
+  const { stripped, strippedToOrig } = buildStrippedView(input);
   const strippedRedacted = redactSensitiveText(stripped, { mode: "tools" });
+  // Fast path: stripping invisibles did not expose any additional secret-like content, so the
+  // raw-view redaction is sufficient. Preserve structure and show invisible-character spoof
+  // attempts as `\u{...}` escapes.
   if (strippedRedacted === stripped) {
-    // No additional match in the stripped view; render the raw-redaction with invisibles
-    // escaped so the operator can still see multi-line boundaries and spliced invisibles.
     return escapeInvisibles(rawRedacted);
   }
-  // Stripped view found at least one redaction. Compare the stripped-view redaction against a
-  // raw-redaction view normalized the same way — by content, not by length. Length comparison
-  // is unsafe because `maskToken()` can expand short tokens to a longer fixed literal (`***`),
-  // which can leave `rawRedactedStripped` and `strippedRedacted` coincidentally the same
-  // length even though the stripped view actually masked a longer secret span that raw only
-  // partially masked.
-  const rawRedactedStripped = rawRedacted.replace(EXEC_APPROVAL_BYPASS_STRIP_REGEX, "");
-  if (strippedRedacted === rawRedactedStripped) {
+  // Detect bypass by position-bitmap coverage. Run each redaction pattern independently on
+  // both views and map stripped-view match positions back to original coordinates. If every
+  // position the stripped view would mask is also masked by the raw view, the raw view
+  // already covered everything — for example, an ordinary multi-line PEM private key where
+  // raw produces `BEGIN/…redacted…/END` while stripped collapses to `***`. A real bypass
+  // exists only when the stripped view masks at least one original position raw missed (e.g.
+  // the tail of an `sk-` token whose prefix-boundary was broken by a spliced zero-width or
+  // NBSP character).
+  const { patterns } = resolveRedactOptions({ mode: "tools" });
+  const rawMask = computeRedactionBitmap(input, patterns);
+  const strippedMask = computeRedactionBitmap(stripped, patterns);
+  let bypassDetected = false;
+  for (let i = 0; i < strippedMask.length; i++) {
+    if (strippedMask[i] && !rawMask[strippedToOrig[i]]) {
+      bypassDetected = true;
+      break;
+    }
+  }
+  if (!bypassDetected) {
     return escapeInvisibles(rawRedacted);
   }
-  // Bypass detected. Neither view can be safely displayed on its own:
-  //   - The raw view may still show the tail of a secret whose prefix was masked by a short
-  //     `***` literal (because word boundaries bounded the match short of the full token).
-  //   - The stripped view removes invisibles/Zs characters, which can defeat whitespace-
-  //     dependent patterns like `Bearer\s+(...)` and re-expose a secret that the raw view
-  //     had already masked (`Bearer\u00A0<jwt>` turns into `Bearer<jwt>` in stripped, and
-  //     the bearer regex no longer matches).
-  // Emit a metadata-only marker. Operators must reject or escalate; there is no way to
-  // render the original bytes without risking a partial-secret leak under either view.
-  const lineCount = commandText.split(/\r\n|\r|\n|\u2028|\u2029/).length;
-  const lineLabel =
-    lineCount > 1
-      ? `${lineCount}-line, ${commandText.length}-char`
-      : `${commandText.length}-char`;
-  return `[exec approval ${lineLabel} command contains obfuscated sensitive content; full text suppressed for safety]`;
+  // Bypass path. Project the stripped-view mask back onto original positions, union with the
+  // raw-view mask, and emit a rendering where each contiguous masked run becomes a single
+  // `***` marker. Invisible characters that fall outside masked runs still render as visible
+  // `\u{...}` escapes so multi-line structure and spliced invisibles stay readable.
+  const unionMask = rawMask.slice();
+  for (let i = 0; i < strippedMask.length; i++) {
+    if (strippedMask[i]) {
+      unionMask[strippedToOrig[i]] = true;
+    }
+  }
+  let out = "";
+  let i = 0;
+  while (i < input.length) {
+    if (unionMask[i]) {
+      let j = i;
+      while (j < input.length && unionMask[j]) {
+        j++;
+      }
+      out += BYPASS_MASK;
+      i = j;
+      continue;
+    }
+    const ch = input[i];
+    out += EXEC_APPROVAL_INVISIBLE_CHAR_SINGLE.test(ch) ? formatCodePointEscape(ch) : ch;
+    i++;
+  }
+  return out;
 }
 
 function normalizePreview(commandText: string, commandPreview?: string | null): string | null {

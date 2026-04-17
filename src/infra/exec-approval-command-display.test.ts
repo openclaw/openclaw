@@ -44,38 +44,44 @@ describe("sanitizeExecApprovalDisplayText", () => {
     expect(result).toContain("git clone");
   });
 
-  it("suppresses raw command and emits a bypass marker when a token bypass is detected", () => {
+  it("masks the full token when a zero-width character is spliced into the middle", () => {
     const cmd = "echo sk-abc123\u200B456789012345678 remainder";
     const result = sanitizeExecApprovalDisplayText(cmd);
     expect(result).not.toContain("sk-abc123");
     expect(result).not.toContain("456789012345678");
-    expect(result).not.toContain("remainder");
-    expect(result).toContain("obfuscated sensitive content");
-    expect(result).toContain("full text suppressed");
+    expect(result).toContain("echo ");
+    expect(result).toContain("remainder");
   });
 
-  it("suppresses raw command when NBSP (Zs) is spliced into a token", () => {
+  it("masks the full token when NBSP (Zs) is spliced into the middle", () => {
     const cmd = "echo sk-abc123\u00A0456789012345678 remainder";
     const result = sanitizeExecApprovalDisplayText(cmd);
     expect(result).not.toContain("sk-abc123");
     expect(result).not.toContain("456789012345678");
-    expect(result).toContain("obfuscated sensitive content");
+    expect(result).toContain("echo ");
+    expect(result).toContain("remainder");
   });
 
-  it("suppresses raw command when narrow no-break space is spliced into a token", () => {
+  it("masks the full token when narrow no-break space is spliced into the middle", () => {
     const cmd = "echo sk-abc123\u202F456789012345678 remainder";
     const result = sanitizeExecApprovalDisplayText(cmd);
     expect(result).not.toContain("sk-abc123");
     expect(result).not.toContain("456789012345678");
-    expect(result).toContain("obfuscated sensitive content");
+    expect(result).toContain("remainder");
   });
 
-  it("includes line-count metadata in the bypass marker so the approval UI cannot be spoofed into looking single-line", () => {
+  it("keeps newline boundaries visible as escape markers even when bypass is detected", () => {
+    // Stripping invisibles lets the stripped-view greedy-match across the original newline
+    // boundaries, so the trailing `line3` gets absorbed into the union mask alongside the
+    // secret. The important guarantees are: (1) the secret is not visible, and (2) the
+    // newlines that existed in the original are still visible as `\u{A}` escapes so the
+    // operator is not misled about multi-line structure.
     const cmd = "line1\necho sk-abc123\u00A0456789012345678\nline3";
     const result = sanitizeExecApprovalDisplayText(cmd);
     expect(result).not.toContain("sk-abc123");
     expect(result).not.toContain("456789012345678");
-    expect(result).toContain("3-line");
+    expect(result).toContain("line1");
+    expect(result).toContain("\\u{A}");
   });
 
   it("detects bypass even when raw and stripped redactions happen to produce the same normalized length", () => {
@@ -92,15 +98,31 @@ describe("sanitizeExecApprovalDisplayText", () => {
   it("does not leak bearer tokens when bypass is triggered by a separate spliced secret", () => {
     // Bearer+NBSP is caught by the raw view (NBSP matches \s in non-u JS regex) but stripping
     // removes NBSP, turning `Bearer<jwt>` into a pattern the bearer regex no longer matches.
-    // A separate spliced-invisible token in the same command triggers bypass detection, and
-    // neither view can be shown safely: raw leaks the spliced token tail, stripped re-exposes
-    // the bearer JWT.
+    // A separate spliced-invisible token triggers bypass detection, and the union-mask output
+    // must cover both the bearer span (from raw) and the spliced sk- span (from stripped).
     const cmd =
       'curl -H "Authorization: Bearer\u00A0eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.longtoken.sig" https://api.example.com; echo sk-abc123\u200B456789012345678';
     const result = sanitizeExecApprovalDisplayText(cmd);
     expect(result).not.toContain("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.longtoken.sig");
     expect(result).not.toContain("456789012345678");
-    expect(result).toContain("obfuscated sensitive content");
+    expect(result).toContain("https://api.example.com");
+  });
+
+  it("keeps PEM private-key context visible when raw redaction already covers the key (not a bypass)", () => {
+    const cmd =
+      "echo -----BEGIN RSA PRIVATE KEY-----\nABCDEF0123456789abcdef\n-----END RSA PRIVATE KEY----- > key.pem";
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("ABCDEF0123456789abcdef");
+    expect(result).toContain("BEGIN RSA PRIVATE KEY");
+    expect(result).toContain("END RSA PRIVATE KEY");
+    expect(result).toContain("> key.pem");
+  });
+
+  it("truncates very large command text so regex work is bounded", () => {
+    const padding = "x".repeat(20 * 1024);
+    const result = sanitizeExecApprovalDisplayText(padding);
+    expect(result.length).toBeLessThan(padding.length);
+    expect(result).toContain("[truncated]");
   });
 });
 
