@@ -26,7 +26,7 @@ Get your API key at: https://opencode.ai/auth
 
 ## Default Model
 
-- `opencode/claude-opus-4-6` (aliased as "Opus")
+- `opencode/claude-opus-4-7` (aliased as "Opus")
 
 ## Design Notes
 
