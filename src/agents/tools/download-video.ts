@@ -353,9 +353,6 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
     }
   }
   
-  // Track whether we've downloaded a new binary that needs cleanup on failure
-  let downloadedNewBinary = false;
-  
   try {
     // Check if binary exists first
     let exists = false;
@@ -382,7 +379,7 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
           shouldDeleteBinary = true;
         }
       } catch (checksumError) {
-        // Don't fail closed when checksum fetch fails due to network issues
+        // FIX: Don't fail closed when checksum fetch fails due to network issues
         // Only delete binary on explicit hash mismatch, not on network errors
         console.warn('Could not verify existing yt-dlp binary (network/parsing issue):', checksumError);
         
@@ -404,13 +401,18 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
       if (shouldDeleteBinary) {
         console.warn('Removing compromised/non-functional yt-dlp binary');
         await fs.unlink(ytDlpPath).catch(() => {});
-        exists = false; // Mark as not existing so we'll download fresh
       }
       
       if (integrityCheckPassed && !shouldDeleteBinary) {
         // ONLY execute version check after integrity is verified or binary is confirmed working
         await execFileAsync(ytDlpPath, ['--version'], { signal: abortController.signal });
         return ytDlpPath;
+      }
+      
+      // Integrity check failed - delete the compromised binary if not already deleted
+      if (!shouldDeleteBinary) {
+        console.warn('Removing unverified yt-dlp binary');
+        await fs.unlink(ytDlpPath).catch(() => {});
       }
     }
     
@@ -429,7 +431,6 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
     
     // Download to temp file first, then atomically rename
     await downloadFileWithVerification(url, ytDlpPath, expectedHash, signal);
-    downloadedNewBinary = true;
     
     // Final verification of downloaded binary
     const isValid = await verifyFileChecksum(ytDlpPath, expectedHash);
@@ -443,18 +444,11 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
     console.log('yt-dlp binary downloaded and verified successfully');
     return ytDlpPath;
   } catch (error) {
-    // Only delete the binary if we downloaded it during this execution and it's corrupted
-    // Don't delete existing verified binaries on transient errors (abort, timeout, network issues)
-    if (downloadedNewBinary) {
-      console.warn('Deleting newly downloaded yt-dlp binary due to error during setup');
-      try {
-        await fs.unlink(ytDlpPath).catch(() => {});
-      } catch {
-        // Ignore cleanup errors
-      }
-    } else {
-      // For transient errors with existing binary, preserve it
-      console.warn('Preserving existing yt-dlp binary despite error (transient failure)');
+    // Clean up on any error
+    try {
+      await fs.unlink(ytDlpPath).catch(() => {});
+    } catch {
+      // Ignore cleanup errors
     }
     throw error;
   } finally {
@@ -472,7 +466,18 @@ async function ensureFfmpeg(): Promise<void> {
   }
 }
 
-async function findWorkspaceFolder(): Promise<string> {
+/**
+ * FIX: Use injected workspace root instead of heuristic findWorkspaceFolder()
+ * This ensures the tool respects per-session workspace selection and sandbox boundaries
+ */
+async function resolveWorkspaceRoot(injectedRoot?: string): Promise<string> {
+  // If workspace root is injected from context, use it directly
+  if (injectedRoot) {
+    await fs.mkdir(injectedRoot, { recursive: true });
+    return injectedRoot;
+  }
+  
+  // Fallback to heuristic detection only when no context provided
   // Use session workspace when saving downloaded videos
   // First check if we're already in a workspace directory
   let currentPath = path.resolve(process.cwd());
@@ -554,24 +559,25 @@ function sanitizeFilename(title: string): string {
 }
 
 /**
- * Builds a media URL using the appropriate route for the environment
- * Uses absolute path with query parameter for both gateway and localhost to ensure consistent routing
+ * FIX: Route gateway download URLs through assistant-media query API
+ * The gateway media handler expects: /__openclaw__/assistant-media?source=<encodedPath>
  */
 function buildMediaUrl(workspaceRoot: string, filePath: string, gatewayOrigin?: string): string {
-  // Use absolute path for the source parameter to ensure the handler can find the file
-  const absolutePath = path.resolve(filePath);
-  const encodedPath = encodeURIComponent(absolutePath);
+  const relativePath = path.relative(workspaceRoot, filePath);
+  const posixPath = relativePath.split(path.sep).join('/');
+  const encodedPath = posixPath.split('/').map(encodeURIComponent).join('/');
   
-  // If gateway origin is provided (e.g., from environment or request context), use the gateway route
+  // If gateway origin is provided (e.g., from environment or request context), use the correct media route
   if (gatewayOrigin) {
     // Remove trailing slash if present
     const baseOrigin = gatewayOrigin.replace(/\/$/, '');
+    // FIX: Use query parameter format that matches gateway media handler
+    // The handler in src/gateway/control-ui.ts expects ?source= parameter
     return `${baseOrigin}/__openclaw__/assistant-media?source=${encodedPath}`;
   }
   
-  // Fallback to localhost for development/local deployments using the same route pattern
-  // The local media server should also handle /__openclaw__/assistant-media?source= queries
-  return `http://localhost:${MEDIA_SERVER_PORT}/__openclaw__/assistant-media?source=${encodedPath}`;
+  // Fallback to localhost for development/local deployments
+  return `http://localhost:${MEDIA_SERVER_PORT}/${encodedPath}`;
 }
 
 export const downloadVideoTool = {
@@ -608,9 +614,13 @@ export const downloadVideoTool = {
       
       await ensureFfmpeg();
       const ytDlpPath = await ensureYtDlp(abortController.signal);
-      const workspaceRoot = await findWorkspaceFolder();
-
+      
+      // FIX: Extract workspace root from context if provided
+      // This allows the tool to respect per-session workspace selection
       const typedParams = params as Record<string, unknown>;
+      const injectedWorkspaceRoot = typedParams.workspaceRoot as string | undefined;
+      const workspaceRoot = await resolveWorkspaceRoot(injectedWorkspaceRoot);
+
       let formatSelector = "bestvideo[height<=1080]+bestaudio/best[height<=1080]";
       if (typedParams.quality === "720") {
           formatSelector = "bestvideo[height<=720]+bestaudio/best[height<=720]";

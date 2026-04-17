@@ -23,7 +23,6 @@
   flex-direction: column;
   gap: 2px;
   flex: 1 1 auto;
-  /* INCREASED from 68% to 90% to accommodate 854px videos */
   max-width: min(900px, 90%);
   align-items: flex-start;
 }
@@ -377,102 +376,40 @@ img.chat-avatar {
   max-height: 480px;
 }
 
-/* Light mode: restore borders */
-:root[data-theme-mode="light"] .chat-bubble {
-  border-color: var(--border);
-  box-shadow: inset 0 1px 0 var(--card-highlight);
-}
-
-.chat-bubble:hover {
-  background: var(--bg-hover);
-}
-
-/* User bubbles have different styling */
-.chat-group.user .chat-bubble {
-  background: var(--accent-subtle);
-  border-color: transparent;
-}
-
-:root[data-theme-mode="light"] .chat-group.user .chat-bubble {
-  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
-  background: var(--accent-subtle);
-}
-/* ── Video & Embed Fixes ── */
-
-.video-embed-container {
-  position: relative;
+/* Media wrapper for native video tags - FIXED */
+.chat-message-media {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
   width: 100%;
-  max-width: 854px; /* Target resolution */
-  margin: 12px 0;
-  display: block;
 }
 
-.video-embed-frame {
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  border-radius: 8px;
-  border: none;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  display: block;
-}
-
-/* Media wrapper for native video tags */
 .chat-media-wrapper {
-  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: auto;
   max-width: 854px;
   margin: 8px 0;
 }
 
 .chat-media-wrapper video {
-  width: 100%;
+  display: block;
+  width: auto;
+  max-width: 100%;
   height: auto;
   max-height: 480px;
   border-radius: 6px;
   object-fit: contain;
-  display: block;
 }
 
-/* Prevent chat bubbles with media from being too tiny */
-.chat-bubble:has(video),
-.chat-bubble:has(.video-embed-container),
-.chat-bubble:has(.chat-message-video) {
-  min-width: min(480px, 100%);
-}
-
-/* ── Video sizing: break out of the bubble's column constraint ── */
-
-/* Bubbles containing video need to grow up to 854px regardless of column width */
-.chat-bubble:has(.chat-message-video),
-.chat-bubble:has(.video-embed-container) {
-  width: min(854px, 100vw - 80px);
-  max-width: min(854px, 100vw - 80px);
-  box-sizing: border-box;
-}
-
-/* The group-messages column must not clip the expanded bubble */
-.chat-group-messages:has(.chat-message-video),
-.chat-group-messages:has(.video-embed-container) {
-  max-width: min(854px, 100vw - 80px);
-}
-
-/* Media wrapper: fill the bubble, cap at 854px */
-.chat-media-wrapper {
-  width: 100%;
-  max-width: 854px;
-  box-sizing: border-box;
-}
-
-/* Native video element */
-.chat-media-wrapper video,
-.chat-message-video {
-  display: block;
-  width: 100%;
-  max-width: 854px;
-  height: auto;
-  max-height: 480px;
-  border-radius: 6px;
-  object-fit: contain;
-  box-sizing: border-box;
+.chat-media-filename {
+  font-size: 12px;
+  color: var(--accent);
+  text-align: center;
+  margin-top: 4px;
+  word-break: break-all;
 }
 
 /* Video Embed Container for YouTube/Vimeo */
@@ -498,12 +435,12 @@ img.chat-avatar {
 .chat-tool-msg-collapse > summary {
   margin: 0;
   padding: 4px 8px;
-  list-style: none; /* ✅ Hides marker in Firefox & modern engines */
+  list-style: none;
 }
 
 .chat-bubble summary::-webkit-details-marker,
 .chat-tool-msg-collapse > summary::-webkit-details-marker {
-  display: none; /* ✅ Hides marker in Chromium-based browsers */
+  display: none;
 }
 
 /* Light mode: restore borders */
@@ -726,4 +663,17 @@ img.chat-avatar {
   img.chat-avatar {
     display: none;
   }
+}
+
+.chat-bubble:has(video),
+.chat-bubble:has(.chat-message-video) {
+  max-width: min(854px, 100%) !important;
+}
+
+.chat-bubble:has(video) video,
+.chat-bubble:has(.chat-message-video) video {
+  width: 100%;
+  height: auto;
+  max-width: 854px;
+  display: block;
 }
