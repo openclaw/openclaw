@@ -155,21 +155,19 @@ describe("createGatewayCloseHandler", () => {
   it("continues shutdown when websocket close hangs without tracked clients", async () => {
     vi.useFakeTimers();
 
-    let closeCallback: (() => void) | null = null;
+    const closeCallbacks: Array<() => void> = [];
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         wss: {
           clients: new Set(),
-          close: (cb: () => void) => {
-            closeCallback = cb;
-          },
+          close: (cb: () => void) => closeCallbacks.push(cb),
         } as never,
       }),
     );
 
     const closePromise = close({ reason: "test shutdown" });
     await vi.advanceTimersByTimeAsync(WEBSOCKET_CLOSE_GRACE_MS + WEBSOCKET_CLOSE_FORCE_CONTINUE_MS);
-    closeCallback?.();
+    closeCallbacks[0]?.();
     await closePromise;
 
     expect(vi.getTimerCount()).toBe(0);

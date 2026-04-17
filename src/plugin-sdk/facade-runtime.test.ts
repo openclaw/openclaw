@@ -396,12 +396,6 @@ describe("plugin-sdk facade runtime", () => {
     const access = __testing.resolveBundledPluginPublicSurfaceAccess({
       dirName: "speech-core",
       artifactBasename: "runtime-api.js",
-      location: {
-        modulePath: path.join(process.cwd(), "extensions", "speech-core", "runtime-api.js"),
-        boundaryRoot: path.join(process.cwd(), "extensions"),
-      },
-      sourceExtensionsRoot: path.join(process.cwd(), "extensions"),
-      resolutionKey: `speech-core:${Date.now()}`,
     });
 
     expect(access.allowed).toBe(true);
