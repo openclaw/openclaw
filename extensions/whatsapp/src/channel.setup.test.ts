@@ -234,6 +234,55 @@ describe("whatsapp setup wizard", () => {
     expectWhatsAppLoginFollowup(harness);
   });
 
+  it("handles undefined phone number input without crashing (#67837)", async () => {
+    hoisted.pathExists.mockResolvedValue(true);
+    const harness = createQueuedWizardPrompter({
+      confirmValues: [false],
+      selectValues: ["personal"],
+      textValues: ["+15555550199"],
+    });
+
+    // Capture the validate callback to test it directly
+    let capturedValidate: ((value: string) => string | undefined) | undefined;
+    const originalText = harness.prompter.text;
+    let callCount = 0;
+    harness.prompter.text = async (opts) => {
+      callCount++;
+      if (callCount === 1 && opts.validate) {
+        capturedValidate = opts.validate;
+      }
+      return originalText.call(harness.prompter, opts);
+    };
+
+    const result = await runConfigureWithHarness({ harness });
+    expect(result.cfg).toBeDefined();
+    // The validate callback must not throw on undefined — this was the #67837 crash
+    expect(capturedValidate).toBeDefined();
+    expect(capturedValidate!(undefined as unknown as string)).toBe("Required");
+  });
+
+  it("handles undefined allowFrom text input without crashing (#67837)", async () => {
+    hoisted.pathExists.mockResolvedValue(true);
+
+    let capturedValidate: ((value: string) => string | undefined) | undefined;
+    const harness = createSeparatePhoneHarness({
+      selectValues: ["separate", "allowlist", "list"],
+      textValues: ["+15555550123"],
+    });
+    const originalText = harness.prompter.text;
+    harness.prompter.text = async (opts) => {
+      if (opts.validate && !capturedValidate) {
+        capturedValidate = opts.validate;
+      }
+      return originalText.call(harness.prompter, opts);
+    };
+
+    const result = await runConfigureWithHarness({ harness });
+    expect(result.cfg).toBeDefined();
+    expect(capturedValidate).toBeDefined();
+    expect(capturedValidate!(undefined as unknown as string)).toBe("Required");
+  });
+
   it("heartbeat readiness uses configured defaultAccount for active listener checks", async () => {
     const result = await checkWhatsAppHeartbeatReady({
       cfg: {
