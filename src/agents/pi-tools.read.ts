@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { createInterface } from "node:readline";
 import path from "node:path";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import {
@@ -80,6 +82,138 @@ function resolveWorkspacePath(relativePath: string, root: string): string {
   }
   // Relative path: join with root
   return path.join(root, relativePath);
+}
+
+// Helper function to read text file with streaming/pagination support
+async function readTextFileStreaming(
+  filePath: string,
+  offset: number,
+  limit: number | undefined,
+  maxChars: number,
+  signal?: AbortSignal,
+): Promise<{ content: string; truncated: boolean; totalLines: number; totalChars: number }> {
+  return new Promise((resolve, reject) => {
+    const lines: string[] = [];
+    let totalLines = 0;
+    let totalChars = 0;
+    let collectedChars = 0;
+    let isTruncated = false;
+    
+    const startLine = Math.max(0, offset - 1);
+    const endLine = limit !== undefined ? startLine + limit : undefined;
+    
+    const readStream = createReadStream(filePath, { encoding: "utf-8" });
+    const rl = createInterface({
+      input: readStream,
+      crlfDelay: Infinity,
+    });
+    
+    let currentLineNumber = 0;
+    
+    rl.on("line", (line) => {
+      if (signal?.aborted) {
+        rl.close();
+        readStream.destroy();
+        reject(new Error("Read operation aborted"));
+        return;
+      }
+      
+      totalLines++;
+      
+      // Check if we've reached the requested range
+      if (currentLineNumber >= startLine && (endLine === undefined || currentLineNumber < endLine)) {
+        const lineWithNewline = currentLineNumber === totalLines - 1 ? line : line + "\n";
+        const lineChars = lineWithNewline.length;
+        
+        // Check if adding this line would exceed maxChars
+        if (collectedChars + lineChars > maxChars) {
+          const remainingChars = maxChars - collectedChars;
+          if (remainingChars > 0) {
+            const partialLine = line.slice(0, remainingChars);
+            lines.push(partialLine);
+            collectedChars += partialLine.length;
+            totalChars += partialLine.length;
+          }
+          isTruncated = true;
+          rl.close();
+          readStream.destroy();
+        } else {
+          lines.push(lineWithNewline);
+          collectedChars += lineChars;
+          totalChars += line.length;
+        }
+      }
+      
+      currentLineNumber++;
+      
+      // Stop if we've collected enough lines and have truncation
+      if (isTruncated) {
+        rl.close();
+        readStream.destroy();
+      }
+    });
+    
+    rl.on("close", () => {
+      let content = lines.join("");
+      
+      // Apply final truncation if needed (for cases where we didn't hit the line limit)
+      if (content.length > maxChars) {
+        content = content.slice(0, maxChars);
+        isTruncated = true;
+      }
+      
+      if (isTruncated) {
+        content += `\n\n... [Content truncated to ${maxChars} chars]`;
+      }
+      
+      resolve({
+        content,
+        truncated: isTruncated,
+        totalLines,
+        totalChars,
+      });
+    });
+    
+    rl.on("error", (error) => {
+      reject(error);
+    });
+    
+    readStream.on("error", (error) => {
+      reject(error);
+    });
+  });
+}
+
+// Helper function for bridge mode (falls back to full read since bridges don't support streaming)
+async function readTextFileBridge(
+  bridge: SandboxFsBridge,
+  filePath: string,
+  cwd: string,
+  offset: number,
+  limit: number | undefined,
+  maxChars: number,
+  signal?: AbortSignal,
+): Promise<{ content: string; truncated: boolean; totalLines: number }> {
+  const buffer = await bridge.readFile({
+    filePath,
+    cwd,
+    signal,
+  });
+  const text = Buffer.isBuffer(buffer) ? buffer.toString("utf-8") : String(buffer);
+  const lines = text.split("\n");
+  const totalLines = lines.length;
+  
+  const start = Math.max(0, Math.min(offset - 1, totalLines));
+  const end = limit !== undefined ? Math.min(start + limit, totalLines) : totalLines;
+  let content = lines.slice(start, end).join("\n");
+  
+  let truncated = false;
+  if (content.length > maxChars) {
+    content = content.slice(0, maxChars) + `\n\n... [Content truncated to ${maxChars} chars]`;
+    truncated = true;
+  }
+  
+  return { content, truncated, totalLines };
 }
 
 // --- OPERATIONS HELPERS ---
@@ -858,37 +992,42 @@ export function createOpenClawReadTool(
             throw new Error("Read operation aborted");
           }
 
-          // Use bridge for text file reading if available
-          let text: string;
-          if (useBridge) {
-            const buffer = await options.bridge!.readFile({
-              filePath: inputPath,
-              cwd: rootDirResolved,
-              signal,
-            });
-            text = Buffer.isBuffer(buffer) ? buffer.toString("utf-8") : String(buffer);
-          } else {
-            text = await fs.readFile(inputPath, "utf-8");
-          }
-
-          if (offset > 0 || limit !== undefined) {
-            const lines = text.split("\n");
-            const start = Math.max(0, Math.min(offset - 1, lines.length));
-            const end = limit !== undefined ? Math.min(start + limit, lines.length) : lines.length;
-            text = lines.slice(start, end).join("\n");
-          }
-
           const maxChars = options?.modelContextWindowTokens
             ? options.modelContextWindowTokens * 3
             : 32000;
-          if (text.length > maxChars) {
-            text = text.slice(0, maxChars) + `\n\n... [Content truncated to ${maxChars} chars]`;
+
+          let text: string;
+          let truncated = false;
+
+          // Use streaming for host mode, fallback to full read for bridge mode
+          if (useBridge) {
+            const result = await readTextFileBridge(
+              options.bridge!,
+              inputPath,
+              rootDirResolved,
+              offset,
+              limit,
+              maxChars,
+              signal,
+            );
+            text = result.content;
+            truncated = result.truncated;
+          } else {
+            const result = await readTextFileStreaming(
+              inputPath,
+              offset,
+              limit,
+              maxChars,
+              signal,
+            );
+            text = result.content;
+            truncated = result.truncated;
           }
 
           result = {
             toolCallId,
             content: [{ type: "text", text }],
-            details: { path: inputPath, size: fileSize, offset, limit },
+            details: { path: inputPath, size: fileSize, offset, limit, truncated },
           } as AgentToolResult;
         }
 
