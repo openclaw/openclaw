@@ -58,31 +58,16 @@
       {{SESSION_DATA}}
     </script>
 
-    <!-- Vendored libraries -->
-    <script>
-      {
-        {
-          MARKED_JS;
-        }
-      }
-    </script>
+    <!-- Vendored libraries (placeholders must stay on one line for .replace() substitution) -->
+    <!-- oxfmt-ignore -->
+    <script>{{MARKED_JS}}</script>
 
     <!-- highlight.js -->
-    <script>
-      {
-        {
-          HIGHLIGHT_JS;
-        }
-      }
-    </script>
+    <!-- oxfmt-ignore -->
+    <script>{{HIGHLIGHT_JS}}</script>
 
     <!-- Main application code -->
-    <script>
-      {
-        {
-          JS;
-        }
-      }
-    </script>
+    <!-- oxfmt-ignore -->
+    <script>{{JS}}</script>
   </body>
 </html>

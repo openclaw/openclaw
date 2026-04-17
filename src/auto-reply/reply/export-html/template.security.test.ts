@@ -79,6 +79,17 @@ function now() {
   return new Date("2026-02-24T00:00:00.000Z").toISOString();
 }
 
+describe("export html template placeholders", () => {
+  it("contains exact placeholder strings that generateHtml expects to replace", () => {
+    // These placeholders must appear as literal strings (not reformatted by oxfmt/prettier).
+    // If a formatter breaks them (e.g. `{{JS}}` → `{ { JS; } }`), the viewer JS
+    // is never injected and the exported HTML renders blank (#68062).
+    for (const placeholder of ["{{CSS}}", "{{JS}}", "{{SESSION_DATA}}", "{{MARKED_JS}}", "{{HIGHLIGHT_JS}}"]) {
+      expect(templateHtml).toContain(placeholder);
+    }
+  });
+});
+
 describe("export html security hardening", () => {
   it("escapes raw HTML from markdown blocks", () => {
     const attack = "<img src=x onerror=alert(1)>";
