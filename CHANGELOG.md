@@ -36,6 +36,7 @@ Docs: https://docs.openclaw.ai
 - Cron/isolated-agent: preserve `trusted: false` on isolated cron awareness events mirrored into the main session, and forward the optional `trusted` flag through the gateway cron wrapper so explicit trust downgrades survive session-key scoping. (#68210)
 - Agents/fallback: recognize bare leading ZenMux `402 ...` quota-refresh errors without misclassifying plain numeric `402 ...` text, and keep the embedded fallback regression coverage stable. (#47579) Thanks @bwjoke.
 - Failover/google: only treat `INTERNAL` status payloads as retryable timeouts when they also carry a `500` code, so malformed non-500 payloads do not enter the retry path. (#68238) Thanks @altaywtf and @Openbling.
+- Agents/tools: filter bundled MCP/LSP tools through the final owner-only and tool-policy pipeline after merging them into the effective tool list, so existing allowlists, deny rules, sandbox policy, subagent policy, and owner-only restrictions apply to bundled tools the same way they apply to core tools. (#68195)
 
 ## 2026.4.15
 
