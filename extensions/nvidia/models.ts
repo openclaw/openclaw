@@ -51,6 +51,24 @@ export const NVIDIA_CATALOGED_MODELS: ModelDefinitionConfig[] = [
     maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
     cost: NVIDIA_DEFAULT_COST,
   },
+  {
+    id: "nvidia/meta/llama-4-maverick-17b-128e-instruct",
+    name: "Meta Llama 4 Maverick 17B 128E Instruct",
+    reasoning: false,
+    input: ["text", "image"],
+    contextWindow: 131072,
+    maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
+    cost: NVIDIA_DEFAULT_COST,
+  },
+  {
+    id: "nvidia/meta/llama-4-scout-17b-16e-instruct",
+    name: "Meta Llama 4 Scout 17B 16E Instruct",
+    reasoning: false,
+    input: ["text", "image"],
+    contextWindow: 131072,
+    maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
+    cost: NVIDIA_DEFAULT_COST,
+  },
 ];
 
 const REASONING_KEYWORDS = [
@@ -59,8 +77,6 @@ const REASONING_KEYWORDS = [
   "thinking",
   "reasoner",
   "qwq",
-  "devstral",
-  "mistral-nemo",
 ] as const;
 
 function isReasoningModelHeuristic(modelId: string): boolean {
@@ -81,7 +97,6 @@ type OpenAIListModelsResponse = {
 
 function isInferenceModel(entry: NVIDIAModelEntry): boolean {
   const id = entry.id?.trim() ?? "";
-  const ownedBy = entry.owned_by?.trim().toLowerCase() ?? "";
 
   if (id.includes("nemoretriever") || id.includes("embed") || id.includes("clip")) {
     return false;

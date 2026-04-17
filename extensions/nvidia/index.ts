@@ -1,7 +1,7 @@
 import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildNvidiaProvider, NVIDIA_CATALOGED_MODELS } from "./provider-catalog.js";
+import { buildNvidiaProvider, NVIDIA_CATALOGED_MODELS, NVIDIA_BASE_URL } from "./provider-catalog.js";
 
 const PROVIDER_ID = "nvidia";
 const NVIDIA_DEFAULT_MODEL_REF = "nvidia/nemotron-3-super-120b-a12b";
@@ -38,7 +38,7 @@ export default defineSingleProviderPluginEntry({
             ...cfg.providers,
             [PROVIDER_ID]: {
               ...(cfg.providers as Record<string, unknown>)?.[PROVIDER_ID] as Record<string, unknown>,
-              baseUrl: "https://integrate.api.nvidia.com/v1",
+              baseUrl: NVIDIA_BASE_URL,
               api: "openai-completions",
             },
           },
@@ -93,7 +93,7 @@ export default defineSingleProviderPluginEntry({
           name: catalogEntry.name,
           api: "openai-completions",
           provider: PROVIDER_ID,
-          baseUrl: "https://integrate.api.nvidia.com/v1",
+          baseUrl: NVIDIA_BASE_URL,
           reasoning: catalogEntry.reasoning,
           input: catalogEntry.input,
           cost: catalogEntry.cost,
@@ -106,7 +106,7 @@ export default defineSingleProviderPluginEntry({
         name: modelId,
         api: "openai-completions",
         provider: PROVIDER_ID,
-        baseUrl: "https://integrate.api.nvidia.com/v1",
+        baseUrl: NVIDIA_BASE_URL,
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
