@@ -344,8 +344,8 @@ importers:
   extensions/acpx:
     dependencies:
       acpx:
-        specifier: 0.5.3
-        version: 0.5.3
+        specifier: github:flowforgelab/acpx#110f44e963d7f40e192bc6700ca2dc0020a5eca3
+        version: https://codeload.github.com/flowforgelab/acpx/tar.gz/110f44e963d7f40e192bc6700ca2dc0020a5eca3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1372,11 +1372,6 @@ importers:
         version: 4.1.4(@opentelemetry/api@1.9.1)(@types/node@25.6.0)(@vitest/browser-playwright@4.1.4)(@vitest/coverage-v8@4.1.4)(jsdom@29.0.2(@noble/hashes@2.0.1))(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3))
 
 packages:
-
-  '@agentclientprotocol/sdk@0.17.1':
-    resolution: {integrity: sha512-yjyIn8POL18IOXioLySYiL0G44kZ/IZctAls7vS3AC3X+qLhFXbWmzABSZehwRnWFShMXT+ODa/HJG1+mGXZ1A==}
-    peerDependencies:
-      zod: ^3.25.0 || ^4.0.0
 
   '@agentclientprotocol/sdk@0.18.2':
     resolution: {integrity: sha512-l/o9NKvUc00GPa6RFJ4AccQq2O/PAf83xQ75mThHuL3H571iN4+PEdwnTBez67sS8Nv2aSA373xCZ5CbTXEwzA==}
@@ -4435,8 +4430,9 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.5.3:
-    resolution: {integrity: sha512-LNKc9gWlRztWKtQ3jr4g/kzlL9HU/5Wor79mromg/zRV5vE2FOdU+8VtW8ZypIMLzxLx2ATN6A4S1Dr97DM2QQ==}
+  acpx@https://codeload.github.com/flowforgelab/acpx/tar.gz/110f44e963d7f40e192bc6700ca2dc0020a5eca3:
+    resolution: {tarball: https://codeload.github.com/flowforgelab/acpx/tar.gz/110f44e963d7f40e192bc6700ca2dc0020a5eca3}
+    version: 0.5.3
     engines: {node: '>=22.12.0'}
     hasBin: true
 
@@ -7838,10 +7834,6 @@ packages:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
-
-  '@agentclientprotocol/sdk@0.17.1(zod@4.3.6)':
-    dependencies:
-      zod: 4.3.6
 
   '@agentclientprotocol/sdk@0.18.2(zod@4.3.6)':
     dependencies:
@@ -11497,9 +11489,9 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  acpx@0.5.3:
+  acpx@https://codeload.github.com/flowforgelab/acpx/tar.gz/110f44e963d7f40e192bc6700ca2dc0020a5eca3:
     dependencies:
-      '@agentclientprotocol/sdk': 0.17.1(zod@4.3.6)
+      '@agentclientprotocol/sdk': 0.18.2(zod@4.3.6)
       commander: 14.0.3
       skillflag: 0.1.4
       tsx: 4.21.0

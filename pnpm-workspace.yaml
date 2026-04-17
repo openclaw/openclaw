@@ -30,6 +30,7 @@ minimumReleaseAgeExclude:
   - "sqlite-vec-*"
 
 onlyBuiltDependencies:
+  - acpx
   - "@discordjs/opus"
   - "@lydell/node-pty"
   - "@matrix-org/matrix-sdk-crypto-nodejs"

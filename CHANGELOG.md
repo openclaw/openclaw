@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- ACP/Claude: bump the bundled `acpx` runtime to a Claude adapter fix that surfaces Opus 4.7 for embedded Claude ACP sessions.
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.
 - Gateway/hello-ok: always report negotiated auth metadata for successful shared-auth handshakes, including control-ui bypass coverage when no device token is issued. (#67810) Thanks @BunsDev.
 - OpenAI Codex/Responses: unify native Responses API capability detection so Codex OAuth requests emit the required `store: false` field on the native Responses path. (#67918) Thanks @obviyus.

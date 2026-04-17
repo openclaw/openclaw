@@ -4,7 +4,7 @@
   "description": "OpenClaw ACP runtime backend",
   "type": "module",
   "dependencies": {
-    "acpx": "0.5.3"
+    "acpx": "github:flowforgelab/acpx#110f44e963d7f40e192bc6700ca2dc0020a5eca3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
