@@ -12,6 +12,7 @@ import {
   connectOk,
   installGatewayTestHooks,
   rpcReq,
+  startServer,
   startServerWithClient,
 } from "./test-helpers.js";
 
@@ -128,7 +129,7 @@ async function issuePairingScopedTokenForAdminApprovedDevice(name: string): Prom
 
 describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
   test("rejects a device-token caller rotating another device's token", async () => {
-    const started = await startServerWithClient("secret");
+    const started = await startServer("secret");
     const deviceA = await issuePairingScopedTokenForAdminApprovedDevice("idor-device-a");
     const deviceB = await issuePairingScopedTokenForAdminApprovedDevice("idor-device-b");
 
@@ -152,7 +153,6 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
       expect(pairedB?.tokens?.operator?.token).toBe(deviceB.pairingToken);
     } finally {
       pairingWs?.close();
-      started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();
     }
@@ -180,7 +180,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
   });
 
   test("rejects a device-token caller revoking another device's token", async () => {
-    const started = await startServerWithClient("secret");
+    const started = await startServer("secret");
     const deviceA = await issuePairingScopedTokenForAdminApprovedDevice("idor-revoke-a");
     const deviceB = await issuePairingScopedTokenForAdminApprovedDevice("idor-revoke-b");
 
@@ -203,7 +203,6 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
       expect(pairedB?.tokens?.operator?.revokedAtMs).toBeUndefined();
     } finally {
       pairingWs?.close();
-      started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();
     }
@@ -235,7 +234,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
 
 describe("gateway device.token.rotate caller scope guard", () => {
   test("rejects rotating an admin-approved device token above the caller session scopes", async () => {
-    const started = await startServerWithClient("secret");
+    const started = await startServer("secret");
     const attacker = await issueOperatorToken({
       name: "rotate-attacker",
       approvedScopes: ["operator.admin"],
@@ -265,7 +264,6 @@ describe("gateway device.token.rotate caller scope guard", () => {
       expect(paired?.approvedScopes).toEqual(["operator.admin"]);
     } finally {
       pairingWs?.close();
-      started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();
     }
@@ -326,7 +324,7 @@ describe("gateway device.token.rotate caller scope guard", () => {
   });
 
   test("returns the same public deny for unknown devices and caller scope failures", async () => {
-    const started = await startServerWithClient("secret");
+    const started = await startServer("secret");
     const attacker = await issueOperatorToken({
       name: "rotate-deny-shape",
       approvedScopes: ["operator.admin"],
@@ -360,14 +358,13 @@ describe("gateway device.token.rotate caller scope guard", () => {
       expect(unknownDevice.error?.message).toBe("device token rotation denied");
     } finally {
       pairingWs?.close();
-      started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();
     }
   });
 
   test("rejects rotating a token for an unapproved role on an existing paired device", async () => {
-    const started = await startServerWithClient("secret");
+    const started = await startServer("secret");
     const attacker = await issueOperatorToken({
       name: "rotate-unapproved-role",
       approvedScopes: ["operator.pairing"],
@@ -397,7 +394,6 @@ describe("gateway device.token.rotate caller scope guard", () => {
       expect(paired?.tokens?.operator?.scopes).toEqual(["operator.pairing"]);
     } finally {
       pairingWs?.close();
-      started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();
     }
