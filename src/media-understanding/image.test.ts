@@ -17,6 +17,7 @@ const hoisted = vi.hoisted(() => ({
   setRuntimeApiKeyMock: vi.fn(),
   discoverModelsMock: vi.fn(),
   fetchMock: vi.fn(),
+  registerProviderStreamForModelMock: vi.fn(),
 }));
 const {
   completeMock,
@@ -27,6 +28,7 @@ const {
   setRuntimeApiKeyMock,
   discoverModelsMock,
   fetchMock,
+  registerProviderStreamForModelMock,
 } = hoisted;
 
 vi.mock("@mariozechner/pi-ai", async () => {
@@ -55,6 +57,10 @@ vi.mock("../agents/pi-model-discovery-runtime.js", () => ({
     setRuntimeApiKey: setRuntimeApiKeyMock,
   }),
   discoverModels: discoverModelsMock,
+}));
+
+vi.mock("../agents/provider-stream.js", () => ({
+  registerProviderStreamForModel: registerProviderStreamForModelMock,
 }));
 
 const { describeImageWithModel } = await import("./image.js");
@@ -275,6 +281,57 @@ describe("describeImageWithModel", () => {
       }),
     );
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
+  });
+
+  it("registers the provider stream handler before completion for plugin-contributed APIs", async () => {
+    const ollamaModel = {
+      provider: "ollama",
+      id: "gemma4:latest",
+      api: "ollama",
+      input: ["text", "image"],
+      baseUrl: "http://localhost:11434",
+    };
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ollamaModel),
+    });
+    const callOrder: string[] = [];
+    registerProviderStreamForModelMock.mockImplementation(() => {
+      callOrder.push("register");
+    });
+    completeMock.mockImplementation(async () => {
+      callOrder.push("complete");
+      return {
+        role: "assistant",
+        api: "ollama",
+        provider: "ollama",
+        model: "gemma4:latest",
+        stopReason: "stop",
+        timestamp: Date.now(),
+        content: [{ type: "text", text: "ollama ok" }],
+      };
+    });
+
+    const cfg = {};
+    const result = await describeImageWithModel({
+      cfg,
+      agentDir: "/tmp/openclaw-agent",
+      provider: "ollama",
+      model: "gemma4:latest",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({ text: "ollama ok", model: "gemma4:latest" });
+    expect(registerProviderStreamForModelMock).toHaveBeenCalledOnce();
+    expect(registerProviderStreamForModelMock).toHaveBeenCalledWith({
+      model: ollamaModel,
+      cfg,
+      agentDir: "/tmp/openclaw-agent",
+    });
+    expect(callOrder).toEqual(["register", "complete"]);
   });
 
   it("normalizes gemini 3.1 flash-lite ids before lookup and keeps profile auth selection", async () => {
