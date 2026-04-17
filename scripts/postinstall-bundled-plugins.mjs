@@ -660,8 +660,8 @@ function shouldRunBundledPluginPostinstall(params) {
 
 export function runBundledPluginPostinstall(params = {}) {
   const env = params.env ?? process.env;
-  const extensionsDir = params.extensionsDir ?? DEFAULT_EXTENSIONS_DIR;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const extensionsDir = params.extensionsDir ?? join(packageRoot, "dist", "extensions");
   const spawn = params.spawnSync ?? spawnSync;
   const pathExists = params.existsSync ?? existsSync;
   const log = params.log ?? console;
