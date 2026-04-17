@@ -536,6 +536,9 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   let totalApplied = 0;
   let failedWorkspaces = 0;
   const pluginConfig = params.cfg ? resolveMemoryCorePluginConfig(params.cfg) : undefined;
+  // Managed cron sweeps already write the durable dreaming reports. Keep the
+  // maintenance path responsive by skipping optional diary subagents here.
+  const narrativeSubagent = params.trigger === "cron" ? undefined : params.subagent;
   for (const workspaceDir of workspaces) {
     try {
       const sweepNowMs = Date.now();
@@ -544,7 +547,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         pluginConfig,
         cfg: params.cfg,
         logger: params.logger,
-        subagent: params.subagent,
+        subagent: narrativeSubagent,
         nowMs: sweepNowMs,
       });
 
@@ -617,14 +620,14 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         storage: params.config.storage ?? { mode: "separate", separateReports: false },
       });
       // Generate dream diary narrative from promoted memories.
-      if (params.subagent && (candidates.length > 0 || applied.applied > 0)) {
+      if (narrativeSubagent && (candidates.length > 0 || applied.applied > 0)) {
         const data: NarrativePhaseData = {
           phase: "deep",
           snippets: candidates.map((c) => c.snippet).filter(Boolean),
           promotions: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
         };
         await generateAndAppendDreamNarrative({
-          subagent: params.subagent,
+          subagent: narrativeSubagent,
           workspaceDir,
           data,
           nowMs: sweepNowMs,

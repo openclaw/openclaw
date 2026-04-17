@@ -1859,6 +1859,59 @@ describe("short-term dreaming trigger", () => {
     expect(memoryText).toContain("Move backups to S3 Glacier.");
   });
 
+  it("skips optional narrative subagents for managed cron dreaming", async () => {
+    const logger = createLogger();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-cron-no-narrative-");
+    await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Move backups to S3 Glacier."]);
+
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "backup policy",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const subagent = {
+      run: vi.fn(async () => ({ runId: "narrative-run-1" })),
+      waitForRun: vi.fn(async () => ({ status: "ok" })),
+      getSessionMessages: vi.fn(async () => ({
+        messages: [{ role: "assistant", content: "A diary entry." }],
+      })),
+      deleteSession: vi.fn(async () => {}),
+    };
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "cron",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+      subagent,
+    });
+
+    expect(result?.handled).toBe(true);
+    expect(subagent.run).not.toHaveBeenCalled();
+    const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    expect(memoryText).toContain("Move backups to S3 Glacier.");
+  });
+
   it("skips dreaming promotion cleanly when limit is zero", async () => {
     const logger = createLogger();
     const workspaceDir = await createTempWorkspace("memory-dreaming-limit-zero-");
