@@ -197,10 +197,32 @@ export async function createWebhookForChannel(params: {
     const webhookId = normalizeOptionalString(created?.id) ?? "";
     const webhookToken = normalizeOptionalString(created?.token) ?? "";
     if (!webhookId || !webhookToken) {
+      // Discord returned 2xx but the payload lacked the id/token pair we need.
+      // Surface this so downstream "empty webhookId" bugs have a clear signal
+      // instead of silently degrading every binding to bot-authored sends.
+      log.warn("discord thread binding webhook create returned empty id/token", {
+        reason: "webhook creation failed during thread binding",
+        channelId: params.channelId,
+        accountId: params.accountId,
+        hasId: Boolean(webhookId),
+        hasToken: Boolean(webhookToken),
+      });
       return {};
     }
     return { webhookId, webhookToken };
   } catch (err) {
+    // Phase 11 F1: elevate silent webhook-create failures to structured warn
+    // logging so username-policy rejections, permission errors (50013), and
+    // other HTTP failures during thread binding are visible in production.
+    // Mirrors the F6 pattern used above in `maybeSendBindingMessage`.
+    log.warn("discord thread binding webhook create failed", {
+      reason: "webhook creation failed during thread binding",
+      channelId: params.channelId,
+      accountId: params.accountId,
+      status: extractDiscordErrorStatus(err),
+      code: extractDiscordErrorCode(err),
+      error: summarizeDiscordError(err),
+    });
     logVerbose(
       `discord thread binding webhook create failed for ${params.channelId}: ${summarizeDiscordError(err)}`,
     );

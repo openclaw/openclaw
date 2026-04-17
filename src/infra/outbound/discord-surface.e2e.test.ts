@@ -199,6 +199,12 @@ async function withLiveHarness<T>(
       discord: {
         ...baseCfg.channels?.discord,
         enabled: true,
+        // Phase 11 F2: the E2E harness itself posts the user-task message as
+        // the `openclaw-e2e` bot (sharing the production bot token). The
+        // preflight defaults to allowBots="off" which drops that message
+        // BEFORE the OPENCLAW_E2E_ALLOW_SELF_MESSAGES bypass runs. Enable
+        // bot-authored messages in-test so the harness can drive the flow.
+        allowBots: true,
         threadBindings: {
           ...baseCfg.channels?.discord?.threadBindings,
           // Required so `/acp spawn ... --bind here` actually creates a
