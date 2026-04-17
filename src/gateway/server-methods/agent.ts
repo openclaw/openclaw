@@ -1079,7 +1079,11 @@ export const agentHandlers: GatewayRequestHandlers = {
           ignoreAgentTerminalSnapshot: ignoreStaleSnapshots,
         });
 
-    const racers = [
+    type RaceEntry =
+      | { source: "lifecycle"; snapshot: Awaited<ReturnType<typeof waitForAgentJob>> }
+      | { source: "dedupe"; snapshot: AgentWaitTerminalSnapshot | null };
+
+    const racers: Promise<RaceEntry>[] = [
       lifecyclePromise.then((snapshot) => ({ source: "lifecycle" as const, snapshot })),
     ];
     if (dedupePromise) {
