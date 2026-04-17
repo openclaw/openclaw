@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
-import { emitAgentPlanEvent } from "../../infra/agent-events.js";
+import { emitAgentPlanEvent, getAgentRunContext } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -98,6 +98,7 @@ import {
 import {
   AUTO_CONTINUE_FAST_PATH_INSTRUCTION,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
+  DEFAULT_PLAN_APPROVED_YIELD_RETRY_LIMIT,
   DEFAULT_PLAN_MODE_ACK_ONLY_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   resolveAckExecutionFastPathInstruction,
@@ -109,6 +110,7 @@ import {
   resolvePlanModeAckOnlyRetryInstruction,
   resolveEscalatingPlanningRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
+  resolveYieldDuringApprovedPlanInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
@@ -476,6 +478,12 @@ export async function runEmbeddedPiAgent(
       // the agent acknowledged but didn't call exit_plan_mode).
       let planModeAckOnlyRetryAttempts = 0;
       const maxPlanModeAckOnlyRetryAttempts = DEFAULT_PLAN_MODE_ACK_ONLY_RETRY_LIMIT;
+      // PR-8 follow-up Round 2: counter for yield-after-plan-approval
+      // detector — catches the case where the agent gets approval then
+      // yields to wait for subagent results instead of continuing
+      // execution.
+      let planApprovedYieldRetryAttempts = 0;
+      const maxPlanApprovedYieldRetryAttempts = DEFAULT_PLAN_APPROVED_YIELD_RETRY_LIMIT;
       let autoContinueCycles = 0;
       let autoContinueAccumulatedMutation = false;
       // Codex P2 (PR #67538 r3096325365): use the session-resolved agent id
@@ -1811,6 +1819,41 @@ export async function runEmbeddedPiAgent(
             );
             continue;
           }
+
+          // PR-8 follow-up Round 2: yield-after-plan-approval detector —
+          // fires when the agent yielded the turn right after getting
+          // plan approval without taking any main-lane action.
+          // Eva's post-mortem: "I went into orchestration/wait mode for
+          // subagents instead of continuing execution." Reuses the
+          // planningOnlyRetryInstruction slot like ack-only does.
+          //
+          // `planApproval` is mirrored onto AgentRunContext at context-
+          // registration time (agent-runner-execution.ts) rather than
+          // threaded as a separate param.
+          const yieldCtx = getAgentRunContext(params.runId);
+          const planApprovedYieldInstruction = resolveYieldDuringApprovedPlanInstruction({
+            planModeActive: params.planMode === "plan",
+            planApproval: yieldCtx?.planApproval,
+            aborted,
+            timedOut,
+            attempt,
+            retryAttemptIndex: planApprovedYieldRetryAttempts,
+          });
+          if (
+            planApprovedYieldInstruction &&
+            planApprovedYieldRetryAttempts < maxPlanApprovedYieldRetryAttempts
+          ) {
+            planApprovedYieldRetryAttempts += 1;
+            planningOnlyRetryInstruction = planApprovedYieldInstruction;
+            log.warn(
+              `plan-approved yield detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${provider}/${modelId} — retrying ` +
+                `${planApprovedYieldRetryAttempts}/${maxPlanApprovedYieldRetryAttempts} ` +
+                `with continue-execution steer`,
+            );
+            continue;
+          }
+
           if (
             !nextPlanningOnlyRetryInstruction &&
             nextReasoningOnlyRetryInstruction &&

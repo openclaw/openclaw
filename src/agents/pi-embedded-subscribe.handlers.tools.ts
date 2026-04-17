@@ -11,6 +11,7 @@ import {
   emitAgentEvent,
   emitAgentItemEvent,
   emitAgentPatchSummaryEvent,
+  getAgentRunContext,
   type AgentApprovalPlanStep,
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
@@ -1331,6 +1332,14 @@ export async function handleToolExecutionEnd(
   if (toolName === "enter_plan_mode" && !isToolError && ctx.params.sessionKey) {
     const ok = await persistPlanModeEnter(ctx.params.sessionKey, ctx.log);
     if (ok) {
+      // PR-8 follow-up: mirror the transition into AgentRunContext so
+      // sessions_spawn (and other runtime checks) can read `inPlanMode`
+      // without a session-store round-trip. Drives the cleanup:"keep"
+      // override for research children and the open-subagent tracking.
+      const runCtx = getAgentRunContext(ctx.params.runId);
+      if (runCtx) {
+        runCtx.inPlanMode = true;
+      }
       const planEnterEvent: AgentApprovalEventData = {
         phase: "requested",
         kind: "plugin",

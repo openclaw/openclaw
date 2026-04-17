@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { getAgentRunContext } from "../../infra/agent-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -144,6 +145,15 @@ export function createSessionsSpawnTool(
     sandboxed?: boolean;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
+    /**
+     * PR-8 follow-up: stable run id of the PARENT run spawning this child.
+     * Used to:
+     *  - add childRunId to the parent's `AgentRunContext.openSubagentRunIds`
+     *    so `exit_plan_mode` can block submission while research is in flight.
+     *  - force `cleanup: "keep"` when the parent session is in plan mode,
+     *    keeping research children visible in the session menu.
+     */
+    runId?: string;
   } & SpawnedToolContext,
 ): AnyAgentTool {
   return {
@@ -259,7 +269,19 @@ export function createSessionsSpawnTool(
             requestedMode: result.mode,
             threadRequested: thread,
           });
-          const trackedCleanup = trackedSpawnMode === "session" ? "keep" : cleanup;
+          // PR-8 follow-up: when the parent session is in plan mode,
+          // force cleanup:"keep" so research children stay visible in the
+          // session menu even after they complete. Prior default was to
+          // purge them (cleanup:"delete" + time-based filter), which hid
+          // results the user may want to inspect during plan synthesis.
+          //
+          // `inPlanMode` is mirrored onto AgentRunContext by the runner at
+          // context-registration time (kept there to avoid a session-store
+          // read on every spawn).
+          const parentCtx = opts?.runId ? getAgentRunContext(opts.runId) : undefined;
+          const parentInPlanMode = parentCtx?.inPlanMode === true;
+          const trackedCleanup =
+            trackedSpawnMode === "session" || parentInPlanMode ? "keep" : cleanup;
           const { mainKey, alias } = resolveMainSessionAlias(cfg);
           const requesterInternalKey = opts?.agentSessionKey
             ? resolveInternalSessionKey({
@@ -293,6 +315,17 @@ export function createSessionsSpawnTool(
               expectsCompletionMessage,
               spawnMode: trackedSpawnMode,
             });
+            // PR-8 follow-up: track this child in the parent's
+            // `openSubagentRunIds` set so `exit_plan_mode` can block
+            // plan submission while research children are in flight.
+            // The completion hook in `subagent-registry-run-manager.ts`
+            // drains the set when the child ends.
+            if (parentCtx) {
+              if (!parentCtx.openSubagentRunIds) {
+                parentCtx.openSubagentRunIds = new Set();
+              }
+              parentCtx.openSubagentRunIds.add(childRunId);
+            }
           } catch (err) {
             // Best-effort only: the ACP turn was already started above, so deleting the
             // child session record here does not guarantee the in-flight run was aborted.
@@ -308,6 +341,13 @@ export function createSessionsSpawnTool(
         return jsonResult(result);
       }
 
+      // PR-8 follow-up: mirror the in-plan-mode cleanup override applied
+      // on the ACP path above. When the parent session is in plan mode,
+      // force cleanup:"keep" so research children stay visible in the
+      // session menu.
+      const directParentCtx = opts?.runId ? getAgentRunContext(opts.runId) : undefined;
+      const directInPlanMode = directParentCtx?.inPlanMode === true;
+      const directCleanup: "delete" | "keep" | undefined = directInPlanMode ? "keep" : cleanup;
       const result = await spawnSubagentDirect(
         {
           task,
@@ -318,7 +358,7 @@ export function createSessionsSpawnTool(
           runTimeoutSeconds,
           thread,
           mode,
-          cleanup,
+          cleanup: directCleanup,
           sandbox,
           lightContext,
           expectsCompletionMessage,
@@ -341,6 +381,20 @@ export function createSessionsSpawnTool(
           workspaceDir: opts?.workspaceDir,
         },
       );
+      // PR-8 follow-up: track child runId in the parent's
+      // `openSubagentRunIds` so `exit_plan_mode` can block plan
+      // submission while research is in flight.
+      if (
+        directParentCtx &&
+        result.status === "accepted" &&
+        typeof result.runId === "string" &&
+        result.runId
+      ) {
+        if (!directParentCtx.openSubagentRunIds) {
+          directParentCtx.openSubagentRunIds = new Set();
+        }
+        directParentCtx.openSubagentRunIds.add(result.runId);
+      }
 
       return jsonResult(result);
     },

@@ -86,6 +86,11 @@ export function buildEmbeddedSystemPrompt(params: {
     includeMemorySection: params.includeMemorySection,
     memoryCitationsMode: params.memoryCitationsMode,
     promptContribution: params.promptContribution,
+    // PR-8 follow-up Round 2: thread model/provider identity so
+    // `sortContextFilesForPrompt` can apply GPT-5-family boot reorder
+    // (SOUL.md / IDENTITY.md before AGENTS.md) when applicable.
+    modelProviderId: params.runtimeInfo?.provider,
+    modelId: params.runtimeInfo?.model,
   });
 }
 

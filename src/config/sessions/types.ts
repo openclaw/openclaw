@@ -194,6 +194,22 @@ export type SessionEntry = {
     feedback?: string;
     rejectionCount: number;
     approvalId?: string;
+    /**
+     * PR-8 follow-up: most-recent plan snapshot written by `update_plan`.
+     * Persisted here so the Control UI can rebuild the live-plan sidebar
+     * after a hard refresh (in-memory `@state()` is lost otherwise). The
+     * runtime writes via `sessions.patch`; the UI reads on subscription
+     * mount. Deliberately persisted at the SessionEntry layer rather than
+     * in a separate store because it's session-scoped and follows the
+     * session's lifecycle.
+     */
+    lastPlanSteps?: Array<{
+      step: string;
+      status: string;
+      activeForm?: string;
+    }>;
+    /** Unix ms timestamp of the last `lastPlanSteps` write. */
+    lastPlanUpdatedAt?: number;
   };
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;

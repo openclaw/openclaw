@@ -154,6 +154,36 @@ export type AgentRunContext = {
    * Disk-persistence (cross-session) is owned by `PlanStore` (#67542).
    */
   lastPlanSteps?: PlanStepSnapshot[];
+  /**
+   * PR-8 follow-up: set of child subagent run ids spawned by this run
+   * that have not completed yet. Populated by `sessions_spawn` at spawn
+   * time and drained by the subagent completion hook. `exit_plan_mode`
+   * consults this set to reject plan submission while research children
+   * are in flight — matches the user's explicit rule "wait for all
+   * expected research children before submitting the plan".
+   *
+   * Stored as a `Set` so spawn/complete are O(1); ordering is not
+   * semantically meaningful, only membership.
+   */
+  openSubagentRunIds?: Set<string>;
+  /**
+   * PR-8 follow-up: whether the parent session is currently in plan mode
+   * (mirrored from `SessionEntry.planMode.mode === "plan"` at context
+   * registration). Used by `sessions_spawn` to force `cleanup: "keep"`
+   * on plan-mode-spawned children so they stay visible in the session
+   * menu for the user to inspect during plan synthesis. Kept on the
+   * context to avoid a session-store read on every spawn.
+   */
+  inPlanMode?: boolean;
+  /**
+   * PR-8 follow-up Round 2: current plan-approval state mirrored from
+   * `SessionEntry.planMode.approval`. Used by the yield-after-approval
+   * detector (`resolveYieldDuringApprovedPlanInstruction`) to decide
+   * whether an unexplained yield should trigger a "continue execution"
+   * retry steer. Values: `"none" | "pending" | "approved" | "edited" |
+   * "rejected" | "timed_out"`.
+   */
+  planApproval?: string;
 };
 
 type AgentEventState = {
@@ -170,6 +200,24 @@ function getAgentEventState(): AgentEventState {
     listeners: new Set<(evt: AgentEventPayload) => void>(),
     runContextById: new Map<string, AgentRunContext>(),
   }));
+}
+
+/**
+ * PR-8 follow-up: called by the subagent registry when a child run ends.
+ * Scans all registered parent run contexts and removes the completed
+ * child's runId from any `openSubagentRunIds` set it appears in. The
+ * typical concurrency is 1-3 open children per parent, so an O(N) scan
+ * across parents is cheap (N is the number of concurrent active runs,
+ * usually single digits).
+ *
+ * Keeps the drain logic in the same module that owns the set, rather
+ * than exposing `AgentRunContext` internals to the registry layer.
+ */
+export function drainCompletedSubagentFromParents(childRunId: string): void {
+  const state = getAgentEventState();
+  for (const ctx of state.runContextById.values()) {
+    ctx.openSubagentRunIds?.delete(childRunId);
+  }
 }
 
 export function registerAgentRunContext(runId: string, context: AgentRunContext) {

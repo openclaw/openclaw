@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { getAgentRunContext } from "../../infra/agent-events.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
   describeExitPlanModeTool,
@@ -101,7 +102,8 @@ export interface CreateExitPlanModeToolOptions {
   runId?: string;
 }
 
-export function createExitPlanModeTool(_options?: CreateExitPlanModeToolOptions): AnyAgentTool {
+export function createExitPlanModeTool(options?: CreateExitPlanModeToolOptions): AnyAgentTool {
+  const runId = options?.runId;
   return {
     label: "Exit Plan Mode",
     name: "exit_plan_mode",
@@ -112,6 +114,33 @@ export function createExitPlanModeTool(_options?: CreateExitPlanModeToolOptions)
       const params = args as Record<string, unknown>;
       const summary = readStringParam(params, "summary");
       const plan = readPlanSteps(params);
+
+      // PR-8 follow-up: hard-block plan submission while any subagents
+      // spawned during this run are still in flight. Eva's own post-
+      // mortem identified the bug: "I treated 'research launched' as
+      // 'research completed,' and submitted the plan with incomplete
+      // research." The runtime now enforces the rule the agent should
+      // follow: wait for research children before submitting.
+      //
+      // Paired with a tool-description warning at the top so the agent
+      // sees the requirement up-front (soft steer) as well as hitting
+      // this hard block if it ignores the warning.
+      if (runId) {
+        const ctx = getAgentRunContext(runId);
+        const open = ctx?.openSubagentRunIds;
+        if (open && open.size > 0) {
+          const ids = [...open].slice(0, 5).join(", ");
+          const more = open.size > 5 ? ` and ${open.size - 5} more` : "";
+          throw new ToolInputError(
+            `Cannot submit plan: ${open.size} subagent(s) you spawned during this ` +
+              `plan-mode investigation are still running (${ids}${more}). Wait for ` +
+              `their completion messages to arrive, then synthesize the final plan ` +
+              `from their results and call exit_plan_mode again. Treat unresolved ` +
+              `children as a blocking dependency of the investigation phase — ` +
+              `'research launched' is not 'research complete.'`,
+          );
+        }
+      }
       // PR-8 follow-up: return non-empty content. Empty content arrays
       // trip third-party transcript-pairing extensions (lossless-claw)
       // which inject `[lossless-claw] missing tool result` placeholders

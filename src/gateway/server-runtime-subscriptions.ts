@@ -2,6 +2,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { startPlanSnapshotPersister } from "./plan-snapshot-persister.js";
 import {
   createAgentEventHandler,
   type ChatRunState,
@@ -75,10 +76,17 @@ export function startGatewayEventSubscriptions(params: {
         }),
       );
 
+  // PR-8 follow-up: persist live plan snapshot to SessionEntry.planMode
+  // after each update_plan call so the Control UI can rebuild the
+  // live-plan sidebar after a hard refresh. See
+  // `plan-snapshot-persister.ts` for details.
+  const planSnapshotUnsub = params.minimalTestGateway ? null : startPlanSnapshotPersister({});
+
   return {
     agentUnsub,
     heartbeatUnsub,
     transcriptUnsub,
     lifecycleUnsub,
+    planSnapshotUnsub,
   };
 }

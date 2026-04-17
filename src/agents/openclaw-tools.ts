@@ -270,7 +270,13 @@ export function createOpenClawTools(
     // affordances that pair with the runtime mutation gate
     // (src/agents/plan-mode/mutation-gate.ts) and SessionEntry.planMode state.
     ...(isPlanModeToolsEnabledForOpenClawTools({ config: resolvedConfig })
-      ? [createEnterPlanModeTool(), createExitPlanModeTool()]
+      ? [
+          createEnterPlanModeTool({ runId: options?.runId }),
+          // PR-8 follow-up: pass runId so the tool can read
+          // `AgentRunContext.openSubagentRunIds` and hard-block plan
+          // submission while research subagents are still in flight.
+          createExitPlanModeTool({ runId: options?.runId }),
+        ]
       : []),
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,
@@ -307,6 +313,11 @@ export function createOpenClawTools(
       sandboxed: options?.sandboxed,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
       workspaceDir: spawnWorkspaceDir,
+      // PR-8 follow-up: thread runId so the spawn tool can read
+      // AgentRunContext.inPlanMode (for cleanup:keep override) and
+      // add the child runId to AgentRunContext.openSubagentRunIds
+      // (so exit_plan_mode can block on pending children).
+      runId: options?.runId,
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,

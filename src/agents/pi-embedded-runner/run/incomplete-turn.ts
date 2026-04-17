@@ -186,6 +186,28 @@ export const PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION_FIRM =
 
 export const DEFAULT_PLAN_MODE_ACK_ONLY_RETRY_LIMIT = 2;
 
+// PR-8 follow-up Round 2: after an approved plan, if the agent yields
+// the turn without taking any main-lane action, auto-retry with a steer
+// that says "continue executing, don't orchestrate/wait." Eva's post-
+// mortem: after approval she went into orchestration/wait mode for
+// subagent results instead of continuing execution, which broke the
+// explicit "do not pause between steps" rule from the approval
+// injection.
+export const PLAN_APPROVED_YIELD_RETRY_INSTRUCTION =
+  "Your plan was just approved and mutating tools were unlocked. You yielded the turn " +
+  "without taking any main-lane action — but the approval flow explicitly told you to " +
+  "continue through every step without pausing. Continue executing the plan now. Only " +
+  "yield if you actually need a subagent's result for the next step you are about to " +
+  "take, AND state in one sentence which step is blocked on which result.";
+
+export const PLAN_APPROVED_YIELD_RETRY_INSTRUCTION_FIRM =
+  "CRITICAL: you yielded again immediately after plan approval. Continue main-lane " +
+  "execution of the approved plan. If a subagent result is genuinely required for the " +
+  "next step, perform that step's prerequisite reads inline instead of orchestrating. " +
+  "Do not yield unless a real blocker requires the user to intervene.";
+
+export const DEFAULT_PLAN_APPROVED_YIELD_RETRY_LIMIT = 2;
+
 export type PlanningOnlyPlanDetails = {
   explanation: string;
   steps: string[];
@@ -774,4 +796,91 @@ export function resolvePlanModeAckOnlyRetryInstruction(params: {
   return params.retryAttemptIndex >= 1
     ? PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION_FIRM
     : PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION;
+}
+
+/**
+ * PR-8 follow-up Round 2: detect "agent yielded the turn immediately
+ * after plan approval without taking any main-lane action." Fires only
+ * on clean yields (no blocker text, no real work done). Reuses the
+ * standard → firm escalation pattern.
+ *
+ * Gating conditions (all must hold):
+ * - plan mode active AND session approval == "approved" or "edited"
+ * - the agent yielded this turn
+ * - no side effects happened this turn (write/edit/exec/send etc.)
+ * - no real tool work happened beyond yield/update_plan
+ * - clean stop (no abort/timeout/error/tool-error)
+ *
+ * Bypass: if the agent did a non-yield, non-update_plan tool call this
+ * turn (e.g., `read`, `exec` dry-run), we treat that as genuine progress
+ * and do NOT re-prompt.
+ */
+type PlanApprovedYieldAttempt = Pick<
+  EmbeddedRunAttemptResult,
+  | "yieldDetected"
+  | "clientToolCall"
+  | "didSendDeterministicApprovalPrompt"
+  | "didSendViaMessagingTool"
+  | "lastToolError"
+  | "lastAssistant"
+  | "toolMetas"
+  | "replayMetadata"
+>;
+
+export function resolveYieldDuringApprovedPlanInstruction(params: {
+  planModeActive?: boolean;
+  /** Latest session-entry approval state: "approved" / "edited" trigger this detector. */
+  planApproval?: string;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: PlanApprovedYieldAttempt;
+  /** 0 = first retry (standard tone), >=1 = firm */
+  retryAttemptIndex: number;
+}): string | null {
+  if (!params.planModeActive) {
+    return null;
+  }
+  if (params.planApproval !== "approved" && params.planApproval !== "edited") {
+    return null;
+  }
+  if (params.aborted || params.timedOut) {
+    return null;
+  }
+  if (!params.attempt.yieldDetected) {
+    return null;
+  }
+  if (params.attempt.clientToolCall) {
+    return null;
+  }
+  if (params.attempt.didSendDeterministicApprovalPrompt) {
+    return null;
+  }
+  if (params.attempt.didSendViaMessagingTool) {
+    return null;
+  }
+  if (params.attempt.lastToolError) {
+    return null;
+  }
+  if (params.attempt.replayMetadata.hadPotentialSideEffects) {
+    return null;
+  }
+
+  const stopReason = params.attempt.lastAssistant?.stopReason;
+  if (stopReason && stopReason !== "stop") {
+    return null;
+  }
+
+  // Yield-only or yield + update_plan only counts as "no progress."
+  // Any OTHER tool call this turn is treated as genuine main-lane work
+  // (reads / investigations / dry-runs are fine; we don't loop).
+  const didOtherWork = params.attempt.toolMetas.some(
+    (t) => t.toolName !== "sessions_yield" && t.toolName !== "update_plan",
+  );
+  if (didOtherWork) {
+    return null;
+  }
+
+  return params.retryAttemptIndex >= 1
+    ? PLAN_APPROVED_YIELD_RETRY_INSTRUCTION_FIRM
+    : PLAN_APPROVED_YIELD_RETRY_INSTRUCTION;
 }

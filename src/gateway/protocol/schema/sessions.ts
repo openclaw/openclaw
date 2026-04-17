@@ -217,6 +217,29 @@ export const SessionsPatchParamsSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    /**
+     * PR-8 follow-up: the runtime calls `sessions.patch` with
+     * `lastPlanSteps` after each `update_plan` tool call so the Control
+     * UI can rebuild the live plan-view sidebar after a hard refresh
+     * (in-memory UI state is lost otherwise). Persisted to
+     * `SessionEntry.planMode.lastPlanSteps` on the server; read by the
+     * UI on session subscription mount.
+     *
+     * Additive protocol change: older clients simply omit the field;
+     * older servers silently drop it (no breakage either direction).
+     */
+    lastPlanSteps: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            step: NonEmptyString,
+            status: NonEmptyString,
+            activeForm: Type.Optional(NonEmptyString),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
   },
   { additionalProperties: false },
 );

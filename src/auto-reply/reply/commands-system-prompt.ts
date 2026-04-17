@@ -156,6 +156,9 @@ export async function resolveCommandsSystemPromptBundle(
     runtimeInfo,
     sandboxInfo,
     memoryCitationsMode: params.cfg?.memory?.citations,
+    // PR-8 follow-up Round 2: GPT-5 family boot reorder.
+    modelProviderId: params.provider,
+    modelId: params.model,
   });
 
   return { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime };

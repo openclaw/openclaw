@@ -444,6 +444,19 @@ export type GatewaySessionRow = {
     updatedAt?: number;
     feedback?: string;
     rejectionCount?: number;
+    /**
+     * PR-8 follow-up Round 2: most-recent plan snapshot persisted by the
+     * runtime after each `update_plan` tool call. Lets the Control UI
+     * rebuild the live-plan sidebar after a hard refresh — without this,
+     * `latestPlanMarkdown` lives only in in-memory `@state()` and is
+     * lost on page reload.
+     */
+    lastPlanSteps?: Array<{
+      step: string;
+      status: string;
+      activeForm?: string;
+    }>;
+    lastPlanUpdatedAt?: number;
   };
 };
 

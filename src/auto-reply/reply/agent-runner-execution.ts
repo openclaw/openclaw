@@ -629,11 +629,19 @@ export async function runAgentTurnWithFallback(params: {
       params.sessionCtx.Provider,
   );
   if (params.sessionKey) {
+    // PR-8 follow-up: mirror session's plan-mode flag and current
+    // approval state onto the run context so spawn-time decisions
+    // (cleanup override, subagent tracking) and incomplete-turn
+    // detectors (yield-after-approval) can read them without a
+    // session-store round-trip.
+    const planModeEntry = params.getActiveSessionEntry()?.planMode;
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
       verboseLevel: params.resolvedVerboseLevel,
       isHeartbeat: params.isHeartbeat,
       isControlUiVisible: shouldSurfaceToControlUi,
+      inPlanMode: planModeEntry?.mode === "plan",
+      ...(planModeEntry?.approval ? { planApproval: planModeEntry.approval } : {}),
     });
   }
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
