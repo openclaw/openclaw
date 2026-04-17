@@ -102,6 +102,104 @@ function generateDetailsId(message: unknown, index: number): string {
   return `tool-${idString}-${index}`;
 }
 
+// Helper function to check if a path is already a gateway-routed path
+function isGatewayRoutedPath(path: string): boolean {
+  return path.startsWith('/__openclaw__/') || 
+         path.startsWith('/media/') ||
+         path.includes('/__openclaw__/assistant-media');
+}
+
+// Helper function to check if a path should be served via media server
+function shouldUseMediaServer(path: string): boolean {
+  // Only use media server for absolute Unix paths that are NOT gateway-routed
+  return path.startsWith('/') && 
+         !path.startsWith('//') && 
+         !isGatewayRoutedPath(path);
+}
+
+// Fixed isLocalAssistantAttachmentSource function
+function isLocalAssistantAttachmentSource(source: string): boolean {
+  const trimmed = source.trim();
+  
+  // Gateway-routed paths are NOT local attachments
+  if (isGatewayRoutedPath(trimmed)) {
+    return false;
+  }
+  
+  if (/^\/(?:__openclaw__|media)\//.test(trimmed)) {
+    return false;
+  }
+  
+  // For absolute Unix paths, only treat as local if they're not gateway-routed
+  // This prevents bypassing allowlist checks
+  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) {
+    return false;
+  }
+  
+  return (
+    trimmed.startsWith("file://") ||
+    trimmed.startsWith("~") ||
+    /^[a-zA-Z]:[\\/]/.test(trimmed)
+  );
+}
+
+// Fixed buildAssistantAttachmentUrl function
+function buildAssistantAttachmentUrl(
+  source: string,
+  basePath?: string,
+  authToken?: string | null,
+): string {
+  const decoded = source.startsWith('%2F') ? decodeURIComponent(source) : source;
+  
+  // Preserve already-routed gateway paths - don't rewrite them
+  if (isGatewayRoutedPath(decoded)) {
+    // Ensure it has the correct base path if needed
+    const normalizedBasePath = basePath && basePath !== "/" 
+      ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) 
+      : "";
+    if (normalizedBasePath && decoded.startsWith('/')) {
+      return `${normalizedBasePath}${decoded}`;
+    }
+    return decoded;
+  }
+  
+  // Handle media server URLs for absolute Unix paths (non-gateway)
+  if (shouldUseMediaServer(decoded)) {
+    return `http://localhost:18791${decoded}`;
+  }
+  
+  // For other sources that aren't local files, return as-is
+  if (!isLocalAssistantAttachmentSource(source)) {
+    return source;
+  }
+  
+  // Only use assistant-media for file://, ~, and Windows paths
+  const normalizedBasePath =
+    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
+  const params = new URLSearchParams({ source });
+  const normalizedToken = authToken?.trim();
+  if (normalizedToken) {
+    params.set("token", normalizedToken);
+  }
+  return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
+}
+
+// Fixed buildAssistantAttachmentMetaUrl function
+function buildAssistantAttachmentMetaUrl(
+  source: string,
+  basePath?: string,
+  authToken?: string | null,
+): string {
+  const attachmentUrl = buildAssistantAttachmentUrl(source, basePath, authToken);
+  // Don't add meta param for media server URLs or already-routed paths
+  if (attachmentUrl.startsWith('http://localhost:18791') || 
+      attachmentUrl.includes('/__openclaw__/assistant-media')) {
+    return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
+  }
+  return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
+}
+
+// Fixed extractImages function (only the relevant part showing the fix)
 function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
@@ -124,8 +222,14 @@ function extractImages(message: unknown): ImageBlock[] {
           images.push({ url, filename, httpUrl: undefined });
         } else if (typeof b.url === "string") {
           const urlValue = b.url;
-          // Handle absolute Unix paths - serve from media server
-          if (urlValue.startsWith("/") && !urlValue.startsWith("//")) {
+          
+          // Preserve gateway-routed paths - don't rewrite them
+          if (isGatewayRoutedPath(urlValue)) {
+            const filename = typeof b.filename === "string" ? b.filename : urlValue.split("/").pop();
+            images.push({ url: urlValue, filename, httpUrl: undefined });
+          }
+          // Handle absolute Unix paths (non-gateway) - serve from media server
+          else if (urlValue.startsWith("/") && !urlValue.startsWith("//")) {
             const mediaServerUrl = `http://localhost:18791${urlValue}`;
             const filename = typeof b.filename === "string" ? b.filename : urlValue.split("/").pop();
             images.push({ 
@@ -145,8 +249,17 @@ function extractImages(message: unknown): ImageBlock[] {
         const imageUrl = b.image_url as Record<string, unknown> | undefined;
         if (typeof imageUrl?.url === "string") {
           const urlValue = imageUrl.url;
-          // Handle absolute Unix paths - serve from media server
-          if (urlValue.startsWith("/") && !urlValue.startsWith("//")) {
+          
+          // Preserve gateway-routed paths - don't rewrite them
+          if (isGatewayRoutedPath(urlValue)) {
+            images.push({
+              url: urlValue,
+              filename: urlValue.split("/").pop(),
+              httpUrl: undefined,
+            });
+          }
+          // Handle absolute Unix paths (non-gateway) - serve from media server
+          else if (urlValue.startsWith("/") && !urlValue.startsWith("//")) {
             const mediaServerUrl = `http://localhost:18791${urlValue}`;
             images.push({
               url: mediaServerUrl,
@@ -936,21 +1049,6 @@ function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
   `;
 }
 
-function isLocalAssistantAttachmentSource(source: string): boolean {
-  const trimmed = source.trim();
-  if (/^\/(?:__openclaw__|media)\//.test(trimmed)) {
-    return false;
-  }
-  // Absolute Unix paths are served directly, not through assistant-media
-  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) {
-    return false;
-  }
-  return (
-    trimmed.startsWith("file://") ||
-    trimmed.startsWith("~") ||
-    /^[a-zA-Z]:[\\/]/.test(trimmed)
-  );
-}
 
 function normalizeLocalAttachmentPath(source: string): string | null {
   const trimmed = source.trim();
@@ -1028,41 +1126,6 @@ function isLocalAttachmentPreviewAllowed(
       )
     );
   });
-}
-
-function buildAssistantAttachmentUrl(
-  source: string,
-  basePath?: string,
-  authToken?: string | null,
-): string {
-  const decoded = source.startsWith('%2F') ? decodeURIComponent(source) : source;
-  if (decoded.startsWith('/') && !decoded.startsWith('//')) {
-    return `http://localhost:18791${decoded}`;
-  }
-  
-  // For other sources that aren't local files, return as-is
-  if (!isLocalAssistantAttachmentSource(source)) {
-    return source;
-  }
-  
-  // Only use assistant-media for file://, ~, and Windows paths
-  const normalizedBasePath =
-    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
-  const params = new URLSearchParams({ source });
-  const normalizedToken = authToken?.trim();
-  if (normalizedToken) {
-    params.set("token", normalizedToken);
-  }
-  return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
-}
-
-function buildAssistantAttachmentMetaUrl(
-  source: string,
-  basePath?: string,
-  authToken?: string | null,
-): string {
-  const attachmentUrl = buildAssistantAttachmentUrl(source, basePath, authToken);
-  return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
 }
 
 function resolveAssistantAttachmentAvailability(
