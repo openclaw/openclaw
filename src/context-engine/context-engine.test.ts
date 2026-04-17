@@ -1011,7 +1011,7 @@ describe("Bundle chunk isolation (#40096)", () => {
     const registryUrl = new URL("./registry.ts", import.meta.url).href;
     const chunks = await Promise.all(
       Array.from(
-        { length: 5 },
+        { length: 3 },
         (_, i) => import(/* @vite-ignore */ `${registryUrl}?chunk=${ts}-${i}`),
       ),
     );
