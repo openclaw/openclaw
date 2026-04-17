@@ -6,7 +6,10 @@ import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
 } from "../sessions/input-provenance.js";
-import { resolveLiveToolResultMaxChars } from "./pi-embedded-runner/tool-result-truncation.js";
+import {
+  resolveLiveToolResultMaxChars,
+  resolveToolResultDetailsPersistPolicy,
+} from "./pi-embedded-runner/tool-result-truncation.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
 export type GuardedSessionManager = SessionManager & {
@@ -85,6 +88,10 @@ export function guardSessionManager(
             agentId: opts.agentId,
           })
         : undefined,
+    toolResultDetailsPersist: resolveToolResultDetailsPersistPolicy({
+      cfg: opts?.config,
+      agentId: opts?.agentId,
+    }),
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
   (sessionManager as GuardedSessionManager).clearPendingToolResults = guard.clearPendingToolResults;

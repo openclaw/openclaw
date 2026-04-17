@@ -220,6 +220,77 @@ export function resolveLiveToolResultMaxChars(params: {
   return calculateMaxToolResultCharsWithCap(params.contextWindowTokens, configuredCap);
 }
 
+export type ToolResultDetailsPersistMode = "full" | "truncated" | "none";
+
+export const DEFAULT_TOOL_RESULT_DETAILS_PERSIST_MODE: ToolResultDetailsPersistMode = "full";
+export const DEFAULT_TOOL_RESULT_DETAILS_MAX_CHARS = 4_000;
+
+export type ToolResultDetailsPersistPolicy = {
+  mode: ToolResultDetailsPersistMode;
+  maxChars: number;
+};
+
+export function resolveToolResultDetailsPersistPolicy(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string | null;
+}): ToolResultDetailsPersistPolicy {
+  const limits = resolveAgentContextLimits(params.cfg, params.agentId);
+  const mode = limits?.toolResultDetailsPersist ?? DEFAULT_TOOL_RESULT_DETAILS_PERSIST_MODE;
+  const maxChars = Math.max(
+    0,
+    limits?.toolResultDetailsMaxChars ?? DEFAULT_TOOL_RESULT_DETAILS_MAX_CHARS,
+  );
+  return { mode, maxChars };
+}
+
+/**
+ * Apply the details-persistence policy to a toolResult message. Returns the
+ * same message reference when no change is needed (cheap fast path).
+ *
+ * Note: details never reaches the model prompt. This policy only governs what
+ * lands in the session jsonl, which is re-read on every chat.history load.
+ */
+export function applyToolResultDetailsPolicy(
+  msg: AgentMessage,
+  policy: ToolResultDetailsPersistPolicy,
+): AgentMessage {
+  if ((msg as { role?: string }).role !== "toolResult") {
+    return msg;
+  }
+  const withDetails = msg as AgentMessage & { details?: unknown };
+  if (policy.mode === "full") {
+    return msg;
+  }
+  if (withDetails.details === undefined) {
+    return msg;
+  }
+  if (policy.mode === "none") {
+    const { details: _omitted, ...rest } = withDetails;
+    return rest as AgentMessage;
+  }
+  // truncated
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(withDetails.details);
+  } catch {
+    // Circular or unserializable details — fall back to drop.
+    const { details: _omitted, ...rest } = withDetails;
+    return rest as AgentMessage;
+  }
+  if (serialized.length <= policy.maxChars) {
+    return msg;
+  }
+  const preview = serialized.slice(0, policy.maxChars);
+  return {
+    ...withDetails,
+    details: {
+      __truncated: true,
+      originalChars: serialized.length,
+      preview,
+    },
+  } as AgentMessage;
+}
+
 /**
  * Get the total character count of text content blocks in a tool result message.
  */

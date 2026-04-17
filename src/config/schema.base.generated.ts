@@ -3536,6 +3536,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Default max characters kept for a single live tool result before truncation. This affects both persisted live tool-result writes and overflow-recovery truncation heuristics.",
                   },
+                  toolResultDetailsPersist: {
+                    type: "string",
+                    enum: ["full", "truncated", "none"],
+                    title: "Default Tool Result Details Persistence",
+                    description:
+                      "How to persist the structured `details` field of tool results into the session transcript. `details` never reaches the model prompt, but it is re-read on every chat.history load, so verbose exec/browser payloads can dominate session I/O. 'full' keeps it verbatim (default, backwards compatible). 'truncated' JSON-serializes and caps to toolResultDetailsMaxChars. 'none' drops it entirely.",
+                  },
+                  toolResultDetailsMaxChars: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 250000,
+                    title: "Default Tool Result Details Max Chars",
+                    description:
+                      "Cap applied to the JSON serialization of tool-result `details` when toolResultDetailsPersist is 'truncated'. Beyond this cap, details is replaced by a marker object with originalChars and a truncated preview.",
+                  },
                   postCompactionMaxChars: {
                     type: "integer",
                     minimum: 1,
@@ -6359,6 +6374,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       title: "Agent Tool Result Max Chars",
                       description:
                         "Per-agent override for the live tool-result max character budget.",
+                    },
+                    toolResultDetailsPersist: {
+                      type: "string",
+                      enum: ["full", "truncated", "none"],
+                      title: "Agent Tool Result Details Persistence",
+                      description:
+                        "Per-agent override for how to persist tool-result `details` into the session transcript.",
+                    },
+                    toolResultDetailsMaxChars: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 250000,
+                      title: "Agent Tool Result Details Max Chars",
+                      description:
+                        "Per-agent override for the tool-result details serialization cap when persist mode is 'truncated'.",
                     },
                     postCompactionMaxChars: {
                       type: "integer",
@@ -23498,6 +23528,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Default max characters kept for a single live tool result before truncation. This affects both persisted live tool-result writes and overflow-recovery truncation heuristics.",
       tags: ["performance"],
     },
+    "agents.defaults.contextLimits.toolResultDetailsPersist": {
+      label: "Default Tool Result Details Persistence",
+      help: "How to persist the structured `details` field of tool results into the session transcript. `details` never reaches the model prompt, but it is re-read on every chat.history load, so verbose exec/browser payloads can dominate session I/O. 'full' keeps it verbatim (default, backwards compatible). 'truncated' JSON-serializes and caps to toolResultDetailsMaxChars. 'none' drops it entirely.",
+      tags: ["performance"],
+    },
+    "agents.defaults.contextLimits.toolResultDetailsMaxChars": {
+      label: "Default Tool Result Details Max Chars",
+      help: "Cap applied to the JSON serialization of tool-result `details` when toolResultDetailsPersist is 'truncated'. Beyond this cap, details is replaced by a marker object with originalChars and a truncated preview.",
+      tags: ["performance"],
+    },
     "agents.defaults.contextLimits.postCompactionMaxChars": {
       label: "Default Post-compaction Max Chars",
       help: "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
@@ -23551,6 +23591,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.list[].contextLimits.toolResultMaxChars": {
       label: "Agent Tool Result Max Chars",
       help: "Per-agent override for the live tool-result max character budget.",
+      tags: ["performance"],
+    },
+    "agents.list[].contextLimits.toolResultDetailsPersist": {
+      label: "Agent Tool Result Details Persistence",
+      help: "Per-agent override for how to persist tool-result `details` into the session transcript.",
+      tags: ["performance"],
+    },
+    "agents.list[].contextLimits.toolResultDetailsMaxChars": {
+      label: "Agent Tool Result Details Max Chars",
+      help: "Per-agent override for the tool-result details serialization cap when persist mode is 'truncated'.",
       tags: ["performance"],
     },
     "agents.list[].contextLimits.postCompactionMaxChars": {

@@ -204,6 +204,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Default memory_get line window used when requests omit lines. This controls how many source lines are selected before the max-char cap is applied.",
   "agents.defaults.contextLimits.toolResultMaxChars":
     "Default max characters kept for a single live tool result before truncation. This affects both persisted live tool-result writes and overflow-recovery truncation heuristics.",
+  "agents.defaults.contextLimits.toolResultDetailsPersist":
+    "How to persist the structured `details` field of tool results into the session transcript. `details` never reaches the model prompt, but it is re-read on every chat.history load, so verbose exec/browser payloads can dominate session I/O. 'full' keeps it verbatim (default, backwards compatible). 'truncated' JSON-serializes and caps to toolResultDetailsMaxChars. 'none' drops it entirely.",
+  "agents.defaults.contextLimits.toolResultDetailsMaxChars":
+    "Cap applied to the JSON serialization of tool-result `details` when toolResultDetailsPersist is 'truncated'. Beyond this cap, details is replaced by a marker object with originalChars and a truncated preview.",
   "agents.defaults.contextLimits.postCompactionMaxChars":
     "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
   "agents.list":
@@ -220,6 +224,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-agent override for the default memory_get line window when lines is omitted.",
   "agents.list[].contextLimits.toolResultMaxChars":
     "Per-agent override for the live tool-result max character budget.",
+  "agents.list[].contextLimits.toolResultDetailsPersist":
+    "Per-agent override for how to persist tool-result `details` into the session transcript.",
+  "agents.list[].contextLimits.toolResultDetailsMaxChars":
+    "Per-agent override for the tool-result details serialization cap when persist mode is 'truncated'.",
   "agents.list[].contextLimits.postCompactionMaxChars":
     "Per-agent override for the post-compaction AGENTS.md excerpt budget.",
   "agents.list[].thinkingDefault":
