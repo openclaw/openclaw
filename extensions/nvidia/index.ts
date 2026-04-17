@@ -1,10 +1,16 @@
 import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildNvidiaProvider } from "./provider-catalog.js";
+import { buildNvidiaProvider, NVIDIA_CATALOGED_MODELS } from "./provider-catalog.js";
 
 const PROVIDER_ID = "nvidia";
 const NVIDIA_DEFAULT_MODEL_REF = "nvidia/nemotron-3-super-120b-a12b";
+
+type NvidiaPluginConfig = {
+  discovery?: {
+    enabled?: boolean;
+  };
+};
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -47,7 +53,29 @@ export default defineSingleProviderPluginEntry({
       }),
     ],
     catalog: {
-      buildProvider: buildNvidiaProvider,
+      order: "simple",
+      run: async (ctx) => {
+        const pluginEntry = ctx.config?.plugins?.entries?.[PROVIDER_ID];
+        const pluginConfig =
+          pluginEntry && typeof pluginEntry === "object" && pluginEntry.config
+            ? (pluginEntry.config as NvidiaPluginConfig)
+            : undefined;
+        const discoveryEnabled =
+          pluginConfig?.discovery?.enabled ?? ctx.config?.models?.nvidiaDiscovery?.enabled;
+        if (discoveryEnabled === false) {
+          return null;
+        }
+        const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
+        if (!apiKey) {
+          return null;
+        }
+        return {
+          provider: {
+            ...(await buildNvidiaProvider(discoveryApiKey)),
+            apiKey,
+          },
+        };
+      },
     },
     augmentModelCatalog: ({ config }) =>
       readConfiguredProviderCatalogEntries({
@@ -56,5 +84,35 @@ export default defineSingleProviderPluginEntry({
       }),
     matchesContextOverflowError: ({ errorMessage }) =>
       /\b(?:nvidia|nim)\b.*(?:input.*too long|context.*exceed)/i.test(errorMessage),
+    resolveDynamicModel: (ctx) => {
+      const modelId = ctx.modelId.trim();
+      const catalogEntry = NVIDIA_CATALOGED_MODELS.find((m) => m.id === modelId);
+      if (catalogEntry) {
+        return {
+          id: catalogEntry.id,
+          name: catalogEntry.name,
+          api: "openai-completions",
+          provider: PROVIDER_ID,
+          baseUrl: "https://integrate.api.nvidia.com/v1",
+          reasoning: catalogEntry.reasoning,
+          input: catalogEntry.input,
+          cost: catalogEntry.cost,
+          contextWindow: catalogEntry.contextWindow,
+          maxTokens: catalogEntry.maxTokens,
+        };
+      }
+      return {
+        id: modelId,
+        name: modelId,
+        api: "openai-completions",
+        provider: PROVIDER_ID,
+        baseUrl: "https://integrate.api.nvidia.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+      };
+    },
   },
 });

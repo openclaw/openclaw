@@ -1,164 +1,27 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  buildNvidiaModelDefinition,
+  discoverNvidiaModels,
+  NVIDIA_BASE_URL,
+  NVIDIA_CATALOGED_MODELS,
+} from "./models.js";
 
-const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
-const NVIDIA_DEFAULT_MODEL_ID = "nvidia/nemotron-3-super-120b-a12b";
-const NVIDIA_DEFAULT_MAX_TOKENS = 8192;
-const NVIDIA_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
+export {
+  buildNvidiaModelDefinition,
+  discoverNvidiaModels,
+  NVIDIA_BASE_URL,
+  NVIDIA_CATALOGED_MODELS,
+} from "./models.js";
 
-export function buildNvidiaProvider(): ModelProviderConfig {
+export async function buildNvidiaProvider(discoveryApiKey?: string): Promise<ModelProviderConfig> {
+  const resolvedSecret = discoveryApiKey?.trim() ?? "";
+  const models =
+    resolvedSecret !== ""
+      ? await discoverNvidiaModels(resolvedSecret)
+      : NVIDIA_CATALOGED_MODELS.map(buildNvidiaModelDefinition);
   return {
     baseUrl: NVIDIA_BASE_URL,
     api: "openai-completions",
-    models: [
-      {
-        id: NVIDIA_DEFAULT_MODEL_ID,
-        name: "NVIDIA Nemotron 3 Super 120B",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 262144,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "nvidia/nemotron-3-8b-instruct",
-        name: "NVIDIA Nemotron 3 8B Instruct",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 131072,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "nvidia/nemotron-4-340b-instruct",
-        name: "NVIDIA Nemotron 4 340B Instruct",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 131072,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "meta/llama-3.3-70b-instruct",
-        name: "Meta Llama 3.3 70B Instruct",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 131072,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "meta/llama-4-maverick-17b-128e-instruct",
-        name: "Meta Llama 4 Maverick 17B 128E Instruct",
-        reasoning: false,
-        input: ["text", "image"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 131072,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "meta/llama-4-scout-17b-16e-instruct",
-        name: "Meta Llama 4 Scout 17B 16E Instruct",
-        reasoning: false,
-        input: ["text", "image"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 131072,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "mistralai/mistral-small-3.2-24b-instruct",
-        name: "Mistral Small 3.2 24B Instruct",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 131072,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "mistralai/mixtral-8x22b-instruct-v0.1",
-        name: "Mistral Mixtral 8x22B Instruct",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 65536,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "google/gemma-3-27b-it",
-        name: "Google Gemma 3 27B",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 131072,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "microsoft/phi-4",
-        name: "Microsoft Phi-4",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 16384,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "moonshotai/kimi-k2.5",
-        name: "Kimi K2.5",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 262144,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "minimaxai/minimax-m2.5",
-        name: "MiniMax M2.5",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 196608,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "z-ai/glm5",
-        name: "GLM-5",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 202752,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "qwen/qwen3-235b-a22b-2507",
-        name: "Qwen3 235B A22B",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 131072,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "qwen/qwq-32b",
-        name: "Qwen QWQ 32B",
-        reasoning: true,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 131072,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "deepseek-ai/deepseek-r1-0528",
-        name: "DeepSeek R1 0528",
-        reasoning: true,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 131072,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-    ],
+    models,
   };
 }
