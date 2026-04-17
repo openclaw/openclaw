@@ -27,6 +27,80 @@ import type {
   GatewayServiceRestartResult,
 } from "./service-types.js";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PowerShell helpers (replace schtasks CLI with PowerShell ScheduledTasks API)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function isRunningAsAdmin(): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  try {
+    const result = spawnSync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-Command",
+        "([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)",
+      ],
+      { encoding: "utf8", timeout: 5_000, windowsHide: true },
+    );
+    return result.stdout?.trim() === "True";
+  } catch {
+    return false;
+  }
+}
+
+interface PowerShellResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+async function execPowerShell(script: string, timeoutMs = 15_000): Promise<PowerShellResult> {
+  return new Promise((resolve) => {
+    const child = spawn(
+      "powershell",
+      ["-NoProfile", "-Command", script],
+      { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk;
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk;
+    });
+    child.on("close", (code) => {
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
+    child.on("error", (err: Error) => {
+      resolve({ code: 1, stdout: "", stderr: String(err) });
+    });
+    setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        /* ignore */
+      }
+      resolve({ code: 124, stdout, stderr: "PowerShell timed out after 15s" });
+    }, timeoutMs);
+  });
+}
+
+async function assertPowerShellScheduledTasksAvailable(): Promise<void> {
+  const res = await execPowerShell("Get-Command Register-ScheduledTask -Syntax");
+  if (res.code === 0) {
+    return;
+  }
+  throw new Error(
+    `PowerShell ScheduledTasks module unavailable: ${res.stderr || "unknown error"}`.trim(),
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function resolveTaskName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
   if (override) {
@@ -300,8 +374,22 @@ async function isStartupEntryInstalled(env: GatewayServiceEnv): Promise<boolean>
 }
 
 async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise<boolean> {
-  const taskName = resolveTaskName(env);
-  const res = await execSchtasks(["/Query", "/TN", taskName]).catch(() => ({
+  // Try PowerShell first (supports newer Task Scheduler API)
+  if (process.platform === "win32") {
+    try {
+      await assertPowerShellScheduledTasksAvailable();
+      const taskName = resolveTaskName(env);
+      const psScript = `Get-ScheduledTask -TaskName '${taskName.replace(/'/g, "''")}' -ErrorAction Stop | ConvertTo-Json -Compress`;
+      const res = await execPowerShell(psScript);
+      if (res.code === 0 && res.stdout.trim()) {
+        return true;
+      }
+    } catch {
+      /* fall through to schtasks */
+    }
+  }
+  // Fall back to schtasks
+  const res = await execSchtasks(["/Query", "/TN", resolveTaskName(env)]).catch(() => ({
     code: 1,
     stdout: "",
     stderr: "",
@@ -578,7 +666,12 @@ async function writeScheduledTaskScript({
   scriptPath: string;
   taskDescription: string;
 }> {
-  await assertSchtasksAvailable();
+  // PowerShell doesn't require schtasks to be available; check module availability
+  if (process.platform === "win32") {
+    await assertPowerShellScheduledTasksAvailable().catch(() => {
+      /* ignore; will fail at activate time */
+    });
+  }
   const scriptPath = resolveTaskScriptPath(env);
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
   const taskDescription = resolveGatewayServiceDescription({ env, environment, description });
@@ -613,6 +706,37 @@ async function updateExistingScheduledTask(params: {
   if (!(await isRegisteredScheduledTask(params.env))) {
     return false;
   }
+
+  // Try PowerShell first
+  if (process.platform === "win32") {
+    try {
+      await assertPowerShellScheduledTasksAvailable();
+      const safePath = params.scriptPath.replace(/'/g, "''");
+      const safeName = params.taskName.replace(/'/g, "''");
+      const psScript = [
+        `$task = Get-ScheduledTask -TaskName '${safeName}' -ErrorAction Stop`,
+        `$task.Actions = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/d /s /c ''${safePath}'''`,
+        `$task | Register-ScheduledTask -TaskName '${safeName}' -Force -ErrorAction Stop`,
+      ].join("; ");
+      const updateRes = await execPowerShell(psScript);
+      if (updateRes.code === 0) {
+        await runScheduledTaskOrThrow({ taskName: params.taskName, env: params.env, scriptPath: params.scriptPath });
+        writeFormattedLines(
+          params.stdout,
+          [
+            { label: "Updated Scheduled Task", value: params.taskName },
+            { label: "Task script", value: params.scriptPath },
+          ],
+          { leadingBlankLine: true },
+        );
+        return true;
+      }
+    } catch {
+      /* fall through to schtasks */
+    }
+  }
+
+  // Fall back to schtasks /Change
   const change = await execSchtasks([
     "/Change",
     "/TN",
@@ -775,6 +899,28 @@ async function runScheduledTaskOrThrow(params: {
   env: GatewayServiceEnv;
   scriptPath: string;
 }): Promise<void> {
+  // Try PowerShell first
+  if (process.platform === "win32") {
+    try {
+      await assertPowerShellScheduledTasksAvailable();
+      const safeName = params.taskName.replace(/'/g, "''");
+      const psScript = `Start-ScheduledTask -TaskName '${safeName}' -ErrorAction Stop`;
+      const runRes = await execPowerShell(psScript);
+      if (runRes.code === 0) {
+        if (
+          !(await shouldFallbackScheduledTaskLaunch({ env: params.env, scriptPath: params.scriptPath }))
+        ) {
+          return;
+        }
+        launchFallbackTaskScript(params.scriptPath);
+        return;
+      }
+    } catch {
+      /* fall through to schtasks */
+    }
+  }
+
+  // Fall back to schtasks /Run
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
@@ -794,14 +940,77 @@ async function activateScheduledTask(params: {
   description?: string;
 }) {
   const taskDescription = params.description ?? "OpenClaw Gateway";
-
   const taskName = resolveTaskName(params.env);
-  const quotedScript = quoteSchtasksArg(params.scriptPath);
+  const scriptPath = params.scriptPath;
+  const safeScriptPath = scriptPath.replace(/'/g, "''");
+  const safeTaskName = taskName.replace(/'/g, "''");
+  const safeTaskDesc = taskDescription.replace(/'/g, "''");
 
-  if (await updateExistingScheduledTask({ ...params, taskName, quotedScript })) {
+  // ── Administrator privilege check ────────────────────────────────────────
+  // Register-ScheduledTask requires admin privileges.
+  // If not admin, throw an explicit error instead of silently falling back to Startup folder.
+  if (process.platform === "win32" && !isRunningAsAdmin()) {
+    throw new Error(
+      `Administrator privileges required to register a Windows Scheduled Task for auto-start.\n` +
+        `Please run the command with administrator privileges and try again.\n` +
+        `(Register-ScheduledTask requires elevation; falling back to Startup folder is disabled for safety.)`,
+    );
+  }
+
+  // ── Try updating existing task ──────────────────────────────────────────────
+  if (await updateExistingScheduledTask({ ...params, taskName, quotedScript: quoteSchtasksArg(scriptPath), scriptPath })) {
     return;
   }
 
+  // ── Use PowerShell Register-ScheduledTask as primary method ─────────────────
+  // Key advantages over schtasks:
+  //   - ExecutionTimeLimit 0  → disables 72-hour auto-stop
+  //   - AllowStartIfOnBatteries + DontStopIfGoingOnBatteries → allow battery power
+  //   - No need for /I idle-time parameter
+  if (process.platform === "win32") {
+    try {
+      await assertPowerShellScheduledTasksAvailable();
+      const psScript = [
+        `$trigger = New-ScheduledTaskTrigger -AtLogOn`,
+        `$action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/d /s /c ''${safeScriptPath}'''`,
+        `$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0 -StartWhenAvailable`,
+        `$principal = New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -LogonType Interactive -RunLevel Limited`,
+        `Register-ScheduledTask -TaskName '${safeTaskName}' -Trigger $trigger -Action $action -Settings $settings -Principal $principal -Description '${safeTaskDesc}' -Force`,
+        `Start-ScheduledTask -TaskName '${safeTaskName}'`,
+      ].join("; ");
+      const createRes = await execPowerShell(psScript);
+      if (createRes.code === 0) {
+        writeFormattedLines(
+          params.stdout,
+          [
+            { label: "Installed Scheduled Task (PowerShell)", value: taskName },
+            { label: "Task script", value: scriptPath },
+          ],
+          { leadingBlankLine: true },
+        );
+        return;
+      }
+      // Check if it was an access-denied error (e.g., elevation lost)
+      const detail = createRes.stderr || createRes.stdout;
+      if (/access is denied|permissiondenied|0x80070005/i.test(detail)) {
+        throw new Error(
+          `Register-ScheduledTask failed (access denied): ${detail}\n` +
+            `Administrator privileges may have been revoked. Please re-run with administrator privileges.`,
+        );
+      }
+      // Non-privilege error — fall through to schtasks
+    } catch (err) {
+      // Re-throw structured admin-privilege errors
+      if (err instanceof Error && err.message?.includes("Administrator privileges")) {
+        throw err;
+      }
+      // Other errors (PowerShell unavailable, etc.) — fall through to schtasks
+    }
+  }
+
+  // ── Fall back to schtasks (only when PowerShell module is unavailable) ───────
+  await assertSchtasksAvailable();
+  const quotedScript = quoteSchtasksArg(scriptPath);
   const baseArgs = [
     "/Create",
     "/F",
@@ -813,6 +1022,8 @@ async function activateScheduledTask(params: {
     taskName,
     "/TR",
     quotedScript,
+    "/I",
+    "0", // Disable idle-wait condition
   ];
   const taskUser = resolveTaskUser(params.env);
   let create = await execSchtasks(
@@ -828,15 +1039,15 @@ async function activateScheduledTask(params: {
       await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
       const launcher = buildStartupLauncherScript({
         description: taskDescription,
-        scriptPath: params.scriptPath,
+        scriptPath,
       });
       await fs.writeFile(startupEntryPath, launcher, "utf8");
-      launchFallbackTaskScript(params.scriptPath);
+      launchFallbackTaskScript(scriptPath);
       writeFormattedLines(
         params.stdout,
         [
           { label: "Installed Windows login item", value: startupEntryPath },
-          { label: "Task script", value: params.scriptPath },
+          { label: "Task script", value: scriptPath },
         ],
         { leadingBlankLine: true },
       );
@@ -848,14 +1059,14 @@ async function activateScheduledTask(params: {
   await runScheduledTaskOrThrow({
     taskName,
     env: params.env,
-    scriptPath: params.scriptPath,
+    scriptPath,
   });
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   writeFormattedLines(
     params.stdout,
     [
       { label: "Installed Scheduled Task", value: taskName },
-      { label: "Task script", value: params.scriptPath },
+      { label: "Task script", value: scriptPath },
     ],
     { leadingBlankLine: true },
   );
@@ -878,11 +1089,32 @@ export async function uninstallScheduledTask({
   env,
   stdout,
 }: GatewayServiceManageArgs): Promise<void> {
-  await assertSchtasksAvailable();
   const taskName = resolveTaskName(env);
+
+  // Try PowerShell first
+  if (process.platform === "win32") {
+    try {
+      await assertPowerShellScheduledTasksAvailable();
+      const safeName = taskName.replace(/'/g, "''");
+      const psScript = `Unregister-ScheduledTask -TaskName '${safeName}' -Confirm:$false -ErrorAction Stop`;
+      const psRes = await execPowerShell(psScript);
+      if (psRes.code === 0) {
+        stdout.write(`${formatLine("Removed Scheduled Task (PowerShell)", taskName)}\n`);
+      }
+    } catch {
+      /* schtasks fallback */
+    }
+  }
+
+  // Fall back to schtasks /Delete
+  try {
+    await assertSchtasksAvailable();
+  } catch {
+    /* schtasks unavailable */
+  }
   const taskInstalled = await isRegisteredScheduledTask(env).catch(() => false);
   if (taskInstalled) {
-    await execSchtasks(["/Delete", "/F", "/TN", taskName]);
+    await execSchtasks(["/Delete", "/F", "/TN", taskName]).catch(() => {/* ignore */});
   }
 
   const startupEntryPath = resolveStartupEntryPath(env);
@@ -923,6 +1155,38 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
     }
   }
   const taskName = resolveTaskName(effectiveEnv);
+
+  // Try PowerShell first
+  if (process.platform === "win32") {
+    try {
+      await assertPowerShellScheduledTasksAvailable();
+      const safeName = taskName.replace(/'/g, "''");
+      const psRes = await execPowerShell(`Stop-ScheduledTask -TaskName '${safeName}' -ErrorAction Stop`);
+      if (psRes.code === 0) {
+        writeFormattedLines(stdout, [{ label: "Stopped Scheduled Task (PowerShell)", value: taskName }], {
+          leadingBlankLine: true,
+        });
+        const stopPort = await resolveScheduledTaskPort(effectiveEnv);
+        await terminateScheduledTaskGatewayListeners(effectiveEnv);
+        await terminateInstalledStartupRuntime(effectiveEnv);
+        if (stopPort) {
+          const released = await waitForGatewayPortRelease(stopPort);
+          if (!released) {
+            await terminateBusyPortListeners(stopPort);
+            const releasedAfterForce = await waitForGatewayPortRelease(stopPort, 2_000);
+            if (!releasedAfterForce) {
+              throw new Error(`gateway port ${stopPort} is still busy after stop`);
+            }
+          }
+        }
+        return;
+      }
+    } catch {
+      /* fall through to schtasks */
+    }
+  }
+
+  // Fall back to schtasks /End
   const res = await execSchtasks(["/End", "/TN", taskName]);
   if (res.code !== 0 && !isTaskNotRunning(res)) {
     throw new Error(`schtasks end failed: ${res.stderr || res.stdout}`.trim());
@@ -962,7 +1226,22 @@ export async function restartScheduledTask({
     }
   }
   const taskName = resolveTaskName(effectiveEnv);
-  await execSchtasks(["/End", "/TN", taskName]);
+
+  // Try PowerShell Stop + Start
+  if (process.platform === "win32") {
+    try {
+      await assertPowerShellScheduledTasksAvailable();
+      const safeName = taskName.replace(/'/g, "''");
+      await execPowerShell(`Stop-ScheduledTask -TaskName '${safeName}' -ErrorAction Stop`).catch(
+        () => {/* ignore stop errors */},
+      );
+    } catch {
+      /* fall through to schtasks End */
+    }
+  } else {
+    await execSchtasks(["/End", "/TN", taskName]).catch(() => {/* ignore */});
+  }
+
   const restartPort = await resolveScheduledTaskPort(effectiveEnv);
   await terminateScheduledTaskGatewayListeners(effectiveEnv);
   await terminateInstalledStartupRuntime(effectiveEnv);
@@ -976,6 +1255,7 @@ export async function restartScheduledTask({
       }
     }
   }
+
   await runScheduledTaskOrThrow({
     taskName,
     env: effectiveEnv,
@@ -996,6 +1276,51 @@ export async function isScheduledTaskInstalled(args: GatewayServiceEnvArgs): Pro
 export async function readScheduledTaskRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
 ): Promise<GatewayServiceRuntime> {
+  // Try PowerShell first
+  if (process.platform === "win32") {
+    try {
+      await assertPowerShellScheduledTasksAvailable();
+      const taskName = resolveTaskName(env);
+      const safeName = taskName.replace(/'/g, "''");
+      const psScript = [
+        `$task = Get-ScheduledTask -TaskName '${safeName}' -ErrorAction Stop`,
+        `$info = Get-ScheduledTaskInfo -TaskName '${safeName}' -ErrorAction Stop`,
+        `@{$taskState=$task.State;$lastRunTime=$info.LastRunTime;$lastResult=$info.LastTaskResult;$nextRunTime=$info.NextRunTime} | ConvertTo-Json -Compress`,
+      ].join("; ");
+      const res = await execPowerShell(psScript);
+      if (res.code === 0 && res.stdout.trim()) {
+        try {
+          const parsed = JSON.parse(res.stdout.trim());
+          const normalizedResult = normalizeTaskResultCode(String(parsed.lastResult ?? ""));
+          const derived =
+            normalizedResult != null
+              ? RUNNING_RESULT_CODES.has(normalizedResult)
+                ? { status: "running" as const }
+                : {
+                    status: "stopped" as const,
+                    detail: `Task Last Run Result=${parsed.lastResult}; treating as not running.`,
+                  }
+              : parsed.taskState === "Running"
+                ? { status: "running" as const }
+                : { status: "unknown" as const, detail: UNKNOWN_STATUS_DETAIL };
+          return {
+            status: derived.status,
+            state: parsed.taskState,
+            lastRunTime: parsed.lastRunTime,
+            lastRunResult: parsed.lastResult,
+            nextRunTime: parsed.nextRunTime,
+            ...(derived.detail ? { detail: derived.detail } : {}),
+          };
+        } catch {
+          /* JSON parse failed */
+        }
+      }
+    } catch {
+      /* PowerShell failed, fall through to schtasks */
+    }
+  }
+
+  // Fall back to schtasks
   try {
     await assertSchtasksAvailable();
   } catch (err) {
