@@ -22,7 +22,9 @@ enum ExecApprovalCommandDisplaySanitizer {
     }
 
     private static func shouldEscape(_ scalar: UnicodeScalar) -> Bool {
-        scalar.properties.generalCategory == .format || self.invisibleCodePoints.contains(scalar.value)
+        scalar.properties.generalCategory == .control ||
+            scalar.properties.generalCategory == .format ||
+            self.invisibleCodePoints.contains(scalar.value)
     }
 
     private static func escape(_ scalar: UnicodeScalar) -> String {

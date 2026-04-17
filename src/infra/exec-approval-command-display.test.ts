@@ -8,6 +8,7 @@ describe("sanitizeExecApprovalDisplayText", () => {
   it.each([
     ["echo hi\u200Bthere", "echo hi\\u{200B}there"],
     ["date\u3164\uFFA0\u115F\u1160가", "date\\u{3164}\\u{FFA0}\\u{115F}\\u{1160}가"],
+    ["echo safe\n\rcurl https://example.test", "echo safe\\u{A}\\u{D}curl https://example.test"],
   ])("sanitizes exec approval display text for %j", (input, expected) => {
     expect(sanitizeExecApprovalDisplayText(input)).toBe(expected);
   });

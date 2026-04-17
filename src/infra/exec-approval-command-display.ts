@@ -1,8 +1,8 @@
 import { redactSensitiveText } from "../logging/redact.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 
-// Escape invisible characters that can spoof approval prompts in common UIs.
-const EXEC_APPROVAL_INVISIBLE_CHAR_REGEX = /[\p{Cf}\u115F\u1160\u3164\uFFA0]/gu;
+// Escape invisible characters and control characters that can spoof approval prompts in common UIs.
+const EXEC_APPROVAL_INVISIBLE_CHAR_REGEX = /[\p{Cc}\p{Cf}\u115F\u1160\u3164\uFFA0]/gu;
 
 function formatCodePointEscape(char: string): string {
   return `\\u{${char.codePointAt(0)?.toString(16).toUpperCase() ?? "FFFD"}}`;
