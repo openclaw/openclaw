@@ -52,9 +52,16 @@ Carefully consider the reversibility and blast radius of actions. For actions th
  * The result looks like what `--append-system-prompt` produces in the CLI:
  * [CC base prompt] + separator + [custom instructions]
  */
+/**
+ * Max characters of OpenClaw content to append. The subscription plan has
+ * a per-request input token limit. Dense technical content (markdown, code,
+ * URLs) tokenizes at ~3-4 chars/token, so 8K chars ≈ 2-3K tokens which
+ * leaves room for tool schemas and messages.
+ */
+const MAX_APPENDED_CHARS = 8000;
+
 export function wrapForSubscription(openClawPrompt: string): string {
-  // Strip any existing CC prefix from the OpenClaw prompt since we're
-  // providing our own. Also strip the anti-CC identity lines.
+  // Strip any existing CC prefix and anti-CC identity lines.
   let cleaned = openClawPrompt
     .replace(/You are Claude Code, Anthropic's official CLI for Claude\.\s*/g, "")
     .replace(/You are NOT Claude Code\.[^\n]*/g, "")
@@ -62,6 +69,17 @@ export function wrapForSubscription(openClawPrompt: string): string {
     .replace(/You are OpenClaw\./g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+
+  // Truncate to stay within the subscription plan's input token budget.
+  // Cut at a section boundary (## heading) to avoid splitting mid-paragraph.
+  if (cleaned.length > MAX_APPENDED_CHARS) {
+    const truncated = cleaned.substring(0, MAX_APPENDED_CHARS);
+    const lastSection = truncated.lastIndexOf("\n## ");
+    cleaned =
+      lastSection > MAX_APPENDED_CHARS * 0.5
+        ? truncated.substring(0, lastSection).trim()
+        : truncated.trim();
+  }
 
   return `${CC_BASE_PROMPT}\n\n# Session-specific guidance\n\n${cleaned}`;
 }
