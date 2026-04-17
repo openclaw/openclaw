@@ -65,9 +65,18 @@ vi.mock("./doctor.js", () => ({
 // credential files; it is slow and can pollute test state. Stub it to a no-op
 // so the suite only exercises in-repo auth-profile logic.
 vi.mock("./external-cli-sync.js", () => ({
-  readManagedExternalCliCredential: () => null,
+  readExternalCliBootstrapCredential: () => null,
   resolveExternalCliAuthProfiles: () => [],
   areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
+  hasUsableOAuthCredential: (credential: { access?: string; expires?: number } | undefined) =>
+    Boolean(
+      credential &&
+      typeof credential.access === "string" &&
+      credential.access.length > 0 &&
+      typeof credential.expires === "number" &&
+      Number.isFinite(credential.expires) &&
+      Date.now() < credential.expires,
+    ),
 }));
 
 function createExpiredOauthStore(params: {

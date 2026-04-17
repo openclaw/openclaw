@@ -27,7 +27,8 @@ import { formatAuthDoctorHint } from "./doctor.js";
 import { resolveEffectiveOAuthCredential } from "./effective-oauth.js";
 import {
   areOAuthCredentialsEquivalent,
-  readManagedExternalCliCredential,
+  hasUsableOAuthCredential,
+  readExternalCliBootstrapCredential,
   shouldReplaceStoredOAuthCredential,
 } from "./external-cli-sync.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
@@ -161,10 +162,11 @@ async function loadFreshStoredOAuthCredential(params: {
 }): Promise<OAuthCredential | null> {
   const reloadedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
   const reloaded = reloadedStore.profiles[params.profileId];
-  if (reloaded?.type !== "oauth" || reloaded.provider !== params.provider) {
-    return null;
-  }
-  if (!Number.isFinite(reloaded.expires) || Date.now() >= reloaded.expires) {
+  if (
+    reloaded?.type !== "oauth" ||
+    reloaded.provider !== params.provider ||
+    !hasUsableOAuthCredential(reloaded)
+  ) {
     return null;
   }
   if (
@@ -557,7 +559,7 @@ async function doRefreshOAuthTokenWithLock(params: {
         return null;
       }
 
-      if (Date.now() < cred.expires) {
+      if (hasUsableOAuthCredential(cred)) {
         return {
           apiKey: await buildOAuthApiKey(cred.provider, cred),
           newCredentials: cred,
@@ -577,8 +579,7 @@ async function doRefreshOAuthTokenWithLock(params: {
           if (
             mainCred?.type === "oauth" &&
             mainCred.provider === cred.provider &&
-            Number.isFinite(mainCred.expires) &&
-            Date.now() < mainCred.expires &&
+            hasUsableOAuthCredential(mainCred) &&
             // Defense-in-depth identity gate. Tolerates the pure upgrade
             // case (sub predates identity capture) but refuses positive
             // mismatch, identity regression, and non-overlapping fields.
@@ -598,8 +599,7 @@ async function doRefreshOAuthTokenWithLock(params: {
           } else if (
             mainCred?.type === "oauth" &&
             mainCred.provider === cred.provider &&
-            Number.isFinite(mainCred.expires) &&
-            Date.now() < mainCred.expires &&
+            hasUsableOAuthCredential(mainCred) &&
             !isSafeToCopyOAuthIdentity(cred, mainCred)
           ) {
             // Main has fresh creds but they belong to a DIFFERENT account —
@@ -618,7 +618,7 @@ async function doRefreshOAuthTokenWithLock(params: {
         }
       }
 
-      const externallyManaged = readManagedExternalCliCredential({
+      const externallyManaged = readExternalCliBootstrapCredential({
         profileId: params.profileId,
         credential: cred,
       });
@@ -630,7 +630,7 @@ async function doRefreshOAuthTokenWithLock(params: {
           store.profiles[params.profileId] = externallyManaged;
           saveAuthProfileStore(store, params.agentDir);
         }
-        if (Date.now() < externallyManaged.expires) {
+        if (hasUsableOAuthCredential(externallyManaged)) {
           return {
             apiKey: await buildOAuthApiKey(externallyManaged.provider, externallyManaged),
             newCredentials: externallyManaged,
@@ -752,7 +752,7 @@ async function tryResolveOAuthProfile(
     credential: cred,
   });
 
-  if (Date.now() < effectiveCred.expires) {
+  if (hasUsableOAuthCredential(effectiveCred)) {
     return await buildOAuthProfileResult({
       provider: effectiveCred.provider,
       credentials: effectiveCred,
@@ -908,7 +908,7 @@ export async function resolveApiKeyForProfile(
     credential: oauthCred,
   });
 
-  if (Date.now() < effectiveOAuthCred.expires) {
+  if (hasUsableOAuthCredential(effectiveOAuthCred)) {
     return await buildOAuthProfileResult({
       provider: effectiveOAuthCred.provider,
       credentials: effectiveOAuthCred,
@@ -933,7 +933,7 @@ export async function resolveApiKeyForProfile(
   } catch (error) {
     const refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
     const refreshed = refreshedStore.profiles[profileId];
-    if (refreshed?.type === "oauth" && Date.now() < refreshed.expires) {
+    if (refreshed?.type === "oauth" && hasUsableOAuthCredential(refreshed)) {
       return await buildOAuthProfileResult({
         provider: refreshed.provider,
         credentials: refreshed,
@@ -1003,7 +1003,7 @@ export async function resolveApiKeyForProfile(
         if (
           mainCred?.type === "oauth" &&
           mainCred.provider === cred.provider &&
-          Date.now() < mainCred.expires &&
+          hasUsableOAuthCredential(mainCred) &&
           // Defense-in-depth identity gate — refuse to inherit credentials
           // from a different account even under refresh failure. Tolerates
           // pre-capture credentials but refuses regression/non-overlap.

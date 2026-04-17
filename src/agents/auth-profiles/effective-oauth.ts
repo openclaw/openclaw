@@ -1,6 +1,7 @@
+import { log } from "./constants.js";
 import {
   hasUsableOAuthCredential,
-  readManagedExternalCliCredential,
+  readExternalCliBootstrapCredential,
   shouldBootstrapFromExternalCliCredential,
 } from "./external-cli-sync.js";
 import type { OAuthCredential } from "./types.js";
@@ -9,7 +10,7 @@ export function resolveEffectiveOAuthCredential(params: {
   profileId: string;
   credential: OAuthCredential;
 }): OAuthCredential {
-  const imported = readManagedExternalCliCredential({
+  const imported = readExternalCliBootstrapCredential({
     profileId: params.profileId,
     credential: params.credential,
   });
@@ -17,12 +18,26 @@ export function resolveEffectiveOAuthCredential(params: {
     return params.credential;
   }
   if (hasUsableOAuthCredential(params.credential)) {
+    log.debug("resolved oauth credential from canonical local store", {
+      profileId: params.profileId,
+      provider: params.credential.provider,
+      localExpires: params.credential.expires,
+      externalExpires: imported.expires,
+    });
     return params.credential;
   }
-  return shouldBootstrapFromExternalCliCredential({
+  const shouldBootstrap = shouldBootstrapFromExternalCliCredential({
     existing: params.credential,
     imported,
-  })
-    ? imported
-    : params.credential;
+  });
+  if (shouldBootstrap) {
+    log.debug("resolved oauth credential from external cli bootstrap", {
+      profileId: params.profileId,
+      provider: imported.provider,
+      localExpires: params.credential.expires,
+      externalExpires: imported.expires,
+    });
+    return imported;
+  }
+  return params.credential;
 }

@@ -10,7 +10,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 }));
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
-  readManagedExternalCliCredential: () => null,
+  readExternalCliBootstrapCredential: () => null,
   resolveExternalCliAuthProfiles: () => [],
 }));
 
