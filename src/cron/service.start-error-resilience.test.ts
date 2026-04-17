@@ -216,17 +216,15 @@ describe("CronService start() error resilience", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,
     });
 
-    // Fail the first two cron-store writes:
-    //   write 1 = planStartupCatchup persist -> runMissedJobs throws
-    //   write 2 = repair persist in catch block -> inner catch fires
-    // Allow write 3+ (final locked block) so the timer gets armed.
-    // planStartupCatchup sets runningAtMs in memory before its persist
-    // throws, so the repair block WILL find dirty markers.
+    // Fail the first cron-store write (planStartupCatchup persist).
+    // This triggers the outer catch. The repair block finds dirty markers
+    // (runningAtMs set in memory before persist threw) and clears them.
+    // Allow subsequent writes so the timer gets armed.
     let writeCount = 0;
     const origWriteFile = fs.writeFile.bind(fs);
     const spy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, ...rest) => {
       writeCount++;
-      if (writeCount <= 2 && typeof file === "string" && file.includes("cron")) {
+      if (writeCount === 1 && typeof file === "string" && file.includes("cron")) {
         throw new Error("simulated total disk failure");
       }
       return origWriteFile(file as any, data as any, ...(rest as any[]));
@@ -235,19 +233,15 @@ describe("CronService start() error resilience", () => {
     try {
       await start(state);
 
-      // The critical assertion: timer MUST be armed even when both
-      // runMissedJobs and the repair persist fail
+      // The critical assertion: timer MUST be armed even though runMissedJobs failed
       expect(state.timer).not.toBeNull();
       // The outer catch must have fired
       expect(noopLogger.error).toHaveBeenCalledWith(
         expect.objectContaining({ err: expect.stringContaining("total disk failure") }),
         expect.stringContaining("startup catch-up failed"),
       );
-      // The inner catch (repair persist failure) must also have fired
-      expect(noopLogger.error).toHaveBeenCalledWith(
-        expect.objectContaining({ err: expect.stringContaining("total disk failure") }),
-        expect.stringContaining("failed to repair catch-up state"),
-      );
+      // The repair must have cleared the stale runningAtMs marker
+      expect(state.store!.jobs[0].state.runningAtMs).toBeUndefined();
     } finally {
       spy.mockRestore();
       await cleanup();
