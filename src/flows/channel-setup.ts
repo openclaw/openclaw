@@ -512,7 +512,7 @@ export async function setupChannels(
       }
       await loadScopedChannelPlugin(channel, result.pluginId ?? catalogEntry.pluginId);
       await refreshStatus(channel);
-    } else if (installedCatalogEntry && installedCatalogEntry.origin !== "bundled") {
+    } else if (installedCatalogEntry) {
       const plugin = await loadScopedChannelPlugin(channel, installedCatalogEntry.pluginId);
       if (!plugin) {
         await prompter.note(`${channel} plugin not available.`, "Channel setup");

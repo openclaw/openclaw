@@ -14,6 +14,8 @@ type ConfiguredChannelRemovalChoice = {
   label: string;
 };
 
+const RESERVED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
+
 function listConfiguredChannelRemovalChoices(
   cfg: OpenClawConfig,
 ): ConfiguredChannelRemovalChoice[] {
@@ -23,6 +25,7 @@ function listConfiguredChannelRemovalChoices(
   }
   const labelsById = new Map(listChatChannels().map((meta) => [meta.id, meta.label]));
   return Object.keys(channels)
+    .filter((id) => !RESERVED_CHANNEL_CONFIG_KEYS.has(id))
     .map((id) => ({
       id,
       label: labelsById.get(id) ?? formatUnknownChannelRemovalLabel(id),

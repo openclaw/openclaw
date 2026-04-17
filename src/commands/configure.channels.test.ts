@@ -24,7 +24,7 @@ import { removeChannelConfigWizard } from "./configure.channels.js";
 
 describe("removeChannelConfigWizard", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     confirm.mockResolvedValue(true);
   });
 
@@ -34,6 +34,8 @@ describe("removeChannelConfigWizard", () => {
     await removeChannelConfigWizard(
       {
         channels: {
+          defaults: { groupPolicy: "open" },
+          modelByChannel: { openai: { telegram: "gpt-5.4" } },
           twitch: {},
           unknown: {},
           telegram: {},
@@ -78,6 +80,26 @@ describe("removeChannelConfigWizard", () => {
       "Telegram removed from config.\nNote: credentials/sessions on disk are unchanged.",
       "Channel removed",
     );
+  });
+
+  it("preserves channel-wide defaults when deleting the last channel block", async () => {
+    select.mockResolvedValueOnce("telegram").mockResolvedValueOnce("done");
+
+    const next = await removeChannelConfigWizard(
+      {
+        channels: {
+          defaults: { groupPolicy: "open" },
+          modelByChannel: { openai: { telegram: "gpt-5.4" } },
+          telegram: { token: "secret" },
+        },
+      } as never,
+      {} as never,
+    );
+
+    expect(next.channels).toEqual({
+      defaults: { groupPolicy: "open" },
+      modelByChannel: { openai: { telegram: "gpt-5.4" } },
+    });
   });
 
   it("sanitizes unknown channel keys before rendering prompts", async () => {
