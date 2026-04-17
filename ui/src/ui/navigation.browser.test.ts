@@ -75,9 +75,12 @@ describe("control UI routing", () => {
     expect(window.location.pathname).toBe("/openclaw/sessions");
   });
 
-  it("updates the URL when clicking nav items", async () => {
+  it("keeps chat navigation links visible and updates the URL when clicked", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
+
+    const dreamsLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/dreaming"]');
+    expect(dreamsLink).not.toBeNull();
 
     const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/channels"]');
     expect(link).not.toBeNull();
@@ -86,14 +89,6 @@ describe("control UI routing", () => {
     await app.updateComplete;
     expect(app.tab).toBe("channels");
     expect(window.location.pathname).toBe("/channels");
-  });
-
-  it("keeps dreams navigation visible even when dreaming is disabled", async () => {
-    const app = mountApp("/chat");
-    await app.updateComplete;
-
-    const dreamsLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/dreaming"]');
-    expect(dreamsLink).not.toBeNull();
   });
 
   it("renders the dreaming view on the /dreaming route", async () => {
@@ -410,23 +405,15 @@ describe("control UI routing", () => {
     expect(container.scrollTop).toBe(targetScrollTop);
   });
 
-  it("hydrates token from query params and strips them", async () => {
-    const app = mountApp("/ui/overview?token=abc123");
+  it("hydrates safe query params and strips unsafe credentials from the URL", async () => {
+    const app = mountApp("/ui/overview?token=abc123&password=sekret");
     await app.updateComplete;
 
     expect(app.settings.token).toBe("abc123");
+    expect(app.password).toBe("");
     expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
       undefined,
     );
-    expect(window.location.pathname).toBe("/ui/overview");
-    expect(window.location.search).toBe("");
-  });
-
-  it("strips password URL params without importing them", async () => {
-    const app = mountApp("/ui/overview?password=sekret");
-    await app.updateComplete;
-
-    expect(app.password).toBe("");
     expect(window.location.pathname).toBe("/ui/overview");
     expect(window.location.search).toBe("");
   });
@@ -450,7 +437,7 @@ describe("control UI routing", () => {
     expect(window.location.hash).toBe("");
   });
 
-  it("hydrates token from URL hash and strips it", async () => {
+  it("hydrates token from URL hash, strips it, and clears it after gateway changes", async () => {
     const app = mountApp("/ui/overview#token=abc123");
     await app.updateComplete;
 
@@ -460,11 +447,6 @@ describe("control UI routing", () => {
     );
     expect(window.location.pathname).toBe("/ui/overview");
     expect(window.location.hash).toBe("");
-  });
-
-  it("clears the current token when the gateway URL changes", async () => {
-    const app = mountApp("/ui/overview#token=abc123");
-    await app.updateComplete;
 
     const gatewayUrlInput = app.querySelector<HTMLInputElement>(
       'input[placeholder="ws://100.x.y.z:18789"]',
