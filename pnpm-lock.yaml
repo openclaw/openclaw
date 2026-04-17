@@ -255,6 +255,9 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
+      '@copilotkit/aimock':
+        specifier: 1.13.0
+        version: 1.13.0
       '@grammyjs/types':
         specifier: ^3.26.0
         version: 3.26.0
@@ -1733,6 +1736,11 @@ packages:
   '@colors/colors@1.5.0':
     resolution: {integrity: sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==}
     engines: {node: '>=0.1.90'}
+
+  '@copilotkit/aimock@1.13.0':
+    resolution: {integrity: sha512-wcNQdicxSuaHf4MLtoC9bouKeYGcV9aBoIVJbeLtrBUhqz5LUAmo/U/S1WT69kyAEuM0uO1XyD3Jz+V+H9jsUw==}
+    engines: {node: '>=20.15.0'}
+    hasBin: true
 
   '@create-markdown/preview@2.0.3':
     resolution: {integrity: sha512-Vrp8DyuiouryZ3E4NQ7tBgoYQdoekd0+DzN64mZ48QYCw3V+MCb/H2q10SW8KC8XPr931XOMDvKX4I83qpQh3g==}
@@ -8748,6 +8756,8 @@ snapshots:
 
   '@colors/colors@1.5.0':
     optional: true
+
+  '@copilotkit/aimock@1.13.0': {}
 
   '@create-markdown/preview@2.0.3(shiki@3.23.0)':
     optionalDependencies:

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveProviderVariant, startQaMockOpenAiServer } from "./mock-openai-server.js";
+import { resolveProviderVariant, startQaMockOpenAiServer } from "./server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 const QA_IMAGE_PNG_BASE64 =
@@ -63,6 +63,23 @@ function makeUserInput(text: string) {
   };
 }
 
+const SESSIONS_SPAWN_TOOL = { type: "function", name: "sessions_spawn" } as const;
+const THREAD_SUBAGENT_CHILD_ERROR_TOKEN = "QA_SUBAGENT_CHILD_ERROR";
+const THREAD_SUBAGENT_TOOL_ERROR =
+  "thread=true requested but thread delivery is unavailable in this test harness.";
+
+function threadSubagentTask(token: string) {
+  return `Reply exactly \`${token}\`. This is the marker.`;
+}
+
+function explicitSessionsSpawnPrompt(token: string) {
+  return [
+    "Use sessions_spawn for this QA check.",
+    `task="${threadSubagentTask(token)}"`,
+    "label=qa-thread-subagent thread=true mode=session runTimeoutSeconds=30",
+  ].join(" ");
+}
+
 describe("qa mock openai server", () => {
   it("serves health and streamed responses", async () => {
     const server = await startQaMockOpenAiServer({
@@ -109,14 +126,14 @@ describe("qa mock openai server", () => {
       },
       body: JSON.stringify({
         stream: true,
-        input: [makeUserInput("Quiet streaming QA check: reply exactly `MATRIX_QA_STREAMING_OK`.")],
+        input: [makeUserInput("Quiet streaming QA check: reply exactly `QA_STREAMING_OK`.")],
       }),
     });
     expect(quietResponse.status).toBe(200);
     const quietBody = await quietResponse.text();
     expect(quietBody).toContain('"type":"response.output_text.delta"');
     expect(quietBody).toContain('"phase":"final_answer"');
-    expect(quietBody).toContain("MATRIX_QA_STREAMING_OK");
+    expect(quietBody).toContain("QA_STREAMING_OK");
 
     const blockResponse = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
@@ -548,6 +565,7 @@ describe("qa mock openai server", () => {
       },
       body: JSON.stringify({
         stream: true,
+        tools: [SESSIONS_SPAWN_TOOL],
         input: [
           {
             role: "user",
@@ -566,6 +584,67 @@ describe("qa mock openai server", () => {
     expect(body).toContain('"name":"sessions_spawn"');
     expect(body).toContain('\\"label\\":\\"qa-sidecar\\"');
     expect(body).toContain('\\"thread\\":false');
+  });
+
+  it("emits explicitly requested sessions_spawn tool calls", async () => {
+    const server = await startMockServer();
+
+    const body = await expectResponsesText(server, {
+      stream: true,
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: explicitSessionsSpawnPrompt("QA_SUBAGENT_CHILD_FIXED"),
+            },
+          ],
+        },
+      ],
+    });
+    expect(body).toContain('"name":"sessions_spawn"');
+    expect(body).toContain('\\"label\\":\\"qa-thread-subagent\\"');
+    expect(body).toContain('\\"thread\\":true');
+    expect(body).toContain('\\"mode\\":\\"session\\"');
+    expect(body).toContain("QA_SUBAGENT_CHILD_FIXED");
+  });
+
+  it("surfaces sessions_spawn tool errors instead of echoing child-task markers", async () => {
+    const server = await startMockServer();
+
+    const body = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(explicitSessionsSpawnPrompt(THREAD_SUBAGENT_CHILD_ERROR_TOKEN)),
+        {
+          type: "function_call",
+          name: "sessions_spawn",
+          arguments: JSON.stringify({
+            task: threadSubagentTask(THREAD_SUBAGENT_CHILD_ERROR_TOKEN),
+            label: "qa-thread-subagent",
+            thread: true,
+            mode: "session",
+            runTimeoutSeconds: 30,
+          }),
+        },
+        {
+          type: "function_call_output",
+          output: JSON.stringify({
+            status: "error",
+            error: THREAD_SUBAGENT_TOOL_ERROR,
+          }),
+        },
+      ],
+    });
+
+    const text = body.output?.[0]?.content?.[0]?.text ?? "";
+    expect(text).toContain(THREAD_SUBAGENT_TOOL_ERROR);
+    expect(text).not.toContain(THREAD_SUBAGENT_CHILD_ERROR_TOKEN);
   });
 
   it("plans memory tools and serves mock image generations", async () => {
@@ -850,6 +929,7 @@ describe("qa mock openai server", () => {
       },
       body: JSON.stringify({
         stream: true,
+        tools: [SESSIONS_SPAWN_TOOL],
         input: [
           {
             role: "user",
@@ -875,6 +955,7 @@ describe("qa mock openai server", () => {
       },
       body: JSON.stringify({
         stream: true,
+        tools: [SESSIONS_SPAWN_TOOL],
         input: [
           {
             role: "user",
@@ -905,6 +986,7 @@ describe("qa mock openai server", () => {
       },
       body: JSON.stringify({
         stream: false,
+        tools: [SESSIONS_SPAWN_TOOL],
         input: [
           {
             role: "user",
@@ -961,6 +1043,7 @@ describe("qa mock openai server", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         stream: true,
+        tools: [SESSIONS_SPAWN_TOOL],
         input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
       }),
     });
@@ -972,6 +1055,7 @@ describe("qa mock openai server", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         stream: true,
+        tools: [SESSIONS_SPAWN_TOOL],
         input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
       }),
     });
@@ -1427,6 +1511,60 @@ describe("qa mock openai server", () => {
     expect(await debugResponse.json()).toMatchObject({
       model: "claude-opus-4-6",
       plannedToolName: "read",
+    });
+  });
+
+  it("preserves Anthropic /v1/messages declared tools for explicit sessions_spawn prompts", async () => {
+    const server = await startMockServer();
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        tools: [
+          {
+            name: "sessions_spawn",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: explicitSessionsSpawnPrompt("QA_SUBAGENT_CHILD_ANTHROPIC"),
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+    expect(body.stop_reason).toBe("tool_use");
+    const toolUseBlock = body.content.find((block) => block.type === "tool_use") as
+      | { name: string; input: Record<string, unknown> }
+      | undefined;
+    expect(toolUseBlock?.name).toBe("sessions_spawn");
+    expect(toolUseBlock?.input).toMatchObject({
+      task: threadSubagentTask("QA_SUBAGENT_CHILD_ANTHROPIC"),
+      label: "qa-thread-subagent",
+      thread: true,
+      mode: "session",
+      runTimeoutSeconds: 30,
+    });
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    expect(await debugResponse.json()).toMatchObject({
+      model: "claude-opus-4-6",
+      plannedToolName: "sessions_spawn",
     });
   });
 
