@@ -37,12 +37,14 @@ export function sanitizeExecApprovalDisplayText(commandText: string): string {
     // escaped so the operator can still see multi-line boundaries and spliced invisibles.
     return escapeInvisibles(rawRedacted);
   }
-  // Stripped view found at least one redaction. Compare against a raw-redaction view
-  // normalized the same way; if the stripped view redacted MORE than raw did, that signals a
-  // bypass attempt (a secret that only matches after invisibles are removed). Otherwise both
-  // views caught the same secrets and the escape-preserving raw display is safe to use.
+  // Stripped view found at least one redaction. Compare the stripped-view redaction against a
+  // raw-redaction view normalized the same way — by content, not by length. Length comparison
+  // is unsafe because `maskToken()` can expand short tokens to a longer fixed literal (`***`),
+  // which can leave `rawRedactedStripped` and `strippedRedacted` coincidentally the same
+  // length even though the stripped view actually masked a longer secret span that raw only
+  // partially masked.
   const rawRedactedStripped = rawRedacted.replace(EXEC_APPROVAL_BYPASS_STRIP_REGEX, "");
-  if (strippedRedacted.length >= rawRedactedStripped.length) {
+  if (strippedRedacted === rawRedactedStripped) {
     return escapeInvisibles(rawRedacted);
   }
   // Bypass detected: suppress the raw display (it would still show the portion of the secret

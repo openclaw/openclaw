@@ -82,6 +82,17 @@ describe("sanitizeExecApprovalDisplayText", () => {
     expect(result).not.toContain("456789012345678");
     expect(result).toContain("3-line");
   });
+
+  it("detects bypass even when raw and stripped redactions happen to produce the same normalized length", () => {
+    // Raw masks the 16-char prefix `sk-abc1234567890` as the fixed literal `***` while the
+    // trailing 8 chars past the zero-width stay visible. The stripped view masks the full
+    // 24-char token as `sk-abc…5678`. Both normalized outputs are the same length (11 chars),
+    // so a length-based bypass check would falsely return the raw view and leak the tail.
+    const cmd = "sk-abc1234567890\u200B12345678";
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("12345678");
+    expect(result).not.toContain("1234567890");
+  });
 });
 
 describe("resolveExecApprovalCommandDisplay", () => {
