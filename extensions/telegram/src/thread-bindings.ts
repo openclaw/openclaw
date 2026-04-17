@@ -137,6 +137,17 @@ function isProtectedTelegramPrimaryConversation(params: {
   );
 }
 
+function isUnsafeProtectedTelegramPrimaryBindingRecord(
+  record: Pick<TelegramThreadBindingRecord, "accountId" | "targetKind" | "conversationId">,
+): boolean {
+  return isProtectedTelegramPrimaryConversation({
+    accountId: record.accountId,
+    targetKind: toSessionBindingTargetKind(record.targetKind),
+    placement: "current",
+    conversationId: record.conversationId,
+  });
+}
+
 function toTelegramTargetKind(raw: BindingTargetKind): TelegramBindingTargetKind {
   return raw === "subagent" ? "subagent" : "acp";
 }
@@ -332,18 +343,15 @@ async function persistBindingsToDisk(params: {
   }
   const payload: StoredTelegramBindingState = {
     version: STORE_VERSION,
-    bindings:
-      params.bindings ??
-      [...getThreadBindingsState().bindingsByAccountConversation.values()].filter(
-        (entry) => entry.accountId === params.accountId,
-      ),
+    bindings: params.bindings ?? listBindingsForAccount(params.accountId),
   };
   await writeJsonFileAtomically(resolveBindingsPath(params.accountId), payload);
 }
 
 function listBindingsForAccount(accountId: string): TelegramThreadBindingRecord[] {
   return [...getThreadBindingsState().bindingsByAccountConversation.values()].filter(
-    (entry) => entry.accountId === accountId,
+    (entry) =>
+      entry.accountId === accountId && !isUnsafeProtectedTelegramPrimaryBindingRecord(entry),
   );
 }
 
@@ -447,7 +455,12 @@ export function createTelegramThreadBindingManager(
   const maxAgeMs = normalizeDurationMs(params.maxAgeMs, DEFAULT_THREAD_BINDING_MAX_AGE_MS);
 
   const loaded = loadBindingsFromDisk(accountId);
+  let droppedUnsafeBinding = false;
   for (const entry of loaded) {
+    if (isUnsafeProtectedTelegramPrimaryBindingRecord(entry)) {
+      droppedUnsafeBinding = true;
+      continue;
+    }
     const key = resolveBindingKey({
       accountId,
       conversationId: entry.conversationId,
@@ -522,12 +535,13 @@ export function createTelegramThreadBindingManager(
       if (!conversationId) {
         return undefined;
       }
-      return getThreadBindingsState().bindingsByAccountConversation.get(
+      const record = getThreadBindingsState().bindingsByAccountConversation.get(
         resolveBindingKey({
           accountId,
           conversationId,
         }),
       );
+      return record && !isUnsafeProtectedTelegramPrimaryBindingRecord(record) ? record : undefined;
     },
     listBySessionKey: (targetSessionKeyRaw) => {
       const targetSessionKey = targetSessionKeyRaw.trim();
@@ -624,6 +638,15 @@ export function createTelegramThreadBindingManager(
       }
     },
   };
+
+  if (droppedUnsafeBinding) {
+    persistBindingsSafely({
+      accountId,
+      persist,
+      bindings: listBindingsForAccount(accountId),
+      reason: "sanitize-protected-primary-load",
+    });
+  }
 
   const sessionBindingAdapter: SessionBindingAdapter = {
     channel: "telegram",

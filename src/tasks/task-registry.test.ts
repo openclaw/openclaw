@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  __testing as telegramThreadBindingsTesting,
+  createTelegramThreadBindingManager,
+} from "../../extensions/telegram/src/thread-bindings.js";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
 import { resetCronActiveJobsForTests } from "../cron/active-jobs.js";
@@ -11,6 +15,10 @@ import {
   hasPendingHeartbeatWake,
   resetHeartbeatWakeStateForTests,
 } from "../infra/heartbeat-wake.js";
+import {
+  __testing as sessionBindingTesting,
+  getSessionBindingService,
+} from "../infra/outbound/session-binding-service.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
@@ -215,7 +223,7 @@ describe("task-registry", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
     if (ORIGINAL_STATE_DIR === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
@@ -231,6 +239,8 @@ describe("task-registry", () => {
     resetTaskRegistryMaintenanceRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+    await telegramThreadBindingsTesting.resetTelegramThreadBindingsForTests();
     hoisted.sendMessageMock.mockReset();
     hoisted.cancelSessionMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
@@ -587,6 +597,149 @@ describe("task-registry", () => {
         ),
       );
       expect(peekSystemEvents("agent:main:main")).toEqual([]);
+    });
+  });
+
+  it("reroutes protected Telegram ACP completions to the bound child thread instead of the primary DM", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      sessionBindingTesting.resetSessionBindingAdaptersForTests();
+      await telegramThreadBindingsTesting.resetTelegramThreadBindingsForTests();
+      createTelegramThreadBindingManager({
+        accountId: "default",
+        persist: false,
+        enableSweeper: false,
+      });
+      await getSessionBindingService().bind({
+        targetSessionKey: "agent:codex:acp:protected-child",
+        targetKind: "session",
+        placement: "current",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-1007777777777:topic:77",
+          parentConversationId: "-1007777777777",
+        },
+      });
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "telegram",
+        to: "-1007777777777",
+        threadId: "77",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:telegram:direct:thomas",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:8582659364",
+          accountId: "default",
+        },
+        childSessionKey: "agent:codex:acp:protected-child",
+        runId: "run-protected-thread-bound",
+        task: "Investigate issue",
+        status: "succeeded",
+        deliveryStatus: "pending",
+        terminalSummary: "Completed safely in the child lane.",
+      });
+
+      await waitForAssertion(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: "telegram",
+            to: "-1007777777777",
+            threadId: "77",
+            mirror: expect.objectContaining({
+              sessionKey: "agent:codex:acp:protected-child",
+            }),
+          }),
+        ),
+      );
+      expect(peekSystemEvents("agent:main:telegram:direct:thomas")).toEqual([]);
+      expect(peekSystemEvents("agent:codex:acp:protected-child")).toEqual([]);
+    });
+  });
+
+  it("fails closed to the ACP child session when the protected Telegram DM has no safe bound destination", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockClear();
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:telegram:direct:thomas",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:8582659364",
+          accountId: "default",
+        },
+        childSessionKey: "agent:codex:acp:protected-fail-closed",
+        runId: "run-protected-fail-closed",
+        task: "Investigate issue",
+        status: "succeeded",
+        deliveryStatus: "pending",
+        terminalSummary: "Held safely in the child lane.",
+      });
+
+      await waitForAssertion(() =>
+        expect(findTaskByRunId("run-protected-fail-closed")).toMatchObject({
+          status: "succeeded",
+          deliveryStatus: "session_queued",
+        }),
+      );
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(peekSystemEvents("agent:main:telegram:direct:thomas")).toEqual([]);
+      expect(peekSystemEvents("agent:codex:acp:protected-fail-closed")).toEqual([
+        "Background task done: ACP background task (run run-prot). Held safely in the child lane.",
+      ]);
+    });
+  });
+
+  it("keeps non-protected Telegram ACP completions on their direct requester lane", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "telegram",
+        to: "telegram:8582659364",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:telegram:atlas:direct:thomas",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:8582659364",
+          accountId: "atlas",
+        },
+        childSessionKey: "agent:codex:acp:atlas-direct",
+        runId: "run-atlas-direct",
+        task: "Investigate issue",
+        status: "succeeded",
+        deliveryStatus: "pending",
+        terminalSummary: "Delivered directly to the named account lane.",
+      });
+
+      await waitForAssertion(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: "telegram",
+            to: "telegram:8582659364",
+            accountId: "atlas",
+            mirror: expect.objectContaining({
+              sessionKey: "agent:main:telegram:atlas:direct:thomas",
+            }),
+          }),
+        ),
+      );
+      expect(peekSystemEvents("agent:main:telegram:atlas:direct:thomas")).toEqual([]);
     });
   });
 

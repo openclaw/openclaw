@@ -128,6 +128,60 @@ describe("telegram thread bindings", () => {
     expect(manager.listBindings()).toEqual([]);
   });
 
+  it("scrubs persisted ACP bindings for the protected primary Telegram DM on reload", async () => {
+    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
+    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
+
+    const statePath = path.join(
+      resolveStateDir(process.env, os.homedir),
+      "telegram",
+      "thread-bindings-default.json",
+    );
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify(
+        {
+          version: 1,
+          bindings: [
+            {
+              conversationId: "8582659364",
+              targetSessionKey: "agent:codex:acp:stale-thread",
+              targetKind: "acp",
+              boundAt: Date.now(),
+              lastActivityAt: Date.now(),
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
+    const manager = createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: true,
+      enableSweeper: false,
+    });
+
+    expect(
+      getSessionBindingService().resolveByConversation({
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "8582659364",
+      }),
+    ).toBeNull();
+    expect(manager.getByConversationId("8582659364")).toBeUndefined();
+    expect(manager.listBindings()).toEqual([]);
+
+    await __testing.resetTelegramThreadBindingsForTests();
+
+    expect(JSON.parse(fs.readFileSync(statePath, "utf8"))).toEqual({
+      version: 1,
+      bindings: [],
+    });
+  });
+
   it("still allows named-account Telegram direct ACP bindings outside the protected lane", async () => {
     const manager = createTelegramThreadBindingManager({
       accountId: "atlas",
