@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(),
   ensureChannelSetupPluginInstalled: vi.fn(),
   loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(),
+  callGatewayFromCli: vi.fn(),
+  buildGatewayConnectionDetails: vi.fn(),
   login: vi.fn(),
   logoutAccount: vi.fn(),
   resolveAccount: vi.fn(),
@@ -67,6 +69,14 @@ vi.mock("../commands/channel-setup/plugin-install.js", () => ({
     mocks.loadChannelSetupPluginRegistrySnapshotForChannel,
 }));
 
+vi.mock("./gateway-rpc.js", () => ({
+  callGatewayFromCli: mocks.callGatewayFromCli,
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
+}));
+
 describe("channel-auth", () => {
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   const plugin = {
@@ -98,6 +108,19 @@ describe("channel-auth", () => {
       cfg: { channels: { whatsapp: {} } },
       installed: true,
       pluginId: "whatsapp",
+    });
+    mocks.callGatewayFromCli.mockReset();
+    mocks.callGatewayFromCli.mockResolvedValue({
+      channel: "whatsapp",
+      accountId: "default-account",
+      cleared: true,
+      loggedOut: true,
+    });
+    mocks.buildGatewayConnectionDetails.mockReset();
+    mocks.buildGatewayConnectionDetails.mockReturnValue({
+      url: "ws://127.0.0.1:18789",
+      message: "Gateway local loopback",
+      urlSource: "local loopback",
     });
     mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue({
       channels: [{ plugin }],
@@ -174,11 +197,16 @@ describe("channel-auth", () => {
 
     await runChannelLogout({}, runtime);
 
-    expect(mocks.logoutAccount).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: autoEnabledCfg,
-      }),
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith(
+      "channels.logout",
+      {},
+      {
+        channel: "whatsapp",
+        accountId: "default-account",
+      },
+      { expectFinal: false },
     );
+    expect(mocks.logoutAccount).not.toHaveBeenCalled();
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: autoEnabledCfg,
       baseHash: "config-1",
@@ -368,6 +396,29 @@ describe("channel-auth", () => {
   it("runs logout with resolved account and explicit account id", async () => {
     await runChannelLogout({ channel: "whatsapp", account: " acct-2 " }, runtime);
 
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith(
+      "channels.logout",
+      {
+        channel: "whatsapp",
+        account: " acct-2 ",
+      },
+      {
+        channel: "whatsapp",
+        accountId: "acct-2",
+      },
+      { expectFinal: false },
+    );
+    expect(mocks.resolveAccount).not.toHaveBeenCalled();
+    expect(mocks.logoutAccount).not.toHaveBeenCalled();
+    expect(mocks.setVerbose).not.toHaveBeenCalled();
+  });
+
+  it("falls back to local logout when the default local gateway is unreachable", async () => {
+    mocks.callGatewayFromCli.mockRejectedValueOnce(new Error("gateway timeout after 10000ms"));
+
+    await runChannelLogout({ channel: "whatsapp", account: " acct-2 " }, runtime);
+
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledOnce();
     expect(mocks.resolveAccount).toHaveBeenCalledWith({ channels: { whatsapp: {} } }, "acct-2");
     expect(mocks.logoutAccount).toHaveBeenCalledWith({
       cfg: { channels: { whatsapp: {} } },
@@ -375,7 +426,9 @@ describe("channel-auth", () => {
       account: { id: "resolved-account" },
       runtime,
     });
-    expect(mocks.setVerbose).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway not reachable; cleared stored channel auth locally."),
+    );
   });
 
   it("throws when channel does not support logout", async () => {

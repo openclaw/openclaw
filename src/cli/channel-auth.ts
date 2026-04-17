@@ -12,17 +12,19 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { setVerbose } from "../globals.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 
 type ChannelAuthOptions = {
   channel?: string;
   account?: string;
   verbose?: boolean;
-};
+} & GatewayRpcOpts;
 
 type ChannelPlugin = NonNullable<ReturnType<typeof getChannelPlugin>>;
 type ChannelAuthMode = "login" | "logout";
@@ -134,6 +136,33 @@ function resolveAccountContext(
   return { accountId };
 }
 
+function normalizeGatewayLogoutErrorMessage(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).toLowerCase();
+}
+
+function shouldUseLocalLogoutFallback(opts: ChannelAuthOptions, error: unknown): boolean {
+  if (normalizeOptionalString(opts.url)) {
+    return false;
+  }
+  const message = normalizeGatewayLogoutErrorMessage(error);
+  const looksLikeReachabilityFailure = [
+    "gateway timeout",
+    "gateway closed",
+    "econnrefused",
+    "enotfound",
+    "ehostunreach",
+    "etimedout",
+    "connection refused",
+    "socket hang up",
+    "fetch failed",
+  ].some((pattern) => message.includes(pattern));
+  if (!looksLikeReachabilityFailure) {
+    return false;
+  }
+  const connection = buildGatewayConnectionDetails();
+  return connection.urlSource === "local loopback";
+}
+
 export async function runChannelLogin(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -198,8 +227,24 @@ export async function runChannelLogout(
   if (!logoutAccount) {
     throw new Error(`Channel ${channelInput} does not support logout`);
   }
-  // Auth-only flow: resolve account + clear session state only.
   const { accountId } = resolveAccountContext(plugin, opts, cfg);
+  try {
+    await callGatewayFromCli(
+      "channels.logout",
+      opts,
+      { channel: channelInput, accountId },
+      { expectFinal: false },
+    );
+    return;
+  } catch (error) {
+    if (!shouldUseLocalLogoutFallback(opts, error)) {
+      throw error;
+    }
+  }
+  runtime.log(
+    "Gateway not reachable; cleared stored channel auth locally. Restart the gateway if it is still running to fully disconnect the live session.",
+  );
+  // Offline fallback: clear persisted auth even when the local gateway is down.
   const account = plugin.config.resolveAccount(cfg, accountId);
   await logoutAccount({
     cfg,
