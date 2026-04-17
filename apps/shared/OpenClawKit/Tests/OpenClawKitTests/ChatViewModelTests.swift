@@ -1652,6 +1652,27 @@ Hello?
         #expect(sanitized == "Hello?")
     }
 
+    @Test func hidesExecSystemEventNoiseFromHistoryMessages() async throws {
+        let history = historyPayload(messages: [
+            chatTextMessage(
+                role: "assistant",
+                text: """
+System (untrusted): [2026-04-17 21:59:00 GMT+8] Exec completed (clear-bl, code 0) :: src[39m
+System (untrusted): [2m Test Files [22m [1m[32m1 passed[39m[22m
+""",
+                timestamp: Date().timeIntervalSince1970 * 1000),
+            chatTextMessage(role: "assistant", text: "正常回复", timestamp: Date().timeIntervalSince1970 * 1000 + 1),
+        ])
+        let transport = TestChatTransport(historyResponses: [history])
+        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("history filtered") { await MainActor.run { vm.messages.count == 1 } }
+
+        let remaining = await MainActor.run { vm.messages.first?.content.first?.text }
+        #expect(remaining == "正常回复")
+    }
+
     @Test func abortRequestsDoNotClearPendingUntilAbortedEvent() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId)

@@ -253,9 +253,12 @@ public final class OpenClawChatViewModel {
     }
 
     private static func decodeMessages(_ raw: [AnyCodable]) -> [OpenClawChatMessage] {
-        let decoded = raw.compactMap { item in
-            (try? ChatPayloadDecoding.decode(item, as: OpenClawChatMessage.self))
-                .map { Self.stripInboundMetadata(from: $0) }
+        let decoded = raw.compactMap { item -> OpenClawChatMessage? in
+            guard let message = try? ChatPayloadDecoding.decode(item, as: OpenClawChatMessage.self) else {
+                return nil
+            }
+            let sanitized = Self.stripInboundMetadata(from: message)
+            return Self.shouldHideMessageFromDisplay(sanitized) ? nil : sanitized
         }
         return Self.dedupeMessages(decoded)
     }
@@ -290,6 +293,30 @@ public final class OpenClawChatViewModel {
             toolName: message.toolName,
             usage: message.usage,
             stopReason: message.stopReason)
+    }
+
+    private static func shouldHideMessageFromDisplay(_ message: OpenClawChatMessage) -> Bool {
+        let hasNonTextVisibleContent = message.content.contains { content in
+            let kind = (content.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return kind != "" && kind != "text"
+        }
+        if hasNonTextVisibleContent {
+            return false
+        }
+
+        let textItems = message.content.compactMap { content -> String? in
+            let kind = (content.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard kind == "" || kind == "text" else { return nil }
+            return content.text
+        }
+        guard !textItems.isEmpty else {
+            return false
+        }
+
+        return textItems.allSatisfy { text in
+            let processed = ChatMarkdownPreprocessor.preprocess(markdown: text)
+            return processed.cleaned.isEmpty && processed.images.isEmpty
+        }
     }
 
     private static func messageContentFingerprint(for message: OpenClawChatMessage) -> String {
