@@ -329,6 +329,27 @@ describe("Databricks plugin", () => {
       expect(result.provider.models[0].name).toBe("chat-model");
       expect(result.provider.models[0].api).toBe("openai-completions");
     });
+
+    it("rejects http:// base URLs to prevent credential exposure", async () => {
+      const api = { registerProvider: vi.fn() } as any;
+      await plugin.register(api);
+      const catalogRun = api.registerProvider.mock.calls[0][0].catalog.run;
+
+      const ctx = {
+        resolveProviderApiKey: () => ({ apiKey: "test-token" }),
+        config: {
+          models: {
+            providers: {
+              databricks: { baseUrl: "http://insecure.databricks.com" },
+            },
+          },
+        },
+      } as any;
+
+      const result = await catalogRun(ctx);
+      expect(result).toBeNull();
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    });
   });
 
   describe("replay normalization", () => {

@@ -296,7 +296,8 @@ export default definePluginEntry({
     defaultAuth.run = async (ctx: ProviderAuthContext) => {
       const opts = ctx.opts as Record<string, unknown> | undefined;
       const rawBaseUrl =
-        typeof opts?.databricksBaseUrl === "string" ? opts.databricksBaseUrl : undefined;
+        (typeof opts?.databricksBaseUrl === "string" ? opts.databricksBaseUrl : undefined) ??
+        process.env.DATABRICKS_BASE_URL;
 
       // Prompt for a valid base URL.  If the CLI-provided value normalizes to empty
       // (e.g. whitespace-only), the user is asked to re-enter so the config is never
@@ -358,6 +359,7 @@ export default definePluginEntry({
         normalizeDatabricksBaseUrl(
           typeof opts?.databricksBaseUrl === "string" ? opts.databricksBaseUrl : undefined,
         ) ??
+        normalizeDatabricksBaseUrl(process.env.DATABRICKS_BASE_URL) ??
         // Fallback to an already-configured base URL so key-rotation/automation flows
         // that omit --databricks-base-url still succeed when the URL is persisted.
         normalizeDatabricksBaseUrl(typeof savedBaseUrl === "string" ? savedBaseUrl : undefined);
@@ -406,15 +408,16 @@ export default definePluginEntry({
           }
 
           const providerConfig = ctx.config.models?.providers?.[PROVIDER_ID];
-          const baseUrl =
-            typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined;
+          const baseUrl = normalizeDatabricksBaseUrl(
+            typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined,
+          );
           if (!baseUrl) {
             return null;
           }
 
           try {
             const { response: res, release } = await fetchWithSsrFGuard({
-              url: `${baseUrl.replace(/\/+$/, "")}/api/2.0/serving-endpoints`,
+              url: `${baseUrl}/api/2.0/serving-endpoints`,
               init: {
                 headers: {
                   Authorization: `Bearer ${auth.apiKey}`,
