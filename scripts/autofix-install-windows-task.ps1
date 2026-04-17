@@ -1,27 +1,27 @@
 # Register the OpenClaw PR Autofix scheduled task on Windows.
 #
-# Usage (from an elevated OR regular PowerShell in the repo root):
+# Usage (from a regular or elevated PowerShell):
+#   cd C:\OpenClaw
 #   .\scripts\autofix-install-windows-task.ps1
 #   .\scripts\autofix-install-windows-task.ps1 -IntervalMinutes 5
 #   .\scripts\autofix-install-windows-task.ps1 -Repo myorg/myrepo -PrNumber 42
 #
 # What it does:
 #   * Registers a per-user scheduled task named "OpenClaw PR Autofix".
-#   * Trigger 1: fires when you log in (so the `claude login` session
-#     in ~/.claude/ is accessible — boot triggers wouldn't have it).
+#   * Trigger 1: fires when you log in (so the `claude login` session in
+#     ~/.claude/ and user env are accessible).
 #   * Trigger 2: repeats every N minutes (default 10) for as long as
-#     you're logged in, indefinitely.
-#   * Action: invokes `scripts/autofix-loop.ps1` which runs `autofix.py`
+#     you're logged in, for up to one year before the trigger expires.
+#   * Action: invokes scripts/autofix-loop.ps1 which runs autofix.py
 #     once and exits.
 #
-# Re-running this script overwrites any existing task with the same
-# name. To remove the task entirely, run the paired
-# `autofix-uninstall-windows-task.ps1`.
+# Re-running overwrites any existing task with the same name. To remove
+# the task entirely, run scripts/autofix-uninstall-windows-task.ps1.
 #
 # One-time prerequisite: set your GitHub PAT in the user environment:
 #   setx GITHUB_TOKEN "<your PAT with repo scope>"
-# Then sign out + back in (or reboot) so the env var is picked up by
-# newly-spawned tasks.
+# Then sign out + back in so the env var is visible to newly-spawned
+# tasks.
 
 param(
     [string]$Repo = "openclaw/openclaw",
@@ -40,70 +40,57 @@ if (-not (Test-Path $LauncherPath)) {
     exit 1
 }
 
-# Warn if GITHUB_TOKEN isn't set in user env — the task will install
-# fine but fail at runtime without it.
+# Warn if GITHUB_TOKEN isn't set in user env.
 $TokenCheck = [System.Environment]::GetEnvironmentVariable("GITHUB_TOKEN", "User")
 if (-not $TokenCheck) {
     Write-Warning "GITHUB_TOKEN is not set in your user environment."
     Write-Warning "The task will install, but every run will fail until you run:"
-    Write-Warning "  setx GITHUB_TOKEN ""<your PAT with repo scope>"""
-    Write-Warning "…in cmd, then sign out + back in."
+    Write-Warning '  setx GITHUB_TOKEN "<your PAT with repo scope>"'
+    Write-Warning "in cmd, then sign out + back in."
 }
 
-# Action: run PowerShell against the launcher script, with bypassed
-# execution policy scoped to this invocation only.
-$Action = New-ScheduledTaskAction `
-    -Execute "powershell.exe" `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$LauncherPath`" -Repo `"$Repo`" -PrNumber $PrNumber" `
-    -WorkingDirectory $RepoRoot
+# Build the PowerShell argument string up-front so we don't have to deal
+# with nested quote escaping inside a parameter value on a backtick-
+# continued line (the PowerShell parser mis-handles that combination).
+# Doubled double-quotes are the single-quoted-string way to emit a real
+# double-quote, so this expands to:
+#   -NoProfile -ExecutionPolicy Bypass -File "C:\OpenClaw\scripts\autofix-loop.ps1" -Repo "openclaw/openclaw" -PrNumber 68135
+$LauncherArg = '-NoProfile -ExecutionPolicy Bypass -File "' + $LauncherPath + '" -Repo "' + $Repo + '" -PrNumber ' + $PrNumber
 
-# Triggers:
-#   1. AtLogOn of the current user (not AtStartup — we need the user
-#      session to be alive so ~/.claude/ and user env are available).
-#   2. Repeat every N minutes forever once the user is logged in.
+$Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $LauncherArg -WorkingDirectory $RepoRoot
+
+# Build the trigger. AtLogOn (NOT AtStartup) so the user session, env
+# vars, and ~/.claude/ credentials are available. The Repetition
+# property is populated by constructing a sacrificial one-off trigger
+# and stealing its Repetition struct.
 $LogonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $Repeat = New-TimeSpan -Minutes $IntervalMinutes
 $RepeatFor = New-TimeSpan -Days 365
-$LogonTrigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval $Repeat -RepetitionDuration $RepeatFor).Repetition
+$DonorTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval $Repeat -RepetitionDuration $RepeatFor
+$LogonTrigger.Repetition = $DonorTrigger.Repetition
 
-# Settings: allow retry if the machine is busy, don't block parallel
-# instances (the launcher itself has a file-lock against overlap),
-# and don't run when on battery to save power.
-$Settings = New-ScheduledTaskSettingsSet `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -StartWhenAvailable `
-    -RunOnlyIfNetworkAvailable `
-    -MultipleInstances IgnoreNew `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RunOnlyIfNetworkAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 
-# Principal: run as current interactive user (no admin elevation).
-$Principal = New-ScheduledTaskPrincipal `
-    -UserId $env:USERNAME `
-    -LogonType Interactive `
-    -RunLevel Limited
+$Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
-$Task = New-ScheduledTask `
-    -Action $Action `
-    -Trigger $LogonTrigger `
-    -Settings $Settings `
-    -Principal $Principal `
-    -Description "Runs autofix.py against the configured OpenClaw PR every $IntervalMinutes minutes. See scripts/autofix-loop.ps1."
+$Description = "Runs autofix.py against the configured OpenClaw PR every $IntervalMinutes minutes. See scripts/autofix-loop.ps1."
+$Task = New-ScheduledTask -Action $Action -Trigger $LogonTrigger -Settings $Settings -Principal $Principal -Description $Description
 
-# Overwrite any existing registration with the same name.
 if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-    Write-Host "Existing task '$TaskName' found — replacing."
+    Write-Host "Existing task '$TaskName' found - replacing."
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
 
 Register-ScheduledTask -TaskName $TaskName -InputObject $Task | Out-Null
 
+$LogDir = Join-Path $env:USERPROFILE ".openclaw\autofix"
+
 Write-Host ""
-Write-Host "✓ Registered scheduled task: $TaskName"
-Write-Host "  Target: $Repo PR #$PrNumber"
-Write-Host "  Interval: every $IntervalMinutes minutes, starting at login"
-Write-Host "  Launcher: $LauncherPath"
-Write-Host "  Logs: $env:USERPROFILE\.openclaw\autofix\autofix-<date>.log"
+Write-Host "[OK] Registered scheduled task: $TaskName"
+Write-Host "  Target:    $Repo PR #$PrNumber"
+Write-Host "  Interval:  every $IntervalMinutes minutes, starting at login"
+Write-Host "  Launcher:  $LauncherPath"
+Write-Host "  Logs:      $LogDir\autofix-<date>.log"
 Write-Host ""
 Write-Host "Run now to verify:"
 Write-Host "  Start-ScheduledTask -TaskName '$TaskName'"
