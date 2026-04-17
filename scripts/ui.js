@@ -97,7 +97,16 @@ function createSpawnOptions(cmd, args, envOverride) {
 function run(cmd, args) {
   let child;
   try {
-    child = spawn(cmd, args, createSpawnOptions(cmd, args));
+    // On Windows, when the command path contains spaces, shell: true doesn't
+    // properly quote the command path. Work around by using just the command
+    // basename (e.g. "pnpm.CMD") and letting the shell resolve it via PATH.
+    const useShell = shouldUseShellForCommand(cmd);
+    const useQuotedShell = useShell && cmd.includes(" ");
+    const spawnCmd = useQuotedShell ? path.basename(cmd) : cmd;
+    const spawnOpts = useQuotedShell
+      ? { cwd: uiDir, stdio: "inherit", env: process.env, shell: true }
+      : createSpawnOptions(cmd, args);
+    child = spawn(spawnCmd, args, spawnOpts);
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);
@@ -118,7 +127,15 @@ function run(cmd, args) {
 function runSync(cmd, args, envOverride) {
   let result;
   try {
-    result = spawnSync(cmd, args, createSpawnOptions(cmd, args, envOverride));
+    // On Windows, when the command path contains spaces, use command basename
+    // and let the shell resolve it via PATH.
+    const useShell = shouldUseShellForCommand(cmd);
+    const useQuotedShell = useShell && cmd.includes(" ");
+    const spawnCmd = useQuotedShell ? path.basename(cmd) : cmd;
+    const spawnOpts = useQuotedShell
+      ? { cwd: uiDir, stdio: "inherit", env: envOverride ?? process.env, shell: true }
+      : createSpawnOptions(cmd, args, envOverride);
+    result = spawnSync(spawnCmd, args, spawnOpts);
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);
