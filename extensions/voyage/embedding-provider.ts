@@ -1,8 +1,11 @@
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
-import { normalizeEmbeddingModelWithPrefixes } from "./embeddings-model-normalize.js";
-import { resolveRemoteEmbeddingBearerClient } from "./embeddings-remote-client.js";
-import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
+import {
+  fetchRemoteEmbeddingVectors,
+  normalizeEmbeddingModelWithPrefixes,
+  resolveRemoteEmbeddingBearerClient,
+  type MemoryEmbeddingProvider,
+  type MemoryEmbeddingProviderCreateOptions,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type VoyageEmbeddingClient = {
   baseUrl: string;
@@ -28,8 +31,8 @@ export function normalizeVoyageModel(model: string): string {
 }
 
 export async function createVoyageEmbeddingProvider(
-  options: EmbeddingProviderOptions,
-): Promise<{ provider: EmbeddingProvider; client: VoyageEmbeddingClient }> {
+  options: MemoryEmbeddingProviderCreateOptions,
+): Promise<{ provider: MemoryEmbeddingProvider; client: VoyageEmbeddingClient }> {
   const client = await resolveVoyageEmbeddingClient(options);
   const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
 
@@ -70,7 +73,7 @@ export async function createVoyageEmbeddingProvider(
 }
 
 export async function resolveVoyageEmbeddingClient(
-  options: EmbeddingProviderOptions,
+  options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<VoyageEmbeddingClient> {
   const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
     provider: "voyage",

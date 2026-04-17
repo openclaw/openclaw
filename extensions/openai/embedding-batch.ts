@@ -17,8 +17,8 @@ import {
   type ProviderBatchOutputLine,
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
-} from "./batch-embedding-common.js";
-import type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { OpenAiEmbeddingClient } from "./embedding-provider.js";
 
 export type OpenAiBatchRequest = {
   custom_id: string;

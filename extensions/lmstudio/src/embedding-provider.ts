@@ -1,20 +1,21 @@
-import { formatErrorMessage } from "../../infra/errors.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import {
+  buildRemoteBaseUrlPolicy,
+  createRemoteEmbeddingProvider,
+  normalizeEmbeddingModelWithPrefixes,
+  type MemoryEmbeddingProvider,
+  type MemoryEmbeddingProviderCreateOptions,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
+import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
+import { ensureLmstudioModelLoaded } from "./models.fetch.js";
+import { resolveLmstudioInferenceBase } from "./models.js";
 import {
   buildLmstudioAuthHeaders,
-  ensureLmstudioModelLoaded,
-  LMSTUDIO_DEFAULT_EMBEDDING_MODEL,
-  LMSTUDIO_PROVIDER_ID,
-  resolveLmstudioInferenceBase,
   resolveLmstudioProviderHeaders,
   resolveLmstudioRuntimeApiKey,
-} from "../../plugin-sdk/lmstudio-runtime.js";
-import { normalizeEmbeddingModelWithPrefixes } from "./embeddings-model-normalize.js";
-import { createRemoteEmbeddingProvider } from "./embeddings-remote-provider.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
-import { buildRemoteBaseUrlPolicy } from "./remote-http.js";
-import { resolveMemorySecretInputString } from "./secret-input.js";
+} from "./runtime.js";
 
 const log = createSubsystemLogger("memory/embeddings");
 
@@ -47,7 +48,7 @@ function hasAuthorizationHeader(headers: Record<string, string> | undefined): bo
 
 /** Resolves API key (real or synthetic placeholder) from runtime/provider auth config. */
 async function resolveLmstudioApiKey(
-  options: EmbeddingProviderOptions,
+  options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<string | undefined> {
   try {
     return await resolveLmstudioRuntimeApiKey({
@@ -65,8 +66,8 @@ async function resolveLmstudioApiKey(
 
 /** Creates the LM Studio embedding provider client and preloads the target model before return. */
 export async function createLmstudioEmbeddingProvider(
-  options: EmbeddingProviderOptions,
-): Promise<{ provider: EmbeddingProvider; client: LmstudioEmbeddingClient }> {
+  options: MemoryEmbeddingProviderCreateOptions,
+): Promise<{ provider: MemoryEmbeddingProvider; client: LmstudioEmbeddingClient }> {
   const providerConfig = options.config.models?.providers?.lmstudio;
   const providerBaseUrl = providerConfig?.baseUrl?.trim();
   const isFallbackActivation = options.fallback === "lmstudio" && options.provider !== "lmstudio";

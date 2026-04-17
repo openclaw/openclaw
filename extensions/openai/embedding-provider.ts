@@ -1,16 +1,17 @@
-import type { SsrFPolicy } from "../../../../src/infra/net/ssrf.js";
-import { OPENAI_DEFAULT_EMBEDDING_MODEL } from "../../../../src/plugins/provider-model-defaults.js";
-import { normalizeEmbeddingModelWithPrefixes } from "./embeddings-model-normalize.js";
 import {
   createRemoteEmbeddingProvider,
   resolveRemoteEmbeddingClient,
-} from "./embeddings-remote-provider.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
+  type MemoryEmbeddingProvider,
+  type MemoryEmbeddingProviderCreateOptions,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { OPENAI_DEFAULT_EMBEDDING_MODEL } from "./default-models.js";
 
 export type OpenAiEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
+  fetchImpl?: typeof fetch;
   model: string;
 };
 
@@ -23,16 +24,16 @@ const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
 };
 
 export function normalizeOpenAiModel(model: string): string {
-  return normalizeEmbeddingModelWithPrefixes({
-    model,
-    defaultModel: DEFAULT_OPENAI_EMBEDDING_MODEL,
-    prefixes: ["openai/"],
-  });
+  const trimmed = model.trim();
+  if (!trimmed) {
+    return DEFAULT_OPENAI_EMBEDDING_MODEL;
+  }
+  return trimmed.startsWith("openai/") ? trimmed.slice("openai/".length) : trimmed;
 }
 
 export async function createOpenAiEmbeddingProvider(
-  options: EmbeddingProviderOptions,
-): Promise<{ provider: EmbeddingProvider; client: OpenAiEmbeddingClient }> {
+  options: MemoryEmbeddingProviderCreateOptions,
+): Promise<{ provider: MemoryEmbeddingProvider; client: OpenAiEmbeddingClient }> {
   const client = await resolveOpenAiEmbeddingClient(options);
 
   return {
@@ -47,7 +48,7 @@ export async function createOpenAiEmbeddingProvider(
 }
 
 export async function resolveOpenAiEmbeddingClient(
-  options: EmbeddingProviderOptions,
+  options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<OpenAiEmbeddingClient> {
   return await resolveRemoteEmbeddingClient({
     provider: "openai",
