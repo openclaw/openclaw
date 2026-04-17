@@ -1031,6 +1031,21 @@ function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
   return Boolean(channel && to && isDeliverableMessageChannel(channel));
 }
 
+function shouldQueueProtectedPrimaryTelegramTerminalUpdate(
+  task: TaskRecord,
+  owner: TaskDeliveryOwner,
+): boolean {
+  const childSessionKey = normalizeOptionalString(task.childSessionKey);
+  const ownerSessionKey = normalizeOptionalString(owner.sessionKey);
+  return Boolean(
+    task.runtime === "acp" &&
+      task.scopeKind === "session" &&
+      isProtectedPrimaryTelegramOwnerSessionKey(task.ownerKey) &&
+      childSessionKey &&
+      ownerSessionKey === childSessionKey,
+  );
+}
+
 function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus {
   return task.scopeKind === "system" ? "not_applicable" : "parent_missing";
 }
@@ -1110,7 +1125,10 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       });
     }
     const eventText = formatTaskTerminalMessage(latest);
-    if (!canDeliverTaskToRequesterOrigin(latest)) {
+    if (
+      shouldQueueProtectedPrimaryTelegramTerminalUpdate(latest, owner) ||
+      !canDeliverTaskToRequesterOrigin(latest)
+    ) {
       try {
         queueTaskSystemEvent(latest, eventText);
         if (latest.terminalOutcome === "blocked") {

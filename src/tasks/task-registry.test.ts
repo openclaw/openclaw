@@ -19,9 +19,14 @@ import {
   __testing as sessionBindingTesting,
   getSessionBindingService,
 } from "../infra/outbound/session-binding-service.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import {
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { completeTaskRunByRunId, createRunningTaskRun } from "./task-executor.js";
 import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import {
@@ -600,7 +605,7 @@ describe("task-registry", () => {
     });
   });
 
-  it("reroutes protected Telegram ACP completions to the bound child thread instead of the primary DM", async () => {
+  it("queues protected Telegram ACP completions on the bound child lane instead of the primary DM", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
@@ -622,13 +627,6 @@ describe("task-registry", () => {
           parentConversationId: "-1007777777777",
         },
       });
-      hoisted.sendMessageMock.mockResolvedValue({
-        channel: "telegram",
-        to: "-1007777777777",
-        threadId: "77",
-        via: "direct",
-      });
-
       createTaskRecord({
         runtime: "acp",
         ownerKey: "agent:main:telegram:direct:thomas",
@@ -647,19 +645,94 @@ describe("task-registry", () => {
       });
 
       await waitForAssertion(() =>
-        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-          expect.objectContaining({
+        expect(findTaskByRunId("run-protected-thread-bound")).toMatchObject({
+          status: "succeeded",
+          deliveryStatus: "session_queued",
+        }),
+      );
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(peekSystemEvents("agent:main:telegram:direct:thomas")).toEqual([]);
+      expect(peekSystemEventEntries("agent:codex:acp:protected-child")).toEqual([
+        expect.objectContaining({
+          text: expect.stringContaining("Completed safely in the child lane."),
+          deliveryContext: {
             channel: "telegram",
             to: "-1007777777777",
+            accountId: "default",
             threadId: "77",
-            mirror: expect.objectContaining({
-              sessionKey: "agent:codex:acp:protected-child",
-            }),
-          }),
-        ),
+          },
+        }),
+      ]);
+    });
+  });
+
+  it("keeps protected Telegram managed ACP completions on the child session lane with bound delivery context", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      sessionBindingTesting.resetSessionBindingAdaptersForTests();
+      await telegramThreadBindingsTesting.resetTelegramThreadBindingsForTests();
+      createTelegramThreadBindingManager({
+        accountId: "default",
+        persist: false,
+        enableSweeper: false,
+      });
+      const childSessionKey = "agent:codex:acp:protected-managed-child";
+      await getSessionBindingService().bind({
+        targetSessionKey: childSessionKey,
+        targetKind: "session",
+        placement: "current",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-1007777777777:topic:88",
+          parentConversationId: "-1007777777777",
+        },
+      });
+
+      createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:main:telegram:direct:thomas",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:8582659364",
+          accountId: "default",
+        },
+        childSessionKey,
+        runId: "run-protected-managed",
+        task: "Investigate issue",
+        startedAt: 10,
+      });
+
+      completeTaskRunByRunId({
+        runId: "run-protected-managed",
+        runtime: "acp",
+        sessionKey: childSessionKey,
+        terminalSummary: "Completed safely in the child lane.",
+        endedAt: 40,
+        lastEventAt: 40,
+      });
+
+      await waitForAssertion(() =>
+        expect(findTaskByRunId("run-protected-managed")).toMatchObject({
+          status: "succeeded",
+          deliveryStatus: "session_queued",
+        }),
       );
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
       expect(peekSystemEvents("agent:main:telegram:direct:thomas")).toEqual([]);
-      expect(peekSystemEvents("agent:codex:acp:protected-child")).toEqual([]);
+      expect(peekSystemEventEntries(childSessionKey)).toEqual([
+        expect.objectContaining({
+          text: expect.stringContaining("Completed safely in the child lane."),
+          deliveryContext: {
+            channel: "telegram",
+            to: "-1007777777777",
+            accountId: "default",
+            threadId: "88",
+          },
+        }),
+      ]);
     });
   });
 
