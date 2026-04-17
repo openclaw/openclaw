@@ -1,4 +1,4 @@
-import type { ModelProviderConfig, ProviderRuntimeModel } from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   ensureOpenRouterModelCache,
   getOpenRouterModelCapabilities,
@@ -103,7 +103,7 @@ export function buildOpenrouterProvider(): ModelProviderConfig {
  * Build a runtime model definition for any OpenRouter model ID.
  * This enables using any model available on OpenRouter, not just the cached popular ones.
  */
-export function buildDynamicOpenRouterModel(modelId: string): ProviderRuntimeModel {
+export function buildDynamicOpenRouterModel(modelId: string): ModelDefinitionConfig {
   const caps = getOpenRouterModelCapabilities(modelId);
 
   return {
