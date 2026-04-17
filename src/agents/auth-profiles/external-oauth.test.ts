@@ -10,9 +10,9 @@ import type { AuthProfileStore, OAuthCredential } from "./types.js";
 const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
   (params: unknown) => ProviderExternalAuthProfile[]
 >(() => []);
-const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
-  readCodexCliCredentialsCachedMock: vi.fn<() => OAuthCredential | null>(() => null),
-}));
+const readCodexCliCredentialsCachedMock = vi.hoisted(() =>
+  vi.fn<() => OAuthCredential | null>(() => null),
+);
 
 vi.mock("../cli-credentials.js", () => ({
   readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,

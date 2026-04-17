@@ -67,7 +67,6 @@ function oauthCredentialMatches(a: OAuthCredential, b: OAuthCredential): boolean
     a.provider === b.provider &&
     a.access === b.access &&
     a.refresh === b.refresh &&
-    a.expires === b.expires &&
     a.clientId === b.clientId &&
     a.email === b.email &&
     a.displayName === b.displayName &&

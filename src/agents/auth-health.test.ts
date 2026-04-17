@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodexCliCredential } from "./cli-credentials.js";
+import type { OAuthCredential } from "./auth-profiles/types.js";
 
 const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
-  readCodexCliCredentialsCachedMock: vi.fn((): CodexCliCredential | null => null),
+  readCodexCliCredentialsCachedMock: vi.fn<() => OAuthCredential | null>(() => null),
 }));
 
 vi.mock("./cli-credentials.js", () => ({

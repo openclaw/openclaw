@@ -268,38 +268,41 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.CODEX_HOME).toBe("/custom/codex-home");
   });
 
-  it("scrubs direct and live provider keys in mock mode", () => {
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        ANTHROPIC_API_KEY: "anthropic-live",
-        ANTHROPIC_OAUTH_TOKEN: "anthropic-oauth",
-        GEMINI_API_KEY: "gemini-live",
-        GEMINI_API_KEYS: "gemini-a gemini-b",
-        GOOGLE_API_KEY: "google-live",
-        OPENAI_API_KEY: "openai-live",
-        OPENAI_API_KEYS: "openai-a,openai-b",
-        CODEX_HOME: "/host/.codex",
-        OPENCLAW_LIVE_ANTHROPIC_KEY: "anthropic-live",
-        OPENCLAW_LIVE_ANTHROPIC_KEYS: "anthropic-a,anthropic-b",
-        OPENCLAW_LIVE_GEMINI_KEY: "gemini-live",
-        OPENCLAW_LIVE_OPENAI_KEY: "openai-live",
-      }),
-      providerMode: "mock-openai",
-    });
+  it.each(["mock-openai", "aimock"] as const)(
+    "scrubs direct and live provider keys in %s mode",
+    (providerMode) => {
+      const env = buildQaRuntimeEnv({
+        ...createParams({
+          ANTHROPIC_API_KEY: "anthropic-live",
+          ANTHROPIC_OAUTH_TOKEN: "anthropic-oauth",
+          GEMINI_API_KEY: "gemini-live",
+          GEMINI_API_KEYS: "gemini-a gemini-b",
+          GOOGLE_API_KEY: "google-live",
+          OPENAI_API_KEY: "openai-live",
+          OPENAI_API_KEYS: "openai-a,openai-b",
+          CODEX_HOME: "/host/.codex",
+          OPENCLAW_LIVE_ANTHROPIC_KEY: "anthropic-live",
+          OPENCLAW_LIVE_ANTHROPIC_KEYS: "anthropic-a,anthropic-b",
+          OPENCLAW_LIVE_GEMINI_KEY: "gemini-live",
+          OPENCLAW_LIVE_OPENAI_KEY: "openai-live",
+        }),
+        providerMode,
+      });
 
-    expect(env.OPENAI_API_KEY).toBeUndefined();
-    expect(env.OPENAI_API_KEYS).toBeUndefined();
-    expect(env.CODEX_HOME).toBeUndefined();
-    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
-    expect(env.ANTHROPIC_OAUTH_TOKEN).toBeUndefined();
-    expect(env.GEMINI_API_KEY).toBeUndefined();
-    expect(env.GEMINI_API_KEYS).toBeUndefined();
-    expect(env.GOOGLE_API_KEY).toBeUndefined();
-    expect(env.OPENCLAW_LIVE_OPENAI_KEY).toBeUndefined();
-    expect(env.OPENCLAW_LIVE_ANTHROPIC_KEY).toBeUndefined();
-    expect(env.OPENCLAW_LIVE_ANTHROPIC_KEYS).toBeUndefined();
-    expect(env.OPENCLAW_LIVE_GEMINI_KEY).toBeUndefined();
-  });
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+      expect(env.OPENAI_API_KEYS).toBeUndefined();
+      expect(env.CODEX_HOME).toBeUndefined();
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(env.ANTHROPIC_OAUTH_TOKEN).toBeUndefined();
+      expect(env.GEMINI_API_KEY).toBeUndefined();
+      expect(env.GEMINI_API_KEYS).toBeUndefined();
+      expect(env.GOOGLE_API_KEY).toBeUndefined();
+      expect(env.OPENCLAW_LIVE_OPENAI_KEY).toBeUndefined();
+      expect(env.OPENCLAW_LIVE_ANTHROPIC_KEY).toBeUndefined();
+      expect(env.OPENCLAW_LIVE_ANTHROPIC_KEYS).toBeUndefined();
+      expect(env.OPENCLAW_LIVE_GEMINI_KEY).toBeUndefined();
+    },
+  );
 
   it("treats restart socket closures as retryable gateway call errors", () => {
     expect(__testing.isRetryableGatewayCallError("gateway closed (1006 abnormal closure)")).toBe(

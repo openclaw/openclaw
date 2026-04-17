@@ -1,6 +1,6 @@
 import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-runtime.js";
-import { resolveExternalCliAuthProfiles } from "./external-cli-sync.js";
+import * as externalCliSync from "./external-cli-sync.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
@@ -49,7 +49,8 @@ function resolveExternalAuthProfileMap(params: {
   });
 
   const resolved: ExternalAuthProfileMap = new Map();
-  for (const profile of resolveExternalCliAuthProfiles(params.store)) {
+  const cliProfiles = externalCliSync.resolveExternalCliAuthProfiles?.(params.store) ?? [];
+  for (const profile of cliProfiles) {
     resolved.set(profile.profileId, {
       profileId: profile.profileId,
       credential: profile.credential,

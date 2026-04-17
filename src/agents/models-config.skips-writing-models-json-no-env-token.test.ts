@@ -12,6 +12,11 @@ import {
 } from "./models-config.e2e-harness.js";
 import type { ProviderConfig as ModelsProviderConfig } from "./models-config.providers.secrets.js";
 
+vi.mock("./auth-profiles/external-cli-sync.js", () => ({
+  resolveExternalCliAuthProfiles: () => [],
+  syncExternalCliCredentials: () => false,
+}));
+
 vi.mock("./models-config.providers.js", async () => {
   function createImplicitProvider(baseUrl: string): ModelsProviderConfig {
     return {

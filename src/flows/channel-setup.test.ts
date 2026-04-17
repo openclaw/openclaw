@@ -1,5 +1,90 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+type ChannelMeta = import("../channels/plugins/types.core.js").ChannelMeta;
+type ChannelPluginCatalogEntry = import("../channels/plugins/catalog.js").ChannelPluginCatalogEntry;
+type ChannelSetupPlugin = import("../channels/plugins/setup-wizard-types.js").ChannelSetupPlugin;
+type ResolveChannelSetupEntries =
+  typeof import("../commands/channel-setup/discovery.js").resolveChannelSetupEntries;
+type CollectChannelStatus = typeof import("./channel-setup.status.js").collectChannelStatus;
+type LoadChannelSetupPluginRegistrySnapshotForChannel =
+  typeof import("../commands/channel-setup/plugin-install.js").loadChannelSetupPluginRegistrySnapshotForChannel;
+type PluginRegistry = ReturnType<LoadChannelSetupPluginRegistrySnapshotForChannel>;
+
+function makeMeta(id: string, label: string, overrides: Partial<ChannelMeta> = {}): ChannelMeta {
+  return {
+    id: id as ChannelMeta["id"],
+    label,
+    selectionLabel: overrides.selectionLabel ?? label,
+    docsPath: overrides.docsPath ?? `/channels/${id}`,
+    blurb: overrides.blurb ?? "",
+    ...overrides,
+  };
+}
+
+function makeCatalogEntry(
+  id: string,
+  label: string,
+  overrides: Partial<ChannelPluginCatalogEntry> = {},
+): ChannelPluginCatalogEntry {
+  return {
+    id,
+    pluginId: overrides.pluginId ?? id,
+    origin: overrides.origin,
+    meta: makeMeta(id, label, overrides.meta),
+    install: overrides.install ?? { npmSpec: `@openclaw/${id}` },
+  };
+}
+
+function makeSetupPlugin(params: {
+  id: string;
+  label: string;
+  setupWizard?: ChannelSetupPlugin["setupWizard"];
+}): ChannelSetupPlugin {
+  return {
+    id: params.id as ChannelSetupPlugin["id"],
+    meta: makeMeta(params.id, params.label),
+    capabilities: { chatTypes: [] },
+    config: {
+      resolveAccount: vi.fn(() => ({})),
+    } as unknown as ChannelSetupPlugin["config"],
+    ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),
+  };
+}
+
+function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): PluginRegistry {
+  return {
+    plugins: [],
+    channels: [],
+    channelSetups: [],
+    providers: [],
+    authProviders: [],
+    authRequirements: [],
+    webSearchProviders: [],
+    webFetchProviders: [],
+    mediaUnderstandingProviders: [],
+    imageGenerationProviders: [],
+    videoGenerationProviders: [],
+    musicGenerationProviders: [],
+    speechProviders: [],
+    realtimeTranscriptionProviders: [],
+    realtimeVoiceProviders: [],
+    cliBackends: [],
+    tools: [],
+    hooks: [],
+    typedHooks: [],
+    bundledExtensionDescriptors: [],
+    doctorChecks: [],
+    flowContributions: [],
+    flowContributionResolvers: [],
+    providerExtensions: [],
+    toolsets: [],
+    toolDisplayEntries: [],
+    textTransforms: [],
+    diagnostics: [],
+    ...overrides,
+  } as unknown as PluginRegistry;
+}
+
 const resolveAgentWorkspaceDir = vi.hoisted(() =>
   vi.fn((_cfg?: unknown, _agentId?: unknown) => "/tmp/openclaw-workspace"),
 );
@@ -11,36 +96,19 @@ const getChannelSetupPlugin = vi.hoisted(() => vi.fn((_channel?: unknown) => und
 const listChannelSetupPlugins = vi.hoisted(() => vi.fn((): unknown[] => []));
 const listActiveChannelSetupPlugins = vi.hoisted(() => vi.fn((): unknown[] => []));
 const loadChannelSetupPluginRegistrySnapshotForChannel = vi.hoisted(() =>
-  vi.fn(
-    (
-      _params?: unknown,
-    ): {
-      channels: unknown[];
-      channelSetups: unknown[];
-    } => ({ channels: [], channelSetups: [] }),
-  ),
+  vi.fn<LoadChannelSetupPluginRegistrySnapshotForChannel>((_params) => makePluginRegistry()),
 );
 const resolveChannelSetupEntries = vi.hoisted(() =>
-  vi.fn(
-    (
-      _params?: unknown,
-    ): {
-      entries: unknown[];
-      installedCatalogEntries: unknown[];
-      installableCatalogEntries: unknown[];
-      installedCatalogById: Map<unknown, unknown>;
-      installableCatalogById: Map<unknown, unknown>;
-    } => ({
-      entries: [],
-      installedCatalogEntries: [],
-      installableCatalogEntries: [],
-      installedCatalogById: new Map(),
-      installableCatalogById: new Map(),
-    }),
-  ),
+  vi.fn<ResolveChannelSetupEntries>((_params) => ({
+    entries: [],
+    installedCatalogEntries: [],
+    installableCatalogEntries: [],
+    installedCatalogById: new Map(),
+    installableCatalogById: new Map(),
+  })),
 );
 const collectChannelStatus = vi.hoisted(() =>
-  vi.fn(async (_params?: unknown) => ({
+  vi.fn<CollectChannelStatus>(async (_params) => ({
     installedPlugins: [],
     catalogEntries: [],
     installedCatalogEntries: [],
@@ -70,14 +138,16 @@ vi.mock("../channels/registry.js", () => ({
 }));
 
 vi.mock("../commands/channel-setup/discovery.js", () => ({
-  resolveChannelSetupEntries: (params?: unknown) => resolveChannelSetupEntries(params),
+  resolveChannelSetupEntries: (params: Parameters<ResolveChannelSetupEntries>[0]) =>
+    resolveChannelSetupEntries(params),
   shouldShowChannelInSetup: () => true,
 }));
 
 vi.mock("../commands/channel-setup/plugin-install.js", () => ({
   ensureChannelSetupPluginInstalled: vi.fn(),
-  loadChannelSetupPluginRegistrySnapshotForChannel: (params?: unknown) =>
-    loadChannelSetupPluginRegistrySnapshotForChannel(params),
+  loadChannelSetupPluginRegistrySnapshotForChannel: (
+    params: Parameters<LoadChannelSetupPluginRegistrySnapshotForChannel>[0],
+  ) => loadChannelSetupPluginRegistrySnapshotForChannel(params),
 }));
 
 vi.mock("../commands/channel-setup/registry.js", () => ({
@@ -102,7 +172,8 @@ vi.mock("./channel-setup.prompts.js", () => ({
 }));
 
 vi.mock("./channel-setup.status.js", () => ({
-  collectChannelStatus: (params?: unknown) => collectChannelStatus(params),
+  collectChannelStatus: (params: Parameters<CollectChannelStatus>[0]) =>
+    collectChannelStatus(params),
   noteChannelPrimer: vi.fn(),
   noteChannelStatus: vi.fn(),
   resolveChannelSelectionNoteLines: vi.fn(() => []),
@@ -127,10 +198,7 @@ describe("setupChannels workspace shadow exclusion", () => {
     getChannelSetupPlugin.mockReturnValue(undefined);
     listActiveChannelSetupPlugins.mockReturnValue([]);
     listChannelSetupPlugins.mockReturnValue([]);
-    loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue({
-      channels: [],
-      channelSetups: [],
-    });
+    loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue(makePluginRegistry());
     resolveChannelSetupEntries.mockReturnValue({
       entries: [],
       installedCatalogEntries: [],
@@ -206,7 +274,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       entries: [
         {
           id: "telegram",
-          meta: { id: "telegram", label: "Telegram", blurb: "" },
+          meta: makeMeta("telegram", "Telegram"),
         },
       ],
       installedCatalogEntries: [],
@@ -240,8 +308,7 @@ describe("setupChannels workspace shadow exclusion", () => {
 
   it("keeps already-active setup plugins in the deferred picker without registry fallback", async () => {
     const activePlugin = {
-      id: "custom-chat",
-      meta: { id: "custom-chat", label: "Custom Chat", blurb: "" },
+      ...makeSetupPlugin({ id: "custom-chat", label: "Custom Chat" }),
     };
     listActiveChannelSetupPlugins.mockReturnValue([activePlugin]);
     resolveChannelSetupEntries.mockImplementation(() => ({
@@ -293,21 +360,17 @@ describe("setupChannels workspace shadow exclusion", () => {
         },
       })),
     };
-    const activePlugin = {
+    const activePlugin = makeSetupPlugin({
       id: "custom-chat",
-      meta: { id: "custom-chat", label: "Custom Chat", blurb: "" },
-      capabilities: {},
-      config: {
-        resolveAccount: vi.fn(() => ({})),
-      },
+      label: "Custom Chat",
       setupWizard,
-    };
+    });
     listActiveChannelSetupPlugins.mockReturnValue([activePlugin]);
     resolveChannelSetupEntries.mockReturnValue({
       entries: [
         {
           id: "custom-chat",
-          meta: { id: "custom-chat", label: "Custom Chat", blurb: "" },
+          meta: makeMeta("custom-chat", "Custom Chat"),
         },
       ],
       installedCatalogEntries: [],
@@ -346,6 +409,14 @@ describe("setupChannels workspace shadow exclusion", () => {
   });
 
   it("loads the selected bundled catalog plugin without writing explicit plugin enablement", async () => {
+    const configure = vi.fn(async ({ cfg }: { cfg: Record<string, unknown> }) => ({
+      cfg: {
+        ...cfg,
+        channels: {
+          telegram: { token: "secret" },
+        },
+      } as never,
+    }));
     const setupWizard = {
       channel: "telegram",
       getStatus: vi.fn(async () => ({
@@ -353,35 +424,22 @@ describe("setupChannels workspace shadow exclusion", () => {
         configured: false,
         statusLines: [],
       })),
-      configure: vi.fn(async ({ cfg }: { cfg: Record<string, unknown> }) => ({
-        cfg: {
-          ...cfg,
-          channels: {
-            telegram: { token: "secret" },
-          },
-        },
-      })),
-    };
-    const telegramPlugin = {
+      configure,
+    } as ChannelSetupPlugin["setupWizard"];
+    const telegramPlugin = makeSetupPlugin({
       id: "telegram",
-      meta: { id: "telegram", label: "Telegram", blurb: "" },
-      capabilities: {},
-      config: {
-        resolveAccount: vi.fn(() => ({})),
-      },
+      label: "Telegram",
       setupWizard,
-    };
-    const installedCatalogEntry = {
-      id: "telegram",
+    });
+    const installedCatalogEntry = makeCatalogEntry("telegram", "Telegram", {
       pluginId: "telegram",
       origin: "bundled",
-      meta: { id: "telegram", label: "Telegram", blurb: "" },
-    };
+    });
     resolveChannelSetupEntries.mockReturnValue({
       entries: [
         {
           id: "telegram",
-          meta: { id: "telegram", label: "Telegram", blurb: "" },
+          meta: makeMeta("telegram", "Telegram"),
         },
       ],
       installedCatalogEntries: [installedCatalogEntry],
@@ -389,10 +447,17 @@ describe("setupChannels workspace shadow exclusion", () => {
       installedCatalogById: new Map([["telegram", installedCatalogEntry]]),
       installableCatalogById: new Map(),
     });
-    loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue({
-      channels: [{ plugin: telegramPlugin }],
-      channelSetups: [],
-    });
+    loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue(
+      makePluginRegistry({
+        channels: [
+          {
+            pluginId: "telegram",
+            source: "bundled",
+            plugin: telegramPlugin,
+          },
+        ],
+      }),
+    );
     const select = vi.fn().mockResolvedValueOnce("telegram").mockResolvedValueOnce("__done__");
 
     const next = await setupChannels(
@@ -420,7 +485,7 @@ describe("setupChannels workspace shadow exclusion", () => {
     );
     expect(getChannelSetupPlugin).not.toHaveBeenCalled();
     expect(collectChannelStatus).not.toHaveBeenCalled();
-    expect(setupWizard.configure).toHaveBeenCalledWith(
+    expect(configure).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg: {},
       }),
@@ -446,7 +511,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       entries: [
         {
           id: "telegram",
-          meta: { id: "telegram", label: "Telegram", blurb: "" },
+          meta: makeMeta("telegram", "Telegram"),
         },
       ],
       installedCatalogEntries: [],
@@ -495,7 +560,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       entries: [
         {
           id: "telegram",
-          meta: { id: "telegram", label: "Telegram", blurb: "" },
+          meta: makeMeta("telegram", "Telegram"),
         },
       ],
       installedCatalogEntries: [],
