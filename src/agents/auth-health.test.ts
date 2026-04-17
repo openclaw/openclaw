@@ -1,4 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
+  readCodexCliCredentialsCachedMock: vi.fn(() => null),
+}));
+
+vi.mock("./cli-credentials.js", () => ({
+  readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
+  readMiniMaxCliCredentialsCached: () => null,
+  resetCliCredentialCachesForTest: () => undefined,
+}));
+
 import {
   buildAuthHealthSummary,
   DEFAULT_OAUTH_WARN_MS,
@@ -14,6 +25,11 @@ describe("buildAuthHealthSummary", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  beforeEach(() => {
+    readCodexCliCredentialsCachedMock.mockReset();
+    readCodexCliCredentialsCachedMock.mockReturnValue(null);
   });
 
   it("classifies OAuth and API key profiles", () => {
@@ -58,13 +74,12 @@ describe("buildAuthHealthSummary", () => {
     const statuses = profileStatuses(summary);
 
     expect(statuses["anthropic:ok"]).toBe("ok");
-    // OAuth credentials with refresh tokens are auto-renewable, so they report "ok"
-    expect(statuses["anthropic:expiring"]).toBe("ok");
-    expect(statuses["anthropic:expired"]).toBe("ok");
+    expect(statuses["anthropic:expiring"]).toBe("expiring");
+    expect(statuses["anthropic:expired"]).toBe("expired");
     expect(statuses["anthropic:api"]).toBe("static");
 
     const provider = summary.providers.find((entry) => entry.provider === "anthropic");
-    expect(provider?.status).toBe("ok");
+    expect(provider?.status).toBe("expired");
   });
 
   it("reports expired for OAuth without a refresh token", () => {
@@ -90,6 +105,38 @@ describe("buildAuthHealthSummary", () => {
     const statuses = profileStatuses(summary);
 
     expect(statuses["google:no-refresh"]).toBe("expired");
+  });
+
+  it("prefers fresher imported external OAuth credentials when reporting health", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    readCodexCliCredentialsCachedMock.mockReturnValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "fresh-cli-access",
+      refresh: "fresh-cli-refresh",
+      expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
+      accountId: "acct-cli",
+    });
+    const store = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "expired-access",
+          refresh: "expired-refresh",
+          expires: now - 10_000,
+        },
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    });
+
+    const statuses = profileStatuses(summary);
+    expect(statuses["openai-codex:default"]).toBe("ok");
   });
 
   it("marks token profiles with invalid expires as missing with reason code", () => {

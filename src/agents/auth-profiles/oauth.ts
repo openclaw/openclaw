@@ -24,6 +24,7 @@ import {
 } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
+import { resolveEffectiveOAuthCredential } from "./effective-oauth.js";
 import {
   areOAuthCredentialsEquivalent,
   readManagedExternalCliCredential,
@@ -753,11 +754,16 @@ async function tryResolveOAuthProfile(
     return null;
   }
 
-  if (Date.now() < cred.expires) {
+  const effectiveCred = resolveEffectiveOAuthCredential({
+    profileId,
+    credential: cred,
+  });
+
+  if (Date.now() < effectiveCred.expires) {
     return await buildOAuthProfileResult({
-      provider: cred.provider,
-      credentials: cred,
-      email: cred.email,
+      provider: effectiveCred.provider,
+      credentials: effectiveCred,
+      email: effectiveCred.email ?? cred.email,
     });
   }
 
@@ -904,12 +910,16 @@ export async function resolveApiKeyForProfile(
       agentDir: params.agentDir,
       cred,
     }) ?? cred;
+  const effectiveOAuthCred = resolveEffectiveOAuthCredential({
+    profileId,
+    credential: oauthCred,
+  });
 
-  if (Date.now() < oauthCred.expires) {
+  if (Date.now() < effectiveOAuthCred.expires) {
     return await buildOAuthProfileResult({
-      provider: oauthCred.provider,
-      credentials: oauthCred,
-      email: oauthCred.email,
+      provider: effectiveOAuthCred.provider,
+      credentials: effectiveOAuthCred,
+      email: effectiveOAuthCred.email,
     });
   }
 
