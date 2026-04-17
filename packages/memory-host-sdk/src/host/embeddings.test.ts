@@ -4,10 +4,20 @@ import { createEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
 import * as nodeLlamaModule from "./node-llama.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
-vi.mock("../../../../src/agents/model-auth.js", async () => {
-  const { createModelAuthMockModule } =
-    await import("../../../../src/test-utils/model-auth-mock.js");
-  return createModelAuthMockModule();
+const { resolveApiKeyForProviderMock } = vi.hoisted(() => ({
+  resolveApiKeyForProviderMock: vi.fn(),
+}));
+
+vi.mock("../../../../src/agents/model-auth.js", () => {
+  return {
+    resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+    requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
+      if (auth.apiKey) {
+        return auth.apiKey;
+      }
+      throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth.mode}).`);
+    },
+  };
 });
 
 vi.mock("../../../../src/infra/net/fetch-guard.js", () => ({

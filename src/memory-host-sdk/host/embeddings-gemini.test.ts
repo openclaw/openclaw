@@ -20,9 +20,20 @@ import {
   type JsonFetchMock,
 } from "./embeddings-provider.test-support.js";
 
-vi.mock("../../agents/model-auth.js", async () => {
-  const { createModelAuthMockModule } = await import("../../test-utils/model-auth-mock.js");
-  return createModelAuthMockModule();
+const { resolveApiKeyForProviderMock } = vi.hoisted(() => ({
+  resolveApiKeyForProviderMock: vi.fn(),
+}));
+
+vi.mock("../../agents/model-auth.js", () => {
+  return {
+    resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+    requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
+      if (auth.apiKey) {
+        return auth.apiKey;
+      }
+      throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth.mode}).`);
+    },
+  };
 });
 
 beforeEach(() => {
