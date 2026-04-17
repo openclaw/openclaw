@@ -262,8 +262,29 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
   });
 
   it("initializes configured ACP bindings only after preflight accepts the message", async () => {
+    // Phase 11 P2 (main-mention escape hatch) makes explicit @main mentions
+    // bypass any thread binding, including configured ACP bindings. Use a
+    // plain message here so the configured-binding route is exercised;
+    // the main-mention override is covered separately below.
+    const plainMessage = createDiscordMessage({
+      id: "m-no-mention-configured",
+      channelId: CHANNEL_ID,
+      content: "hello",
+      mentionedUsers: [],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "alice",
+      },
+    });
     const result = await preflightDiscordMessage(
       createBasePreflightParams({
+        data: createGuildEvent({
+          channelId: CHANNEL_ID,
+          guildId: GUILD_ID,
+          author: plainMessage.author,
+          message: plainMessage,
+        }),
         guildEntries: {
           [GUILD_ID]: {
             id: GUILD_ID,

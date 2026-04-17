@@ -112,6 +112,7 @@ function createNoopManager(accountIdRaw?: string): ThreadBindingManager {
     touchThread: () => null,
     bindTarget: async () => null,
     unbindThread: () => null,
+    endBinding: () => null,
     unbindBySessionKey: () => [],
     stop: () => {},
   };
@@ -144,7 +145,7 @@ function stripDiscordConversationPrefix(value?: string | null): string | undefin
   return trimmed;
 }
 
-function toSessionBindingRecord(
+export function toSessionBindingRecord(
   record: ThreadBindingRecord,
   defaults: { idleTimeoutMs: number; maxAgeMs: number },
 ): SessionBindingRecord {
@@ -153,6 +154,10 @@ function toSessionBindingRecord(
       accountId: record.accountId,
       threadId: record.threadId,
     }) ?? `${record.accountId}:${record.threadId}`;
+  // Phase 11 P4: mark bindings that went through endBinding() as "ended"
+  // so preflight can treat them equivalently to stale sessions and trigger
+  // an in-place respawn instead of routing to a dead target.
+  const status: SessionBindingRecord["status"] = record.endedAt != null ? "ended" : "active";
   return {
     bindingId,
     targetSessionKey: record.targetSessionKey,
@@ -163,7 +168,7 @@ function toSessionBindingRecord(
       conversationId: record.threadId,
       parentConversationId: record.channelId,
     },
-    status: "active",
+    status,
     boundAt: record.boundAt,
     expiresAt: resolveEffectiveBindingExpiresAt({
       record,
@@ -185,6 +190,8 @@ function toSessionBindingRecord(
         record,
         defaultMaxAgeMs: defaults.maxAgeMs,
       }),
+      ...(record.endedAt != null ? { endedAt: record.endedAt } : {}),
+      ...(record.endedReason ? { endedReason: record.endedReason } : {}),
       ...record.metadata,
     },
   };
@@ -532,6 +539,34 @@ export function createThreadBindingManager(
         void maybeSendBindingMessage({ cfg, record, text: introText });
       }
       return record;
+    },
+    endBinding: (endParams) => {
+      const bindingKey = resolveBindingRecordKey({
+        accountId,
+        threadId: endParams.threadId,
+      });
+      if (!bindingKey) {
+        return null;
+      }
+      const existing = BINDINGS_BY_THREAD_ID.get(bindingKey);
+      if (!existing || existing.accountId !== accountId) {
+        return null;
+      }
+      // Phase 11 P4: mark the record as ended in-place. Unlike unbindThread
+      // this keeps webhookId/webhookToken/metadata so the next inbound
+      // message can respawn the ACP child on the same thread with the same
+      // webhook identity (preserving the ⚙/emoji-prefixed persona).
+      const now = Date.now();
+      const next: ThreadBindingRecord = {
+        ...existing,
+        endedAt: now,
+        endedReason: normalizeOptionalString(endParams.reason) ?? existing.endedReason,
+      };
+      setBindingRecord(next);
+      if (persist) {
+        saveBindingsToDisk();
+      }
+      return next;
     },
     unbindThread: (unbindParams) => {
       const bindingKey = resolveBindingRecordKey({

@@ -17,6 +17,16 @@ export type ThreadBindingRecord = {
   idleTimeoutMs?: number;
   /** Hard max-age window in milliseconds from bind time (0 disables hard cap). */
   maxAgeMs?: number;
+  /**
+   * Timestamp at which the binding entered the "ended" lifecycle state.
+   * "Ended" bindings retain webhook credentials + metadata so the next
+   * inbound message can trigger an in-place respawn rather than starting
+   * a fresh conversation. Distinct from `unbindThread` (which destroys the
+   * binding entirely; e.g., thread-delete / user unbind).
+   */
+  endedAt?: number;
+  /** Human-readable reason, e.g. "session-closed", "session-error". */
+  endedReason?: string;
   metadata?: Record<string, unknown>;
 };
 
@@ -65,6 +75,14 @@ export type ThreadBindingManager = {
     sendFarewell?: boolean;
     farewellText?: string;
   }) => ThreadBindingRecord | null;
+  /**
+   * Mark a binding as "ended" without destroying it. Preserves webhook
+   * credentials, metadata, and the thread<->sessionKey association so the
+   * next inbound message can respawn the ACP child in place. Used when an
+   * ACP session closes cleanly (graceful farewell) vs. `unbindThread` which
+   * wipes the binding on thread-delete / thread-archive / user unbind.
+   */
+  endBinding: (params: { threadId: string; reason?: string }) => ThreadBindingRecord | null;
   unbindBySessionKey: (params: {
     targetSessionKey: string;
     targetKind?: ThreadBindingTargetKind;

@@ -10,6 +10,17 @@ import type {
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export { getAcpSessionManager };
+// Phase 11 Discord Surface Overhaul (P3): bundled channels need to respawn
+// dead ACP children in-place when an inbound arrives on a bound thread whose
+// target session is stale/none/ended. Re-export the canonical spawn path so
+// extensions do not reach into `src/agents/**` directly.
+export {
+  isSpawnAcpAcceptedResult,
+  spawnAcpDirect,
+  type SpawnAcpContext,
+  type SpawnAcpParams,
+  type SpawnAcpResult,
+} from "../agents/acp-spawn.js";
 export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
 export {

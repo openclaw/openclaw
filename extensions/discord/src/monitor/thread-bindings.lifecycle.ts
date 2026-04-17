@@ -336,12 +336,16 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
   let removed = 0;
   for (const binding of staleBindings) {
     staleSessionKeys.push(binding.targetSessionKey);
-    const unbound = manager.unbindThread({
+    // Phase 11 P4: mark the binding as "ended" instead of destroying it. The
+    // thread, webhook credentials, and metadata are preserved so the next
+    // inbound user message respawns the ACP child in-place (see preflight
+    // P3). Callers that explicitly want destruction (thread-delete,
+    // thread-archive, user-requested unbind) continue to use unbindThread.
+    const ended = manager.endBinding({
       threadId: binding.threadId,
       reason: "stale-session",
-      sendFarewell: params.sendFarewell ?? false,
     });
-    if (unbound) {
+    if (ended) {
       removed += 1;
     }
   }

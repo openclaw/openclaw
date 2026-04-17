@@ -1254,7 +1254,15 @@ describe("thread binding lifecycle", () => {
       targetKind: "acp",
       targetSessionKey: "agent:codex:acp:healthy",
     });
-    expect(manager.getByThreadId("thread-acp-stale")).toBeUndefined();
+    // Phase 11 P4: stale bindings are marked "ended" in-place (not destroyed)
+    // so the next inbound message can respawn the ACP child while preserving
+    // webhook credentials and metadata.
+    const endedStale = manager.getByThreadId("thread-acp-stale");
+    expect(endedStale).toBeDefined();
+    expect(endedStale?.endedAt).toBeDefined();
+    expect(endedStale?.endedReason).toBe("stale-session");
+    expect(endedStale?.webhookId).toBe("wh-1");
+    expect(endedStale?.webhookToken).toBe("tok-1");
     expect(requireBinding(manager, "thread-subagent")).toMatchObject({
       threadId: "thread-subagent",
       targetKind: "subagent",
@@ -1390,7 +1398,12 @@ describe("thread binding lifecycle", () => {
     expect(result.checked).toBe(1);
     expect(result.removed).toBe(1);
     expect(result.staleSessionKeys).toContain("agent:codex:acp:running");
-    expect(manager.getByThreadId("thread-acp-running")).toBeUndefined();
+    // Phase 11 P4: stale-by-health-probe bindings end in-place; next inbound
+    // triggers a respawn rather than starting a fresh conversation.
+    const endedRunning = manager.getByThreadId("thread-acp-running");
+    expect(endedRunning).toBeDefined();
+    expect(endedRunning?.endedAt).toBeDefined();
+    expect(endedRunning?.endedReason).toBe("stale-session");
   });
 
   it("keeps running ACP bindings when health probe is uncertain", async () => {

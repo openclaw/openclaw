@@ -55,6 +55,16 @@ import {
 } from "./route-resolution.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
 import { isRecentlyUnboundThreadWebhookMessage } from "./thread-bindings.js";
+import { toSessionBindingRecord } from "./thread-bindings.manager.js";
+import {
+  respawnBoundAcpThread,
+  type RespawnThreadBindingManagerLike,
+} from "./thread-bindings.respawn.js";
+import {
+  DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
+  DEFAULT_THREAD_BINDING_MAX_AGE_MS,
+  type ThreadBindingRecord,
+} from "./thread-bindings.types.js";
 
 export type {
   DiscordMessagePreflightContext,
@@ -169,6 +179,133 @@ function resolveInjectedBoundThreadLookupRecord(params: {
   return binding && typeof binding === "object"
     ? (binding as BoundThreadLookupRecordLike)
     : undefined;
+}
+
+/**
+ * Phase 11 P1: local-fallback thread-binding lookup. Reads from the handler's
+ * own `params.threadBindings` manager, which is populated by channel startup
+ * BEFORE the session-binding adapter registers with
+ * `ADAPTERS_BY_CHANNEL_ACCOUNT`. Returns a full `ThreadBindingRecord` (not
+ * just the lookup-shaped subset) so callers can feed it into
+ * `toSessionBindingRecord`.
+ */
+function resolveLocalThreadBindingRecord(params: {
+  threadBindings: DiscordMessagePreflightParams["threadBindings"];
+  threadId: string;
+}): ThreadBindingRecord | undefined {
+  const getByThreadId = (params.threadBindings as { getByThreadId?: (threadId: string) => unknown })
+    .getByThreadId;
+  if (typeof getByThreadId !== "function") {
+    return undefined;
+  }
+  const record = getByThreadId(params.threadId);
+  if (!record || typeof record !== "object") {
+    return undefined;
+  }
+  // Duck-type: the real thread binding records carry accountId + targetSessionKey.
+  const candidate = record as Partial<ThreadBindingRecord>;
+  if (!candidate.accountId || !candidate.targetSessionKey || !candidate.threadId) {
+    return undefined;
+  }
+  return candidate as ThreadBindingRecord;
+}
+
+type MaybeRespawnStaleBindingResult =
+  | { newBinding: SessionBindingRecord; failed?: undefined; error?: undefined }
+  | { newBinding?: undefined; failed: true; error: string }
+  | undefined;
+
+/**
+ * Phase 11 P3: check session liveness and respawn in place if the bound
+ * target is stale/none/ended. Returns:
+ *   - `undefined` when the session is healthy; caller uses original binding.
+ *   - `{newBinding}` when respawn succeeded; caller swaps to new binding.
+ *   - `{failed: true, error}` when respawn itself failed; caller drops inbound.
+ */
+async function maybeRespawnStaleThreadBinding(params: {
+  cfg: DiscordMessagePreflightParams["cfg"];
+  binding: SessionBindingRecord;
+  threadBindingsManager: DiscordMessagePreflightParams["threadBindings"];
+}): Promise<MaybeRespawnStaleBindingResult> {
+  // Only ACP session bindings get the liveness check here. Subagent bindings
+  // are backed by their spawned runner record; plugin-owned bindings are
+  // handled separately upstream.
+  if (params.binding.targetKind !== "session") {
+    return undefined;
+  }
+  // Configured-binding records (metadata.source === "config") are owned by
+  // the configured-binding layer — session lifecycle is managed there, NOT
+  // by the inbound respawn path. Skip them to avoid fighting for ownership.
+  const metadataSource =
+    typeof params.binding.metadata?.source === "string"
+      ? params.binding.metadata.source
+      : undefined;
+  if (metadataSource === "config") {
+    return undefined;
+  }
+  const sessionKey = params.binding.targetSessionKey?.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  const endedAt =
+    typeof params.binding.metadata?.endedAt === "number"
+      ? params.binding.metadata.endedAt
+      : undefined;
+  const isEnded = params.binding.status === "ended" || endedAt != null;
+
+  let needsRespawn = isEnded;
+  if (!needsRespawn) {
+    try {
+      const { getAcpSessionManager } = await import("openclaw/plugin-sdk/acp-runtime");
+      const resolution = getAcpSessionManager().resolveSession({
+        cfg: params.cfg,
+        sessionKey,
+      });
+      if (resolution.kind === "stale" || resolution.kind === "none") {
+        needsRespawn = true;
+      }
+    } catch (err) {
+      logVerbose(
+        `discord: acp resolveSession threw for ${sessionKey}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      // On resolve failure, don't force respawn — preserve current behavior.
+      return undefined;
+    }
+  }
+
+  if (!needsRespawn) {
+    return undefined;
+  }
+
+  // Runtime check: respawn requires the full thread-bindings manager, not the
+  // narrower DiscordThreadBindingLookup shape. In production the injected
+  // value IS a full manager; noop managers in unrelated tests are tolerated
+  // by bailing out here.
+  const managerCandidate = params.threadBindingsManager as unknown as {
+    bindTarget?: unknown;
+    getIdleTimeoutMs?: unknown;
+  };
+  if (
+    typeof managerCandidate.bindTarget !== "function" ||
+    typeof managerCandidate.getIdleTimeoutMs !== "function"
+  ) {
+    logVerbose(
+      `discord: skipping respawn for ${sessionKey} — lookup-shaped binding manager cannot spawn`,
+    );
+    return undefined;
+  }
+  const result = await respawnBoundAcpThread({
+    cfg: params.cfg,
+    binding: params.binding,
+    threadBindingsManager:
+      params.threadBindingsManager as unknown as RespawnThreadBindingManagerLike,
+  });
+  if (result.ok) {
+    return { newBinding: result.newBinding };
+  }
+  return { failed: true, error: `${result.errorCode}: ${result.error}` };
 }
 
 function resolveDiscordMentionState(params: {
@@ -637,6 +774,28 @@ export async function preflightDiscordMessage(
       conversationId: bindingConversationId,
       parentConversationId: earlyThreadParentId,
     }) ?? undefined;
+
+  // Phase 11 P1: local-fallback thread-binding lookup. At cold start the
+  // Discord session-binding adapter may not yet be registered in
+  // ADAPTERS_BY_CHANNEL_ACCOUNT, in which case `resolveByConversation` returns
+  // null even though the handler's own `params.threadBindings` manager DOES
+  // know about the binding. Consult the local manager directly as a fallback.
+  if (threadBinding == null && bindingConversationId && params.threadBindings) {
+    const localRecord = resolveLocalThreadBindingRecord({
+      threadBindings: params.threadBindings,
+      threadId: bindingConversationId,
+    });
+    if (localRecord) {
+      threadBinding = toSessionBindingRecord(localRecord, {
+        idleTimeoutMs: DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
+        maxAgeMs: DEFAULT_THREAD_BINDING_MAX_AGE_MS,
+      });
+      logDebug(
+        `[discord-preflight] local-fallback thread binding for ${bindingConversationId} sessionKey=${threadBinding.targetSessionKey}`,
+      );
+    }
+  }
+
   const configuredRoute =
     threadBinding == null
       ? conversationRuntime.resolveConfiguredBindingRoute({
@@ -665,6 +824,47 @@ export async function preflightDiscordMessage(
     logVerbose(`discord: drop bound-thread webhook echo message ${message.id}`);
     return null;
   }
+
+  // Phase 11 P2: main-mention escape hatch. If the user explicitly @-mentions
+  // the main bot in a bound thread, bypass the binding so main responds. The
+  // ACP child does NOT see the message. `explicitlyMentioned` is matched
+  // specifically against `botId` (= `params.botUserId`, which is main's user
+  // id, not a sub-agent's).
+  const explicitlyMentionedMain = Boolean(
+    botId && message.mentionedUsers?.some((user: User) => user.id === botId),
+  );
+  if (threadBinding != null && explicitlyMentionedMain) {
+    logDebug(
+      `[discord-preflight] main-mention escape hatch: overriding thread binding ${threadBinding.targetSessionKey} for message ${message.id} (reason=main-mention)`,
+    );
+    threadBinding = undefined;
+  }
+
+  // Phase 11 P3: session-liveness check + respawn-in-place. If the binding
+  // points to an ACP session that is stale/none/ended, spawn a fresh ACP
+  // child, rebind in place (preserves webhook credentials), and route the
+  // current message to the new session.
+  //
+  // Scoped to bound THREADS only (not DMs or plain channel bindings). The
+  // respawn helper creates a thread-bound session, so applying it to DM/
+  // channel bindings would change their placement shape — and DMs don't
+  // have the thread-webhook identity that motivates in-place rebind.
+  if (threadBinding != null && !explicitlyMentionedMain && earlyThreadChannel != null) {
+    const acpRespawnResult = await maybeRespawnStaleThreadBinding({
+      cfg: params.cfg,
+      binding: threadBinding,
+      threadBindingsManager: params.threadBindings,
+    });
+    if (acpRespawnResult?.newBinding) {
+      threadBinding = acpRespawnResult.newBinding;
+    } else if (acpRespawnResult?.failed) {
+      logVerbose(
+        `discord: respawn failed for thread ${bindingConversationId} — dropping inbound ${message.id}: ${acpRespawnResult.error}`,
+      );
+      return null;
+    }
+  }
+
   const boundSessionKey = conversationRuntime.isPluginOwnedSessionBindingRecord(threadBinding)
     ? ""
     : threadBinding?.targetSessionKey?.trim();
@@ -688,9 +888,9 @@ export async function preflightDiscordMessage(
     return null;
   }
   const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId);
-  const explicitlyMentioned = Boolean(
-    botId && message.mentionedUsers?.some((user: User) => user.id === botId),
-  );
+  // Computed earlier (see P2 above); kept here under this name for clarity
+  // of the downstream mention-decision pipeline.
+  const explicitlyMentioned = explicitlyMentionedMain;
   const hasAnyMention = Boolean(
     !isDirectMessage &&
     ((message.mentionedUsers?.length ?? 0) > 0 ||

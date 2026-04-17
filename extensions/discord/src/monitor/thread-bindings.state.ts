@@ -178,6 +178,11 @@ function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBin
       : undefined;
   const metadata =
     value.metadata && typeof value.metadata === "object" ? { ...value.metadata } : undefined;
+  const endedAt =
+    typeof value.endedAt === "number" && Number.isFinite(value.endedAt)
+      ? Math.max(0, Math.floor(value.endedAt))
+      : undefined;
+  const endedReason = normalizeOptionalString(value.endedReason);
   const legacyExpiresAt =
     typeof (value as { expiresAt?: unknown }).expiresAt === "number" &&
     Number.isFinite((value as { expiresAt?: unknown }).expiresAt)
@@ -217,6 +222,8 @@ function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBin
     lastActivityAt,
     idleTimeoutMs: migratedIdleTimeoutMs,
     maxAgeMs: migratedMaxAgeMs,
+    endedAt,
+    endedReason,
     metadata,
   };
 }
