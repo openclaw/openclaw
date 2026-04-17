@@ -464,16 +464,22 @@ export async function reconcileShortTermDreamingCronJob(params: {
 
   const validation = validateMemoryDreamingFrequency(params.config.cron, params.config.timezone);
   if (!validation.valid) {
-    const timezoneHint =
-      validation.reason === "inline-timezone"
-        ? " Timezone must be set via dreaming.timezone, not inline in the expression."
-        : "";
     // Strip any trailing period on the upstream error so the "." we append
     // here never doubles up.
     const errorText = validation.error.replace(/\.+$/, "");
-    params.logger.error(
-      `memory-core: dreaming.frequency contains invalid cron expression: ${errorText}.${timezoneHint}`,
-    );
+    // Branch the log message on reason so users see the actual broken config
+    // key. A bare "invalid cron expression" message attributed to
+    // dreaming.frequency would send them auditing their cron when the real
+    // fix is dreaming.timezone.
+    let logMessage: string;
+    if (validation.reason === "timezone") {
+      logMessage = `memory-core: dreaming.timezone contains an invalid IANA timezone: ${errorText}.`;
+    } else if (validation.reason === "inline-timezone") {
+      logMessage = `memory-core: dreaming.frequency contains invalid cron expression: ${errorText}. Timezone must be set via dreaming.timezone, not inline in the expression.`;
+    } else {
+      logMessage = `memory-core: dreaming.frequency contains invalid cron expression: ${errorText}.`;
+    }
+    params.logger.error(logMessage);
     // Leave the remaining primary managed job untouched so the last-known-good
     // schedule keeps running until the configured frequency is fixed.
     return { status: "invalid", removed: cleanupRemoved };

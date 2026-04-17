@@ -542,6 +542,44 @@ describe("short-term dreaming cron reconciliation", () => {
     );
   });
 
+  it("points users at dreaming.timezone when the IANA zone is invalid", async () => {
+    // A bare "invalid cron expression" message would send users auditing
+    // dreaming.frequency when the actual broken key is dreaming.timezone.
+    const harness = createCronHarness();
+    const logger = createLogger();
+
+    const result = await reconcileShortTermDreamingCronJob({
+      cron: harness.cron,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        timezone: "Not/Real",
+        limit: constants.DEFAULT_DREAMING_LIMIT,
+        minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
+        minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
+        minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result).toEqual({ status: "invalid", removed: 0 });
+    expect(harness.addCalls).toHaveLength(0);
+    expect(harness.updateCalls).toHaveLength(0);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^memory-core: dreaming\.timezone contains an invalid IANA timezone: .+\.$/,
+      ),
+    );
+    // The frequency-focused wording would be misleading here — the broken key
+    // is the timezone, not the cron expression.
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.not.stringContaining("invalid cron expression"),
+    );
+    expect(logger.error).toHaveBeenCalledWith(expect.not.stringMatching(/\.\./));
+  });
+
   it("does not show timezone guidance for plain invalid dreaming frequency", async () => {
     const harness = createCronHarness();
     const logger = createLogger();
