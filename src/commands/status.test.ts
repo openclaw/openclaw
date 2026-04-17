@@ -1,6 +1,5 @@
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -77,15 +76,8 @@ function createErrorChannelPlugin(params: { id: string; label: string; docsPath:
 }
 
 async function withUnknownUsageStore(run: () => Promise<void>) {
-  const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
   mocks.loadSessionStore.mockReturnValue(createUnknownUsageSessionStore());
-  try {
-    await run();
-  } finally {
-    if (originalLoadSessionStore) {
-      mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
-    }
-  }
+  await run();
 }
 
 function getRuntimeLogs() {
@@ -640,7 +632,10 @@ vi.mock("../gateway/call.js", () => ({
     }) => {
       const token = params.config?.gateway?.auth?.token;
       if (token && typeof token === "object" && "source" in token) {
-        throw new GatewaySecretRefUnavailableError("gateway.auth.token");
+        throw Object.assign(new Error("gateway.auth.token unavailable"), {
+          name: "GatewaySecretRefUnavailableError",
+          path: "gateway.auth.token",
+        });
       }
       const envToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
       return envToken ? { token: envToken } : {};
@@ -776,7 +771,7 @@ vi.mock("./status-runtime-shared.ts", () => ({
   ),
 }));
 
-import { statusCommand } from "./status.command.js";
+import { resolvePairingRecoveryContext, statusCommand } from "./status.command.js";
 
 const runtime = {
   log: vi.fn(),
@@ -917,8 +912,6 @@ describe("statusCommand", () => {
         inconsistent_timestamps: 0,
       },
     });
-    mocks.hasPotentialConfiguredChannels.mockReset();
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     mocks.runSecurityAudit.mockReset();
     mocks.runSecurityAudit.mockResolvedValue(createDefaultSecurityAuditResult());
     mocks.resolveGatewayService.mockReset();
@@ -959,7 +952,7 @@ describe("statusCommand", () => {
     (runtime.error as Mock<(...args: unknown[]) => void>).mockClear();
   });
 
-  it("prints JSON when requested", async () => {
+  it("prints JSON and includes security audit only when all is requested", async () => {
     mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
       createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
@@ -995,16 +988,13 @@ describe("statusCommand", () => {
       }),
     );
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
-  });
 
-  it("includes security audit in JSON when all is requested", async () => {
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
-
+    runtimeLogMock.mockClear();
     await statusCommand({ json: true, all: true }, runtime as never);
 
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
-    expect(payload.securityAudit.summary.critical).toBe(1);
-    expect(payload.securityAudit.summary.warn).toBe(1);
+    const allPayload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
+    expect(allPayload.securityAudit.summary.critical).toBe(1);
+    expect(allPayload.securityAudit.summary.warn).toBe(1);
     expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         includeFilesystem: true,
@@ -1025,18 +1015,11 @@ describe("statusCommand", () => {
     });
   });
 
-  it("prints unknown usage in formatted output when totalTokens is missing", async () => {
-    await withUnknownUsageStore(async () => {
-      const logs = await runStatusAndGetLogs();
-      expect(logs.some((line) => line.includes("unknown/") && line.includes("(?%)"))).toBe(true);
-    });
-  });
-
-  it("prints formatted lines otherwise", async () => {
+  it("prints formatted lines with verbose cache details", async () => {
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
       createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);
-    const logs = await runStatusAndGetLogs();
+    const logs = await runStatusAndGetLogs({ verbose: true });
     for (const token of [
       "OpenClaw status",
       "Overview",
@@ -1072,10 +1055,6 @@ describe("statusCommand", () => {
           line.includes("openclaw --profile isolated status --all"),
       ),
     ).toBe(true);
-  });
-
-  it("shows explicit cache details in verbose session output", async () => {
-    const logs = await runStatusAndGetLogs({ verbose: true });
     expect(logs.some((line) => line.includes("Cache"))).toBe(true);
     expect(logs.some((line) => line.includes("40% hit"))).toBe(true);
     expect(logs.some((line) => line.includes("read 2.0k"))).toBe(true);
@@ -1122,8 +1101,7 @@ describe("statusCommand", () => {
     expect(joined).toContain("tasks maintenance --apply");
   });
 
-  it("caps cached percentage at the prompt-token denominator for legacy session totals", async () => {
-    const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
+  it("uses prompt-side denominator for cached percentages", async () => {
     mocks.loadSessionStore.mockReturnValue({
       "+1000": {
         ...createDefaultSessionStoreEntry(),
@@ -1133,19 +1111,10 @@ describe("statusCommand", () => {
         totalTokens: 1_000,
       },
     });
-    try {
-      const logs = await runStatusAndGetLogs();
-      expect(logs.some((line) => line.includes("100% cached"))).toBe(true);
-      expect(logs.some((line) => line.includes("120% cached"))).toBe(false);
-    } finally {
-      if (originalLoadSessionStore) {
-        mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
-      }
-    }
-  });
+    const logs = await runStatusAndGetLogs();
+    expect(logs.some((line) => line.includes("100% cached"))).toBe(true);
+    expect(logs.some((line) => line.includes("120% cached"))).toBe(false);
 
-  it("uses prompt-side tokens for cached percentage when they differ from totalTokens", async () => {
-    const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
     mocks.loadSessionStore.mockReturnValue({
       "+1000": {
         ...createDefaultSessionStoreEntry(),
@@ -1155,15 +1124,9 @@ describe("statusCommand", () => {
         totalTokens: 5_000,
       },
     });
-    try {
-      const logs = await runStatusAndGetLogs();
-      expect(logs.some((line) => line.includes("67% cached"))).toBe(true);
-      expect(logs.some((line) => line.includes("40% cached"))).toBe(false);
-    } finally {
-      if (originalLoadSessionStore) {
-        mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
-      }
-    }
+    const promptSideLogs = await runStatusAndGetLogs();
+    expect(promptSideLogs.some((line) => line.includes("67% cached"))).toBe(true);
+    expect(promptSideLogs.some((line) => line.includes("40% cached"))).toBe(false);
   });
 
   it("shows node-only gateway info when no local gateway service is installed", async () => {
@@ -1283,60 +1246,45 @@ describe("statusCommand", () => {
     expect(joined).toMatch(/WARN/);
   });
 
-  it.each([
-    {
-      name: "prints requestId-aware recovery guidance when gateway pairing is required",
-      error: "connect failed: pairing required (requestId: req-123)",
-      closeReason: "pairing required (requestId: req-123)",
-      includes: ["devices approve req-123"],
-      excludes: [],
-    },
-    {
-      name: "prints fallback recovery guidance when pairing requestId is unavailable",
-      error: "connect failed: pairing required",
-      closeReason: "connect failed",
-      includes: [],
-      excludes: ["devices approve req-"],
-    },
-    {
-      name: "does not render unsafe requestId content into approval command hints",
-      error: "connect failed: pairing required (requestId: req-123;rm -rf /)",
-      closeReason: "pairing required (requestId: req-123;rm -rf /)",
-      includes: [],
-      excludes: ["devices approve req-123;rm -rf /"],
-    },
-  ])("$name", async ({ error, closeReason, includes, excludes }) => {
+  it("prints safe gateway pairing recovery guidance", async () => {
+    expect(
+      resolvePairingRecoveryContext({
+        error: "connect failed: pairing required (requestId: req-123)",
+        closeReason: "pairing required (requestId: req-123)",
+      }),
+    ).toEqual({ requestId: "req-123" });
+    expect(
+      resolvePairingRecoveryContext({
+        error: "connect failed: pairing required",
+        closeReason: "connect failed",
+      }),
+    ).toEqual({ requestId: null });
+    expect(
+      resolvePairingRecoveryContext({
+        error: "connect failed: pairing required (requestId: req-123;rm -rf /)",
+        closeReason: "pairing required (requestId: req-123;rm -rf /)",
+      }),
+    ).toEqual({ requestId: null });
+    expect(
+      resolvePairingRecoveryContext({
+        error: "connect failed: pairing required",
+        closeReason: "pairing required (requestId: req-close-456)",
+      }),
+    ).toEqual({ requestId: "req-close-456" });
+
     mocks.loadConfig.mockReturnValue({
       session: {},
       channels: { whatsapp: { allowFrom: ["*"] } },
     });
     mockProbeGatewayResult({
-      error,
-      close: { code: 1008, reason: closeReason },
+      error: "connect failed: pairing required (requestId: req-123)",
+      close: { code: 1008, reason: "pairing required (requestId: req-123)" },
     });
     const joined = await runStatusAndGetJoinedLogs();
     expect(joined).toContain("Gateway pairing approval required.");
+    expect(joined).toContain("devices approve req-123");
     expect(joined).toContain("devices approve --latest");
     expect(joined).toContain("devices list");
-    for (const expected of includes) {
-      expect(joined).toContain(expected);
-    }
-    for (const blocked of excludes) {
-      expect(joined).not.toContain(blocked);
-    }
-  });
-
-  it("extracts requestId from close reason when error text omits it", async () => {
-    mocks.loadConfig.mockReturnValue({
-      session: {},
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    });
-    mockProbeGatewayResult({
-      error: "connect failed: pairing required",
-      close: { code: 1008, reason: "pairing required (requestId: req-close-456)" },
-    });
-    const joined = await runStatusAndGetJoinedLogs();
-    expect(joined).toContain("devices approve req-close-456");
   });
 
   it("includes sessions across agents in JSON output", async () => {

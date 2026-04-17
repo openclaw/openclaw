@@ -49,12 +49,6 @@ vi.mock("../cli/command-secret-targets.js", () => ({
   getChannelsCommandSecretTargetIds: () => new Set<string>(),
 }));
 
-vi.mock(buildBundledPluginModuleId("telegram", "update-offset-runtime-api.js"), async () => {
-  const actual: Record<string, unknown> = await vi.importActual(
-    buildBundledPluginModuleId("telegram", "update-offset-runtime-api.js"),
-  );
-  return {
-    ...actual,
-    deleteTelegramUpdateOffset: offsetMocks.deleteTelegramUpdateOffset,
-  };
-});
+vi.mock(buildBundledPluginModuleId("telegram", "update-offset-runtime-api.js"), () => ({
+  deleteTelegramUpdateOffset: offsetMocks.deleteTelegramUpdateOffset,
+}));

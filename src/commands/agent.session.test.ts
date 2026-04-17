@@ -9,7 +9,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-agent-session-" });
+  return withTempHomeBase(fn, {
+    prefix: "openclaw-agent-session-",
+    skipSessionCleanup: true,
+  });
 }
 
 function mockConfig(
@@ -35,7 +38,7 @@ function writeSessionStoreSeed(
   sessions: Record<string, Record<string, unknown>>,
 ) {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(sessions, null, 2));
+  fs.writeFileSync(storePath, JSON.stringify(sessions));
 }
 
 async function withCrossAgentResumeFixture(
