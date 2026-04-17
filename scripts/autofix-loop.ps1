@@ -69,8 +69,8 @@ try {
 
     # Validate env.
     if (-not $env:GITHUB_TOKEN) {
-        Write-Log "GITHUB_TOKEN not set in user environment — cannot run" "ERROR"
-        Write-Log "Fix: run `setx GITHUB_TOKEN ""<your PAT>""` in cmd and restart the task" "ERROR"
+        Write-Log "GITHUB_TOKEN not set in user environment - cannot run" "ERROR"
+        Write-Log 'Fix: run `setx GITHUB_TOKEN "<your PAT>"` in cmd and restart the task' "ERROR"
         exit 1
     }
 
@@ -87,10 +87,15 @@ try {
     )
     if ($DryRun) { $Args += "--dry-run" }
 
-    # Spawn python and capture both streams to the log.
+    # Spawn python and capture both streams to the log. Wrap each arg
+    # in literal double-quotes so paths with spaces stay intact. Use
+    # single-quoted "' + string for the wrapping quote to avoid
+    # PowerShell's fiddly backtick-quote escape-inside-double-quote
+    # parsing.
     $ProcessInfo = New-Object System.Diagnostics.ProcessStartInfo
     $ProcessInfo.FileName = "python"
-    $ProcessInfo.Arguments = ($Args | ForEach-Object { "`"$_`"" }) -join " "
+    $QuotedArgs = $Args | ForEach-Object { '"' + $_ + '"' }
+    $ProcessInfo.Arguments = ($QuotedArgs -join " ")
     $ProcessInfo.WorkingDirectory = $RepoRoot
     $ProcessInfo.RedirectStandardOutput = $true
     $ProcessInfo.RedirectStandardError = $true
@@ -103,13 +108,16 @@ try {
     $Process.WaitForExit()
     $ExitCode = $Process.ExitCode
 
+    # Single-quoted pattern so PowerShell doesn't try to interpret \r/\n.
+    # -split applies the pattern as a regex.
+    $LineSplit = '\r?\n'
     if ($StdOut) {
-        foreach ($line in $StdOut -split "`r?`n") {
+        foreach ($line in $StdOut -split $LineSplit) {
             if ($line) { Write-Log "  $line" "OUT" }
         }
     }
     if ($StdErr) {
-        foreach ($line in $StdErr -split "`r?`n") {
+        foreach ($line in $StdErr -split $LineSplit) {
             if ($line) { Write-Log "  $line" "ERR" }
         }
     }
