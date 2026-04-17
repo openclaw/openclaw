@@ -792,12 +792,12 @@ export async function runHeartbeatOnce(opts: {
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {
       accountId: delivery.accountId ?? heartbeatAccountId ?? null,
-      target: heartbeat?.target ?? "none",
+      target: effectiveHeartbeat?.target ?? "none",
     });
   } else if (heartbeatAccountId) {
     log.info("heartbeat: using explicit accountId", {
       accountId: delivery.accountId ?? heartbeatAccountId,
-      target: heartbeat?.target ?? "none",
+      target: effectiveHeartbeat?.target ?? "none",
       channel: delivery.channel,
     });
   }
