@@ -6,6 +6,7 @@ import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { listBindings } from "./bindings.js";
+import { peerKindMatches } from "./peer-kind-match.js";
 import {
   buildAgentMainSessionKey,
   buildAgentPeerSessionKey,
@@ -584,14 +585,6 @@ function hasTeamConstraint(match: NormalizedBindingMatch): boolean {
 
 function hasRolesConstraint(match: NormalizedBindingMatch): boolean {
   return Boolean(match.roles);
-}
-
-function peerKindMatches(bindingKind: ChatType, scopeKind: ChatType): boolean {
-  if (bindingKind === scopeKind) {
-    return true;
-  }
-  const both = new Set([bindingKind, scopeKind]);
-  return both.has("group") && both.has("channel");
 }
 
 function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope): boolean {

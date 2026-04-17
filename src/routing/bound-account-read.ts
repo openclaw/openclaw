@@ -4,6 +4,7 @@ import { listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { peerKindMatches } from "./peer-kind-match.js";
 import { normalizeAccountId, normalizeAgentId } from "./session-key.js";
 
 function normalizeBindingChannelId(raw?: string | null): string | null {
@@ -46,17 +47,6 @@ function resolveNormalizedBindingMatch(binding: AgentRouteBinding): {
     peerId: peerId || undefined,
     peerKind: peerKind ?? undefined,
   };
-}
-
-// Peer-kind equivalence matches resolve-route.ts: `group` and `channel` are
-// treated as compatible so bindings authored as `peer.kind: "group"` resolve
-// for callers inferred as `"channel"` (Matrix rooms, Slack/Mattermost
-// channels) and vice versa.
-function peerKindMatches(a: ChatType, b: ChatType): boolean {
-  if (a === b) {
-    return true;
-  }
-  return (a === "group" && b === "channel") || (a === "channel" && b === "group");
 }
 
 function buildExactPeerIdSet(params: {
