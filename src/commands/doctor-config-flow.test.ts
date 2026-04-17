@@ -1145,29 +1145,13 @@ describe("doctor config flow", () => {
     ).toBe(true);
   });
 
-  it("drops unknown keys on repair", async () => {
+  it("repairs generic legacy config surfaces in one pass", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
       config: {
         bridge: { bind: "auto" },
         gateway: { auth: { mode: "token", token: "ok", extra: true } },
         agents: { list: [{ id: "pi" }] },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as Record<string, unknown>;
-    expect(cfg.bridge).toBeUndefined();
-    expect((cfg.gateway as Record<string, unknown>)?.auth).toEqual({
-      mode: "token",
-      token: "ok",
-    });
-  });
-
-  it("migrates legacy browser extension profiles to existing-session on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
         browser: {
           relayBindHost: "0.0.0.0",
           profiles: {
@@ -1177,21 +1161,6 @@ describe("doctor config flow", () => {
             },
           },
         },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const browser = (result.cfg as { browser?: Record<string, unknown> }).browser ?? {};
-    expect(browser.relayBindHost).toBeUndefined();
-    expect(
-      ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
-    ).toBe("existing-session");
-  });
-
-  it("repairs restrictive plugins.allow when browser is referenced via tools.alsoAllow", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
         tools: {
           alsoAllow: ["browser"],
         },
@@ -1202,6 +1171,17 @@ describe("doctor config flow", () => {
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
+    const cfg = result.cfg as Record<string, unknown>;
+    expect(cfg.bridge).toBeUndefined();
+    expect((cfg.gateway as Record<string, unknown>)?.auth).toEqual({
+      mode: "token",
+      token: "ok",
+    });
+    const browser = (result.cfg as { browser?: Record<string, unknown> }).browser ?? {};
+    expect(browser.relayBindHost).toBeUndefined();
+    expect(
+      ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
+    ).toBe("existing-session");
     expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser"]);
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
   });
@@ -1735,7 +1715,7 @@ describe("doctor config flow", () => {
     expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
   });
 
-  it('adds allowFrom ["*"] when dmPolicy="open" and allowFrom is missing on repair', async () => {
+  it('repairs open dmPolicy allowFrom variants with ["*"] in one pass', async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
       config: {
@@ -1745,16 +1725,40 @@ describe("doctor config flow", () => {
             dmPolicy: "open",
             groupPolicy: "open",
           },
+          googlechat: {
+            accounts: {
+              work: {
+                dm: {
+                  policy: "open",
+                },
+              },
+            },
+          },
         },
       },
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
     const cfg = result.cfg as unknown as {
-      channels: { discord: { allowFrom: string[]; dmPolicy: string } };
+      channels: {
+        discord: { allowFrom: string[]; dmPolicy: string };
+        googlechat: {
+          accounts: {
+            work: {
+              dm: {
+                policy: string;
+                allowFrom: string[];
+              };
+              allowFrom?: string[];
+            };
+          };
+        };
+      };
     };
     expect(cfg.channels.discord.allowFrom).toEqual(["*"]);
     expect(cfg.channels.discord.dmPolicy).toBe("open");
+    expect(cfg.channels.googlechat.accounts.work.dm.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.googlechat.accounts.work.allowFrom).toBeUndefined();
   });
 
   it('repairs dmPolicy="allowlist" by restoring allowFrom from pairing store on repair', async () => {
@@ -1847,13 +1851,37 @@ describe("doctor config flow", () => {
     expect(toolsBySender["*"]).toEqual({ deny: ["exec"] });
   });
 
-  it("migrates top-level heartbeat into agents.defaults.heartbeat on repair", async () => {
+  it("repairs legacy root runtime config surfaces in one pass", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
       config: {
         heartbeat: {
           model: "anthropic/claude-3-5-haiku-20241022",
           every: "30m",
+          showOk: true,
+          showAlerts: false,
+        },
+        gateway: {
+          bind: "0.0.0.0",
+        },
+        session: {
+          threadBindings: {
+            ttlHours: 24,
+          },
+        },
+        channels: {
+          discord: {
+            threadBindings: {
+              ttlHours: 12,
+            },
+            accounts: {
+              alpha: {
+                threadBindings: {
+                  ttlHours: 6,
+                },
+              },
+            },
+          },
         },
       },
       run: loadAndMaybeMigrateDoctorConfig,
@@ -1861,6 +1889,15 @@ describe("doctor config flow", () => {
 
     const cfg = result.cfg as {
       heartbeat?: unknown;
+      gateway?: {
+        bind?: string;
+      };
+      session?: {
+        threadBindings?: {
+          idleHours?: number;
+          ttlHours?: number;
+        };
+      };
       agents?: {
         defaults?: {
           heartbeat?: {
@@ -1869,11 +1906,52 @@ describe("doctor config flow", () => {
           };
         };
       };
+      channels?: {
+        defaults?: {
+          heartbeat?: {
+            showOk?: boolean;
+            showAlerts?: boolean;
+            useIndicator?: boolean;
+          };
+        };
+        discord?: {
+          threadBindings?: {
+            idleHours?: number;
+            ttlHours?: number;
+          };
+          accounts?: Record<
+            string,
+            {
+              threadBindings?: {
+                idleHours?: number;
+                ttlHours?: number;
+              };
+            }
+          >;
+        };
+      };
     };
     expect(cfg.heartbeat).toBeUndefined();
     expect(cfg.agents?.defaults?.heartbeat).toMatchObject({
       model: "anthropic/claude-3-5-haiku-20241022",
       every: "30m",
+    });
+    expect(cfg.gateway?.bind).toBe("lan");
+    expect(cfg.session?.threadBindings).toMatchObject({
+      idleHours: 24,
+    });
+    expect(cfg.channels?.discord?.threadBindings).toMatchObject({
+      idleHours: 12,
+    });
+    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
+      idleHours: 6,
+    });
+    expect(cfg.session?.threadBindings?.ttlHours).toBeUndefined();
+    expect(cfg.channels?.discord?.threadBindings?.ttlHours).toBeUndefined();
+    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.ttlHours).toBeUndefined();
+    expect(cfg.channels?.defaults?.heartbeat).toMatchObject({
+      showOk: true,
+      showAlerts: false,
     });
   });
 
@@ -1983,161 +2061,6 @@ describe("doctor config flow", () => {
     } finally {
       noteSpy.mockClear();
     }
-  });
-
-  it("repairs legacy gateway.bind host aliases on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        gateway: {
-          bind: "0.0.0.0",
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as {
-      gateway?: {
-        bind?: string;
-      };
-    };
-    expect(cfg.gateway?.bind).toBe("lan");
-  });
-
-  it("repairs legacy thread binding ttlHours config on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        session: {
-          threadBindings: {
-            ttlHours: 24,
-          },
-        },
-        channels: {
-          discord: {
-            threadBindings: {
-              ttlHours: 12,
-            },
-            accounts: {
-              alpha: {
-                threadBindings: {
-                  ttlHours: 6,
-                },
-              },
-            },
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as {
-      session?: {
-        threadBindings?: {
-          idleHours?: number;
-          ttlHours?: number;
-        };
-      };
-      channels?: {
-        discord?: {
-          threadBindings?: {
-            idleHours?: number;
-            ttlHours?: number;
-          };
-          accounts?: Record<
-            string,
-            {
-              threadBindings?: {
-                idleHours?: number;
-                ttlHours?: number;
-              };
-            }
-          >;
-        };
-      };
-    };
-    expect(cfg.session?.threadBindings).toMatchObject({
-      idleHours: 24,
-    });
-    expect(cfg.channels?.discord?.threadBindings).toMatchObject({
-      idleHours: 12,
-    });
-    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
-      idleHours: 6,
-    });
-    expect(cfg.session?.threadBindings?.ttlHours).toBeUndefined();
-    expect(cfg.channels?.discord?.threadBindings?.ttlHours).toBeUndefined();
-    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.ttlHours).toBeUndefined();
-  });
-
-  it("migrates top-level heartbeat visibility into channels.defaults.heartbeat on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        heartbeat: {
-          showOk: true,
-          showAlerts: false,
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as {
-      heartbeat?: unknown;
-      channels?: {
-        defaults?: {
-          heartbeat?: {
-            showOk?: boolean;
-            showAlerts?: boolean;
-            useIndicator?: boolean;
-          };
-        };
-      };
-    };
-    expect(cfg.heartbeat).toBeUndefined();
-    expect(cfg.channels?.defaults?.heartbeat).toMatchObject({
-      showOk: true,
-      showAlerts: false,
-    });
-  });
-
-  it("repairs googlechat account dm.policy open by setting dm.allowFrom on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        channels: {
-          googlechat: {
-            accounts: {
-              work: {
-                dm: {
-                  policy: "open",
-                },
-              },
-            },
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as unknown as {
-      channels: {
-        googlechat: {
-          accounts: {
-            work: {
-              dm: {
-                policy: string;
-                allowFrom: string[];
-              };
-              allowFrom?: string[];
-            };
-          };
-        };
-      };
-    };
-
-    expect(cfg.channels.googlechat.accounts.work.dm.allowFrom).toEqual(["*"]);
-    expect(cfg.channels.googlechat.accounts.work.allowFrom).toBeUndefined();
   });
 
   it("recovers from stale googlechat top-level allowFrom by repairing dm.allowFrom", async () => {

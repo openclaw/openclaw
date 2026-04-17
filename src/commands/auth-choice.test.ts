@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -9,11 +10,9 @@ import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "../
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice } from "./auth-choice.apply.js";
 import {
-  authProfilePathForAgent,
   createAuthTestLifecycle,
   createExitThrowingRuntime,
   createWizardPrompter,
-  readAuthProfilesForAgent,
   requireOpenClawAgentDir,
   setupAuthTestEnv,
 } from "./test-wizard-helpers.js";
@@ -83,11 +82,48 @@ type StoredAuthProfile = {
   keyRef?: { source: string; provider: string; id: string };
   access?: string;
   refresh?: string;
+  expires?: number;
   provider?: string;
   type?: string;
   email?: string;
   metadata?: Record<string, string>;
 };
+
+const testAuthProfileStores = vi.hoisted(
+  () => new Map<string, { profiles: Record<string, StoredAuthProfile> }>(),
+);
+
+// These tests verify profile payloads, not file locking; keep auth stores in memory.
+function resolveTestAuthStoreKey(agentDir?: string): string {
+  return agentDir?.trim() || process.env.OPENCLAW_AGENT_DIR || "__main__";
+}
+
+function readTestAuthProfileStore(agentDir?: string): {
+  profiles: Record<string, StoredAuthProfile>;
+} {
+  return testAuthProfileStores.get(resolveTestAuthStoreKey(agentDir)) ?? { profiles: {} };
+}
+
+function seedTestAuthProfile(params: {
+  profileId: string;
+  credential: StoredAuthProfile;
+  agentDir?: string;
+}): void {
+  const key = resolveTestAuthStoreKey(params.agentDir);
+  const store = testAuthProfileStores.get(key) ?? { profiles: {} };
+  store.profiles[params.profileId] = params.credential;
+  testAuthProfileStores.set(key, store);
+}
+
+vi.mock("../agents/auth-profiles.js", () => ({
+  upsertAuthProfile: (params: {
+    profileId: string;
+    credential: StoredAuthProfile;
+    agentDir?: string;
+  }) => {
+    seedTestAuthProfile(params);
+  },
+}));
 
 function normalizeText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -723,14 +759,18 @@ describe("applyAuthChoice", () => {
     "SSH_TTY",
     "CHUTES_CLIENT_ID",
   ]);
-  let activeStateDir: string | null = null;
+  let authTestRoot: string | null = null;
+  let authStateCounter = 0;
   async function setupTempState() {
-    if (activeStateDir) {
-      await fs.rm(activeStateDir, { recursive: true, force: true });
+    if (!authTestRoot) {
+      throw new Error("auth test root not initialized");
     }
-    const env = await setupAuthTestEnv("openclaw-auth-");
-    activeStateDir = env.stateDir;
-    lifecycle.setStateDir(env.stateDir);
+    testAuthProfileStores.clear();
+    const stateDir = path.join(authTestRoot, `state-${++authStateCounter}`);
+    const agentDir = path.join(stateDir, "agent");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    process.env.OPENCLAW_AGENT_DIR = agentDir;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
   }
   function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
     return createWizardPrompter(overrides, { defaultSelect: "" });
@@ -759,9 +799,10 @@ describe("applyAuthChoice", () => {
     };
   }
   async function readAuthProfiles() {
-    return await readAuthProfilesForAgent<{
-      profiles?: Record<string, StoredAuthProfile>;
-    }>(requireOpenClawAgentDir());
+    return readTestAuthProfileStore(requireOpenClawAgentDir());
+  }
+  async function readAuthProfilesForAgentDir(agentDir: string) {
+    return readTestAuthProfileStore(agentDir);
   }
   async function readAuthProfile(profileId: string) {
     return (await readAuthProfiles()).profiles?.[profileId];
@@ -770,8 +811,15 @@ describe("applyAuthChoice", () => {
   let defaultProviderPlugins: ProviderPlugin[] = [];
 
   beforeAll(async () => {
+    authTestRoot = (await setupAuthTestEnv("openclaw-auth-")).stateDir;
     defaultProviderPlugins = await createDefaultProviderPlugins();
     resolvePluginProviders.mockReturnValue(defaultProviderPlugins);
+  });
+
+  afterAll(async () => {
+    if (authTestRoot) {
+      await fs.rm(authTestRoot, { recursive: true, force: true });
+    }
   });
 
   afterEach(async () => {
@@ -783,8 +831,8 @@ describe("applyAuthChoice", () => {
     detectZaiEndpoint.mockResolvedValue(null);
     loginOpenAICodexOAuth.mockReset();
     loginOpenAICodexOAuth.mockResolvedValue(null);
+    testAuthProfileStores.clear();
     await lifecycle.cleanup();
-    activeStateDir = null;
   });
 
   it("applies Anthropic setup-token auth when the provider exposes the setup flow", async () => {
@@ -1464,18 +1512,14 @@ describe("applyAuthChoice", () => {
         });
         const profileStore =
           scenario.agentId && scenario.agentId !== "default"
-            ? await readAuthProfilesForAgent<{ profiles?: Record<string, StoredAuthProfile> }>(
-                resolveAgentDir(result.config, scenario.agentId),
-              )
+            ? await readAuthProfilesForAgentDir(resolveAgentDir(result.config, scenario.agentId))
             : await readAuthProfiles();
         expect(profileStore.profiles?.[scenario.profileId]?.key).toBe(scenario.token);
       }
       if (scenario.extraProfileId) {
         const profileStore =
           scenario.agentId && scenario.agentId !== "default"
-            ? await readAuthProfilesForAgent<{ profiles?: Record<string, StoredAuthProfile> }>(
-                resolveAgentDir(result.config, scenario.agentId),
-              )
+            ? await readAuthProfilesForAgentDir(resolveAgentDir(result.config, scenario.agentId))
             : await readAuthProfiles();
         expect(profileStore.profiles?.[scenario.extraProfileId]?.key).toBe(scenario.token);
       }
@@ -1580,27 +1624,17 @@ describe("applyAuthChoice", () => {
     await setupTempState();
     process.env.LITELLM_API_KEY = "sk-litellm-test"; // pragma: allowlist secret
 
-    const authProfilePath = authProfilePathForAgent(requireOpenClawAgentDir());
-    await fs.writeFile(
-      authProfilePath,
-      JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "litellm:legacy": {
-              type: "oauth",
-              provider: "litellm",
-              access: "access-token",
-              refresh: "refresh-token",
-              expires: Date.now() + 60_000,
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
+    seedTestAuthProfile({
+      profileId: "litellm:legacy",
+      credential: {
+        type: "oauth",
+        provider: "litellm",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 60_000,
+      },
+      agentDir: requireOpenClawAgentDir(),
+    });
 
     const text = vi.fn();
     const confirm = vi.fn(async () => true);
