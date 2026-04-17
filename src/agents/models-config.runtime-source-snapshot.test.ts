@@ -314,6 +314,7 @@ describe("models-config runtime source snapshot", () => {
           expect(parsed.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
           expect(parsed.providers.openai?.headers?.["X-OpenClaw-Test"]).toBe("one");
 
+          // Header changes still rewrite models.json, but merge mode preserves the existing baseUrl.
           await ensureOpenClawModelsJson(secondCandidate);
           parsed = await readGeneratedModelsJson<{
             providers: Record<
