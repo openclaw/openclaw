@@ -303,6 +303,40 @@ describe("dreaming controller", () => {
     expect(state.wikiImportInsightsLoading).toBe(false);
   });
 
+  it("falls back to config gating for wiki import insights when methods are not advertised", async () => {
+    const { state, request } = createState();
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          entries: {
+            "memory-wiki": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    };
+    request.mockResolvedValue({
+      sourceType: "chatgpt",
+      totalItems: 1,
+      totalClusters: 1,
+      clusters: [],
+    });
+
+    await loadWikiImportInsights(state);
+
+    expect(request).toHaveBeenCalledWith("wiki.importInsights", {});
+    expect(state.wikiImportInsights).toEqual(
+      expect.objectContaining({
+        totalItems: 1,
+        totalClusters: 1,
+      }),
+    );
+    expect(state.wikiImportInsightsError).toBeNull();
+    expect(state.wikiImportInsightsLoading).toBe(false);
+  });
+
   it("skips wiki import insights when memory-wiki is not enabled", async () => {
     const { state, request } = createState();
     state.configSnapshot = {
@@ -431,6 +465,41 @@ describe("dreaming controller", () => {
             ],
           }),
         ],
+      }),
+    );
+    expect(state.wikiMemoryPalaceError).toBeNull();
+    expect(state.wikiMemoryPalaceLoading).toBe(false);
+  });
+
+  it("falls back to config gating for wiki memory palace when methods are not advertised", async () => {
+    const { state, request } = createState();
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          entries: {
+            "memory-wiki": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    };
+    request.mockResolvedValue({
+      totalItems: 1,
+      totalClaims: 2,
+      totalQuestions: 0,
+      totalContradictions: 0,
+      clusters: [],
+    });
+
+    await loadWikiMemoryPalace(state);
+
+    expect(request).toHaveBeenCalledWith("wiki.palace", {});
+    expect(state.wikiMemoryPalace).toEqual(
+      expect.objectContaining({
+        totalItems: 1,
+        totalClaims: 2,
       }),
     );
     expect(state.wikiMemoryPalaceError).toBeNull();
