@@ -106,7 +106,7 @@ describe("acp prompt cwd prefix", () => {
         systemInputProvenance: {
           kind: "external_user",
           originSessionId: TEST_SESSION_ID,
-          sourceChannel: "acp",
+          originChannel: "acp",
           sourceTool: "openclaw_acp",
         },
         systemProvenanceReceipt: undefined,
@@ -123,7 +123,7 @@ describe("acp prompt cwd prefix", () => {
         systemInputProvenance: {
           kind: "external_user",
           originSessionId: TEST_SESSION_ID,
-          sourceChannel: "acp",
+          originChannel: "acp",
           sourceTool: "openclaw_acp",
         },
         systemProvenanceReceipt: expect.stringContaining("[Source Receipt]"),
@@ -187,7 +187,7 @@ describe("acp prompt cwd prefix", () => {
         systemInputProvenance: {
           kind: "external_user",
           originSessionId: TEST_SESSION_ID,
-          sourceChannel: "acp",
+          originChannel: "acp",
           sourceTool: "openclaw_acp",
         },
         systemProvenanceReceipt: expect.stringContaining("[Source Receipt]"),

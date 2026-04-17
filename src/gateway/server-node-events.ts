@@ -364,7 +364,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           messageChannel: "node",
           inputProvenance: {
             kind: "external_user",
-            sourceChannel: "voice",
+            originChannel: "voice",
             sourceTool: "gateway.voice.transcript",
           },
           senderIsOwner: false,

@@ -877,7 +877,7 @@ describe("gateway agent handler", () => {
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: "music_generate:task-123",
-          sourceChannel: "internal",
+          originChannel: "internal",
           sourceTool: "music_generate",
         },
         idempotencyKey: "music-generation-event-inter-session",

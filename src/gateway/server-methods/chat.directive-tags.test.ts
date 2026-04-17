@@ -1416,7 +1416,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-system-provenance-reject",
       requestParams: {
-        systemInputProvenance: { kind: "external_user", sourceChannel: "acp" },
+        systemInputProvenance: { kind: "external_user", originChannel: "acp" },
         systemProvenanceReceipt: "[Source Receipt]\nbridge=openclaw-acp\n[/Source Receipt]",
       },
       expectBroadcast: false,
@@ -1450,7 +1450,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         systemInputProvenance: {
           kind: "external_user",
           originSessionId: "acp-session-spoof",
-          sourceChannel: "acp",
+          originChannel: "acp",
           sourceTool: "openclaw_acp",
         },
         systemProvenanceReceipt:
@@ -1486,7 +1486,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         systemInputProvenance: {
           kind: "external_user",
           originSessionId: "admin-session-1",
-          sourceChannel: "acp",
+          originChannel: "acp",
           sourceTool: "openclaw_acp",
         },
         systemProvenanceReceipt:
@@ -1498,7 +1498,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx?.InputProvenance).toEqual({
       kind: "external_user",
       originSessionId: "admin-session-1",
-      sourceChannel: "acp",
+      originChannel: "acp",
       sourceTool: "openclaw_acp",
     });
     expect(mockState.lastDispatchCtx?.Body).toBe(
@@ -1569,7 +1569,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         systemInputProvenance: {
           kind: "external_user",
           originSessionId: "acp-session-1",
-          sourceChannel: "acp",
+          originChannel: "acp",
           sourceTool: "openclaw_acp",
         },
         systemProvenanceReceipt:
@@ -1581,7 +1581,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx?.InputProvenance).toEqual({
       kind: "external_user",
       originSessionId: "acp-session-1",
-      sourceChannel: "acp",
+      originChannel: "acp",
       sourceTool: "openclaw_acp",
     });
     expect(mockState.lastDispatchCtx?.Body).toBe(

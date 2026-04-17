@@ -31,7 +31,7 @@ export type AnnounceQueueItem = {
   origin?: DeliveryContext;
   originKey?: string;
   sourceSessionKey?: string;
-  sourceChannel?: string;
+  originChannel?: string;
   sourceTool?: string;
 };
 

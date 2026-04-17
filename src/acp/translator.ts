@@ -395,7 +395,7 @@ function buildSystemInputProvenance(originSessionId: string) {
   return {
     kind: "external_user" as const,
     originSessionId,
-    sourceChannel: "acp",
+    originChannel: "acp",
     sourceTool: "openclaw_acp",
   };
 }

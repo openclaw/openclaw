@@ -13,7 +13,14 @@ export type InputProvenance = {
   kind: InputProvenanceKind;
   originSessionId?: string;
   sourceSessionKey?: string;
-  sourceChannel?: string;
+  /**
+   * The channel where this input originated (Discord, Telegram, Slack, ACP,
+   * `webchat` for internal, etc.). Respects origin — not the delivery target.
+   * Use this to decide how an inter-session message should be classified or
+   * filtered; do not confuse it with the routing/destination channel in
+   * `AgentDeliveryPlan.resolvedChannel`.
+   */
+  originChannel?: string;
   sourceTool?: string;
 };
 
@@ -31,11 +38,16 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
   if (!isInputProvenanceKind(record.kind)) {
     return undefined;
   }
+  // Accept legacy `sourceChannel` for backward-compat with any persisted
+  // provenance or in-flight protocol payloads produced before the
+  // `originChannel` rename. Prefer `originChannel` when both are present.
+  const originChannel =
+    normalizeOptionalString(record.originChannel) ?? normalizeOptionalString(record.sourceChannel);
   return {
     kind: record.kind,
     originSessionId: normalizeOptionalString(record.originSessionId),
     sourceSessionKey: normalizeOptionalString(record.sourceSessionKey),
-    sourceChannel: normalizeOptionalString(record.sourceChannel),
+    originChannel,
     sourceTool: normalizeOptionalString(record.sourceTool),
   };
 }

@@ -90,7 +90,7 @@ function buildInterSessionPrefix(message: AgentMessage): string {
   }
   const details = [
     provenance.sourceSessionKey ? `sourceSession=${provenance.sourceSessionKey}` : undefined,
-    provenance.sourceChannel ? `sourceChannel=${provenance.sourceChannel}` : undefined,
+    provenance.originChannel ? `originChannel=${provenance.originChannel}` : undefined,
     provenance.sourceTool ? `sourceTool=${provenance.sourceTool}` : undefined,
   ].filter(Boolean);
   if (details.length === 0) {

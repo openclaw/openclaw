@@ -869,8 +869,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         threadId: deliveryPlan.resolvedThreadId,
         provenanceKind: inputProvenance?.kind,
         provenanceSourceTool: (inputProvenance as Record<string, unknown> | undefined)?.sourceTool,
-        provenanceSourceChannel: (inputProvenance as Record<string, unknown> | undefined)
-          ?.sourceChannel,
+        provenanceOriginChannel: (inputProvenance as Record<string, unknown> | undefined)
+          ?.originChannel,
         idem,
       });
     }

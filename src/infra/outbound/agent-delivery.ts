@@ -19,9 +19,27 @@ import {
 
 export type AgentDeliveryPlan = {
   baseDelivery: SessionDeliveryTarget;
+  /**
+   * Destination channel for the outbound delivery — i.e. where the agent
+   * reply will be sent. This is NOT the origin/input channel.
+   *
+   * Origin lives on `InputProvenance.originChannel` (see
+   * `src/sessions/input-provenance.ts`) and represents where the request
+   * came from (Discord, Telegram, ACP, `webchat`, etc.).
+   *
+   * When these two differ — for example a Discord-originated request in a
+   * shared session whose `lastChannel` is Slack — the destination wins for
+   * routing but origin must still be preserved for classification and
+   * provenance. Use `turnSourceChannel` (see `resolveAgentDeliveryPlan`)
+   * to prevent cross-channel reply bleed in shared `dmScope="main"`
+   * sessions; the resolved destination honors that turn-source hint.
+   */
   resolvedChannel: GatewayMessageChannel;
+  /** Destination `to` — paired with `resolvedChannel`. */
   resolvedTo?: string;
+  /** Destination `accountId` — paired with `resolvedChannel`. */
   resolvedAccountId?: string;
+  /** Destination `threadId` — paired with `resolvedChannel`. */
   resolvedThreadId?: string | number;
   deliveryTargetMode?: ChannelOutboundTargetMode;
 };

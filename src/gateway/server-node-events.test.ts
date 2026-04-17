@@ -602,7 +602,7 @@ describe("voice transcript events", () => {
       messageChannel: "node",
       inputProvenance: {
         kind: "external_user",
-        sourceChannel: "voice",
+        originChannel: "voice",
         sourceTool: "gateway.voice.transcript",
       },
     });

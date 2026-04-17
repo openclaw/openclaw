@@ -312,7 +312,7 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     completionDirectOrigin: params.handle.requesterOrigin,
     directOrigin: params.handle.requesterOrigin,
     sourceSessionKey: `${params.toolName}:${params.handle.taskId}`,
-    sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+    originChannel: INTERNAL_MESSAGE_CHANNEL,
     sourceTool: params.toolName,
     requesterIsSubagent: false,
     expectsCompletionMessage: true,

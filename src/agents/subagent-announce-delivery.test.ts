@@ -72,13 +72,13 @@ describe("thread-bound announce delivery suppression policy", () => {
   function isThreadBoundAnnounce(params: {
     requesterIsSubagent: boolean;
     threadId?: string | number | null;
-    sourceChannel?: string;
+    originChannel?: string;
     sourceTool?: string;
   }): boolean {
     return (
       !params.requesterIsSubagent &&
       params.threadId != null &&
-      params.sourceChannel === INTERNAL_MESSAGE_CHANNEL &&
+      params.originChannel === INTERNAL_MESSAGE_CHANNEL &&
       params.sourceTool === "subagent_announce"
     );
   }
@@ -88,7 +88,7 @@ describe("thread-bound announce delivery suppression policy", () => {
       isThreadBoundAnnounce({
         requesterIsSubagent: false,
         threadId: "1493151001098584226",
-        sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+        originChannel: INTERNAL_MESSAGE_CHANNEL,
         sourceTool: "subagent_announce",
       }),
     ).toBe(true);
@@ -99,7 +99,7 @@ describe("thread-bound announce delivery suppression policy", () => {
       isThreadBoundAnnounce({
         requesterIsSubagent: false,
         threadId: "1493151001098584226",
-        sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+        originChannel: INTERNAL_MESSAGE_CHANNEL,
         sourceTool: "user_message",
       }),
     ).toBe(false);
@@ -110,7 +110,7 @@ describe("thread-bound announce delivery suppression policy", () => {
       isThreadBoundAnnounce({
         requesterIsSubagent: false,
         threadId: undefined,
-        sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+        originChannel: INTERNAL_MESSAGE_CHANNEL,
         sourceTool: "subagent_announce",
       }),
     ).toBe(false);
@@ -121,18 +121,18 @@ describe("thread-bound announce delivery suppression policy", () => {
       isThreadBoundAnnounce({
         requesterIsSubagent: true,
         threadId: "1493151001098584226",
-        sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+        originChannel: INTERNAL_MESSAGE_CHANNEL,
         sourceTool: "subagent_announce",
       }),
     ).toBe(false);
   });
 
-  it("does not suppress for non-internal source channels", () => {
+  it("does not suppress for non-internal origin channels", () => {
     expect(
       isThreadBoundAnnounce({
         requesterIsSubagent: false,
         threadId: "1493151001098584226",
-        sourceChannel: "discord",
+        originChannel: "discord",
         sourceTool: "subagent_announce",
       }),
     ).toBe(false);

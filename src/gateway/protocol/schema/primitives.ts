@@ -24,6 +24,11 @@ export const InputProvenanceSchema = Type.Object(
     kind: Type.String({ enum: [...INPUT_PROVENANCE_KIND_VALUES] }),
     originSessionId: Type.Optional(Type.String()),
     sourceSessionKey: Type.Optional(Type.String()),
+    // Canonical field: the channel where the input originated.
+    originChannel: Type.Optional(Type.String()),
+    // Legacy alias for `originChannel`. Accepted on the wire for backward
+    // compatibility with older producers; normalized to `originChannel` in
+    // `normalizeInputProvenance`. New code must emit `originChannel`.
     sourceChannel: Type.Optional(Type.String()),
     sourceTool: Type.Optional(Type.String()),
   },

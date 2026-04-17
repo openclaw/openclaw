@@ -281,7 +281,7 @@ export function createSessionsSendTool(opts?: {
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: opts?.agentSessionKey,
-          sourceChannel: opts?.agentChannel,
+          originChannel: opts?.agentChannel,
           sourceTool: "sessions_send",
         },
       };

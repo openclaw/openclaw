@@ -402,7 +402,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       inputProvenance: {
         kind: "inter_session",
         sourceSessionKey: item.sourceSessionKey,
-        sourceChannel: item.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
+        originChannel: item.originChannel ?? INTERNAL_MESSAGE_CHANNEL,
         sourceTool: item.sourceTool ?? "subagent_announce",
       },
       idempotencyKey,
@@ -445,7 +445,7 @@ async function maybeQueueSubagentAnnounce(params: {
   summaryLine?: string;
   requesterOrigin?: DeliveryContext;
   sourceSessionKey?: string;
-  sourceChannel?: string;
+  originChannel?: string;
   sourceTool?: string;
   internalEvents?: AgentInternalEvent[];
   signal?: AbortSignal;
@@ -493,7 +493,7 @@ async function maybeQueueSubagentAnnounce(params: {
         sessionKey: canonicalKey,
         origin,
         sourceSessionKey: params.sourceSessionKey,
-        sourceChannel: params.sourceChannel,
+        originChannel: params.originChannel,
         sourceTool: params.sourceTool,
       },
       settings: queueSettings,
@@ -516,7 +516,7 @@ async function sendSubagentAnnounceDirectly(params: {
   directOrigin?: DeliveryContext;
   requesterSessionOrigin?: DeliveryContext;
   sourceSessionKey?: string;
-  sourceChannel?: string;
+  originChannel?: string;
   sourceTool?: string;
   requesterIsSubagent: boolean;
   signal?: AbortSignal;
@@ -554,7 +554,7 @@ async function sendSubagentAnnounceDirectly(params: {
     const isThreadBoundAnnounce =
       !params.requesterIsSubagent &&
       effectiveDirectOrigin?.threadId != null &&
-      params.sourceChannel === INTERNAL_MESSAGE_CHANNEL &&
+      params.originChannel === INTERNAL_MESSAGE_CHANNEL &&
       params.sourceTool === "subagent_announce";
     const deliveryTarget =
       !params.requesterIsSubagent && !isThreadBoundAnnounce
@@ -584,7 +584,7 @@ async function sendSubagentAnnounceDirectly(params: {
     log.info("[delivery-trace] subagent announce direct delivery", {
       targetRequesterSessionKey: params.targetRequesterSessionKey,
       sourceSessionKey: params.sourceSessionKey,
-      sourceChannel: params.sourceChannel,
+      originChannel: params.originChannel,
       sourceTool: params.sourceTool,
       isThreadBoundAnnounce,
       deliver: deliveryTarget.deliver,
@@ -629,7 +629,7 @@ async function sendSubagentAnnounceDirectly(params: {
             inputProvenance: {
               kind: "inter_session",
               sourceSessionKey: params.sourceSessionKey,
-              sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
+              originChannel: params.originChannel ?? INTERNAL_MESSAGE_CHANNEL,
               sourceTool: params.sourceTool ?? "subagent_announce",
             },
             idempotencyKey: params.directIdempotencyKey,
@@ -664,7 +664,7 @@ export async function deliverSubagentAnnouncement(params: {
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   sourceSessionKey?: string;
-  sourceChannel?: string;
+  originChannel?: string;
   sourceTool?: string;
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
@@ -685,7 +685,7 @@ export async function deliverSubagentAnnouncement(params: {
         summaryLine: params.summaryLine,
         requesterOrigin: params.requesterOrigin,
         sourceSessionKey: params.sourceSessionKey,
-        sourceChannel: params.sourceChannel,
+        originChannel: params.originChannel,
         sourceTool: params.sourceTool,
         internalEvents: params.internalEvents,
         signal: params.signal,
@@ -700,7 +700,7 @@ export async function deliverSubagentAnnouncement(params: {
         directOrigin: params.directOrigin,
         requesterSessionOrigin: params.requesterSessionOrigin,
         sourceSessionKey: params.sourceSessionKey,
-        sourceChannel: params.sourceChannel,
+        originChannel: params.originChannel,
         sourceTool: params.sourceTool,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,

@@ -24,7 +24,7 @@ export async function runAgentStep(params: {
   channel?: string;
   lane?: string;
   sourceSessionKey?: string;
-  sourceChannel?: string;
+  originChannel?: string;
   sourceTool?: string;
 }): Promise<string | undefined> {
   const stepIdem = crypto.randomUUID();
@@ -41,7 +41,7 @@ export async function runAgentStep(params: {
       inputProvenance: {
         kind: "inter_session",
         sourceSessionKey: params.sourceSessionKey,
-        sourceChannel: params.sourceChannel,
+        originChannel: params.originChannel,
         sourceTool: params.sourceTool ?? "sessions_send",
       },
     },

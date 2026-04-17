@@ -95,7 +95,7 @@ export async function runSessionsSendA2AFlow(params: {
           timeoutMs: params.announceTimeoutMs,
           lane: resolveNestedAgentLaneForSession(currentSessionKey),
           sourceSessionKey: nextSessionKey,
-          sourceChannel:
+          originChannel:
             nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
           sourceTool: "sessions_send",
         });
@@ -126,7 +126,7 @@ export async function runSessionsSendA2AFlow(params: {
       timeoutMs: params.announceTimeoutMs,
       lane: resolveNestedAgentLaneForSession(params.targetSessionKey),
       sourceSessionKey: params.requesterSessionKey,
-      sourceChannel: params.requesterChannel,
+      originChannel: params.requesterChannel,
       sourceTool: "sessions_send",
     });
     const announcePayload = extractAnnouncePayload(announceReply);
