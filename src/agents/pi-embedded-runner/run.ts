@@ -10,8 +10,8 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
-import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveUserPath } from "../../utils.js";
+import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
   hasConfiguredModelFallbacks,
@@ -310,6 +310,11 @@ export async function runEmbeddedPiAgent(
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
       const legacyBeforeAgentStartResult = hookSelection.legacyBeforeAgentStartResult;
+
+      // If a plugin set toolsAllow via before_prompt_build or before_agent_start,
+      // merge it with any cron-provided toolsAllow. Cron (params) takes precedence;
+      // hook-derived toolsAllow only applies when params.toolsAllow is not set.
+      const effectiveToolsAllow = params.toolsAllow ?? hookSelection.hookToolsAllow;
 
       const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
         provider,
@@ -762,7 +767,7 @@ export async function runEmbeddedPiAgent(
             silentExpected: params.silentExpected,
             bootstrapContextMode: params.bootstrapContextMode,
             bootstrapContextRunKind: params.bootstrapContextRunKind,
-            toolsAllow: params.toolsAllow,
+            toolsAllow: effectiveToolsAllow,
             disableMessageTool: params.disableMessageTool,
             requireExplicitMessageTarget: params.requireExplicitMessageTarget,
             internalEvents: params.internalEvents,

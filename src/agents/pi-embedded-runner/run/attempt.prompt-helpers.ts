@@ -86,6 +86,8 @@ export async function resolvePromptBuildHookResult(params: {
       promptBuildResult?.appendSystemContext,
       legacyResult?.appendSystemContext,
     ]),
+    // First defined toolsAllow wins (before_prompt_build takes precedence over legacy hook).
+    toolsAllow: promptBuildResult?.toolsAllow ?? legacyResult?.toolsAllow,
   };
 }
 

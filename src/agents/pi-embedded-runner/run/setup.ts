@@ -92,10 +92,29 @@ export async function resolveHookModelSelection(params: {
     log.info(`[hooks] model overridden to ${modelId}`);
   }
 
+  // Run before_prompt_build hooks for early toolsAllow extraction.
+  // The full prompt-build result (system prompt, context injection) is consumed
+  // later in the attempt when session messages are available; here we only need
+  // the toolsAllow field so plugins can narrow the tool surface before assembly.
+  let beforePromptBuildToolsAllow: string[] | undefined;
+  if (hookRunner?.hasHooks("before_prompt_build")) {
+    try {
+      const promptBuildResult = await hookRunner.runBeforePromptBuild(
+        { prompt: params.prompt, messages: [] },
+        params.hookContext,
+      );
+      beforePromptBuildToolsAllow = promptBuildResult?.toolsAllow;
+    } catch (hookErr) {
+      log.warn(`before_prompt_build hook (early toolsAllow extraction) failed: ${String(hookErr)}`);
+    }
+  }
+
   return {
     provider,
     modelId,
     legacyBeforeAgentStartResult,
+    // before_prompt_build toolsAllow takes precedence over legacy before_agent_start
+    hookToolsAllow: beforePromptBuildToolsAllow ?? legacyBeforeAgentStartResult?.toolsAllow,
   };
 }
 

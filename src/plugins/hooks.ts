@@ -246,6 +246,8 @@ export function createHookRunner(
       left: acc?.appendSystemContext,
       right: next.appendSystemContext,
     }),
+    // First plugin to set toolsAllow wins (higher priority).
+    toolsAllow: firstDefined(acc?.toolsAllow, next.toolsAllow),
   });
 
   const mergeSubagentSpawningResult = (

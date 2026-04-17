@@ -31,6 +31,19 @@ export type PluginHookBeforePromptBuildResult = {
    * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
    */
   appendSystemContext?: string;
+  /**
+   * Optional tool allow-list for this turn. When set, only the listed tools are
+   * sent to the model — the same filtering that `toolsAllow` on cron payloads
+   * already applies (intersection with the owner's static policy, never additive).
+   *
+   * Plugins can use this to dynamically narrow the tool surface per-turn based
+   * on task classification, reducing token overhead and model confusion.
+   *
+   * Safety guarantee: this list is intersected with the tools that survive the
+   * existing policy pipeline — it can only *remove* tools, never grant access
+   * to tools the owner denied.
+   */
+  toolsAllow?: string[];
 };
 
 export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
@@ -38,6 +51,7 @@ export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
   "prependContext",
   "prependSystemContext",
   "appendSystemContext",
+  "toolsAllow",
 ] as const satisfies readonly (keyof PluginHookBeforePromptBuildResult)[];
 
 type MissingPluginPromptMutationResultFields = Exclude<
