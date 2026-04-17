@@ -130,6 +130,10 @@ Hello-ok response:
       "stateVersion": { "presence": 0, "health": 0 },
       "uptimeMs": 0
     },
+    "auth": {
+      "role": "operator",
+      "scopes": ["operator.read"]
+    },
     "policy": { "maxPayload": 1048576, "maxBufferedBytes": 1048576, "tickIntervalMs": 30000 }
   }
 }

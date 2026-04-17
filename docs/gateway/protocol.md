@@ -79,6 +79,10 @@ Gateway → Client:
     "server": { "version": "…", "connId": "…" },
     "features": { "methods": ["…"], "events": ["…"] },
     "snapshot": { "…": "…" },
+    "auth": {
+      "role": "operator",
+      "scopes": ["operator.read", "operator.write"]
+    },
     "policy": {
       "maxPayload": 26214400,
       "maxBufferedBytes": 52428800,
@@ -88,12 +92,12 @@ Gateway → Client:
 }
 ```
 
-`server`, `features`, `snapshot`, and `policy` are all required by the schema
-(`src/gateway/protocol/schema/frames.ts`). `canvasHostUrl` is optional. `auth`
-reports the negotiated role/scopes when available, and includes `deviceToken`
-when the gateway issues one.
+`server`, `features`, `snapshot`, `auth`, and `policy` are all required by the
+schema (`src/gateway/protocol/schema/frames.ts`). `canvasHostUrl` is optional.
+`hello-ok.auth` always reports the negotiated role/scopes and includes
+`deviceToken` when the gateway issues one.
 
-When no device token is issued, `hello-ok.auth` can still report the negotiated
+When no device token is issued, `hello-ok.auth` reports the negotiated
 permissions:
 
 ```json

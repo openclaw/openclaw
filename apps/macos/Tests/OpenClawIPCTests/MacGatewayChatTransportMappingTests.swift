@@ -23,7 +23,12 @@ struct MacGatewayChatTransportMappingTests {
             features: [:],
             snapshot: snapshot,
             canvashosturl: nil,
-            auth: nil,
+            auth: [
+                "role": OpenClawProtocol.AnyCodable("operator"),
+                "scopes": OpenClawProtocol.AnyCodable([
+                    OpenClawProtocol.AnyCodable("operator.read")
+                ]),
+            ],
             policy: [:])
 
         let mapped = MacGatewayChatTransport.mapPushToTransportEvent(.snapshot(hello))

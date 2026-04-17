@@ -82,7 +82,7 @@ public struct HelloOk: Codable, Sendable {
     public let features: [String: AnyCodable]
     public let snapshot: Snapshot
     public let canvashosturl: String?
-    public let auth: [String: AnyCodable]?
+    public let auth: [String: AnyCodable]
     public let policy: [String: AnyCodable]
 
     public init(
@@ -92,7 +92,7 @@ public struct HelloOk: Codable, Sendable {
         features: [String: AnyCodable],
         snapshot: Snapshot,
         canvashosturl: String?,
-        auth: [String: AnyCodable]?,
+        auth: [String: AnyCodable],
         policy: [String: AnyCodable])
     {
         self.type = type
