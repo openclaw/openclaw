@@ -15,11 +15,23 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 
 /**
+ * Test-only injection point for the token-source function. Production code
+ * always uses `estimateSessionTokensFromTranscriptDefault`. Tests call
+ * `_setTokenSourceForTests()` to supply tokens directly without needing a
+ * real transcript file on disk.
+ */
+type TokenSource = (entry: SessionEntry) => number | undefined;
+let tokenSourceOverride: TokenSource | null = null;
+export function _setTokenSourceForTests(fn: TokenSource | null): void {
+  tokenSourceOverride = fn;
+}
+
+/**
  * Estimate current context tokens from the session transcript.
  * Uses chars/4 heuristic (same as upstream compaction).
  * Reads only kept messages (respects compaction markers).
  */
-function estimateSessionTokensFromTranscript(entry: SessionEntry): number | undefined {
+function estimateSessionTokensFromTranscriptDefault(entry: SessionEntry): number | undefined {
   const sessionId = (entry as Record<string, unknown>).sessionId as string | undefined;
   if (!sessionId) {
     return undefined;
@@ -115,7 +127,9 @@ export function maybeInjectAgentCompactionPressureSignal(params: {
     ((entry as Record<string, unknown>).contextTokens as number | undefined) ??
     128_000;
 
-  const totalTokens = estimateSessionTokensFromTranscript(entry);
+  const totalTokens = tokenSourceOverride
+    ? tokenSourceOverride(entry)
+    : estimateSessionTokensFromTranscriptDefault(entry);
 
   logVerbose(
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
