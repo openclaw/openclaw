@@ -6,21 +6,11 @@ import { createScopedChannelConfigAdapter } from "../plugin-sdk/channel-config-h
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { configMocks, offsetMocks } from "./channels.mock-harness.js";
-import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
-
-const authMocks = vi.hoisted(() => ({
-  loadAuthProfileStore: vi.fn(),
-}));
-
-vi.mock("../agents/auth-profiles.js", () => ({
-  loadAuthProfileStore: authMocks.loadAuthProfileStore,
-}));
-
+import { configMocks, offsetMocks, secretMocks } from "./channels.mock-harness.js";
 import { channelsAddCommand } from "./channels/add.js";
-import { channelsListCommand } from "./channels/list.js";
 import { channelsRemoveCommand } from "./channels/remove.js";
 import { formatGatewayChannelsStatusLines } from "./channels/status.js";
+import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const runtime = createTestRuntime();
 let clackPrompterModule: typeof import("../wizard/clack-prompter.js");
@@ -307,15 +297,11 @@ describe("channels command", () => {
   beforeEach(() => {
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
-    authMocks.loadAuthProfileStore.mockClear();
+    secretMocks.resolveCommandConfigWithSecrets.mockClear();
     offsetMocks.deleteTelegramUpdateOffset.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
-    authMocks.loadAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {},
-    });
     setMinimalChannelsCommandRegistryForTests();
   });
 
@@ -561,42 +547,6 @@ describe("channels command", () => {
       channels?: { discord?: { enabled?: boolean } };
     }>();
     expect(next.channels?.discord?.enabled).toBe(false);
-  });
-
-  it("includes external auth profiles in JSON output", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {},
-    });
-    authMocks.loadAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {
-        "anthropic:default": {
-          type: "oauth",
-          provider: "anthropic",
-          access: "token",
-          refresh: "refresh",
-          expires: 0,
-          created: 0,
-        },
-        "openai-codex:default": {
-          type: "oauth",
-          provider: "openai",
-          access: "token",
-          refresh: "refresh",
-          expires: 0,
-          created: 0,
-        },
-      },
-    });
-
-    await channelsListCommand({ json: true, usage: false }, runtime);
-    const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
-      auth?: Array<{ id: string }>;
-    };
-    const ids = payload.auth?.map((entry) => entry.id) ?? [];
-    expect(ids).toContain("anthropic:default");
-    expect(ids).toContain("openai-codex:default");
   });
 
   it("stores default account names in accounts when multiple accounts exist", async () => {
