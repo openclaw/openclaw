@@ -1,13 +1,13 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "vitest";
-import { projectSdkMessage } from "./session-mirror.js";
+import { projectSdkMessage, resolveSessionMirrorPath } from "./session-mirror.js";
 
 function asSdkMessage(obj: unknown): SDKMessage {
   return obj as SDKMessage;
 }
 
 describe("projectSdkMessage", () => {
-  it("projects an assistant text message to an assistant pi-ai frame", () => {
+  it("projects an assistant text message into a canonical message envelope", () => {
     const result = projectSdkMessage(
       asSdkMessage({
         type: "assistant",
@@ -15,16 +15,28 @@ describe("projectSdkMessage", () => {
           content: [{ type: "text", text: "hello world" }],
         },
       }),
+      { model: "claude-sonnet-4-5" },
     );
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      type: "assistant",
-      text: "hello world",
-      source: "claude-sdk",
+    const record = result[0];
+    if (!record) {
+      throw new Error("expected at least one record");
+    }
+    expect(record.type).toBe("message");
+    expect(record.claudeSdk).toBe(true);
+    expect(record.message.role).toBe("assistant");
+    expect(record.message).toMatchObject({
+      role: "assistant",
+      api: "claude-sdk",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
     });
+    if (record.message.role === "assistant") {
+      expect(record.message.content).toEqual([{ type: "text", text: "hello world" }]);
+    }
   });
 
-  it("projects a tool_use block as a synthetic assistant frame with toolCall", () => {
+  it("includes tool_use blocks alongside text in the assistant content array", () => {
     const result = projectSdkMessage(
       asSdkMessage({
         type: "assistant",
@@ -36,15 +48,21 @@ describe("projectSdkMessage", () => {
         },
       }),
     );
-    expect(result).toHaveLength(2);
-    expect(result[0]).toMatchObject({ type: "assistant", text: "running bash" });
-    expect(result[1]).toMatchObject({
-      type: "assistant",
-      toolCall: { id: "tu_1", name: "Bash", input: { command: "ls" } },
-    });
+    expect(result).toHaveLength(1);
+    const record = result[0];
+    if (!record) {
+      throw new Error("expected at least one record");
+    }
+    expect(record.message.role).toBe("assistant");
+    if (record.message.role === "assistant") {
+      expect(record.message.content).toEqual([
+        { type: "text", text: "running bash" },
+        { type: "toolCall", id: "tu_1", name: "Bash", input: { command: "ls" } },
+      ]);
+    }
   });
 
-  it("projects a user tool_result block as a synthetic assistant frame with toolResult", () => {
+  it("projects a user tool_result block as a canonical tool-role message", () => {
     const result = projectSdkMessage(
       asSdkMessage({
         type: "user",
@@ -61,24 +79,49 @@ describe("projectSdkMessage", () => {
       }),
     );
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      type: "assistant",
-      toolResult: { id: "tu_1", output: "total 0\n", isError: false },
-    });
+    const record = result[0];
+    if (!record) {
+      throw new Error("expected at least one record");
+    }
+    expect(record.message.role).toBe("tool");
+    if (record.message.role === "tool") {
+      expect(record.message.content).toEqual([
+        {
+          type: "toolResult",
+          toolCallId: "tu_1",
+          output: "total 0\n",
+          isError: false,
+        },
+      ]);
+    }
   });
 
-  it("projects a result message to a stop frame with the SDK's stop_reason", () => {
-    const result = projectSdkMessage(asSdkMessage({ type: "result", stop_reason: "end_turn" }));
+  it("projects a user text message into a canonical user-role message", () => {
+    const result = projectSdkMessage(
+      asSdkMessage({
+        type: "user",
+        message: { content: [{ type: "text", text: "hi there" }] },
+      }),
+    );
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({ type: "stop", reason: "end_turn" });
+    const record = result[0];
+    if (!record) {
+      throw new Error("expected at least one record");
+    }
+    expect(record.message.role).toBe("user");
+    if (record.message.role === "user") {
+      expect(record.message.content).toEqual([{ type: "text", text: "hi there" }]);
+    }
   });
 
-  it("drops unknown message types silently (SDK primary still has them)", () => {
-    const result = projectSdkMessage(asSdkMessage({ type: "system_unknown_variant" }));
-    expect(result).toEqual([]);
+  it("drops result messages and unknown message types — sidecar emits stop markers separately", () => {
+    expect(
+      projectSdkMessage(asSdkMessage({ type: "result", stop_reason: "end_turn" })),
+    ).toEqual([]);
+    expect(projectSdkMessage(asSdkMessage({ type: "system_unknown_variant" }))).toEqual([]);
   });
 
-  it("concatenates multiple text blocks with newlines", () => {
+  it("concatenates multiple text blocks with newlines into one canonical text content entry", () => {
     const result = projectSdkMessage(
       asSdkMessage({
         type: "assistant",
@@ -91,6 +134,37 @@ describe("projectSdkMessage", () => {
       }),
     );
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({ text: "first\nsecond" });
+    const record = result[0];
+    if (!record) {
+      throw new Error("expected at least one record");
+    }
+    if (record.message.role === "assistant") {
+      expect(record.message.content).toEqual([{ type: "text", text: "first\nsecond" }]);
+    }
+  });
+
+  it("falls back to an empty model id when no model context is provided", () => {
+    const result = projectSdkMessage(
+      asSdkMessage({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "hi" }] },
+      }),
+    );
+    expect(result).toHaveLength(1);
+    const record = result[0];
+    if (!record) {
+      throw new Error("expected at least one record");
+    }
+    if (record.message.role === "assistant") {
+      expect(record.message.model).toBe("");
+    }
+  });
+});
+
+describe("resolveSessionMirrorPath", () => {
+  it("appends the .claude-sdk.jsonl suffix to the primary path", () => {
+    expect(resolveSessionMirrorPath("/foo/bar/session-123.jsonl")).toBe(
+      "/foo/bar/session-123.jsonl.claude-sdk.jsonl",
+    );
   });
 });

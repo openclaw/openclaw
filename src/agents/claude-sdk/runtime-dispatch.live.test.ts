@@ -92,7 +92,14 @@ describeLive("runAgent dispatch → claude-sdk (live)", () => {
     // thrown from pi-ai module resolution or returned an embedded-shape
     // result. A passing DISPATCH-OK confirms the SDK drove the turn.
     expect(result.payloads?.[0]?.text ?? "").toMatch(/DISPATCH-OK/);
-    expect(result.meta.agentMeta?.provider).toBe("anthropic");
+    // agentMeta is only emitted when we forward an explicit model id
+    // to the SDK. In subscription mode with no per-agent model
+    // override (the default), the SDK picks its own default and we
+    // omit agentMeta entirely so downstream `?.model ?? fallback`
+    // chains aren't poisoned by a placeholder string.
+    if (result.meta.agentMeta) {
+      expect(result.meta.agentMeta.provider).toBe("anthropic");
+    }
 
     // The session-mirror sidecar file should exist and have a
     // system frame tagged with the SDK source — unique on-disk

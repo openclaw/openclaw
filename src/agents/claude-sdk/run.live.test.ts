@@ -79,7 +79,11 @@ describeLive("runClaudeSdkAgent (live, OPENCLAW_LIVE_TEST=1)", () => {
       }),
     );
     expect(result.payloads?.[0]?.text ?? "").toMatch(/CLAUDE-SDK-OK/);
-    expect(result.meta.agentMeta?.provider).toBe("anthropic");
+    // agentMeta only appears when an explicit model id was forwarded;
+    // see runtime-dispatch.live.test.ts for the rationale.
+    if (result.meta.agentMeta) {
+      expect(result.meta.agentMeta.provider).toBe("anthropic");
+    }
   }, RUN_TIMEOUT_MS);
 
   it("writes the pi-ai JSONL mirror to the sidecar file", async () => {
@@ -89,17 +93,23 @@ describeLive("runClaudeSdkAgent (live, OPENCLAW_LIVE_TEST=1)", () => {
       }),
     );
     // The mirror writes to a sidecar at <sessionFile>.claude-sdk.jsonl
-    // rather than the primary file, because pi-ai's SessionManager owns
-    // the primary path and may rewrite it.
+    // (tagged "system" marker + canonical message envelopes) AND to the
+    // primary canonical session file (envelopes only). The sidecar is
+    // the deterministic on-disk evidence the run took the SDK path.
     const sidecarPath = resolveSessionMirrorPath(sessionFile);
     const written = fs.readFileSync(sidecarPath, "utf8");
-    // First frame is the system kickoff; we at least expect some assistant
-    // text was projected afterward.
+    // First frame is the system kickoff; we expect a canonical
+    // message envelope (`type: "message"` with `claudeSdk: true`) from
+    // an assistant turn afterward.
     const lines = written
       .split("\n")
       .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line) as { type: string });
+      .map((line) => JSON.parse(line) as { type: string; claudeSdk?: boolean; message?: { role?: string } });
     expect(lines[0]?.type).toBe("system");
-    expect(lines.some((l) => l.type === "assistant")).toBe(true);
+    expect(
+      lines.some(
+        (l) => l.type === "message" && l.claudeSdk === true && l.message?.role === "assistant",
+      ),
+    ).toBe(true);
   }, RUN_TIMEOUT_MS);
 });

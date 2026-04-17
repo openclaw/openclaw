@@ -21,7 +21,6 @@
 //   pnpm skills:subagents:gen
 //   pnpm skills:subagents:check
 
-import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -345,18 +344,55 @@ function checkMode(): number {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-check-"));
   try {
     const { writes } = collectWrites(tempRoot);
+    // Compare ONLY the files this script produces. writeMode preserves
+    // any custom .md files a user manually added under .claude/agents/
+    // (they don't match the generated marker), so the drift check has
+    // to exclude them too — otherwise a user-added file makes
+    // `pnpm skills:subagents:check` red forever with no remediation.
+    const drifted: string[] = [];
     for (const w of writes) {
-      fs.writeFileSync(w.outputPath, w.content, "utf8");
+      const expectedBasename = path.basename(w.outputPath);
+      const repoPath = path.join(OUTPUT_DIR, expectedBasename);
+      if (!fs.existsSync(repoPath)) {
+        drifted.push(`missing: ${expectedBasename}`);
+        continue;
+      }
+      const actual = fs.readFileSync(repoPath, "utf8");
+      if (actual !== w.content) {
+        drifted.push(`changed: ${expectedBasename}`);
+      }
     }
-    // Diff with git against the committed .claude/agents tree.
+    // Also flag files in OUTPUT_DIR that look generated (start with the
+    // sub-agent frontmatter marker we always emit) but don't appear in
+    // `writes` — that means a generated file lingers from a deleted
+    // skill and should be removed by re-running gen.
     try {
-      execSync(`git diff --no-index --exit-code "${OUTPUT_DIR}" "${tempRoot}"`, {
-        stdio: "inherit",
-      });
+      const expectedBasenames = new Set(writes.map((w) => path.basename(w.outputPath)));
+      for (const entry of fs.readdirSync(OUTPUT_DIR)) {
+        if (!entry.endsWith(".md") || expectedBasenames.has(entry)) {
+          continue;
+        }
+        const fullPath = path.join(OUTPUT_DIR, entry);
+        try {
+          const head = fs.readFileSync(fullPath, "utf8").slice(0, 32);
+          if (head.startsWith("---\nname: ")) {
+            drifted.push(`stale generated file: ${entry}`);
+          }
+        } catch {
+          // Ignore unreadable entries — not our problem.
+        }
+      }
     } catch {
+      // OUTPUT_DIR doesn't exist; collectWrites would have flagged
+      // everything as "missing" above already.
+    }
+    if (drifted.length > 0) {
       process.stderr.write(
-        "\n.claude/agents/ is out of date; run `pnpm skills:subagents:gen` and commit the result.\n",
+        ".claude/agents/ is out of date; run `pnpm skills:subagents:gen` and commit the result. Drift:\n",
       );
+      for (const d of drifted) {
+        process.stderr.write(`  - ${d}\n`);
+      }
       return 1;
     }
     process.stdout.write(".claude/agents/ is up to date.\n");
