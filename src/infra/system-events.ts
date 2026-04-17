@@ -12,6 +12,7 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { recordReceipt } from "./outbound/delivery-receipts.js";
 import type { MessageClass } from "./outbound/message-class.js";
 
 export type SystemEvent = {
@@ -143,6 +144,33 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
+  }
+  // Phase 9 Discord Surface Overhaul: record a delivery receipt for the
+  // queued path. `messageId` is unknown at enqueue time (set when the
+  // delivery worker actually sends), so we intentionally omit it here.
+  // We do NOT re-record for the acp-spawn-parent-stream caller because that
+  // caller records before/after planDelivery with a richer reason tag. To
+  // avoid double-counting, guard on a well-known contextKey shape.
+  const isAcpSpawnParentStream =
+    typeof normalizedContextKey === "string" && normalizedContextKey.startsWith("acp-spawn:");
+  if (!isAcpSpawnParentStream) {
+    const ctx = normalizedDeliveryContext;
+    recordReceipt(key, {
+      target:
+        ctx?.channel && ctx?.to
+          ? {
+              channel: ctx.channel,
+              to: ctx.to,
+              ...(ctx.accountId ? { accountId: ctx.accountId } : {}),
+              ...(ctx.threadId != null ? { threadId: ctx.threadId } : {}),
+            }
+          : { channel: "unknown", to: "unknown" },
+      messageClass: normalizedMessageClass,
+      outcome: "delivered",
+      reason: "enqueue_system_event",
+      ts: Date.now(),
+      resolvedContextAt: Date.now(),
+    });
   }
   return true;
 }

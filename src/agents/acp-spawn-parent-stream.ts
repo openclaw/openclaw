@@ -4,6 +4,7 @@ import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { recordReceipt } from "../infra/outbound/delivery-receipts.js";
 import type { MessageClass } from "../infra/outbound/message-class.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { planDelivery, type ResolvedSurfaceTarget } from "../infra/outbound/surface-policy.js";
@@ -24,6 +25,37 @@ const relayLog = createSubsystemLogger("agents/acp-spawn-parent-stream");
 // redacts sk-*/Bearer tokens, and removes stack-trace frames. Non-prose
 // classes (completion, internal_narration, etc.) do not pass through the
 // sanitizer because they are either system-generated strings or suppressed.
+// Phase 9 P2 Discord Surface Overhaul: when the parent-stream relay decides to
+// suppress an emission (via `planDelivery`), push a machine-readable
+// `delivery_outcome` event back to the ORIGINATING child session. Class is
+// always `internal_narration` so the event never leaks to any user-facing
+// surface; it becomes part of the child's next prompt prefix.
+function emitDeliveryOutcomeSystemEvent(params: {
+  childSessionKey: string;
+  decision: "suppress";
+  reason?: string;
+  originalMessageClass: MessageClass;
+  target: { channel: string; to: string; accountId?: string; threadId?: string | number };
+}): void {
+  if (!params.childSessionKey) {
+    return;
+  }
+  const payload = {
+    kind: "delivery_outcome",
+    decision: params.decision,
+    ...(params.reason ? { reason: params.reason } : {}),
+    originalMessageClass: params.originalMessageClass,
+    target: params.target,
+  };
+  const text = `[delivery_outcome] ${JSON.stringify(payload)}`;
+  enqueueSystemEvent(text, {
+    sessionKey: params.childSessionKey,
+    contextKey: `delivery_outcome:${params.originalMessageClass}:${params.reason ?? "unknown"}`,
+    messageClass: "internal_narration",
+    trusted: false,
+  });
+}
+
 function sanitizeEmissionText(text: string, messageClass: MessageClass): string {
   if (messageClass === "final_reply") {
     return sanitizeAssistantVisibleTextWithProfile(text, "delivery");
@@ -338,7 +370,58 @@ export function startAcpSpawnParentStreamRelay(params: {
     // will be suppressed by the surface-policy predicate downstream.
     const sanitized = sanitizeEmissionText(cleaned, messageClass);
     const payload = sanitized.trim() || cleaned; // never deliver empty text
+    const resolvedContextAt = Date.now();
+    const ctx = params.deliveryContext;
+    const target =
+      ctx?.channel && ctx?.to
+        ? {
+            channel: ctx.channel,
+            to: ctx.to,
+            ...(ctx.accountId ? { accountId: ctx.accountId } : {}),
+            ...(ctx.threadId != null ? { threadId: ctx.threadId } : {}),
+          }
+        : { channel: "unknown", to: "unknown" };
+    // Phase 9: plan the delivery ONCE here so we can branch on the outcome and
+    // record a receipt for both directions (deliver/suppress). We ONLY call
+    // planDelivery when a concrete delivery context is present — absent one,
+    // legacy behavior is to enqueue into the parent's prompt prefix (the
+    // session-queue surface), which is not an origin-respect violation because
+    // it never reaches an external user-facing channel.
+    const hasContext = Boolean(ctx?.channel && ctx?.to);
+    const plan = hasContext
+      ? planDelivery({ messageClass, surface: ctx ?? { channel: "", to: "" } })
+      : ({ outcome: "deliver" } as const);
+    if (plan.outcome === "suppress") {
+      recordReceipt(parentSessionKey, {
+        target,
+        messageClass,
+        outcome: "suppressed",
+        reason: plan.reason,
+        ts: Date.now(),
+        resolvedContextAt,
+      });
+      // Phase 9 P2: surface a `delivery_outcome` system event back to the
+      // originating child session so the child can see its own fate without
+      // polling. Class `internal_narration` guarantees it won't leak to any
+      // user-visible surface.
+      emitDeliveryOutcomeSystemEvent({
+        childSessionKey: params.childSessionKey,
+        originalMessageClass: messageClass,
+        decision: "suppress",
+        reason: plan.reason,
+        target,
+      });
+      return;
+    }
     if (directPostFinalReply(payload, contextKey, messageClass)) {
+      recordReceipt(parentSessionKey, {
+        target,
+        messageClass,
+        outcome: "delivered",
+        reason: "direct_post_final_reply",
+        ts: Date.now(),
+        resolvedContextAt,
+      });
       wake();
       return;
     }
@@ -348,6 +431,14 @@ export function startAcpSpawnParentStreamRelay(params: {
       deliveryContext: params.deliveryContext,
       trusted: false,
       messageClass,
+    });
+    recordReceipt(parentSessionKey, {
+      target,
+      messageClass,
+      outcome: "delivered",
+      reason: "queued_system_event",
+      ts: Date.now(),
+      resolvedContextAt,
     });
     wake();
   };
