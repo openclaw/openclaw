@@ -47,6 +47,7 @@ export type MatrixQaConfigOverrides = {
   groupPolicy?: MatrixQaGroupPolicy;
   groupsByKey?: Record<string, MatrixQaGroupConfigOverrides>;
   replyToMode?: MatrixQaReplyToMode;
+  startupVerification?: "if-unverified" | "off";
   streaming?: "off" | "partial" | "quiet" | boolean;
   threadReplies?: MatrixQaThreadRepliesMode;
 };
@@ -74,6 +75,7 @@ export type MatrixQaConfigSnapshot = {
     }
   >;
   replyToMode: MatrixQaReplyToMode;
+  startupVerification?: "if-unverified" | "off";
   streaming: MatrixQaStreamingMode;
   threadReplies: MatrixQaThreadRepliesMode;
 };
@@ -271,6 +273,10 @@ function buildMatrixQaChannelAccountConfig(params: {
       : {};
   const streamingConfig =
     params.overrides?.streaming !== undefined ? { streaming: params.overrides.streaming } : {};
+  const startupVerificationConfig =
+    params.snapshot.startupVerification !== undefined
+      ? { startupVerification: params.snapshot.startupVerification }
+      : {};
 
   return {
     accessToken: params.sutAccessToken,
@@ -289,6 +295,7 @@ function buildMatrixQaChannelAccountConfig(params: {
       dangerouslyAllowPrivateNetwork: true,
     },
     replyToMode: params.snapshot.replyToMode,
+    ...startupVerificationConfig,
     threadReplies: params.snapshot.threadReplies,
     userId: params.sutUserId,
     ...autoJoinConfig,
@@ -318,6 +325,7 @@ export function buildMatrixQaConfigSnapshot(params: {
       topology: params.topology,
     }),
     replyToMode: params.overrides?.replyToMode ?? "off",
+    startupVerification: params.overrides?.startupVerification,
     streaming: resolveMatrixQaStreamingMode(params.overrides?.streaming),
     threadReplies: params.overrides?.threadReplies ?? "inbound",
   };
@@ -335,6 +343,7 @@ export function summarizeMatrixQaConfigSnapshot(snapshot: MatrixQaConfigSnapshot
     `blockStreaming=${formatMatrixQaBoolean(snapshot.blockStreaming)}`,
     `autoJoin=${snapshot.autoJoin}`,
     `encryption=${formatMatrixQaBoolean(snapshot.encryption)}`,
+    `startupVerification=${snapshot.startupVerification ?? "<default>"}`,
   ].join(", ");
 }
 
