@@ -19,6 +19,18 @@ const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
+const loadSessionStoreMock = vi.hoisted(() => vi.fn());
+const resolveSessionStoreEntryMock = vi.hoisted(() =>
+  vi.fn<
+    () => {
+      existing:
+        | {
+            reasoningLevel?: "off" | "on" | "stream";
+          }
+        | undefined;
+    }
+  >(() => ({ existing: undefined })),
+);
 const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
 
 function mergeStreamingText(
@@ -65,6 +77,10 @@ vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
   removeTypingIndicator: removeTypingIndicatorMock,
 }));
+vi.mock("./bot-runtime-api.js", () => ({
+  loadSessionStore: loadSessionStoreMock,
+  resolveSessionStoreEntry: resolveSessionStoreEntryMock,
+}));
 vi.mock("./streaming-card.js", () => {
   return {
     mergeStreamingText,
@@ -96,6 +112,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     streamingInstances.length = 0;
     sendMediaFeishuMock.mockResolvedValue(undefined);
     sendStructuredCardFeishuMock.mockResolvedValue(undefined);
+    loadSessionStoreMock.mockReturnValue({});
+    resolveSessionStoreEntryMock.mockReturnValue({ existing: undefined });
 
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
@@ -130,6 +148,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         reply: {
           createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
           resolveHumanDelayConfig: vi.fn(() => undefined),
+        },
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/feishu-session-store.json"),
         },
       },
     });
@@ -615,6 +636,28 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(closeArg).toContain("> deep thought");
     expect(closeArg).not.toContain("Reasoning:");
     expect(closeArg).not.toContain("---");
+  });
+
+  it("suppresses reasoning text when session reasoningLevel is off", async () => {
+    resolveSessionStoreEntryMock.mockReturnValue({
+      existing: { reasoningLevel: "off" },
+    });
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
+      sessionKey: "agent:main:feishu:dm:ou_sender_1",
+    });
+
+    await options.onReplyStart?.();
+    result.replyOptions.onReasoningStream?.({ text: "Reasoning:\n_hidden thought_" });
+    result.replyOptions.onReasoningEnd?.();
+    await options.deliver({ text: "final answer" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;
+    expect(closeArg).toBe("final answer");
+    expect(closeArg).not.toContain("Thinking");
   });
 
   it("ignores empty reasoning payloads", async () => {

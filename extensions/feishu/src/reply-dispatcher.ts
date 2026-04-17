@@ -6,6 +6,7 @@ import {
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { loadSessionStore, resolveSessionStoreEntry } from "./bot-runtime-api.js";
 import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
@@ -32,6 +33,7 @@ function shouldUseCard(text: string): boolean {
  * Messages older than this are likely replays after context compaction (#30418). */
 const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
 const MS_EPOCH_MIN = 1_000_000_000_000;
+type FeishuReasoningLevel = "off" | "on" | "stream";
 
 function normalizeEpochMs(timestamp: number | undefined): number | undefined {
   if (!Number.isFinite(timestamp) || timestamp === undefined || timestamp <= 0) {
@@ -72,11 +74,37 @@ function resolveCardNote(
   return parts.join(" | ");
 }
 
+function resolveFeishuReasoningLevel(params: {
+  cfg: ClawdbotConfig;
+  sessionKey?: string;
+  agentId: string;
+  runtime: ReturnType<typeof getFeishuRuntime>;
+}): FeishuReasoningLevel {
+  if (!params.sessionKey) {
+    return "on";
+  }
+  try {
+    const storePath = params.runtime.channel.session.resolveStorePath(params.cfg.session?.store, {
+      agentId: params.agentId,
+    });
+    const store = loadSessionStore(storePath, { skipCache: true });
+    const level = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing
+      ?.reasoningLevel;
+    if (level === "off" || level === "on" || level === "stream") {
+      return level;
+    }
+  } catch {
+    // Fall through to default.
+  }
+  return "on";
+}
+
 export type CreateFeishuReplyDispatcherParams = {
   cfg: ClawdbotConfig;
   agentId: string;
   runtime: RuntimeEnv;
   chatId: string;
+  sessionKey?: string;
   allowReasoningPreview?: boolean;
   replyToMessageId?: string;
   /** When true, preserve typing indicator on reply target but send messages without reply metadata */
@@ -99,6 +127,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     cfg,
     agentId,
     chatId,
+    sessionKey,
     replyToMessageId,
     skipReplyToInMessages,
     replyInThread,
@@ -186,6 +215,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
+  const resolvedReasoningLevel = resolveFeishuReasoningLevel({
+    cfg,
+    sessionKey,
+    agentId,
+    runtime: core,
+  });
+  const suppressReasoning = resolvedReasoningLevel === "off";
   // Card streaming may miss thread affinity in topic contexts; use direct replies there.
   const streamingEnabled =
     !threadReplyMode && account.config?.streaming !== false && renderMode !== "raw";
@@ -210,12 +246,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return `> 💭 **Thinking**\n${lines.join("\n")}`;
   };
 
-  const buildCombinedStreamText = (thinking: string, answer: string): string => {
+  const buildCombinedStreamText = (
+    thinking: string,
+    answer: string,
+    suppressThinking: boolean,
+  ): string => {
+    const visibleThinking = suppressThinking ? "" : thinking;
     const parts: string[] = [];
-    if (thinking) {
-      parts.push(formatReasoningPrefix(thinking));
+    if (visibleThinking) {
+      parts.push(formatReasoningPrefix(visibleThinking));
     }
-    if (thinking && answer) {
+    if (visibleThinking && answer) {
       parts.push("\n\n---\n\n");
     }
     if (answer) {
@@ -254,7 +295,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     const mode = options?.mode ?? "snapshot";
     streamText =
       mode === "delta" ? `${streamText}${nextText}` : mergeStreamingText(streamText, nextText);
-    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText, suppressReasoning));
   };
 
   const queueReasoningUpdate = (nextThinking: string) => {
@@ -262,7 +303,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       return;
     }
     reasoningText = nextThinking;
-    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText, suppressReasoning));
   };
 
   const startStreaming = () => {
@@ -305,7 +346,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     await partialUpdateQueue;
     if (streaming?.isActive()) {
-      let text = buildCombinedStreamText(reasoningText, streamText);
+      let text = buildCombinedStreamText(reasoningText, streamText, suppressReasoning);
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
