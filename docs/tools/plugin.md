@@ -72,10 +72,10 @@ OpenClaw recognizes two plugin formats:
 | **Native** | `openclaw.plugin.json` + runtime module; executes in-process       | Official plugins, community npm packages               |
 | **Bundle** | Codex/Claude/Cursor-compatible layout; mapped to OpenClaw features | `.codex-plugin/`, `.claude-plugin/`, `.cursor-plugin/` |
 
-Both show up under `openclaw plugins list`. See [Plugin Bundles](/plugins/bundles) for bundle details.
+Both show up under `openclaw plugins list`. See [Plugin Bundles](https://docs.openclaw.ai/plugins/bundles) for bundle details.
 
-If you are writing a native plugin, start with [Building Plugins](/plugins/building-plugins)
-and the [Plugin SDK Overview](/plugins/sdk-overview).
+If you are writing a native plugin, start with [Building Plugins](https://docs.openclaw.ai/plugins/building-plugins)
+and the [Plugin SDK Overview](https://docs.openclaw.ai/plugins/sdk-overview).
 
 ## Official plugins
 
@@ -83,12 +83,12 @@ and the [Plugin SDK Overview](/plugins/sdk-overview).
 
 | Plugin          | Package                | Docs                                 |
 | --------------- | ---------------------- | ------------------------------------ |
-| Matrix          | `@openclaw/matrix`     | [Matrix](/channels/matrix)           |
-| Microsoft Teams | `@openclaw/msteams`    | [Microsoft Teams](/channels/msteams) |
-| Nostr           | `@openclaw/nostr`      | [Nostr](/channels/nostr)             |
-| Voice Call      | `@openclaw/voice-call` | [Voice Call](/plugins/voice-call)    |
-| Zalo            | `@openclaw/zalo`       | [Zalo](/channels/zalo)               |
-| Zalo Personal   | `@openclaw/zalouser`   | [Zalo Personal](/plugins/zalouser)   |
+| Matrix          | `@openclaw/matrix`     | [Matrix](https://docs.openclaw.ai/channels/matrix)           |
+| Microsoft Teams | `@openclaw/msteams`    | [Microsoft Teams](https://docs.openclaw.ai/channels/msteams) |
+| Nostr           | `@openclaw/nostr`      | [Nostr](https://docs.openclaw.ai/channels/nostr)             |
+| Voice Call      | `@openclaw/voice-call` | [Voice Call](https://docs.openclaw.ai/plugins/voice-call)    |
+| Zalo            | `@openclaw/zalo`       | [Zalo](https://docs.openclaw.ai/channels/zalo)               |
+| Zalo Personal   | `@openclaw/zalouser`   | [Zalo Personal](https://docs.openclaw.ai/plugins/zalouser)   |
 
 ### Core (shipped with OpenClaw)
 
@@ -116,7 +116,7 @@ and the [Plugin SDK Overview](/plugins/sdk-overview).
   </Accordion>
 </AccordionGroup>
 
-Looking for third-party plugins? See [Community Plugins](/plugins/community).
+Looking for third-party plugins? See [Community Plugins](https://docs.openclaw.ai/plugins/community).
 
 ## Configuration
 
@@ -275,7 +275,7 @@ Marketplace sources can be a Claude known-marketplace name from
 URL, or a git URL. For remote marketplaces, plugin entries must stay inside the
 cloned marketplace repo and use relative path sources only.
 
-See [`openclaw plugins` CLI reference](/cli/plugins) for full details.
+See [`openclaw plugins` CLI reference](https://docs.openclaw.ai/cli/plugins) for full details.
 
 ## Plugin API overview
 
@@ -337,13 +337,13 @@ Hook guard behavior for typed lifecycle hooks:
 - `message_sending`: `{ cancel: true }` is terminal; lower-priority handlers are skipped.
 - `message_sending`: `{ cancel: false }` is a no-op and does not clear an earlier cancel.
 
-For full typed hook behavior, see [SDK Overview](/plugins/sdk-overview#hook-decision-semantics).
+For full typed hook behavior, see [SDK Overview](https://docs.openclaw.ai/plugins/sdk-overview#hook-decision-semantics).
 
 ## Related
 
-- [Building Plugins](/plugins/building-plugins) — create your own plugin
-- [Plugin Bundles](/plugins/bundles) — Codex/Claude/Cursor bundle compatibility
-- [Plugin Manifest](/plugins/manifest) — manifest schema
-- [Registering Tools](/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
-- [Plugin Internals](/plugins/architecture) — capability model and load pipeline
-- [Community Plugins](/plugins/community) — third-party listings
+- [Building Plugins](https://docs.openclaw.ai/plugins/building-plugins) — create your own plugin
+- [Plugin Bundles](https://docs.openclaw.ai/plugins/bundles) — Codex/Claude/Cursor bundle compatibility
+- [Plugin Manifest](https://docs.openclaw.ai/plugins/manifest) — manifest schema
+- [Registering Tools](https://docs.openclaw.ai/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
+- [Plugin Internals](https://docs.openclaw.ai/plugins/architecture) — capability model and load pipeline
+- [Community Plugins](https://docs.openclaw.ai/plugins/community) — third-party listings
