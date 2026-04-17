@@ -97,7 +97,11 @@ function expectTelegramBotTransportSequence(firstTransport: unknown, secondTrans
 }
 
 function makeTelegramTransport() {
-  return { fetch: globalThis.fetch, sourceFetch: globalThis.fetch };
+  return {
+    fetch: globalThis.fetch,
+    sourceFetch: globalThis.fetch,
+    close: vi.fn(async () => undefined),
+  };
 }
 
 function mockRestartAfterPollingError(error: unknown, abort: AbortController) {
@@ -366,8 +370,16 @@ describe("TelegramPollingSession", () => {
 
     const watchdogHarness = installPollingStallWatchdogHarness();
 
-    const transport1 = { fetch: globalThis.fetch, sourceFetch: globalThis.fetch };
-    const transport2 = { fetch: globalThis.fetch, sourceFetch: globalThis.fetch };
+    const transport1 = {
+      fetch: globalThis.fetch,
+      sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
+    };
+    const transport2 = {
+      fetch: globalThis.fetch,
+      sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
+    };
     const createTelegramTransport = vi.fn(() => transport2);
 
     try {
