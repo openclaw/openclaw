@@ -52,6 +52,10 @@ vi.mock("./infra/git-commit.js", () => ({
   resolveCommitHash: resolveCommitHashMock,
 }));
 
+vi.mock("./infra/gaxios-fetch-compat.js", () => ({
+  installGaxiosFetchCompat: vi.fn(async () => {}),
+}));
+
 vi.mock("./infra/is-main.js", () => ({
   isMainModule: isMainModuleMock,
 }));
