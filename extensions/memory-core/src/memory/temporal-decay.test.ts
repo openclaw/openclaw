@@ -101,9 +101,21 @@ describe("temporal decay", () => {
       nowMs: NOW_MS,
     });
 
-    expect(decayed[0]?.score ?? 1).toBeLessThan(0.001);
-    expect(decayed[1]?.score).toBeCloseTo(decayed[0]?.score ?? 0);
-    expect(decayed[2]?.score).toBeCloseTo(decayed[0]?.score ?? 0);
+    const baseScore = decayed[0]?.score;
+    expect(baseScore).toBeDefined();
+    expect(baseScore ?? 1).toBeLessThan(0.001);
+    expect(decayed[1]?.score).toBeCloseTo(baseScore!);
+    expect(decayed[2]?.score).toBeCloseTo(baseScore!);
+  });
+
+  it("does not decay date-prefixed evergreen memory files", async () => {
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [{ path: "memory/daily-log/2025-01-01-project-plan.md", score: 0.8, source: "memory" }],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    expect(decayed[0]?.score).toBeCloseTo(0.8);
   });
 
   it("applies decay in hybrid merging before ranking", async () => {
