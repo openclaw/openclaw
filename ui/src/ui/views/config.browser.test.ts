@@ -1,7 +1,7 @@
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThemeMode, ThemeName } from "../theme.ts";
-import { renderConfig, type ConfigProps } from "./config.ts";
+import { renderConfig, resetConfigViewStateForTests, type ConfigProps } from "./config.ts";
 
 describe("config view", () => {
   const baseProps = () => ({
@@ -84,22 +84,8 @@ describe("config view", () => {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
 
-  function resetRawRevealState() {
-    const { container } = renderConfigView({
-      formMode: "raw",
-      raw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
-      originalRaw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
-      formValue: {
-        openai: {
-          apiKey: "supersecret",
-        },
-      },
-    });
-    container.querySelector<HTMLButtonElement>(".config-raw-toggle.active")?.click();
-  }
-
   beforeEach(() => {
-    resetRawRevealState();
+    resetConfigViewStateForTests();
   });
 
   it("updates save/apply disabled state from form safety and raw dirtiness", () => {
