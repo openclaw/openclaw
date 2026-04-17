@@ -826,6 +826,13 @@ describe("isFailoverErrorMessage", () => {
     expect(classifyFailoverReason(sample)).toBe(null);
     expect(isFailoverErrorMessage(sample)).toBe(false);
   });
+
+  it("keeps mixed upstream server errors retryable when they also mention status prose", () => {
+    const sample = "Proxy notice: Status: Internal Server Error; upstream connect error";
+    expect(isTimeoutErrorMessage(sample)).toBe(false);
+    expect(classifyFailoverReason(sample)).toBe("timeout");
+    expect(isFailoverErrorMessage(sample)).toBe(true);
+  });
 });
 
 describe("parseImageSizeError", () => {

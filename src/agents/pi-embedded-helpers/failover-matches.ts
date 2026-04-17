@@ -236,8 +236,10 @@ export function isOverloadedErrorMessage(raw: string): boolean {
 }
 
 export function isServerErrorMessage(raw: string): boolean {
-  if (STATUS_INTERNAL_SERVER_ERROR_RE.test(raw)) {
+  const value = normalizeLowercaseStringOrEmpty(raw);
+  if (!value) {
     return false;
   }
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.serverError);
+  const scrubbed = value.replace(STATUS_INTERNAL_SERVER_ERROR_RE, "").trim();
+  return scrubbed.length > 0 && matchesErrorPatterns(scrubbed, ERROR_PATTERNS.serverError);
 }
