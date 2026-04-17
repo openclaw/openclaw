@@ -710,7 +710,7 @@ async function wakeSlackReplySession(params: {
     SessionKey: sessionKey,
     AccountId: route.accountId,
     OriginatingChannel: "slack" as const,
-    OriginatingTo: `user:${parsed.userId}`,
+    OriginatingTo: isDirectMessage ? `user:${parsed.userId}` : `channel:${parsed.channelId}`,
   });
 
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
@@ -720,9 +720,11 @@ async function wakeSlackReplySession(params: {
     accountId: route.accountId,
   });
 
-  // Respect replyToMode: only thread replies when the mode is not "off".
-  const replyThreadTs =
-    ctx.replyToMode !== "off" ? (parsed.threadTs ?? parsed.messageTs) : undefined;
+  // Always stay in-thread when the interaction originates from a thread.
+  // For top-level messages, respect replyToMode to avoid forcing threads
+  // when the workspace is configured for top-level responses.
+  const replyThreadTs = parsed.threadTs
+    ?? (ctx.replyToMode !== "off" ? parsed.messageTs : undefined);
 
   await dispatchReplyWithDispatcher({
     ctx: ctxPayload,
