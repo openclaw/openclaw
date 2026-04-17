@@ -255,6 +255,9 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
+      '@copilotkit/aimock':
+        specifier: 1.13.0
+        version: 1.13.0
       '@grammyjs/types':
         specifier: ^3.26.0
         version: 3.26.0
@@ -359,6 +362,12 @@ importers:
       '@aws-sdk/client-bedrock':
         specifier: 3.1028.0
         version: 3.1028.0
+      '@aws-sdk/client-bedrock-runtime':
+        specifier: 3.1028.0
+        version: 3.1028.0
+      '@aws-sdk/credential-provider-node':
+        specifier: 3.972.30
+        version: 3.972.30
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -986,6 +995,9 @@ importers:
 
   extensions/qa-lab:
     dependencies:
+      '@copilotkit/aimock':
+        specifier: 1.13.0
+        version: 1.13.0
       playwright-core:
         specifier: 1.59.1
         version: 1.59.1
@@ -1217,6 +1229,12 @@ importers:
         version: link:../..
 
   extensions/volcengine:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/voyage:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1733,6 +1751,11 @@ packages:
   '@colors/colors@1.5.0':
     resolution: {integrity: sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==}
     engines: {node: '>=0.1.90'}
+
+  '@copilotkit/aimock@1.13.0':
+    resolution: {integrity: sha512-wcNQdicxSuaHf4MLtoC9bouKeYGcV9aBoIVJbeLtrBUhqz5LUAmo/U/S1WT69kyAEuM0uO1XyD3Jz+V+H9jsUw==}
+    engines: {node: '>=20.15.0'}
+    hasBin: true
 
   '@create-markdown/preview@2.0.3':
     resolution: {integrity: sha512-Vrp8DyuiouryZ3E4NQ7tBgoYQdoekd0+DzN64mZ48QYCw3V+MCb/H2q10SW8KC8XPr931XOMDvKX4I83qpQh3g==}
@@ -8748,6 +8771,8 @@ snapshots:
 
   '@colors/colors@1.5.0':
     optional: true
+
+  '@copilotkit/aimock@1.13.0': {}
 
   '@create-markdown/preview@2.0.3(shiki@3.23.0)':
     optionalDependencies:

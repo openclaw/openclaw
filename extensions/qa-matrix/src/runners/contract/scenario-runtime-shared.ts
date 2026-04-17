@@ -29,6 +29,7 @@ export type MatrixQaScenarioContext = {
   observerUserId: string;
   outputDir?: string;
   restartGateway?: () => Promise<void>;
+  restartGatewayWithQueuedMessage?: (queueMessage: () => Promise<void>) => Promise<void>;
   roomId: string;
   interruptTransport?: () => Promise<void>;
   sutAccessToken: string;
@@ -56,7 +57,7 @@ export function buildMatrixQaToken(prefix: string) {
 }
 
 export function buildMatrixQuietStreamingPrompt(sutUserId: string, text: string) {
-  return `${sutUserId} Matrix quiet streaming QA check: reply exactly \`${text}\`.`;
+  return `${sutUserId} Quiet streaming QA check: reply exactly \`${text}\`.`;
 }
 
 export function buildMatrixBlockStreamingPrompt(
@@ -66,7 +67,7 @@ export function buildMatrixBlockStreamingPrompt(
 ) {
   return [
     sutUserId,
-    "Matrix block streaming QA check:",
+    "Block streaming QA check:",
     "emit exactly two assistant message blocks in order.",
     `First exact marker: \`${firstText}\`.`,
     `Second exact marker: \`${secondText}\`.`,

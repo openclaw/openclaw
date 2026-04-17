@@ -1,16 +1,18 @@
 import { EventEmitter } from "node:events";
 import {
   ClientEvent,
+  Filter,
   MatrixEventEvent,
   Preset,
   createClient as createMatrixJsClient,
+  type IFilterDefinition,
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,
 } from "matrix-js-sdk/lib/matrix.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { normalizeNullableString } from "openclaw/plugin-sdk/text-runtime";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
+import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SsrFPolicy } from "../runtime-api.js";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
 import { FileBackedMatrixSyncStore } from "./client/file-sync-store.js";
@@ -216,6 +218,7 @@ export class MatrixClient {
   private readonly httpClient: MatrixAuthedHttpClient;
   private readonly localTimeoutMs: number;
   private readonly initialSyncLimit?: number;
+  private readonly syncFilter?: IFilterDefinition;
   private readonly encryptionEnabled: boolean;
   private readonly password?: string;
   private readonly syncStore?: FileBackedMatrixSyncStore;
@@ -258,6 +261,7 @@ export class MatrixClient {
       localTimeoutMs?: number;
       encryption?: boolean;
       initialSyncLimit?: number;
+      syncFilter?: IFilterDefinition;
       storagePath?: string;
       recoveryKeyPath?: string;
       idbSnapshotPath?: string;
@@ -275,6 +279,7 @@ export class MatrixClient {
     });
     this.localTimeoutMs = Math.max(1, opts.localTimeoutMs ?? 60_000);
     this.initialSyncLimit = opts.initialSyncLimit;
+    this.syncFilter = opts.syncFilter;
     this.encryptionEnabled = opts.encryption === true;
     this.password = opts.password;
     this.syncStore = opts.storagePath ? new FileBackedMatrixSyncStore(opts.storagePath) : undefined;
@@ -496,6 +501,7 @@ export class MatrixClient {
 
     await this.client.startClient({
       initialSyncLimit: this.initialSyncLimit,
+      ...(this.syncFilter ? { filter: Filter.fromJson(this.selfUserId, "", this.syncFilter) } : {}),
     });
     await this.waitForInitialSyncReady({
       abortSignal: opts.abortSignal,
@@ -1674,6 +1680,12 @@ export class MatrixClient {
       "MatrixClientLite",
       "No room key backup version found on server, creating one via secret storage bootstrap",
     );
+    // matrix-js-sdk 41.3.0 can log a transient PerSessionKeyBackupDownloader
+    // "current backup version ... undefined" warning while setupNewKeyBackup creates
+    // the backup: resetKeyBackup emits key-backup cache events before its async
+    // checkKeyBackupAndEnable pass has populated active backup state. Keep the
+    // explicit server re-check below and do not hide the SDK logs; if this needs
+    // fixing in code, upstream a minimal Matrix SDK repro instead of patching here.
     await this.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey(crypto, {
       setupNewKeyBackup: true,
     });

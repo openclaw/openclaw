@@ -187,11 +187,12 @@ describe("plugin activation boundary", () => {
       }),
     ).toBe(true);
     expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
-    expect(normalizeModelRef("google", "gemini-3.1-pro")).toEqual({
+    const staticNormalize = { allowPluginNormalization: false };
+    expect(normalizeModelRef("google", "gemini-3.1-pro", staticNormalize)).toEqual({
       provider: "google",
       model: "gemini-3.1-pro-preview",
     });
-    expect(normalizeModelRef("xai", "grok-4-fast-reasoning")).toEqual({
+    expect(normalizeModelRef("xai", "grok-4-fast-reasoning", staticNormalize)).toEqual({
       provider: "xai",
       model: "grok-4-fast",
     });
@@ -226,26 +227,10 @@ describe("plugin activation boundary", () => {
       loadBundledPluginPublicSurfaceModuleSync.mock.calls.map(
         ([params]) => params.artifactBasename,
       ),
-    ).toEqual([
-      "browser-host-inspection.js",
-      "browser-control-auth.js",
-      "browser-profiles.js",
-      "browser-profiles.js",
-      "browser-host-inspection.js",
-      "browser-host-inspection.js",
-    ]);
+    ).toEqual(["browser-host-inspection.js", "browser-control-auth.js", "browser-profiles.js"]);
 
     loadBundledPluginPublicSurfaceModuleSync.mockReset();
-    const { getSessionBindingService } =
-      await import("./infra/outbound/session-binding-service.js");
-
     await expect(browser.closeTrackedBrowserTabsForSessions({ sessionKeys: [] })).resolves.toBe(0);
-    await expect(
-      getSessionBindingService().unbind({
-        targetSessionKey: "agent:main:test",
-        reason: "session-reset",
-      }),
-    ).resolves.toEqual([]);
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 });

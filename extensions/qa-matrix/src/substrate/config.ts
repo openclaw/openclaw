@@ -22,9 +22,15 @@ export type MatrixQaAgentDefaultsOverrides = {
   };
 };
 
+export type MatrixQaToolConfigOverrides = {
+  allow?: string[];
+  deny?: string[];
+};
+
 export type MatrixQaGroupConfigOverrides = {
   enabled?: boolean;
   requireMention?: boolean;
+  tools?: MatrixQaToolConfigOverrides;
 };
 
 export type MatrixQaDmConfigOverrides = {
@@ -33,6 +39,14 @@ export type MatrixQaDmConfigOverrides = {
   policy?: MatrixQaDmPolicy;
   sessionScope?: "per-room" | "per-user";
   threadReplies?: MatrixQaThreadRepliesMode;
+};
+
+export type MatrixQaThreadBindingsConfigOverrides = {
+  enabled?: boolean;
+  idleHours?: number;
+  maxAgeHours?: number;
+  spawnAcpSessions?: boolean;
+  spawnSubagentSessions?: boolean;
 };
 
 export type MatrixQaConfigOverrides = {
@@ -49,7 +63,9 @@ export type MatrixQaConfigOverrides = {
   replyToMode?: MatrixQaReplyToMode;
   startupVerification?: "if-unverified" | "off";
   streaming?: "off" | "partial" | "quiet" | boolean;
+  threadBindings?: MatrixQaThreadBindingsConfigOverrides;
   threadReplies?: MatrixQaThreadRepliesMode;
+  toolProfile?: "coding" | "messaging" | "minimal";
 };
 
 export type MatrixQaConfigSnapshot = {
@@ -66,20 +82,22 @@ export type MatrixQaConfigSnapshot = {
   encryption: boolean;
   groupAllowFrom: string[];
   groupPolicy: MatrixQaGroupPolicy;
-  groupsByKey: Record<
-    string,
-    {
-      enabled: boolean;
-      requireMention: boolean;
-      roomId: string;
-    }
-  >;
+  groupsByKey: Record<string, MatrixQaGroupSnapshot>;
   replyToMode: MatrixQaReplyToMode;
   startupVerification?: "if-unverified" | "off";
   streaming: MatrixQaStreamingMode;
+  threadBindings: MatrixQaThreadBindingsConfigOverrides;
   threadReplies: MatrixQaThreadRepliesMode;
 };
 
+type MatrixQaGroupSnapshot = {
+  enabled: boolean;
+  requireMention: boolean;
+  roomId: string;
+  tools?: MatrixQaToolConfigOverrides;
+};
+
+type MatrixQaGroupEntry = Omit<MatrixQaGroupSnapshot, "roomId">;
 type MatrixQaChannelConfig = NonNullable<OpenClawConfig["channels"]>["matrix"];
 type MatrixQaChannelAccountConfig = NonNullable<
   NonNullable<MatrixQaChannelConfig>["accounts"]
@@ -122,6 +140,7 @@ function resolveMatrixQaGroupSnapshots(params: {
           roomId: room.roomId,
           enabled: override?.enabled ?? true,
           requireMention: override?.requireMention ?? room.requireMention,
+          ...(override?.tools ? { tools: override.tools } : {}),
         },
       ];
     }),
@@ -130,13 +149,14 @@ function resolveMatrixQaGroupSnapshots(params: {
 
 function buildMatrixQaGroupEntries(
   groupsByKey: MatrixQaConfigSnapshot["groupsByKey"],
-): Record<string, { enabled: boolean; requireMention: boolean }> {
+): Record<string, MatrixQaGroupEntry> {
   return Object.fromEntries(
     Object.values(groupsByKey).map((group) => [
       group.roomId,
       {
         enabled: group.enabled,
         requireMention: group.requireMention,
+        ...(group.tools ? { tools: group.tools } : {}),
       },
     ]),
   );
@@ -252,7 +272,7 @@ function buildMatrixQaAccountDmConfig(params: {
 }
 
 function buildMatrixQaChannelAccountConfig(params: {
-  groups: Record<string, { enabled: boolean; requireMention: boolean }>;
+  groups: Record<string, MatrixQaGroupEntry>;
   homeserver: string;
   overrides?: MatrixQaConfigOverrides;
   snapshot: MatrixQaConfigSnapshot;
@@ -277,6 +297,10 @@ function buildMatrixQaChannelAccountConfig(params: {
     params.snapshot.startupVerification !== undefined
       ? { startupVerification: params.snapshot.startupVerification }
       : {};
+  const threadBindingsConfig =
+    params.overrides?.threadBindings !== undefined
+      ? { threadBindings: params.snapshot.threadBindings }
+      : {};
 
   return {
     accessToken: params.sutAccessToken,
@@ -296,6 +320,7 @@ function buildMatrixQaChannelAccountConfig(params: {
     },
     replyToMode: params.snapshot.replyToMode,
     ...startupVerificationConfig,
+    ...threadBindingsConfig,
     threadReplies: params.snapshot.threadReplies,
     userId: params.sutUserId,
     ...autoJoinConfig,
@@ -327,6 +352,7 @@ export function buildMatrixQaConfigSnapshot(params: {
     replyToMode: params.overrides?.replyToMode ?? "off",
     startupVerification: params.overrides?.startupVerification,
     streaming: resolveMatrixQaStreamingMode(params.overrides?.streaming),
+    threadBindings: { ...params.overrides?.threadBindings },
     threadReplies: params.overrides?.threadReplies ?? "inbound",
   };
 }
@@ -344,6 +370,8 @@ export function summarizeMatrixQaConfigSnapshot(snapshot: MatrixQaConfigSnapshot
     `autoJoin=${snapshot.autoJoin}`,
     `encryption=${formatMatrixQaBoolean(snapshot.encryption)}`,
     `startupVerification=${snapshot.startupVerification ?? "<default>"}`,
+    `threadBindings.enabled=${snapshot.threadBindings.enabled ?? "<default>"}`,
+    `threadBindings.spawnSubagentSessions=${snapshot.threadBindings.spawnSubagentSessions ?? "<default>"}`,
   ].join(", ");
 }
 
@@ -373,6 +401,14 @@ export function buildMatrixQaConfig(
 
   return {
     ...baseCfg,
+    ...(params.overrides?.toolProfile
+      ? {
+          tools: {
+            ...baseCfg.tools,
+            profile: params.overrides.toolProfile,
+          },
+        }
+      : {}),
     ...(params.overrides?.agentDefaults
       ? {
           agents: {

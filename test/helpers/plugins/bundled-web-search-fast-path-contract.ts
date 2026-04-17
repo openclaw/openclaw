@@ -1,9 +1,13 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { loadBundledCapabilityRuntimeRegistry } from "../../../src/plugins/bundled-capability-runtime.js";
-import { resolveManifestContractOwnerPluginId } from "../../../src/plugins/manifest-registry.js";
-import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../../../src/plugins/web-provider-public-artifacts.explicit.js";
-import { resolvePluginWebSearchProviders } from "../../../src/plugins/web-search-providers.runtime.js";
+import { resolveBundledPluginsDir } from "../../../src/plugins/bundled-dir.js";
+import {
+  resolveBundledExplicitRuntimeWebSearchProvidersFromPublicArtifacts,
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
+} from "../../../src/plugins/web-provider-public-artifacts.explicit.js";
+import { normalizeOptionalLowercaseString } from "../../../src/shared/string-coerce.js";
 
 type ComparableProvider = {
   pluginId: string;
@@ -22,6 +26,64 @@ type ComparableProvider = {
   hasApplySelectionConfig: boolean;
   hasResolveRuntimeMetadata: boolean;
 };
+
+type MinimalBundledPluginManifest = {
+  id?: unknown;
+  contracts?: {
+    webSearchProviders?: unknown;
+  };
+};
+
+const bundledWebSearchManifestContracts = new Map<
+  string,
+  { pluginId: string; webSearchProviderIds: string[] } | null
+>();
+
+function readBundledWebSearchManifestContract(pluginId: string) {
+  if (bundledWebSearchManifestContracts.has(pluginId)) {
+    return bundledWebSearchManifestContracts.get(pluginId) ?? null;
+  }
+
+  const bundledPluginsDir = resolveBundledPluginsDir();
+  if (!bundledPluginsDir) {
+    bundledWebSearchManifestContracts.set(pluginId, null);
+    return null;
+  }
+
+  const manifestPath = path.join(bundledPluginsDir, pluginId, "openclaw.plugin.json");
+  const manifest = JSON.parse(
+    fs.readFileSync(manifestPath, "utf8"),
+  ) as MinimalBundledPluginManifest;
+  const manifestPluginId = typeof manifest.id === "string" ? manifest.id : "";
+  const webSearchProviderIds = Array.isArray(manifest.contracts?.webSearchProviders)
+    ? manifest.contracts.webSearchProviders.filter(
+        (providerId): providerId is string => typeof providerId === "string",
+      )
+    : [];
+  const contract = { pluginId: manifestPluginId, webSearchProviderIds };
+  bundledWebSearchManifestContracts.set(pluginId, contract);
+  return contract;
+}
+
+function resolveBundledManifestWebSearchOwnerPluginId(params: {
+  pluginId: string;
+  providerId: string;
+}): string | undefined {
+  const normalizedProviderId = normalizeOptionalLowercaseString(params.providerId);
+  if (!normalizedProviderId) {
+    return undefined;
+  }
+
+  const contract = readBundledWebSearchManifestContract(params.pluginId);
+  if (
+    !contract?.webSearchProviderIds.some(
+      (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedProviderId,
+    )
+  ) {
+    return undefined;
+  }
+  return contract.pluginId || undefined;
+}
 
 function toComparableEntry(params: {
   pluginId: string;
@@ -86,29 +148,23 @@ export function describeBundledWebSearchFastPathContract(pluginId: string) {
       expect(providers.length).toBeGreaterThan(0);
       for (const provider of providers) {
         expect(
-          resolveManifestContractOwnerPluginId({
-            contract: "webSearchProviders",
-            value: provider.id,
-            origin: "bundled",
+          resolveBundledManifestWebSearchOwnerPluginId({
+            pluginId,
+            providerId: provider.id,
           }),
         ).toBe(pluginId);
       }
     });
 
-    it("keeps fast-path provider metadata aligned with the bundled runtime registry", async () => {
-      const fastPathProviders = resolvePluginWebSearchProviders({
-        origin: "bundled",
-        onlyPluginIds: [pluginId],
-      }).filter((provider) => provider.pluginId === pluginId);
-      const bundledProviderEntries = loadBundledCapabilityRuntimeRegistry({
-        pluginIds: [pluginId],
-        pluginSdkResolution: "dist",
-      })
-        .webSearchProviders.filter((entry) => entry.pluginId === pluginId)
-        .map((entry) => ({
-          pluginId: entry.pluginId,
-          ...entry.provider,
-        }));
+    it("keeps fast-path provider metadata aligned with the bundled runtime artifact", async () => {
+      const fastPathProviders =
+        resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+          onlyPluginIds: [pluginId],
+        })?.filter((provider) => provider.pluginId === pluginId) ?? [];
+      const bundledProviderEntries =
+        resolveBundledExplicitRuntimeWebSearchProvidersFromPublicArtifacts({
+          onlyPluginIds: [pluginId],
+        })?.filter((entry) => entry.pluginId === pluginId) ?? [];
 
       expect(
         sortComparableEntries(
