@@ -1,10 +1,22 @@
 import chalk from "chalk";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import type { ModelApi } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasEnvHttpProxyConfigured } from "../infra/net/proxy-env.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../security/dangerous-config-flags.js";
+
+// APIs that support request.proxy/request.tls transport overrides.
+// Must stay in sync with SUPPORTED_TRANSPORT_APIS in provider-transport-stream.ts.
+const PROXY_CAPABLE_APIS = new Set<ModelApi>([
+  "openai-responses",
+  "openai-codex-responses",
+  "openai-completions",
+  "azure-openai-responses",
+  "anthropic-messages",
+  "google-generative-ai",
+]);
 
 export function logGatewayStartup(params: {
   cfg: OpenClawConfig;
@@ -91,6 +103,11 @@ export function collectProxyEnvMismatch(cfg: OpenClawConfig): string | null {
 
   for (const [name, provider] of Object.entries(providers)) {
     if (isLocalOrPrivateProviderUrl(provider.baseUrl)) {
+      continue;
+    }
+    // Skip providers whose API does not support transport overrides —
+    // recommending env-proxy for them would cause a runtime error.
+    if (provider.api && !PROXY_CAPABLE_APIS.has(provider.api)) {
       continue;
     }
     if (!provider.request?.proxy) {

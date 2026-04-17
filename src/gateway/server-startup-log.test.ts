@@ -158,6 +158,25 @@ describe("gateway startup log", () => {
       expect(result).toBeNull();
     });
 
+    it("does not warn for providers with proxy-incapable APIs", async () => {
+      const { hasEnvHttpProxyConfigured } = await import("../infra/net/proxy-env.js");
+      vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
+
+      const result = collectProxyEnvMismatch({
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "https://remote-ollama.example.com",
+              api: "ollama",
+              models: [],
+            },
+          },
+        },
+      });
+
+      expect(result).toBeNull();
+    });
+
     it("does not warn for RFC 1918 private LAN providers", async () => {
       const { hasEnvHttpProxyConfigured } = await import("../infra/net/proxy-env.js");
       vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
