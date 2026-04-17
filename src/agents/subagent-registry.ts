@@ -550,7 +550,16 @@ async function sweepSubagentRuns() {
       // Session-mode runs have no archiveAtMs — apply absolute TTL after cleanup completes.
       // Use cleanupCompletedAt (not endedAt) to avoid interrupting deferred cleanup flows.
       if (!entry.archiveAtMs) {
+        // Session-mode records must outlive the per-round TTL: the child session is
+        // still alive and downstream consumers (e.g. sessions.send's skipA2A check)
+        // rely on the record to suppress A2A transcript pollution. Only sweep once
+        // the session is truly terminated (KILLED/ERROR).
+        const sessionStillAlive =
+          entry.spawnMode === "session" &&
+          entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED &&
+          entry.endedReason !== SUBAGENT_ENDED_REASON_ERROR;
         if (
+          !sessionStillAlive &&
           typeof entry.cleanupCompletedAt === "number" &&
           now - entry.cleanupCompletedAt > SESSION_RUN_TTL_MS
         ) {
