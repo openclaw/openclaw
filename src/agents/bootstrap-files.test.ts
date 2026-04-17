@@ -10,6 +10,7 @@ import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
+  makeBootstrapWarn,
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
@@ -359,6 +360,43 @@ describe("hasCompletedBootstrapTurn", () => {
     );
     await fs.symlink(realFile, linkFile);
     expect(await hasCompletedBootstrapTurn(linkFile)).toBe(false);
+  });
+});
+
+describe("makeBootstrapWarn", () => {
+  it("deduplicates repeated warnings for the same session and message", () => {
+    const warnings: string[] = [];
+    const warn = makeBootstrapWarn({
+      sessionLabel: "agent:main:test-session",
+      warn: (message) => warnings.push(message),
+    });
+
+    warn?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
+    warn?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
+
+    expect(warnings).toEqual([
+      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:test-session)",
+    ]);
+  });
+
+  it("keeps warnings distinct across sessions", () => {
+    const warnings: string[] = [];
+    const first = makeBootstrapWarn({
+      sessionLabel: "agent:main:first-session",
+      warn: (message) => warnings.push(message),
+    });
+    const second = makeBootstrapWarn({
+      sessionLabel: "agent:main:second-session",
+      warn: (message) => warnings.push(message),
+    });
+
+    first?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
+    second?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
+
+    expect(warnings).toEqual([
+      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:first-session)",
+      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:second-session)",
+    ]);
   });
 });
 
