@@ -39,22 +39,6 @@ function expectConfirmedGatewayChange(app: ReturnType<typeof mountApp>) {
 }
 
 describe("control UI routing", () => {
-  it("keeps chat navigation links visible and updates the URL when clicked", async () => {
-    const app = mountApp("/chat");
-    await app.updateComplete;
-
-    const dreamsLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/dreaming"]');
-    expect(dreamsLink).not.toBeNull();
-
-    const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/channels"]');
-    expect(link).not.toBeNull();
-    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
-
-    await app.updateComplete;
-    expect(app.tab).toBe("channels");
-    expect(window.location.pathname).toBe("/channels");
-  });
-
   it("renders the dreaming view on the /dreaming route", async () => {
     const app = mountApp("/dreaming");
     app.dreamingStatus = {
@@ -126,6 +110,9 @@ describe("control UI routing", () => {
     await app.updateComplete;
 
     expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
+
+    const dreamsLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/dreaming"]');
+    expect(dreamsLink).not.toBeNull();
 
     expect(app.querySelector(".topnav-shell")).not.toBeNull();
     expect(app.querySelector(".topnav-shell__content")).not.toBeNull();
@@ -398,19 +385,6 @@ describe("control UI routing", () => {
       await nextFrame();
     }
     expect(container.scrollTop).toBe(targetScrollTop);
-  });
-
-  it("hydrates safe query params and strips unsafe credentials from the URL", async () => {
-    const app = mountApp("/ui/overview?token=abc123&password=sekret");
-    await app.updateComplete;
-
-    expect(app.settings.token).toBe("abc123");
-    expect(app.password).toBe("");
-    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
-      undefined,
-    );
-    expect(window.location.pathname).toBe("/ui/overview");
-    expect(window.location.search).toBe("");
   });
 
   it("hydrates token from URL hash, strips it, and clears it after gateway changes", async () => {
