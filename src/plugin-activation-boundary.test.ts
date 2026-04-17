@@ -187,11 +187,12 @@ describe("plugin activation boundary", () => {
       }),
     ).toBe(true);
     expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
-    expect(normalizeModelRef("google", "gemini-3.1-pro")).toEqual({
+    const staticNormalize = { allowPluginNormalization: false };
+    expect(normalizeModelRef("google", "gemini-3.1-pro", staticNormalize)).toEqual({
       provider: "google",
       model: "gemini-3.1-pro-preview",
     });
-    expect(normalizeModelRef("xai", "grok-4-fast-reasoning")).toEqual({
+    expect(normalizeModelRef("xai", "grok-4-fast-reasoning", staticNormalize)).toEqual({
       provider: "xai",
       model: "grok-4-fast",
     });
