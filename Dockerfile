@@ -38,7 +38,7 @@ ENV PATH="/root/.bun/bin:${PATH}"
 RUN bun --version
 
 WORKDIR /app
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig.json tsconfig.base.json ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig.json ./
 COPY scripts ./scripts
 COPY --from=ext-deps /out ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
 
