@@ -178,6 +178,14 @@ function normalizeResolvedCardActionChatType(value: unknown): "p2p" | "group" | 
 const resolvedChatTypeCache = new Map<string, { value: "p2p" | "group"; expiresAt: number }>();
 const CHAT_TYPE_CACHE_TTL_MS = 30 * 60_000;
 
+function pruneChatTypeCache(now: number): void {
+  for (const [key, entry] of resolvedChatTypeCache.entries()) {
+    if (entry.expiresAt <= now) {
+      resolvedChatTypeCache.delete(key);
+    }
+  }
+}
+
 async function resolveCardActionChatType(params: {
   event: FeishuCardActionEvent;
   account: ReturnType<typeof resolveFeishuRuntimeAccount>;
@@ -195,8 +203,9 @@ async function resolveCardActionChatType(params: {
   }
 
   const now = Date.now();
+  pruneChatTypeCache(now);
   const cached = resolvedChatTypeCache.get(chatId);
-  if (cached && cached.expiresAt > now) {
+  if (cached) {
     return cached.value;
   }
 
