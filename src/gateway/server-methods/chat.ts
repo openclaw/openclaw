@@ -1616,10 +1616,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit, maxChars } = params as {
+    const { sessionKey, limit, maxChars, runId } = params as {
       sessionKey: string;
       limit?: number;
       maxChars?: number;
+      runId?: string;
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
@@ -1668,10 +1669,24 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    // Optional runId filter — serialized-text match against markers emitted
+    // by agents (`run_id=<runId>`) or structured fields containing the id.
+    // Applied after all size-budget passes so callers get exactly the
+    // messages that belong to their run, nothing more.
+    const scopedMessages = runId
+      ? bounded.messages.filter((msg) => {
+          try {
+            const serialized = JSON.stringify(msg);
+            return serialized.includes(runId);
+          } catch {
+            return false;
+          }
+        })
+      : bounded.messages;
     respond(true, {
       sessionKey,
       sessionId,
-      messages: bounded.messages,
+      messages: scopedMessages,
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,
