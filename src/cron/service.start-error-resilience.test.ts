@@ -58,17 +58,17 @@ describe("CronService start() error resilience", () => {
       runIsolatedAgentJob: runIsolatedAgentJob as never,
     });
 
-    // Make persist fail after the first write (in planStartupCatchup) so
-    // that applyStartupCatchupOutcomes throws, propagating through
-    // runMissedJobs and triggering the try/catch guard in start().
+    // Make the second cron-store write fail (applyStartupCatchupOutcomes persist)
+    // while allowing the first write (planStartupCatchup persist) to succeed.
+    // The job has no initial runningAtMs, so the startup stale-marker cleanup
+    // does not persist, meaning writes are:
+    //   1. planStartupCatchup persist (runningAtMs set on candidate)
+    //   2. applyStartupCatchupOutcomes persist (should fail -> triggers catch)
     let writeCount = 0;
     const origWriteFile = fs.writeFile.bind(fs);
     const spy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, ...rest) => {
       writeCount++;
-      // Allow the first write (startup stale-marker cleanup) and the second
-      // write (planStartupCatchup sets runningAtMs). Fail the third write
-      // (applyStartupCatchupOutcomes persist) to trigger the catch path.
-      if (writeCount > 2 && typeof file === "string" && file.includes("cron")) {
+      if (writeCount === 2 && typeof file === "string" && file.includes("cron")) {
         throw new Error("simulated disk failure during persist");
       }
       return origWriteFile(file as any, data as any, ...(rest as any[]));
@@ -169,6 +169,83 @@ describe("CronService start() error resilience", () => {
       expect(noopLogger.error).toHaveBeenCalledWith(
         expect.objectContaining({ err: expect.stringContaining("simulated failure") }),
         expect.stringContaining("startup catch-up failed"),
+      );
+    } finally {
+      spy.mockRestore();
+      await cleanup();
+    }
+  });
+
+  it("arms timer even when repair persist also fails", async () => {
+    const { storePath, cleanup } = await makeStorePath();
+
+    const overdueAtMs = Date.now() - 120_000;
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "recurring-1",
+              name: "recurring-job",
+              enabled: true,
+              createdAtMs: overdueAtMs - 60_000,
+              updatedAtMs: overdueAtMs - 60_000,
+              schedule: { kind: "every", everyMs: 60_000, anchorMs: overdueAtMs - 60_000 },
+              sessionTarget: "isolated",
+              wakeMode: "now",
+              payload: { kind: "agentTurn", message: "tick", timeoutSeconds: 60 },
+              state: { nextRunAtMs: overdueAtMs },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn() as never,
+      requestHeartbeatNow: vi.fn() as never,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,
+    });
+
+    // Fail ALL cron-related writes after the first one.
+    // Write 1 (planStartupCatchup) succeeds.
+    // Write 2 (applyStartupCatchupOutcomes) fails -> runMissedJobs throws.
+    // Write 3 (repair persist in catch block) also fails.
+    // The timer must STILL be armed.
+    let writeCount = 0;
+    const origWriteFile = fs.writeFile.bind(fs);
+    const spy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, ...rest) => {
+      writeCount++;
+      if (writeCount > 1 && typeof file === "string" && file.includes("cron")) {
+        throw new Error("simulated total disk failure");
+      }
+      return origWriteFile(file as any, data as any, ...(rest as any[]));
+    });
+
+    try {
+      // start() should NOT throw even though both runMissedJobs AND the
+      // repair persist fail
+      await start(state);
+
+      // The critical assertion: timer MUST be armed
+      expect(state.timer).not.toBeNull();
+      // Both error paths should have been logged
+      expect(noopLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.stringContaining("total disk failure") }),
+        expect.stringContaining("startup catch-up failed"),
+      );
+      expect(noopLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.stringContaining("total disk failure") }),
+        expect.stringContaining("failed to repair catch-up state"),
       );
     } finally {
       spy.mockRestore();

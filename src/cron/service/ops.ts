@@ -155,23 +155,34 @@ export async function start(state: CronServiceState) {
     // persisted.  One-shot jobs with past-due nextRunAtMs and no runningAtMs
     // would be re-executed on the first tick.  Clear their nextRunAtMs to
     // prevent double-execution.
-    await locked(state, async () => {
-      await ensureLoaded(state, { skipRecompute: true });
-      let dirty = false;
-      for (const job of state.store?.jobs ?? []) {
-        if (typeof job.state.runningAtMs === "number") {
-          job.state.runningAtMs = undefined;
-          dirty = true;
+    //
+    // This repair is best-effort: if it also fails (e.g. transient I/O),
+    // we still arm the timer below so the scheduler survives.  The runtime
+    // zombie detector in onTimer() will eventually clean up stale markers.
+    try {
+      await locked(state, async () => {
+        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+        let dirty = false;
+        for (const job of state.store?.jobs ?? []) {
+          if (typeof job.state.runningAtMs === "number") {
+            job.state.runningAtMs = undefined;
+            dirty = true;
+          }
+          if (interruptedOneShotIds.has(job.id) && typeof job.state.nextRunAtMs === "number") {
+            job.state.nextRunAtMs = undefined;
+            dirty = true;
+          }
         }
-        if (interruptedOneShotIds.has(job.id) && typeof job.state.nextRunAtMs === "number") {
-          job.state.nextRunAtMs = undefined;
-          dirty = true;
+        if (dirty) {
+          await persist(state);
         }
-      }
-      if (dirty) {
-        await persist(state);
-      }
-    });
+      });
+    } catch (repairErr) {
+      state.deps.log.error(
+        { err: String(repairErr) },
+        "cron: failed to repair catch-up state; runtime zombie detector will clean up",
+      );
+    }
   }
 
   await locked(state, async () => {
