@@ -47,12 +47,14 @@ describe("formatSystemRunAllowlistMissMessage", () => {
 
 describe("handleSystemRunInvoke mac app exec host routing", () => {
   let sharedFixtureRoot = "";
+  let sharedOpenClawHome = "";
   let sharedFixtureId = 0;
-  let testOpenClawHome = "";
   let previousOpenClawHome: string | undefined;
 
   beforeAll(() => {
     sharedFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-host-fixtures-"));
+    sharedOpenClawHome = path.join(sharedFixtureRoot, "openclaw-home");
+    fs.mkdirSync(sharedOpenClawHome, { recursive: true });
   });
 
   afterAll(() => {
@@ -69,8 +71,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   beforeEach(() => {
     previousOpenClawHome = process.env.OPENCLAW_HOME;
-    testOpenClawHome = createFixtureDir("openclaw-node-host-home-");
-    process.env.OPENCLAW_HOME = testOpenClawHome;
+    process.env.OPENCLAW_HOME = sharedOpenClawHome;
     clearRuntimeConfigSnapshot();
   });
 
@@ -81,7 +82,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     } else {
       process.env.OPENCLAW_HOME = previousOpenClawHome;
     }
-    testOpenClawHome = "";
   });
 
   function createLocalRunResult(stdout = "local-ok") {
