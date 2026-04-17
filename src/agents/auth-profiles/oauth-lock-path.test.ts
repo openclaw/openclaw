@@ -72,6 +72,23 @@ describe("resolveOAuthRefreshLockPath", () => {
     expect(first).toBe(second);
   });
 
+  it("returns a valid path on a clean install where the locks/ directory does not yet exist", async () => {
+    // Defensive check: even on a fresh install with no lock hierarchy
+    // populated, the function must return a safe path. withFileLock
+    // internally creates missing parent dirs, but this test pins the
+    // expectation so a future change to remove that guarantee would
+    // fail loudly.
+    const locksDir = path.join(stateDir, "locks", "oauth-refresh");
+    // Sanity precondition: parent dir must not exist yet.
+    await expect(fs.stat(locksDir)).rejects.toThrow();
+
+    const resolved = resolveOAuthRefreshLockPath("openai-codex", "openai-codex:default");
+    expect(path.dirname(resolved)).toBe(locksDir);
+    expect(path.basename(resolved)).toMatch(/^sha256-[0-9a-f]{64}$/);
+    // Function itself must not create the directory (path resolver only).
+    await expect(fs.stat(locksDir)).rejects.toThrow();
+  });
+
   it("never embeds path separators or .. in the basename", () => {
     const hazards = [
       ["openai-codex", "../etc/passwd"],

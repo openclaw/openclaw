@@ -201,7 +201,13 @@ function adoptNewerMainOAuthCredential(params: {
       mainCred?.type === "oauth" &&
       mainCred.provider === params.cred.provider &&
       Number.isFinite(mainCred.expires) &&
-      (!Number.isFinite(params.cred.expires) || mainCred.expires > params.cred.expires)
+      (!Number.isFinite(params.cred.expires) || mainCred.expires > params.cred.expires) &&
+      // Defense-in-depth: the same CWE-284 identity gate used on the mirror
+      // path. Provider-only matches are not sufficient because a misconfigured
+      // multi-user setup could have two agents sharing a profileId/provider
+      // but with different account owners; silently adopting a foreign
+      // credential into the sub-agent store would leak access.
+      isSameOAuthIdentity(params.cred, mainCred)
     ) {
       params.store.profiles[params.profileId] = { ...mainCred };
       saveAuthProfileStore(params.store, params.agentDir);
@@ -487,7 +493,9 @@ async function doRefreshOAuthTokenWithLock(params: {
             mainCred?.type === "oauth" &&
             mainCred.provider === cred.provider &&
             Number.isFinite(mainCred.expires) &&
-            Date.now() < mainCred.expires
+            Date.now() < mainCred.expires &&
+            // Defense-in-depth identity gate — see mirror path for rationale.
+            isSameOAuthIdentity(cred, mainCred)
           ) {
             store.profiles[params.profileId] = { ...mainCred };
             saveAuthProfileStore(store, params.agentDir);
@@ -500,6 +508,20 @@ async function doRefreshOAuthTokenWithLock(params: {
               apiKey: await buildOAuthApiKey(mainCred.provider, mainCred),
               newCredentials: mainCred,
             };
+          } else if (
+            mainCred?.type === "oauth" &&
+            mainCred.provider === cred.provider &&
+            Number.isFinite(mainCred.expires) &&
+            Date.now() < mainCred.expires &&
+            !isSameOAuthIdentity(cred, mainCred)
+          ) {
+            // Main has fresh creds but they belong to a different account —
+            // record the refusal so operators can diagnose, then proceed to
+            // our own refresh rather than leaking credentials.
+            log.warn("refused to adopt fresh main-store OAuth credential: identity mismatch", {
+              profileId: params.profileId,
+              agentDir: params.agentDir,
+            });
           }
         } catch (err) {
           log.debug("inside-lock main-store adoption failed; proceeding to refresh", {
@@ -917,7 +939,14 @@ export async function resolveApiKeyForProfile(
       try {
         const mainStore = ensureAuthProfileStore(undefined); // main agent (no agentDir)
         const mainCred = mainStore.profiles[profileId];
-        if (mainCred?.type === "oauth" && Date.now() < mainCred.expires) {
+        if (
+          mainCred?.type === "oauth" &&
+          mainCred.provider === cred.provider &&
+          Date.now() < mainCred.expires &&
+          // Defense-in-depth identity gate — refuse to inherit credentials
+          // from a different account even under refresh failure.
+          isSameOAuthIdentity(cred, mainCred)
+        ) {
           // Main agent has fresh credentials - copy them to this agent and use them
           refreshedStore.profiles[profileId] = { ...mainCred };
           saveAuthProfileStore(refreshedStore, params.agentDir);

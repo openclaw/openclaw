@@ -198,4 +198,62 @@ describe("OAuth refresh in-process queue", () => {
     resetOAuthRefreshQueuesForTest();
     expect(true).toBe(true);
   });
+
+  it("serializes a 10-caller burst so later arrivals never pass an earlier caller", async () => {
+    // Burst-arrival stress: 10 same-PID callers all fire concurrently.
+    // The queue must chain them so each refresh completes fully before the
+    // next one begins — i.e. no overlap between running refresh calls.
+    // This pins the invariant that the map-overwrite pattern in the queue
+    // wrapper does not let later arrivals skip ahead (see review P2: the
+    // `refreshQueues.set(key, gate)` overwrites only the *map head*, while
+    // FIFO ordering is enforced via the `await prev` chain).
+    const profileId = "openai-codex:default";
+    const provider = "openai-codex";
+    saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), agentDir);
+
+    const startOrder: number[] = [];
+    const endOrder: number[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let seq = 0;
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
+      const n = ++seq;
+      startOrder.push(n);
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      // Small delay so any non-serialized overlap would be observable.
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight -= 1;
+      endOrder.push(n);
+      return {
+        type: "oauth",
+        provider,
+        access: `refreshed-${n}`,
+        refresh: `refresh-${n}`,
+        // Re-expire immediately so each queued caller also enters the
+        // refresh path (otherwise later callers would adopt the fresh
+        // cred and the serialization chain wouldn't be exercised).
+        expires: Date.now() - 1_000,
+      } as never;
+    });
+
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        resolveApiKeyForProfile({
+          store: ensureAuthProfileStore(agentDir),
+          profileId,
+          agentDir,
+        }).catch((e: unknown) => e),
+      ),
+    );
+
+    // Every caller must have run to completion (null result or error —
+    // either is fine; what matters is that no caller is lost or blocked).
+    expect(results).toHaveLength(10);
+    // FIFO: start order matches end order (no overlap – each caller fully
+    // completed before the next started).
+    expect(startOrder).toEqual(endOrder);
+    // At no point did two refresh calls run concurrently.
+    expect(maxInFlight).toBe(1);
+  });
 });
