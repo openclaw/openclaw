@@ -464,6 +464,43 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  // PR-8 follow-up: persist live plan-step snapshot from the runtime.
+  // Written by `update_plan` after each call so the Control UI can
+  // rebuild the live-plan sidebar after a hard refresh. Independent of
+  // planMode/planApproval — the runtime may write `lastPlanSteps` in a
+  // patch that doesn't touch either of those fields.
+  //
+  // We DO NOT clear `lastPlanSteps` when planMode is set to "normal" —
+  // the user may want to view the prior plan even after toggling out
+  // of plan mode. Only `/new` (sessions.reset) drops it.
+  if ("lastPlanSteps" in patch && patch.lastPlanSteps !== undefined) {
+    if (!Array.isArray(patch.lastPlanSteps)) {
+      return invalid("lastPlanSteps must be an array");
+    }
+    if (!next.planMode) {
+      // Materialize a minimal planMode entry so the snapshot has a home.
+      // Keeps the schema invariant ("lastPlanSteps lives under planMode")
+      // while supporting runtime writes that arrive before any explicit
+      // planMode toggle (e.g., the agent calls update_plan in normal
+      // mode — we still want the sidebar to render it).
+      next.planMode = {
+        mode: "normal",
+        approval: "none",
+        rejectionCount: 0,
+        updatedAt: now,
+      };
+    }
+    next.planMode = {
+      ...next.planMode,
+      lastPlanSteps: patch.lastPlanSteps.map((s) => ({
+        step: s.step,
+        status: s.status,
+        ...(s.activeForm !== undefined ? { activeForm: s.activeForm } : {}),
+      })),
+      lastPlanUpdatedAt: now,
+    };
+  }
+
   if ("model" in patch) {
     const raw = patch.model;
     if (raw === null) {

@@ -605,6 +605,7 @@ export async function startGatewayServer(
       heartbeatUnsub: runtimeState.heartbeatUnsub,
       transcriptUnsub: runtimeState.transcriptUnsub,
       lifecycleUnsub: runtimeState.lifecycleUnsub,
+      planSnapshotUnsub: runtimeState.planSnapshotUnsub,
       chatRunState,
       clients,
       configReloader: runtimeState.configReloader,

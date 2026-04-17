@@ -83,6 +83,12 @@ export type RunEmbeddedPiAgentParams = {
    * pipeline or chat send handler) and threaded through so the runner
    * can arm the mutation gate without re-loading the session store on
    * every tool call. Undefined or `"normal"` = mutation gate disarmed.
+   *
+   * Note: approval state (pending/approved/edited/rejected/timed_out)
+   * is mirrored onto `AgentRunContext.planApproval` at context-
+   * registration time rather than threaded as a separate param — that
+   * avoids per-turn protocol surgery and keeps detectors (see
+   * `resolveYieldDuringApprovedPlanInstruction`) pure lookups.
    */
   planMode?: "plan" | "normal";
   prompt: string;

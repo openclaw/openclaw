@@ -205,6 +205,39 @@ function buildPlanDecisionUserMessage(
   }
 }
 
+/**
+ * PR-8 follow-up Round 2: shared placeholder content for the plan-view
+ * sidebar when no `update_plan` event has fired yet on this session.
+ * Module-level so `togglePlanViewSidebar` and other consumers can do
+ * an identity check (===) against the same string instance.
+ */
+const PLAN_VIEW_PLACEHOLDER_MARKDOWN =
+  "# No active plan\n\nThe agent hasn't called `update_plan` yet on this session. Once it does, the current plan will render here and tick off live as the agent steps through.\n";
+
+/**
+ * PR-8 follow-up Round 2: build the live-plan markdown checklist from
+ * a plan-step array. Shared between the live-stream path (refresh on
+ * every `agent_plan_event`) and the refresh-restore path (rebuild from
+ * persisted `SessionEntry.planMode.lastPlanSteps` when the page mounts).
+ * Keeps both surfaces byte-identical so the toggle's identity check
+ * (`sidebarContent.content === latestPlanMarkdown`) works after either.
+ */
+function buildPlanViewMarkdown(
+  plan: ReadonlyArray<{ step: string; status: string; activeForm?: string }>,
+  summary?: string,
+): string {
+  const stepLines = plan
+    .map((step, i) => {
+      const marker =
+        step.status === "completed" ? "[x]" : step.status === "cancelled" ? "[ ] ~~" : "[ ]";
+      const close = step.status === "cancelled" ? "~~" : "";
+      const label = step.status === "in_progress" && step.activeForm ? step.activeForm : step.step;
+      return `${i + 1}. ${marker} ${label}${close}`;
+    })
+    .join("\n");
+  return `# ${summary || "Active plan"}\n\n${stepLines}\n`;
+}
+
 @customElement("openclaw-app")
 export class OpenClawApp extends LitElement {
   private i18nController = new I18nController(this);
@@ -682,6 +715,14 @@ export class OpenClawApp extends LitElement {
 
   protected updated(changed: Map<PropertyKey, unknown>) {
     handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
+    // PR-8 follow-up Round 2: when sessions list updates OR the active
+    // session changes, hydrate the plan-view markdown from
+    // SessionEntry.planMode.lastPlanSteps. Restores the sidebar state
+    // after a hard refresh — without this, the button shows the
+    // placeholder until a fresh `update_plan` event fires.
+    if (changed.has("sessionsResult") || changed.has("sessionKey")) {
+      this.hydratePlanViewFromSession();
+    }
     if (!changed.has("sessionKey") || this.agentsPanel !== "tools") {
       return;
     }
@@ -1157,17 +1198,7 @@ export class OpenClawApp extends LitElement {
     plan: import("./app-tool-stream.ts").PlanApprovalRequest["plan"],
     summary?: string,
   ): void {
-    const stepLines = plan
-      .map((step, i) => {
-        const marker =
-          step.status === "completed" ? "[x]" : step.status === "cancelled" ? "[ ] ~~" : "[ ]";
-        const close = step.status === "cancelled" ? "~~" : "";
-        const label =
-          step.status === "in_progress" && step.activeForm ? step.activeForm : step.step;
-        return `${i + 1}. ${marker} ${label}${close}`;
-      })
-      .join("\n");
-    const md = `# ${summary || "Active plan"}\n\n${stepLines}\n`;
+    const md = buildPlanViewMarkdown(plan, summary);
     // ALWAYS track latest plan so the chat-controls "Plan view" button
     // and `/plan view` slash command can re-open the sidebar with current
     // content. Sidebar content is only updated if it's already showing
@@ -1179,26 +1210,75 @@ export class OpenClawApp extends LitElement {
   }
 
   /**
+   * PR-8 follow-up Round 2: rebuild `latestPlanMarkdown` from the
+   * persisted `SessionEntry.planMode.lastPlanSteps` snapshot for the
+   * current session. Called when the sessions list updates so the
+   * Plan view button shows the latest plan after a hard refresh —
+   * before this hydrates, only stream events would update the markdown
+   * and a fresh subscription doesn't replay prior `update_plan` events.
+   *
+   * No-op when no snapshot exists for the active session (button still
+   * shows the placeholder) or when a snapshot is already loaded with
+   * the same content (avoids stomping fresher live-stream state).
+   */
+  hydratePlanViewFromSession(): void {
+    const activeSessionKey = this.sessionKey;
+    if (!activeSessionKey || !this.sessionsResult) {
+      return;
+    }
+    const row = this.sessionsResult.sessions.find((s) => s.key === activeSessionKey);
+    const snapshot = row?.planMode?.lastPlanSteps;
+    if (!snapshot || snapshot.length === 0) {
+      return;
+    }
+    const md = buildPlanViewMarkdown(snapshot);
+    if (md === this.latestPlanMarkdown) {
+      return;
+    }
+    this.latestPlanMarkdown = md;
+    // If the sidebar is currently showing the placeholder for THIS
+    // session, swap it for the real plan. Don't yank focus from a
+    // different view the user is on.
+    if (
+      this.sidebarOpen &&
+      this.sidebarContent?.kind === "markdown" &&
+      this.sidebarContent.content === PLAN_VIEW_PLACEHOLDER_MARKDOWN
+    ) {
+      this.sidebarContent = { kind: "markdown", content: md };
+    }
+  }
+
+  /**
    * PR-8 follow-up: open the most-recent active plan in the right
    * sidebar. Used by both the chat-controls "Plan view" button and
    * the `/plan view` slash command. If the sidebar is already showing
-   * the plan, toggle it closed. If no plan has been tracked yet,
-   * render a placeholder so the user knows the affordance exists.
+   * the plan (or the placeholder), toggle it closed. If no plan has
+   * been tracked yet, render the placeholder so the user knows the
+   * affordance exists.
+   *
+   * Round 2 fix: previously the close-check required
+   * `latestPlanMarkdown !== null`, but opening with the placeholder
+   * doesn't populate that field, so the second click never matched
+   * the close branch. Now the close branch fires when the sidebar
+   * shows EITHER the live plan markdown OR the shared placeholder
+   * constant, so the toggle is symmetric for both states.
    */
   togglePlanViewSidebar(): void {
-    const isShowingPlan =
-      this.sidebarOpen &&
-      this.sidebarContent?.kind === "markdown" &&
-      this.latestPlanMarkdown !== null &&
-      this.sidebarContent.content === this.latestPlanMarkdown;
-    if (isShowingPlan) {
+    const sidebarMd =
+      this.sidebarOpen && this.sidebarContent?.kind === "markdown"
+        ? this.sidebarContent.content
+        : null;
+    const isShowingPlanContent =
+      sidebarMd !== null &&
+      (sidebarMd === this.latestPlanMarkdown || sidebarMd === PLAN_VIEW_PLACEHOLDER_MARKDOWN);
+    if (isShowingPlanContent) {
       this.handleCloseSidebar();
       return;
     }
-    const md =
-      this.latestPlanMarkdown ??
-      "# No active plan\n\nThe agent hasn't called `update_plan` yet on this session. Once it does, the current plan will render here and tick off live as the agent steps through.\n";
-    this.handleOpenSidebar({ kind: "markdown", content: md });
+    this.handleOpenSidebar({
+      kind: "markdown",
+      content: this.latestPlanMarkdown ?? PLAN_VIEW_PLACEHOLDER_MARKDOWN,
+    });
   }
 
   /**

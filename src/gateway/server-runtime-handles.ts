@@ -26,6 +26,12 @@ export type GatewayServerMutableState = {
   heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
+  /**
+   * PR-8 follow-up Round 2: persists live plan snapshots to
+   * SessionEntry so the Control UI can rebuild the live-plan sidebar
+   * after a hard refresh. See `plan-snapshot-persister.ts`.
+   */
+  planSnapshotUnsub: (() => void) | null;
 };
 
 export function createGatewayServerMutableState(): GatewayServerMutableState {
@@ -57,5 +63,6 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     heartbeatUnsub: null as (() => void) | null,
     transcriptUnsub: null as (() => void) | null,
     lifecycleUnsub: null as (() => void) | null,
+    planSnapshotUnsub: null as (() => void) | null,
   };
 }
