@@ -1,6 +1,7 @@
 ---
 name: canvas
 description: Display HTML content on connected OpenClaw nodes and work with rendered canvas surfaces. Use when presenting HTML to connected Mac, iOS, or Android nodes, navigating canvas URLs, evaluating JavaScript in the canvas, or capturing canvas snapshots.
+metadata: { "openclaw": { "emoji": "🖼️", "os": ["darwin"] } }
 ---
 
 # Canvas Skill
