@@ -519,24 +519,33 @@ export async function runEmbeddedAttempt(
     ) {
       workspaceNotesList.push("Reminder: commit your changes in this workspace after edits.");
     }
-    // PR-8 follow-up: when a session is in plan mode, the agent needs
-    // to know the rules — write/edit/exec are blocked, only read +
-    // update_plan + exit_plan_mode are usable. Without this note the
-    // agent will try mutating tools, get them blocked, and not
-    // understand why. enter_plan_mode/exit_plan_mode are the entry
-    // points; the user controls mode via the chip + /plan command.
-    if (params.planMode === "plan") {
-      workspaceNotesList.push(
-        [
-          "PLAN MODE ACTIVE.",
-          "Mutating tools (write, edit, exec, bash with mutating commands, apply_patch) are blocked.",
-          "Read-only tools (read, web_search, web_fetch, update_plan) are available.",
-          "Workflow: investigate with read-only tools, draft a plan with update_plan, then call exit_plan_mode with the proposed plan to request user approval.",
-          "After approval the runtime flips the session out of plan mode and you can execute. After rejection the user feedback comes via [PLAN_DECISION] in the next turn — revise and re-propose.",
-        ].join(" "),
-      );
-    }
     const workspaceNotes = workspaceNotesList.length > 0 ? workspaceNotesList : undefined;
+
+    // PR-8 follow-up: plan-mode awareness must reach the agent on EVERY
+    // attempt regardless of whether the agent has a systemPromptOverride
+    // in place (Eva, Black Panther, custom personas all set their own
+    // prompt and would otherwise never see the rules). Built once here
+    // and prepended to the final appendPrompt below so it lands no
+    // matter which branch produced the base prompt.
+    const planModeAppendPrompt =
+      params.planMode === "plan"
+        ? [
+            "═══ PLAN MODE ACTIVE ═══",
+            "",
+            "The user has put this session into plan mode. You MUST follow the plan-mode workflow:",
+            "",
+            "1. Investigate with read-only tools (read, web_search, web_fetch). Use update_plan to track your investigation steps as you go.",
+            "2. When you have a concrete plan ready for execution, call the `exit_plan_mode` tool with the full plan as a structured array of steps. This sends the plan to the user for approval — do NOT just write the plan as chat text.",
+            "3. The user will see Approve / Edit / Reject buttons. After Approve, the runtime flips you out of plan mode and you can execute. After Reject, the user's feedback arrives in your next turn as a [PLAN_DECISION] block — revise the plan and call exit_plan_mode again.",
+            "",
+            "Hard rules while in plan mode:",
+            "- Mutating tools (write, edit, exec, bash with side-effects, apply_patch) are BLOCKED by the runtime. Calling them returns a tool error and wastes a turn.",
+            "- Do NOT write the plan as a markdown list in your reply text. Use the `exit_plan_mode` tool — that's how the user actually sees the plan with action buttons.",
+            "- If the user asks for a plan, your response should be: a brief sentence acknowledging, followed by the `exit_plan_mode` tool call. Nothing else.",
+            "",
+            "═════════════════════════",
+          ].join("\n")
+        : "";
 
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
 
@@ -865,6 +874,14 @@ export async function runEmbeddedAttempt(
         memoryCitationsMode: params.config?.memory?.citations,
         promptContribution,
       });
+    // Prepend plan-mode rules so they reach the agent regardless of
+    // whether systemPromptOverride replaced the default prompt — without
+    // this Eva/Black Panther/etc. (custom personas) silently lose
+    // plan-mode awareness and write the plan as chat text instead of
+    // calling exit_plan_mode.
+    const promptWithPlanMode = planModeAppendPrompt
+      ? `${planModeAppendPrompt}\n\n${builtAppendPrompt}`
+      : builtAppendPrompt;
     const appendPrompt = transformProviderSystemPrompt({
       provider: params.provider,
       config: params.config,
@@ -879,7 +896,7 @@ export async function runEmbeddedAttempt(
         runtimeChannel,
         runtimeCapabilities,
         agentId: sessionAgentId,
-        systemPrompt: builtAppendPrompt,
+        systemPrompt: promptWithPlanMode,
       },
     });
     const systemPromptReport = buildSystemPromptReport({
