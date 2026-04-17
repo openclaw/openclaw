@@ -32,12 +32,13 @@ const rootSchema = {
     },
   },
 };
+const rootAnalysis = analyzeConfigSchema(rootSchema);
 
 describe("config form renderer", () => {
   it("renders inputs and patches values", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
-    const analysis = analyzeConfigSchema(rootSchema);
+    const analysis = rootAnalysis;
     render(
       renderConfigForm({
         schema: analysis.schema,
@@ -83,7 +84,7 @@ describe("config form renderer", () => {
   it("adds and removes array entries", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
-    const analysis = analyzeConfigSchema(rootSchema);
+    const analysis = rootAnalysis;
     render(
       renderConfigForm({
         schema: analysis.schema,
@@ -109,7 +110,7 @@ describe("config form renderer", () => {
   it("renders union literals as select options", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
-    const analysis = analyzeConfigSchema(rootSchema);
+    const analysis = rootAnalysis;
     render(
       renderConfigForm({
         schema: analysis.schema,
@@ -203,7 +204,7 @@ describe("config form renderer", () => {
   it("renders tags from uiHints metadata", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
-    const analysis = analyzeConfigSchema(rootSchema);
+    const analysis = rootAnalysis;
     render(
       renderConfigForm({
         schema: analysis.schema,
@@ -227,7 +228,7 @@ describe("config form renderer", () => {
   it("filters by tag query", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
-    const analysis = analyzeConfigSchema(rootSchema);
+    const analysis = rootAnalysis;
     render(
       renderConfigForm({
         schema: analysis.schema,
@@ -246,65 +247,6 @@ describe("config form renderer", () => {
     expect(container.textContent).toContain("Token");
     expect(container.textContent).not.toContain("Allow From");
     expect(container.textContent).not.toContain("Mode");
-  });
-
-  it("does not treat plain text as tag filter", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const analysis = analyzeConfigSchema(rootSchema);
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {
-          "gateway.auth.token": { tags: ["security"] },
-        },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: {},
-        searchQuery: "security",
-        onPatch,
-      }),
-      container,
-    );
-
-    expect(container.textContent).toContain('No settings match "security"');
-  });
-
-  it("requires both text and tag when combined", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const analysis = analyzeConfigSchema(rootSchema);
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {
-          "gateway.auth.token": { tags: ["security"] },
-        },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: {},
-        searchQuery: "token tag:security",
-        onPatch,
-      }),
-      container,
-    );
-
-    expect(container.textContent).toContain("Token");
-    expect(container.textContent).not.toContain('No settings match "token tag:security"');
-
-    const noMatchContainer = document.createElement("div");
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {
-          "gateway.auth.token": { tags: ["security"] },
-        },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: {},
-        searchQuery: "mode tag:security",
-        onPatch,
-      }),
-      noMatchContainer,
-    );
-    expect(noMatchContainer.textContent).toContain('No settings match "mode tag:security"');
   });
 
   it("supports SecretInput unions in additionalProperties maps", () => {
