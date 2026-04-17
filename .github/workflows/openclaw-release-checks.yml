@@ -136,6 +136,7 @@ jobs:
     needs: [resolve_target]
     permissions:
       contents: read
+      pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
       ref: ${{ needs.resolve_target.outputs.ref }}

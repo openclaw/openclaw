@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: openclaw-scheduled-live-checks-${{ github.ref }}
@@ -19,6 +20,7 @@ jobs:
   live_and_openwebui_checks:
     permissions:
       contents: read
+      pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
       ref: ${{ github.sha }}

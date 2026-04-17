@@ -63,9 +63,6 @@ mkdir -p "$CLI_TOOLS_DIR"
 mkdir -p "$CACHE_HOME_DIR"
 if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
   DOCKER_USER="$(id -u):$(id -g)"
-  DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
-  TEMP_DIRS+=("$DOCKER_HOME_DIR")
-  DOCKER_HOME_MOUNT=(-v "$DOCKER_HOME_DIR":/home/node)
 fi
 
 PROFILE_MOUNT=()
@@ -224,11 +221,17 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     AUTH_FILES_CSV="$(openclaw_live_join_csv "${AUTH_FILES[@]}")"
   fi
 
+  DOCKER_HOME_MOUNT=()
+  DOCKER_AUTH_PRESTAGED=0
+  if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
+    TEMP_DIRS+=("$DOCKER_HOME_DIR")
+    DOCKER_HOME_MOUNT=(-v "$DOCKER_HOME_DIR":/home/node)
+  fi
+
   if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
     openclaw_live_stage_auth_into_home "$DOCKER_HOME_DIR" "${AUTH_DIRS[@]}" --files "${AUTH_FILES[@]}"
     DOCKER_AUTH_PRESTAGED=1
-  else
-    DOCKER_AUTH_PRESTAGED=0
   fi
 
   EXTERNAL_AUTH_MOUNTS=()

@@ -46,7 +46,7 @@ import {
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
 } from "./live-tool-probe-utils.js";
-import { startGatewayServer } from "./server.impl.js";
+import { startGatewayServer } from "./server.js";
 import { loadSessionEntry, readSessionMessages } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
@@ -2056,6 +2056,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                   provider: m.provider,
                   useExplicitModels: useExplicit,
                   providerFilter: PROVIDERS,
+                  config: cfg,
+                  env: process.env,
                 }) && isHighSignalLiveModelRef({ provider: m.provider, id: m.id }),
             );
 

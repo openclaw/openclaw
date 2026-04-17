@@ -1,4 +1,6 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderModernModelRef } from "../plugins/provider-runtime.js";
+import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./provider-id.js";
 
@@ -98,10 +100,43 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
   return isHighSignalClaudeModelId(id);
 }
 
+function sharesOwningPlugin(params: {
+  left: string;
+  right: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  ownerCache: Map<string, readonly string[]>;
+}): boolean {
+  const resolveOwners = (provider: string): readonly string[] => {
+    const normalized = normalizeProviderId(provider);
+    const cached = params.ownerCache.get(normalized);
+    if (cached) {
+      return cached;
+    }
+    const owners =
+      resolveOwningPluginIdsForProvider({
+        provider: normalized,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      }) ?? [];
+    params.ownerCache.set(normalized, owners);
+    return owners;
+  };
+
+  const leftOwners = resolveOwners(params.left);
+  const rightOwners = resolveOwners(params.right);
+  return leftOwners.some((owner) => rightOwners.includes(owner));
+}
+
 export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
   provider?: string | null;
   useExplicitModels: boolean;
   providerFilter?: ReadonlySet<string> | null;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): boolean {
   const provider = normalizeProviderId(params.provider ?? "");
   if (!provider || params.useExplicitModels) {
@@ -110,9 +145,23 @@ export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
   if (!DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS.has(provider)) {
     return false;
   }
+  const ownerCache = new Map<string, readonly string[]>();
   for (const filterEntry of params.providerFilter ?? []) {
     const requestedProvider = normalizeProviderId(filterEntry);
     if (requestedProvider === provider) {
+      return false;
+    }
+    if (
+      requestedProvider &&
+      sharesOwningPlugin({
+        left: requestedProvider,
+        right: provider,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        ownerCache,
+      })
+    ) {
       return false;
     }
     if (requestedProvider && DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS.has(requestedProvider)) {

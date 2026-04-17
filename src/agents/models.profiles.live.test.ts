@@ -490,6 +490,8 @@ describeLive("live models (profile keys)", () => {
               provider: model.provider,
               useExplicitModels: useExplicit,
               providerFilter: providers,
+              config: cfg,
+              env: process.env,
             })
           ) {
             continue;

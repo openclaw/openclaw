@@ -157,7 +157,7 @@ fi
 AUTH_DIRS=()
 AUTH_FILES=()
 if [[ "$CLI_AUTH_MODE" == "api-key" && "$CLI_PROVIDER" == "codex-cli" ]]; then
-  :
+  AUTH_FILES+=(".codex/config.toml")
 elif [[ -n "${OPENCLAW_DOCKER_AUTH_DIRS:-}" ]]; then
   while IFS= read -r auth_dir; do
     [[ -n "$auth_dir" ]] || continue

@@ -215,6 +215,35 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function pollCliCronJobVisible(params: {
+  port: number;
+  token: string;
+  env: NodeJS.ProcessEnv;
+  expectedName: string;
+  expectedMessage: string;
+  polls?: number;
+  pollMs?: number;
+}): Promise<{ job?: CronListJob; pollsUsed: number }> {
+  const polls = Math.max(1, params.polls ?? CLI_CRON_MCP_PROBE_VERIFY_POLLS);
+  const pollMs = Math.max(0, params.pollMs ?? CLI_CRON_MCP_PROBE_VERIFY_POLL_MS);
+  for (let verifyAttempt = 0; verifyAttempt < polls; verifyAttempt += 1) {
+    const job = await assertCronJobVisibleViaCli({
+      port: params.port,
+      token: params.token,
+      env: params.env,
+      expectedName: params.expectedName,
+      expectedMessage: params.expectedMessage,
+    });
+    if (job) {
+      return { job, pollsUsed: verifyAttempt + 1 };
+    }
+    if (verifyAttempt < polls - 1) {
+      await sleep(pollMs);
+    }
+  }
+  return { pollsUsed: polls };
+}
+
 type LoopbackJsonRpcResponse = {
   result?: unknown;
   error?: { message?: string };
@@ -347,12 +376,17 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
     throw new Error(`mcp loopback cron tools/call returned isError for job ${cronProbe.name}`);
   }
 
-  const createdJob = await assertCronJobVisibleViaCli({
+  const { job: createdJob, pollsUsed } = await pollCliCronJobVisible({
     port: params.port,
     token: params.token,
     env: params.env,
     expectedName: cronProbe.name,
     expectedMessage: cronProbe.message,
+  });
+  logCliCronProbe("loopback-preflight:verify", {
+    jobName: cronProbe.name,
+    pollsUsed,
+    createdJob: Boolean(createdJob),
   });
   if (!createdJob) {
     throw new Error(`mcp loopback cron tools/call did not create job ${cronProbe.name}`);
@@ -397,7 +431,9 @@ export function shouldRetryCliCronMcpProbeReply(text: string): boolean {
     normalized.includes("canceled by the environment") ||
     normalized.includes("mcp call was cancelled") ||
     normalized.includes("mcp call was canceled");
-  const mentionsUserCancellation = normalized.includes("user cancelled mcp tool call");
+  const mentionsUserCancellation =
+    normalized.includes("user cancelled mcp tool call") ||
+    normalized.includes("user canceled mcp tool call");
   const mentionsCreateFailure =
     normalized.includes("could not create ") ||
     normalized.includes("couldn't create ") ||
@@ -709,30 +745,17 @@ export async function verifyCliCronMcpProbe(params: {
       retryableReply,
       reply: lastCronText,
     });
-    let pollsUsed = 0;
-    for (
-      let verifyAttempt = 0;
-      verifyAttempt < CLI_CRON_MCP_PROBE_VERIFY_POLLS;
-      verifyAttempt += 1
-    ) {
-      pollsUsed = verifyAttempt + 1;
-      createdJob = await assertCronJobVisibleViaCli({
-        port: params.port,
-        token: params.token,
-        env: params.env,
-        expectedName: cronProbe.name,
-        expectedMessage: cronProbe.message,
-      });
-      if (createdJob) {
-        break;
-      }
-      if (verifyAttempt < CLI_CRON_MCP_PROBE_VERIFY_POLLS - 1) {
-        await sleep(CLI_CRON_MCP_PROBE_VERIFY_POLL_MS);
-      }
-    }
+    const verifyResult = await pollCliCronJobVisible({
+      port: params.port,
+      token: params.token,
+      env: params.env,
+      expectedName: cronProbe.name,
+      expectedMessage: cronProbe.message,
+    });
+    createdJob = verifyResult.job;
     logCliCronProbe("agent-attempt:verify", {
       attempt,
-      pollsUsed,
+      pollsUsed: verifyResult.pollsUsed,
       createdJob: Boolean(createdJob),
       retryableReply,
     });
