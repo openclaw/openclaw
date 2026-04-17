@@ -70,11 +70,28 @@ export type SessionMirror = {
 };
 
 export type OpenSessionMirrorParams = {
-  /** Absolute path to the OpenClaw primary JSONL file for this run. */
+  /**
+   * Absolute path to the OpenClaw primary JSONL file for this run.
+   * The mirror writes to a sidecar file derived from this path, NOT
+   * to the file itself — pi-ai's SessionManager owns the primary
+   * file and may truncate/rewrite it during initialization, which
+   * would clobber any frames we appended. The sidecar path is
+   * `<primaryPath>.claude-sdk.jsonl` so it lives next to the primary
+   * for easy discovery by tooling and is trivially cleanable.
+   */
   primaryPath: string;
   /** The SDK session id to include in the initial system frame. */
   sdkSessionId: string;
 };
+
+/**
+ * Resolve the sidecar mirror path for a given primary session-file path.
+ * Exposed so tests and tooling can locate the sidecar without
+ * recomputing the suffix.
+ */
+export function resolveSessionMirrorPath(primaryPath: string): string {
+  return `${primaryPath}.claude-sdk.jsonl`;
+}
 
 /**
  * Open an append-only session mirror for the duration of a run. The
@@ -83,7 +100,8 @@ export type OpenSessionMirrorParams = {
 export function openSessionMirror(params: OpenSessionMirrorParams): SessionMirror {
   const dir = path.dirname(params.primaryPath);
   fs.mkdirSync(dir, { recursive: true });
-  const stream = fs.createWriteStream(params.primaryPath, { flags: "a" });
+  const sidecarPath = resolveSessionMirrorPath(params.primaryPath);
+  const stream = fs.createWriteStream(sidecarPath, { flags: "a" });
 
   const writeEntry = (entry: PiJsonlEntry): void => {
     stream.write(`${JSON.stringify(entry)}\n`);

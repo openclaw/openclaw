@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RunEmbeddedPiAgentParams } from "../pi-embedded-runner/run/params.js";
 import { runAgent } from "../runtime-dispatch.js";
+import { resolveSessionMirrorPath } from "./session-mirror.js";
 
 const LIVE = process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = LIVE ? describe : describe.skip;
@@ -93,9 +94,14 @@ describeLive("runAgent dispatch → claude-sdk (live)", () => {
     expect(result.payloads?.[0]?.text ?? "").toMatch(/DISPATCH-OK/);
     expect(result.meta.agentMeta?.provider).toBe("anthropic");
 
-    // The session mirror should have a system frame tagged with the
-    // SDK source — unique to the claude-sdk path.
-    const written = fs.readFileSync(sessionFile, "utf8");
+    // The session-mirror sidecar file should exist and have a
+    // system frame tagged with the SDK source — unique on-disk
+    // evidence the run took the claude-sdk path. We assert against
+    // the sidecar path (NOT the primary sessionFile) because pi-ai's
+    // SessionManager owns the primary path and may rewrite it.
+    const sidecarPath = resolveSessionMirrorPath(sessionFile);
+    expect(fs.existsSync(sidecarPath)).toBe(true);
+    const written = fs.readFileSync(sidecarPath, "utf8");
     const firstLine = written.split("\n").find((l) => l.length > 0);
     expect(firstLine).toBeDefined();
     const parsed = JSON.parse(firstLine!) as { source?: string; type?: string };
