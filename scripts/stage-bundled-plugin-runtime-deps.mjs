@@ -142,6 +142,15 @@ function readInstalledDependencyVersionFromRoot(depRoot) {
 }
 
 const defaultStagedRuntimeDepGlobalPruneSuffixes = [".d.ts", ".map"];
+const defaultStagedRuntimeDepGlobalPruneDirectories = [
+  "__snapshots__",
+  "__tests__",
+  "test",
+  "tests",
+];
+const defaultStagedRuntimeDepGlobalPruneFilePatterns = [
+  /(?:^|\/)[^/]+\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/u,
+];
 const defaultStagedRuntimeDepPruneRules = new Map([
   // Type declarations only; runtime resolves through lib/es entrypoints.
   ["@larksuiteoapi/node-sdk", { paths: ["types"] }],
@@ -182,11 +191,17 @@ const defaultStagedRuntimeDepPruneRules = new Map([
   ["@jimp/plugin-quantize", { paths: ["src/__image_snapshots__"] }],
   ["@jimp/plugin-threshold", { paths: ["src/__image_snapshots__"] }],
 ]);
-const runtimeDepsStagingVersion = 5;
+const runtimeDepsStagingVersion = 6;
 const exactVersionSpecRe = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 
 function resolveRuntimeDepPruneConfig(params = {}) {
   return {
+    globalPruneDirectories:
+      params.stagedRuntimeDepGlobalPruneDirectories ??
+      defaultStagedRuntimeDepGlobalPruneDirectories,
+    globalPruneFilePatterns:
+      params.stagedRuntimeDepGlobalPruneFilePatterns ??
+      defaultStagedRuntimeDepGlobalPruneFilePatterns,
     globalPruneSuffixes:
       params.stagedRuntimeDepGlobalPruneSuffixes ?? defaultStagedRuntimeDepGlobalPruneSuffixes,
     pruneRules: params.stagedRuntimeDepPruneRules ?? defaultStagedRuntimeDepPruneRules,
@@ -463,8 +478,8 @@ function walkFiles(rootDir, visitFile) {
     return;
   }
   const queue = [rootDir];
-  while (queue.length > 0) {
-    const currentDir = queue.shift();
+  for (let index = 0; index < queue.length; index += 1) {
+    const currentDir = queue[index];
     for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
       const fullPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
@@ -489,6 +504,53 @@ function pruneDependencyFilesBySuffixes(depRoot, suffixes) {
   });
 }
 
+function relativePathSegments(rootDir, fullPath) {
+  return path.relative(rootDir, fullPath).split(path.sep).filter(Boolean);
+}
+
+function isNodeModulesPackageRoot(segments, index) {
+  const parent = segments[index - 1];
+  if (parent === "node_modules") {
+    return true;
+  }
+  return parent?.startsWith("@") === true && segments[index - 2] === "node_modules";
+}
+
+function pruneDependencyDirectoriesByBasename(depRoot, basenames) {
+  if (!basenames || basenames.length === 0 || !fs.existsSync(depRoot)) {
+    return;
+  }
+  const basenameSet = new Set(basenames);
+  const queue = [depRoot];
+  for (let index = 0; index < queue.length; index += 1) {
+    const currentDir = queue[index];
+    for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const fullPath = path.join(currentDir, entry.name);
+      const segments = relativePathSegments(depRoot, fullPath);
+      if (basenameSet.has(entry.name) && !isNodeModulesPackageRoot(segments, segments.length - 1)) {
+        removePathIfExists(fullPath);
+        continue;
+      }
+      queue.push(fullPath);
+    }
+  }
+}
+
+function pruneDependencyFilesByPatterns(depRoot, patterns) {
+  if (!patterns || patterns.length === 0 || !fs.existsSync(depRoot)) {
+    return;
+  }
+  walkFiles(depRoot, (fullPath) => {
+    const relativePath = relativePathSegments(depRoot, fullPath).join("/");
+    if (patterns.some((pattern) => pattern.test(relativePath))) {
+      removePathIfExists(fullPath);
+    }
+  });
+}
+
 function pruneStagedInstalledDependencyCargo(nodeModulesDir, depName, pruneConfig) {
   const depRoot = dependencyNodeModulesPath(nodeModulesDir, depName);
   if (depRoot === null) {
@@ -498,6 +560,8 @@ function pruneStagedInstalledDependencyCargo(nodeModulesDir, depName, pruneConfi
   for (const relativePath of pruneRule?.paths ?? []) {
     removePathIfExists(path.join(depRoot, relativePath));
   }
+  pruneDependencyDirectoriesByBasename(depRoot, pruneConfig.globalPruneDirectories);
+  pruneDependencyFilesByPatterns(depRoot, pruneConfig.globalPruneFilePatterns);
   pruneDependencyFilesBySuffixes(depRoot, pruneConfig.globalPruneSuffixes);
   pruneDependencyFilesBySuffixes(depRoot, pruneRule?.suffixes ?? []);
 }
@@ -784,6 +848,10 @@ function createRuntimeDepsFingerprint(packageJson, pruneConfig, params = {}) {
   return createHash("sha256")
     .update(
       JSON.stringify({
+        globalPruneDirectories: pruneConfig.globalPruneDirectories,
+        globalPruneFilePatterns: pruneConfig.globalPruneFilePatterns.map((pattern) =>
+          pattern.toString(),
+        ),
         globalPruneSuffixes: pruneConfig.globalPruneSuffixes,
         packageJson,
         pruneRules: [...pruneConfig.pruneRules.entries()],

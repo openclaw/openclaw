@@ -445,6 +445,38 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
+  it("blocks room control commands from DM-only paired senders", async () => {
+    const readAllowFromStore = vi.fn(async () => ["@user:example.org"]);
+    const { handler, finalizeInboundContext, recordInboundSession } =
+      createMatrixHandlerTestHarness({
+        isDirectMessage: false,
+        readAllowFromStore,
+        roomsConfig: {
+          "!room:example.org": { requireMention: false },
+        },
+        shouldHandleTextCommands: () => true,
+        hasControlCommand: () => true,
+        cfg: {
+          commands: {
+            useAccessGroups: true,
+          },
+        },
+        getMemberDisplayName: async () => "sender",
+      });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$dm-only-room-command",
+        body: "/config",
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
+    expect(readAllowFromStore).not.toHaveBeenCalled();
+  });
+
   it("processes room messages mentioned via displayName in formatted_body", async () => {
     const recordInboundSession = vi.fn(async () => {});
     const { handler } = createMatrixHandlerTestHarness({
@@ -530,6 +562,32 @@ describe("matrix monitor handler pairing account scope", () => {
 
     expect(recordInboundSession).not.toHaveBeenCalled();
     expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops root events that carry a bundled replacement relation", async () => {
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      mentionRegexes: [/@bot/i],
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$edited-root",
+        body: "@bot please reply",
+        mentions: { user_ids: ["@bot:example.org"] },
+        unsigned: {
+          "m.relations": {
+            "m.replace": {
+              event_id: "$edit",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
   it("skips media downloads for unmentioned group media messages", async () => {

@@ -266,6 +266,18 @@ describe("isCloudflareOrHtmlErrorPage", () => {
     expect(isCloudflareOrHtmlErrorPage(htmlError)).toBe(true);
   });
 
+  it("detects standalone Cloudflare challenge HTML pages", () => {
+    const htmlError = `<!DOCTYPE html>
+<html lang="en-US">
+  <head><title>Just a moment...</title></head>
+  <body>
+    <span id="challenge-error-text">Enable JavaScript and cookies to continue</span>
+    <script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script>
+  </body>
+</html>`;
+    expect(isCloudflareOrHtmlErrorPage(htmlError)).toBe(true);
+  });
+
   it("does not flag non-HTML status lines", () => {
     expect(isCloudflareOrHtmlErrorPage("500 Internal Server Error")).toBe(false);
     expect(isCloudflareOrHtmlErrorPage("429 Too Many Requests")).toBe(false);
@@ -1195,6 +1207,9 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(classifyProviderRuntimeFailureKind("tool_use.input: Field required")).toBe(
       "replay_invalid",
     );
+    expect(
+      classifyProviderRuntimeFailureKind("401 input item ID does not belong to this connection"),
+    ).toBe("replay_invalid");
   });
 
   it("does not classify generic config errors that mention proxy settings as proxy failures", () => {
