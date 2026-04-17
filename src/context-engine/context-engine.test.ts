@@ -532,19 +532,6 @@ describe("Registry tests", () => {
       existingOwner: "core",
     });
   });
-
-  it("shares registered engines across duplicate module copies", async () => {
-    const registryUrl = new URL("./registry.ts", import.meta.url).href;
-    const suffix = Date.now().toString(36);
-    const first = await import(/* @vite-ignore */ `${registryUrl}?copy=${suffix}-a`);
-    const second = await import(/* @vite-ignore */ `${registryUrl}?copy=${suffix}-b`);
-
-    const engineId = `dup-copy-${suffix}`;
-    const factory = () => new MockContextEngine();
-    first.registerContextEngine(engineId, factory);
-
-    expect(second.getContextEngineFactory(engineId)).toBe(factory);
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1019,34 +1006,15 @@ describe("Initialization guard", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Bundle chunk isolation (#40096)", () => {
-  it("Symbol.for key is stable across independently loaded modules", async () => {
-    // Simulate two distinct bundle chunks by loading the registry module
-    // twice with different query strings (forces separate module instances
-    // in Vite/esbuild but shares globalThis).
+  it("shares registrations and resolves engines across independently loaded chunks", async () => {
     const ts = Date.now().toString(36);
     const registryUrl = new URL("./registry.ts", import.meta.url).href;
 
     const chunkA = await import(/* @vite-ignore */ `${registryUrl}?chunk=a-${ts}`);
     const chunkB = await import(/* @vite-ignore */ `${registryUrl}?chunk=b-${ts}`);
 
-    // Chunk A registers an engine
     const engineId = `cross-chunk-${ts}`;
-    chunkA.registerContextEngine(engineId, () => new MockContextEngine());
-
-    // Chunk B must see it
-    expect(chunkB.getContextEngineFactory(engineId)).toBeDefined();
-    expect(chunkB.listContextEngineIds()).toContain(engineId);
-  });
-
-  it("resolveContextEngine from chunk B finds engine registered in chunk A", async () => {
-    const ts = Date.now().toString(36);
-    const registryUrl = new URL("./registry.ts", import.meta.url).href;
-
-    const chunkA = await import(/* @vite-ignore */ `${registryUrl}?chunk=resolve-a-${ts}`);
-    const chunkB = await import(/* @vite-ignore */ `${registryUrl}?chunk=resolve-b-${ts}`);
-
-    const engineId = `resolve-cross-${ts}`;
-    chunkA.registerContextEngine(engineId, () => ({
+    const factory = () => ({
       info: { id: engineId, name: "Cross-chunk Engine", version: "0.0.1" },
       async ingest() {
         return { ingested: true };
@@ -1057,9 +1025,11 @@ describe("Bundle chunk isolation (#40096)", () => {
       async compact() {
         return { ok: true, compacted: false };
       },
-    }));
+    });
+    chunkA.registerContextEngine(engineId, factory);
 
-    // Resolve from chunk B using a config that points to this engine
+    expect(chunkB.getContextEngineFactory(engineId)).toBe(factory);
+    expect(chunkB.listContextEngineIds()).toContain(engineId);
     const engine = await chunkB.resolveContextEngine(configWithSlot(engineId));
     expect(engine.info.id).toBe(engineId);
   });

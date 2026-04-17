@@ -8,6 +8,7 @@ import {
   collectControlUiPackErrors,
   collectForbiddenPackedContentErrors,
   collectForbiddenPackedPathErrors,
+  collectPackedTestCargoErrors,
   collectReleasePackageMetadataErrors,
   collectReleaseTagErrors,
   parseNpmPackJsonOutput,
@@ -21,7 +22,10 @@ import {
 } from "../scripts/openclaw-npm-release-check.ts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
 
-const LEGACY_UPDATE_COMPAT_PACKED_PATHS = ["dist/extensions/qa-channel/runtime-api.js"] as const;
+const LEGACY_UPDATE_COMPAT_PACKED_PATHS = [
+  "dist/extensions/qa-channel/runtime-api.js",
+  "dist/extensions/qa-lab/runtime-api.js",
+] as const;
 const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ...LEGACY_UPDATE_COMPAT_PACKED_PATHS,
@@ -340,7 +344,6 @@ describe("collectForbiddenPackedPathErrors", () => {
       ]),
     ).toEqual([
       'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
-      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
       'npm package must not include private QA lab type artifact "dist/plugin-sdk/extensions/qa-lab/cli.d.ts".',
       'npm package must not include private QA runtime chunk "dist/qa-runtime-B9LDtssJ.js".',
@@ -348,15 +351,13 @@ describe("collectForbiddenPackedPathErrors", () => {
     ]);
   });
 
-  it("allows only the legacy update verifier QA channel runtime sidecar", () => {
+  it("allows legacy update verifier QA runtime sidecars", () => {
     expect(
       collectForbiddenPackedPathErrors([
         "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-lab/runtime-api.js",
       ]),
-    ).toEqual([
-      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
-    ]);
+    ).toEqual([]);
   });
 
   it("rejects root dist chunks that still reference the private qa lab", () => {
@@ -377,6 +378,64 @@ describe("collectForbiddenPackedPathErrors", () => {
     } finally {
       rmSync(rootDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("collectPackedTestCargoErrors", () => {
+  it("rejects packed test files and test directories", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/extensions/webhooks/node_modules/zod/src/v3/tests/all-errors.test.ts",
+        "dist/extensions/whatsapp/node_modules/pino/test/basic.test.js",
+        "dist/extensions/whatsapp/node_modules/@jimp/plugin-crop/src/__snapshots__/crop.test.ts.snap",
+        "dist/index.js",
+      ]),
+    ).toEqual([
+      'npm package must not include test cargo "dist/extensions/webhooks/node_modules/zod/src/v3/tests/all-errors.test.ts".',
+      'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/@jimp/plugin-crop/src/__snapshots__/crop.test.ts.snap".',
+      'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/pino/test/basic.test.js".',
+    ]);
+  });
+
+  it("allows normal runtime files", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/index.js",
+        "dist/extensions/whatsapp/node_modules/pino/lib/proto.js",
+        "dist/extensions/webhooks/node_modules/zod/v4/core/api.js",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("allows legitimate package roots named test under node_modules", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/extensions/fixture-plugin/node_modules/direct/node_modules/test/index.js",
+        "dist/extensions/fixture-plugin/node_modules/direct/node_modules/@scope/tests/index.js",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("allows leaf runtime filenames named test or tests", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/extensions/fixture-plugin/node_modules/direct/bin/test",
+        "dist/extensions/fixture-plugin/node_modules/direct/bin/tests",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("normalizes Windows or mixed separators before classifying test cargo", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        String.raw`dist\extensions\fixture-plugin\node_modules\direct\__tests__\index.js`,
+        String.raw`dist/extensions/fixture-plugin\node_modules/direct/src/runtime.spec.ts`,
+        String.raw`dist\extensions\fixture-plugin\node_modules\direct\node_modules\test\index.js`,
+      ]),
+    ).toEqual([
+      `npm package must not include test cargo "${String.raw`dist/extensions/fixture-plugin\node_modules/direct/src/runtime.spec.ts`}".`,
+      `npm package must not include test cargo "${String.raw`dist\extensions\fixture-plugin\node_modules\direct\__tests__\index.js`}".`,
+    ]);
   });
 });
 
