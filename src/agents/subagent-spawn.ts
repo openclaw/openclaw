@@ -379,6 +379,12 @@ function resolveThreadBindingDeliveryOrigin(childSessionKey: string): DeliveryCo
   });
 }
 
+function hasRoutableDeliveryOrigin(
+  origin?: DeliveryContext,
+): origin is DeliveryContext & { channel: string; to: string } {
+  return Boolean(origin?.channel && origin.to);
+}
+
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
@@ -740,7 +746,7 @@ export async function spawnSubagentDirect(
   const deliverInitialChildRunDirectly =
     requestThreadBinding &&
     spawnMode === "session" &&
-    Boolean(childSessionOrigin?.channel && childSessionOrigin.to);
+    hasRoutableDeliveryOrigin(childSessionOrigin);
   const shouldAnnounceCompletion = deliverInitialChildRunDirectly
     ? false
     : expectsCompletionMessage;

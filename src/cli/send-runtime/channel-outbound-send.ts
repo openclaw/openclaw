@@ -40,29 +40,7 @@ export function createChannelOutboundRuntimeSend(params: {
       const outbound = await loadChannelOutboundAdapter(params.channelId);
       const threadId = resolveRuntimeThreadId(opts);
       const replyToId = resolveRuntimeReplyToId(opts);
-      const hasMedia = Boolean(opts.mediaUrl);
-      if (hasMedia && outbound?.sendMedia) {
-        return await outbound.sendMedia({
-          cfg: opts.cfg ?? loadConfig(),
-          to,
-          text,
-          mediaUrl: opts.mediaUrl,
-          mediaAccess: opts.mediaAccess,
-          mediaLocalRoots: opts.mediaLocalRoots,
-          mediaReadFile: opts.mediaReadFile,
-          accountId: opts.accountId,
-          threadId,
-          replyToId,
-          silent: opts.silent,
-          forceDocument: opts.forceDocument,
-          gifPlayback: opts.gifPlayback,
-          gatewayClientScopes: opts.gatewayClientScopes,
-        });
-      }
-      if (!outbound?.sendText) {
-        throw new Error(params.unavailableMessage);
-      }
-      return await outbound.sendText({
+      const buildContext = () => ({
         cfg: opts.cfg ?? loadConfig(),
         to,
         text,
@@ -78,6 +56,14 @@ export function createChannelOutboundRuntimeSend(params: {
         gifPlayback: opts.gifPlayback,
         gatewayClientScopes: opts.gatewayClientScopes,
       });
+      const hasMedia = Boolean(opts.mediaUrl);
+      if (hasMedia && outbound?.sendMedia) {
+        return await outbound.sendMedia(buildContext());
+      }
+      if (!outbound?.sendText) {
+        throw new Error(params.unavailableMessage);
+      }
+      return await outbound.sendText(buildContext());
     },
   };
 }
