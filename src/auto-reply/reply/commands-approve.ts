@@ -81,6 +81,12 @@ function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
 }
 
 function formatApprovalSubmitError(error: unknown): string {
+  if (isApprovalNotFoundError(error)) {
+    return (
+      "This approval request is no longer available. If you typed the ID manually, double-check it. " +
+      "It may have expired or the gateway restarted. Re-request the action and try again."
+    );
+  }
   return formatErrorMessage(error);
 }
 

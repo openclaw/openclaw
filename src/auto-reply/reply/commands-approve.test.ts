@@ -895,7 +895,8 @@ describe("handleApproveCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Failed to submit approval");
-    expect(result?.reply?.text).toContain("unknown or expired approval id");
+    expect(result?.reply?.text).toContain("approval request is no longer available");
+    expect(result?.reply?.text).toContain("gateway restarted");
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -972,7 +973,7 @@ describe("handleApproveCommand", () => {
           SenderId: "123",
         },
         setup: () => callGatewayMock.mockRejectedValue(new Error("unknown or expired approval id")),
-        expectedText: "unknown or expired approval id",
+        expectedText: "approval request is no longer available",
         expectGatewayCalls: 2,
       },
       {
