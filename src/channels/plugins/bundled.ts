@@ -79,11 +79,21 @@ function resolveChannelPluginModuleEntry(
     return null;
   }
   const missingFields: string[] = [];
-  if (typeof record.id !== "string") missingFields.push("id");
-  if (typeof record.name !== "string") missingFields.push("name");
-  if (typeof record.description !== "string") missingFields.push("description");
-  if (typeof record.register !== "function") missingFields.push("register");
-  if (typeof record.loadChannelPlugin !== "function") missingFields.push("loadChannelPlugin");
+  if (typeof record.id !== "string") {
+    missingFields.push("id");
+  }
+  if (typeof record.name !== "string") {
+    missingFields.push("name");
+  }
+  if (typeof record.description !== "string") {
+    missingFields.push("description");
+  }
+  if (typeof record.register !== "function") {
+    missingFields.push("register");
+  }
+  if (typeof record.loadChannelPlugin !== "function") {
+    missingFields.push("loadChannelPlugin");
+  }
   if (missingFields.length > 0) {
     log.warn(
       `[channels] bundled channel entry missing required fields: ${missingFields.join(", ")}; skipping`,
