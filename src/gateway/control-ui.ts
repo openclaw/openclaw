@@ -313,7 +313,9 @@ export async function handleControlUiAssistantMediaRequest(
       return true;
     }
     const trustDeclaredOperatorScopes =
-      authResult.method !== "token" && authResult.method !== "password";
+      authResult.method !== "token" &&
+      authResult.method !== "password" &&
+      authResult.method !== "none";
     if (trustDeclaredOperatorScopes) {
       const requestedScopes = resolveTrustedHttpOperatorScopes(req, {
         trustDeclaredOperatorScopes,
