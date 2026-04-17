@@ -45,6 +45,10 @@ const GROQ_TOO_MANY_REQUESTS_MESSAGE =
   "429 Too Many Requests: Too many requests were sent in a given timeframe.";
 const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
   "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance."; // pragma: allowlist secret
+const PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE =
+  "Proxy notice: Status: Internal Server Error";
+const MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE =
+  `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; upstream connect error`;
 
 function expectMessageMatches(
   matcher: (message: string) => boolean,
@@ -62,6 +66,12 @@ function expectTimeoutFailoverSamples(samples: readonly string[]) {
     expect(classifyFailoverReason(sample)).toBe("timeout");
     expect(isFailoverErrorMessage(sample)).toBe(true);
   }
+}
+
+function expectNotFailoverSample(sample: string) {
+  expect(isTimeoutErrorMessage(sample)).toBe(false);
+  expect(classifyFailoverReason(sample)).toBeNull();
+  expect(isFailoverErrorMessage(sample)).toBe(false);
 }
 
 describe("isAuthPermanentErrorMessage", () => {
@@ -821,17 +831,13 @@ describe("isFailoverErrorMessage", () => {
   });
 
   it("does not treat plain status text with internal-server-error wording as timeout", () => {
-    const sample = "Proxy notice: Status: Internal Server Error";
-    expect(isTimeoutErrorMessage(sample)).toBe(false);
-    expect(classifyFailoverReason(sample)).toBe(null);
-    expect(isFailoverErrorMessage(sample)).toBe(false);
+    expectNotFailoverSample(PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE);
   });
 
   it("keeps mixed upstream server errors retryable when they also mention status prose", () => {
-    const sample = "Proxy notice: Status: Internal Server Error; upstream connect error";
-    expect(isTimeoutErrorMessage(sample)).toBe(false);
-    expect(classifyFailoverReason(sample)).toBe("timeout");
-    expect(isFailoverErrorMessage(sample)).toBe(true);
+    expect(isTimeoutErrorMessage(MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE)).toBe(false);
+    expect(classifyFailoverReason(MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE)).toBe("timeout");
+    expect(isFailoverErrorMessage(MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE)).toBe(true);
   });
 });
 
@@ -1275,6 +1281,6 @@ describe("classifyProviderRuntimeFailureKind", () => {
   });
 
   it("does not classify plain status text with internal server error wording as timeout", () => {
-    expect(classifyFailoverReason("Proxy notice: Status: Internal Server Error")).toBeNull();
+    expectNotFailoverSample(PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE);
   });
 });
