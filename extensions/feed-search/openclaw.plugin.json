@@ -1,0 +1,24 @@
+{
+  "id": "feed-search",
+  "name": "Feed Search",
+  "description": "Search feed monitor data from external MySQL with topic-based access control and LLM-powered natural language queries.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mysql": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": { "type": "string" },
+          "port": { "type": "number" },
+          "user": { "type": "string" },
+          "password": { "type": "string" },
+          "database": { "type": "string" }
+        },
+        "required": ["host", "user", "password", "database"]
+      }
+    },
+    "required": ["mysql"]
+  }
+}

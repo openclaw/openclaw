@@ -1,0 +1,45 @@
+{
+  "id": "rabbitmq-consumer",
+  "name": "RabbitMQ Consumer",
+  "description": "Consume chat messages from RabbitMQ, process them via OpenClaw subagent, and push responses via Mercure.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "rabbitmq": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": { "type": "string" },
+          "port": { "type": "number" },
+          "user": { "type": "string" },
+          "password": { "type": "string" },
+          "queue": { "type": "string" }
+        },
+        "required": ["host", "user", "password"]
+      },
+      "historyDb": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": { "type": "string" },
+          "port": { "type": "number" },
+          "user": { "type": "string" },
+          "password": { "type": "string" },
+          "database": { "type": "string" }
+        },
+        "required": ["host", "user", "password", "database"]
+      },
+      "mercure": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "hubUrl": { "type": "string" },
+          "jwtSecret": { "type": "string" }
+        },
+        "required": ["hubUrl", "jwtSecret"]
+      }
+    },
+    "required": ["rabbitmq", "historyDb", "mercure"]
+  }
+}

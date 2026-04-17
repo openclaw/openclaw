@@ -1,0 +1,25 @@
+{
+  "name": "@openclaw/feed-search",
+  "version": "2026.4.16",
+  "private": true,
+  "description": "OpenClaw feed data search plugin with MySQL backend",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49",
+    "mysql2": "^3.12.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.4.16"
+    },
+    "build": {
+      "openclawVersion": "2026.4.16"
+    }
+  }
+}

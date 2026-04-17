@@ -1,0 +1,56 @@
+/** RabbitMQ connection config */
+export interface RabbitMqConfig {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  queue: string;
+}
+
+/** History database MySQL config */
+export interface HistoryDbConfig {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+}
+
+/** Mercure push config */
+export interface MercureConfig {
+  hubUrl: string;
+  jwtSecret: string;
+}
+
+/** Combined plugin config */
+export interface RabbitMqPluginConfig {
+  rabbitmq: RabbitMqConfig;
+  historyDb: HistoryDbConfig;
+  mercure: MercureConfig;
+}
+
+/** Parsed RabbitMQ message body */
+export interface ChatMessage {
+  historyId: number;
+  message: string;
+  sessionId: string;
+  userId: string;
+  modelKey?: string;
+  useMemory: boolean;
+  useWebsearch: boolean;
+  temperature?: number;
+  maxTokens?: number;
+  topic?: string;
+}
+
+/** History record from MySQL */
+export interface HistoryRecord {
+  id: number;
+  sessionId: string;
+  userId: string;
+  message: string;
+  response: string | null;
+  toolsUsed: string | null;
+  metadata: string | null;
+  createdAt: Date;
+}

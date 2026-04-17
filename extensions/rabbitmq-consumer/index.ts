@@ -1,0 +1,114 @@
+import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
+import { RabbitMqClient } from "./src/rabbitmq-client.js";
+import { HistoryManager } from "./src/history-manager.js";
+import { parseMessage } from "./src/message-handler.js";
+import { processChatMessage } from "./src/chat-pipeline.js";
+import type { HistoryDbConfig, MercureConfig, RabbitMqPluginConfig } from "./src/types.js";
+
+/**
+ * Resolve plugin config from the plugin config object, with env var fallbacks.
+ */
+function resolvePluginConfig(pluginConfig: Record<string, unknown>): RabbitMqPluginConfig {
+  const rabbitmq = pluginConfig.rabbitmq as Record<string, unknown> | undefined;
+  const historyDb = pluginConfig.historyDb as Record<string, unknown> | undefined;
+  const mercure = pluginConfig.mercure as Record<string, unknown> | undefined;
+
+  return {
+    rabbitmq: {
+      host: (rabbitmq?.host as string) ?? process.env.RABBITMQ_HOST ?? "127.0.0.1",
+      port: Number(rabbitmq?.port ?? process.env.RABBITMQ_PORT ?? 5672),
+      user: (rabbitmq?.user as string) ?? process.env.RABBITMQ_USER ?? "",
+      password: (rabbitmq?.password as string) ?? process.env.RABBITMQ_PASSWORD ?? "",
+      queue: (rabbitmq?.queue as string) ?? process.env.RABBITMQ_QUEUE ?? "MessageProxy",
+    },
+    historyDb: {
+      host: (historyDb?.host as string) ?? process.env.HISTORY_MYSQL_HOST ?? "127.0.0.1",
+      port: Number(historyDb?.port ?? process.env.HISTORY_MYSQL_PORT ?? 3306),
+      user: (historyDb?.user as string) ?? process.env.HISTORY_MYSQL_USER ?? "",
+      password: (historyDb?.password as string) ?? process.env.HISTORY_MYSQL_PASSWORD ?? "",
+      database: (historyDb?.database as string) ?? process.env.HISTORY_MYSQL_DATABASE ?? "superworker",
+    },
+    mercure: {
+      hubUrl: (mercure?.hubUrl as string) ?? process.env.MERCURE_HUB_URL ?? "",
+      jwtSecret: (mercure?.jwtSecret as string) ?? process.env.MERCURE_JWT_SECRET ?? "",
+    },
+  };
+}
+
+/** Module-level references for service lifecycle management (avoids mutating the api object). */
+let clientRef: RabbitMqClient | undefined;
+let historyRef: HistoryManager | undefined;
+
+export default definePluginEntry({
+  id: "rabbitmq-consumer",
+  name: "RabbitMQ Consumer",
+  description: "Consume chat messages from RabbitMQ and process them via OpenClaw subagent.",
+  register(api: OpenClawPluginApi) {
+    api.registerService({
+      id: "rabbitmq-consumer",
+
+      async start(ctx) {
+        const pluginConfig = resolvePluginConfig(api.pluginConfig as Record<string, unknown>);
+
+        if (!pluginConfig.rabbitmq.user || !pluginConfig.rabbitmq.host) {
+          ctx.logger.warn("[RABBITMQ_CONSUMER] Missing RabbitMQ config, service not started");
+          return;
+        }
+        if (!pluginConfig.historyDb.user || !pluginConfig.historyDb.host) {
+          ctx.logger.warn("[RABBITMQ_CONSUMER] Missing historyDb config, service not started");
+          return;
+        }
+        if (!pluginConfig.mercure.hubUrl) {
+          ctx.logger.warn("[RABBITMQ_CONSUMER] Missing Mercure config, service not started");
+          return;
+        }
+
+        // Shared HistoryManager across messages (pool reuse)
+        historyRef = new HistoryManager(pluginConfig.historyDb);
+
+        const client = new RabbitMqClient(
+          pluginConfig.rabbitmq,
+          ctx.logger,
+          async (msg) => {
+            const chatMsg = parseMessage(msg.content);
+            if (!chatMsg) {
+              ctx.logger.error("[RABBITMQ_CONSUMER] Failed to parse message");
+              return;
+            }
+
+            ctx.logger.info(
+              `[RABBITMQ_CONSUMER] Received message: historyId=${chatMsg.historyId}, ` +
+                `userId=${chatMsg.userId}`,
+            );
+
+            await processChatMessage(
+              chatMsg,
+              historyRef!,
+              pluginConfig.mercure,
+              api.runtime,
+              ctx.logger,
+            );
+          },
+        );
+
+        clientRef = client;
+
+        client.start().catch((err) => {
+          ctx.logger.error(`[RABBITMQ_CONSUMER] Fatal error: ${err}`);
+        });
+      },
+
+      async stop(ctx) {
+        if (clientRef) {
+          await clientRef.stop();
+          clientRef = undefined;
+        }
+        if (historyRef) {
+          await historyRef.close();
+          historyRef = undefined;
+        }
+        ctx.logger.info("[RABBITMQ_CONSUMER] Service stopped");
+      },
+    });
+  },
+});
