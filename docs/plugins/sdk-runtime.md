@@ -50,9 +50,14 @@ const timeoutMs = api.runtime.agent.resolveAgentTimeoutMs(cfg);
 // Ensure workspace exists
 await api.runtime.agent.ensureAgentWorkspace(cfg);
 
-// Run an embedded Pi agent
+// Run an agent. `runAgent` picks the active runtime driver from the
+// agent's config (`agents.list[<id>].runtime.type`): `claude-sdk` by
+// default, `embedded` for the legacy pi-ai path, `acp` for ACP-backed
+// agents. The return shape is stable across drivers.
 const agentDir = api.runtime.agent.resolveAgentDir(cfg);
-const result = await api.runtime.agent.runEmbeddedPiAgent({
+const result = await api.runtime.agent.runAgent({
+  config: cfg, // required so the dispatcher can read `runtime.type`
+  agentId: "my-plugin-agent",
   sessionId: "my-plugin:task-1",
   runId: crypto.randomUUID(),
   sessionFile: path.join(agentDir, "sessions", "my-plugin-task-1.jsonl"),
@@ -60,6 +65,12 @@ const result = await api.runtime.agent.runEmbeddedPiAgent({
   prompt: "Summarize the latest changes",
   timeoutMs: api.runtime.agent.resolveAgentTimeoutMs(cfg),
 });
+
+// Legacy direct entry that always routes through the pi-embedded
+// runtime regardless of `runtime.type`. Retained for plugins pinned to
+// the pi-ai execution model during the compat window; new code should
+// call `runAgent` above so the active driver is picked per agent.
+// const legacy = await api.runtime.agent.runEmbeddedPiAgent({ ... });
 ```
 
 **Session store helpers** are under `api.runtime.agent.session`:

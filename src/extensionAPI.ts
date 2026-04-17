@@ -22,6 +22,12 @@ export { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./agents/defaults.js";
 export { resolveAgentIdentity } from "./agents/identity.js";
 export { resolveThinkingDefault } from "./agents/model-selection.js";
 export { runEmbeddedPiAgent } from "./agents/pi-embedded.js";
+// Preferred agent entry point since the Phase 3 default flip: picks the
+// active runtime (claude-sdk by default, pi-embedded for agents that
+// still set `runtime.type: "embedded"`, acp for ACP-backed agents) and
+// dispatches. Return shape matches `EmbeddedPiRunResult` for either
+// driver.
+export { runAgent } from "./agents/runtime-dispatch.js";
 export { resolveAgentTimeoutMs } from "./agents/timeout.js";
 export { ensureAgentWorkspace } from "./agents/workspace.js";
 export {
