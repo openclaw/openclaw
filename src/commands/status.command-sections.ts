@@ -109,6 +109,22 @@ function listStatusContributorDetails(contributor: StatusContributorSummary): st
     : [];
 }
 
+function findStatusContributor(params: {
+  contributors: StatusContributorSummary[] | undefined;
+  id?: string;
+  label?: string;
+}): StatusContributorSummary | undefined {
+  const contributors = Array.isArray(params.contributors) ? params.contributors : [];
+  const targetId = normalizeLowercaseStringOrEmpty(params.id);
+  const targetLabel = normalizeLowercaseStringOrEmpty(params.label);
+  return contributors.find((contributor) => {
+    const idMatches = targetId.length > 0 && normalizeLowercaseStringOrEmpty(contributor.id) == targetId;
+    const labelMatches =
+      targetLabel.length > 0 && normalizeLowercaseStringOrEmpty(contributor.label) == targetLabel;
+    return idMatches || labelMatches;
+  });
+}
+
 function buildStatusContributorOverviewValue(params: {
   contributor: StatusContributorSummary;
   ok: (value: string) => string;
@@ -219,17 +235,24 @@ export function buildStatusContributorOverviewRows(params: {
 }
 
 export function buildStatusA2AValue(params: {
-  summary: Pick<SummaryLike, "a2a">;
+  summary: Pick<SummaryLike, "a2a" | "contributors">;
   ok: (value: string) => string;
   warn: (value: string) => string;
   muted: (value: string) => string;
 }) {
-  return buildStatusContributorOverviewValue({
-    contributor: buildStatusA2AFallbackContributor({
+  const contributor =
+    findStatusContributor({
+      contributors: params.summary.contributors,
+      id: "a2a",
+      label: "A2A",
+    }) ??
+    buildStatusA2AFallbackContributor({
       summary: params.summary,
       warn: params.warn,
       muted: params.muted,
-    }),
+    });
+  return buildStatusContributorOverviewValue({
+    contributor,
     ok: params.ok,
     warn: params.warn,
     muted: params.muted,

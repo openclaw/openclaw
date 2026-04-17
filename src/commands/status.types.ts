@@ -100,6 +100,10 @@ export type StatusSummary = {
   channelSummary: string[];
   queuedSystemEvents: string[];
   contributors?: StatusContributorSummary[];
+  /**
+   * Legacy compatibility mirror for consumers that have not moved to
+   * `contributors` yet. Prefer `contributors` for new status UI work.
+   */
   a2a: A2AStatusSummary;
   tasks: TaskRegistrySummary;
   taskAudit: TaskAuditSummary;
