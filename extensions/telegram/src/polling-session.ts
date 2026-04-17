@@ -92,24 +92,31 @@ export class TelegramPollingSession {
   }
 
   async runUntilAbort(): Promise<void> {
-    while (!this.opts.abortSignal?.aborted) {
-      const bot = await this.#createPollingBot();
-      if (!bot) {
-        continue;
-      }
+    try {
+      while (!this.opts.abortSignal?.aborted) {
+        const bot = await this.#createPollingBot();
+        if (!bot) {
+          continue;
+        }
 
-      const cleanupState = await this.#ensureWebhookCleanup(bot);
-      if (cleanupState === "retry") {
-        continue;
-      }
-      if (cleanupState === "exit") {
-        return;
-      }
+        const cleanupState = await this.#ensureWebhookCleanup(bot);
+        if (cleanupState === "retry") {
+          continue;
+        }
+        if (cleanupState === "exit") {
+          return;
+        }
 
-      const state = await this.#runPollingCycle(bot);
-      if (state === "exit") {
-        return;
+        const state = await this.#runPollingCycle(bot);
+        if (state === "exit") {
+          return;
+        }
       }
+    } finally {
+      // Release the transport's dispatchers on session shutdown. Without
+      // this, the undici keep-alive sockets survive beyond the session and
+      // leak to api.telegram.org; see openclaw#68128.
+      await this.#transportState.dispose();
     }
   }
 

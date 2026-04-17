@@ -680,4 +680,51 @@ describe("TelegramPollingSession", () => {
     expectTelegramBotTransportSequence(transport1, transport1);
     expect(createTelegramTransport).not.toHaveBeenCalled();
   });
+
+  it("closes the transport once when runUntilAbort exits normally", async () => {
+    const abort = new AbortController();
+    const transport = makeTelegramTransport();
+    createTelegramBotMock.mockReturnValueOnce(makeBot());
+    runMock.mockReturnValueOnce({
+      task: async () => {
+        abort.abort();
+      },
+      stop: vi.fn(async () => undefined),
+      isRunning: () => false,
+    });
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      telegramTransport: transport,
+    });
+
+    await session.runUntilAbort();
+
+    expect(transport.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the stale transport when a rebuild replaces it", async () => {
+    const abort = new AbortController();
+    const recoverableError = new Error("recoverable polling error");
+    const transport1 = makeTelegramTransport();
+    const transport2 = makeTelegramTransport();
+    const createTelegramTransport = vi
+      .fn<() => ReturnType<typeof makeTelegramTransport>>()
+      .mockReturnValueOnce(transport2);
+    createTelegramBotMock.mockReturnValueOnce(makeBot()).mockReturnValueOnce(makeBot());
+    mockRestartAfterPollingError(recoverableError, abort);
+
+    const session = createPollingSessionWithTransportRestart({
+      abortSignal: abort.signal,
+      telegramTransport: transport1,
+      createTelegramTransport,
+    });
+
+    await session.runUntilAbort();
+
+    // Dirty-rebuild closes transport1 (fire-and-forget via #closeTransportAsync).
+    // dispose() closes transport2 since it becomes the held transport after the rebuild.
+    expect(transport1.close).toHaveBeenCalled();
+    expect(transport2.close).toHaveBeenCalled();
+  });
 });
