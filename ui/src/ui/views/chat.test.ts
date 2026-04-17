@@ -1057,6 +1057,55 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("MEDIA:https://example.com/photo.png");
   });
 
+  it("opens only safe assistant image URLs in a hardened new tab", () => {
+    const container = document.createElement("div");
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    const renderAssistantImage = (url: string) =>
+      render(
+        renderChat(
+          createProps({
+            messages: [
+              {
+                role: "assistant",
+                content: [{ type: "image_url", image_url: { url } }],
+                timestamp: Date.now(),
+              },
+            ],
+          }),
+        ),
+        container,
+      );
+
+    try {
+      renderAssistantImage("https://example.com/cat.png");
+      let image = container.querySelector<HTMLImageElement>(".chat-message-image");
+      expect(image).not.toBeNull();
+      image?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(openSpy).toHaveBeenCalledWith(
+        "https://example.com/cat.png",
+        "_blank",
+        "noopener,noreferrer",
+      );
+
+      openSpy.mockClear();
+      renderAssistantImage("javascript:alert(1)");
+      image = container.querySelector<HTMLImageElement>(".chat-message-image");
+      expect(image).not.toBeNull();
+      image?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(openSpy).not.toHaveBeenCalled();
+
+      renderAssistantImage("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' />");
+      image = container.querySelector<HTMLImageElement>(".chat-message-image");
+      expect(image).not.toBeNull();
+      image?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(openSpy).not.toHaveBeenCalled();
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   it("renders verified local assistant attachments through the Control UI media route", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const fetchMock = vi.fn(async (url: string) => {
