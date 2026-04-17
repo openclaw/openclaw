@@ -382,10 +382,25 @@ export async function runClaudeSdkAgent(
       abortController.abort(new Error(`claude-sdk run exceeded timeoutMs=${params.timeoutMs}`));
     }, params.timeoutMs);
   }
-  const mirror = openSessionMirror({
-    primaryPath: params.sessionFile,
-    sdkSessionId: params.sessionId,
-  });
+  // Diagnostic: log the mirror path so we can verify writes are landing
+  // where we expect (post-incident debugging on Windows where users
+  // reported the sidecar file was missing).
+  log.info(
+    `[claude-sdk] opening session mirror runId=${params.runId} primaryPath=${params.sessionFile}`,
+  );
+  let mirror: ReturnType<typeof openSessionMirror>;
+  try {
+    mirror = openSessionMirror({
+      primaryPath: params.sessionFile,
+      sdkSessionId: params.sessionId,
+    });
+    log.info(`[claude-sdk] session mirror opened runId=${params.runId}`);
+  } catch (err) {
+    log.error(
+      `[claude-sdk] FAILED to open session mirror runId=${params.runId} err=${(err as Error).message}`,
+    );
+    throw err;
+  }
 
   const releaseResources = () => {
     if (timeoutHandle) {
