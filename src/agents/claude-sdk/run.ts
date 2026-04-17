@@ -34,6 +34,11 @@ import type { EmbeddedPiRunResult } from "../pi-embedded.js";
 import type { RunEmbeddedPiAgentParams } from "../pi-embedded-runner/run/params.js";
 import type { AgentRuntimeClaudeSdkConfig } from "../../config/types.agents.js";
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  HookCallbackMatcher,
+  HookEvent,
+  HookJSONOutput,
+} from "@anthropic-ai/claude-agent-sdk";
 import {
   resolveSdkCredential,
   rotateOnAuthFailure,
@@ -43,6 +48,10 @@ import { ensureAuthProfileStore } from "../auth-profiles.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { buildOpenClawMcpServer } from "./native-tools-adapter.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
+import { buildSdkHooks } from "./hooks-adapter.js";
+import { loadWorkspaceHookEntries } from "../../hooks/workspace.js";
+import { importFileModule, resolveFunctionModuleExport } from "../../hooks/module-loader.js";
+import type { HookEntry } from "../../hooks/types.js";
 
 const log = createSubsystemLogger("agents/claude-sdk");
 
@@ -100,6 +109,74 @@ function mapThinkBudget(level: RunEmbeddedPiAgentParams["thinkLevel"]): number |
  * check once per run prevents silent drops from looking like adapter
  * bugs later.
  */
+/**
+ * Build the SDK hooks record for this run from OpenClaw's workspace
+ * hook entries. Returns `undefined` when there are no entries — so the
+ * caller can skip setting `hooks` on the SDK options entirely.
+ *
+ * Handler invocation resolves the hook module lazily (per-call) and
+ * calls its exported function with the SDK hook input + entry metadata.
+ * Handlers that throw are swallowed with a warning so one flaky hook
+ * can't kill the run. A stricter policy can land later.
+ */
+async function buildNativeSdkHooks(
+  params: RunEmbeddedPiAgentParams,
+): Promise<Partial<Record<HookEvent, HookCallbackMatcher[]>> | undefined> {
+  let entries: HookEntry[];
+  try {
+    entries = loadWorkspaceHookEntries(params.workspaceDir, {
+      config: params.config,
+    });
+  } catch (err) {
+    log.warn(
+      `[claude-sdk hooks] failed to load workspace hook entries for runId=${params.runId}: ` +
+        (err as Error).message,
+    );
+    return undefined;
+  }
+  if (entries.length === 0) {
+    return undefined;
+  }
+  const record = buildSdkHooks({
+    entries,
+    invoke: async ({ entry, input }): Promise<HookJSONOutput | undefined> => {
+      try {
+        const mod = await importFileModule({ modulePath: entry.hook.handlerPath });
+        const handler = resolveFunctionModuleExport<(args: unknown) => unknown>({
+          mod,
+          exportName: entry.metadata?.export,
+          fallbackExportNames: ["default"],
+        });
+        if (!handler) {
+          log.warn(
+            `[claude-sdk hooks] hook "${entry.hook.name}" has no invokable handler export`,
+          );
+          return { continue: true };
+        }
+        const result = await handler({
+          event: input.hook_event_name,
+          sdkInput: input,
+          hook: entry.hook,
+        });
+        // If the handler returns a well-shaped HookJSONOutput, forward
+        // it; otherwise default to continue.
+        if (result && typeof result === "object" && "continue" in result) {
+          return result as HookJSONOutput;
+        }
+        return { continue: true };
+      } catch (err) {
+        log.warn(
+          `[claude-sdk hooks] hook "${entry.hook.name}" handler threw: ` +
+            (err as Error).message,
+        );
+        return { continue: true };
+      }
+    },
+    warn: (msg) => log.warn(msg),
+  });
+  return Object.keys(record).length > 0 ? record : undefined;
+}
+
 /**
  * Build OpenClaw's native tool inventory and wrap it as a
  * `McpServerConfig` record suitable for `options.mcpServers`. Returns
@@ -189,9 +266,10 @@ function warnIgnoredFields(params: RunEmbeddedPiAgentParams): void {
   if (params.blockReplyChunking) {
     ignored.push("blockReplyChunking");
   }
-  if (params.memoryFlushWritePath) {
-    ignored.push("memoryFlushWritePath");
-  }
+  // memoryFlushWritePath is passed through to createOpenClawCodingTools() by
+  // buildNativeMcpServers, so tools that consume it DO receive it. Only the
+  // post-run memory-flush semantics (handled by the calling layer, not this
+  // adapter) are unsupported — warning there would be confusing, so we don't.
   if (params.inputProvenance) {
     ignored.push("inputProvenance");
   }
@@ -245,12 +323,18 @@ export async function runClaudeSdkAgent(
 
   // Compose an abort controller that fires on either the upstream abort
   // signal OR the timeout, so `timeoutMs` stops being silently ignored.
+  // The listener is named so it can be removed in the cleanup block —
+  // otherwise a session-scoped upstream signal keeps a closure reference
+  // to this abortController for its whole lifetime.
   const abortController = new AbortController();
   const upstream = params.abortSignal;
+  const onUpstreamAbort = upstream
+    ? () => abortController.abort(upstream.reason)
+    : undefined;
   if (upstream?.aborted) {
     abortController.abort(upstream.reason);
-  } else {
-    upstream?.addEventListener("abort", () => abortController.abort(upstream.reason));
+  } else if (upstream && onUpstreamAbort) {
+    upstream.addEventListener("abort", onUpstreamAbort);
   }
   let timeoutHandle: NodeJS.Timeout | undefined;
   if (params.timeoutMs > 0) {
@@ -258,11 +342,21 @@ export async function runClaudeSdkAgent(
       abortController.abort(new Error(`claude-sdk run exceeded timeoutMs=${params.timeoutMs}`));
     }, params.timeoutMs);
   }
-
   const mirror = openSessionMirror({
     primaryPath: params.sessionFile,
     sdkSessionId: params.sessionId,
   });
+
+  const releaseResources = () => {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+      timeoutHandle = undefined;
+    }
+    if (upstream && onUpstreamAbort) {
+      upstream.removeEventListener("abort", onUpstreamAbort);
+    }
+    mirror.close();
+  };
 
   // Emit an AssistantMessageStart event on the first assistant SDK message,
   // then honor onAgentEvent / onPartialReply for subsequent chunks.
@@ -306,6 +400,17 @@ export async function runClaudeSdkAgent(
     return undefined;
   });
 
+  // Load OpenClaw's workspace hook entries and translate them into SDK
+  // `hooks` matchers. Same survival policy as tools: a hook-loading
+  // failure logs but doesn't kill the run.
+  const sdkHooks = await buildNativeSdkHooks(params).catch((err) => {
+    log.warn(
+      `[claude-sdk] hook inventory build failed for runId=${params.runId}: ` +
+        `${(err as Error).message}; hooks will not fire for this run`,
+    );
+    return undefined;
+  });
+
   try {
     const query = sdk.query({
       prompt: params.prompt,
@@ -319,6 +424,7 @@ export async function runClaudeSdkAgent(
         ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
         ...(thinkBudget !== undefined ? { maxThinkingTokens: thinkBudget } : {}),
         ...(nativeMcpServers ? { mcpServers: nativeMcpServers } : {}),
+        ...(sdkHooks ? { hooks: sdkHooks } : {}),
       },
     });
 
@@ -383,26 +489,27 @@ export async function runClaudeSdkAgent(
     }
   } catch (err) {
     aborted = abortController.signal.aborted;
-    if (credential.profileId) {
-      await rotateOnAuthFailure({
-        store,
-        profileId: credential.profileId,
-        error: err,
-        agentDir: params.agentDir,
-        runId: params.runId,
-      });
+    // Wrap rotation bookkeeping in try/finally so a failure inside
+    // `rotateOnAuthFailure` (e.g., auth-store lock contention) doesn't
+    // leave `timeoutHandle` firing or the session-mirror write stream
+    // open for the process lifetime.
+    try {
+      if (credential.profileId) {
+        await rotateOnAuthFailure({
+          store,
+          profileId: credential.profileId,
+          error: err,
+          agentDir: params.agentDir,
+          runId: params.runId,
+        });
+      }
+    } finally {
+      releaseResources();
     }
-    if (timeoutHandle) {
-    clearTimeout(timeoutHandle);
-  }
-    mirror.close();
     throw err;
   }
 
-  if (timeoutHandle) {
-    clearTimeout(timeoutHandle);
-  }
-  mirror.close();
+  releaseResources();
 
   const finalText = collectedText.join("\n").trim();
   const result: EmbeddedPiRunResult = {
