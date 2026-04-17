@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeQaHttpServer } from "./bus-server.js";
+import { closeQaHttpServer } from "../../bus-server.js";
 
 type ResponsesInputItem = Record<string, unknown>;
 
@@ -142,8 +142,8 @@ const QA_REASONING_ONLY_RECOVERY_PROMPT_RE = /reasoning-only continuation qa che
 const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE = /reasoning-only after write safety check/i;
 const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
-const QA_QUIET_STREAMING_PROMPT_RE = /(?:matrix\s+)?quiet streaming qa check/i;
-const QA_BLOCK_STREAMING_PROMPT_RE = /(?:matrix\s+)?block streaming qa check/i;
+const QA_QUIET_STREAMING_PROMPT_RE = /quiet streaming qa check/i;
+const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
 const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
 const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
@@ -538,6 +538,77 @@ function extractLabeledMarkerDirective(text: string, label: string) {
   );
 }
 
+function extractQuotedToolArg(text: string, name: string) {
+  const escapedName = name.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return extractLastCapture(text, new RegExp(`\\b${escapedName}\\s*=\\s*"([^"]+)"`, "i"));
+}
+
+function extractBareToolArg(text: string, name: string) {
+  const escapedName = name.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return extractLastCapture(text, new RegExp(`\\b${escapedName}\\s*=\\s*([^\\s\\\`.,;:!?]+)`, "i"));
+}
+
+function hasDeclaredTool(body: Record<string, unknown>, name: string) {
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  return tools.some((tool) => {
+    if (!tool || typeof tool !== "object") {
+      return false;
+    }
+    const record = tool as Record<string, unknown>;
+    if (record.name === name) {
+      return true;
+    }
+    const nested = record.function;
+    return Boolean(
+      nested && typeof nested === "object" && (nested as { name?: unknown }).name === name,
+    );
+  });
+}
+
+function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> | null {
+  if (!/\bsessions_spawn\b/i.test(text)) {
+    return null;
+  }
+  const task = extractQuotedToolArg(text, "task");
+  if (!task) {
+    return null;
+  }
+  const label = extractQuotedToolArg(text, "label") ?? extractBareToolArg(text, "label");
+  const mode = extractBareToolArg(text, "mode")?.toLowerCase();
+  const runTimeoutSecondsRaw = extractBareToolArg(text, "runTimeoutSeconds");
+  const runTimeoutSeconds =
+    runTimeoutSecondsRaw && /^\d+$/.test(runTimeoutSecondsRaw)
+      ? Number(runTimeoutSecondsRaw)
+      : undefined;
+  return {
+    task,
+    ...(label ? { label } : {}),
+    ...(extractBareToolArg(text, "thread")?.toLowerCase() === "true" ? { thread: true } : {}),
+    ...(mode === "session" || mode === "run" ? { mode } : {}),
+    ...(runTimeoutSeconds !== undefined ? { runTimeoutSeconds } : {}),
+  };
+}
+
+function extractToolErrorForNamedCall(params: {
+  allInputText: string;
+  input: ResponsesInputItem[];
+  name: string;
+  toolJson: Record<string, unknown> | null;
+}) {
+  const error = typeof params.toolJson?.error === "string" ? params.toolJson.error.trim() : "";
+  if (!error) {
+    return undefined;
+  }
+  const namedFunctionCall = params.input.some(
+    (item) => item.type === "function_call" && item.name === params.name,
+  );
+  const namedPromptReference = new RegExp(`\\b${params.name}\\b`, "i").test(params.allInputText);
+  if (namedFunctionCall || namedPromptReference) {
+    return error;
+  }
+  return undefined;
+}
+
 function isHeartbeatPrompt(text: string) {
   const trimmed = text.trim();
   if (!trimmed || /remember this fact/i.test(trimmed)) {
@@ -573,9 +644,18 @@ function buildAssistantText(
   const imageInputCount = countImageInputs(input);
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
+  const sessionsSpawnError = extractToolErrorForNamedCall({
+    allInputText,
+    input,
+    name: "sessions_spawn",
+    toolJson,
+  });
 
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
     return `Protocol note: the QA canary code was ${rememberedFact}.`;
+  }
+  if (sessionsSpawnError) {
+    return `Protocol note: sessions_spawn failed: ${sessionsSpawnError}`;
   }
   if (/remember this fact/i.test(prompt) && exactReplyDirective) {
     return exactReplyDirective;
@@ -867,6 +947,7 @@ async function buildResponsesPayload(
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
   const hasEmptyResponseRetryInstruction = allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE);
+  const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn");
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
   }
@@ -1110,7 +1191,7 @@ async function buildResponsesPayload(
       size: "1024x1024",
     });
   }
-  if (/subagent fanout synthesis check/i.test(prompt)) {
+  if (canCallSessionsSpawn && /subagent fanout synthesis check/i.test(prompt)) {
     if (!toolOutput && scenarioState.subagentFanoutPhase === 0) {
       scenarioState.subagentFanoutPhase = 1;
       return buildToolCallEventsWithArgs("sessions_spawn", {
@@ -1127,6 +1208,10 @@ async function buildResponsesPayload(
         thread: false,
       });
     }
+  }
+  const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(allInputText);
+  if (canCallSessionsSpawn && explicitSessionsSpawnArgs && !toolOutput) {
+    return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
   }
   if (/tool continuity check/i.test(prompt) && !toolOutput) {
     return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
@@ -1155,7 +1240,11 @@ async function buildResponsesPayload(
       });
     }
   }
-  if ((/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt)) && !toolOutput) {
+  if (
+    canCallSessionsSpawn &&
+    (/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt)) &&
+    !toolOutput
+  ) {
     return buildToolCallEventsWithArgs("sessions_spawn", {
       task: "Inspect the QA workspace and return one concise protocol note.",
       label: "qa-sidecar",
@@ -1547,12 +1636,13 @@ async function buildMessagesPayload(
   const normalizedModel =
     typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-6";
   // Dispatch through the same scenario logic the /v1/responses route uses.
-  // The mock dispatcher only reads `body.input`, `body.model`, and
-  // `body.stream`, so a synthetic shim body is sufficient.
+  // Preserve declared tools so route-specific adapters mirror what the
+  // real provider request made available to the model.
   const dispatchBody: Record<string, unknown> = {
     input,
     model: normalizedModel,
     stream: false,
+    ...(Array.isArray(body.tools) ? { tools: body.tools } : {}),
   };
   const events = await buildResponsesPayload(dispatchBody, scenarioState);
   const extracted = extractFinalAssistantOutputFromEvents(events);

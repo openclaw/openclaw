@@ -151,6 +151,22 @@ The baseline list should stay broad enough to cover:
 - repo-reading and docs-reading
 - one small build task such as Lobster Invaders
 
+## Provider mock lanes
+
+`qa suite` has two local provider mock lanes:
+
+- `mock-openai` is the scenario-aware OpenClaw mock. It remains the default
+  deterministic mock lane for repo-backed QA and parity gates.
+- `aimock` starts an AIMock-backed provider server for experimental protocol,
+  fixture, record/replay, and chaos coverage. It is additive and does not
+  replace the `mock-openai` scenario dispatcher.
+
+Provider-lane implementation lives under `extensions/qa-lab/src/providers/`.
+Each provider owns its defaults, local server startup, gateway model config,
+auth-profile staging needs, and live/mock capability flags. Shared suite and
+gateway code should route through the provider registry instead of branching on
+provider names.
+
 ## Transport adapters
 
 `qa-lab` owns a generic transport seam for markdown QA scenarios.
