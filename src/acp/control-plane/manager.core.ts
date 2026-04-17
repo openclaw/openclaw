@@ -5,6 +5,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { summarizeDeliveryReceipts } from "../../infra/outbound/delivery-receipts.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
@@ -231,6 +232,8 @@ export class AcpSessionManager {
         [...this.errorCountsByCode.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
       ),
       announce: getSubagentAnnounceCounters(),
+      // Phase 9 Discord Surface Overhaul: aggregate delivery-receipt counts.
+      receipts: summarizeDeliveryReceipts(),
     };
   }
 

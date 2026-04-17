@@ -36,6 +36,10 @@ const OWNER_ONLY_TOOL_APPROVAL_CLASS_FALLBACKS = new Map<string, OwnerOnlyToolAp
   ["cron", "control_plane"],
   ["gateway", "control_plane"],
   ["nodes", "exec_capable"],
+  // Phase 9 Discord Surface Overhaul: operator escape-hatch. Control-plane
+  // approval gate matches its risk profile (pushes into bound surfaces on
+  // behalf of the operator).
+  ["resume_for_task", "control_plane"],
 ]);
 
 export function resolveOwnerOnlyToolApprovalClass(

@@ -1098,6 +1098,29 @@
         "message"
       ]
     },
+    "acp_receipts": {
+      "emoji": "📜",
+      "title": "ACP Receipts",
+      "detailKeys": [
+        "sessionKey",
+        "limit"
+      ]
+    },
+    "emit_final_reply": {
+      "emoji": "📤",
+      "title": "Emit Final Reply",
+      "detailKeys": [
+        "text"
+      ]
+    },
+    "resume_for_task": {
+      "emoji": "▶️",
+      "title": "Resume For Task",
+      "detailKeys": [
+        "taskId",
+        "message"
+      ]
+    },
     "tts": {
       "emoji": "🔊",
       "title": "TTS",

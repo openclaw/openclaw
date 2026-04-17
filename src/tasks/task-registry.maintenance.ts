@@ -119,7 +119,7 @@ function hasActiveCliRun(task: TaskRecord): boolean {
   return false;
 }
 
-function hasBackingSession(task: TaskRecord): boolean {
+export function hasBackingSession(task: TaskRecord): boolean {
   if (task.runtime === "cron") {
     const jobId = task.sourceId?.trim();
     return jobId ? taskRegistryMaintenanceRuntime.isCronJobActive(jobId) : false;

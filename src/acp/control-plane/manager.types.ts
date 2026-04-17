@@ -121,6 +121,18 @@ export type AcpManagerObservabilitySnapshot = {
     budgetExhaustedTotal: number;
     lastTimeoutAt?: number;
   };
+  /**
+   * Phase 9 Discord Surface Overhaul: aggregate delivery-receipt counts. Lets
+   * `/acp doctor` (and operator dashboards) see how many outbound deliveries
+   * were made and how many were suppressed, without scraping logs.
+   */
+  receipts?: {
+    totalRecorded: number;
+    totalDelivered: number;
+    totalSuppressed: number;
+    sessionsTracked: number;
+    lastRecordedAt?: number;
+  };
 };
 
 export type AcpStartupIdentityReconcileResult = {

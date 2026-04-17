@@ -33,4 +33,7 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "nodes",
   // Interactive setup — requires terminal QR scan, hangs on HTTP
   "whatsapp_login",
+  // Operator escape-hatch — pushes into bound surfaces on behalf of operator.
+  // Not safe on a non-interactive HTTP surface without extra guards.
+  "resume_for_task",
 ] as const;

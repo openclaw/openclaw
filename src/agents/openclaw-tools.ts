@@ -13,10 +13,12 @@ import {
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
+import { createAcpReceiptsTool } from "./tools/acp-receipts-tool.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
+import { createEmitFinalReplyTool } from "./tools/emit-final-reply-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
@@ -24,6 +26,7 @@ import { createMessageTool } from "./tools/message-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
+import { createResumeForTaskTool } from "./tools/resume-for-task-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -300,6 +303,27 @@ export function createOpenClawTools(
       agentSessionKey: options?.agentSessionKey,
       config: resolvedConfig,
       sandboxed: options?.sandboxed,
+    }),
+    // Phase 9 Discord Surface Overhaul: agent-native delivery introspection +
+    // explicit final-reply + operator resume escape hatch. Placed next to the
+    // read-only session-scoped tools so the visibility policy is consistent.
+    createAcpReceiptsTool({
+      agentSessionKey: options?.agentSessionKey,
+      sandboxed: options?.sandboxed,
+      config: resolvedConfig,
+    }),
+    createEmitFinalReplyTool({
+      agentSessionKey: options?.agentSessionKey,
+      agentChannel: options?.agentChannel,
+      agentAccountId: options?.agentAccountId,
+      agentTo: options?.agentTo,
+      agentThreadId: options?.agentThreadId,
+      sandboxed: options?.sandboxed,
+      config: resolvedConfig,
+    }),
+    createResumeForTaskTool({
+      agentSessionKey: options?.agentSessionKey,
+      config: resolvedConfig,
     }),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];
