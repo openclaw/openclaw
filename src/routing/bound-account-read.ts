@@ -56,8 +56,25 @@ function peerKindMatches(a: ChatType, b: ChatType): boolean {
   if (a === b) {
     return true;
   }
-  const pair = new Set([a, b]);
-  return pair.has("group") && pair.has("channel");
+  return (a === "group" && b === "channel") || (a === "channel" && b === "group");
+}
+
+function buildExactPeerIdSet(params: {
+  peerId?: string;
+  exactPeerIdAliases?: string[];
+}): Set<string> {
+  const exactPeerIds = new Set<string>();
+  const peerId = params.peerId?.trim();
+  if (peerId) {
+    exactPeerIds.add(peerId);
+  }
+  for (const alias of params.exactPeerIdAliases ?? []) {
+    const trimmed = alias.trim();
+    if (trimmed) {
+      exactPeerIds.add(trimmed);
+    }
+  }
+  return exactPeerIds;
 }
 
 export function resolveFirstBoundAccountId(params: {
@@ -65,7 +82,7 @@ export function resolveFirstBoundAccountId(params: {
   channelId: string;
   agentId: string;
   peerId?: string;
-  peerIdAliases?: string[];
+  exactPeerIdAliases?: string[];
   peerKind?: ChatType;
 }): string | undefined {
   const normalizedChannel = normalizeBindingChannelId(params.channelId);
@@ -74,12 +91,10 @@ export function resolveFirstBoundAccountId(params: {
   }
   const normalizedAgentId = normalizeAgentId(params.agentId);
   const normalizedPeerId = params.peerId?.trim() || undefined;
-  const exactPeerIds = new Set(
-    [
-      normalizedPeerId,
-      ...(params.peerIdAliases ?? []).map((value) => value.trim()).filter(Boolean),
-    ].filter((value): value is string => Boolean(value)),
-  );
+  const exactPeerIds = buildExactPeerIdSet({
+    peerId: normalizedPeerId,
+    exactPeerIdAliases: params.exactPeerIdAliases,
+  });
   const normalizedPeerKind = normalizeChatType(params.peerKind) ?? undefined;
   let wildcardPeerMatch: string | undefined;
   let channelOnlyFallback: string | undefined;

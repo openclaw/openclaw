@@ -3,7 +3,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 
 describe("resolveRequesterOriginForChild", () => {
-  it("keeps canonical prefixed peer ids eligible for exact binding lookup", () => {
+  it.each([
+    ["channel:conversation-a", "channel:conversation-a"],
+    ["thread:conversation-a/thread-a", "thread:conversation-a/thread-a"],
+  ])("keeps canonical prefixed peer id %s eligible for exact binding lookup", (to, peerId) => {
     const cfg = {
       bindings: [
         {
@@ -13,7 +16,7 @@ describe("resolveRequesterOriginForChild", () => {
             channel: "qa-channel",
             peer: {
               kind: "channel",
-              id: "channel:conversation-a",
+              id: peerId,
             },
             accountId: "bot-alpha-qa",
           },
@@ -28,12 +31,12 @@ describe("resolveRequesterOriginForChild", () => {
         requesterAgentId: "main",
         requesterChannel: "qa-channel",
         requesterAccountId: "bot-beta",
-        requesterTo: "channel:conversation-a",
+        requesterTo: to,
       }),
     ).toMatchObject({
       channel: "qa-channel",
       accountId: "bot-alpha-qa",
-      to: "channel:conversation-a",
+      to,
     });
   });
 });

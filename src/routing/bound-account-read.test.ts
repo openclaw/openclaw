@@ -340,7 +340,7 @@ describe("resolveFirstBoundAccountId", () => {
         channelId: "qa-channel",
         agentId: "bot-alpha",
         peerId: "conversation-a",
-        peerIdAliases: ["channel:conversation-a"],
+        exactPeerIdAliases: ["channel:conversation-a"],
         peerKind: "channel",
       }),
     ).toBe("bot-alpha-conversation");

@@ -4,10 +4,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveFirstBoundAccountId } from "../routing/bound-account-read.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 
-// Delivery targets carry a channel-side prefix (e.g. Matrix uses
-// `room:<roomId>`; LINE uses `line:group:<id>`), but route bindings store raw
-// peer ids on `match.peer.id`. Peel namespace and kind prefixes so the raw peer
-// id surfaces for binding lookup.
+// Delivery targets often carry a transport wrapper (e.g. Matrix `room:<id>` or
+// LINE `line:group:<id>`), while route bindings commonly store raw peer ids on
+// `match.peer.id`. Peel wrappers for those lookups, and separately pass the
+// original target as an exact-match alias for channels whose canonical peer ids
+// intentionally include prefixes such as `channel:` or `thread:`.
 const KIND_PREFIX_TO_CHAT_TYPE: Readonly<Record<string, ChatType>> = {
   "room:": "channel",
   "channel:": "channel",
@@ -22,10 +23,7 @@ const KIND_PREFIX_TO_CHAT_TYPE: Readonly<Record<string, ChatType>> = {
   "pm:": "direct",
 };
 
-// Matches any `<alpha-token>:` prefix. Real-world peer ids (Matrix `!`/`@`,
-// IRC `#`, Slack/Discord/LINE alphanumerics, numeric Telegram/WhatsApp, or
-// email-style `user@server`) never start with a lowercase-alpha token followed
-// by `:`, so this peels prefixes without risking the raw id itself.
+// Matches one leading `<alpha-token>:` wrapper at a time.
 const GENERIC_PREFIX_PATTERN = /^[a-z][a-z0-9_-]*:/i;
 
 export function extractRequesterPeer(
@@ -92,7 +90,7 @@ export function resolveRequesterOriginForChild(params: {
           channelId: params.requesterChannel,
           agentId: params.targetAgentId,
           peerId: normalizedPeerId,
-          peerIdAliases:
+          exactPeerIdAliases:
             rawPeerIdAlias && rawPeerIdAlias !== normalizedPeerId ? [rawPeerIdAlias] : undefined,
           peerKind: inferredPeerKind,
         })
