@@ -247,6 +247,8 @@ describe("handleChatWheelIntent", () => {
     const container = document.createElement("div");
     const nestedScrollable = document.createElement("div");
     container.appendChild(nestedScrollable);
+    Object.defineProperty(container, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(container, "clientHeight", { value: 400, configurable: true });
     Object.defineProperty(nestedScrollable, "scrollHeight", { value: 600, configurable: true });
     Object.defineProperty(nestedScrollable, "clientHeight", { value: 300, configurable: true });
 
@@ -260,6 +262,40 @@ describe("handleChatWheelIntent", () => {
     expect(host.chatFollowLocked).toBe(false);
     expect(host.chatScrollFrame).toBe(99);
     expect(host.chatScrollTimeout).not.toBeNull();
+  });
+
+  it("does not ignore wheel intent for a clipped descendant that cannot scroll vertically", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatScrollFrame = 99;
+    host.chatScrollTimeout = window.setTimeout(() => {}, 1000);
+
+    const container = document.createElement("div");
+    const clippedBlock = document.createElement("div");
+    container.appendChild(clippedBlock);
+    Object.defineProperty(container, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(container, "clientHeight", { value: 400, configurable: true });
+    Object.defineProperty(clippedBlock, "scrollHeight", { value: 600, configurable: true });
+    Object.defineProperty(clippedBlock, "clientHeight", { value: 300, configurable: true });
+
+    vi.spyOn(window, "getComputedStyle").mockImplementation(
+      (element) =>
+        ({ overflowY: element === clippedBlock ? "hidden" : "auto" }) as CSSStyleDeclaration,
+    );
+
+    handleChatWheelIntent(host, {
+      deltaY: -120,
+      currentTarget: container,
+      target: clippedBlock,
+    } as unknown as WheelEvent);
+
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(true);
+    expect(host.chatScrollFrame).toBeNull();
+    expect(host.chatScrollTimeout).toBeNull();
   });
 });
 
@@ -370,7 +406,9 @@ describe("scheduleChatScroll", () => {
     expect(container.scrollTop).toBe(originalScrollTop);
     expect(host.chatNewMessagesBelow).toBe(true);
   });
+});
 
+describe("handleChatWheelIntent + handleChatScroll interaction", () => {
   it("preserves the wheel-intent lock for small upward deltas that still land within the bottom threshold", () => {
     const { host } = createScrollHost({
       scrollHeight: 2000,

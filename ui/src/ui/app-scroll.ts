@@ -36,7 +36,12 @@ function cancelPendingChatScroll(host: ScrollHost) {
 function hasNestedScrollableAncestor(target: EventTarget | null, container: HTMLElement) {
   let node = target instanceof HTMLElement ? target : null;
   while (node && node !== container) {
-    if (node.scrollHeight - node.clientHeight > 1) {
+    const overflowY = getComputedStyle(node).overflowY;
+    const hasVerticalScrollRange = node.scrollHeight - node.clientHeight > 1;
+    const canScrollVertically =
+      (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
+      hasVerticalScrollRange;
+    if (canScrollVertically) {
       return true;
     }
     node = node.parentElement;
