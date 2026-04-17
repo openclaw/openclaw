@@ -82,14 +82,14 @@ describe("extractCodeBlocks", () => {
 
 \`\`\`javascript
 const x = 1;
-console.log(x);
+printValue(x);
 \`\`\`
 
 And more text.`;
     const withLanguageResult = extractCodeBlocks(withLanguage);
     expect(withLanguageResult.codeBlocks).toHaveLength(1);
     expect(withLanguageResult.codeBlocks[0].language).toBe("javascript");
-    expect(withLanguageResult.codeBlocks[0].code).toBe("const x = 1;\nconsole.log(x);");
+    expect(withLanguageResult.codeBlocks[0].code).toBe("const x = 1;\nprintValue(x);");
     expect(withLanguageResult.textWithoutCode).toContain("Here is some code:");
     expect(withLanguageResult.textWithoutCode).toContain("And more text.");
     expect(withLanguageResult.textWithoutCode).not.toContain("```");
@@ -270,7 +270,7 @@ describe("processLineMessage", () => {
     const text = `Check this code:
 
 \`\`\`js
-console.log("hi");
+emit("hi");
 \`\`\`
 
 That's it.`;
