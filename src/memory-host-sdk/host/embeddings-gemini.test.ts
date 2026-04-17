@@ -35,6 +35,21 @@ vi.mock("../../agents/model-auth.js", () => {
   };
 });
 
+vi.mock("../../agents/api-key-rotation.js", () => ({
+  collectProviderApiKeysForExecution: (params: { primaryApiKey?: string }) =>
+    params.primaryApiKey ? [params.primaryApiKey] : [],
+  executeWithApiKeyRotation: async <T>(params: {
+    apiKeys: string[];
+    execute: (apiKey: string) => Promise<T>;
+  }) => {
+    const apiKey = params.apiKeys[0];
+    if (!apiKey) {
+      throw new Error('No API keys configured for provider "google".');
+    }
+    return await params.execute(apiKey);
+  },
+}));
+
 beforeEach(() => {
   vi.useRealTimers();
   vi.doUnmock("undici");

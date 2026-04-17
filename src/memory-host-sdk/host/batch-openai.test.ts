@@ -38,18 +38,23 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("./batch-embedding-common.js", async () => {
-  const actual = await vi.importActual<typeof import("./batch-embedding-common.js")>(
-    "./batch-embedding-common.js",
-  );
-  return {
-    ...actual,
-    uploadBatchJsonlFile: mocks.uploadBatchJsonlFile,
-    postJsonWithRetry: mocks.postJsonWithRetry,
-    resolveCompletedBatchResult: mocks.resolveCompletedBatchResult,
-    withRemoteHttpResponse: mocks.withRemoteHttpResponse,
-  };
-});
+vi.mock("./batch-upload.js", () => ({
+  uploadBatchJsonlFile: mocks.uploadBatchJsonlFile,
+}));
+
+vi.mock("./batch-http.js", () => ({
+  postJsonWithRetry: mocks.postJsonWithRetry,
+}));
+
+vi.mock("./batch-status.js", () => ({
+  resolveBatchCompletionFromStatus: vi.fn(),
+  resolveCompletedBatchResult: mocks.resolveCompletedBatchResult,
+  throwIfBatchTerminalFailure: vi.fn(),
+}));
+
+vi.mock("./remote-http.js", () => ({
+  withRemoteHttpResponse: mocks.withRemoteHttpResponse,
+}));
 
 describe("runOpenAiEmbeddingBatches", () => {
   beforeEach(() => {
