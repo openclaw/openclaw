@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { __testing } from "../test-api.js";
 import { createExaWebSearchProvider as createContractExaWebSearchProvider } from "../web-search-contract-api.js";
-import { __testing, createExaWebSearchProvider } from "./exa-web-search-provider.js";
+import { createExaWebSearchProvider } from "./exa-web-search-provider.js";
 
 describe("exa web search provider", () => {
   it("exposes the expected metadata and selection wiring", () => {
