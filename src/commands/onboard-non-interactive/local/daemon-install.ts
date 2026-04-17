@@ -8,6 +8,24 @@ import { resolveGatewayInstallToken } from "../../gateway-install-token.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 import { ensureSystemdUserLingerNonInteractive } from "../../systemd-linger.js";
 
+/**
+ * Parses an array of "KEY=VALUE" strings (from --daemon-env) into a plain
+ * object suitable for merging into the systemd unit environment dict.
+ * Entries that do not contain "=" are silently ignored.
+ */
+function parseDaemonEnvEntries(entries: string[] | undefined): Record<string, string> {
+  if (!entries || entries.length === 0) return {};
+  const result: Record<string, string> = {};
+  for (const entry of entries) {
+    const eq = entry.indexOf("=");
+    if (eq === -1) continue;
+    const key = entry.slice(0, eq).trim();
+    const value = entry.slice(eq + 1);
+    if (key) result[key] = value;
+  }
+  return result;
+}
+
 export async function installGatewayDaemonNonInteractive(params: {
   nextConfig: OpenClawConfig;
   opts: OnboardOptions;
@@ -69,13 +87,18 @@ export async function installGatewayDaemonNonInteractive(params: {
     warn: (message) => runtime.log(message),
     config: params.nextConfig,
   });
+
+  // Merge any extra --daemon-env KEY=VALUE entries into the environment dict.
+  const extraEnv = parseDaemonEnvEntries(opts.daemonEnv);
+  const mergedEnvironment = { ...environment, ...extraEnv };
+
   try {
     await service.install({
       env: process.env,
       stdout: process.stdout,
       programArguments,
       workingDirectory,
-      environment,
+      environment: mergedEnvironment,
     });
   } catch (err) {
     runtime.error(`Gateway service install failed: ${String(err)}`);

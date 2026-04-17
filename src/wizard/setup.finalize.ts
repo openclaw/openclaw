@@ -49,6 +49,23 @@ type FinalizeOnboardingOptions = {
   runtime: RuntimeEnv;
 };
 
+/**
+ * Parses an array of "KEY=VALUE" strings (from --daemon-env) into a plain
+ * object suitable for merging into the systemd unit environment dict.
+ */
+function parseDaemonEnvEntries(entries: string[] | undefined): Record<string, string> {
+  if (!entries || entries.length === 0) return {};
+  const result: Record<string, string> = {};
+  for (const entry of entries) {
+    const eq = entry.indexOf("=");
+    if (eq === -1) continue;
+    const key = entry.slice(0, eq).trim();
+    const value = entry.slice(eq + 1);
+    if (key) result[key] = value;
+  }
+  return result;
+}
+
 export async function finalizeSetupWizard(
   options: FinalizeOnboardingOptions,
 ): Promise<{ launchedTui: boolean }> {
@@ -204,13 +221,17 @@ export async function finalizeSetupWizard(
             },
           );
 
+          // Merge any extra --daemon-env KEY=VALUE entries into the environment dict.
+          const extraEnv = parseDaemonEnvEntries(opts.daemonEnv);
+          const mergedEnvironment = { ...environment, ...extraEnv };
+
           progress.update("Installing Gateway service…");
           await service.install({
             env: process.env,
             stdout: process.stdout,
             programArguments,
             workingDirectory,
-            environment,
+            environment: mergedEnvironment,
           });
         }
       } catch (err) {
