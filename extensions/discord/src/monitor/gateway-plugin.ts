@@ -20,6 +20,8 @@ import { validateDiscordProxyUrl } from "../proxy-fetch.js";
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
 const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
 const DISCORD_GATEWAY_INFO_TIMEOUT_MS = 10_000;
+const DEFAULT_RECONNECT_BASE_DELAY_MS = 1_000;
+const MAX_RECONNECT_JITTER_MS = 250;
 
 type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
 type DiscordGatewayFetchInit = Record<string, unknown> & {
@@ -357,7 +359,18 @@ function createGatewayPlugin(params: {
   return new SafeGatewayPlugin();
 }
 
+// Carbon uses reconnect.baseDelay as the exponential backoff base, so keep the
+// default baseline and add only a small deterministic jitter per account.
+function reconnectBaseDelayForAccount(accountId: string): number {
+  let hash = 0;
+  for (let i = 0; i < accountId.length; i++) {
+    hash = (hash * 31 + accountId.charCodeAt(i)) >>> 0;
+  }
+  return DEFAULT_RECONNECT_BASE_DELAY_MS + (hash % (MAX_RECONNECT_JITTER_MS + 1));
+}
+
 export function createDiscordGatewayPlugin(params: {
+  accountId?: string;
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
   __testing?: {
@@ -374,8 +387,11 @@ export function createDiscordGatewayPlugin(params: {
   const intents = resolveDiscordGatewayIntents(params.discordConfig?.intents);
   const proxy = resolveEffectiveDebugProxyUrl(params.discordConfig?.proxy);
   const debugProxySettings = resolveDebugProxySettings();
-  const options = {
-    reconnect: { maxAttempts: 50 },
+  const options: carbonGateway.GatewayPluginOptions = {
+    reconnect: {
+      maxAttempts: 50,
+      ...(params.accountId ? { baseDelay: reconnectBaseDelayForAccount(params.accountId) } : {}),
+    },
     intents,
     autoInteractions: true,
   };
