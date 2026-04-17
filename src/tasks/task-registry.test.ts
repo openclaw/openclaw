@@ -277,6 +277,29 @@ describe("task-registry", () => {
     });
   });
 
+  it("does not create timestamp skew when startedAt is already known", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-04-03T16:20:00.000Z"));
+
+      const task = createTaskRecord({
+        runtime: "cron",
+        ownerKey: "",
+        scopeKind: "system",
+        runId: "run-known-start",
+        task: "Health-check",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: Date.now() - 9,
+      });
+
+      expect(task.createdAt).toBe(task.startedAt);
+      expect(task.startedAt).toBeDefined();
+    });
+  });
+
   it("ignores late agent events for operator-cancelled tasks", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

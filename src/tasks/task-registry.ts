@@ -1438,6 +1438,7 @@ export function createTaskRecord(params: {
     return mergeExistingTaskForCreate(existing, params);
   }
   const now = Date.now();
+  const createdAt = typeof params.startedAt === "number" ? Math.min(now, params.startedAt) : now;
   const taskId = crypto.randomUUID();
   const status = normalizeTaskStatus(params.status);
   const deliveryStatus =
@@ -1471,7 +1472,7 @@ export function createTaskRecord(params: {
     status,
     deliveryStatus,
     notifyPolicy,
-    createdAt: now,
+    createdAt,
     startedAt: params.startedAt,
     lastEventAt,
     cleanupAfter: params.cleanupAfter,
