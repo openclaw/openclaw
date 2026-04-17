@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { listAgentHarnessIds } from "../agents/harness/registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { getContextEngineFactory, listContextEngineIds } from "../context-engine/registry.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -14,6 +15,10 @@ import { withEnv } from "../test-utils/env.js";
 import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createHookRunner } from "./hooks.js";
+import {
+  clearPluginInteractiveHandlers,
+  resolvePluginInteractiveNamespaceMatch,
+} from "./interactive-registry.js";
 import {
   __testing,
   clearPluginLoaderCache,
@@ -1770,7 +1775,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     clearInternalHooks();
   });
 
-  it("rolls back global hook and command side effects when registration fails", async () => {
+  it("rolls back global side effects when registration fails", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "failing-side-effects",
@@ -1790,6 +1795,16 @@ module.exports = { id: "throws-after-import", register() {} };`,
             description: "Fail me",
             handler: async () => ({ text: "nope" }),
           });
+          api.registerInteractiveHandler({
+            channel: "slack",
+            namespace: "failme",
+            handle: async () => ({ handled: true }),
+          });
+          api.registerContextEngine("failme-context", () => ({
+            info: { id: "failme-context", name: "Failme Context" },
+            ingest: async () => {},
+            assemble: async () => ({ messages: [] }),
+          }));
           throw new Error("boom");
         },
       };`,
@@ -1797,6 +1812,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     clearInternalHooks();
     clearPluginCommands();
+    clearPluginInteractiveHandlers();
 
     const registry = loadOpenClawPlugins({
       cache: false,
@@ -1815,6 +1831,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
     );
     expect(getRegisteredEventKeys()).toEqual([]);
     expect(getPluginCommandSpecs()).toEqual([]);
+    expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
+    expect(getContextEngineFactory("failme-context")).toBeUndefined();
+    expect(listContextEngineIds()).not.toContain("failme-context");
 
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
     await triggerInternalHook(event);
@@ -1822,6 +1841,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     clearInternalHooks();
     clearPluginCommands();
+    clearPluginInteractiveHandlers();
   });
 
   it("can scope bundled provider loads to deepseek without hanging", () => {
