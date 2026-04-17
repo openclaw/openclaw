@@ -38,7 +38,7 @@ function resolveInstallerVersionCases(params: {
     "bash",
     [
       "-c",
-      `source "${installerPath}" >/dev/null 2>&1
+      `${versionHelperSource}
 for openclaw_bin in "\${@:3}"; do
   OPENCLAW_BIN="$openclaw_bin"
   resolve_openclaw_version
