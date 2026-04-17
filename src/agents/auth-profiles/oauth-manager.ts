@@ -334,6 +334,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       if (
         mainCred?.type === "oauth" &&
         mainCred.provider === params.credential.provider &&
+        hasUsableOAuthCredential(mainCred) &&
         Number.isFinite(mainCred.expires) &&
         (!Number.isFinite(params.credential.expires) ||
           mainCred.expires > params.credential.expires) &&
@@ -651,13 +652,18 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             credential: recovered,
           };
         }
-        const retried = await refreshOAuthTokenWithLock({
-          profileId: params.profileId,
-          provider: params.credential.provider,
-          agentDir: params.agentDir,
-        });
-        if (retried) {
-          return retried;
+        try {
+          const retried = await refreshOAuthTokenWithLock({
+            profileId: params.profileId,
+            provider: params.credential.provider,
+            agentDir: params.agentDir,
+          });
+          if (retried) {
+            return retried;
+          }
+        } catch {
+          // Retry failed too; keep flowing through the main-store fallback
+          // and final wrapped error path below.
         }
       }
       if (params.agentDir) {
