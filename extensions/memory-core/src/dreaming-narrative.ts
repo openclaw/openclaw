@@ -932,9 +932,14 @@ export async function generateAndAppendDreamNarrative(params: {
     try {
       await params.subagent.deleteSession({ sessionKey });
     } catch (cleanupErr) {
-      params.logger.warn(
-        `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,
-      );
+      // operator.admin scope is expected to be absent in gateway-client cron contexts —
+      // suppress the warning so the log is not polluted by a known harmless condition
+      const msg = formatErrorMessage(cleanupErr);
+      if (!msg.includes("operator.admin")) {
+        params.logger.warn(
+          `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${msg}`,
+        );
+      }
     }
 
     await scrubDreamingNarrativeArtifacts(params.logger).catch((scrubErr: unknown) => {
