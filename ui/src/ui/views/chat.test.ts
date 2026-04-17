@@ -3,9 +3,13 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { resetAssistantAttachmentAvailabilityCacheForTest } from "../chat/grouped-render.ts";
+import {
+  renderMessageGroup,
+  resetAssistantAttachmentAvailabilityCacheForTest,
+} from "../chat/grouped-render.ts";
 import { normalizeMessage } from "../chat/message-normalizer.ts";
 import type { SessionsListResult } from "../types.ts";
+import type { MessageGroup } from "../types/chat-types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
 
 vi.mock("./markdown-sidebar.ts", async () => {
@@ -80,6 +84,39 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onAgentChange: () => undefined,
     ...overrides,
   };
+}
+
+type RenderMessageGroupOptions = Parameters<typeof renderMessageGroup>[1];
+
+function renderAssistantMessage(
+  container: HTMLElement,
+  message: unknown,
+  opts: Partial<RenderMessageGroupOptions> = {},
+) {
+  const timestamp =
+    typeof message === "object" &&
+    message !== null &&
+    typeof (message as { timestamp?: unknown }).timestamp === "number"
+      ? (message as { timestamp: number }).timestamp
+      : Date.now();
+  const group: MessageGroup = {
+    kind: "group",
+    key: "assistant-group",
+    role: "assistant",
+    messages: [{ key: "assistant-message", message }],
+    timestamp,
+    isStreaming: false,
+  };
+  render(
+    renderMessageGroup(group, {
+      showReasoning: true,
+      showToolCalls: true,
+      assistantName: "OpenClaw",
+      assistantAvatar: null,
+      ...opts,
+    }),
+    container,
+  );
 }
 
 function clearDeleteConfirmSkip() {
@@ -864,22 +901,16 @@ describe("chat view", () => {
 
   it("renders assistant MEDIA attachments, voice-note badge, and reply pill", () => {
     const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          showToolCalls: false,
-          messages: [
-            {
-              id: "assistant-media-inline",
-              role: "assistant",
-              content:
-                "[[reply_to_current]]Here is the image.\nMEDIA:https://example.com/photo.png\nMEDIA:https://example.com/voice.ogg\n[[audio_as_voice]]",
-              timestamp: Date.now(),
-            },
-          ],
-        }),
-      ),
+    renderAssistantMessage(
       container,
+      {
+        id: "assistant-media-inline",
+        role: "assistant",
+        content:
+          "[[reply_to_current]]Here is the image.\nMEDIA:https://example.com/photo.png\nMEDIA:https://example.com/voice.ogg\n[[audio_as_voice]]",
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false },
     );
 
     expect(container.querySelector(".chat-reply-pill")?.textContent).toContain(
@@ -900,20 +931,11 @@ describe("chat view", () => {
     const container = document.createElement("div");
     const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
     const renderAssistantImage = (url: string) =>
-      render(
-        renderChat(
-          createProps({
-            messages: [
-              {
-                role: "assistant",
-                content: [{ type: "image_url", image_url: { url } }],
-                timestamp: Date.now(),
-              },
-            ],
-          }),
-        ),
-        container,
-      );
+      renderAssistantMessage(container, {
+        role: "assistant",
+        content: [{ type: "image_url", image_url: { url } }],
+        timestamp: Date.now(),
+      });
 
     try {
       renderAssistantImage("https://example.com/cat.png");
@@ -958,27 +980,26 @@ describe("chat view", () => {
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const container = document.createElement("div");
-    const template = () =>
-      renderChat(
-        createProps({
+    const renderMessage = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-local-media-inline",
+          role: "assistant",
+          content:
+            "Local image\nMEDIA:/tmp/openclaw/test image.png\nMEDIA:/tmp/openclaw/test-doc.pdf",
+          timestamp: Date.now(),
+        },
+        {
           showToolCalls: false,
           basePath: "/openclaw",
           assistantAttachmentAuthToken: "session-token",
           localMediaPreviewRoots: ["/tmp/openclaw"],
-          onRequestUpdate: () => render(template(), container),
-          messages: [
-            {
-              id: "assistant-local-media-inline",
-              role: "assistant",
-              content:
-                "Local image\nMEDIA:/tmp/openclaw/test image.png\nMEDIA:/tmp/openclaw/test-doc.pdf",
-              timestamp: Date.now(),
-            },
-          ],
-        }),
+          onRequestUpdate: renderMessage,
+        },
       );
 
-    render(template(), container);
+    renderMessage();
     expect(container.textContent).toContain("Checking...");
     await flushAssistantAttachmentAvailabilityChecks();
 
@@ -1016,25 +1037,21 @@ describe("chat view", () => {
     const container = document.createElement("div");
 
     const renderWithToken = (token: string | null) =>
-      render(
-        renderChat(
-          createProps({
-            showToolCalls: false,
-            basePath: "/openclaw",
-            assistantAttachmentAuthToken: token,
-            localMediaPreviewRoots: ["/tmp/openclaw"],
-            onRequestUpdate: () => renderWithToken(token),
-            messages: [
-              {
-                id: "assistant-local-media-auth-refresh",
-                role: "assistant",
-                content: "Local image\nMEDIA:/tmp/openclaw/test image.png",
-                timestamp: Date.now(),
-              },
-            ],
-          }),
-        ),
+      renderAssistantMessage(
         container,
+        {
+          id: "assistant-local-media-auth-refresh",
+          role: "assistant",
+          content: "Local image\nMEDIA:/tmp/openclaw/test image.png",
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          assistantAttachmentAuthToken: token,
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          onRequestUpdate: () => renderWithToken(token),
+        },
       );
 
     renderWithToken(null);
@@ -1063,24 +1080,20 @@ describe("chat view", () => {
   it("preserves same-origin assistant attachments without local preview rewriting", () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          showToolCalls: false,
-          basePath: "/openclaw",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
-          messages: [
-            {
-              id: "assistant-same-origin-media-inline",
-              role: "assistant",
-              content:
-                "Inline\nMEDIA:/media/inbound/test-image.png\nMEDIA:/__openclaw__/media/test-doc.pdf",
-              timestamp: Date.now(),
-            },
-          ],
-        }),
-      ),
+    renderAssistantMessage(
       container,
+      {
+        id: "assistant-same-origin-media-inline",
+        role: "assistant",
+        content:
+          "Inline\nMEDIA:/media/inbound/test-image.png\nMEDIA:/__openclaw__/media/test-doc.pdf",
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        basePath: "/openclaw",
+        localMediaPreviewRoots: ["/tmp/openclaw"],
+      },
     );
 
     const image = container.querySelector<HTMLImageElement>(".chat-message-image");
@@ -1095,23 +1108,19 @@ describe("chat view", () => {
   it("renders blocked local assistant files as unavailable with a reason", () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          showToolCalls: false,
-          basePath: "/openclaw",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
-          messages: [
-            {
-              id: "assistant-blocked-local-media",
-              role: "assistant",
-              content: "Blocked\nMEDIA:/Users/test/Documents/private.pdf\nDone",
-              timestamp: Date.now(),
-            },
-          ],
-        }),
-      ),
+    renderAssistantMessage(
       container,
+      {
+        id: "assistant-blocked-local-media",
+        role: "assistant",
+        content: "Blocked\nMEDIA:/Users/test/Documents/private.pdf\nDone",
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        basePath: "/openclaw",
+        localMediaPreviewRoots: ["/tmp/openclaw"],
+      },
     );
 
     expect(container.querySelector(".chat-assistant-attachment-card__link")).toBeNull();
@@ -1141,18 +1150,12 @@ describe("chat view", () => {
       message: ChatProps["messages"][number];
       roots: string[];
     }) => {
-      render(
-        renderChat(
-          createProps({
-            showToolCalls: false,
-            basePath: "/openclaw",
-            localMediaPreviewRoots: params.roots,
-            onRequestUpdate: () => undefined,
-            messages: [params.message],
-          }),
-        ),
-        container,
-      );
+      renderAssistantMessage(container, params.message, {
+        showToolCalls: false,
+        basePath: "/openclaw",
+        localMediaPreviewRoots: params.roots,
+        onRequestUpdate: () => undefined,
+      });
       return params.expectedUrl;
     };
 
@@ -1232,24 +1235,20 @@ describe("chat view", () => {
     const container = document.createElement("div");
 
     const renderMessage = () =>
-      render(
-        renderChat(
-          createProps({
-            showToolCalls: false,
-            basePath: "/openclaw",
-            localMediaPreviewRoots: ["/tmp/openclaw"],
-            onRequestUpdate: renderMessage,
-            messages: [
-              {
-                id: "assistant-local-media-retry-after-unavailable",
-                role: "assistant",
-                content: "Local image\nMEDIA:/tmp/openclaw/test image.png",
-                timestamp: Date.now(),
-              },
-            ],
-          }),
-        ),
+      renderAssistantMessage(
         container,
+        {
+          id: "assistant-local-media-retry-after-unavailable",
+          role: "assistant",
+          content: "Local image\nMEDIA:/tmp/openclaw/test image.png",
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          onRequestUpdate: renderMessage,
+        },
       );
 
     renderMessage();
@@ -1273,35 +1272,31 @@ describe("chat view", () => {
 
   it("routes inline canvas blocks through the scoped canvas host when available", () => {
     const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          canvasHostUrl: "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
-          messages: [
-            {
-              id: "assistant-scoped-canvas",
-              role: "assistant",
-              content: [
-                { type: "text", text: "Rendered inline." },
-                {
-                  type: "canvas",
-                  preview: {
-                    kind: "canvas",
-                    surface: "assistant_message",
-                    render: "url",
-                    viewId: "cv_inline_scoped",
-                    title: "Scoped preview",
-                    url: "/__openclaw__/canvas/documents/cv_inline_scoped/index.html",
-                    preferredHeight: 320,
-                  },
-                },
-              ],
-              timestamp: Date.now(),
-            },
-          ],
-        }),
-      ),
+    renderAssistantMessage(
       container,
+      {
+        id: "assistant-scoped-canvas",
+        role: "assistant",
+        content: [
+          { type: "text", text: "Rendered inline." },
+          {
+            type: "canvas",
+            preview: {
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              viewId: "cv_inline_scoped",
+              title: "Scoped preview",
+              url: "/__openclaw__/canvas/documents/cv_inline_scoped/index.html",
+              preferredHeight: 320,
+            },
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        canvasHostUrl: "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
+      },
     );
 
     const iframe = container.querySelector(".chat-tool-card__preview-frame");
