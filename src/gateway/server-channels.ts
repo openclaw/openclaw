@@ -596,14 +596,27 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const startChannels = async () => {
-    for (const plugin of listChannelPlugins()) {
-      try {
-        await startChannel(plugin.id);
-      } catch (err) {
-        channelLogs[plugin.id]?.error?.(
-          `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
-        );
-      }
+    // Use Promise.allSettled to avoid one channel's failure blocking others
+    const plugins = listChannelPlugins();
+    const results = await Promise.allSettled(
+      plugins.map((plugin) =>
+        startChannel(plugin.id).catch((err) => {
+          channelLogs[plugin.id]?.error?.(
+            `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
+          );
+          throw err;
+        }),
+      ),
+    );
+
+    // Log summary of failures (but don't throw)
+    const failures = results
+      .map((result, i) => (result.status === "rejected" ? plugins[i].id : null))
+      .filter((id) => id !== null);
+    if (failures.length > 0) {
+      channelLogs[failures[0]]?.warn?.(
+        `Channel startup: ${failures.length} module(s) failed to load (${failures.join(", ")})`,
+      );
     }
   };
 

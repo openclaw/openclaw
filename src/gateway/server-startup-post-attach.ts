@@ -175,10 +175,18 @@ export async function startGatewaySidecars(params: {
         cfg: params.cfg,
         log: params.log,
       });
-      await params.startChannels();
     } catch (err) {
-      params.logChannels.error(`channel startup failed: ${String(err)}`);
+      params.log.warn(`model warmup failed: ${String(err)}`);
     }
+    // Start channels asynchronously without blocking gateway startup.
+    // If channel initialization fails, errors are logged but don't prevent the gateway from being ready.
+    void (async () => {
+      try {
+        await params.startChannels();
+      } catch (err) {
+        params.logChannels.error(`channel startup failed: ${String(err)}`);
+      }
+    })();
   } else {
     params.logChannels.info(
       "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
