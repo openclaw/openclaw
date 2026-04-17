@@ -66,6 +66,14 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
   };
 }
 
+function clearDeleteConfirmSkip() {
+  try {
+    getSafeLocalStorage()?.removeItem("openclaw:skipDeleteConfirm");
+  } catch {
+    /* noop */
+  }
+}
+
 describe("chat view", () => {
   it("renders BTW side results outside transcript history", () => {
     const container = document.createElement("div");
@@ -150,126 +158,70 @@ describe("chat view", () => {
     expect(container.querySelector(".chat-side-result--error")).not.toBeNull();
   });
 
-  it("hides the context notice when only cumulative inputTokens exceed the limit", () => {
+  it("renders the context notice only for fresh high current usage", () => {
     const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          sessions: {
-            ts: 0,
-            path: "",
-            count: 1,
-            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
-            sessions: [
-              {
-                key: "main",
-                kind: "direct",
-                updatedAt: null,
-                inputTokens: 757_300,
-                totalTokens: 46_000,
-                contextTokens: 200_000,
-              },
-            ],
-          },
-        }),
-      ),
-      container,
-    );
 
+    const renderWithSession = (session: NonNullable<ChatProps["sessions"]>["sessions"][number]) =>
+      render(
+        renderChat(
+          createProps({
+            sessions: {
+              ts: 0,
+              path: "",
+              count: 1,
+              defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+              sessions: [session],
+            },
+          }),
+        ),
+        container,
+      );
+
+    renderWithSession({
+      key: "main",
+      kind: "direct",
+      updatedAt: null,
+      inputTokens: 757_300,
+      totalTokens: 46_000,
+      contextTokens: 200_000,
+    });
     expect(container.textContent).not.toContain("context used");
     expect(container.textContent).not.toContain("757.3k / 200k");
-  });
 
-  it("uses totalTokens for the context notice detail when current usage is high", () => {
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          sessions: {
-            ts: 0,
-            path: "",
-            count: 1,
-            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
-            sessions: [
-              {
-                key: "main",
-                kind: "direct",
-                updatedAt: null,
-                inputTokens: 757_300,
-                totalTokens: 190_000,
-                contextTokens: 200_000,
-              },
-            ],
-          },
-        }),
-      ),
-      container,
-    );
-
+    renderWithSession({
+      key: "main",
+      kind: "direct",
+      updatedAt: null,
+      inputTokens: 757_300,
+      totalTokens: 190_000,
+      contextTokens: 200_000,
+    });
     expect(container.textContent).toContain("95% context used");
     expect(container.textContent).toContain("190k / 200k");
     expect(container.textContent).not.toContain("757.3k / 200k");
-  });
 
-  it("hides the context notice when totalTokens is missing even if inputTokens is high", () => {
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          sessions: {
-            ts: 0,
-            path: "",
-            count: 1,
-            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
-            sessions: [
-              {
-                key: "main",
-                kind: "direct",
-                updatedAt: null,
-                inputTokens: 500_000,
-                contextTokens: 200_000,
-              },
-            ],
-          },
-        }),
-      ),
-      container,
-    );
-
+    renderWithSession({
+      key: "main",
+      kind: "direct",
+      updatedAt: null,
+      inputTokens: 500_000,
+      contextTokens: 200_000,
+    });
     expect(container.textContent).not.toContain("context used");
-  });
 
-  it("hides the context notice when totalTokens is marked stale", () => {
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          sessions: {
-            ts: 0,
-            path: "",
-            count: 1,
-            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
-            sessions: [
-              {
-                key: "main",
-                kind: "direct",
-                updatedAt: null,
-                totalTokens: 190_000,
-                totalTokensFresh: false,
-                contextTokens: 200_000,
-              },
-            ],
-          },
-        }),
-      ),
-      container,
-    );
-
+    renderWithSession({
+      key: "main",
+      kind: "direct",
+      updatedAt: null,
+      totalTokens: 190_000,
+      totalTokensFresh: false,
+      contextTokens: 200_000,
+    });
     expect(container.textContent).not.toContain("context used");
     expect(container.textContent).not.toContain("190k / 200k");
   });
 
-  it("uses the assistant avatar URL for the welcome state when the identity avatar is only initials", () => {
+  it("uses the assistant avatar URL or bundled logo fallbacks", () => {
     const container = document.createElement("div");
     render(
       renderChat(
@@ -285,10 +237,7 @@ describe("chat view", () => {
     const welcomeImage = container.querySelector<HTMLImageElement>(".agent-chat__welcome > img");
     expect(welcomeImage).not.toBeNull();
     expect(welcomeImage?.getAttribute("src")).toBe("/avatar/main");
-  });
 
-  it("falls back to the bundled logo in the welcome state when the assistant avatar is not a URL", () => {
-    const container = document.createElement("div");
     render(
       renderChat(
         createProps({
@@ -299,18 +248,13 @@ describe("chat view", () => {
       ),
       container,
     );
-
-    const welcomeImage = container.querySelector<HTMLImageElement>(".agent-chat__welcome > img");
     const logoImage = container.querySelector<HTMLImageElement>(
       ".agent-chat__welcome .agent-chat__avatar--logo img",
     );
-    expect(welcomeImage).toBeNull();
+    expect(container.querySelector<HTMLImageElement>(".agent-chat__welcome > img")).toBeNull();
     expect(logoImage).not.toBeNull();
     expect(logoImage?.getAttribute("src")).toBe("favicon.svg");
-  });
 
-  it("keeps the welcome logo fallback under the mounted base path", () => {
-    const container = document.createElement("div");
     render(
       renderChat(
         createProps({
@@ -322,16 +266,12 @@ describe("chat view", () => {
       ),
       container,
     );
+    expect(
+      container
+        .querySelector<HTMLImageElement>(".agent-chat__welcome .agent-chat__avatar--logo img")
+        ?.getAttribute("src"),
+    ).toBe("/openclaw/favicon.svg");
 
-    const logoImage = container.querySelector<HTMLImageElement>(
-      ".agent-chat__welcome .agent-chat__avatar--logo img",
-    );
-    expect(logoImage).not.toBeNull();
-    expect(logoImage?.getAttribute("src")).toBe("/openclaw/favicon.svg");
-  });
-
-  it("keeps grouped assistant avatar fallbacks under the mounted base path", () => {
-    const container = document.createElement("div");
     render(
       renderChat(
         createProps({
@@ -350,7 +290,6 @@ describe("chat view", () => {
       ),
       container,
     );
-
     const groupedLogo = container.querySelector<HTMLImageElement>(
       ".chat-group.assistant .chat-avatar--logo",
     );
@@ -358,141 +297,122 @@ describe("chat view", () => {
     expect(groupedLogo?.getAttribute("src")).toBe("/openclaw/favicon.svg");
   });
 
-  it("renders compacting indicator as a badge", () => {
+  it("renders compaction and fallback indicators while they are fresh", () => {
     const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          compactionStatus: {
-            phase: "active",
-            runId: "run-1",
-            startedAt: Date.now(),
-            completedAt: null,
-          },
-        }),
-      ),
-      container,
-    );
+    const nowSpy = vi.spyOn(Date, "now");
 
-    const indicator = container.querySelector(".compaction-indicator--active");
-    expect(indicator).not.toBeNull();
-    expect(indicator?.textContent).toContain("Compacting context...");
+    try {
+      nowSpy.mockReturnValue(1_000);
+      render(
+        renderChat(
+          createProps({
+            compactionStatus: {
+              phase: "active",
+              runId: "run-1",
+              startedAt: 1_000,
+              completedAt: null,
+            },
+          }),
+        ),
+        container,
+      );
+
+      let indicator = container.querySelector(".compaction-indicator--active");
+      expect(indicator).not.toBeNull();
+      expect(indicator?.textContent).toContain("Compacting context...");
+
+      render(
+        renderChat(
+          createProps({
+            compactionStatus: {
+              phase: "complete",
+              runId: "run-1",
+              startedAt: 900,
+              completedAt: 900,
+            },
+          }),
+        ),
+        container,
+      );
+      indicator = container.querySelector(".compaction-indicator--complete");
+      expect(indicator).not.toBeNull();
+      expect(indicator?.textContent).toContain("Context compacted");
+
+      nowSpy.mockReturnValue(10_000);
+      render(
+        renderChat(
+          createProps({
+            compactionStatus: {
+              phase: "complete",
+              runId: "run-1",
+              startedAt: 0,
+              completedAt: 0,
+            },
+          }),
+        ),
+        container,
+      );
+      expect(container.querySelector(".compaction-indicator")).toBeNull();
+
+      nowSpy.mockReturnValue(1_000);
+      render(
+        renderChat(
+          createProps({
+            fallbackStatus: {
+              selected: "fireworks/minimax-m2p5",
+              active: "deepinfra/moonshotai/Kimi-K2.5",
+              attempts: ["fireworks/minimax-m2p5: rate limit"],
+              occurredAt: 900,
+            },
+          }),
+        ),
+        container,
+      );
+      indicator = container.querySelector(".compaction-indicator--fallback");
+      expect(indicator).not.toBeNull();
+      expect(indicator?.textContent).toContain("Fallback active: deepinfra/moonshotai/Kimi-K2.5");
+
+      nowSpy.mockReturnValue(20_000);
+      render(
+        renderChat(
+          createProps({
+            fallbackStatus: {
+              selected: "fireworks/minimax-m2p5",
+              active: "deepinfra/moonshotai/Kimi-K2.5",
+              attempts: [],
+              occurredAt: 0,
+            },
+          }),
+        ),
+        container,
+      );
+      expect(container.querySelector(".compaction-indicator--fallback")).toBeNull();
+
+      nowSpy.mockReturnValue(1_000);
+      render(
+        renderChat(
+          createProps({
+            fallbackStatus: {
+              phase: "cleared",
+              selected: "fireworks/minimax-m2p5",
+              active: "fireworks/minimax-m2p5",
+              previous: "deepinfra/moonshotai/Kimi-K2.5",
+              attempts: [],
+              occurredAt: 900,
+            },
+          }),
+        ),
+        container,
+      );
+      indicator = container.querySelector(".compaction-indicator--fallback-cleared");
+      expect(indicator).not.toBeNull();
+      expect(indicator?.textContent).toContain("Fallback cleared: fireworks/minimax-m2p5");
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
-  it("renders completion indicator shortly after compaction", () => {
-    const container = document.createElement("div");
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    render(
-      renderChat(
-        createProps({
-          compactionStatus: {
-            phase: "complete",
-            runId: "run-1",
-            startedAt: 900,
-            completedAt: 900,
-          },
-        }),
-      ),
-      container,
-    );
-
-    const indicator = container.querySelector(".compaction-indicator--complete");
-    expect(indicator).not.toBeNull();
-    expect(indicator?.textContent).toContain("Context compacted");
-    nowSpy.mockRestore();
-  });
-
-  it("hides stale compaction completion indicator", () => {
-    const container = document.createElement("div");
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(10_000);
-    render(
-      renderChat(
-        createProps({
-          compactionStatus: {
-            phase: "complete",
-            runId: "run-1",
-            startedAt: 0,
-            completedAt: 0,
-          },
-        }),
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".compaction-indicator")).toBeNull();
-    nowSpy.mockRestore();
-  });
-
-  it("renders fallback indicator shortly after fallback event", () => {
-    const container = document.createElement("div");
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    render(
-      renderChat(
-        createProps({
-          fallbackStatus: {
-            selected: "fireworks/minimax-m2p5",
-            active: "deepinfra/moonshotai/Kimi-K2.5",
-            attempts: ["fireworks/minimax-m2p5: rate limit"],
-            occurredAt: 900,
-          },
-        }),
-      ),
-      container,
-    );
-
-    const indicator = container.querySelector(".compaction-indicator--fallback");
-    expect(indicator).not.toBeNull();
-    expect(indicator?.textContent).toContain("Fallback active: deepinfra/moonshotai/Kimi-K2.5");
-    nowSpy.mockRestore();
-  });
-
-  it("hides stale fallback indicator", () => {
-    const container = document.createElement("div");
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(20_000);
-    render(
-      renderChat(
-        createProps({
-          fallbackStatus: {
-            selected: "fireworks/minimax-m2p5",
-            active: "deepinfra/moonshotai/Kimi-K2.5",
-            attempts: [],
-            occurredAt: 0,
-          },
-        }),
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".compaction-indicator--fallback")).toBeNull();
-    nowSpy.mockRestore();
-  });
-
-  it("renders fallback-cleared indicator shortly after transition", () => {
-    const container = document.createElement("div");
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    render(
-      renderChat(
-        createProps({
-          fallbackStatus: {
-            phase: "cleared",
-            selected: "fireworks/minimax-m2p5",
-            active: "fireworks/minimax-m2p5",
-            previous: "deepinfra/moonshotai/Kimi-K2.5",
-            attempts: [],
-            occurredAt: 900,
-          },
-        }),
-      ),
-      container,
-    );
-
-    const indicator = container.querySelector(".compaction-indicator--fallback-cleared");
-    expect(indicator).not.toBeNull();
-    expect(indicator?.textContent).toContain("Fallback cleared: fireworks/minimax-m2p5");
-    nowSpy.mockRestore();
-  });
-
-  it("shows a stop button when aborting is available", () => {
+  it("renders the run action button for abortable and idle states", () => {
     const container = document.createElement("div");
     const onAbort = vi.fn();
     render(
@@ -506,15 +426,12 @@ describe("chat view", () => {
       container,
     );
 
-    const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
+    let stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
     expect(stopButton).not.toBeUndefined();
     stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onAbort).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("New session");
-  });
 
-  it("keeps the stop button visible for abortable non-streaming runs", () => {
-    const container = document.createElement("div");
     render(
       renderChat(
         createProps({
@@ -526,14 +443,10 @@ describe("chat view", () => {
       ),
       container,
     );
-
-    const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
+    stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
     expect(stopButton).not.toBeNull();
     expect(container.textContent).not.toContain("New session");
-  });
 
-  it("shows a new session button when aborting is unavailable", () => {
-    const container = document.createElement("div");
     const onNewSession = vi.fn();
     render(
       renderChat(
@@ -612,12 +525,8 @@ describe("chat view", () => {
     expect(senderLabels).toContain("Joaquin De Rojas");
   });
 
-  it("opens delete confirm on the left for user messages", () => {
-    try {
-      getSafeLocalStorage()?.removeItem("openclaw:skipDeleteConfirm");
-    } catch {
-      /* noop */
-    }
+  it("positions delete confirm by message side", () => {
+    clearDeleteConfirmSkip();
     const container = document.createElement("div");
     render(
       renderChat(
@@ -634,24 +543,19 @@ describe("chat view", () => {
       container,
     );
 
-    const deleteButton = container.querySelector<HTMLButtonElement>(
+    const userDeleteButton = container.querySelector<HTMLButtonElement>(
       ".chat-group.user .chat-group-delete",
     );
-    expect(deleteButton).not.toBeNull();
-    deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(userDeleteButton).not.toBeNull();
+    userDeleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    const confirm = container.querySelector<HTMLElement>(".chat-group.user .chat-delete-confirm");
-    expect(confirm).not.toBeNull();
-    expect(confirm?.classList.contains("chat-delete-confirm--left")).toBe(true);
-  });
+    const userConfirm = container.querySelector<HTMLElement>(
+      ".chat-group.user .chat-delete-confirm",
+    );
+    expect(userConfirm).not.toBeNull();
+    expect(userConfirm?.classList.contains("chat-delete-confirm--left")).toBe(true);
 
-  it("opens delete confirm on the right for assistant messages", () => {
-    try {
-      getSafeLocalStorage()?.removeItem("openclaw:skipDeleteConfirm");
-    } catch {
-      /* noop */
-    }
-    const container = document.createElement("div");
+    clearDeleteConfirmSkip();
     render(
       renderChat(
         createProps({
@@ -667,17 +571,17 @@ describe("chat view", () => {
       container,
     );
 
-    const deleteButton = container.querySelector<HTMLButtonElement>(
+    const assistantDeleteButton = container.querySelector<HTMLButtonElement>(
       ".chat-group.assistant .chat-group-delete",
     );
-    expect(deleteButton).not.toBeNull();
-    deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(assistantDeleteButton).not.toBeNull();
+    assistantDeleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    const confirm = container.querySelector<HTMLElement>(
+    const assistantConfirm = container.querySelector<HTMLElement>(
       ".chat-group.assistant .chat-delete-confirm",
     );
-    expect(confirm).not.toBeNull();
-    expect(confirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
+    expect(assistantConfirm).not.toBeNull();
+    expect(assistantConfirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
   });
 
   it("keeps tool cards collapsed by default and expands them inline on demand", async () => {
