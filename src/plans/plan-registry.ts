@@ -60,6 +60,23 @@ function deindexPlan(record: PlanRecord) {
   removeFromIndex(planIdsByParentPlanId, record.parentPlanId, record.planId);
 }
 
+function replacePlanRecord(record: PlanRecord): PlanRecord {
+  const existing = plans.get(record.planId);
+  if (existing) {
+    deindexPlan(existing);
+  }
+  plans.set(record.planId, {
+    ...record,
+    ...(record.linkedFlowIds ? { linkedFlowIds: [...record.linkedFlowIds] } : {}),
+  });
+  indexPlan(record);
+  return clonePlanRecord(record);
+}
+
+export function restorePlanRecord(record: PlanRecord): PlanRecord {
+  return replacePlanRecord(record);
+}
+
 function createPlanId(): string {
   return `plan_${crypto.randomUUID()}`;
 }

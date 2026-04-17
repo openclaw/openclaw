@@ -359,6 +359,71 @@ describe("plans gateway handlers", () => {
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(call?.[2]?.message).toContain("session artifact persist failed");
+
+    const failedList = listPlansCall();
+    await failedList.invoke();
+    const failedListCall = failedList.respond.mock.calls[0] as RespondCall | undefined;
+    const failedPlan = findPlanByTitleFromRespond(failedListCall, "Session rejected plan");
+    expect(failedPlan?.status).toBe("ready_for_review");
+  });
+
+  it("allows retry after session plan artifact persistence fails once", async () => {
+    setupSessionPersistenceMocks();
+    let persistAttempts = 0;
+    hoisted.applySessionsPatchToStoreMock.mockImplementation(
+      async ({ patch }: { patch: Record<string, unknown> }) => {
+        persistAttempts += 1;
+        if (persistAttempts === 1) {
+          return {
+            ok: false,
+            error: { code: ErrorCodes.INVALID_REQUEST, message: "session artifact persist failed" },
+          };
+        }
+        return {
+          ok: true,
+          entry: {
+            updatedAt: 1,
+            planMode: "active",
+            planArtifact: patch.planArtifact,
+          },
+        };
+      },
+    );
+    createPlanRecord({
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      sessionKey: "agent:main:main",
+      title: "Session retry plan",
+      content: "- retry after failure",
+      status: "ready_for_review",
+      createdAt: 600,
+      updatedAt: 600,
+    });
+
+    const initialList = listPlansCall();
+    await initialList.invoke();
+    const initialCall = initialList.respond.mock.calls[0] as RespondCall | undefined;
+    const sessionPlanId = findPlanIdByTitleFromRespond(initialCall, "Session retry plan");
+
+    const firstAttempt = createInvokeParams("plans.updateStatus", {
+      planId: sessionPlanId,
+      status: "approved",
+    });
+    await firstAttempt.invoke();
+    const firstCall = firstAttempt.respond.mock.calls[0] as RespondCall | undefined;
+    expect(firstCall?.[0]).toBe(false);
+    expect(firstCall?.[2]?.message).toContain("session artifact persist failed");
+
+    const secondAttempt = createInvokeParams("plans.updateStatus", {
+      planId: sessionPlanId,
+      status: "approved",
+    });
+    await secondAttempt.invoke();
+    const secondCall = secondAttempt.respond.mock.calls[0] as RespondCall | undefined;
+    expect(secondCall?.[0]).toBe(true);
+    const payload = secondCall?.[1] as { previousStatus: string; plan: { status: string } };
+    expect(payload.previousStatus).toBe("ready_for_review");
+    expect(payload.plan.status).toBe("approved");
   });
 
   it("does not persist session artifacts for non-session plans", async () => {

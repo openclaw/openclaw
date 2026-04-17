@@ -4,6 +4,7 @@ import {
   getPlanById,
   listPlanRecords,
   listPlansForOwnerKey,
+  restorePlanRecord,
   updatePlanStatus,
 } from "../../plans/plan-registry.js";
 import { summarizePlanRecords } from "../../plans/plan-registry.summary.js";
@@ -180,7 +181,15 @@ export const plansHandlers: GatewayRequestHandlers = {
         planId: params.planId,
         status: params.status,
       });
-      await persistSessionPlanStatus(result.plan);
+      try {
+        await persistSessionPlanStatus(result.plan);
+      } catch (error) {
+        restorePlanRecord({
+          ...result.plan,
+          status: result.previousStatus,
+        });
+        throw error;
+      }
       respond(true, result, undefined);
     } catch (error) {
       if (isPlanStatusTransitionError(error)) {
