@@ -323,6 +323,8 @@ describe("config view", () => {
     messagesButton?.click();
     await Promise.resolve();
 
+    expect(content.scrollTo).toHaveBeenCalledOnce();
+    expect(content.scrollTo).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
     expect(content.scrollTop).toBe(0);
     expect(content.scrollLeft).toBe(0);
   });
