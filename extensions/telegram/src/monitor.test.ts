@@ -87,6 +87,7 @@ const { resolveTelegramTransportSpy } = vi.hoisted(() => ({
   resolveTelegramTransportSpy: vi.fn(() => ({
     fetch: globalThis.fetch,
     sourceFetch: globalThis.fetch,
+    close: vi.fn(async () => undefined),
   })),
 }));
 
@@ -358,6 +359,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     resolveTelegramTransportSpy.mockReset().mockImplementation(() => ({
       fetch: globalThis.fetch,
       sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
     }));
     registerUnhandledRejectionHandlerMock.mockClear();
     resetUnhandledRejection();
@@ -565,10 +567,12 @@ describe("monitorTelegramProvider (grammY)", () => {
       const telegramTransport = {
         fetch: globalThis.fetch,
         sourceFetch: globalThis.fetch,
+        close: vi.fn(async () => undefined),
       };
       const rebuiltTransport = {
         fetch: globalThis.fetch,
         sourceFetch: globalThis.fetch,
+        close: vi.fn(async () => undefined),
       };
       resolveTelegramTransportSpy
         .mockReturnValueOnce(telegramTransport)
@@ -600,10 +604,12 @@ describe("monitorTelegramProvider (grammY)", () => {
     const telegramTransport = {
       fetch: globalThis.fetch,
       sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
     };
     const rebuiltTransport = {
       fetch: globalThis.fetch,
       sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
     };
     resolveTelegramTransportSpy
       .mockReturnValueOnce(telegramTransport)
@@ -760,6 +766,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     const telegramTransport = {
       fetch: globalThis.fetch,
       sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
     };
     resolveTelegramTransportSpy.mockReturnValueOnce(telegramTransport);
 
