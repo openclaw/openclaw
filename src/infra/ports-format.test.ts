@@ -5,6 +5,7 @@ import {
   formatPortDiagnostics,
   formatPortListener,
   isDualStackLoopbackGatewayListeners,
+  isGatewayOwnedLocalPortUsage,
 } from "./ports-format.js";
 
 describe("ports-format", () => {
@@ -42,8 +43,22 @@ describe("ports-format", () => {
       { pid: 4242, commandLine: "openclaw-gateway", address: "[::1]:18789" },
     ];
     expect(isDualStackLoopbackGatewayListeners(listeners, 18789)).toBe(true);
+    expect(isGatewayOwnedLocalPortUsage(listeners, 18789)).toBe(true);
+    expect(buildPortHints(listeners, 18789)).toEqual([
+      "Gateway is already listening on its configured local port.",
+    ]);
+  });
+
+  it("keeps multi-process gateway listeners classified as conflicts", () => {
+    const listeners = [
+      { pid: 4242, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
+      { pid: 5252, commandLine: "openclaw-gateway", address: "[::1]:18789" },
+    ];
+    expect(isDualStackLoopbackGatewayListeners(listeners, 18789)).toBe(false);
+    expect(isGatewayOwnedLocalPortUsage(listeners, 18789)).toBe(false);
     expect(buildPortHints(listeners, 18789)).toEqual([
       expect.stringContaining("Gateway already running locally."),
+      expect.stringContaining("Multiple listeners detected"),
     ]);
   });
 

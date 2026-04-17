@@ -100,9 +100,21 @@ export function isGatewayOwnedLocalPortUsage(listeners: PortListener[], port: nu
   if (listeners.length === 0) {
     return false;
   }
+
+  let sharedPid: number | null = null;
   return listeners.every((listener) => {
     if (classifyPortListener(listener, port) !== "gateway") {
       return false;
+    }
+    if (listeners.length > 1) {
+      if (typeof listener.pid !== "number" || !Number.isFinite(listener.pid)) {
+        return false;
+      }
+      if (sharedPid === null) {
+        sharedPid = listener.pid;
+      } else if (listener.pid !== sharedPid) {
+        return false;
+      }
     }
     if (typeof listener.address !== "string") {
       return true;

@@ -148,6 +148,22 @@ describe("status-all diagnosis port checks", () => {
     expect(output).toContain("Port 18789 is already in use.");
   });
 
+  it("keeps warning for multi-process gateway listener conflicts", async () => {
+    const params = createBaseParams([
+      { pid: 5001, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
+      { pid: 5002, commandLine: "openclaw-gateway", address: "[::1]:18789" },
+    ]);
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Port 18789");
+    expect(output).toContain("Port 18789 is already in use.");
+    expect(output).not.toContain(
+      "Detected the local OpenClaw gateway listening on its configured port.",
+    );
+  });
+
   it("avoids unreachable gateway diagnosis in node-only mode", async () => {
     const params = createBaseParams([]);
     params.connectionDetailsForReport = [

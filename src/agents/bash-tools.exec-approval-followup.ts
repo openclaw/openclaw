@@ -102,12 +102,6 @@ function formatDirectExecApprovalFollowupText(
       return body || null;
     }
 
-    if (body) {
-      return metadata.includes("signal")
-        ? "Background command stopped unexpectedly. Rerun it in chat if you still need it."
-        : "Background command failed. Rerun it in chat if you still need it.";
-    }
-
     return metadata.includes("signal")
       ? "Background command stopped unexpectedly. Rerun it in chat if you still need it."
       : "Background command failed. Rerun it in chat if you still need it.";
