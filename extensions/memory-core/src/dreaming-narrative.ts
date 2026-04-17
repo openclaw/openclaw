@@ -932,9 +932,18 @@ export async function generateAndAppendDreamNarrative(params: {
     try {
       await params.subagent.deleteSession({ sessionKey });
     } catch (cleanupErr) {
-      params.logger.warn(
-        `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,
-      );
+      const errMsg = formatErrorMessage(cleanupErr);
+      // Missing operator.admin scope is expected when running in main session;
+      // treat as best-effort cleanup and log at debug level only.
+      if (errMsg.includes("missing scope: operator.admin")) {
+        params.logger.debug(
+          `memory-core: narrative session cleanup skipped for ${params.data.phase} phase (missing operator.admin scope)`,
+        );
+      } else {
+        params.logger.warn(
+          `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${errMsg}`,
+        );
+      }
     }
 
     await scrubDreamingNarrativeArtifacts(params.logger).catch((scrubErr: unknown) => {

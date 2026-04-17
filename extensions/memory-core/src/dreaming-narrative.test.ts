@@ -576,6 +576,7 @@ describe("generateAndAppendDreamNarrative", () => {
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
+      debug: vi.fn(),
     };
   }
 
@@ -675,6 +676,28 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(subagent.waitForRun.mock.calls[1][0]).toMatchObject({ timeoutMs: 120_000 });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("narrative session cleanup failed for rem phase"),
+    );
+  });
+
+  it("logs debug message when cleanup fails due to missing operator.admin scope", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("");
+    subagent.waitForRun.mockResolvedValue({ status: "ok" });
+    subagent.deleteSession.mockRejectedValue(new Error("missing scope: operator.admin"));
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: ["some memory"] },
+      logger,
+    });
+
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining("narrative session cleanup skipped for light phase"),
+    );
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("narrative session cleanup failed"),
     );
   });
 
