@@ -274,6 +274,28 @@ describe("memory plugin state", () => {
     expect(getMemoryRuntime()).toBe(runtime);
   });
 
+  it("restoreMemoryPluginState preserves a live capability when restoring empty state", () => {
+    const runtime = createMemoryRuntime();
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["core prompt"],
+      runtime,
+    });
+
+    // A stale or cache-hit snapshot with no capability must not clobber a
+    // live registration. Previously this path reset memoryPluginState.capability
+    // to undefined, which caused listActiveMemoryPublicArtifacts to return []
+    // and memory-wiki bridge imports to prune all synced source pages.
+    restoreMemoryPluginState({
+      capability: undefined,
+      corpusSupplements: [],
+      promptSupplements: [],
+    });
+
+    expect(getMemoryCapabilityRegistration()).toMatchObject({ pluginId: "memory-core" });
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["core prompt"]);
+    expect(getMemoryRuntime()).toBe(runtime);
+  });
+
   it("clearMemoryPluginState resets both registries", () => {
     registerMemoryState({
       promptSection: ["stale section"],
