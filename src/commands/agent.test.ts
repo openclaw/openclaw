@@ -54,6 +54,170 @@ vi.mock("../agents/command/session-store.runtime.js", () => {
   };
 });
 
+vi.mock("../agents/command/attempt-execution.runtime.js", () => {
+  return {
+    buildAcpResult: vi.fn(),
+    createAcpVisibleTextAccumulator: vi.fn(),
+    emitAcpAssistantDelta: vi.fn(),
+    emitAcpLifecycleEnd: vi.fn(),
+    emitAcpLifecycleError: vi.fn(),
+    emitAcpLifecycleStart: vi.fn(),
+    persistAcpTurnTranscript: vi.fn(
+      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+    ),
+    persistCliTurnTranscript: vi.fn(
+      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+    ),
+    runAgentAttempt: vi.fn(async (params: Record<string, unknown>) => {
+      const { runEmbeddedPiAgent } = await import("../agents/pi-embedded.js");
+      const opts = params.opts as Record<string, unknown>;
+      const runContext = params.runContext as Record<string, unknown>;
+      const sessionEntry = params.sessionEntry as
+        | {
+            authProfileOverride?: string;
+            authProfileOverrideSource?: string;
+          }
+        | undefined;
+      const providerOverride = params.providerOverride as string;
+      const authProfileProvider = params.authProfileProvider as string;
+      const authProfileId =
+        providerOverride === authProfileProvider ? sessionEntry?.authProfileOverride : undefined;
+
+      return await runEmbeddedPiAgent({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        agentId: params.sessionAgentId,
+        trigger: "user",
+        messageChannel: params.messageChannel,
+        agentAccountId: runContext.accountId,
+        messageTo: opts.replyTo ?? opts.to,
+        messageThreadId: opts.threadId,
+        senderIsOwner: opts.senderIsOwner,
+        sessionFile: params.sessionFile,
+        workspaceDir: params.workspaceDir,
+        config: params.cfg,
+        skillsSnapshot: params.skillsSnapshot,
+        prompt: params.body,
+        images: opts.images,
+        imageOrder: opts.imageOrder,
+        clientTools: opts.clientTools,
+        provider: providerOverride,
+        model: params.modelOverride,
+        authProfileId,
+        authProfileIdSource: authProfileId ? sessionEntry?.authProfileOverrideSource : undefined,
+        thinkLevel: params.resolvedThinkLevel,
+        verboseLevel: params.resolvedVerboseLevel,
+        timeoutMs: params.timeoutMs,
+        runId: params.runId,
+        lane: opts.lane,
+        abortSignal: opts.abortSignal,
+        extraSystemPrompt: opts.extraSystemPrompt,
+        bootstrapContextMode: opts.bootstrapContextMode,
+        bootstrapContextRunKind: opts.bootstrapContextRunKind,
+        internalEvents: opts.internalEvents,
+        inputProvenance: opts.inputProvenance,
+        streamParams: opts.streamParams,
+        agentDir: params.agentDir,
+        allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+        cleanupBundleMcpOnRunEnd: opts.cleanupBundleMcpOnRunEnd,
+        onAgentEvent: params.onAgentEvent,
+      } as never);
+    }),
+    sessionFileHasContent: vi.fn(async () => false),
+  };
+});
+
+vi.mock("../agents/command/delivery.runtime.js", () => {
+  return {
+    deliverAgentCommandResult: vi.fn(
+      async (params: {
+        cfg: OpenClawConfig;
+        deps: {
+          sendMessageTelegram?: (
+            to: string,
+            text: string,
+            opts: Record<string, unknown>,
+          ) => Promise<unknown>;
+        };
+        runtime: RuntimeEnv;
+        opts: {
+          channel?: string;
+          deliver?: boolean;
+          json?: boolean;
+          to?: string;
+        };
+        result: { meta?: Record<string, unknown> };
+        payloads?: Array<{ text?: string; mediaUrl?: string | null }>;
+      }) => {
+        const payloads = params.payloads ?? [];
+        if (params.opts.json) {
+          params.runtime.log(JSON.stringify({ payloads, meta: params.result.meta ?? {} }));
+          return;
+        }
+        if (params.opts.deliver && params.opts.channel === "telegram" && params.opts.to) {
+          for (const payload of payloads) {
+            await params.deps.sendMessageTelegram?.(params.opts.to, payload.text ?? "", {
+              ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
+              accountId: params.cfg.channels?.telegram?.accountId,
+              verbose: false,
+            });
+          }
+          return;
+        }
+        for (const payload of payloads) {
+          if (payload.text) {
+            params.runtime.log(payload.text);
+          }
+        }
+      },
+    ),
+  };
+});
+
+vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
+  return {
+    resolveSessionTranscriptFile: vi.fn(
+      async (params: {
+        sessionId: string;
+        sessionKey: string;
+        sessionEntry?: { sessionFile?: string };
+        sessionStore?: Record<string, { sessionFile?: string; sessionId?: string }>;
+        storePath?: string;
+        agentId: string;
+        threadId?: string | number;
+      }) => {
+        const nodeFs = await import("node:fs");
+        const nodePath = await import("node:path");
+        const { resolveSessionFilePath, resolveSessionTranscriptPath } =
+          await import("../config/sessions/paths.js");
+        const sessionsDir = params.storePath ? nodePath.dirname(params.storePath) : undefined;
+        const sessionFileFromStorePath = resolveSessionFilePath(
+          params.sessionId,
+          params.sessionEntry,
+          {
+            agentId: params.agentId,
+            ...(sessionsDir ? { sessionsDir } : {}),
+          },
+        );
+        const sessionFile = params.sessionEntry?.sessionFile
+          ? sessionFileFromStorePath
+          : resolveSessionTranscriptPath(params.sessionId, params.agentId, params.threadId);
+        let sessionEntry = params.sessionEntry;
+        if (params.sessionStore && params.storePath && params.sessionKey) {
+          sessionEntry = {
+            ...params.sessionStore[params.sessionKey],
+            sessionId: params.sessionId,
+            sessionFile,
+          };
+          params.sessionStore[params.sessionKey] = sessionEntry;
+          nodeFs.writeFileSync(params.storePath, JSON.stringify(params.sessionStore, null, 2));
+        }
+        return { sessionFile, sessionEntry };
+      },
+    ),
+  };
+});
+
 const runtime: RuntimeEnv = {
   log: vi.fn(),
   error: vi.fn(),
