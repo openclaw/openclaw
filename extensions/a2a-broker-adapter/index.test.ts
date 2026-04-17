@@ -181,6 +181,40 @@ describe("a2a-broker-adapter plugin", () => {
     expect(
       shouldUseStandaloneBrokerSessionsSendAdapter({
         plugins: {
+          allow: [A2A_BROKER_ADAPTER_PLUGIN_ID],
+          deny: [A2A_BROKER_ADAPTER_PLUGIN_ID],
+          entries: {
+            [A2A_BROKER_ADAPTER_PLUGIN_ID]: {
+              enabled: true,
+              config: {
+                baseUrl: "https://broker.example.com",
+              },
+            },
+          },
+        },
+      } as never),
+    ).toBe(false);
+
+    expect(
+      shouldUseStandaloneBrokerSessionsSendAdapter({
+        plugins: {
+          enabled: false,
+          allow: [A2A_BROKER_ADAPTER_PLUGIN_ID],
+          entries: {
+            [A2A_BROKER_ADAPTER_PLUGIN_ID]: {
+              enabled: true,
+              config: {
+                baseUrl: "https://broker.example.com",
+              },
+            },
+          },
+        },
+      } as never),
+    ).toBe(false);
+
+    expect(
+      shouldUseStandaloneBrokerSessionsSendAdapter({
+        plugins: {
           entries: {
             [A2A_BROKER_ADAPTER_PLUGIN_ID]: {
               enabled: true,

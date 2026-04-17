@@ -1,8 +1,8 @@
 /**
- * A2A gateway handler tests — plugin-local.
- * Migrated from src/gateway/server-methods/a2a.test.ts.
+ * A2A gateway handler tests, plugin-local.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createA2AGatewayHandlers } from "./gateway-handlers.js";
 
 const mockBrokerClient = {
   requestTask: vi.fn(),
@@ -11,15 +11,8 @@ const mockBrokerClient = {
   statusTask: vi.fn(),
 };
 
-let handleA2ATaskRequest: typeof import("./gateway-handlers.js").handleA2ATaskRequest;
-let handleA2ATaskUpdate: typeof import("./gateway-handlers.js").handleA2ATaskUpdate;
-let handleA2ATaskCancel: typeof import("./gateway-handlers.js").handleA2ATaskCancel;
-let handleA2ATaskStatus: typeof import("./gateway-handlers.js").handleA2ATaskStatus;
-let setBrokerClient: typeof import("./gateway-handlers.js").__setBrokerClientForTesting;
-
 describe("a2a gateway handlers (plugin-local)", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     mockBrokerClient.requestTask.mockReset();
     mockBrokerClient.updateTask.mockReset();
     mockBrokerClient.cancelTask.mockReset();
@@ -38,17 +31,9 @@ describe("a2a gateway handlers (plugin-local)", () => {
       taskId: "task-1",
     });
     mockBrokerClient.statusTask.mockResolvedValue({
-      method: "a2a.task.status",
       taskId: "task-1",
+      executionStatus: "running",
     });
-
-    const mod = await import("./gateway-handlers.js");
-    handleA2ATaskRequest = mod.handleA2ATaskRequest;
-    handleA2ATaskUpdate = mod.handleA2ATaskUpdate;
-    handleA2ATaskCancel = mod.handleA2ATaskCancel;
-    handleA2ATaskStatus = mod.handleA2ATaskStatus;
-    setBrokerClient = mod.__setBrokerClientForTesting;
-    setBrokerClient(mockBrokerClient);
   });
 
   const createHandlerOpts = () => {
@@ -64,7 +49,16 @@ describe("a2a gateway handlers (plugin-local)", () => {
     };
   };
 
+  function createHandlers(
+    createBrokerClient: () => typeof mockBrokerClient | null = () => mockBrokerClient,
+  ) {
+    return createA2AGatewayHandlers({} as never, {
+      createBrokerClient: createBrokerClient as never,
+    });
+  }
+
   it("a2a.task.request delegates to broker client", async () => {
+    const { handleA2ATaskRequest } = createHandlers();
     const opts = createHandlerOpts();
     opts.params = {
       sessionKey: "test-session",
@@ -72,7 +66,7 @@ describe("a2a gateway handlers (plugin-local)", () => {
         method: "a2a.task.request",
         taskId: "task-1",
         task: { intent: "delegate", instructions: "do something" },
-        target: { sessionKey: "target-session", displayKey: "target" },
+        target: { sessionKey: "target-session", displayKey: "target-node" },
       },
     };
 
@@ -86,6 +80,7 @@ describe("a2a gateway handlers (plugin-local)", () => {
   });
 
   it("a2a.task.update delegates to broker client", async () => {
+    const { handleA2ATaskUpdate } = createHandlers();
     const opts = createHandlerOpts();
     opts.params = {
       sessionKey: "test-session",
@@ -106,6 +101,7 @@ describe("a2a gateway handlers (plugin-local)", () => {
   });
 
   it("a2a.task.cancel delegates to broker client", async () => {
+    const { handleA2ATaskCancel } = createHandlers();
     const opts = createHandlerOpts();
     opts.params = {
       sessionKey: "test-session",
@@ -125,6 +121,7 @@ describe("a2a gateway handlers (plugin-local)", () => {
   });
 
   it("a2a.task.status delegates to broker client", async () => {
+    const { handleA2ATaskStatus } = createHandlers();
     const opts = createHandlerOpts();
     opts.params = {
       sessionKey: "test-session",
@@ -134,14 +131,11 @@ describe("a2a gateway handlers (plugin-local)", () => {
     await handleA2ATaskStatus(opts as never);
 
     expect(mockBrokerClient.statusTask).toHaveBeenCalledTimes(1);
-    expect(opts.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ method: "a2a.task.status" }),
-    );
+    expect(opts.respond).toHaveBeenCalledWith(true, expect.objectContaining({ taskId: "task-1" }));
   });
 
   it("returns error when broker client is not initialized", async () => {
-    setBrokerClient(null);
+    const { handleA2ATaskRequest } = createHandlers(() => null);
     const opts = createHandlerOpts();
     opts.params = {
       sessionKey: "test-session",
@@ -163,8 +157,9 @@ describe("a2a gateway handlers (plugin-local)", () => {
   });
 
   it("returns validation error for invalid params", async () => {
+    const { handleA2ATaskRequest } = createHandlers();
     const opts = createHandlerOpts();
-    opts.params = {}; // missing required fields
+    opts.params = {};
 
     await handleA2ATaskRequest(opts as never);
 
@@ -176,7 +171,10 @@ describe("a2a gateway handlers (plugin-local)", () => {
     expect(mockBrokerClient.requestTask).not.toHaveBeenCalled();
   });
 
-  it("reuses single broker client across handlers", async () => {
+  it("initializes broker client lazily once and reuses it across handlers", async () => {
+    const createBrokerClient = vi.fn().mockReturnValue(mockBrokerClient);
+    const { handleA2ATaskRequest, handleA2ATaskCancel } = createHandlers(createBrokerClient);
+
     const requestOpts = createHandlerOpts();
     requestOpts.params = {
       sessionKey: "test-session",
@@ -197,6 +195,7 @@ describe("a2a gateway handlers (plugin-local)", () => {
     await handleA2ATaskRequest(requestOpts as never);
     await handleA2ATaskCancel(cancelOpts as never);
 
+    expect(createBrokerClient).toHaveBeenCalledTimes(1);
     expect(mockBrokerClient.requestTask).toHaveBeenCalledTimes(1);
     expect(mockBrokerClient.cancelTask).toHaveBeenCalledTimes(1);
   });

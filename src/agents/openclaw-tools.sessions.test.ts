@@ -157,6 +157,35 @@ const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2
   );
 };
 
+function createDelegatedTaskRecord(taskId: string) {
+  return {
+    taskId,
+    envelope: {
+      v: 1,
+      taskId,
+      kind: "delegate_task",
+      target: {
+        sessionKey: "main",
+        displayKey: "main",
+      },
+      task: {
+        intent: "delegate",
+        summary: "Regression lock",
+        instructions: "Regression lock",
+      },
+    },
+    execution: {
+      status: "accepted",
+      createdAt: 1,
+      acceptedAt: 1,
+    },
+    delivery: {
+      status: "none",
+      mode: "announce",
+    },
+  } as const;
+}
+
 describe("sessions tools", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
@@ -913,6 +942,174 @@ describe("sessions tools", () => {
     });
     await vi.waitFor(() => {
       expect(runTaskRequest).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("sessions_send follows broker SSE to terminal status in background accepted mode", async () => {
+    const runTaskRequest = vi
+      .fn()
+      .mockResolvedValue(createDelegatedTaskRecord("task-broker-stream-bg-1"));
+    const subscribeTaskStatus = vi.fn().mockResolvedValue({
+      finalStatus: {
+        taskId: "task-broker-stream-bg-1",
+        executionStatus: "completed",
+        deliveryStatus: "skipped",
+        updatedAt: 111,
+        hasHeartbeat: true,
+      },
+      endedReason: "terminal",
+    });
+    const reconcileTaskStatus = vi.fn();
+    sessionsSendA2ATesting.setAdapterSelectionForTest({
+      shouldUseBrokerAdapter: () => true,
+      createBrokerAdapter: () => ({
+        runTaskRequest,
+        subscribeTaskStatus,
+        reconcileTaskStatus,
+      }),
+    });
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-broker-stream-bg-1", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "discord:group:req",
+      agentChannel: "discord",
+      config: {
+        ...TEST_CONFIG,
+        plugins: {
+          entries: {
+            "a2a-broker-adapter": {
+              enabled: true,
+              config: {
+                baseUrl: "https://broker.example.com",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-broker-stream-bg", {
+      sessionKey: "main",
+      message: "lock the broker stream",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      runId: "run-broker-stream-bg-1",
+      status: "accepted",
+    });
+    await waitForCalls(() => runTaskRequest.mock.calls.length, 1);
+    await waitForCalls(() => subscribeTaskStatus.mock.calls.length, 1);
+
+    const adapterCall = runTaskRequest.mock.calls[0]?.[0] as { request?: Record<string, unknown> };
+    expect(adapterCall.request).toMatchObject({
+      waitRunId: "run-broker-stream-bg-1",
+      correlationId: "run-broker-stream-bg-1",
+      parentRunId: "run-broker-stream-bg-1",
+      cancelTarget: {
+        kind: "session_run",
+        sessionKey: "main",
+        runId: "run-broker-stream-bg-1",
+      },
+    });
+    expect(subscribeTaskStatus).toHaveBeenCalledWith({
+      sessionKey: "main",
+      taskId: "task-broker-stream-bg-1",
+    });
+    expect(reconcileTaskStatus).not.toHaveBeenCalled();
+  });
+
+  it("sessions_send falls back to reconcile when broker SSE exits before terminal in background accepted mode", async () => {
+    const runTaskRequest = vi
+      .fn()
+      .mockResolvedValue(createDelegatedTaskRecord("task-broker-stream-bg-2"));
+    const subscribeTaskStatus = vi.fn().mockResolvedValue({
+      finalStatus: {
+        taskId: "task-broker-stream-bg-2",
+        executionStatus: "running",
+        deliveryStatus: "pending",
+        updatedAt: 112,
+        hasHeartbeat: true,
+      },
+      endedReason: "stream_ended",
+    });
+    const reconcileTaskStatus = vi.fn().mockResolvedValue({
+      taskId: "task-broker-stream-bg-2",
+      executionStatus: "running",
+      deliveryStatus: "pending",
+      updatedAt: 113,
+      hasHeartbeat: true,
+    });
+    sessionsSendA2ATesting.setAdapterSelectionForTest({
+      shouldUseBrokerAdapter: () => true,
+      createBrokerAdapter: () => ({
+        runTaskRequest,
+        subscribeTaskStatus,
+        reconcileTaskStatus,
+      }),
+    });
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-broker-stream-bg-2", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "discord:group:req",
+      agentChannel: "discord",
+      config: {
+        ...TEST_CONFIG,
+        plugins: {
+          entries: {
+            "a2a-broker-adapter": {
+              enabled: true,
+              config: {
+                baseUrl: "https://broker.example.com",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-broker-stream-bg-fallback", {
+      sessionKey: "main",
+      message: "lock the fallback path",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      runId: "run-broker-stream-bg-2",
+      status: "accepted",
+    });
+    await waitForCalls(() => subscribeTaskStatus.mock.calls.length, 1);
+    await waitForCalls(() => reconcileTaskStatus.mock.calls.length, 1);
+
+    expect(subscribeTaskStatus).toHaveBeenCalledWith({
+      sessionKey: "main",
+      taskId: "task-broker-stream-bg-2",
+    });
+    expect(reconcileTaskStatus).toHaveBeenCalledWith({
+      sessionKey: "main",
+      taskId: "task-broker-stream-bg-2",
     });
   });
 
