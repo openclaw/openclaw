@@ -72,6 +72,8 @@ export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
   if (theme === "knot") {
     return resolvedMode === "light" ? "openknot-light" : "openknot";
   }
+  // Matrix theme is intentionally dark-only (no light variant)
+  // Honors retro terminal aesthetic - always returns dark mode
   if (theme === "matrix") {
     return "matrix";
   }

@@ -477,12 +477,12 @@
    * Matrix Theme — Lime green on deep black
    *
    * WCAG 2.1 AA audit (bg = #000000, relative luminance ≈ 0):
-   *   --accent #00ff41  L ≈ 0.566  contrast ≈ 1.5:1  ⚠️ Low contrast (intentional for Matrix aesthetic)
-   *   --accent-hover #00cc33  L ≈ 0.332  contrast ≈ 2.2:1  ⚠️ Low contrast (intentional)
-   *   --accent-glow #00ff41  with glow effect: practical contrast ≈ 4:1
+   *   --accent #00ff41  L ≈ 0.719  contrast ≈ 15.4:1  ✅ Passes AA (large & normal text)
+   *   --accent-hover #00cc33  L ≈ 0.451  contrast ≈ 10.0:1  ✅ Passes AA
+   *   Note: Matrix theme's green-on-black palette naturally provides high contrast.
    *
-   * Note: Matrix theme intentionally uses lower contrast for authenticity.
-   * Glow effects and text-shadow compensate for readability.
+   * Glow effects are purely aesthetic and are not required for accessibility.
+   * 
    */
   --ring: #00ff41;
   --accent: #00ff41;
@@ -609,26 +609,20 @@
   0%, 100% {
     opacity: 1;
   }
-  3% {
-    opacity: 0.4;
+  12.5% {
+    opacity: 0.85;
   }
-  6% {
+  25% {
     opacity: 1;
   }
-  7% {
-    opacity: 0.4;
+  50% {
+    opacity: 0.9;
   }
-  8% {
+  75% {
     opacity: 1;
   }
-  9% {
-    opacity: 1;
-  }
-  10% {
+  87.5% {
     opacity: 0.1;
-  }
-  11% {
-    opacity: 1;
   }
 }
 
@@ -943,6 +937,9 @@ select {
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+  }
+}
+
 /* Theme families override accent tokens while keeping shared surfaces/layout. */
 :root[data-theme="cyberpunk"] {
   /*
