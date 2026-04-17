@@ -1,6 +1,6 @@
 # PR Monitor Report
 
-**Date:** 2026-04-16 (run 25)
+**Date:** 2026-04-17 (run 26)
 **Contributor:** suboss87
 **Repo:** openclaw/openclaw
 
@@ -8,12 +8,12 @@
 
 ## PRs Checked
 
-| PR     | Branch                                  | Status | CI                                                                     | Review                              | Conflicts (upstream/main) | Actions Taken                         |
-| ------ | --------------------------------------- | ------ | ---------------------------------------------------------------------- | ----------------------------------- | ------------------------- | ------------------------------------- |
-| #45911 | fix/telegram-approval-callback-fallback | MERGED | N/A                                                                    | N/A                                 | N/A                       | None (already merged)                 |
-| #45584 | feat/cron-fresh-session-option          | OPEN   | Labels only (no build CI — conflicts block trigger)                    | Bot comments; all addressed in code | YES — dirty               | None — cannot rebase (no upstream access) |
-| #54363 | fix/chat-send-button-contrast           | CLOSED | N/A                                                                    | N/A                                 | N/A                       | None (closed without merge)           |
-| #54730 | fix/subagent-identity-fallback          | OPEN   | FAILING — security-fast, extensions shards 2/3/4/6, contracts-protocol | Bot comment addressed               | No conflicts (fork/main)  | None — no new activity since run 9    |
+| PR     | Branch                                  | Status | CI  | Review | Conflicts | Actions Taken |
+| ------ | --------------------------------------- | ------ | --- | ------ | --------- | ------------- |
+| #45911 | fix/telegram-approval-callback-fallback | MERGED | N/A | N/A    | N/A       | None (already merged) |
+| #45584 | feat/cron-fresh-session-option          | **CLOSED (no merge)** — NEW this run | N/A | N/A | N/A | None (closed by maintainer) |
+| #54363 | fix/chat-send-button-contrast           | CLOSED (no merge) | N/A | N/A | N/A | None (closed without merge) |
+| #54730 | fix/subagent-identity-fallback          | **CLOSED (no merge)** — NEW this run | N/A | N/A | N/A | None (closed by maintainer) |
 
 ---
 
@@ -21,11 +21,7 @@
 
 **Status:** MERGED (merged_at: 2026-03-29T05:15:58Z)
 
-Confirmed merged — absent from `is:open author:suboss87` search. Squash-merge commit
-`14fd49c362b7d84b8fda157967befe2a0ca730f5` on the fork branch (message includes `#45911` and
-`thanks @suboss87`, authored by maintainer `obviyus`).
-Fork's `main` has not been synced with upstream yet.
-No action required.
+Squash-merge by maintainer `obviyus`. No action required.
 
 **Branch tip (fork):** `14fd49c362b7d84b8fda157967befe2a0ca730f5` (unchanged since run 16)
 
@@ -33,193 +29,129 @@ No action required.
 
 ## PR #45584 — feat/cron-fresh-session-option
 
-**Status:** OPEN | **Branch:** `feat/cron-fresh-session-option`
-**Head SHA:** `46e2b30607303996c6423abd33ec854c42b57ac3` (2026-04-06 — **unchanged since run 9**)
-**Last PR activity:** 2026-04-06T03:49:37Z (10 days stale as of this run — **unchanged from run 24**)
+**Status:** CLOSED without merge — **closed_at: 2026-04-17T02:10:17Z** (NEW this run)
 
-**Commits unique to PR branch vs fork/main (in order, oldest first):**
+Was OPEN in run 25 (2026-04-16). Branch tip `46e2b30607303996c6423abd33ec854c42b57ac3` was
+unchanged since 2026-04-06. No maintainer review or approval was ever recorded.
 
-| SHA         | Date       | Subject                                                           | Notes                     |
-| ----------- | ---------- | ----------------------------------------------------------------- | ------------------------- |
-| `cb7f5c9630` | 2026-03-25 | feat(cron): add freshSession option to control session reuse per job | Legitimate PR commit      |
-| `569a0bdfab` | 2026-04-06 | chore(protocol): regenerate Swift models for freshSession cron field | Legitimate (CI fix)       |
-| `46e2b30607` | 2026-04-06 | chore(format): fix markdown formatting in pr-monitor-report       | **Monitoring artifact**   |
+Prior outstanding issues now moot:
+- Upstream rebase was required (mergeable: dirty) — no longer actionable.
+- Monitoring artifact tip commit `46e2b30607` — no longer actionable.
+- CI was blocked by dirty state — no longer actionable.
 
-**Upstream conflict (carried from run 16 — GitHub API confirmed):**
-`mergeable: false`, `mergeable_state: dirty` — conflicts with `openclaw/openclaw:main`.
-Upstream remote is not reachable from this environment; automated rebase not possible.
-`review:changes_requested` search returned 0 results — no formal changes requested.
+Close reason not visible from available API access (comment bodies inaccessible without full
+`openclaw/openclaw` MCP scope or `gh` CLI). Likely closed due to staleness or upstream conflict.
 
-**CI (carried from run 16):** Only label checks running; build/test CI blocked by dirty state.
+**No action required.**
 
-**Reviews (carried from run 16):** Two bot reviews, both addressed in code:
-- `greptile-apps[bot]`: JSDoc accuracy — already correct on branch.
-- `chatgpt-codex-connector[bot]`: `freshSession` propagation — already implemented in `src/cron/service/jobs.ts`.
-No human maintainer reviews. No `CHANGES_REQUESTED` per GitHub search.
-
-**No new activity since run 9 (2026-04-06). Branch tip unchanged since run 24.**
-
-**Needs human attention:**
-1. **Upstream rebase required** — dirty against `openclaw/openclaw:main`; cannot be done from this environment.
-2. **Remove monitoring artifact** — commit `46e2b30607` (tip) adds `tasks/pr-monitor-report.md` to the PR diff; remove via interactive rebase before merge.
-3. **Re-trigger CI** after rebase to confirm all checks pass.
+**Fork branch tip:** `46e2b30607303996c6423abd33ec854c42b57ac3` (unchanged)
 
 ---
 
 ## PR #54363 — fix/chat-send-button-contrast
 
-**Status:** CLOSED (closed_at: 2026-03-27T14:12:49Z, merged: false)
+**Status:** CLOSED without merge (closed_at: 2026-03-27T14:12:49Z)
 
-Confirmed closed — absent from `is:open author:suboss87` search. Closed without merge;
-maintainer `velvet-shark` noted PR #55075 landed the same fix as part of a broader
-design-system cleanup. Branch still exists on fork at tip `76c2ea44d857b9ae68cf056dfc72c8e4d4cfcd64` (unchanged).
+Closed without merge. Maintainer `velvet-shark` noted PR #55075 landed the same fix.
 No action required.
+
+**Fork branch tip:** `76c2ea44d857b9ae68cf056dfc72c8e4d4cfcd64` (unchanged)
 
 ---
 
 ## PR #54730 — fix/subagent-identity-fallback
 
-**Status:** OPEN | **Branch:** `fix/subagent-identity-fallback`
-**Head SHA:** `f052129db44607fed72a0769dc5de6b919bcd5dc` (2026-04-06 — **unchanged since run 9**)
-**Last PR activity:** 2026-04-07T05:14:52Z (9 days stale as of this run — **unchanged from run 24**)
+**Status:** CLOSED without merge — **closed_at: 2026-04-17T02:10:15Z** (NEW this run)
 
-**Commits unique to PR branch vs fork/main (in order, oldest first):**
+Was OPEN in run 25 (2026-04-16). Branch tip `f052129db44607fed72a0769dc5de6b919bcd5dc` was
+unchanged since 2026-04-06. No human maintainer review was ever recorded (only bot reviews,
+which were addressed).
 
-| SHA         | Date       | Subject                                                               | Notes                     |
-| ----------- | ---------- | --------------------------------------------------------------------- | ------------------------- |
-| `7870292d6c` | 2026-03-26 | fix(ui): prefer per-agent identity for subagents over global ui.assistant | Legitimate PR commit  |
-| `8fb20f890e` | 2026-03-26 | refactor: hoist resolveDefaultAgentId to avoid redundant call         | Legitimate (bot feedback) |
-| `d18c8771bb` | 2026-04-06 | chore(format): fix markdown formatting in pr-monitor-report           | **Monitoring artifact**   |
-| `f052129db4` | 2026-04-06 | chore(tasks): update PR monitor report for suboss87 PRs (2026-04-06 run 9) | **Monitoring artifact** |
+Prior outstanding issues now moot:
+- CI failures (security-fast, contracts-protocol, ext shards 2/3/4/6) — no longer actionable.
+- Monitoring artifact tip commits `d18c8771bb` + `f052129db4` — no longer actionable.
+- Pending maintainer review — moot; PR closed before review occurred.
 
-**CI (carried from run 16 — GitHub API):**
+Close reason not visible from available API access (comment bodies inaccessible without full
+`openclaw/openclaw` MCP scope or `gh` CLI). Closed at ~02:10 UTC 2026-04-17, 2 seconds after
+#45584, suggesting a batch close by a maintainer.
 
-| Check                            | Result      |
-| -------------------------------- | ----------- |
-| security-fast                    | **failure** |
-| checks-fast-extensions           | **failure** |
-| checks-fast-extensions-shard-2   | **failure** |
-| checks-fast-extensions-shard-3   | **failure** |
-| checks-fast-extensions-shard-4   | **failure** |
-| checks-fast-extensions-shard-6   | **failure** |
-| checks-fast-contracts-protocol   | **failure** |
-| checks-node-test                 | cancelled   |
-| macos-node                       | cancelled   |
-| checks-node-channels             | success     |
-| build-smoke                      | success     |
-| checks-fast-bundled              | success     |
-| checks-fast-extensions-shard-1   | success     |
-| checks-fast-extensions-shard-5   | success     |
-| android-build-third-party        | success     |
-| android-build-play               | success     |
-| macos-swift                      | success     |
-| check / check-additional         | success     |
-| install-smoke / build-artifacts  | success     |
+**No action required.**
 
-Head SHA unchanged since run 9; failures assessed as pre-existing on main or flaky shards.
-`checks-node-channels` (core channel code) passes — confirms PR's `resolveAssistantIdentity`
-changes are not causing node-layer failures.
-`review:changes_requested` search returned 0 results — no formal changes requested.
-
-**Reviews (carried from run 16):**
-- `greptile-apps[bot]`: Flagged redundant `resolveDefaultAgentId` call — addressed in `8fb20f890e`.
-- No human maintainer reviews; no `CHANGES_REQUESTED`.
-- Community: `MoltyCel` confirmed fix logic and tests look correct (2026-04-06/07).
-
-**No new activity since run 9 (2026-04-06). Branch tip unchanged since run 24.**
-
-**Needs human attention:**
-1. **CI investigation** — confirm whether `security-fast`, `checks-fast-contracts-protocol`, and
-   failing extension shards are pre-existing on main or caused by this PR. If pre-existing,
-   maintainer can approve/merge regardless.
-2. **Remove monitoring artifacts** — commits `d18c8771bb` and `f052129db4` (tips) add
-   `tasks/pr-monitor-report.md` to PR diff; remove via interactive rebase before merge.
-3. **Maintainer review** — no human review yet despite positive community feedback. Fix addresses
-   a real subagent identity regression; candidate for maintainer review pass.
+**Fork branch tip:** `f052129db44607fed72a0769dc5de6b919bcd5dc` (unchanged)
 
 ---
 
-## Actions Taken This Run (run 25 — 2026-04-16)
+## Actions Taken This Run (run 26 — 2026-04-17)
 
-**GitHub API access:** BLOCKED — MCP restricted to `suboss87/openclaw` (fork only); `gh` CLI not
-installed; `openclaw/openclaw` PRs are not accessible via direct MCP calls. `search_pull_requests`
-and `search_issues` provide partial read access to `openclaw/openclaw` (PR state, comment counts,
-label state, review-state filters) but not full comment/review bodies.
+**GitHub API access:** BLOCKED — MCP restricted to `suboss87/openclaw` (fork only); `gh` CLI
+not installed; `openclaw/openclaw` PR/CI/review details are inaccessible via direct MCP calls.
+`search_pull_requests` and `search_issues` provide partial read access (state, closed_at,
+merged_at, comment counts, labels) but not comment/review bodies.
 
-**Branch SHAs confirmed from fork (run 25 vs run 24):**
+**Branch SHAs confirmed from fork (run 26 vs run 25):**
 
-| Branch                                  | SHA (tip)                                  | Changed since run 24? |
+| Branch                                  | SHA (tip)                                  | Changed since run 25? |
 | --------------------------------------- | ------------------------------------------ | --------------------- |
-| fix/telegram-approval-callback-fallback | `14fd49c362b7d84b8fda157967befe2a0ca730f5` | No                    |
-| feat/cron-fresh-session-option          | `46e2b30607303996c6423abd33ec854c42b57ac3` | No                    |
-| fix/chat-send-button-contrast           | `76c2ea44d857b9ae68cf056dfc72c8e4d4cfcd64` | No                    |
-| fix/subagent-identity-fallback          | `f052129db44607fed72a0769dc5de6b919bcd5dc` | No                    |
+| fix/telegram-approval-callback-fallback | `14fd49c362b7d84b8fda157967befe2a0ca730f5` | No |
+| feat/cron-fresh-session-option          | `46e2b30607303996c6423abd33ec854c42b57ac3` | No |
+| fix/chat-send-button-contrast           | `76c2ea44d857b9ae68cf056dfc72c8e4d4cfcd64` | No |
+| fix/subagent-identity-fallback          | `f052129db44607fed72a0769dc5de6b919bcd5dc` | No |
 
-All branch tips are **unchanged since run 9 (2026-04-06)** — now 10–11 days with no new commits.
+**Key changes since run 25:**
+- openclaw/openclaw#45584 (`feat/cron-fresh-session-option`): closed without merge at 2026-04-17T02:10:17Z
+- openclaw/openclaw#54730 (`fix/subagent-identity-fallback`): closed without merge at 2026-04-17T02:10:15Z
 
-**PR updated_at timestamps (run 25 vs run 24):**
-- #45584: 2026-04-06T03:49:37Z — **unchanged**
-- #54730: 2026-04-07T05:14:52Z — **unchanged**
+Both closures happened within 2 seconds of each other at ~02:10 UTC, consistent with a maintainer
+batch-closing stale/conflicting PRs. No code changes made this run.
 
-No new review comments, CI re-runs, or maintainer activity detected on either open monitored PR.
-
-**Review state (via search_pull_requests):**
-- `review:changes_requested` for open suboss87 PRs → 0 results (no blocking reviews)
-- `review:approved` for open suboss87 PRs → 0 results (no approvals yet)
-
-**Rebase:** Not attempted — upstream remote not reachable from this environment. #45584 remains
-dirty per last known state (run 16). #54730 had no upstream conflicts per run 16.
+**Rebase:** Not attempted — both open PRs are now closed; no further rebase needed.
 
 **No code changes made this run.**
 
 **Other open PRs by suboss87 (outside monitoring scope — noted for awareness):**
-- openclaw/openclaw#67457 (`fix(ollama): strip provider prefix from model ID in chat requests`)
-  — **NEW this run**, opened 2026-04-16T01:08:42Z, 2 comments, labels: size: XS. Already has
-  2 👍 reactions. Opened and got initial feedback same day.
-- openclaw/openclaw#66544 (`fix(gateway): exclude heartbeat sender ID from session display name`)
-  — updated 2026-04-16T01:10:53Z (**new activity since run 24**), now 3 comments (was 2), labels: gateway, size: XS, 2 👍
-- openclaw/openclaw#66225 (`fix(agents): align final tag regexes to handle self-closing <final/> variant`)
-  — updated 2026-04-16T01:14:10Z (**new activity since run 24**), 4 comments, labels: agents, size: S, 1 👍
-- openclaw/openclaw#56978 (`fix(whatsapp): exclude DM allowFrom from group policy sender bypass`)
-  — updated 2026-04-16T00:49:29Z (**new activity since run 24**), 4 comments, assigned: mcaxtr, labels: channel: whatsapp-web, size: S
-- openclaw/openclaw#55787 (`fix: strip orphaned OpenAI reasoning blocks before responses API call`)
-  — last updated 2026-04-14T00:24:43Z (unchanged from run 24), 5 comments, labels: agents, size: XS, 3 👍
+
+| PR | Title | Labels | Updated | Comments | Reactions |
+| --- | --- | --- | --- | --- | --- |
+| #66544 | fix(gateway): exclude heartbeat sender ID from session display name | gateway, size: XS | 2026-04-17T02:16:13Z | 3 | 👍×2 |
+| #66225 | fix(agents): align final tag regexes to handle self-closing `<final/>` variant | agents, size: S | 2026-04-17T02:13:03Z | 4 | 👍×1 |
+| #56978 | fix(whatsapp): exclude DM allowFrom from group policy sender bypass | channel: whatsapp-web, size: S | 2026-04-16T05:26:43Z | 4 | 👍×1 |
+| #55787 | fix: strip orphaned OpenAI reasoning blocks before responses API call | agents, size: XS | 2026-04-16T05:26:30Z | 5 | 👍×3 |
+
+Both #66544 and #66225 had activity at ~02:13–02:16 UTC today (same window as the batch closes).
+
+**Recently merged by suboss87 (for reference):**
+- openclaw/openclaw#67457 (`fix(ollama): strip provider prefix from model ID`) — merged 2026-04-16T05:45:38Z by `obviyus`
+- openclaw/openclaw#64735 (`fix(hooks): pass workspaceDir in gateway session reset`) — merged 2026-04-14T01:19:07Z by `vincentkoc`
 
 ---
 
 ## PRs Requiring Human Attention
 
-| PR | Issue | Priority | Update (run 25) |
-| --- | --- | --- | --- |
-| openclaw/openclaw#45584 | Upstream rebase required (dirty with `openclaw/openclaw:main`) | High | Still blocked; upstream not reachable. Now 11+ days stale. |
-| openclaw/openclaw#45584 | Remove monitoring artifact tip commit `46e2b30607` before merge | Medium | Unchanged |
-| openclaw/openclaw#45584 | Re-trigger CI after rebase | Medium | Blocked on rebase |
-| openclaw/openclaw#54730 | CI failures (security-fast, contracts-protocol, ext shards 2/3/4/6) — likely pre-existing | Medium | Unchanged — assessed as pre-existing (run 20) |
-| openclaw/openclaw#54730 | Remove monitoring artifact tip commits `f052129db4` + `d18c8771bb` before merge | Medium | Unchanged |
-| openclaw/openclaw#54730 | Needs human maintainer review (none yet; 9+ days stale) | Medium | Unchanged |
+All four originally monitored PRs are now resolved (2 merged, 2 closed without merge). No
+items from the original monitoring scope require further human attention.
+
+The active open PRs (#66544, #66225, #56978, #55787) are outside the original monitoring
+scope; they are noted for awareness only.
 
 ---
 
 ## Environment Constraints (ongoing)
 
 - `gh` CLI not installed in this environment (`command not found`).
-- GitHub MCP server is configured for `suboss87/openclaw` only; `openclaw/openclaw` PRs, CI
-  check runs, and review threads are inaccessible via direct MCP calls.
+- GitHub MCP server is configured for `suboss87/openclaw` only; `openclaw/openclaw` PR CI
+  check runs and review thread bodies are inaccessible via direct MCP calls.
 - `search_pull_requests` and `search_issues` provide partial read access to `openclaw/openclaw`
-  (PR state, comment counts, label state, review-state filters) but not full comment/review bodies.
+  (PR state, closed_at/merged_at, comment counts, label state) but not full comment/review bodies.
 - Upstream `openclaw/openclaw` remote not configured; git proxy not reachable for that repo.
-- Fork git proxy (`origin`) works for fork branches only.
 - **Action required by operator:** Install `gh` CLI (authenticated) or extend MCP scope to
   `openclaw/openclaw` to restore full monitoring capability.
 
 ---
 
-## Note on Monitoring Artifact Contamination (standing note)
+## Monitoring Artifact Contamination (standing note — now moot for monitored PRs)
 
 Runs 3–9 accidentally committed `tasks/pr-monitor-report.md` updates to the PR branches
-`feat/cron-fresh-session-option` and `fix/subagent-identity-fallback`. These commits are now
-the tip commits on those branches and will appear in the PR diff on GitHub. They must be removed
-via interactive rebase before those PRs can be merged cleanly.
-
-Going forward, monitoring report commits are made only to the fork's `main` branch (or the
-detached HEAD session branch), never to contributor PR branches.
+`feat/cron-fresh-session-option` and `fix/subagent-identity-fallback`. Those PRs are now
+closed, so the artifact contamination is no longer a merge blocker. The fork branches retain
+those artifact commits but no cleanup action is needed unless the branches are reused.
