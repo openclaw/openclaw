@@ -190,6 +190,7 @@ Current migrations:
 - `browser.ssrfPolicy.allowPrivateNetwork` → `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
 - `browser.profiles.*.driver: "extension"` → `"existing-session"`
 - remove `browser.relayBindHost` (legacy extension relay setting)
+- `channels.<id>.messages.*` / `channels.<id>.accounts.<aid>.messages.*` → the canonical locations (per-channel `ackReaction` / `responsePrefix` stay on the channel/account; `ackReactionScope`, `removeAckAfterReply`, `statusReactions`, and the other `MessagesConfig` keys land on top-level `messages.*`). The nested `messages` block is not a valid path on any channel schema, so the runtime silently ignores it until doctor repairs it.
 
 Doctor warnings also include account-default guidance for multi-account channels:
 

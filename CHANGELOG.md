@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.
+- Doctor/config: detect and repair misplaced `channels.<id>.messages.*` and `channels.<id>.accounts.<aid>.messages.*` blocks. These paths are not part of any channel schema, so the runtime was silently ignoring keys like `ackReaction`, `ackReactionScope`, `removeAckAfterReply`, and `statusReactions` when users nested them under a channel. `openclaw doctor --fix` now lifts channel-scoped `ackReaction`/`responsePrefix` to the channel/account scalar and relocates the other `MessagesConfig` keys to top-level `messages.*`. (#67859) [AI-assisted]
 
 ## 2026.4.15
 
