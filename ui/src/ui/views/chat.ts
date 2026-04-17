@@ -1183,7 +1183,7 @@ export function renderChat(props: ChatProps) {
       role="log"
       aria-live="polite"
       @scroll=${props.onChatScroll}
-      @wheel=${(event: WheelEvent) => props.onChatWheelIntent?.(event)}
+      @wheel=${props.onChatWheelIntent}
       @click=${handleCodeBlockCopy}
     >
       <div class="chat-thread-inner">
