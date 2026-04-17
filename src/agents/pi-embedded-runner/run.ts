@@ -98,6 +98,7 @@ import {
 import {
   AUTO_CONTINUE_FAST_PATH_INSTRUCTION,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
+  DEFAULT_PLAN_MODE_ACK_ONLY_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   resolveAckExecutionFastPathInstruction,
   extractPlanningOnlyPlanDetails,
@@ -105,6 +106,7 @@ import {
   resolveIncompleteTurnPayloadText,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  resolvePlanModeAckOnlyRetryInstruction,
   resolveEscalatingPlanningRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
@@ -467,6 +469,13 @@ export async function runEmbeddedPiAgent(
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
       let planningOnlyRetryAttempts = 0;
+      // PR-8 follow-up: counter for plan-mode-acknowledge-only retry
+      // (separate from planningOnlyRetryAttempts because the planning-
+      // only detector short-circuits in plan mode at incomplete-turn.ts:568,
+      // while this detector specifically handles the plan-mode case where
+      // the agent acknowledged but didn't call exit_plan_mode).
+      let planModeAckOnlyRetryAttempts = 0;
+      const maxPlanModeAckOnlyRetryAttempts = DEFAULT_PLAN_MODE_ACK_ONLY_RETRY_LIMIT;
       let autoContinueCycles = 0;
       let autoContinueAccumulatedMutation = false;
       // Codex P2 (PR #67538 r3096325365): use the session-resolved agent id
@@ -1770,6 +1779,35 @@ export async function runEmbeddedPiAgent(
               `planning-only turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${provider}/${modelId} contract=${executionContract} configured=${configuredExecutionContract} — retrying ` +
                 `${planningOnlyRetryAttempts}/${maxPlanningOnlyRetryAttempts} with act-now steer`,
+            );
+            continue;
+          }
+          // PR-8 follow-up: plan-mode-acknowledge-only detector. Sister
+          // to the planning-only retry above (which short-circuits in
+          // plan mode at incomplete-turn.ts:568). Triggers when the
+          // session is in plan mode and the agent's response had no
+          // exit_plan_mode call AND no investigative tool call AND
+          // clean stop. Reuses the planningOnlyRetryInstruction
+          // injection slot (already wired into prompt-additions, also
+          // reused by auto-continue at line ~1850 — established pattern).
+          const planModeAckOnlyInstruction = resolvePlanModeAckOnlyRetryInstruction({
+            planModeActive: params.planMode === "plan",
+            aborted,
+            timedOut,
+            attempt,
+            retryAttemptIndex: planModeAckOnlyRetryAttempts,
+          });
+          if (
+            planModeAckOnlyInstruction &&
+            planModeAckOnlyRetryAttempts < maxPlanModeAckOnlyRetryAttempts
+          ) {
+            planModeAckOnlyRetryAttempts += 1;
+            planningOnlyRetryInstruction = planModeAckOnlyInstruction;
+            log.warn(
+              `plan-mode ack-only turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${provider}/${modelId} — retrying ` +
+                `${planModeAckOnlyRetryAttempts}/${maxPlanModeAckOnlyRetryAttempts} ` +
+                `with exit_plan_mode steer`,
             );
             continue;
           }
