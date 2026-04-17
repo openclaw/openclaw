@@ -625,8 +625,11 @@ jobs:
               echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4" >> "$GITHUB_ENV"
               # The CLI backend Docker lane should exercise the same staged
               # Codex auth path Peter uses locally so MCP cron creation and
-              # multimodal probes stay covered in CI.
+              # multimodal probes stay covered in CI. Drop the local Codex
+              # config.toml because maintainer profiles can pin runner-local
+              # gateways that do not exist inside CI.
               echo 'OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV=["OPENAI_API_KEY","OPENAI_BASE_URL"]' >> "$GITHUB_ENV"
+              echo "OPENCLAW_LIVE_CLI_BACKEND_DROP_CODEX_CONFIG=1" >> "$GITHUB_ENV"
               ;;
             live-codex-harness-docker)
               # Keep CI on the API-key path for now. The staged Codex auth secret
