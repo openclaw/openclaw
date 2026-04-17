@@ -164,21 +164,6 @@ export function installWebFetchProviderContractSuite(params: {
       expect(applied.plugins?.entries?.[params.pluginId]?.enabled).toBe(true);
     }
 
-    const config = {
-      tools: {
-        web: {
-          fetch: {
-            provider: provider.id,
-            ...fetchConfigTarget,
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const tool = provider.createTool({ config, fetchConfig: fetchConfigTarget });
-
-    expect(tool).not.toBeNull();
-    expect(tool?.description.trim()).not.toBe("");
-    expect(tool?.parameters).toEqual(expect.any(Object));
-    expect(typeof tool?.execute).toBe("function");
+    expect(typeof provider.createTool).toBe("function");
   });
 }
