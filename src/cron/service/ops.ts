@@ -130,9 +130,20 @@ export async function start(state: CronServiceState) {
     }
   });
 
-  await runMissedJobs(state, {
-    skipJobIds: interruptedOneShotIds.size > 0 ? interruptedOneShotIds : undefined,
-  });
+  // Run missed jobs from before the restart.  If this throws (e.g. an
+  // isolated agent turn fails catastrophically), we must STILL arm the timer
+  // so the scheduler does not silently die until the next gateway restart.
+  // See: https://github.com/openclaw/openclaw/issues/67854
+  try {
+    await runMissedJobs(state, {
+      skipJobIds: interruptedOneShotIds.size > 0 ? interruptedOneShotIds : undefined,
+    });
+  } catch (err) {
+    state.deps.log.error(
+      { err: String(err) },
+      "cron: startup catch-up failed; arming timer anyway to keep scheduler alive",
+    );
+  }
 
   await locked(state, async () => {
     // Startup catch-up already persisted the latest in-memory store state, and
