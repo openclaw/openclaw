@@ -313,20 +313,40 @@ describe("setup surface helpers", () => {
   });
 
   describe("setup wizard account routing", () => {
-    it("normalizes account ids before using them as config keys", () => {
-      const cfg = setTwitchAccount(
-        {} as Parameters<typeof setTwitchAccount>[0],
-        {
-          username: "normalized-bot",
-          accessToken: "oauth:normalized",
-          clientId: "normalized-client",
-          channel: "#normalized",
-        },
-        "__proto__",
-      );
+    it("rejects reserved account ids before using them as config keys", () => {
+      expect(() =>
+        setTwitchAccount(
+          {} as Parameters<typeof setTwitchAccount>[0],
+          {
+            username: "reserved-bot",
+            accessToken: "oauth:reserved",
+            clientId: "reserved-client",
+            channel: "#reserved",
+          },
+          "__proto__",
+        ),
+      ).toThrow("Invalid Twitch account id");
 
-      expect(cfg.channels?.twitch?.accounts?.default?.username).toBe("normalized-bot");
       expect(Object.prototype).not.toHaveProperty("username");
+    });
+
+    it("rejects reserved account ids before env-token writes", async () => {
+      await expect(
+        configureWithEnvToken(
+          {} as Parameters<typeof configureWithEnvToken>[0],
+          mockPrompter,
+          null,
+          "oauth:fromenv",
+          false,
+          {} as Parameters<typeof configureWithEnvToken>[5],
+          "__proto__",
+        ),
+      ).rejects.toThrow("Invalid Twitch account id");
+
+      expect(mockPromptConfirm).not.toHaveBeenCalled();
+    });
+
+    it("normalizes account ids before rendering status lines", () => {
       expect(
         twitchSetupWizard.status?.resolveStatusLines?.({
           cfg: {},

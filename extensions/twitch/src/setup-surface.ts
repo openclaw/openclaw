@@ -2,6 +2,7 @@
  * Twitch setup wizard surface for CLI setup.
  */
 
+import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   formatDocsLink,
@@ -23,11 +24,20 @@ import type { TwitchAccountConfig, TwitchRole } from "./types.js";
 import { isAccountConfigured } from "./utils/twitch.js";
 
 const channel = "twitch" as const;
+const INVALID_ACCOUNT_ID_MESSAGE = "Invalid Twitch account id";
+
+function normalizeRequestedSetupAccountId(accountId: string): string {
+  const normalized = normalizeOptionalAccountId(accountId);
+  if (!normalized) {
+    throw new Error(INVALID_ACCOUNT_ID_MESSAGE);
+  }
+  return normalized;
+}
 
 function resolveSetupAccountId(cfg: OpenClawConfig, requestedAccountId?: string): string {
   const requested = requestedAccountId?.trim();
   if (requested) {
-    return normalizeAccountId(requested);
+    return normalizeRequestedSetupAccountId(requested);
   }
 
   const preferred = cfg.channels?.twitch?.defaultAccount?.trim();
@@ -39,7 +49,9 @@ export function setTwitchAccount(
   account: Partial<TwitchAccountConfig>,
   accountId: string = resolveSetupAccountId(cfg),
 ): OpenClawConfig {
-  const resolvedAccountId = normalizeAccountId(accountId);
+  const resolvedAccountId = accountId.trim()
+    ? normalizeRequestedSetupAccountId(accountId)
+    : resolveSetupAccountId(cfg);
   const existing = getAccountConfig(cfg, resolvedAccountId);
   const merged: TwitchAccountConfig = {
     username: account.username ?? existing?.username ?? "",
@@ -208,7 +220,9 @@ export async function configureWithEnvToken(
   dmPolicy: ChannelSetupDmPolicy,
   accountId: string = resolveSetupAccountId(cfg),
 ): Promise<{ cfg: OpenClawConfig } | null> {
-  const resolvedAccountId = normalizeAccountId(accountId);
+  const resolvedAccountId = accountId.trim()
+    ? normalizeRequestedSetupAccountId(accountId)
+    : resolveSetupAccountId(cfg);
   if (resolvedAccountId !== DEFAULT_ACCOUNT_ID) {
     return null;
   }
