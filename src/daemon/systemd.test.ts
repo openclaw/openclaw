@@ -20,6 +20,7 @@ vi.mock("node:child_process", async () => {
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
+  installSystemdService,
   isNonFatalSystemdInstallProbeError,
   isSystemdServiceEnabled,
   isSystemdUserServiceAvailable,
@@ -29,6 +30,7 @@ import {
   resolveSystemdUserUnitPath,
   stageSystemdService,
   stopSystemdService,
+  uninstallSystemdService,
 } from "./systemd.js";
 
 type ExecFileError = Error & {
@@ -896,5 +898,168 @@ describe("systemd service control", () => {
         cb(null, "", "");
       });
     await assertRestartSuccess({ USER: "debian" });
+  });
+});
+
+describe("installSystemdService / uninstallSystemdService — OPENCLAW_SYSTEMD_UNIT override", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    execFileMock.mockReset();
+  });
+
+  /**
+   * Regression test for: activateSystemdService called resolveGatewaySystemdServiceName
+   * instead of resolveSystemdServiceName, so on a node-only VM it would try to enable
+   * openclaw-gateway.service (which doesn't exist) instead of openclaw-node.service.
+   */
+  it("installSystemdService enables the unit named by OPENCLAW_SYSTEMD_UNIT, not openclaw-gateway", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-node-install-"));
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const env: NodeJS.ProcessEnv = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
+    };
+
+    const systemctlCalls: string[][] = [];
+
+    execFileMock.mockImplementation(
+      (
+        _cmd: string,
+        args: string[],
+        _opts: unknown,
+        cb: (err: null, stdout: string, stderr: string) => void,
+      ) => {
+        systemctlCalls.push([...args]);
+        cb(null, "", "");
+      },
+    );
+
+    const stdout = { write: vi.fn() } as unknown as NodeJS.WritableStream;
+
+    try {
+      await installSystemdService({
+        env,
+        stdout,
+        programArguments: ["/usr/bin/openclaw", "node", "run"],
+        workingDirectory: "/tmp",
+        environment: {},
+      });
+    } finally {
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+
+    // daemon-reload, enable, restart — all should target openclaw-node.service, not openclaw-gateway.service
+    const enableCall = systemctlCalls.find((args) => args.includes("enable"));
+    const restartCall = systemctlCalls.find((args) => args.includes("restart"));
+
+    expect(enableCall).toBeDefined();
+    expect(enableCall).toContain("openclaw-node.service");
+    expect(enableCall).not.toContain("openclaw-gateway.service");
+
+    expect(restartCall).toBeDefined();
+    expect(restartCall).toContain("openclaw-node.service");
+    expect(restartCall).not.toContain("openclaw-gateway.service");
+  });
+
+  it("uninstallSystemdService disables the unit named by OPENCLAW_SYSTEMD_UNIT, not openclaw-gateway", async () => {
+    const tempHomeRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-systemd-node-uninstall-"),
+    );
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const env: NodeJS.ProcessEnv = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
+    };
+
+    // Create the unit file so uninstall can delete it
+    const unitDir = path.join(home, ".config", "systemd", "user");
+    await fs.mkdir(unitDir, { recursive: true });
+    await fs.writeFile(path.join(unitDir, "openclaw-node.service"), "[Unit]\nDescription=test\n");
+
+    const systemctlCalls: string[][] = [];
+
+    execFileMock.mockImplementation(
+      (
+        _cmd: string,
+        args: string[],
+        _opts: unknown,
+        cb: (err: null, stdout: string, stderr: string) => void,
+      ) => {
+        // isSystemdUserServiceAvailable check
+        if (args.includes("status")) {
+          cb(null, "", "");
+          return;
+        }
+        systemctlCalls.push([...args]);
+        cb(null, "", "");
+      },
+    );
+
+    const stdout = { write: vi.fn() } as unknown as NodeJS.WritableStream;
+
+    try {
+      await uninstallSystemdService({ env, stdout });
+    } finally {
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+
+    const disableCall = systemctlCalls.find((args) => args.includes("disable"));
+
+    expect(disableCall).toBeDefined();
+    expect(disableCall).toContain("openclaw-node.service");
+    expect(disableCall).not.toContain("openclaw-gateway.service");
+  });
+
+  it("installSystemdService still uses openclaw-gateway.service when OPENCLAW_SYSTEMD_UNIT is not set", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-gw-install-"));
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const env: NodeJS.ProcessEnv = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      // No OPENCLAW_SYSTEMD_UNIT — gateway default
+    };
+
+    const systemctlCalls: string[][] = [];
+
+    execFileMock.mockImplementation(
+      (
+        _cmd: string,
+        args: string[],
+        _opts: unknown,
+        cb: (err: null, stdout: string, stderr: string) => void,
+      ) => {
+        systemctlCalls.push([...args]);
+        cb(null, "", "");
+      },
+    );
+
+    const stdout = { write: vi.fn() } as unknown as NodeJS.WritableStream;
+
+    try {
+      await installSystemdService({
+        env,
+        stdout,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {},
+      });
+    } finally {
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+
+    const enableCall = systemctlCalls.find((args) => args.includes("enable"));
+    expect(enableCall).toBeDefined();
+    expect(enableCall).toContain("openclaw-gateway.service");
   });
 });
