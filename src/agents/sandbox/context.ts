@@ -24,11 +24,13 @@ import type { SandboxContext, SandboxDockerConfig, SandboxWorkspaceInfo } from "
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 /**
- * Timeout for sandbox initialization (Docker container start + browser setup).
- * 60 s is generous enough for a warm container start but short enough to
- * unblock the message pipeline when Docker is hung or unreachable.
+ * Default timeout for sandbox initialization (Docker container start + browser
+ * setup). 60 s is generous enough for a warm container start but short enough
+ * to unblock the message pipeline when Docker is hung or unreachable.
+ * Operators can override this per-agent via `agents.defaults.sandbox.initTimeoutMs`
+ * (for example SSH/remote backends that need a larger budget).
  */
-const SANDBOX_INIT_TIMEOUT_MS = 60_000;
+const DEFAULT_SANDBOX_INIT_TIMEOUT_MS = 60_000;
 
 async function ensureSandboxWorkspaceLayout(params: {
   cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
@@ -147,12 +149,17 @@ export async function resolveSandboxContext(params: {
   // The timer is cleared via .finally() so it cannot keep the event loop alive
   // after initialization succeeds. timer.unref() allows the process to exit
   // cleanly if the event loop is otherwise idle.
+  const configuredInitTimeout = resolved.cfg.initTimeoutMs;
+  const initTimeoutMs =
+    typeof configuredInitTimeout === "number" && configuredInitTimeout > 0
+      ? configuredInitTimeout
+      : DEFAULT_SANDBOX_INIT_TIMEOUT_MS;
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       const err = new Error(
-        `Sandbox initialization timed out after ${SANDBOX_INIT_TIMEOUT_MS / 1000}s (Docker may be unresponsive)`,
+        `Sandbox initialization timed out after ${initTimeoutMs / 1000}s (Docker may be unresponsive)`,
       );
       defaultRuntime.error?.(err.message);
       // Abort the inner work so pending await points exit early.
@@ -161,7 +168,7 @@ export async function resolveSandboxContext(params: {
       // rejection surface the same Error identity.
       controller.abort(err);
       reject(err);
-    }, SANDBOX_INIT_TIMEOUT_MS);
+    }, initTimeoutMs);
     timer.unref?.();
   });
 

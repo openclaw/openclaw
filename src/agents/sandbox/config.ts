@@ -272,5 +272,6 @@ export function resolveSandboxConfigForAgent(
       globalPrune: agent?.prune,
       agentPrune: agentSandbox?.prune,
     }),
+    initTimeoutMs: agentSandbox?.initTimeoutMs ?? agent?.initTimeoutMs,
   };
 }

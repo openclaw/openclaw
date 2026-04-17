@@ -78,6 +78,7 @@ export type SandboxConfig = {
   browser: SandboxBrowserConfig;
   tools: SandboxToolPolicy;
   prune: SandboxPruneConfig;
+  initTimeoutMs?: number;
 };
 
 export type SandboxBrowserContext = {
