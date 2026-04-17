@@ -448,6 +448,60 @@ describe("Feishu Card Action Handler", () => {
     expect(createFeishuClientMock).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to p2p when Feishu chat API returns an error", async () => {
+    createFeishuClientMock.mockReturnValueOnce({
+      im: {
+        chat: {
+          get: vi.fn().mockResolvedValue({ code: 99, msg: "not found" }),
+        },
+      },
+    });
+    const event = createCardActionEvent({
+      token: "tok9d",
+      chatId: "oc_unknown_chat_456",
+      actionValue: { text: "/help" },
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleFeishuMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          message: expect.objectContaining({
+            chat_type: "p2p",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("falls back to p2p when Feishu chat API throws", async () => {
+    createFeishuClientMock.mockReturnValueOnce({
+      im: {
+        chat: {
+          get: vi.fn().mockRejectedValue(new Error("network failure")),
+        },
+      },
+    });
+    const event = createCardActionEvent({
+      token: "tok9e",
+      chatId: "oc_broken_chat_789",
+      actionValue: { text: "/help" },
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleFeishuMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          message: expect.objectContaining({
+            chat_type: "p2p",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("drops duplicate structured callback tokens", async () => {
     const event = createStructuredQuickActionEvent({
       token: "tok10",
