@@ -921,36 +921,31 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
-  it("keeps fail-closed behavior for shell payloads that invoke mutable script files", () => {
-    expectShellPayloadApprovalDenied({
-      tmpPrefix: "openclaw-shell-script-binding-",
-      fileName: "run.sh",
-      body: "#!/bin/sh\necho SAFE\n",
-    });
-  });
-
-  it("keeps fail-closed behavior for empty shell payload files", () => {
-    expectShellPayloadApprovalDenied({
-      tmpPrefix: "openclaw-shell-empty-binding-",
-      fileName: "empty",
-      body: "",
-    });
-  });
-
-  it("does not treat weak MZ text headers as native binaries", () => {
-    expectShellPayloadApprovalDenied({
-      tmpPrefix: "openclaw-shell-mz-text-binding-",
-      fileName: "mz-script",
-      body: "MZ not really a PE file\n",
-    });
-  });
-
-  it("keeps fail-closed behavior for unknown NUL-bearing headers", () => {
-    expectShellPayloadApprovalDenied({
-      tmpPrefix: "openclaw-shell-nul-header-binding-",
-      fileName: "nul-script",
-      body: "SAFE\u0000maybe-binary\n",
-    });
+  it("keeps fail-closed behavior for mutable or ambiguous shell payload files", () => {
+    for (const testCase of [
+      {
+        tmpPrefix: "openclaw-shell-script-binding-",
+        fileName: "run.sh",
+        body: "#!/bin/sh\necho SAFE\n",
+      },
+      {
+        tmpPrefix: "openclaw-shell-empty-binding-",
+        fileName: "empty",
+        body: "",
+      },
+      {
+        tmpPrefix: "openclaw-shell-mz-text-binding-",
+        fileName: "mz-script",
+        body: "MZ not really a PE file\n",
+      },
+      {
+        tmpPrefix: "openclaw-shell-nul-header-binding-",
+        fileName: "nul-script",
+        body: "SAFE\u0000maybe-binary\n",
+      },
+    ]) {
+      expectShellPayloadApprovalDenied(testCase);
+    }
   });
 
   it("keeps fail-closed behavior when the shell payload probe stops seeing a file", () => {
