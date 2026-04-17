@@ -27,6 +27,22 @@ const CONTINUATION_SCAN_MAX_RECORDS = 500;
 export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:full";
 const BOOTSTRAP_WARNING_DEDUPE_LIMIT = 1024;
 const seenBootstrapWarnings = new Set<string>();
+const bootstrapWarningOrder: string[] = [];
+
+function rememberBootstrapWarning(key: string): boolean {
+  if (seenBootstrapWarnings.has(key)) {
+    return false;
+  }
+  if (seenBootstrapWarnings.size >= BOOTSTRAP_WARNING_DEDUPE_LIMIT) {
+    const oldest = bootstrapWarningOrder.shift();
+    if (oldest) {
+      seenBootstrapWarnings.delete(oldest);
+    }
+  }
+  seenBootstrapWarnings.add(key);
+  bootstrapWarningOrder.push(key);
+  return true;
+}
 
 export function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection {
   return config?.agents?.defaults?.contextInjection ?? "always";
@@ -112,15 +128,8 @@ export function makeBootstrapWarn(params: {
   }
   return (message: string) => {
     const key = `${params.sessionLabel}\u0000${message}`;
-    if (seenBootstrapWarnings.has(key)) {
+    if (!rememberBootstrapWarning(key)) {
       return;
-    }
-    seenBootstrapWarnings.add(key);
-    if (seenBootstrapWarnings.size > BOOTSTRAP_WARNING_DEDUPE_LIMIT) {
-      const oldest = seenBootstrapWarnings.values().next().value;
-      if (typeof oldest === "string") {
-        seenBootstrapWarnings.delete(oldest);
-      }
     }
     params.warn?.(`${message} (sessionKey=${params.sessionLabel})`);
   };
