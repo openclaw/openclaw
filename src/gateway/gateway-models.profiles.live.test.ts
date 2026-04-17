@@ -46,7 +46,6 @@ import {
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
 } from "./live-tool-probe-utils.js";
-import { startGatewayServer } from "./server.js";
 import { loadSessionEntry, readSessionMessages } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
@@ -89,6 +88,13 @@ const GATEWAY_LIVE_SUITE_TIMEOUT_MS = resolveGatewayLiveSuiteTimeoutMs(GATEWAY_L
 const QUIET_LIVE_LOGS = process.env.OPENCLAW_LIVE_TEST_QUIET !== "0";
 
 const describeLive = isLiveTestEnabled(["OPENCLAW_LIVE_GATEWAY"]) ? describe : describe.skip;
+
+async function startGatewayServerForLive(
+  ...args: Parameters<typeof import("./server.js").startGatewayServer>
+): ReturnType<typeof import("./server.js").startGatewayServer> {
+  const mod = await import("./server.js");
+  return await mod.startGatewayServer(...args);
+}
 
 function parseFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
@@ -1384,7 +1390,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     await fs.writeFile(modelsPath, `${JSON.stringify({ providers: liveProviders }, null, 2)}\n`);
   }
 
-  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  let server: Awaited<ReturnType<typeof startGatewayServerForLive>> | undefined;
   let client: GatewayClient | undefined;
   try {
     const port = await withGatewayLiveProbeTimeout(
@@ -1392,7 +1398,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       `${params.label}: gateway-port`,
     );
     server = await withGatewayLiveProbeTimeout(
-      startGatewayServer(port, {
+      startGatewayServerForLive(port, {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
@@ -2214,7 +2220,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const toolProbePath = path.join(workspaceDir, `.openclaw-live-zai-fallback.${nonceA}.txt`);
     await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
-    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let server: Awaited<ReturnType<typeof startGatewayServerForLive>> | undefined;
     let client: GatewayClient | undefined;
     try {
       const port = await withGatewayLiveProbeTimeout(
@@ -2222,7 +2228,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         "zai-fallback: gateway-port",
       );
       server = await withGatewayLiveProbeTimeout(
-        startGatewayServer(port, {
+        startGatewayServerForLive(port, {
           bind: "loopback",
           auth: { mode: "token", token },
           controlUiEnabled: false,
