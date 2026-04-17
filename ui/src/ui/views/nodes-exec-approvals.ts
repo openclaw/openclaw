@@ -256,7 +256,7 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
               }}
             >
               <option value="gateway" ?selected=${state.target === "gateway"}>Gateway</option>
-              <option value="node" ?selected=${state.target === "node"}>Node</option>
+              <option value="node" ?selected=${state.target === "node"}>${t("nodes.binding.node")}</option>
             </select>
           </label>
           ${state.target === "node"
