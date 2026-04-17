@@ -199,6 +199,12 @@ describe("anthropic provider replay hooks", () => {
         provider: "anthropic",
         modelId: "claude-opus-4-7",
       } as never),
+    ).toBe("off");
+    expect(
+      provider.resolveDefaultThinkingLevel?.({
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+      } as never),
     ).toBe("adaptive");
     expect(
       provider.supportsXHighThinking?.({
