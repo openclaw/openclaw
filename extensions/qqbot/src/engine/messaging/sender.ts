@@ -34,7 +34,7 @@ import {
   type OutboundMeta,
 } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
-import { debugLog, debugError } from "../utils/log.js";
+import { debugLog, debugError, debugWarn } from "../utils/log.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "../utils/upload-cache.js";
 
@@ -60,15 +60,25 @@ export function getPluginUserAgent(): string {
 }
 
 /**
- * Initialize sender with the plugin version.
+ * Initialize sender with the plugin version and optional framework logger.
  * Must be called once during startup before any API calls.
+ *
+ * When `logger` is provided, all API-layer logs (token refresh, HTTP requests)
+ * flow through the framework log system instead of the QQBOT_DEBUG gate.
  */
-export function initSender(options: { pluginVersion?: string; openclawVersion?: string }): void {
+export function initSender(options: {
+  pluginVersion?: string;
+  openclawVersion?: string;
+  logger?: EngineLogger;
+}): void {
   if (options.pluginVersion) {
     _pluginVersion = options.pluginVersion;
   }
   if (options.openclawVersion) {
     _openclawVersion = options.openclawVersion;
+  }
+  if (options.logger) {
+    _frameworkLogger = options.logger;
   }
 }
 
@@ -81,10 +91,14 @@ export function setOpenClawVersion(version: string): void {
 
 // ============ Lazy singleton instances ============
 
+/** Framework logger injected via initSender(). Falls back to debugLog when absent. */
+let _frameworkLogger: EngineLogger | null = null;
+
 const _logger: EngineLogger = {
-  info: (msg: string) => debugLog(msg),
-  error: (msg: string) => debugError(msg),
-  debug: (msg: string) => debugLog(msg),
+  info: (msg: string) => (_frameworkLogger ? _frameworkLogger.info(msg) : debugLog(msg)),
+  error: (msg: string) => (_frameworkLogger ? _frameworkLogger.error(msg) : debugError(msg)),
+  warn: (msg: string) => (_frameworkLogger?.warn ? _frameworkLogger.warn(msg) : debugWarn(msg)),
+  debug: (msg: string) => (_frameworkLogger?.debug ? _frameworkLogger.debug(msg) : debugLog(msg)),
 };
 
 let _client: ApiClient | null = null;

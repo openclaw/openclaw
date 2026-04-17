@@ -29,6 +29,7 @@ import {
   shouldHandleQQBotExecApprovalRequest,
 } from "../../exec-approvals.js";
 import { resolveQQBotAccount } from "../config.js";
+import { getBridgeLogger } from "../logger.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 
@@ -84,14 +85,14 @@ const qqbotApprovalRuntimeSpec: ChannelApprovalNativeRuntimeSpec<
     isConfigured: ({ cfg, accountId }) => {
       if (resolveQQBotExecApprovalConfig({ cfg, accountId }) !== undefined) {
         const result = isQQBotExecApprovalClientEnabled({ cfg, accountId });
-        console.log(
+        getBridgeLogger().debug?.(
           `[qqbot:approval-runtime] isConfigured(profile) accountId=${accountId} → ${result}`,
         );
         return result;
       }
       const account = resolveQQBotAccount(cfg, accountId ?? undefined);
       const result = account.enabled && account.secretSource !== "none";
-      console.log(
+      getBridgeLogger().debug?.(
         `[qqbot:approval-runtime] isConfigured(fallback) accountId=${accountId} enabled=${account.enabled} secretSource=${account.secretSource} → ${result}`,
       );
       return result;
@@ -99,13 +100,13 @@ const qqbotApprovalRuntimeSpec: ChannelApprovalNativeRuntimeSpec<
     shouldHandle: ({ cfg, accountId, request }) => {
       if (resolveQQBotExecApprovalConfig({ cfg, accountId }) !== undefined) {
         const result = shouldHandleQQBotExecApprovalRequest({ cfg, accountId, request });
-        console.log(
+        getBridgeLogger().debug?.(
           `[qqbot:approval-runtime] shouldHandle(profile) accountId=${accountId} → ${result}`,
         );
         return result;
       }
       const target = resolveQQTarget(request as ApprovalRequest);
-      console.log(
+      getBridgeLogger().debug?.(
         `[qqbot:approval-runtime] shouldHandle(fallback) accountId=${accountId} target=${JSON.stringify(target)} → ${target !== null}`,
       );
       return target !== null;
@@ -120,7 +121,7 @@ const qqbotApprovalRuntimeSpec: ChannelApprovalNativeRuntimeSpec<
         req.id,
         view.actions.map((action) => action.decision),
       );
-      console.log(
+      getBridgeLogger().debug?.(
         `[qqbot:approval-runtime] buildPendingPayload requestId=${req.id} kind=${
           isExecRequest(req) ? "exec" : "plugin"
         }`,
@@ -134,7 +135,7 @@ const qqbotApprovalRuntimeSpec: ChannelApprovalNativeRuntimeSpec<
   transport: {
     prepareTarget: ({ request }) => {
       const target = resolveQQTarget(request as ApprovalRequest);
-      console.log(
+      getBridgeLogger().debug?.(
         `[qqbot:approval-runtime] prepareTarget requestId=${request.id} target=${JSON.stringify(target)}`,
       );
       if (!target) {
@@ -150,7 +151,7 @@ const qqbotApprovalRuntimeSpec: ChannelApprovalNativeRuntimeSpec<
 
       let result: MessageResponse;
       try {
-        console.log(
+        getBridgeLogger().debug?.(
           `[qqbot:approval-runtime] deliverPending accountId=${accountId} target=${preparedTarget.type}:${preparedTarget.id}`,
         );
         result = await messageApi.sendMessage(
@@ -168,7 +169,7 @@ const qqbotApprovalRuntimeSpec: ChannelApprovalNativeRuntimeSpec<
         );
       }
 
-      console.log(
+      getBridgeLogger().debug?.(
         `[qqbot:approval-runtime] deliverPending success accountId=${accountId} messageId=${result.id ?? ""}`,
       );
       return {

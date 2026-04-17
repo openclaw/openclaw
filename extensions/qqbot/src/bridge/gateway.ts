@@ -22,6 +22,7 @@ import type { GatewayAccount } from "../engine/gateway/types.js";
 import { initSender } from "../engine/messaging/sender.js";
 import { registerTextChunker } from "../engine/utils/text-chunk.js";
 import type { ResolvedQQBotAccount } from "../types.js";
+import { setBridgeLogger } from "./logger.js";
 import { getQQBotRuntimeForEngine } from "./runtime.js";
 
 // Register framework SDK version resolver for core/ slash commands.
@@ -73,6 +74,12 @@ export interface GatewayContext {
  */
 export async function startGateway(ctx: GatewayContext): Promise<void> {
   const runtime = getQQBotRuntimeForEngine();
+
+  // Inject framework logger into engine sender and bridge-layer modules.
+  if (ctx.log) {
+    initSender({ logger: ctx.log });
+    setBridgeLogger(ctx.log);
+  }
 
   registerTextChunker((text, limit) => runtime.channel.text.chunkMarkdownText(text, limit));
 

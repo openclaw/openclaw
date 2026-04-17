@@ -30,6 +30,7 @@ import {
   resolveQQBotExecApprovalConfig,
 } from "../../exec-approvals.js";
 import { resolveQQBotAccount } from "../config.js";
+import { getBridgeLogger } from "../logger.js";
 
 /**
  * When `execApprovals` is configured, delegate to the profile-based
@@ -148,7 +149,7 @@ function createQQBotApprovalCapability(): ChannelApprovalCapability {
           normalizeOptionalString(input.target?.accountId) ??
           normalizeOptionalString(input.request?.request?.turnSourceAccountId);
         const result = isNativeDeliveryEnabled({ cfg: input.cfg, accountId });
-        console.log(
+        getBridgeLogger().debug?.(
           `[qqbot:approval] shouldSuppressForwardingFallback channel=${channel} accountId=${accountId} → ${result}`,
         );
         return result;
@@ -187,7 +188,7 @@ function createQQBotApprovalCapability(): ChannelApprovalCapability {
       eventKinds: ["exec", "plugin"],
       isConfigured: ({ cfg, accountId }) => {
         const result = isNativeDeliveryEnabled({ cfg, accountId });
-        console.log(
+        getBridgeLogger().debug?.(
           `[qqbot:approval] nativeRuntime.isConfigured accountId=${accountId} → ${result}`,
         );
         return result;
@@ -198,7 +199,7 @@ function createQQBotApprovalCapability(): ChannelApprovalCapability {
           accountId,
           request: request as never,
         });
-        console.log(
+        getBridgeLogger().debug?.(
           `[qqbot:approval] nativeRuntime.shouldHandle accountId=${accountId} → ${result}`,
         );
         return result;

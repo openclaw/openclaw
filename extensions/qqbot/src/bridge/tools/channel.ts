@@ -2,8 +2,8 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { getAccessToken } from "../../engine/messaging/sender.js";
 import { ChannelApiSchema, executeChannelApi } from "../../engine/tools/channel-api.js";
 import type { ChannelApiParams } from "../../engine/tools/channel-api.js";
-import { debugLog } from "../../engine/utils/log.js";
 import { listQQBotAccountIds, resolveQQBotAccount } from "../config.js";
+import { getBridgeLogger } from "../logger.js";
 
 /**
  * Register the QQ channel API proxy tool.
@@ -15,13 +15,13 @@ import { listQQBotAccountIds, resolveQQBotAccount } from "../config.js";
 export function registerChannelTool(api: OpenClawPluginApi): void {
   const cfg = api.config;
   if (!cfg) {
-    debugLog("[qqbot-channel-api] No config available, skipping");
+    getBridgeLogger().debug?.("[qqbot-channel-api] No config available, skipping");
     return;
   }
 
   const accountIds = listQQBotAccountIds(cfg);
   if (accountIds.length === 0) {
-    debugLog("[qqbot-channel-api] No QQBot accounts configured, skipping");
+    getBridgeLogger().debug?.("[qqbot-channel-api] No QQBot accounts configured, skipping");
     return;
   }
 
@@ -29,7 +29,7 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
   const account = resolveQQBotAccount(cfg, firstAccountId);
 
   if (!account.appId || !account.clientSecret) {
-    debugLog("[qqbot-channel-api] Account not fully configured, skipping");
+    getBridgeLogger().debug?.("[qqbot-channel-api] Account not fully configured, skipping");
     return;
   }
 

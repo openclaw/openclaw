@@ -17,6 +17,7 @@ import {
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { registerPlatformAdapter, type PlatformAdapter } from "../engine/adapter/index.js";
 import type { FetchMediaOptions, FetchMediaResult } from "../engine/adapter/types.js";
+import { getBridgeLogger } from "./logger.js";
 
 const builtinAdapter: PlatformAdapter = {
   async validateRemoteUrl(_url: string, _options?: { allowPrivate?: boolean }): Promise<void> {
@@ -83,7 +84,7 @@ const builtinAdapter: PlatformAdapter = {
       });
       return true;
     } catch (err) {
-      console.error(`[qqbot] resolveApproval failed: ${String(err)}`);
+      getBridgeLogger().error(`[qqbot] resolveApproval failed: ${String(err)}`);
       return false;
     }
   },
