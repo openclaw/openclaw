@@ -37,6 +37,14 @@ export type HeartbeatStatus = {
   everyMs: number | null;
 };
 
+export type StatusContributorSummary = {
+  id: string;
+  label: string;
+  state: "ok" | "warn" | "error" | "info";
+  summary: string;
+  details?: string[];
+};
+
 export type A2AHealthState = "ok" | "delayed" | "waiting_external" | "failed" | "config_error";
 
 export type A2ALatestFailedTaskSummary = {
@@ -91,6 +99,7 @@ export type StatusSummary = {
   };
   channelSummary: string[];
   queuedSystemEvents: string[];
+  contributors?: StatusContributorSummary[];
   a2a: A2AStatusSummary;
   tasks: TaskRegistrySummary;
   taskAudit: TaskAuditSummary;

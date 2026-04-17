@@ -467,6 +467,7 @@ export async function getStatusSummary(
     },
     channelSummary,
     queuedSystemEvents,
+    contributors: [],
     a2a,
     tasks,
     taskAudit,
