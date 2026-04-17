@@ -15,6 +15,8 @@ import { normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 
+const BLANK_TOOL_NAME_SENTINEL = "_blank";
+
 type UnknownToolLoopGuardState = {
   lastUnknownToolName?: string;
   count: number;
@@ -201,7 +203,7 @@ function normalizeToolCallNameForDispatch(
     // Return a clearly-invalid sentinel so tool dispatch produces a single
     // descriptive "Tool _blank not found" error instead of looping on an
     // empty name that the model keeps retrying (#34129, #29965).
-    return inferToolNameFromToolCallId(rawToolCallId, allowedToolNames) ?? "_blank";
+    return inferToolNameFromToolCallId(rawToolCallId, allowedToolNames) ?? BLANK_TOOL_NAME_SENTINEL;
   }
   if (!allowedToolNames || allowedToolNames.size === 0) {
     return trimmed;
@@ -673,7 +675,10 @@ function classifyToolCallMessage(
     }
     sawToolCall = true;
     const rawName = typeof typedBlock.name === "string" ? typedBlock.name.trim() : "";
-    if (!rawName) {
+    // Treat the blank-name dispatch sentinel as incomplete so the unknown-tool
+    // loop guard does not count streaming placeholders while a real name is
+    // still arriving (see normalizeToolCallNameForDispatch).
+    if (!rawName || rawName === BLANK_TOOL_NAME_SENTINEL) {
       sawIncompleteToolCall = true;
       continue;
     }
