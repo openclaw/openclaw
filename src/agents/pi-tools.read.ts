@@ -64,6 +64,7 @@ type OpenClawReadToolOptions = {
   containerWorkdir?: string;
   bridge?: SandboxFsBridge;
   getBaseUrl?: () => string;
+  transformForTransport?: boolean; // Apply transport transformation
 };
 
 // --- OPERATIONS HELPERS ---
@@ -265,6 +266,7 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
     modelContextWindowTokens: params.modelContextWindowTokens,
     imageSanitization: params.imageSanitization,
     bridge: params.bridge,
+    transformForTransport: false, // Webchat doesn't need transform
   } as OpenClawReadToolOptions);
 }
 
@@ -584,7 +586,7 @@ const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac", "op
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi", "mkv", "m4v", "mpg", "mpeg"]);
 const MAX_DIR_ENTRIES = 200;
 
-// Export transform function for transports to use
+// Transform function for transports to use
 export function transformToolResultForTransport(result: AgentToolResult): AgentToolResult {
   if (!result.content || !Array.isArray(result.content)) {
     return result;
@@ -733,6 +735,8 @@ export function createOpenClawReadTool(
         // Build valid media URLs using dynamic base URL (fixes localhost hardcoding issue)
         const mediaUrl = getMediaUrl(inputPath, options?.getBaseUrl);
 
+        let result: AgentToolResult;
+
         if (IMAGE_EXTENSIONS.has(ext)) {
           if (signal?.aborted) {
             throw new Error("Read operation aborted");
@@ -781,7 +785,7 @@ export function createOpenClawReadTool(
           }
 
           // KEEP THE ORIGINAL WORKING FORMAT
-          return {
+          result = {
             toolCallId,
             content: [
               {
@@ -796,13 +800,11 @@ export function createOpenClawReadTool(
             ],
             details: { path: inputPath, size: fileBuffer.length },
           } as AgentToolResult;
-        }
-
-        // Audio handling with player - KEEP ORIGINAL FORMAT
-        if (AUDIO_EXTENSIONS.has(ext)) {
+        } else if (AUDIO_EXTENSIONS.has(ext)) {
+          // Audio handling with player - KEEP ORIGINAL FORMAT
           const mimeType = getAudioMimeType(ext);
 
-          return {
+          result = {
             toolCallId,
             content: [
               {
@@ -815,13 +817,11 @@ export function createOpenClawReadTool(
             ],
             details: { path: inputPath, size: fileSize },
           } as AgentToolResult;
-        }
-
-        // Video handling with player - KEEP ORIGINAL FORMAT
-        if (VIDEO_EXTENSIONS.has(ext)) {
+        } else if (VIDEO_EXTENSIONS.has(ext)) {
+          // Video handling with player - KEEP ORIGINAL FORMAT
           const mimeType = getVideoMimeType(ext);
 
-          return {
+          result = {
             toolCallId,
             content: [
               {
@@ -834,44 +834,51 @@ export function createOpenClawReadTool(
             ],
             details: { path: inputPath, size: fileSize },
           } as AgentToolResult;
-        }
-
-        if (signal?.aborted) {
-          throw new Error("Read operation aborted");
-        }
-
-        // Use bridge for text file reading if available
-        let text: string;
-        if (useBridge) {
-          const buffer = await options.bridge!.readFile({
-            filePath: inputPath,
-            cwd: rootDirResolved,
-            signal,
-          });
-          text = Buffer.isBuffer(buffer) ? buffer.toString("utf-8") : String(buffer);
         } else {
-          text = await fs.readFile(inputPath, "utf-8");
+          if (signal?.aborted) {
+            throw new Error("Read operation aborted");
+          }
+
+          // Use bridge for text file reading if available
+          let text: string;
+          if (useBridge) {
+            const buffer = await options.bridge!.readFile({
+              filePath: inputPath,
+              cwd: rootDirResolved,
+              signal,
+            });
+            text = Buffer.isBuffer(buffer) ? buffer.toString("utf-8") : String(buffer);
+          } else {
+            text = await fs.readFile(inputPath, "utf-8");
+          }
+
+          if (offset > 0 || limit !== undefined) {
+            const lines = text.split("\n");
+            const start = Math.max(0, Math.min(offset - 1, lines.length));
+            const end = limit !== undefined ? Math.min(start + limit, lines.length) : lines.length;
+            text = lines.slice(start, end).join("\n");
+          }
+
+          const maxChars = options?.modelContextWindowTokens
+            ? options.modelContextWindowTokens * 3
+            : 32000;
+          if (text.length > maxChars) {
+            text = text.slice(0, maxChars) + `\n\n... [Content truncated to ${maxChars} chars]`;
+          }
+
+          result = {
+            toolCallId,
+            content: [{ type: "text", text }],
+            details: { path: inputPath, size: fileSize, offset, limit },
+          } as AgentToolResult;
         }
 
-        if (offset > 0 || limit !== undefined) {
-          const lines = text.split("\n");
-          const start = Math.max(0, Math.min(offset - 1, lines.length));
-          const end = limit !== undefined ? Math.min(start + limit, lines.length) : lines.length;
-          text = lines.slice(start, end).join("\n");
+        // Apply transport transformation if requested
+        if (options?.transformForTransport) {
+          result = transformToolResultForTransport(result);
         }
 
-        const maxChars = options?.modelContextWindowTokens
-          ? options.modelContextWindowTokens * 3
-          : 32000;
-        if (text.length > maxChars) {
-          text = text.slice(0, maxChars) + `\n\n... [Content truncated to ${maxChars} chars]`;
-        }
-
-        return {
-          toolCallId,
-          content: [{ type: "text", text }],
-          details: { path: inputPath, size: fileSize, offset, limit },
-        } as AgentToolResult;
+        return result;
       } catch (error) {
         return {
           toolCallId,
