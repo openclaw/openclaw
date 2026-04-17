@@ -72,7 +72,7 @@ describe("SafeGatewayPlugin.connect()", () => {
         error: vi.fn(),
         exit: vi.fn(),
       },
-    });
+    }) as unknown as InstanceType<typeof GatewayPlugin>;
   }
 
   it("clears stale heartbeatInterval before delegating to super when isConnecting=true", () => {

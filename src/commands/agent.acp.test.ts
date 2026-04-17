@@ -3,6 +3,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import "./agent-command.test-mocks.js";
+import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import * as acpManagerModule from "../acp/control-plane/manager.js";
 import * as embeddedModule from "../agents/pi-embedded.js";
 import * as configIoModule from "../config/io.js";
@@ -401,9 +402,10 @@ describe("agentCommand ACP runtime routing", () => {
           return {
             kind: "stale",
             sessionKey,
-            error: Object.assign(new Error(`ACP metadata is missing for session ${sessionKey}.`), {
-              code: "ACP_SESSION_INIT_FAILED",
-            }),
+            error: new AcpRuntimeError(
+              "ACP_SESSION_INIT_FAILED",
+              `ACP metadata is missing for session ${sessionKey}.`,
+            ),
           };
         },
       });
