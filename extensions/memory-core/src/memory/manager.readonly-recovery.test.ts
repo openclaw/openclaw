@@ -136,6 +136,7 @@ describe("memory manager readonly recovery", () => {
     expect(harness.runSync).toHaveBeenCalledTimes(2);
     expect(harness.openDatabase).toHaveBeenCalledTimes(1);
     expect(harness.resetVectorState).toHaveBeenCalledTimes(1);
+    expect(harness.vector.dims).toBe(123);
     expect(initialClose).toHaveBeenCalledTimes(1);
     expectReadonlyRecoveryStatus(harness, params.expectedLastError);
   }
@@ -192,6 +193,20 @@ describe("memory manager readonly recovery", () => {
     ).resolves.toBeUndefined();
 
     expect(harness.vectorDegradedWriteWarningShown).toBe(false);
+  });
+
+  it("prefers reopened vector dims when metadata is available", async () => {
+    const { harness } = createReadonlyRecoveryHarness();
+    harness.readMeta.mockReturnValueOnce({ vectorDims: 768 });
+    harness.runSync.mockRejectedValueOnce(new Error("attempt to write a readonly database"));
+
+    await expect(
+      runSyncWithReadonlyRecovery(harness, {
+        reason: "test",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(harness.vector.dims).toBe(768);
   });
 
   it("sets busy_timeout on memory sqlite connections", async () => {

@@ -102,11 +102,12 @@ export async function runMemorySyncWithReadonlyRecovery(
     try {
       state.db.close();
     } catch {}
+    const previousVectorDims = state.vector.dims;
     state.db = state.openDatabase();
     state.resetVectorState();
     state.ensureSchema();
     const meta = state.readMeta();
-    state.vector.dims = meta?.vectorDims;
+    state.vector.dims = meta?.vectorDims ?? previousVectorDims;
     try {
       await state.runSync(params);
       state.readonlyRecoverySuccesses += 1;
