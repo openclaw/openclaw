@@ -1068,7 +1068,9 @@ export async function spawnAcpDirect(
       // resolve failure → fall through to new UUID
     }
   }
-  if (!sessionKey) sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
+  if (!sessionKey) {
+    sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
+  }
   const runtimeMode = resolveAcpSessionMode(spawnMode);
   const resolvedCwd = resolveSpawnedWorkspaceInheritance({
     config: cfg,
@@ -1124,6 +1126,18 @@ export async function spawnAcpDirect(
       timeoutMs: 10_000,
     });
     sessionCreated = true;
+    // Re-validate wasResolved: if the session was deleted between resolve and
+    // patch, sessions.patch recreates a fresh entry. Detect this by re-reading
+    // the store and checking for the persistent mode marker. Without this,
+    // cleanup would skip deletion for a session that is actually new.
+    if (wasResolved) {
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
+      const store = loadSessionStore(storePath);
+      const entry = store[sessionKey] as SessionEntry | undefined;
+      if (!entry?.acp?.mode || entry.acp.mode !== "persistent") {
+        wasResolved = false;
+      }
+    }
     const initializedSession = await initializeAcpSpawnRuntime({
       cfg,
       sessionKey,
