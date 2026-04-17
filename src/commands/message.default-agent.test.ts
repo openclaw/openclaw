@@ -4,11 +4,10 @@ import type { RuntimeEnv } from "../runtime.js";
 import { messageCommand } from "./message.js";
 
 let testConfig: Record<string, unknown> = {};
-const applyPluginAutoEnable = vi.hoisted(() => vi.fn(({ config }) => ({ config, changes: [] })));
-
-const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
+const resolveCommandConfigWithSecrets = vi.hoisted(() =>
   vi.fn(async ({ config }: { config: unknown }) => ({
     resolvedConfig: config,
+    effectiveConfig: config,
     diagnostics: [] as string[],
   })),
 );
@@ -24,20 +23,12 @@ const runMessageAction = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: () => testConfig,
-  };
-});
-
-vi.mock("../cli/command-secret-gateway.js", () => ({
-  resolveCommandSecretRefsViaGateway,
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => testConfig,
 }));
 
-vi.mock("../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable,
+vi.mock("../cli/command-config-resolution.js", () => ({
+  resolveCommandConfigWithSecrets,
 }));
 
 vi.mock("../infra/outbound/message-action-runner.js", () => ({
@@ -47,8 +38,7 @@ vi.mock("../infra/outbound/message-action-runner.js", () => ({
 describe("messageCommand agent routing", () => {
   beforeEach(() => {
     testConfig = {};
-    applyPluginAutoEnable.mockClear();
-    resolveCommandSecretRefsViaGateway.mockClear();
+    resolveCommandConfigWithSecrets.mockClear();
     runMessageAction.mockClear();
   });
 
@@ -68,8 +58,9 @@ describe("messageCommand agent routing", () => {
       },
     };
     testConfig = rawConfig;
-    resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
+    resolveCommandConfigWithSecrets.mockResolvedValueOnce({
       resolvedConfig,
+      effectiveConfig: resolvedConfig,
       diagnostics: [],
     });
 
@@ -90,13 +81,13 @@ describe("messageCommand agent routing", () => {
       runtime,
     );
 
-    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
+    expect(resolveCommandConfigWithSecrets).toHaveBeenCalledWith(
       expect.objectContaining({
         config: rawConfig,
         commandName: "message",
       }),
     );
-    const call = resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0] as {
+    const call = resolveCommandConfigWithSecrets.mock.calls[0]?.[0] as {
       targetIds?: Set<string>;
     };
     expect(call.targetIds).toBeInstanceOf(Set);
