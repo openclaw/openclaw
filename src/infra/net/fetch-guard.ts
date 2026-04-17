@@ -6,6 +6,7 @@ import { hasProxyEnvConfigured } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
   fetchWithRuntimeDispatcher,
+  isFormDataLike,
   isMockedFetch,
   type DispatcherAwareRequestInit,
 } from "./runtime-fetch.js";
@@ -202,6 +203,21 @@ function isAmbientGlobalFetch(params: {
   );
 }
 
+/**
+ * Test fetch mocks opt in to receiving the raw RequestInit — including the
+ * attached `dispatcher` and the caller-constructed FormData body — by setting
+ * `__openclawAcceptsDispatcher: true` on the function. Production code paths
+ * never carry this marker, so cross-realm FormData rewriting stays on for
+ * them while existing mock-based tests keep observing the body they built.
+ */
+function declaresDispatcherSupport(fetchImpl: FetchLike | undefined): boolean {
+  return (
+    typeof fetchImpl === "function" &&
+    (fetchImpl as FetchLike & { __openclawAcceptsDispatcher?: unknown })
+      .__openclawAcceptsDispatcher === true
+  );
+}
+
 export function retainSafeHeadersForCrossOriginRedirectHeaders(
   headers?: HeadersInit,
 ): Record<string, string> | undefined {
@@ -372,11 +388,31 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
             globalFetch: globalThis.fetch,
           })) ||
         isMockedFetch(defaultFetch);
+      // FormData bodies must travel through the same undici realm as the
+      // dispatcher: Node's built-in undici and the bundled `undici` in
+      // node_modules define two distinct FormData classes, so the dispatcher's
+      // internal `instanceof` check against its own FormData fails when they
+      // were allocated in different realms. When that happens the request is
+      // serialised as a plain object / stream fallback and the multipart
+      // boundary is dropped, producing HTTP 400
+      // `"request Content-Type isn't multipart/form-data"` at the provider
+      // (reproducible against Groq's /audio/transcriptions on Node 24).
+      //
+      // Test fetch mocks constructed via `withFetchPreconnect` set
+      // `__openclawAcceptsDispatcher: true` to declare that they accept the
+      // raw RequestInit (dispatcher + original FormData) without realm
+      // handling. Honour that opt-in so existing mocks still see the
+      // caller-constructed FormData for assertions.
+      const bodyNeedsRuntimeRealm =
+        isFormDataLike(init.body) &&
+        !declaresDispatcherSupport(params.fetchImpl) &&
+        !isMockedFetch(defaultFetch);
       // Explicit caller stubs and test-installed fetch mocks should win.
       // Otherwise, fall back to undici's fetch whenever we attach a dispatcher,
       // because the default global fetch path will not honor per-request
       // dispatchers.
-      const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
+      const shouldUseRuntimeFetch =
+        Boolean(dispatcher) && (bodyNeedsRuntimeRealm || !supportsDispatcherInit);
       const response = shouldUseRuntimeFetch
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);

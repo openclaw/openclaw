@@ -9,7 +9,7 @@ type RuntimeFormDataCtor = NonNullable<UndiciRuntimeDeps["FormData"]>;
 
 type FormDataEntryValueWithOptionalName = FormDataEntryValue & { name?: string };
 
-function isFormDataLike(value: unknown): value is FormData {
+export function isFormDataLike(value: unknown): value is FormData {
   return (
     typeof value === "object" &&
     value !== null &&
