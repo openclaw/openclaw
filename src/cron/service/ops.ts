@@ -161,12 +161,22 @@ export async function start(state: CronServiceState) {
     // zombie detector in onTimer() will eventually clean up stale markers.
     try {
       await locked(state, async () => {
-        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+        // Do NOT force-reload: if applyStartupCatchupOutcomes() already
+        // updated in-memory state (cleared runningAtMs for completed jobs,
+        // advanced nextRunAtMs) before its persist threw, reloading would
+        // discard those outcomes and revert to the pre-outcome disk state,
+        // potentially making completed jobs runnable again.
+        await ensureLoaded(state, { skipRecompute: true });
         let dirty = false;
         for (const job of state.store?.jobs ?? []) {
           if (typeof job.state.runningAtMs === "number") {
             job.state.runningAtMs = undefined;
             dirty = true;
+            // For one-shot jobs, also clear nextRunAtMs to prevent
+            // re-execution if the outcome was applied but not persisted.
+            if (job.schedule.kind === "at" && typeof job.state.nextRunAtMs === "number") {
+              job.state.nextRunAtMs = undefined;
+            }
           }
           if (interruptedOneShotIds.has(job.id) && typeof job.state.nextRunAtMs === "number") {
             job.state.nextRunAtMs = undefined;

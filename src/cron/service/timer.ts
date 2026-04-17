@@ -711,6 +711,13 @@ export function clearZombieRunningMarkers(state: CronServiceState): boolean {
         "cron: clearing zombie running marker",
       );
       job.state.runningAtMs = undefined;
+      // For one-shot jobs, also clear nextRunAtMs to prevent
+      // re-execution. A one-shot with a past-due nextRunAtMs and no
+      // runningAtMs will be selected for execution again, duplicating
+      // side effects from the interrupted run.
+      if (job.schedule.kind === "at" && typeof job.state.nextRunAtMs === "number") {
+        job.state.nextRunAtMs = undefined;
+      }
       cleared = true;
     }
   }
