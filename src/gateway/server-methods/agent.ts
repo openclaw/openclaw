@@ -569,11 +569,15 @@ export const agentHandlers: GatewayRequestHandlers = {
           spawnedBy: resetSpawnedBy,
         });
         const resetSessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKey);
-        const resetModelRef = resolveSessionModelRef(
+        const resetBaseModelRef = resolveSessionModelRef(
           resetCfg,
           resetSessionEntry,
           resetSessionAgentId,
         );
+        const resetEffectiveModelRef = {
+          provider: providerOverride || resetBaseModelRef.provider,
+          model: modelOverride || resetBaseModelRef.model,
+        };
         const bareResetPromptState = await resolveBareSessionResetPromptState({
           cfg: resetCfg,
           workspaceDir: runtimeWorkspaceDir,
@@ -585,8 +589,8 @@ export const agentHandlers: GatewayRequestHandlers = {
             agentId: resetSessionAgentId,
             sessionKey: requestedSessionKey,
             workspaceDir: runtimeWorkspaceDir,
-            modelProvider: resetModelRef.provider,
-            modelId: resetModelRef.model,
+            modelProvider: resetEffectiveModelRef.provider,
+            modelId: resetEffectiveModelRef.model,
           }),
         });
         // Keep bare /new and /reset behavior aligned with chat.send:
