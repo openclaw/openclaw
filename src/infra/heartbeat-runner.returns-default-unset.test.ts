@@ -15,6 +15,7 @@ import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/run
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
+import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import {
   type HeartbeatDeps,
   isHeartbeatEnabledForAgent,
@@ -226,6 +227,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetSystemEventsForTest();
+  resetHeartbeatEventsForTest();
   if (testRegistry) {
     setActivePluginRegistry(testRegistry);
   }
@@ -1589,6 +1591,7 @@ describe("runHeartbeatOnce", () => {
       expect(calledCtx.Provider).toBe("cron-event");
       expect(calledCtx.Body).toContain("Handle this reminder internally");
       expect(calledCtx.Body).not.toContain("Please relay this reminder to the user");
+      expect(getLastHeartbeatEvent()).toMatchObject({ status: "skipped", reason: "target-none" });
     } finally {
       replySpy.mockReset();
     }
@@ -1649,8 +1652,181 @@ describe("runHeartbeatOnce", () => {
       expect(calledCtx.ForceSenderIsOwnerFalse).toBe(true);
       expect(calledCtx.Body).toContain("Handle the result internally");
       expect(calledCtx.Body).not.toContain("Please relay the command output to the user");
+      expect(getLastHeartbeatEvent()).toMatchObject({ status: "skipped", reason: "target-none" });
     } finally {
       replySpy.mockReset();
     }
+  });
+
+  it("keeps heartbeat-child exec events internal for protected telegram primary DMs", async () => {
+    const tmpDir = await createCaseDir("hb-exec-protected-telegram-child");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", target: "last", isolatedSession: true },
+        },
+      },
+      channels: {
+        telegram: {
+          allowFrom: ["8582659364"],
+          accounts: { default: { botToken: "token", allowFrom: ["8582659364"] } },
+        },
+      },
+      session: { store: storePath },
+    };
+    const baseSessionKey = "agent:main:telegram:direct:thomas";
+    const heartbeatSessionKey = `${baseSessionKey}:heartbeat`;
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [baseSessionKey]: {
+          sessionId: "sid-base",
+          updatedAt: Date.now(),
+          channel: "telegram",
+          chatType: "direct",
+          lastChannel: "telegram",
+          lastTo: "8582659364",
+          lastAccountId: "default",
+          routeMetadata: {
+            scope: "peer-scoped-direct",
+            provenance: { provider: "telegram", chatType: "direct" },
+          },
+        },
+        [heartbeatSessionKey]: {
+          sessionId: "sid-heartbeat",
+          updatedAt: Date.now() + 1,
+          channel: "telegram",
+          chatType: "direct",
+          heartbeatIsolatedBaseSessionKey: baseSessionKey,
+          routeMetadata: {
+            scope: "heartbeat-isolated",
+            heartbeatIsolatedBaseSessionKey: baseSessionKey,
+            provenance: { provider: "telegram", chatType: "direct" },
+          },
+        },
+      }),
+    );
+    enqueueSystemEvent("exec finished: scan completed", {
+      sessionKey: heartbeatSessionKey,
+      contextKey: "exec:scan",
+      trusted: false,
+      deliveryContext: { channel: "hook", to: "8582659364", accountId: "default" },
+    });
+
+    const replySpy = vi.fn().mockResolvedValue({ text: "Handled internally" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg1", chatId: "8582659364" });
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      sessionKey: heartbeatSessionKey,
+      reason: "exec-event",
+      deps: {
+        ...createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+        telegram: sendTelegram,
+      },
+    });
+
+    expect(res.status).toBe("ran");
+    expect(sendTelegram).toHaveBeenCalledTimes(0);
+    const calledCtx = replySpy.mock.calls[0]?.[0] as {
+      Provider?: string;
+      Body?: string;
+      OriginatingChannel?: string | null;
+      OriginatingTo?: string | null;
+      ForceSenderIsOwnerFalse?: boolean;
+    };
+    expect(calledCtx.Provider).toBe("exec-event");
+    expect(calledCtx.ForceSenderIsOwnerFalse).toBe(true);
+    expect(calledCtx.OriginatingChannel).toBeUndefined();
+    expect(calledCtx.OriginatingTo).toBeUndefined();
+    expect(calledCtx.Body).toContain("Handle the result internally");
+    expect(calledCtx.Body).not.toContain("Please relay the command output to the user");
+    expect(getLastHeartbeatEvent()).toMatchObject({
+      status: "skipped",
+      reason: "protected-primary-dm",
+    });
+  });
+
+  it("blocks async exec relays that try to borrow a protected telegram primary DM", async () => {
+    const tmpDir = await createCaseDir("hb-exec-protected-telegram-main");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", target: "last" },
+        },
+      },
+      channels: {
+        telegram: {
+          allowFrom: ["8582659364"],
+          accounts: { default: { botToken: "token", allowFrom: ["8582659364"] } },
+        },
+      },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid-main",
+          updatedAt: Date.now(),
+          routeMetadata: {
+            scope: "agent-main",
+            provenance: { provider: "cli", chatType: "direct" },
+          },
+        },
+      }),
+    );
+    enqueueSystemEvent("exec finished: backup completed", {
+      sessionKey,
+      contextKey: "exec:backup",
+      trusted: false,
+      deliveryContext: { channel: "telegram", to: "8582659364", accountId: "default" },
+    });
+
+    const replySpy = vi.fn().mockResolvedValue({ text: "Handled internally" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg1", chatId: "8582659364" });
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      sessionKey,
+      reason: "exec-event",
+      deps: {
+        ...createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+        telegram: sendTelegram,
+      },
+    });
+
+    expect(res.status).toBe("ran");
+    expect(sendTelegram).toHaveBeenCalledTimes(0);
+    const calledCtx = replySpy.mock.calls[0]?.[0] as {
+      Provider?: string;
+      Body?: string;
+      OriginatingChannel?: string | null;
+      OriginatingTo?: string | null;
+    };
+    expect(calledCtx.Provider).toBe("exec-event");
+    expect(calledCtx.OriginatingChannel).toBeUndefined();
+    expect(calledCtx.OriginatingTo).toBeUndefined();
+    expect(calledCtx.Body).toContain("Handle the result internally");
+    expect(calledCtx.Body).not.toContain("Please relay the command output to the user");
+    expect(getLastHeartbeatEvent()).toMatchObject({
+      status: "skipped",
+      reason: "protected-primary-dm",
+    });
   });
 });

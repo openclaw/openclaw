@@ -29,9 +29,7 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.public.js";
 import { loadConfig } from "../config/config.js";
-import {
-  resolveAgentMainSessionKey,
-} from "../config/sessions/main-session.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import {
@@ -45,18 +43,22 @@ import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
+import { resolveSessionRoute } from "../routing/resolve-route.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { resolveSessionRoute } from "../routing/resolve-route.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
@@ -94,6 +96,7 @@ import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
+  type OutboundTarget,
 } from "./outbound/targets.js";
 import {
   consumeSystemEventEntries,
@@ -593,6 +596,157 @@ type HeartbeatPromptResolution = {
   hasCronEvents: boolean;
 };
 
+type AsyncHeartbeatRelayPolicy = {
+  blockReason:
+    | "protected-primary-dm"
+    | "internal-background-session"
+    | "ambiguous-async-provenance"
+    | null;
+  useStoredSessionRoute: boolean;
+};
+
+function resolveHeartbeatBaseSessionKey(sessionKey: string, entry?: SessionEntry): string {
+  const storedBaseSessionKey = normalizeLowercaseStringOrEmpty(
+    entry?.heartbeatIsolatedBaseSessionKey,
+  );
+  if (storedBaseSessionKey) {
+    return storedBaseSessionKey;
+  }
+  const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  return normalizedSessionKey.endsWith(":heartbeat")
+    ? normalizedSessionKey.replace(/:heartbeat$/u, "")
+    : normalizedSessionKey;
+}
+
+function normalizeTelegramPrimaryDirectTarget(target: unknown): string {
+  const trimmed = normalizeOptionalString(target);
+  if (!trimmed) {
+    return "";
+  }
+  const normalized = trimmed.replace(/^telegram:/iu, "");
+  return /^\d+$/u.test(normalized) ? normalized : "";
+}
+
+function resolveHeartbeatSessionThreadId(entry?: SessionEntry): string | number | undefined {
+  return (
+    entry?.deliveryContext?.threadId ??
+    entry?.lastThreadId ??
+    entry?.origin?.threadId ??
+    entry?.routeMetadata?.provenance?.threadId ??
+    undefined
+  );
+}
+
+function isProtectedTelegramPrimaryDeliveryContext(deliveryContext?: DeliveryContext): boolean {
+  return (
+    normalizeLowercaseStringOrEmpty(deliveryContext?.channel) === "telegram" &&
+    deliveryContext?.threadId == null &&
+    Boolean(normalizeTelegramPrimaryDirectTarget(deliveryContext?.to))
+  );
+}
+
+function isProtectedTelegramPrimaryHeartbeatSession(params: {
+  sessionKey: string;
+  entry?: SessionEntry;
+}): boolean {
+  const baseSessionKey = resolveHeartbeatBaseSessionKey(params.sessionKey, params.entry);
+  if (!/^agent:[^:]+:telegram:direct:[^:]+$/u.test(baseSessionKey)) {
+    return false;
+  }
+  const routeScope = normalizeLowercaseStringOrEmpty(params.entry?.routeMetadata?.scope);
+  return (
+    (!routeScope || routeScope === "peer-scoped-direct" || routeScope === "heartbeat-isolated") &&
+    resolveHeartbeatSessionThreadId(params.entry) == null
+  );
+}
+
+function isProtectedTelegramPrimaryBaseSession(params: {
+  sessionKey: string;
+  entry?: SessionEntry;
+}): boolean {
+  if (!params.entry) {
+    return false;
+  }
+  if (
+    !/^agent:[^:]+:telegram:direct:[^:]+$/u.test(normalizeLowercaseStringOrEmpty(params.sessionKey))
+  ) {
+    return false;
+  }
+  const routeScope = normalizeLowercaseStringOrEmpty(params.entry?.routeMetadata?.scope);
+  return (
+    (!routeScope || routeScope === "peer-scoped-direct") &&
+    resolveHeartbeatSessionThreadId(params.entry) == null
+  );
+}
+
+function blockHeartbeatUserDeliveryTarget(
+  delivery: OutboundTarget,
+  reason: NonNullable<AsyncHeartbeatRelayPolicy["blockReason"]> = "protected-primary-dm",
+): OutboundTarget {
+  return {
+    channel: "none",
+    reason,
+    accountId: delivery.accountId,
+    lastChannel: delivery.lastChannel,
+    lastAccountId: delivery.lastAccountId,
+  };
+}
+
+function hasDeliverableHeartbeatSessionRoute(entry?: SessionEntry): boolean {
+  const route = deliveryContextFromSession(entry);
+  return Boolean(route?.channel && isDeliverableMessageChannel(route.channel) && route.to);
+}
+
+function resolveAsyncHeartbeatRelayPolicy(params: {
+  sessionKey: string;
+  entry?: SessionEntry;
+  baseEntry?: SessionEntry;
+  turnSource?: DeliveryContext;
+  pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
+  shouldInspectPendingEvents: boolean;
+}): AsyncHeartbeatRelayPolicy | false {
+  if (!params.shouldInspectPendingEvents || params.pendingEventEntries.length === 0) {
+    return false;
+  }
+
+  const baseSessionKey = resolveHeartbeatBaseSessionKey(params.sessionKey, params.entry);
+  if (
+    isProtectedTelegramPrimaryBaseSession({
+      sessionKey: baseSessionKey,
+      entry: params.baseEntry,
+    })
+  ) {
+    return { blockReason: "protected-primary-dm", useStoredSessionRoute: false };
+  }
+  if (
+    isProtectedTelegramPrimaryHeartbeatSession({
+      sessionKey: params.sessionKey,
+      entry: params.entry,
+    })
+  ) {
+    return { blockReason: "protected-primary-dm", useStoredSessionRoute: false };
+  }
+  if (isProtectedTelegramPrimaryDeliveryContext(params.turnSource)) {
+    return { blockReason: "protected-primary-dm", useStoredSessionRoute: false };
+  }
+  if (params.turnSource?.channel && params.turnSource?.to) {
+    return { blockReason: null, useStoredSessionRoute: false };
+  }
+
+  const baseRouteScope = normalizeLowercaseStringOrEmpty(params.baseEntry?.routeMetadata?.scope);
+  if (!hasDeliverableHeartbeatSessionRoute(params.baseEntry)) {
+    return {
+      blockReason:
+        baseRouteScope === "explicit" || baseRouteScope === "agent-main"
+          ? "internal-background-session"
+          : "ambiguous-async-provenance",
+      useStoredSessionRoute: false,
+    };
+  }
+
+  return { blockReason: null, useStoredSessionRoute: true };
+}
+
 function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string): string {
   if (!/heartbeat\.md/i.test(prompt)) {
     return prompt;
@@ -610,6 +764,7 @@ function resolveHeartbeatRunPrompt(params: {
   heartbeat?: HeartbeatConfig;
   preflight: HeartbeatPreflight;
   canRelayToUser: boolean;
+  suppressExecUserRelay?: boolean;
   workspaceDir: string;
   startedAt: number;
   heartbeatFileContent?: string;
@@ -664,7 +819,9 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
 
   // Fallback to original behavior
   const basePrompt = hasExecCompletion
-    ? buildExecEventPrompt({ deliverToUser: params.canRelayToUser })
+    ? buildExecEventPrompt({
+        deliverToUser: params.canRelayToUser && !params.suppressExecUserRelay,
+      })
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
@@ -749,15 +906,38 @@ export async function runHeartbeatOnce(opts: {
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing still uses the main session entry (lastChannel, lastTo).
   const useIsolatedSession = heartbeat?.isolatedSession === true;
+  const baseSessionKey = resolveHeartbeatBaseSessionKey(sessionKey, entry);
+  const baseEntry =
+    preflight.session.store[baseSessionKey] ?? (baseSessionKey === sessionKey ? entry : undefined);
+  const asyncRelayPolicy = resolveAsyncHeartbeatRelayPolicy({
+    sessionKey,
+    entry,
+    baseEntry,
+    turnSource: preflight.turnSourceDeliveryContext,
+    pendingEventEntries: preflight.pendingEventEntries,
+    shouldInspectPendingEvents: preflight.shouldInspectPendingEvents,
+  });
+  const blockAsyncRelay = Boolean(asyncRelayPolicy?.blockReason);
+  const shouldUseStoredSessionRoute =
+    asyncRelayPolicy?.useStoredSessionRoute && heartbeat?.target !== "none";
+  const heartbeatDeliveryConfig = shouldUseStoredSessionRoute
+    ? {
+        ...heartbeat,
+        target: "last" as const,
+        to: undefined,
+        accountId: undefined,
+      }
+    : heartbeat;
   const delivery = resolveHeartbeatDeliveryTarget({
     cfg,
     entry,
-    heartbeat,
+    heartbeat: heartbeatDeliveryConfig,
     // Isolated heartbeat runs drain system events from their dedicated
     // `:heartbeat` session, not from the base session we peek during preflight.
     // Reusing base-session turnSource routing here can pin later isolated runs
     // to stale channels/threads because that base-session event context remains queued.
-    turnSource: useIsolatedSession ? undefined : preflight.turnSourceDeliveryContext,
+    turnSource:
+      useIsolatedSession || blockAsyncRelay ? undefined : preflight.turnSourceDeliveryContext,
   });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
@@ -780,21 +960,21 @@ export async function runHeartbeatOnce(opts: {
           accountId: delivery.accountId,
         })
       : { showOk: false, showAlerts: true, useIndicator: true };
-  const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery });
   const responsePrefix = resolveEffectiveMessagesConfig(cfg, agentId, {
     channel: delivery.channel !== "none" ? delivery.channel : undefined,
     accountId: delivery.accountId,
   }).responsePrefix;
 
-  const canRelayToUser = Boolean(
-    delivery.channel !== "none" && delivery.to && visibility.showAlerts,
-  );
+  const canRelayToUser =
+    !blockAsyncRelay &&
+    Boolean(delivery.channel !== "none" && delivery.to && visibility.showAlerts);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const { prompt, hasExecCompletion, hasCronEvents } = resolveHeartbeatRunPrompt({
     cfg,
     heartbeat,
     preflight,
     canRelayToUser,
+    suppressExecUserRelay: blockAsyncRelay,
     workspaceDir,
     startedAt,
     heartbeatFileContent: preflight.heartbeatFileContent,
@@ -811,6 +991,22 @@ export async function runHeartbeatOnce(opts: {
     }
     return { status: "skipped", reason: "no-tasks-due" };
   }
+
+  const effectiveDelivery = blockAsyncRelay
+    ? blockHeartbeatUserDeliveryTarget(
+        delivery,
+        asyncRelayPolicy?.blockReason ?? "protected-primary-dm",
+      )
+    : delivery;
+  const effectiveVisibility =
+    effectiveDelivery.channel !== "none"
+      ? resolveHeartbeatVisibility({
+          cfg,
+          channel: effectiveDelivery.channel,
+          accountId: effectiveDelivery.accountId,
+        })
+      : { showOk: false, showAlerts: false, useIndicator: true };
+  const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery: effectiveDelivery });
 
   let runSessionKey = sessionKey;
   if (useIsolatedSession) {
@@ -923,21 +1119,27 @@ export async function runHeartbeatOnce(opts: {
     From: sender,
     To: sender,
     OriginatingChannel:
-      !suppressOriginatingContext && delivery.channel !== "none" ? delivery.channel : undefined,
-    OriginatingTo: !suppressOriginatingContext ? delivery.to : undefined,
-    AccountId: delivery.accountId,
-    MessageThreadId: delivery.threadId,
+      !suppressOriginatingContext && effectiveDelivery.channel !== "none"
+        ? effectiveDelivery.channel
+        : undefined,
+    OriginatingTo: !suppressOriginatingContext ? effectiveDelivery.to : undefined,
+    AccountId: effectiveDelivery.accountId,
+    MessageThreadId: effectiveDelivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: runSessionKey,
     ForceSenderIsOwnerFalse: hasExecCompletion || hasUntrustedPendingEvents,
   };
-  if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
+  if (
+    !effectiveVisibility.showAlerts &&
+    !effectiveVisibility.showOk &&
+    !effectiveVisibility.useIndicator
+  ) {
     emitHeartbeatEvent({
       status: "skipped",
       reason: "alerts-disabled",
       durationMs: Date.now() - startedAt,
-      channel: delivery.channel !== "none" ? delivery.channel : undefined,
-      accountId: delivery.accountId,
+      channel: effectiveDelivery.channel !== "none" ? effectiveDelivery.channel : undefined,
+      accountId: effectiveDelivery.accountId,
     });
     return { status: "skipped", reason: "alerts-disabled" };
   }
@@ -949,17 +1151,17 @@ export async function runHeartbeatOnce(opts: {
     sessionKey,
   });
   const canAttemptHeartbeatOk = Boolean(
-    visibility.showOk && delivery.channel !== "none" && delivery.to,
+    effectiveVisibility.showOk && effectiveDelivery.channel !== "none" && effectiveDelivery.to,
   );
   const maybeSendHeartbeatOk = async () => {
-    if (!canAttemptHeartbeatOk || delivery.channel === "none" || !delivery.to) {
+    if (!canAttemptHeartbeatOk || effectiveDelivery.channel === "none" || !effectiveDelivery.to) {
       return false;
     }
-    const heartbeatPlugin = getChannelPlugin(delivery.channel);
+    const heartbeatPlugin = getChannelPlugin(effectiveDelivery.channel);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({
         cfg,
-        accountId: delivery.accountId,
+        accountId: effectiveDelivery.accountId,
         deps: opts.deps,
       });
       if (!readiness.ok) {
@@ -968,10 +1170,10 @@ export async function runHeartbeatOnce(opts: {
     }
     await deliverOutboundPayloads({
       cfg,
-      channel: delivery.channel,
-      to: delivery.to,
-      accountId: delivery.accountId,
-      threadId: delivery.threadId,
+      channel: effectiveDelivery.channel,
+      to: effectiveDelivery.to,
+      accountId: effectiveDelivery.accountId,
+      threadId: effectiveDelivery.threadId,
       payloads: [{ text: heartbeatOkText }],
       session: outboundSession,
       deps: opts.deps,
@@ -1015,10 +1217,12 @@ export async function runHeartbeatOnce(opts: {
         status: "ok-empty",
         reason: opts.reason,
         durationMs: Date.now() - startedAt,
-        channel: delivery.channel !== "none" ? delivery.channel : undefined,
-        accountId: delivery.accountId,
+        channel: effectiveDelivery.channel !== "none" ? effectiveDelivery.channel : undefined,
+        accountId: effectiveDelivery.accountId,
         silent: !okSent,
-        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
+        indicatorType: effectiveVisibility.useIndicator
+          ? resolveIndicatorType("ok-empty")
+          : undefined,
       });
       await updateTaskTimestamps();
       consumeInspectedSystemEvents();
@@ -1052,10 +1256,12 @@ export async function runHeartbeatOnce(opts: {
         status: "ok-token",
         reason: opts.reason,
         durationMs: Date.now() - startedAt,
-        channel: delivery.channel !== "none" ? delivery.channel : undefined,
-        accountId: delivery.accountId,
+        channel: effectiveDelivery.channel !== "none" ? effectiveDelivery.channel : undefined,
+        accountId: effectiveDelivery.accountId,
         silent: !okSent,
-        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
+        indicatorType: effectiveVisibility.useIndicator
+          ? resolveIndicatorType("ok-token")
+          : undefined,
       });
       await updateTaskTimestamps();
       consumeInspectedSystemEvents();
@@ -1091,8 +1297,8 @@ export async function runHeartbeatOnce(opts: {
         preview: normalized.text.slice(0, 200),
         durationMs: Date.now() - startedAt,
         hasMedia: false,
-        channel: delivery.channel !== "none" ? delivery.channel : undefined,
-        accountId: delivery.accountId,
+        channel: effectiveDelivery.channel !== "none" ? effectiveDelivery.channel : undefined,
+        accountId: effectiveDelivery.accountId,
       });
       await updateTaskTimestamps();
       consumeInspectedSystemEvents();
@@ -1107,21 +1313,21 @@ export async function runHeartbeatOnce(opts: {
           .join("\n")
       : normalized.text;
 
-    if (delivery.channel === "none" || !delivery.to) {
+    if (effectiveDelivery.channel === "none" || !effectiveDelivery.to) {
       emitHeartbeatEvent({
         status: "skipped",
-        reason: delivery.reason ?? "no-target",
+        reason: effectiveDelivery.reason ?? "no-target",
         preview: previewText?.slice(0, 200),
         durationMs: Date.now() - startedAt,
         hasMedia: mediaUrls.length > 0,
-        accountId: delivery.accountId,
+        accountId: effectiveDelivery.accountId,
       });
       await updateTaskTimestamps();
       consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    if (!visibility.showAlerts) {
+    if (!effectiveVisibility.showAlerts) {
       await updateTaskTimestamps();
       await restoreHeartbeatUpdatedAt({
         storePath,
@@ -1133,17 +1339,17 @@ export async function runHeartbeatOnce(opts: {
         reason: "alerts-disabled",
         preview: previewText?.slice(0, 200),
         durationMs: Date.now() - startedAt,
-        channel: delivery.channel,
+        channel: effectiveDelivery.channel,
         hasMedia: mediaUrls.length > 0,
-        accountId: delivery.accountId,
-        indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+        accountId: effectiveDelivery.accountId,
+        indicatorType: effectiveVisibility.useIndicator ? resolveIndicatorType("sent") : undefined,
       });
       consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    const deliveryAccountId = delivery.accountId;
-    const heartbeatPlugin = getChannelPlugin(delivery.channel);
+    const deliveryAccountId = effectiveDelivery.accountId;
+    const heartbeatPlugin = getChannelPlugin(effectiveDelivery.channel);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({
         cfg,
@@ -1157,11 +1363,11 @@ export async function runHeartbeatOnce(opts: {
           preview: previewText?.slice(0, 200),
           durationMs: Date.now() - startedAt,
           hasMedia: mediaUrls.length > 0,
-          channel: delivery.channel,
-          accountId: delivery.accountId,
+          channel: effectiveDelivery.channel,
+          accountId: effectiveDelivery.accountId,
         });
         log.info("heartbeat: channel not ready", {
-          channel: delivery.channel,
+          channel: effectiveDelivery.channel,
           reason: readiness.reason,
         });
         return { status: "skipped", reason: readiness.reason };
@@ -1170,11 +1376,11 @@ export async function runHeartbeatOnce(opts: {
 
     await deliverOutboundPayloads({
       cfg,
-      channel: delivery.channel,
-      to: delivery.to,
+      channel: effectiveDelivery.channel,
+      to: effectiveDelivery.to,
       accountId: deliveryAccountId,
       session: outboundSession,
-      threadId: delivery.threadId,
+      threadId: effectiveDelivery.threadId,
       payloads: [
         ...reasoningPayloads,
         ...(shouldSkipMain
@@ -1205,13 +1411,13 @@ export async function runHeartbeatOnce(opts: {
 
     emitHeartbeatEvent({
       status: "sent",
-      to: delivery.to,
+      to: effectiveDelivery.to,
       preview: previewText?.slice(0, 200),
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
-      channel: delivery.channel,
-      accountId: delivery.accountId,
-      indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+      channel: effectiveDelivery.channel,
+      accountId: effectiveDelivery.accountId,
+      indicatorType: effectiveVisibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
     await updateTaskTimestamps();
     consumeInspectedSystemEvents();
@@ -1222,9 +1428,9 @@ export async function runHeartbeatOnce(opts: {
       status: "failed",
       reason,
       durationMs: Date.now() - startedAt,
-      channel: delivery.channel !== "none" ? delivery.channel : undefined,
-      accountId: delivery.accountId,
-      indicatorType: visibility.useIndicator ? resolveIndicatorType("failed") : undefined,
+      channel: effectiveDelivery.channel !== "none" ? effectiveDelivery.channel : undefined,
+      accountId: effectiveDelivery.accountId,
+      indicatorType: effectiveVisibility.useIndicator ? resolveIndicatorType("failed") : undefined,
     });
     log.error(`heartbeat failed: ${reason}`, { error: reason });
     return { status: "failed", reason };
