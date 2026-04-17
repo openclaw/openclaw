@@ -1160,6 +1160,39 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
+      label: "rejects async register functions instead of silently loading them",
+      run: () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "async-register",
+          filename: "async-register.cjs",
+          body: `module.exports = {
+  id: "async-register",
+  async register(api) {
+    await Promise.resolve();
+    api.registerGatewayMethod("async-register.ping", ({ respond }) => respond(true, { ok: true }));
+  },
+};`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["async-register"],
+            },
+          },
+        });
+
+        const loaded = registry.plugins.find((entry) => entry.id === "async-register");
+        expect(loaded?.status).toBe("error");
+        expect(loaded?.failurePhase).toBe("register");
+        expect(loaded?.error).toContain("plugin register must be synchronous");
+        expect(Object.keys(registry.gatewayHandlers)).not.toContain("async-register.ping");
+      },
+    },
+    {
       label: "limits imports to the requested plugin ids",
       run: () => {
         useNoBundledPlugins();
