@@ -37,10 +37,13 @@ export function createJsonResponseFetchMock(payload: unknown) {
   const fetchMock = vi.fn<FetchMock>(async (input: RequestInfo | URL, init?: RequestInit) => {
     const body =
       typeof payload === "function" ? (payload as FetchPayloadFactory)(input, init) : payload;
-    return new Response(JSON.stringify(body), {
+    const serialized = JSON.stringify(body);
+    return {
+      ok: true,
       status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+      json: async () => body,
+      text: async () => serialized,
+    } as Response;
   });
   return withFetchPreconnect(fetchMock) as JsonResponseFetchMock;
 }

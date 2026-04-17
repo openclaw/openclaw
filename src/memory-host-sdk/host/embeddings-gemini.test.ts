@@ -62,8 +62,8 @@ async function createProviderWithFetch(
   return provider;
 }
 
-describe("buildGeminiTextEmbeddingRequest", () => {
-  it("builds a text embedding request with optional model and dimensions", () => {
+describe("Gemini embedding request helpers", () => {
+  it("builds text and multimodal requests", () => {
     expect(
       buildGeminiTextEmbeddingRequest({
         text: "hello",
@@ -77,11 +77,6 @@ describe("buildGeminiTextEmbeddingRequest", () => {
       taskType: "RETRIEVAL_DOCUMENT",
       outputDimensionality: 1536,
     });
-  });
-});
-
-describe("buildGeminiEmbeddingRequest", () => {
-  it("builds a multimodal request from structured input parts", () => {
     expect(
       buildGeminiEmbeddingRequest({
         input: {
@@ -107,49 +102,21 @@ describe("buildGeminiEmbeddingRequest", () => {
       outputDimensionality: 1536,
     });
   });
-});
 
-// ---------- Model detection ----------
-
-describe("isGeminiEmbedding2Model", () => {
-  it("returns true for gemini-embedding-2-preview", () => {
+  it("detects v2 model names", () => {
+    expect(GEMINI_EMBEDDING_2_MODELS.has("gemini-embedding-2-preview")).toBe(true);
     expect(isGeminiEmbedding2Model("gemini-embedding-2-preview")).toBe(true);
-  });
-
-  it("returns false for gemini-embedding-001", () => {
     expect(isGeminiEmbedding2Model("gemini-embedding-001")).toBe(false);
-  });
-
-  it("returns false for text-embedding-004", () => {
     expect(isGeminiEmbedding2Model("text-embedding-004")).toBe(false);
   });
-});
 
-describe("GEMINI_EMBEDDING_2_MODELS", () => {
-  it("contains gemini-embedding-2-preview", () => {
-    expect(GEMINI_EMBEDDING_2_MODELS.has("gemini-embedding-2-preview")).toBe(true);
-  });
-});
-
-// ---------- Dimension resolution ----------
-
-describe("resolveGeminiOutputDimensionality", () => {
-  it("returns undefined for non-v2 models", () => {
+  it("resolves v2 dimensions and rejects invalid values", () => {
     expect(resolveGeminiOutputDimensionality("gemini-embedding-001")).toBeUndefined();
     expect(resolveGeminiOutputDimensionality("text-embedding-004")).toBeUndefined();
-  });
-
-  it("returns 3072 by default for v2 models", () => {
     expect(resolveGeminiOutputDimensionality("gemini-embedding-2-preview")).toBe(3072);
-  });
-
-  it("accepts valid dimension values", () => {
     expect(resolveGeminiOutputDimensionality("gemini-embedding-2-preview", 768)).toBe(768);
     expect(resolveGeminiOutputDimensionality("gemini-embedding-2-preview", 1536)).toBe(1536);
     expect(resolveGeminiOutputDimensionality("gemini-embedding-2-preview", 3072)).toBe(3072);
-  });
-
-  it("throws for invalid dimension values", () => {
     expect(() => resolveGeminiOutputDimensionality("gemini-embedding-2-preview", 512)).toThrow(
       /Invalid outputDimensionality 512/,
     );
@@ -157,9 +124,20 @@ describe("resolveGeminiOutputDimensionality", () => {
       /Valid values: 768, 1536, 3072/,
     );
   });
-});
 
-// ---------- Provider behavior ----------
+  it("normalizes known model prefixes and default model", () => {
+    expect(normalizeGeminiModel("models/gemini-embedding-2-preview")).toBe(
+      "gemini-embedding-2-preview",
+    );
+    expect(normalizeGeminiModel("gemini/gemini-embedding-2-preview")).toBe(
+      "gemini-embedding-2-preview",
+    );
+    expect(normalizeGeminiModel("google/gemini-embedding-2-preview")).toBe(
+      "gemini-embedding-2-preview",
+    );
+    expect(normalizeGeminiModel("")).toBe(DEFAULT_GEMINI_EMBEDDING_MODEL);
+  });
+});
 
 describe("gemini embedding provider", () => {
   it("handles legacy and v2 request/response behavior", async () => {
@@ -251,22 +229,5 @@ describe("gemini embedding provider", () => {
         outputDimensionality: 768,
       },
     ]);
-  });
-});
-
-// ---------- Model normalization ----------
-
-describe("gemini model normalization", () => {
-  it("normalizes known model prefixes and default model", () => {
-    expect(normalizeGeminiModel("models/gemini-embedding-2-preview")).toBe(
-      "gemini-embedding-2-preview",
-    );
-    expect(normalizeGeminiModel("gemini/gemini-embedding-2-preview")).toBe(
-      "gemini-embedding-2-preview",
-    );
-    expect(normalizeGeminiModel("google/gemini-embedding-2-preview")).toBe(
-      "gemini-embedding-2-preview",
-    );
-    expect(normalizeGeminiModel("")).toBe(DEFAULT_GEMINI_EMBEDDING_MODEL);
   });
 });
