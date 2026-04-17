@@ -1,6 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../../../../src/agents/model-auth.js";
-import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
 vi.mock("../../../../src/infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: async (params: {
@@ -101,7 +100,6 @@ async function createProviderWithFetch(
   options: Partial<Parameters<typeof createGeminiEmbeddingProvider>[0]> & { model: string },
 ) {
   installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
-  mockPublicPinnedHostname();
   mockResolvedProviderKey();
   const { provider } = await createGeminiEmbeddingProvider({
     config: {} as never,

@@ -72,14 +72,10 @@ vi.mock("../../../src/config/model-input.js", () => ({
 vi.mock("../../../src/logging/subsystem.js", () => ({
   createSubsystemLogger: mediaRuntimeMocks.createSubsystemLogger,
 }));
-vi.mock("../../../src/secrets/provider-env-vars.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/secrets/provider-env-vars.js")>();
-  return {
-    ...actual,
-    getProviderEnvVars: mediaRuntimeMocks.getProviderEnvVars,
-    resolveProviderAuthEnvVarCandidates: mediaRuntimeMocks.resolveProviderAuthEnvVarCandidates,
-  };
-});
+vi.mock("../../../src/secrets/provider-env-vars.js", () => ({
+  getProviderEnvVars: mediaRuntimeMocks.getProviderEnvVars,
+  resolveProviderAuthEnvVarCandidates: mediaRuntimeMocks.resolveProviderAuthEnvVarCandidates,
+}));
 
 vi.mock("../../../src/image-generation/model-ref.js", () => ({
   parseImageGenerationModelRef: mediaRuntimeMocks.parseImageGenerationModelRef,
