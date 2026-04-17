@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
+  loadSessionStoreReadOnlyShared,
   saveSessionStore,
 } from "./sessions/store.js";
 import type { SessionEntry } from "./sessions/types.js";
@@ -83,6 +84,22 @@ describe("Session Store Cache", () => {
     // Second load - should stay cached (still no disk read)
     const loaded2 = loadSessionStore(storePath);
     expect(loaded2).toEqual(testStore);
+    expect(readSpy).toHaveBeenCalledTimes(0);
+    readSpy.mockRestore();
+  });
+
+  it("should reuse a shared read-only store object on cache hits", async () => {
+    const testStore = createSingleSessionStore();
+
+    await saveSessionStore(storePath, testStore);
+
+    const readSpy = vi.spyOn(fs, "readFileSync");
+
+    const shared1 = loadSessionStoreReadOnlyShared(storePath);
+    const shared2 = loadSessionStoreReadOnlyShared(storePath);
+
+    expect(shared1).toBe(shared2);
+    expect(shared2).toEqual(testStore);
     expect(readSpy).toHaveBeenCalledTimes(0);
     readSpy.mockRestore();
   });

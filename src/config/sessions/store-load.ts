@@ -4,6 +4,7 @@ import { getFileStatSnapshot } from "../cache-utils.js";
 import {
   isSessionStoreCacheEnabled,
   readSessionStoreCache,
+  readSessionStoreSharedCache,
   setSerializedSessionStore,
   writeSessionStoreCache,
 } from "./store-cache.js";
@@ -12,6 +13,10 @@ import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.j
 
 export type LoadSessionStoreOptions = {
   skipCache?: boolean;
+};
+
+type LoadSessionStoreInternalOptions = LoadSessionStoreOptions & {
+  shared?: boolean;
 };
 
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
@@ -63,17 +68,23 @@ export function normalizeSessionStore(store: Record<string, SessionEntry>): void
   }
 }
 
-export function loadSessionStore(
+function loadSessionStoreInternal(
   storePath: string,
-  opts: LoadSessionStoreOptions = {},
-): Record<string, SessionEntry> {
+  opts: LoadSessionStoreInternalOptions = {},
+): Record<string, SessionEntry> | Readonly<Record<string, SessionEntry>> {
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     const currentFileStat = getFileStatSnapshot(storePath);
-    const cached = readSessionStoreCache({
-      storePath,
-      mtimeMs: currentFileStat?.mtimeMs,
-      sizeBytes: currentFileStat?.sizeBytes,
-    });
+    const cached = opts.shared
+      ? readSessionStoreSharedCache({
+          storePath,
+          mtimeMs: currentFileStat?.mtimeMs,
+          sizeBytes: currentFileStat?.sizeBytes,
+        })
+      : readSessionStoreCache({
+          storePath,
+          mtimeMs: currentFileStat?.mtimeMs,
+          sizeBytes: currentFileStat?.sizeBytes,
+        });
     if (cached) {
       return cached;
     }
@@ -129,5 +140,25 @@ export function loadSessionStore(
     });
   }
 
+  if (opts.shared) {
+    return store;
+  }
   return structuredClone(store);
+}
+
+export function loadSessionStore(
+  storePath: string,
+  opts: LoadSessionStoreOptions = {},
+): Record<string, SessionEntry> {
+  return loadSessionStoreInternal(storePath, opts) as Record<string, SessionEntry>;
+}
+
+export function loadSessionStoreReadOnlyShared(
+  storePath: string,
+  opts: LoadSessionStoreOptions = {},
+): Readonly<Record<string, SessionEntry>> {
+  return loadSessionStoreInternal(storePath, {
+    ...opts,
+    shared: true,
+  }) as Readonly<Record<string, SessionEntry>>;
 }

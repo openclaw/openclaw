@@ -390,6 +390,52 @@ describe("gateway session utils", () => {
     }
   });
 
+  test("loadSessionEntry returns an entry clone so cache-backed reads stay immutable", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-load-entry-clone-", async ({ stateDir }) => {
+        const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(sessionsDir, "sessions.json"),
+          JSON.stringify(
+            {
+              "agent:main:main": {
+                sessionId: "sess-main",
+                updatedAt: 3,
+                displayName: "Original Session",
+              },
+            },
+            null,
+            2,
+          ),
+          "utf8",
+        );
+
+        const cfg = {
+          session: {
+            mainKey: "main",
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+          agents: { list: [{ id: "main", default: true }] },
+        } as OpenClawConfig;
+        setRuntimeConfigSnapshot(cfg, cfg);
+
+        const first = loadSessionEntry("agent:main:main");
+        expect(first.entry?.displayName).toBe("Original Session");
+        if (!first.entry) {
+          throw new Error("expected session entry");
+        }
+        first.entry.displayName = "Mutated Session";
+
+        const second = loadSessionEntry("agent:main:main");
+        expect(second.entry?.displayName).toBe("Original Session");
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
   test("pruneLegacyStoreKeys removes alias and case-variant ghost keys", () => {
     const store: Record<string, unknown> = {
       "agent:ops:work": { sessionId: "canonical", updatedAt: 3 },

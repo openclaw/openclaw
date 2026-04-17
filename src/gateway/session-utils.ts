@@ -39,6 +39,7 @@ import {
   type SessionStoreTarget,
   type SessionScope,
 } from "../config/sessions.js";
+import { loadSessionStoreReadOnlyShared } from "../config/sessions/store-load.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   normalizeAgentId,
@@ -369,7 +370,7 @@ export function loadSessionEntry(sessionKey: string) {
   const cfg = loadConfig();
   const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey });
   const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
-  const { storePath, store } = resolveGatewaySessionStoreLookup({
+  const { storePath, store } = resolveGatewaySessionStoreLookupReadOnly({
     cfg,
     key: sessionKey.trim(),
     canonicalKey,
@@ -382,11 +383,22 @@ export function loadSessionEntry(sessionKey: string) {
   });
   const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
   const legacyKey = freshestMatch?.key !== canonicalKey ? freshestMatch?.key : undefined;
-  return { cfg, storePath, store, entry: freshestMatch?.entry, canonicalKey, legacyKey };
+  let loadedStore: Record<string, SessionEntry> | undefined;
+  return {
+    cfg,
+    storePath,
+    get store() {
+      loadedStore ??= loadSessionStore(storePath);
+      return loadedStore;
+    },
+    entry: freshestMatch?.entry ? structuredClone(freshestMatch.entry) : undefined,
+    canonicalKey,
+    legacyKey,
+  };
 }
 
 export function resolveFreshestSessionStoreMatchFromStoreKeys(
-  store: Record<string, SessionEntry>,
+  store: Readonly<Record<string, SessionEntry>>,
   storeKeys: string[],
 ): { key: string; entry: SessionEntry } | undefined {
   const matches = storeKeys
@@ -405,14 +417,14 @@ export function resolveFreshestSessionStoreMatchFromStoreKeys(
 }
 
 export function resolveFreshestSessionEntryFromStoreKeys(
-  store: Record<string, SessionEntry>,
+  store: Readonly<Record<string, SessionEntry>>,
   storeKeys: string[],
 ): SessionEntry | undefined {
   return resolveFreshestSessionStoreMatchFromStoreKeys(store, storeKeys)?.entry;
 }
 
 function findFreshestStoreMatch(
-  store: Record<string, SessionEntry>,
+  store: Readonly<Record<string, SessionEntry>>,
   ...candidates: string[]
 ): { entry: SessionEntry; key: string } | undefined {
   const matches = new Map<string, { entry: SessionEntry; key: string }>();
@@ -822,10 +834,10 @@ function resolveGatewaySessionStoreLookup(params: {
   key: string;
   canonicalKey: string;
   agentId: string;
-  initialStore?: Record<string, SessionEntry>;
+  initialStore?: Readonly<Record<string, SessionEntry>>;
 }): {
   storePath: string;
-  store: Record<string, SessionEntry>;
+  store: Readonly<Record<string, SessionEntry>>;
   match: { entry: SessionEntry; key: string } | undefined;
 } {
   const scanTargets = buildGatewaySessionStoreScanTargets(params);
@@ -867,11 +879,58 @@ function resolveGatewaySessionStoreLookup(params: {
   };
 }
 
+function resolveGatewaySessionStoreLookupReadOnly(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  canonicalKey: string;
+  agentId: string;
+}): {
+  storePath: string;
+  store: Readonly<Record<string, SessionEntry>>;
+  match: { entry: SessionEntry; key: string } | undefined;
+} {
+  const scanTargets = buildGatewaySessionStoreScanTargets(params);
+  const candidates = resolveGatewaySessionStoreCandidates(params.cfg, params.agentId);
+  const fallback = candidates[0] ?? {
+    agentId: params.agentId,
+    storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
+  };
+  let selectedStorePath = fallback.storePath;
+  let selectedStore = loadSessionStoreReadOnlyShared(fallback.storePath);
+  let selectedMatch = findFreshestStoreMatch(selectedStore, ...scanTargets);
+  let selectedUpdatedAt = selectedMatch?.entry.updatedAt ?? Number.NEGATIVE_INFINITY;
+
+  for (let index = 1; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    if (!candidate) {
+      continue;
+    }
+    const store = loadSessionStoreReadOnlyShared(candidate.storePath);
+    const match = findFreshestStoreMatch(store, ...scanTargets);
+    if (!match) {
+      continue;
+    }
+    const updatedAt = match.entry.updatedAt ?? 0;
+    if (!selectedMatch || updatedAt >= selectedUpdatedAt) {
+      selectedStorePath = candidate.storePath;
+      selectedStore = store;
+      selectedMatch = match;
+      selectedUpdatedAt = updatedAt;
+    }
+  }
+
+  return {
+    storePath: selectedStorePath,
+    store: selectedStore,
+    match: selectedMatch,
+  };
+}
+
 export function resolveGatewaySessionStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
   scanLegacyKeys?: boolean;
-  store?: Record<string, SessionEntry>;
+  store?: Readonly<Record<string, SessionEntry>>;
 }): {
   agentId: string;
   storePath: string;

@@ -53,7 +53,7 @@ export {
   drainSessionStoreLockQueuesForTest,
   getSessionStoreLockQueueSizeForTest,
 } from "./store-lock-state.js";
-export { loadSessionStore } from "./store-load.js";
+export { loadSessionStore, loadSessionStoreReadOnlyShared } from "./store-load.js";
 
 const log = createSubsystemLogger("sessions/store");
 let sessionArchiveRuntimePromise: Promise<

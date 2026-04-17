@@ -52,11 +52,11 @@ export function dropSessionStoreObjectCache(storePath: string): void {
   SESSION_STORE_CACHE.delete(storePath);
 }
 
-export function readSessionStoreCache(params: {
+function readSessionStoreCacheEntry(params: {
   storePath: string;
   mtimeMs?: number;
   sizeBytes?: number;
-}): Record<string, SessionEntry> | null {
+}): SessionStoreCacheEntry | null {
   const cached = SESSION_STORE_CACHE.get(params.storePath);
   if (!cached) {
     return null;
@@ -65,7 +65,27 @@ export function readSessionStoreCache(params: {
     invalidateSessionStoreCache(params.storePath);
     return null;
   }
+  return cached;
+}
+
+export function readSessionStoreCache(params: {
+  storePath: string;
+  mtimeMs?: number;
+  sizeBytes?: number;
+}): Record<string, SessionEntry> | null {
+  const cached = readSessionStoreCacheEntry(params);
+  if (!cached) {
+    return null;
+  }
   return structuredClone(cached.store);
+}
+
+export function readSessionStoreSharedCache(params: {
+  storePath: string;
+  mtimeMs?: number;
+  sizeBytes?: number;
+}): Readonly<Record<string, SessionEntry>> | null {
+  return readSessionStoreCacheEntry(params)?.store ?? null;
 }
 
 export function writeSessionStoreCache(params: {
