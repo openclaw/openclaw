@@ -87,6 +87,8 @@
   - `src/plugin-sdk/AGENTS.md` expands public SDK contract rules.
   - `src/plugins/AGENTS.md` expands plugin loading, registry, and manifest rules.
   - `src/gateway/protocol/AGENTS.md` expands typed Gateway protocol rules.
+  - `src/gateway/AGENTS.md` expands Gateway server hot-path and plugin artifact rules.
+  - `src/agents/AGENTS.md` expands agent test/import performance rules.
   - `test/helpers/AGENTS.md` and `test/helpers/channels/AGENTS.md` expand shared test helper boundary rules.
 - Plugin architecture direction:
   - Keep a manifest-first control plane: discovery, validation, enablement, setup hints, and activation planning should stay metadata-driven by default.
@@ -215,6 +217,8 @@
 - Test performance guardrail: when production code already accepts `deps`, callbacks, or runtime injection, use that seam in tests before adding module-level mocks.
 - Test performance guardrail: prefer narrow public SDK subpaths such as `models-provider-runtime`, `skill-commands-runtime`, and `reply-dispatch-runtime` over older broad helper barrels when both expose the needed helper.
 - Test performance guardrail: treat import-dominated test time as a boundary bug. Refactor the import surface before adding more cases to the slow file.
+- Test performance guardrail: when replacing a slow integration test with helper-level coverage, extract the exact production composition into a named helper and test that helper. Do not trade coverage shape for speed without preserving the behavior proof somewhere cheaper.
+- Test performance guardrail: for plugin-owned static descriptors used by core tests or cold paths, prefer lightweight public artifacts with full-runtime fallback over loading broad bundled plugin barrels.
 - Agents MUST NOT modify baseline, inventory, ignore, snapshot, or expected-failure files to silence failing checks without explicit approval in this chat.
 - For targeted/local debugging, use the native root-project entrypoint: `pnpm test <path-or-filter> [vitest args...]` (for example `pnpm test src/commands/onboard-search.test.ts -t "shows registered plugin providers"`); do not default to raw `pnpm vitest run ...` because it bypasses the repo's default config/profile/pool routing.
 - Do not set test workers above 16; tried already.

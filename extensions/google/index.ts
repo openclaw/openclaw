@@ -3,20 +3,22 @@ import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-under
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { buildGoogleMusicGenerationProvider } from "./music-generation-provider.js";
 import { registerGoogleProvider } from "./provider-registration.js";
+import { buildGoogleSpeechProvider } from "./speech-provider.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 import { buildGoogleVideoGenerationProvider } from "./video-generation-provider.js";
 
 let googleImageGenerationProviderPromise: Promise<ImageGenerationProvider> | null = null;
 let googleMediaUnderstandingProviderPromise: Promise<MediaUnderstandingProvider> | null = null;
 
-type GoogleMediaUnderstandingProvider = MediaUnderstandingProvider & {
-  describeImage: NonNullable<MediaUnderstandingProvider["describeImage"]>;
-  describeImages: NonNullable<MediaUnderstandingProvider["describeImages"]>;
-  transcribeAudio: NonNullable<MediaUnderstandingProvider["transcribeAudio"]>;
-  describeVideo: NonNullable<MediaUnderstandingProvider["describeVideo"]>;
-};
+type GoogleMediaUnderstandingProvider = Required<
+  Pick<
+    MediaUnderstandingProvider,
+    "describeImage" | "describeImages" | "transcribeAudio" | "describeVideo"
+  >
+>;
 
 async function loadGoogleImageGenerationProvider(): Promise<ImageGenerationProvider> {
   if (!googleImageGenerationProviderPromise) {
@@ -110,9 +112,11 @@ export default definePluginEntry({
     api.registerCliBackend(buildGoogleGeminiCliBackend());
     registerGoogleGeminiCliProvider(api);
     registerGoogleProvider(api);
+    api.registerMemoryEmbeddingProvider(geminiMemoryEmbeddingProviderAdapter);
     api.registerImageGenerationProvider(createLazyGoogleImageGenerationProvider());
     api.registerMediaUnderstandingProvider(createLazyGoogleMediaUnderstandingProvider());
     api.registerMusicGenerationProvider(buildGoogleMusicGenerationProvider());
+    api.registerSpeechProvider(buildGoogleSpeechProvider());
     api.registerVideoGenerationProvider(buildGoogleVideoGenerationProvider());
     api.registerWebSearchProvider(createGeminiWebSearchProvider());
   },
