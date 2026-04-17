@@ -34,7 +34,10 @@ import {
   parseJsonObjectPreservingUnsafeIntegers,
   parseJsonPreservingUnsafeIntegers,
 } from "./ollama-json.js";
-import { buildOllamaBaseUrlSsrFPolicy } from "./provider-models.js";
+import {
+  buildOllamaBaseUrlSsrFPolicy,
+  isReasoningModelHeuristic,
+} from "./provider-models.js";
 
 const log = createSubsystemLogger("ollama-stream");
 
@@ -199,9 +202,14 @@ export function createConfiguredOllamaCompatStreamWrapper(
     streamFn = wrapOllamaCompatNumCtx(streamFn, resolveOllamaCompatNumCtx(model));
   }
 
-  if (ctx.thinkingLevel === "off") {
+  // Only apply the think parameter for models that are known to support thinking.
+  // Models like qwen2.5:0.5b don't support the think parameter at all and will
+  // return a 400 error if the parameter is sent (even with think=false).
+  const supportsThinking = isReasoningModelHeuristic(ctx.modelId);
+
+  if (supportsThinking && ctx.thinkingLevel === "off") {
     streamFn = createOllamaThinkingWrapper(streamFn, false);
-  } else if (ctx.thinkingLevel) {
+  } else if (supportsThinking && ctx.thinkingLevel) {
     // Any non-off ThinkLevel (minimal, low, medium, high, xhigh, adaptive)
     // should enable Ollama's native thinking mode.
     streamFn = createOllamaThinkingWrapper(streamFn, true);

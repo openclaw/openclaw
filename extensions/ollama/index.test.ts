@@ -395,7 +395,7 @@ describe("ollama plugin", () => {
     );
   });
 
-  it("wraps native Ollama payloads with top-level think=false when thinking is off", () => {
+  it("wraps native Ollama payloads with top-level think=false when thinking is off for reasoning models", () => {
     const provider = registerProvider();
     let payloadSeen: Record<string, unknown> | undefined;
     const baseStreamFn = vi.fn((_model, _context, options) => {
@@ -422,12 +422,12 @@ describe("ollama plugin", () => {
         },
       },
       provider: "ollama",
-      modelId: "qwen3.5:9b",
+      modelId: "deepseek-r1:8b",
       thinkingLevel: "off",
       model: {
         api: "ollama",
         provider: "ollama",
-        id: "qwen3.5:9b",
+        id: "deepseek-r1:8b",
         baseUrl: "http://127.0.0.1:11434",
         contextWindow: 131_072,
       },
@@ -439,7 +439,7 @@ describe("ollama plugin", () => {
       {
         api: "ollama",
         provider: "ollama",
-        id: "qwen3.5:9b",
+        id: "deepseek-r1:8b",
       } as never,
       {} as never,
       {},
@@ -449,7 +449,7 @@ describe("ollama plugin", () => {
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.think).toBeUndefined();
   });
 
-  it("wraps native Ollama payloads with top-level think=true when thinking is enabled", () => {
+  it("wraps native Ollama payloads with top-level think=true when thinking is enabled for reasoning models", () => {
     const provider = registerProvider();
     let payloadSeen: Record<string, unknown> | undefined;
     const baseStreamFn = vi.fn((_model, _context, options) => {
@@ -476,12 +476,12 @@ describe("ollama plugin", () => {
         },
       },
       provider: "ollama",
-      modelId: "qwen3.5:9b",
+      modelId: "deepseek-r1:8b",
       thinkingLevel: "low",
       model: {
         api: "ollama",
         provider: "ollama",
-        id: "qwen3.5:9b",
+        id: "deepseek-r1:8b",
         baseUrl: "http://127.0.0.1:11434",
         contextWindow: 131_072,
       },
@@ -493,7 +493,7 @@ describe("ollama plugin", () => {
       {
         api: "ollama",
         provider: "ollama",
-        id: "qwen3.5:9b",
+        id: "deepseek-r1:8b",
       } as never,
       {} as never,
       {},
@@ -553,6 +553,116 @@ describe("ollama plugin", () => {
       {},
     );
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
+    expect(payloadSeen?.think).toBeUndefined();
+  });
+
+  it("does not set think param for non-reasoning models even when thinkingLevel is set", () => {
+    const provider = registerProvider();
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [],
+        options: { num_ctx: 65536 },
+        stream: true,
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+
+    const wrapped = provider.wrapStreamFn?.({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      modelId: "qwen2.5:0.5b",
+      thinkingLevel: "low",
+      model: {
+        api: "ollama",
+        provider: "ollama",
+        id: "qwen2.5:0.5b",
+        baseUrl: "http://127.0.0.1:11434",
+        contextWindow: 131_072,
+      },
+      streamFn: baseStreamFn,
+    });
+
+    expect(typeof wrapped).toBe("function");
+    void wrapped?.(
+      {
+        api: "ollama",
+        provider: "ollama",
+        id: "qwen2.5:0.5b",
+      } as never,
+      {} as never,
+      {},
+    );
+    expect(baseStreamFn).toHaveBeenCalledTimes(1);
+    // qwen2.5:0.5b is not a reasoning model, so think param should NOT be set
+    // even when thinkingLevel is provided (fixes openclaw/openclaw#67949)
+    expect(payloadSeen?.think).toBeUndefined();
+  });
+
+  it("does not set think param for non-reasoning models when thinkingLevel is off", () => {
+    const provider = registerProvider();
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [],
+        options: { num_ctx: 65536 },
+        stream: true,
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+
+    const wrapped = provider.wrapStreamFn?.({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      modelId: "qwen2.5:0.5b",
+      thinkingLevel: "off",
+      model: {
+        api: "ollama",
+        provider: "ollama",
+        id: "qwen2.5:0.5b",
+        baseUrl: "http://127.0.0.1:11434",
+        contextWindow: 131_072,
+      },
+      streamFn: baseStreamFn,
+    });
+
+    expect(typeof wrapped).toBe("function");
+    void wrapped?.(
+      {
+        api: "ollama",
+        provider: "ollama",
+        id: "qwen2.5:0.5b",
+      } as never,
+      {} as never,
+      {},
+    );
+    expect(baseStreamFn).toHaveBeenCalledTimes(1);
+    // qwen2.5:0.5b is not a reasoning model, so think param should NOT be set
+    // even when thinkingLevel is "off" (fixes openclaw/openclaw#67949)
     expect(payloadSeen?.think).toBeUndefined();
   });
 });
