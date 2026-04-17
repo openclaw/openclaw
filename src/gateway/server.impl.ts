@@ -74,7 +74,10 @@ import {
   prepareGatewayStartupConfig,
 } from "./server-startup-config.js";
 import { prepareGatewayPluginBootstrap } from "./server-startup-plugins.js";
-import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
+import {
+  STARTUP_UNAVAILABLE_GATEWAY_METHODS,
+  createStartupGateBarrier,
+} from "./server-startup-unavailable-methods.js";
 import { startGatewayEarlyRuntime, startGatewayPostAttachRuntime } from "./server-startup.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
@@ -637,6 +640,10 @@ export async function startGatewayServer(
     const unavailableGatewayMethods = new Set<string>(
       minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
     );
+    const startupGateBarrier = createStartupGateBarrier();
+    if (minimalTestGateway) {
+      startupGateBarrier.open();
+    }
     const gatewayRequestContext = createGatewayRequestContext({
       deps,
       runtimeState,
@@ -696,6 +703,7 @@ export async function startGatewayServer(
       wizardRunner,
       broadcastVoiceWakeChanged,
       unavailableGatewayMethods,
+      startupGateBarrier,
     });
 
     setFallbackGatewayContextResolver(() => gatewayRequestContext);
@@ -765,6 +773,7 @@ export async function startGatewayServer(
       logHooks,
       logChannels,
       unavailableGatewayMethods,
+      startupGateBarrier,
     }));
 
     // Keep scheduled work inert until post-attach sidecars finish.

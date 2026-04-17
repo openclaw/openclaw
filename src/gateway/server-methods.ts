@@ -36,6 +36,7 @@ import { usageHandlers } from "./server-methods/usage.js";
 import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
+import { STARTUP_GATE_WAIT_MS } from "./server-startup-unavailable-methods.js";
 
 const CONTROL_PLANE_WRITE_METHODS = new Set(["config.apply", "config.patch", "update.run"]);
 function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {
@@ -111,16 +112,20 @@ export async function handleGatewayRequest(
     return;
   }
   if (context.unavailableGatewayMethods?.has(req.method)) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, `${req.method} unavailable during gateway startup`, {
-        retryable: true,
-        retryAfterMs: 500,
-        details: { method: req.method },
-      }),
-    );
-    return;
+    const barrier = context.startupGateBarrier;
+    const opened = barrier ? await barrier.waitWithTimeout(STARTUP_GATE_WAIT_MS) : false;
+    if (!opened || context.unavailableGatewayMethods.has(req.method)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, `${req.method} unavailable during gateway startup`, {
+          retryable: true,
+          retryAfterMs: 500,
+          details: { method: req.method },
+        }),
+      );
+      return;
+    }
   }
   if (CONTROL_PLANE_WRITE_METHODS.has(req.method)) {
     const budget = consumeControlPlaneWriteBudget({ client });

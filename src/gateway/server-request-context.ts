@@ -57,6 +57,7 @@ export type GatewayRequestContextParams = {
   wizardRunner: GatewayRequestContext["wizardRunner"];
   broadcastVoiceWakeChanged: GatewayRequestContext["broadcastVoiceWakeChanged"];
   unavailableGatewayMethods: ReadonlySet<string>;
+  startupGateBarrier: GatewayRequestContext["startupGateBarrier"];
 };
 
 export function createGatewayRequestContext(
@@ -150,5 +151,6 @@ export function createGatewayRequestContext(
     wizardRunner: params.wizardRunner,
     broadcastVoiceWakeChanged: params.broadcastVoiceWakeChanged,
     unavailableGatewayMethods: params.unavailableGatewayMethods,
+    startupGateBarrier: params.startupGateBarrier,
   };
 }

@@ -43,7 +43,10 @@ import {
 } from "./server-restart-sentinel.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
-import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
+import {
+  STARTUP_UNAVAILABLE_GATEWAY_METHODS,
+  type StartupGateBarrier,
+} from "./server-startup-unavailable-methods.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
@@ -290,6 +293,7 @@ export async function startGatewayPostAttachRuntime(
     };
     logChannels: { info: (msg: string) => void; error: (msg: string) => void };
     unavailableGatewayMethods: Set<string>;
+    startupGateBarrier: StartupGateBarrier;
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
@@ -345,6 +349,7 @@ export async function startGatewayPostAttachRuntime(
     for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
       params.unavailableGatewayMethods.delete(method);
     }
+    params.startupGateBarrier.open();
   }
 
   if (!params.minimalTestGateway) {
