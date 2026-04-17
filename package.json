@@ -1084,6 +1084,10 @@
       "types": "./dist/plugin-sdk/secret-input.d.ts",
       "default": "./dist/plugin-sdk/secret-input.js"
     },
+    "./plugin-sdk/secret-input-runtime": {
+      "types": "./dist/plugin-sdk/secret-input-runtime.d.ts",
+      "default": "./dist/plugin-sdk/secret-input-runtime.js"
+    },
     "./plugin-sdk/channel-status": {
       "types": "./dist/plugin-sdk/channel-status.d.ts",
       "default": "./dist/plugin-sdk/channel-status.js"
