@@ -860,6 +860,17 @@ export function purgeSubagentRunsForSessionKey(childSessionKey: string): number 
   if (!key) {
     return 0;
   }
+  // Pull in any disk-resident rows so session-mode runs created by other
+  // worker processes are visible to the purge. Read paths merge disk state via
+  // getSubagentRunsSnapshotForRead, so a cross-worker row must be removed here
+  // too — otherwise it would linger on disk indefinitely (sweepSubagentRuns
+  // skips all spawnMode:"session" entries, and persistSubagentRuns would keep
+  // writing the stale row back on every persist). mergeOnly preserves the
+  // memory-first semantics used on startup restore.
+  subagentRegistryDeps.restoreSubagentRunsFromDisk({
+    runs: subagentRuns,
+    mergeOnly: true,
+  });
   const runIds = findRunIdsByChildSessionKey(key);
   if (runIds.length === 0) {
     return 0;
