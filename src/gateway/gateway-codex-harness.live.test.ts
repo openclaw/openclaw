@@ -535,6 +535,7 @@ describeLive("gateway live (Codex harness)", () => {
             "Available in this session:",
             "Available models in this session:",
             "Available models in this environment:",
+            "Available models in this Codex environment:",
             "Available agent models:",
             "Current:",
             "Current: `codex/",
