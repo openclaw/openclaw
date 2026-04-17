@@ -40,6 +40,17 @@ export interface LineGroupConfig {
   enabled?: boolean;
   allowFrom?: Array<string | number>;
   requireMention?: boolean;
+  /**
+   * When `true`, non-text messages (images, stickers, videos, audio, files,
+   * locations) in groups with `requireMention: true` are also gated by the
+   * mention check. The LINE Messaging API does not deliver
+   * `mention.mentionees` on non-text messages, so enabling this option
+   * causes unmentionable media in a group to be skipped, matching how bots
+   * behave in WhatsApp/Telegram/Discord/Slack groups. Defaults to `false`
+   * to preserve the historical fail-open behavior where non-text group
+   * messages bypass `requireMention`.
+   */
+  requireMentionForNonText?: boolean;
   systemPrompt?: string;
   skills?: string[];
 }

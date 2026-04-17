@@ -286,6 +286,7 @@ function createLineWebhookTestContext(params: {
   groupPolicy?: LineAccountConfig["groupPolicy"];
   dmPolicy?: LineAccountConfig["dmPolicy"];
   requireMention?: boolean;
+  requireMentionForNonText?: boolean;
   groupHistories?: Map<string, HistoryEntry[]>;
   replayCache?: ReturnType<typeof createLineWebhookReplayCache>;
 }): Parameters<typeof handleLineWebhookEvents>[1] {
@@ -293,6 +294,19 @@ function createLineWebhookTestContext(params: {
     ...(params.groupPolicy ? { groupPolicy: params.groupPolicy } : {}),
     ...(params.dmPolicy ? { dmPolicy: params.dmPolicy } : {}),
   };
+  const groupEntry =
+    params.requireMention === undefined && params.requireMentionForNonText === undefined
+      ? undefined
+      : {
+          "*": {
+            ...(params.requireMention === undefined
+              ? {}
+              : { requireMention: params.requireMention }),
+            ...(params.requireMentionForNonText === undefined
+              ? {}
+              : { requireMentionForNonText: params.requireMentionForNonText }),
+          },
+        };
   return {
     cfg: { channels: { line: lineConfig } },
     account: {
@@ -303,9 +317,7 @@ function createLineWebhookTestContext(params: {
       tokenSource: "config",
       config: {
         ...lineConfig,
-        ...(params.requireMention === undefined
-          ? {}
-          : { groups: { "*": { requireMention: params.requireMention } } }),
+        ...(groupEntry === undefined ? {} : { groups: groupEntry }),
       },
     },
     runtime: createRuntime(),
@@ -1012,6 +1024,68 @@ describe("handleLineWebhookEvents", () => {
     });
 
     await expectRequireMentionGroupMessageProcessed(event);
+  });
+
+  it("skips non-text group messages when requireMentionForNonText is set", async () => {
+    // LINE does not deliver mention metadata on non-text messages, so the
+    // bot can never be @-mentioned on an image in a group. Opting in to
+    // `requireMentionForNonText` causes those messages to be skipped under
+    // `requireMention`, matching how bots behave in other group chats.
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-strict-img",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-strict-img",
+      },
+      source: { type: "group", groupId: "group-1", userId: "user-strict-img" },
+      webhookEventId: "evt-strict-img",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+        requireMentionForNonText: true,
+      }),
+    );
+
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it("still processes text group messages with bot mention when requireMentionForNonText is set", async () => {
+    // Opting in to `requireMentionForNonText` must not regress the regular
+    // text @-mention path.
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-strict-text-mention",
+        type: "text",
+        text: "@Bot hi there",
+        mention: {
+          mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }],
+        },
+      } as unknown as MessageEvent["message"],
+      source: { type: "group", groupId: "group-1", userId: "user-strict-text-mention" },
+      webhookEventId: "evt-strict-text-mention",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+        requireMentionForNonText: true,
+      }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
   it("does not bypass mention gating when non-bot mention is present with control command", async () => {

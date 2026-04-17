@@ -432,6 +432,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   if (isGroup) {
     const groupConfig = resolveLineGroupConfig({ config: account.config, groupId, roomId });
     const requireMention = groupConfig?.requireMention !== false;
+    const requireMentionForNonText = groupConfig?.requireMentionForNonText === true;
     const rawText = message.type === "text" ? message.text : "";
     const sourceInfo = getLineSourceInfo(event.source);
     const peerId = groupId ?? roomId ?? sourceInfo.userId ?? "unknown";
@@ -446,9 +447,18 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     const wasMentionedByPattern =
       message.type === "text" ? matchesMentionPatterns(rawText, mentionRegexes) : false;
     const wasMentioned = wasMentionedByNative || wasMentionedByPattern;
+    // Non-text LINE messages (image, sticker, video, audio, file, location)
+    // do not carry `mention.mentionees` in the LINE Messaging API, so the bot
+    // can never be @-mentioned on them. When `requireMentionForNonText` is
+    // opted in we still run the mention gate for those messages, which
+    // results in them being skipped under `requireMention`. This matches how
+    // bots behave in WhatsApp/Telegram/Discord/Slack groups where
+    // unaddressed media does not trigger a reply. The default (`false`)
+    // preserves the historical fail-open behavior.
+    const canDetectMention = message.type === "text" || requireMentionForNonText;
     const mentionDecision = resolveInboundMentionDecision({
       facts: {
-        canDetectMention: message.type === "text",
+        canDetectMention,
         wasMentioned,
         hasAnyMention: hasAnyLineMention(message),
         implicitMentionKinds: [],
