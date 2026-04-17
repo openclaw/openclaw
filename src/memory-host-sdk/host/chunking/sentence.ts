@@ -77,8 +77,8 @@ export class SentenceStrategy implements ChunkingStrategy {
       if (current.length === 0) {
         return;
       }
-      const first = current[0]!;
-      const last = current[current.length - 1]!;
+      const first = current[0];
+      const last = current[current.length - 1];
       const text = current.map((s) => s.text).join("\n");
       chunks.push({
         startLine: first.startLine,

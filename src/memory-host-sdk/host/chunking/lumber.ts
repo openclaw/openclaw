@@ -39,8 +39,8 @@ export function splitIntoParagraphs(content: string): Paragraph[] {
     if (currentLines.length === 0) {
       return;
     }
-    const first = currentLines[0]!;
-    const last = currentLines[currentLines.length - 1]!;
+    const first = currentLines[0];
+    const last = currentLines[currentLines.length - 1];
     const text = currentLines.map((l) => l.text).join("\n");
     const estimatedChars = estimateStringChars(text);
     paragraphs.push({
@@ -137,7 +137,7 @@ export class LumberChunkerStrategy implements ChunkingStrategy {
       let tokenSum = 0;
       let groupEnd = cursor;
       while (groupEnd < paragraphs.length) {
-        tokenSum += paragraphs[groupEnd]!.estimatedTokens;
+        tokenSum += paragraphs[groupEnd].estimatedTokens;
         groupEnd++;
         if (tokenSum >= this.theta) {
           break;
@@ -217,8 +217,8 @@ export class LumberChunkerStrategy implements ChunkingStrategy {
         continue;
       }
       const text = group.map((p) => p.text).join("\n\n");
-      const firstParagraph = group[0]!;
-      const lastParagraph = group[group.length - 1]!;
+      const firstParagraph = group[0];
+      const lastParagraph = group[group.length - 1];
       chunks.push({
         startLine: firstParagraph.startLine,
         endLine: lastParagraph.endLine,

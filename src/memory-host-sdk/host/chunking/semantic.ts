@@ -167,8 +167,8 @@ export class SemanticStrategy implements ChunkingStrategy {
     if (rawSentences.length === 1) {
       // Single sentence, no need for semantic chunking.
       return [{
-          startLine: rawSentences[0]!.startLine,
-          endLine: rawSentences[0]!.endLine,
+          startLine: rawSentences[0].startLine,
+          endLine: rawSentences[0].endLine,
           text: content,
           hash: hashText(content),
           embeddingInput: buildTextEmbeddingInput(content),
@@ -185,13 +185,13 @@ export class SemanticStrategy implements ChunkingStrategy {
     }
     const embeddings = await this.provider.embedBatch(embeddingStrings);
     for (let i = 0; i < sentences.length; i += 1) {
-      sentences[i]!.embedding = embeddings[i] ?? [];
+      sentences[i].embedding = embeddings[i] ?? [];
     }
 
     // 4. Calculate cosine distances between adjacent embeddings.
     const distances = calculateCosineDistances(sentences);
     for (let i = 0; i < distances.length; i += 1) {
-      sentences[i]!.dist_to_next = distances[i];
+      sentences[i].dist_to_next = distances[i];
     }
 
     // 5. Find sentence indices above the percentile threshold.

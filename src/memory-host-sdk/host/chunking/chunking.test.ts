@@ -52,9 +52,9 @@ describe("chunkFixedSize", () => {
     const content = "Hello world\nThis is a short doc.";
     const chunks = chunkFixedSize(content, { tokens: 400, overlap: 0 });
     expect(chunks).toHaveLength(1);
-    expect(chunks[0]!.text).toBe(content);
-    expect(chunks[0]!.startLine).toBe(1);
-    expect(chunks[0]!.endLine).toBe(2);
+    expect(chunks[0].text).toBe(content);
+    expect(chunks[0].startLine).toBe(1);
+    expect(chunks[0].endLine).toBe(2);
   });
 
   it("splits into multiple chunks when content exceeds token budget", () => {
@@ -76,15 +76,15 @@ describe("chunkFixedSize", () => {
     const chunks = chunkFixedSize(content, { tokens: 5, overlap: 2 });
     expect(chunks.length).toBeGreaterThanOrEqual(2);
     // The second chunk should overlap with lines that appeared in the first chunk
-    const firstChunkLastLine = chunks[0]!.text.split("\n").at(-1)!;
-    expect(chunks[1]!.text).toContain(firstChunkLastLine);
+    const firstChunkLastLine = chunks[0].text.split("\n").at(-1);
+    expect(chunks[1].text).toContain(firstChunkLastLine);
   });
 
   it("line numbers are 1-indexed and correct", () => {
     const content = "a\nb\nc\nd\ne";
     const chunks = chunkFixedSize(content, { tokens: 400, overlap: 0 });
-    expect(chunks[0]!.startLine).toBe(1);
-    expect(chunks[0]!.endLine).toBe(5);
+    expect(chunks[0].startLine).toBe(1);
+    expect(chunks[0].endLine).toBe(5);
   });
 
   it("handles CJK content without infinite loop", () => {
@@ -132,7 +132,7 @@ describe("MarkdownHeadingStrategy", () => {
     const content = "Just some text\nwithout any headings.";
     const chunks = strategy.chunk(content, cfg);
     expect(chunks).toHaveLength(1);
-    expect(chunks[0]!.text).toBe(content);
+    expect(chunks[0].text).toBe(content);
   });
 
   it("splits on H1/H2/H3 headings by default (maxDepth=3)", () => {
@@ -150,8 +150,8 @@ describe("MarkdownHeadingStrategy", () => {
     const chunks = strategy.chunk(content, cfg);
     // Expect 4 chunks (each heading starts a new chunk)
     expect(chunks.length).toBe(4);
-    expect(chunks[0]!.text).toContain("# Chapter 1");
-    expect(chunks[2]!.text).toContain("### Sub-section 1.1.1");
+    expect(chunks[0].text).toContain("# Chapter 1");
+    expect(chunks[2].text).toContain("### Sub-section 1.1.1");
   });
 
   it("does NOT split on H4 when maxDepth=3", () => {
@@ -160,7 +160,7 @@ describe("MarkdownHeadingStrategy", () => {
     const chunks = strategy.chunk(content, cfg);
     // H4 should NOT trigger a split; "#### Deep heading" stays in the first chunk
     expect(chunks.length).toBe(1);
-    expect(chunks[0]!.text).toContain("#### Deep heading");
+    expect(chunks[0].text).toContain("#### Deep heading");
   });
 
   it("splits on H4 when maxDepth=4", () => {
@@ -186,9 +186,9 @@ describe("MarkdownHeadingStrategy", () => {
     const content = ["intro", "# Section", "body"].join("\n");
     const strategy = new MarkdownHeadingStrategy(cfg);
     const chunks = strategy.chunk(content, cfg);
-    expect(chunks[0]!.startLine).toBe(1);
-    expect(chunks[1]!.startLine).toBe(2);
-    expect(chunks[1]!.endLine).toBe(3);
+    expect(chunks[0].startLine).toBe(1);
+    expect(chunks[1].startLine).toBe(2);
+    expect(chunks[1].endLine).toBe(3);
   });
 
   it("skips empty sections", () => {
@@ -212,7 +212,7 @@ describe("splitIntoSentences", () => {
   it("splits on period", () => {
     const entries = splitIntoSentences("Hello world. Goodbye world.");
     expect(entries.length).toBeGreaterThanOrEqual(2);
-    expect(entries[0]!.text).toContain("Hello world");
+    expect(entries[0].text).toContain("Hello world");
   });
 
   it("splits on Chinese period 。", () => {
@@ -233,8 +233,8 @@ describe("splitIntoSentences", () => {
 
   it("preserves line numbers correctly", () => {
     const entries = splitIntoSentences("First line.\nSecond line.");
-    expect(entries[0]!.startLine).toBe(1);
-    expect(entries[1]!.startLine).toBe(2);
+    expect(entries[0].startLine).toBe(1);
+    expect(entries[1].startLine).toBe(2);
   });
 });
 
@@ -266,8 +266,8 @@ describe("SentenceStrategy", () => {
     const chunks = strategy.chunk(content, cfg);
     expect(chunks.length).toBeGreaterThanOrEqual(2);
     // Last sentence in chunk[0] should appear in chunk[1] (overlap)
-    const lastSentenceOfFirst = chunks[0]!.text.split("\n").at(-1)!;
-    expect(chunks[1]!.text).toContain(lastSentenceOfFirst);
+    const lastSentenceOfFirst = chunks[0].text.split("\n").at(-1);
+    expect(chunks[1].text).toContain(lastSentenceOfFirst);
   });
 });
 
@@ -334,8 +334,8 @@ describe("splitIntoParagraphs", () => {
     const content = "Para one.\n\nPara two.\n\nPara three.";
     const paras = splitIntoParagraphs(content);
     expect(paras).toHaveLength(3);
-    expect(paras[0]!.text).toBe("Para one.");
-    expect(paras[1]!.text).toBe("Para two.");
+    expect(paras[0].text).toBe("Para one.");
+    expect(paras[1].text).toBe("Para two.");
   });
 
   it("assigns 1-based IDs", () => {
@@ -346,10 +346,10 @@ describe("splitIntoParagraphs", () => {
   it("preserves correct line numbers", () => {
     const content = "Line1\nLine2\n\nLine4\nLine5";
     const paras = splitIntoParagraphs(content);
-    expect(paras[0]!.startLine).toBe(1);
-    expect(paras[0]!.endLine).toBe(2);
-    expect(paras[1]!.startLine).toBe(4);
-    expect(paras[1]!.endLine).toBe(5);
+    expect(paras[0].startLine).toBe(1);
+    expect(paras[0].endLine).toBe(2);
+    expect(paras[1].startLine).toBe(4);
+    expect(paras[1].endLine).toBe(5);
   });
 });
 

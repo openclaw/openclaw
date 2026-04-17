@@ -12,7 +12,7 @@ import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../utils/cjk-c
 import { chunkFixedSize } from "./chunking/fixed-size.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
-import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
+import { type EmbeddingInput } from "./embedding-inputs.js";
 import { isFileMissingError } from "./fs-utils.js";
 import {
   buildMemoryMultimodalLabel,

@@ -284,8 +284,8 @@ export function parseAnswerChunkingPoints(answer: string, maxLevel: number): Mul
       continue;
     }
 
-    const point = Number.parseInt(parts[0]!, 10);
-    const levelName = parts[1]!;
+    const point = Number.parseInt(parts[0], 10);
+    const levelName = parts[1];
 
     if (Number.isNaN(point)) {
       continue;
@@ -296,19 +296,19 @@ export function parseAnswerChunkingPoints(answer: string, maxLevel: number): Mul
       continue;
     }
 
-    result[levelIdx]!.push(point);
+    result[levelIdx].push(point);
   }
 
   // Remove non-monotonic duplicates within each level (keep strictly increasing)
   for (let i = 0; i < result.length; i++) {
-    const arr = result[i]!;
+    const arr = result[i];
     if (arr.length === 0) {
       continue;
     }
-    const filtered = [arr[0]!];
+    const filtered = [arr[0]];
     for (let j = 1; j < arr.length; j++) {
-      if (arr[j]! > filtered[filtered.length - 1]!) {
-        filtered.push(arr[j]!);
+      if (arr[j] > filtered[filtered.length - 1]) {
+        filtered.push(arr[j]);
       }
     }
     result[i] = filtered;
@@ -325,12 +325,12 @@ export function parseAnswerChunkingPoints(answer: string, maxLevel: number): Mul
  * Validate that first-level chunk points are within bounds and strictly increasing.
  */
 export function checkAnswerPoints(firstLevelPoints: number[], startIdx: number, endIdx: number): boolean {
-	if (firstLevelPoints.length > 0 && firstLevelPoints[0]! < startIdx) {
+	if (firstLevelPoints.length > 0 && firstLevelPoints[0] < startIdx) {
     return false;
   }
   for (let i = 1; i < firstLevelPoints.length; i++) {
-		const p = firstLevelPoints[i]!;
-		if (p <= firstLevelPoints[i - 1]! || p > endIdx) {
+		const p = firstLevelPoints[i];
+		if (p <= firstLevelPoints[i - 1] || p > endIdx) {
       return false;
     }
   }
@@ -366,7 +366,7 @@ function buildResidualLines(
   let lastFirstPoint = 0;
   const firstLevelPoints = globalChunkPoints[0];
   if (firstLevelPoints && firstLevelPoints.length > 0) {
-    lastFirstPoint = firstLevelPoints[firstLevelPoints.length - 1]!;
+    lastFirstPoint = firstLevelPoints[firstLevelPoints.length - 1];
   }
 
   // Level Two points in the current L1 segment
@@ -424,7 +424,7 @@ function unionChunkPoints(
   for (let i = 0; i < global.length; i++) {
     const localLevel = local[i];
     if (localLevel) {
-			global[i]!.push(...localLevel.filter((p) => p < maxIdx));
+			global[i].push(...localLevel.filter((p) => p < maxIdx));
     }
   }
   return global;
@@ -475,7 +475,7 @@ function buildInputInstruction(
   let gIdx = globalStartIdx;
 
   while (gIdx < sentences.length) {
-		const lineText = indexFormat(localIdx + residualCount, sentences[gIdx]!.text);
+		const lineText = indexFormat(localIdx + residualCount, sentences[gIdx].text);
     const lineTokens = estimateTokens(lineText);
     if (curTokens + lineTokens > windowSize) {
       break;
@@ -512,7 +512,7 @@ function postProcess(originSentences: HiSentenceEntry[], globalChunkPoints: Mult
   // Collect all points with their level (1-based level)
   const allPoints: Array<{ point: number; level: number }> = [];
   for (let levelIdx = 0; levelIdx < globalChunkPoints.length; levelIdx++) {
-		for (const p of globalChunkPoints[levelIdx]!) {
+		for (const p of globalChunkPoints[levelIdx]) {
       allPoints.push({ point: p, level: levelIdx + 1 });
     }
   }
@@ -530,8 +530,8 @@ function postProcess(originSentences: HiSentenceEntry[], globalChunkPoints: Mult
     if (segmentTexts.length > 0) {
       const text = segmentTexts.join("").trim();
       if (text.length > 0) {
-				const firstSent = originSentences[prevPoint]!;
-				const lastSent = originSentences[Math.min(point - 1, originSentences.length - 1)]!;
+				const firstSent = originSentences[prevPoint];
+				const lastSent = originSentences[Math.min(point - 1, originSentences.length - 1)];
         chunks.push({
           startLine: firstSent.startLine,
           endLine: lastSent.endLine,
@@ -549,8 +549,8 @@ function postProcess(originSentences: HiSentenceEntry[], globalChunkPoints: Mult
     const segmentTexts = cleanTexts.slice(prevPoint);
     const text = segmentTexts.join("").trim();
     if (text.length > 0) {
-			const firstSent = originSentences[prevPoint]!;
-			const lastSent = originSentences[originSentences.length - 1]!;
+			const firstSent = originSentences[prevPoint];
+			const lastSent = originSentences[originSentences.length - 1];
       chunks.push({
         startLine: firstSent.startLine,
         endLine: lastSent.endLine,
@@ -612,14 +612,14 @@ export class HiChunkStrategy implements ChunkingStrategy {
 
     // Short-circuit: very short documents
     if (inputSentences.length === 1) {
-      const text = (replaceHeadingMarkers(originSentences[0]!.text, "") ?? originSentences[0]!.text).trim();
+      const text = (replaceHeadingMarkers(originSentences[0].text, "") ?? originSentences[0].text).trim();
       if (text.length === 0) {
         return [];
       }
       return [
         {
-					startLine: originSentences[0]!.startLine,
-					endLine: originSentences[0]!.endLine,
+					startLine: originSentences[0].startLine,
+					endLine: originSentences[0].endLine,
           text,
           hash: hashText(text),
           embeddingInput: buildTextEmbeddingInput(text),
@@ -658,14 +658,14 @@ export class HiChunkStrategy implements ChunkingStrategy {
         localChunkPoints = parseAnswerChunkingPoints(answer, this.maxLevel);
 
         // Validate first-level points
-				if (!checkAnswerPoints(localChunkPoints[0]!, 0, sentenceCount + residualSentNum - 1)) {
+				if (!checkAnswerPoints(localChunkPoints[0], 0, sentenceCount + residualSentNum - 1)) {
           // Check error: fallback to inserting a L1 point at startIdx
           localChunkPoints = initChunkPoints(this.maxLevel);
-					localChunkPoints[0]!.push(startIdx);
+					localChunkPoints[0].push(startIdx);
         } else {
           // Map local indices to global indices
           for (let lvl = 0; lvl < localChunkPoints.length; lvl++) {
-						const points = localChunkPoints[lvl]!;
+						const points = localChunkPoints[lvl];
             localChunkPoints[lvl] = points
               .filter((p) => p >= residualSentNum)
               .map((p) => p - residualSentNum + startIdx);
@@ -674,7 +674,7 @@ export class HiChunkStrategy implements ChunkingStrategy {
       } catch {
         // Parse or LLM error: fallback
         localChunkPoints = initChunkPoints(this.maxLevel);
-				localChunkPoints[0]!.push(startIdx);
+				localChunkPoints[0].push(startIdx);
       }
 
       if (isEnd) {
@@ -684,11 +684,11 @@ export class HiChunkStrategy implements ChunkingStrategy {
         break;
       }
 
-			const firstLevelPoints = localChunkPoints[0]!;
+			const firstLevelPoints = localChunkPoints[0];
 
       if (firstLevelPoints.length > 1 && this.recurrentType >= 1) {
         // Multiple L1 segments: discard the last one, restart from there
-        startIdx = firstLevelPoints[firstLevelPoints.length - 1]!;
+        startIdx = firstLevelPoints[firstLevelPoints.length - 1];
         unionChunkPoints(localChunkPoints, globalChunkPoints, startIdx);
         residualLines = [];
       } else {
