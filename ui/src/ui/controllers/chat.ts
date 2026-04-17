@@ -13,6 +13,7 @@ import {
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
+const STARTUP_CONTEXT_PREFIX = "[Startup context loaded by runtime]";
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
@@ -71,8 +72,29 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
   return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
 }
 
+/** Client-side defense-in-depth: detect user messages whose text is entirely runtime-injected startup context. */
+function isRuntimeInjectedUserMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  const role = normalizeLowercaseStringOrEmpty(entry.role);
+  if (role !== "user") {
+    return false;
+  }
+  const text = extractText(message);
+  if (typeof text !== "string") {
+    return false;
+  }
+  return text.trimStart().startsWith(STARTUP_CONTEXT_PREFIX);
+}
+
 function shouldHideHistoryMessage(message: unknown): boolean {
-  return isAssistantSilentReply(message) || isSyntheticTranscriptRepairToolResult(message);
+  return (
+    isAssistantSilentReply(message) ||
+    isSyntheticTranscriptRepairToolResult(message) ||
+    isRuntimeInjectedUserMessage(message)
+  );
 }
 
 function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {
