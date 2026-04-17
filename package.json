@@ -1537,6 +1537,7 @@
     "@mariozechner/pi-tui": "0.67.68",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
+    "@sentry/node": "^10.48.0",
     "@sinclair/typebox": "0.34.49",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",

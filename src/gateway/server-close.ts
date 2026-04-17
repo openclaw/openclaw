@@ -4,6 +4,7 @@ import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
+import { flushErrorTracking } from "../infra/error-tracking.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
@@ -14,6 +15,7 @@ const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
+const ERROR_TRACKING_FLUSH_TIMEOUT_MS = 2_000;
 
 function createTimeoutRace<T>(timeoutMs: number, onTimeout: () => T) {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -62,6 +64,9 @@ export async function runGatewayClosePrelude(params: {
   params.stopChannelHealthMonitor?.();
   params.clearSecretsRuntimeSnapshot?.();
   await params.closeMcpServer?.().catch(() => {});
+  // Flush in-flight error-tracking events with a bounded timeout so a slow
+  // upstream cannot stall shutdown. No-op when error tracking is disabled.
+  await flushErrorTracking(ERROR_TRACKING_FLUSH_TIMEOUT_MS).catch(() => false);
 }
 
 function isServerNotRunningError(err: unknown): boolean {

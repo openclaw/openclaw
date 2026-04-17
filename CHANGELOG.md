@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - CLI/doctor plugins: lazy-load doctor plugin paths and prefer installed plugin `dist/*` runtime entries over source-adjacent JavaScript fallbacks, reducing the measured `doctor --non-interactive` runtime by about 74% while keeping cold doctor startup on built plugin artifacts. (#69840) Thanks @gumadeiras.
+- Observability: optional error tracking. Set `OPENCLAW_ERROR_TRACKING_DSN` (Sentry SaaS or any Sentry-compatible endpoint such as a self-hosted GlitchTip) to forward classified unhandled rejections, uncaught exceptions, and `error`/`fatal` log records. Optional `OPENCLAW_ERROR_TRACKING_ENVIRONMENT` and `OPENCLAW_ERROR_TRACKING_RELEASE` enrich events. The integration is a no-op when no DSN is set; transient network and SQLite rejections are still suppressed locally and not forwarded.
 
 ## 2026.4.21
 

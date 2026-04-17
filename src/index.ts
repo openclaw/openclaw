@@ -1,6 +1,15 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  captureException,
+  flushErrorTracking,
+  initErrorTracking,
+  isErrorTrackingEnabled,
+} from "./infra/error-tracking.js";
+
+// Bounded wait for Sentry delivery before terminating on crash paths.
+const CRASH_FLUSH_TIMEOUT_MS = 2_000;
 import { formatUncaughtError } from "./infra/errors.js";
 import { isMainModule } from "./infra/is-main.js";
 import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
@@ -85,19 +94,37 @@ if (!isMain) {
 if (isMain) {
   const { restoreTerminalState } = await import("./terminal/restore.js");
 
+  // Initialize error tracking before installing rejection handlers so that any
+  // early-startup classified errors are captured. No-op when DSN is unset.
+  await initErrorTracking();
+
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
   installUnhandledRejectionHandler();
 
+  const crashExit = (reason: string) => {
+    if (!isErrorTrackingEnabled()) {
+      restoreTerminalState(reason, { resumeStdinIfPaused: false });
+      process.exit(1);
+      return;
+    }
+    void flushErrorTracking(CRASH_FLUSH_TIMEOUT_MS)
+      .catch(() => false)
+      .finally(() => {
+        restoreTerminalState(reason, { resumeStdinIfPaused: false });
+        process.exit(1);
+      });
+  };
+
   process.on("uncaughtException", (error) => {
     console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
-    restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
-    process.exit(1);
+    captureException(error, { classification: "uncaught-exception" });
+    crashExit("uncaught exception");
   });
 
   void runLegacyCliEntry(process.argv).catch((err) => {
     console.error("[openclaw] CLI failed:", formatUncaughtError(err));
-    restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
-    process.exit(1);
+    captureException(err, { classification: "cli-entry" });
+    crashExit("legacy cli failure");
   });
 }

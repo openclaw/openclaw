@@ -1,12 +1,18 @@
 import process from "node:process";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { restoreTerminalState } from "../terminal/restore.js";
+import { captureException, flushErrorTracking, isErrorTrackingEnabled } from "./error-tracking.js";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
   formatUncaughtError,
   readErrorName,
 } from "./errors.js";
+
+// Sentry delivery is async, but process.exit terminates before any pending
+// HTTP request flushes. On crash paths we flush with a short bounded timeout
+// so classified crash events actually leave the process.
+const CRASH_FLUSH_TIMEOUT_MS = 2_000;
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 
@@ -338,8 +344,21 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
 
 export function installUnhandledRejectionHandler(): void {
   const exitWithTerminalRestore = (reason: string) => {
-    restoreTerminalState(reason, { resumeStdinIfPaused: false });
-    process.exit(1);
+    // When error tracking isn't configured, flushing is a no-op — exit
+    // synchronously so existing callers (and tests) don't see an async
+    // delay on the crash path. When configured, flush with a bounded
+    // timeout first so classified crash events are actually delivered.
+    if (!isErrorTrackingEnabled()) {
+      restoreTerminalState(reason, { resumeStdinIfPaused: false });
+      process.exit(1);
+      return;
+    }
+    void flushErrorTracking(CRASH_FLUSH_TIMEOUT_MS)
+      .catch(() => false)
+      .finally(() => {
+        restoreTerminalState(reason, { resumeStdinIfPaused: false });
+        process.exit(1);
+      });
   };
 
   process.on("unhandledRejection", (reason, _promise) => {
@@ -356,12 +375,14 @@ export function installUnhandledRejectionHandler(): void {
 
     if (isFatalError(reason)) {
       console.error("[openclaw] FATAL unhandled rejection:", formatUncaughtError(reason));
+      captureException(reason, { classification: "fatal" });
       exitWithTerminalRestore("fatal unhandled rejection");
       return;
     }
 
     if (isConfigError(reason)) {
       console.error("[openclaw] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
+      captureException(reason, { classification: "config" });
       exitWithTerminalRestore("configuration error");
       return;
     }
@@ -375,6 +396,7 @@ export function installUnhandledRejectionHandler(): void {
     }
 
     console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
+    captureException(reason, { classification: "unhandled" });
     exitWithTerminalRestore("unhandled rejection");
   });
 }
