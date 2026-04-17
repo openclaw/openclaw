@@ -198,7 +198,14 @@ describe("plugin contract registry scoped retries", () => {
           id: "openai",
           label: "OpenAI",
           docsPath: "/providers/openai",
-          auth: [{ id: "api-key", label: "API key", run: async () => ({ profiles: [] }) }],
+          auth: [
+            {
+              id: "api-key",
+              label: "API key",
+              kind: "api_key",
+              run: async () => ({ profiles: [] }),
+            },
+          ],
         } as ProviderPlugin,
       },
       {
@@ -207,7 +214,14 @@ describe("plugin contract registry scoped retries", () => {
           id: "openai-codex",
           label: "OpenAI Codex",
           docsPath: "/providers/openai",
-          auth: [{ id: "oauth", label: "OAuth", run: async () => ({ profiles: [] }) }],
+          auth: [
+            {
+              id: "oauth",
+              label: "OAuth",
+              kind: "oauth",
+              run: async () => ({ profiles: [] }),
+            },
+          ],
         } as ProviderPlugin,
       },
     ]);
