@@ -15,7 +15,10 @@ type ConfiguredChannelRemovalChoice = {
   label: string;
 };
 
+type ChannelRemovalSelectValue = { kind: "channel"; id: string } | { kind: "done" };
+
 const RESERVED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
+const DONE_VALUE: ChannelRemovalSelectValue = { kind: "done" };
 
 function listConfiguredChannelRemovalChoices(
   cfg: OpenClawConfig,
@@ -74,25 +77,26 @@ export async function removeChannelConfigWizard(
       return next;
     }
 
-    const channel = guardCancel(
-      await select({
+    const choice = guardCancel(
+      await select<ChannelRemovalSelectValue>({
         message: "Remove which channel config?",
         options: [
           ...configured.map((meta) => ({
-            value: meta.id,
+            value: { kind: "channel" as const, id: meta.id },
             label: meta.label,
             hint: "Deletes tokens + settings from config (credentials stay on disk)",
           })),
-          { value: "done", label: "Done" },
+          { value: DONE_VALUE, label: "Done" },
         ],
       }),
       runtime,
     );
 
-    if (channel === "done") {
+    if (choice.kind === "done") {
       return next;
     }
 
+    const channel = choice.id;
     const label = configured.find((entry) => entry.id === channel)?.label ?? channel;
     const confirmed = guardCancel(
       await confirm({
