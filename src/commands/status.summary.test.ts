@@ -136,6 +136,15 @@ describe("getStatusSummary", () => {
     expect(summary.heartbeat.defaultAgentId).toBe("main");
     expect(summary.channelSummary).toEqual(["ok"]);
     expect(summary.a2a.state).toBe("ok");
+    expect(summary.contributors).toEqual([
+      {
+        id: "a2a",
+        label: "A2A",
+        state: "ok",
+        summary: "ok",
+        details: ["broker off", "no active"],
+      },
+    ]);
     expect(summary.tasks.active).toBe(0);
     expect(summary.taskAudit.warnings).toBe(1);
   });

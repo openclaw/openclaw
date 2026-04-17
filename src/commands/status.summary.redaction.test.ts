@@ -29,6 +29,15 @@ describe("redactSensitiveStatusSummary", () => {
       },
       channelSummary: ["ok"],
       queuedSystemEvents: ["none"],
+      contributors: [
+        {
+          id: "a2a",
+          label: "A2A",
+          state: "warn",
+          summary: "waiting external",
+          details: ["broker on", "1 active"],
+        },
+      ],
       a2a: {
         state: "ok",
         tasks: {
@@ -113,6 +122,7 @@ describe("redactSensitiveStatusSummary", () => {
     expect(redacted.runtimeVersion).toBe("2026.3.8");
     expect(redacted.heartbeat).toEqual(input.heartbeat);
     expect(redacted.channelSummary).toEqual(input.channelSummary);
+    expect(redacted.contributors).toEqual(input.contributors);
     expect(redacted.a2a).toEqual(input.a2a);
     expect(redacted.tasks).toEqual(input.tasks);
     expect(redacted.taskAudit).toEqual(input.taskAudit);

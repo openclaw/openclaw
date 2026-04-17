@@ -20,6 +20,7 @@ import type {
   A2AStatusSummary,
   HeartbeatStatus,
   SessionStatus,
+  StatusContributorSummary,
   StatusSummary,
 } from "./status.types.js";
 
@@ -156,6 +157,64 @@ function resolveA2AHealthState(
     return "delayed";
   }
   return "ok";
+}
+
+
+function buildA2AStatusContributor(summary: A2AStatusSummary): StatusContributorSummary {
+  const state: StatusContributorSummary["state"] =
+    summary.state === "ok"
+      ? "ok"
+      : summary.state === "delayed" || summary.state === "waiting_external"
+        ? "warn"
+        : summary.state === "failed" || summary.state === "config_error"
+          ? "error"
+          : "info";
+  const summaryLabelByState: Record<A2AStatusSummary["state"], string> = {
+    ok: "ok",
+    delayed: "delayed",
+    waiting_external: "waiting external",
+    failed: "failed",
+    config_error: "config error",
+  };
+  const details: string[] = [`broker ${summary.broker.adapterEnabled ? "on" : "off"}`];
+  if (summary.tasks.active > 0) {
+    details.push(`${summary.tasks.active} active`);
+  } else {
+    details.push("no active");
+  }
+  if (summary.tasks.waitingExternal > 0) {
+    details.push(`${summary.tasks.waitingExternal} waiting external`);
+  }
+  if (summary.tasks.delayed > 0) {
+    details.push(`${summary.tasks.delayed} delayed`);
+  }
+  if (summary.tasks.failed > 0) {
+    details.push(`${summary.tasks.failed} failed`);
+  }
+  if (summary.state === "config_error") {
+    if (!summary.broker.baseUrlPresent) {
+      details.push("baseUrl missing");
+    }
+    if (!summary.broker.methodScopesOk) {
+      details.push("scope map missing");
+    }
+  } else if (summary.tasks.latestFailed) {
+    const detail =
+      summary.tasks.latestFailed.errorMessage ??
+      summary.tasks.latestFailed.errorCode ??
+      summary.tasks.latestFailed.summary ??
+      summary.tasks.latestFailed.taskId;
+    if (detail) {
+      details.push(`latest ${detail}`);
+    }
+  }
+  return {
+    id: "a2a",
+    label: "A2A",
+    state,
+    summary: summaryLabelByState[summary.state],
+    details,
+  };
 }
 
 async function buildA2AStatusSummary(params: {
@@ -451,6 +510,8 @@ export async function getStatusSummary(
   const recent = allSessions.slice(0, 10);
   const totalSessions = allSessions.length;
 
+  const contributors: StatusContributorSummary[] = [buildA2AStatusContributor(a2a)];
+
   const summary: StatusSummary = {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
     linkChannel: linkContext
@@ -467,7 +528,7 @@ export async function getStatusSummary(
     },
     channelSummary,
     queuedSystemEvents,
-    contributors: [],
+    contributors,
     a2a,
     tasks,
     taskAudit,
