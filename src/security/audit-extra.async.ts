@@ -25,6 +25,7 @@ import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -692,11 +693,25 @@ export async function collectPluginsTrustFindings(params: {
       // Warn about allowlist entries that don't match any installed plugin ID.
       // An attacker could register a plugin with an allowlisted ID after the
       // allowlist was created, exploiting the pre-approved entry.
-      // Exclude bundled channel plugin IDs (telegram, discord, etc.) from the
-      // phantom check — they are never in the extensions directory but are
-      // legitimate allowlist targets.
+      // Exclude bundled channel plugin IDs (telegram, discord, etc.) AND
+      // bundled stock plugin IDs (browser, memory-core, active-memory,
+      // device-pair, minimax, acpx, qqbot, etc.) from the phantom check —
+      // neither lives in the extensions directory but both are legitimate
+      // allowlist targets.
       const installedPluginIds = new Set(pluginDirs.map((dir) => path.basename(dir).toLowerCase()));
-      const bundledPluginIds = new Set(listChannelPlugins().map((p) => p.id.toLowerCase()));
+      const bundledPluginIds = new Set<string>(
+        listChannelPlugins().map((p) => p.id.toLowerCase()),
+      );
+      for (const meta of listBundledPluginMetadata()) {
+        const manifestId = normalizeOptionalLowercaseString(meta.manifest?.id);
+        if (manifestId) {
+          bundledPluginIds.add(manifestId);
+        }
+        const idHint = normalizeOptionalLowercaseString(meta.idHint);
+        if (idHint) {
+          bundledPluginIds.add(idHint);
+        }
+      }
       const phantomEntries = allow.filter((entry) => {
         if (typeof entry !== "string" || entry === "group:plugins") {
           return false;
