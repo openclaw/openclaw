@@ -67,8 +67,7 @@ describe("CronService start() error resilience", () => {
       if (writeCount > 1 && typeof file === "string" && file.includes("cron")) {
         throw new Error("simulated disk failure during persist");
       }
-      // @ts-expect-error overload resolution
-      return origWriteFile(file, data, ...rest);
+      return origWriteFile(file as any, data as any, ...(rest as any[]));
     });
 
     try {
