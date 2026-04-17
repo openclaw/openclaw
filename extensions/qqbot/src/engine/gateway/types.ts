@@ -6,7 +6,6 @@
  * is `runtime` (PluginRuntime), which is a framework-provided object.
  */
 
-import type { InteractionEvent } from "../types.js";
 // ============ Logger ============
 import type { EngineLogger } from "../types.js";
 export type { EngineLogger };
@@ -159,8 +158,6 @@ export interface CoreGatewayContext {
   cfg: unknown;
   onReady?: (data: unknown) => void;
   onError?: (error: Error) => void;
-  /** Called when an INTERACTION_CREATE event is received (e.g. approval button clicks). */
-  onInteraction?: (event: InteractionEvent) => void;
   log?: EngineLogger;
   /** PluginRuntime injected by the framework — same object in both versions. */
   runtime: GatewayPluginRuntime;

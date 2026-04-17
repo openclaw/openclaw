@@ -13,6 +13,8 @@
  */
 
 import path from "node:path";
+import { getPlatformAdapter } from "../adapter/index.js";
+import { parseApprovalButtonData } from "../approval/index.js";
 import { registerOutboundAudioAdapter } from "../messaging/outbound.js";
 import {
   clearTokenCache,
@@ -24,6 +26,7 @@ import {
   accountToCreds,
 } from "../messaging/sender.js";
 import { setRefIndex } from "../ref/store.js";
+import type { InteractionEvent } from "../types.js";
 import {
   audioFileToSilkBase64,
   convertSilkToWav,
@@ -148,7 +151,10 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     }
   };
 
-  // ---- 7. Start connection ----
+  // ---- 7. Interaction handler ----
+  const handleInteraction = createApprovalInteractionHandler(account, log);
+
+  // ---- 8. Start connection ----
   const connection = new GatewayConnection({
     account,
     abortSignal: ctx.abortSignal,
@@ -157,7 +163,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     runtime,
     onReady: ctx.onReady,
     onError: ctx.onError,
-    onInteraction: ctx.onInteraction,
+    onInteraction: handleInteraction,
     handleMessage,
   });
 
@@ -230,4 +236,39 @@ async function startTypingForEvent(
     );
     return { keepAlive: null };
   }
+}
+
+// ============ Interaction handler ============
+
+/**
+ * Default INTERACTION_CREATE handler — resolves approval button clicks
+ * via the registered PlatformAdapter.
+ */
+function createApprovalInteractionHandler(
+  account: GatewayAccount,
+  log?: EngineLogger,
+): (event: InteractionEvent) => void {
+  return (event) => {
+    const buttonData = event.data?.resolved?.button_data ?? "";
+    const parsed = parseApprovalButtonData(buttonData);
+    if (!parsed) {
+      return;
+    }
+
+    const adapter = getPlatformAdapter();
+    if (!adapter.resolveApproval) {
+      log?.error(`[qqbot:${account.accountId}] resolveApproval not available on PlatformAdapter`);
+      return;
+    }
+
+    void adapter.resolveApproval(parsed.approvalId, parsed.decision).then((ok) => {
+      if (ok) {
+        log?.info(
+          `[qqbot:${account.accountId}] Approval resolved: id=${parsed.approvalId}, decision=${parsed.decision}`,
+        );
+      } else {
+        log?.error(`[qqbot:${account.accountId}] Approval resolve failed: id=${parsed.approvalId}`);
+      }
+    });
+  };
 }
