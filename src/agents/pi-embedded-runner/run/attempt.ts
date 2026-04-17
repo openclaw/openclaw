@@ -427,13 +427,8 @@ export async function runEmbeddedAttempt(
     const CLAUDE_CODE_SUBSCRIPTION_PREFIX =
       "You are Claude Code, Anthropic's official CLI for Claude.\n\n";
     const rawSystemPrompt = systemPromptOverride();
-    const deferredToolsSection = toolSearchState
-      ? buildDeferredToolsPromptSection(toolsSanitized)
-      : "";
     const systemPromptText = needsSubscriptionPrefix
-      ? CLAUDE_CODE_SUBSCRIPTION_PREFIX +
-        rawSystemPrompt +
-        (deferredToolsSection ? "\n\n" + deferredToolsSection : "")
+      ? CLAUDE_CODE_SUBSCRIPTION_PREFIX + rawSystemPrompt
       : rawSystemPrompt;
 
     const sessionLock = await acquireSessionWriteLock({
