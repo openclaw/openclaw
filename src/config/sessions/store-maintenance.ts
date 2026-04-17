@@ -413,6 +413,11 @@ export async function rotateTranscriptFile(params: {
   // Write replacement file with session header + most recent lines
   const maxLines = maintenance.transcriptMaxLines;
   let replacementWritten = false;
+  // Track whether *we* created the replacement file via O_EXCL, so we know
+  // it is safe to unlink on rollback.  If we never opened it successfully,
+  // the file at transcriptPath (if any) belongs to a concurrent writer and
+  // must not be deleted.
+  let weCreatedReplacement = false;
   try {
     const { headerLine: archiveHeader, tailLines } = await readHeaderAndTailLines(
       backupPath,
@@ -438,6 +443,7 @@ export async function rotateTranscriptFile(params: {
         fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
         0o600,
       );
+      weCreatedReplacement = true;
       try {
         await fd.writeFile(replacementLines.join("\n") + "\n", "utf-8");
         replacementWritten = true;
@@ -461,15 +467,25 @@ export async function rotateTranscriptFile(params: {
     });
   }
 
-  // If the replacement was not written (and no concurrent writer recreated it),
-  // attempt to restore the original file from the archive to avoid data loss.
+  // If the replacement was not written, attempt to restore the original file
+  // from the archive to avoid data loss.
   if (!replacementWritten) {
     try {
-      // Remove any partially-written replacement file before restoring the
-      // original.  Without this, a truncated/corrupt file left behind by a
-      // failed writeFile (e.g. ENOSPC) would satisfy an existence check and
-      // prevent the restore.
-      await fs.promises.unlink(transcriptPath).catch(() => undefined);
+      if (weCreatedReplacement) {
+        // We created the file via O_EXCL but writeFile failed (e.g. ENOSPC),
+        // leaving a partial/empty file.  Safe to remove before restoring.
+        await fs.promises.unlink(transcriptPath).catch(() => undefined);
+      }
+      // If a concurrent writer recreated transcriptPath between our rename
+      // and now (weCreatedReplacement === false), rename() will atomically
+      // replace it with the archive.  However, reaching this branch while a
+      // concurrent file exists is extremely unlikely: it requires both (a) a
+      // concurrent writer recreating the file AND (b) a non-EEXIST failure
+      // in our open/write path.  In practice the outer catch only fires for
+      // pre-open failures (e.g. readHeaderAndTailLines) where no concurrent
+      // file typically exists yet.  We still attempt rename as a best-effort
+      // restore — losing the archive would be worse than overwriting a
+      // freshly recreated (near-empty) transcript.
       await fs.promises.rename(backupPath, transcriptPath);
       log.warn(
         "transcript rotation: restored original file from archive after replacement failure",
