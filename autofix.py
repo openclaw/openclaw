@@ -271,8 +271,15 @@ def _call_claude_api_key(system: str, user_msg: str, *, retries: int = 4) -> str
 
 def _call_claude_subscription(system: str, user_msg: str) -> str:
     """Run Claude via the Agent SDK subprocess against the operator's
-    `claude login` session. Non-interactive: feeds the prompt on stdin
-    and collects stdout. No metered billing."""
+    `claude login` session. Non-interactive: feeds the prompt via stdin
+    and collects stdout. No metered billing.
+
+    We feed the prompt through stdin (not via -p <prompt>) because Windows
+    has a ~32 KB command-line length limit, and large source files plus
+    review-comment context easily blow past it (observed as WinError 206:
+    "The filename or extension is too long"). The Agent SDK CLI detects
+    piped stdin and enters non-interactive print mode automatically; -p
+    is passed as a belt-and-suspenders hint."""
     node_bin = _resolve_node_bin()
     sdk_cli = _resolve_sdk_cli()
     prompt = f"{system}\n\n---\n\n{user_msg}"
@@ -281,12 +288,12 @@ def _call_claude_subscription(system: str, user_msg: str) -> str:
             node_bin,
             sdk_cli,
             "-p",
-            prompt,
             "--model",
             MODEL,
             "--output-format",
             "text",
         ],
+        input=prompt,
         capture_output=True,
         text=True,
         timeout=300,
