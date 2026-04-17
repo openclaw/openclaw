@@ -603,6 +603,8 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(subagent.run.mock.calls[0][0]).toMatchObject({
       idempotencyKey: expectedSessionKey,
       sessionKey: expectedSessionKey,
+      lane: `dreaming-narrative:${expectedSessionKey}`,
+      lightContext: true,
       deliver: false,
     });
     expect(subagent.waitForRun).toHaveBeenCalledOnce();

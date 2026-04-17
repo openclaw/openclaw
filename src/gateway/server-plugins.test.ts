@@ -576,6 +576,28 @@ describe("loadGatewayPlugins", () => {
     });
   });
 
+  test("forwards lightContext as lightweight bootstrap context on subagent run", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("light-context-forward"));
+
+    await runtime.run({
+      sessionKey: "s-light-context",
+      message: "hello",
+      lightContext: true,
+      lane: "dreaming-narrative:s-light-context",
+      deliver: false,
+    });
+
+    expect(getLastDispatchedParams()).toMatchObject({
+      sessionKey: "s-light-context",
+      message: "hello",
+      lane: "dreaming-narrative:s-light-context",
+      bootstrapContextMode: "lightweight",
+      deliver: false,
+    });
+  });
+
   test("generates a non-empty idempotencyKey when the caller omits it", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);

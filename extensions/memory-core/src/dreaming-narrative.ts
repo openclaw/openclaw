@@ -27,6 +27,8 @@ type SubagentSurface = {
     sessionKey: string;
     message: string;
     extraSystemPrompt?: string;
+    lane?: string;
+    lightContext?: boolean;
     deliver?: boolean;
   }) => Promise<{ runId: string }>;
   waitForRun: (params: {
@@ -153,6 +155,8 @@ async function startNarrativeRunOrFallback(params: {
       sessionKey: params.sessionKey,
       message: params.message,
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
+      lane: `dreaming-narrative:${params.sessionKey}`,
+      lightContext: true,
       deliver: false,
     });
     return run.runId;
