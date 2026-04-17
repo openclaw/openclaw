@@ -220,7 +220,18 @@ export function createDiscordMessageHandler(
       // slowdown (see #15874).
       const msgAuthorId = data.message?.author?.id ?? data.author?.id;
       if (params.botUserId && msgAuthorId === params.botUserId) {
-        return;
+        // Test-only bypass: when running the Phase 7 live E2E harness, the
+        // test bot shares its token with the production gateway, so a REST
+        // post by the harness immediately returns as a self MessageCreate
+        // event. Allow self-sent messages only when the harness explicitly
+        // opts in AND we are outside production. Double-gated so it is
+        // impossible to hit in a real deployment.
+        const allowSelf =
+          process.env.OPENCLAW_E2E_ALLOW_SELF_MESSAGES === "1" &&
+          process.env.NODE_ENV !== "production";
+        if (!allowSelf) {
+          return;
+        }
       }
       const replayKey = buildDiscordInboundReplayKey({
         accountId: params.accountId,

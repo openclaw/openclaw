@@ -234,21 +234,17 @@ export async function spawnAcpWithMarker(params: {
   const timeoutMs = params.timeoutMs ?? 180_000;
   const startedAt = Date.now();
 
-  // Post the spawn request into the parent channel. The production classifier
-  // and spawn path will create a thread for the new ACP session.
-  //
-  // Note: we use `--thread auto`. For Discord (a child-placement channel),
-  // `--thread here` requires already being in a thread; `--bind here` would
-  // bind to the parent channel without creating a child thread. Only
-  // `--thread auto` auto-creates a new Discord thread when issued from the
-  // parent channel, which is exactly what this surface test needs.
-  const messageContent = `/acp spawn ${params.agentId} --thread auto\n${params.task}\n${params.marker}`;
-  e2eTrace(`spawnAcpWithMarker: posting Discord message (agent=${params.agentId})`);
-  const request = await withDiscordRetry(() =>
-    postDiscordMessage(params.env, params.env.parentChannelId, messageContent),
+  // Snapshot the set of active threads under the parent channel BEFORE the
+  // spawn. After the gateway creates the bound thread we diff against this
+  // snapshot to discover the new thread id deterministically — without
+  // relying on banner text matching, which is brittle when the banner runs
+  // through the sanitizer or channel rate-limits the REST read.
+  e2eTrace("spawnAcpWithMarker: snapshotting active threads (pre-spawn)");
+  const preSpawnThreads = await withDiscordRetry(() =>
+    listActiveThreadsInParent({ env: params.env }),
   );
-  const requestMessageId = request.id;
-  e2eTrace(`spawnAcpWithMarker: parent message posted id=${requestMessageId}`);
+  const preSpawnThreadIds = new Set(preSpawnThreads.map((t) => t.id));
+  e2eTrace(`spawnAcpWithMarker: pre-spawn active thread count=${preSpawnThreadIds.size}`);
 
   // Trigger the gateway-side spawn over RPC. We piggyback on chat.send with
   // the parent channel as originatingTo so routing replicates real Discord flow.
@@ -306,50 +302,87 @@ export async function spawnAcpWithMarker(params: {
     );
   }
 
-  // After bind, drive the ACP session with the task prompt so the child
-  // agent produces the marker. The `/acp spawn` command only creates the
-  // session; the actual task needs a separate turn on the spawned session
-  // key. Without this second turn the child has nothing to echo into the
-  // bound Discord thread and findThreadWithMarker below will always time
-  // out. We dispatch via `chat.send` on the spawned session key and await
-  // completion (best effort — some scenarios want to inspect mid-run state,
-  // so we cap the wait here to the remaining budget).
-  const taskRemainingMs = Math.max(30_000, timeoutMs - (Date.now() - startedAt));
-  e2eTrace(`spawnAcpWithMarker: dispatching task prompt (remainingMs=${taskRemainingMs})`);
-  const taskResult: { runId?: string; status?: string } = await params.gateway.request(
-    "chat.send",
-    {
-      sessionKey: spawnedSessionKey,
-      message: params.task,
-      idempotencyKey: `idem-task-${randomUUID()}`,
-      originatingChannel: "discord",
-      originatingTo: params.env.parentChannelId,
-      originatingAccountId: params.env.accountId,
-    },
-  );
-  e2eTrace(
-    `spawnAcpWithMarker: task chat.send status=${String(taskResult?.status)} runId=${String(taskResult?.runId)}`,
-  );
-  if (taskResult?.status === "started" && typeof taskResult.runId === "string") {
-    await params.gateway.request(
-      "agent.wait",
-      { runId: taskResult.runId, timeoutMs: taskRemainingMs },
-      { timeoutMs: taskRemainingMs + 5_000 },
-    );
-    e2eTrace("spawnAcpWithMarker: task agent.wait completed");
+  // Discover the bound thread id by diffing the active-threads list against
+  // the pre-spawn snapshot. The gateway creates at most one new thread per
+  // `--thread auto` spawn under this parent, so the single new entry is the
+  // one we want. We poll briefly because REST sees thread creation slightly
+  // after the spawn RPC resolves.
+  e2eTrace("spawnAcpWithMarker: discovering bound thread id via snapshot diff");
+  const discoverDeadlineMs = Date.now() + Math.max(15_000, Math.min(30_000, timeoutMs / 4));
+  let threadId: string | undefined;
+  while (Date.now() < discoverDeadlineMs) {
+    const nowThreads = await withDiscordRetry(() => listActiveThreadsInParent({ env: params.env }));
+    const candidates = nowThreads.filter((t) => !preSpawnThreadIds.has(t.id));
+    if (candidates.length === 1) {
+      threadId = candidates[0]?.id;
+      break;
+    }
+    if (candidates.length > 1) {
+      // Multiple new threads is unexpected; prefer the most recent name
+      // starting with the spawn's agent id if present, else fail loudly so
+      // operators notice the ambiguity.
+      const match = candidates.find((t) => (t.name ?? "").toLowerCase().includes(params.agentId));
+      if (match) {
+        threadId = match.id;
+        break;
+      }
+      throw new Error(
+        `spawnAcpWithMarker: ambiguous new threads after spawn (${String(
+          candidates.length,
+        )} candidates): ${JSON.stringify(candidates.map((t) => ({ id: t.id, name: t.name })))}`,
+      );
+    }
+    await sleep(500);
   }
+  if (!threadId) {
+    throw new Error(
+      `spawnAcpWithMarker: no new thread appeared under parent ${params.env.parentChannelId} within ${String(
+        Math.round((discoverDeadlineMs - startedAt) / 1000),
+      )}s of spawn completing`,
+    );
+  }
+  e2eTrace(`spawnAcpWithMarker: discovered bound threadId=${threadId}`);
 
-  // Find the newly created thread containing our marker. ACP spawn creates a
-  // thread via the Discord extension; we poll until it shows up.
-  e2eTrace(`spawnAcpWithMarker: looking for thread with marker ${params.marker}`);
-  const threadId = await withDiscordRetry(() =>
+  // The spawn RPC's agent.wait guarantees the bind step completed before
+  // we reach here, so the binding record for the new thread id should be
+  // in state. We intentionally do NOT deep-import the Discord extension's
+  // binding manager from this core helper (extension boundary rule): the
+  // binding is exercised implicitly when the native message below resolves
+  // a bound session via preflight. If the binding were absent, the ACP
+  // turn would fall back to an unbound session and the marker would not
+  // reach the thread — which the assertion at the end of this helper
+  // surfaces as a clear timeout failure.
+
+  // Drive the child's first real turn as a NATIVE Discord message posted
+  // into the bound thread. Because the harness bot shares its token with the
+  // gateway, the self-filter bypass (gated by OPENCLAW_E2E_ALLOW_SELF_MESSAGES
+  // + NODE_ENV!=="production") allows the resulting MessageCreate event to
+  // reach preflightDiscordMessage, which resolves the session via the Phase 11
+  // thread-binding lookup. The ctx then carries Discord provenance +
+  // MessageThreadId, so dispatch-acp-delivery routes the child's final_reply
+  // back through the webhook path into the same thread.
+  const taskContent = `${params.task}\n\nEcho the following token verbatim on its own line at the end of your reply: ${params.marker}`;
+  e2eTrace(`spawnAcpWithMarker: posting native-origin task message into thread ${threadId}`);
+  const request = await withDiscordRetry(() =>
+    postDiscordMessage(params.env, threadId, taskContent),
+  );
+  const requestMessageId = request.id;
+  e2eTrace(`spawnAcpWithMarker: task message posted id=${requestMessageId}`);
+
+  // Wait for the marker to show up in the bound thread. This is the merge
+  // gate: the marker reaching the thread proves the whole delivery chain
+  // (inbound self-bypass -> preflight -> bound-session resolution -> ACP
+  // dispatch -> webhook outbound) works end-to-end against live Discord.
+  e2eTrace(`spawnAcpWithMarker: waiting for marker ${params.marker} in thread ${threadId}`);
+  await withDiscordRetry(() =>
     findThreadWithMarker({
       env: params.env,
       marker: params.marker,
       timeoutMs: Math.max(15_000, timeoutMs - (Date.now() - startedAt)),
+      expectedThreadId: threadId,
     }),
   );
-  e2eTrace(`spawnAcpWithMarker: found threadId=${threadId}`);
+  e2eTrace(`spawnAcpWithMarker: marker seen in threadId=${threadId}`);
 
   return { threadId, spawnedSessionKey, requestMessageId };
 }
@@ -950,25 +983,40 @@ async function findThreadWithMarker(params: {
   env: DiscordE2EEnv;
   marker: string;
   timeoutMs: number;
+  /**
+   * If provided, only scan this specific thread id. Used by
+   * `spawnAcpWithMarker` once the bound thread has already been discovered
+   * via snapshot-diff so we don't re-scan unrelated threads and race their
+   * markers. Callers that want the original discovery-via-scan behavior can
+   * simply omit this field.
+   */
+  expectedThreadId?: string;
 }): Promise<string> {
-  const { env, marker, timeoutMs } = params;
+  const { env, marker, timeoutMs, expectedThreadId } = params;
   const startedAt = Date.now();
   const rest = getRestClient(env.botToken);
   let pollAttempt = 0;
   while (Date.now() - startedAt < timeoutMs) {
     pollAttempt += 1;
-    const active = (await rest.get(Routes.guildActiveThreads(env.guildId))) as {
-      threads?: Array<{ id: string; parent_id?: string; name?: string }>;
-    };
-    const threads = active.threads ?? [];
-    const candidateThreads = threads.filter(
-      (t) => !t.parent_id || t.parent_id === env.parentChannelId,
-    );
+    let candidateThreads: Array<{ id: string; parent_id?: string; name?: string }>;
+    if (expectedThreadId) {
+      candidateThreads = [{ id: expectedThreadId }];
+    } else {
+      const active = (await rest.get(Routes.guildActiveThreads(env.guildId))) as {
+        threads?: Array<{ id: string; parent_id?: string; name?: string }>;
+      };
+      const threads = active.threads ?? [];
+      candidateThreads = threads.filter((t) => !t.parent_id || t.parent_id === env.parentChannelId);
+    }
     // Log candidate threads periodically (every 10 polls plus first two)
     // so operators can see progress without drowning logs.
     if (pollAttempt <= 2 || pollAttempt % 10 === 0) {
       e2eTrace(
-        `findThreadWithMarker poll=${pollAttempt}: ${threads.length} active thread(s), ${candidateThreads.length} under parent ${env.parentChannelId}; names=${JSON.stringify(candidateThreads.map((t) => t.name ?? t.id))}`,
+        `findThreadWithMarker poll=${pollAttempt}: scanning ${candidateThreads.length} thread(s)${
+          expectedThreadId
+            ? ` (pinned to ${expectedThreadId})`
+            : ` under parent ${env.parentChannelId}`
+        }; names=${JSON.stringify(candidateThreads.map((t) => t.name ?? t.id))}`,
       );
     }
     for (const thread of candidateThreads) {

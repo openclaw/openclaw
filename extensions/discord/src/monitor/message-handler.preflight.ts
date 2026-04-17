@@ -515,8 +515,16 @@ export async function preflightDiscordMessage(
   const allowBotsMode =
     allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting === true ? "all" : "off";
   if (params.botUserId && author.id === params.botUserId) {
-    // Always ignore own messages to prevent self-reply loops
-    return null;
+    // Test-only bypass: Phase 7 live E2E harness shares its bot token with
+    // the production gateway. Allow self-sent messages only when the harness
+    // explicitly opts in AND we are outside production. Keeps the normal
+    // anti-self-reply guarantee intact for real deployments.
+    const allowSelf =
+      process.env.OPENCLAW_E2E_ALLOW_SELF_MESSAGES === "1" && process.env.NODE_ENV !== "production";
+    if (!allowSelf) {
+      // Always ignore own messages to prevent self-reply loops
+      return null;
+    }
   }
 
   message = await hydrateDiscordMessageIfEmpty({
