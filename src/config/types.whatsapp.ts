@@ -76,6 +76,8 @@ type WhatsAppSharedConfig = {
   chunkMode?: "length" | "newline";
   /** Maximum media file size in MB. Default: 50. */
   mediaMaxMb?: number;
+  /** Additional local directory roots allowed for outbound media reads on WhatsApp. */
+  mediaLocalRoots?: string[];
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */

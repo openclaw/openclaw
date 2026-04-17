@@ -578,6 +578,35 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("merges whatsapp mediaLocalRoots from config into outbound media roots", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w2", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {
+        ...whatsappChunkConfig,
+        channels: {
+          ...whatsappChunkConfig.channels,
+          whatsapp: {
+            ...whatsappChunkConfig.channels?.whatsapp,
+            mediaLocalRoots: ["/tmp/wa-custom-root"],
+          },
+        },
+      } as OpenClawConfig,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hi", mediaUrl: "https://example.com/x.png" }],
+      deps: { whatsapp: sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "hi",
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining([expectedPreferredTmpRoot, "/tmp/wa-custom-root"]),
+      }),
+    );
+  });
+
   it("includes OpenClaw tmp root in imessage mediaLocalRoots", async () => {
     const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i1", chatId: "chat-1" });
 

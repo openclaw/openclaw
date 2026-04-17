@@ -245,9 +245,35 @@ function createPluginHandler(
   };
 }
 
+function mergeMediaLocalRoots(
+  baseRoots: readonly string[] | undefined,
+  extraRoots: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if ((!baseRoots || baseRoots.length === 0) && (!extraRoots || extraRoots.length === 0)) {
+    return undefined;
+  }
+  return Array.from(new Set([...(baseRoots ?? []), ...(extraRoots ?? [])]));
+}
+
 function createChannelOutboundContextBase(
   params: ChannelHandlerParams,
 ): Omit<ChannelOutboundContext, "text" | "mediaUrl"> {
+  const whatsappConfig = params.channel === "whatsapp" ? params.cfg.channels?.whatsapp : undefined;
+  const whatsappAccountConfig =
+    params.channel === "whatsapp" && params.accountId
+      ? whatsappConfig?.accounts?.[params.accountId]
+      : undefined;
+  const mediaLocalRoots =
+    params.channel === "whatsapp"
+      ? mergeMediaLocalRoots(
+          params.mediaAccess?.localRoots,
+          mergeMediaLocalRoots(
+            whatsappConfig?.mediaLocalRoots,
+            whatsappAccountConfig?.mediaLocalRoots,
+          ),
+        )
+      : params.mediaAccess?.localRoots;
+
   return {
     cfg: params.cfg,
     to: params.to,
@@ -260,7 +286,7 @@ function createChannelOutboundContextBase(
     deps: params.deps,
     silent: params.silent,
     mediaAccess: params.mediaAccess,
-    mediaLocalRoots: params.mediaAccess?.localRoots,
+    mediaLocalRoots,
     mediaReadFile: params.mediaAccess?.readFile,
     gatewayClientScopes: params.gatewayClientScopes,
   };
