@@ -16,6 +16,8 @@ import { z } from "zod";
 import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
 
 const LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
+const SYSTEM_EVENT_PREFIX_RE = /^\s*System(?: \(untrusted\))?:\s*(?:\[[^\]]+\]\s*)?/;
+const HIDDEN_SYSTEM_EVENT_HEADER_RE = /^Exec (?:completed|finished|started|denied)\b/i;
 
 /**
  * Sentinel strings that identify the start of an injected metadata block.
@@ -157,6 +159,48 @@ function stripActiveMemoryPromptPrefixBlocks(lines: string[]): string[] {
   return result;
 }
 
+function systemEventBody(line: string): string | null {
+  const trimmed = line.trim();
+  if (!SYSTEM_EVENT_PREFIX_RE.test(trimmed)) {
+    return null;
+  }
+  return trimmed.replace(SYSTEM_EVENT_PREFIX_RE, "").trim();
+}
+
+function hiddenSystemEventBody(line: string): string | null {
+  const body = systemEventBody(line);
+  if (!body || !HIDDEN_SYSTEM_EVENT_HEADER_RE.test(body)) {
+    return null;
+  }
+  return body;
+}
+
+function stripHiddenSystemEventBlocks(text: string): string {
+  if (!text || !text.includes("System")) {
+    return text;
+  }
+
+  const lines = text.split("\n");
+  const result: string[] = [];
+  let hidingSystemEventBlock = false;
+
+  for (const line of lines) {
+    if (hiddenSystemEventBody(line) !== null) {
+      hidingSystemEventBlock = true;
+      continue;
+    }
+
+    if (hidingSystemEventBlock && systemEventBody(line) !== null) {
+      continue;
+    }
+
+    hidingSystemEventBlock = false;
+    result.push(line);
+  }
+
+  return result.join("\n");
+}
+
 /**
  * Remove all injected inbound metadata prefix blocks from `text`.
  *
@@ -178,11 +222,14 @@ export function stripInboundMetadata(text: string): string {
   }
 
   const withoutTimestamp = text.replace(LEADING_TIMESTAMP_PREFIX_RE, "");
-  if (!SENTINEL_FAST_RE.test(withoutTimestamp)) {
-    return withoutTimestamp;
+  const withoutHiddenSystemEvents = stripHiddenSystemEventBlocks(withoutTimestamp);
+  if (!SENTINEL_FAST_RE.test(withoutHiddenSystemEvents)) {
+    return withoutHiddenSystemEvents === withoutTimestamp
+      ? withoutHiddenSystemEvents
+      : withoutHiddenSystemEvents.replace(/^\n+/, "").replace(/\n+$/, "");
   }
 
-  const lines = withoutTimestamp.split("\n");
+  const lines = withoutHiddenSystemEvents.split("\n");
   const strippedLeadingPrefixLines = stripActiveMemoryPromptPrefixBlocks(lines);
   const result: string[] = [];
   let inMetaBlock = false;
