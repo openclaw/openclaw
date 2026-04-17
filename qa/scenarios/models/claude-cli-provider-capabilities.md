@@ -4,6 +4,11 @@
 id: claude-cli-provider-capabilities
 title: Claude CLI provider capabilities API key
 surface: model-provider
+coverage:
+  primary:
+    - models.provider-capabilities
+  secondary:
+    - models.claude-cli
 objective: Verify the Claude CLI model-provider lane can use the Anthropic API key path to talk, read an attached image, use bundled MCP tools, and apply workspace skills.
 successCriteria:
   - A live-frontier run fails fast unless the selected primary provider is claude-cli.

@@ -4,6 +4,12 @@
 id: control-ui-qa-channel-image-roundtrip
 title: Control UI plus qa-channel image roundtrip
 surface: control-ui
+coverage:
+  primary:
+    - ui.control
+  secondary:
+    - media.image-understanding
+    - channels.qa-channel
 objective: Verify the embedded Control UI can observe a qa-channel-backed session while the fake channel injects text and image turns that the agent answers correctly.
 successCriteria:
   - Control UI opens directly on the target qa-channel session.

@@ -4,6 +4,11 @@
 id: native-image-generation
 title: Native image generation
 surface: image-generation
+coverage:
+  primary:
+    - media.image-generation
+  secondary:
+    - tools.native-image-generation
 objective: Verify image_generate appears when configured and returns a real saved media artifact.
 successCriteria:
   - image_generate appears in the effective tool inventory.
