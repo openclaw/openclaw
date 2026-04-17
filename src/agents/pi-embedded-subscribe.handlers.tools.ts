@@ -46,11 +46,19 @@ type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
 type MediaParseModule = typeof import("../media/parse.js");
 type BeforeToolCallModule = typeof import("./pi-tools.before-tool-call.js");
+type SessionStoreRuntimeModule = typeof import("../config/sessions/store.runtime.js");
+type ConfigModule = typeof import("../config/config.js");
+type SessionPathsModule = typeof import("../config/sessions/paths.js");
+type RoutingModule = typeof import("../routing/session-key.js");
 
 let execApprovalReplyModulePromise: Promise<ExecApprovalReplyModule> | undefined;
 let hookRunnerGlobalModulePromise: Promise<HookRunnerGlobalModule> | undefined;
 let mediaParseModulePromise: Promise<MediaParseModule> | undefined;
 let beforeToolCallModulePromise: Promise<BeforeToolCallModule> | undefined;
+let sessionStoreRuntimePromise: Promise<SessionStoreRuntimeModule> | undefined;
+let configModulePromise: Promise<ConfigModule> | undefined;
+let sessionPathsPromise: Promise<SessionPathsModule> | undefined;
+let routingPromise: Promise<RoutingModule> | undefined;
 
 function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
   execApprovalReplyModulePromise ??= import("../infra/exec-approval-reply.js");
@@ -70,6 +78,85 @@ function loadMediaParse(): Promise<MediaParseModule> {
 function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
   beforeToolCallModulePromise ??= import("./pi-tools.before-tool-call.js");
   return beforeToolCallModulePromise;
+}
+
+function loadSessionStoreRuntime(): Promise<SessionStoreRuntimeModule> {
+  sessionStoreRuntimePromise ??= import("../config/sessions/store.runtime.js");
+  return sessionStoreRuntimePromise;
+}
+
+function loadConfigModule(): Promise<ConfigModule> {
+  configModulePromise ??= import("../config/config.js");
+  return configModulePromise;
+}
+
+function loadSessionPaths(): Promise<SessionPathsModule> {
+  sessionPathsPromise ??= import("../config/sessions/paths.js");
+  return sessionPathsPromise;
+}
+
+function loadRouting(): Promise<RoutingModule> {
+  routingPromise ??= import("../routing/session-key.js");
+  return routingPromise;
+}
+
+/**
+ * Persist plan-mode approval-pending state on the session entry so the
+ * `sessions.patch { planApproval }` flow can match the approvalId minted
+ * by the runtime when `exit_plan_mode` fires.
+ *
+ * Without this, the resolvePlanApproval guard rejects every approval
+ * click as "stale approvalId" because the on-disk state has
+ * `approvalId: undefined` while the UI sends the freshly-minted token.
+ */
+async function persistPlanApprovalRequest(
+  sessionKey: string,
+  approvalId: string,
+  log: { warn?: (msg: string) => void } | undefined,
+): Promise<void> {
+  try {
+    const [
+      { updateSessionStoreEntry },
+      { loadConfig },
+      { resolveStorePath },
+      { parseAgentSessionKey },
+    ] = await Promise.all([
+      loadSessionStoreRuntime(),
+      loadConfigModule(),
+      loadSessionPaths(),
+      loadRouting(),
+    ]);
+    const cfg = loadConfig();
+    const parsed = parseAgentSessionKey(sessionKey);
+    const storePath = resolveStorePath(
+      cfg.session?.store,
+      parsed?.agentId ? { agentId: parsed.agentId } : {},
+    );
+    const now = Date.now();
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async (entry) => {
+        const current = entry.planMode;
+        // No active plan-mode session — agent called exit_plan_mode
+        // outside of plan mode (shouldn't happen in normal flow). Leave
+        // the entry untouched so we don't accidentally arm the gate.
+        if (!current || current.mode !== "plan") {
+          return null;
+        }
+        return {
+          planMode: {
+            ...current,
+            approval: "pending",
+            approvalId,
+            updatedAt: now,
+          },
+        };
+      },
+    });
+  } catch (err) {
+    log?.warn?.(`failed to persist plan-mode approvalId: ${String(err)}`);
+  }
 }
 
 type ToolStartRecord = {
@@ -1189,6 +1276,14 @@ export async function handleToolExecutionEnd(
     const details = readPlanProposalDetails(result);
     if (details && details.plan.length > 0) {
       const approvalId = newPlanApprovalId();
+      // Persist the approvalId to SessionEntry.planMode BEFORE emitting
+      // the event so the eventual sessions.patch { planApproval } can
+      // match it via resolvePlanApproval's stale-id guard. Without this
+      // the user clicks Approve and gets "stale approvalId" because the
+      // on-disk approvalId is still undefined.
+      if (ctx.params.sessionKey) {
+        await persistPlanApprovalRequest(ctx.params.sessionKey, approvalId, ctx.log);
+      }
       const approvalData: AgentApprovalEventData = {
         phase: "requested",
         kind: "plugin",
