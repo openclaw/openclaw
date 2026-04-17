@@ -8,8 +8,20 @@ import {
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./constants.js";
 import { log } from "./constants.js";
-import { hasUsableOAuthCredential as hasUsableOAuthCredentialShared } from "./credential-state.js";
+import {
+  areOAuthCredentialsEquivalent,
+  hasUsableOAuthCredential,
+  shouldBootstrapFromExternalCliCredential,
+  shouldReplaceStoredOAuthCredential,
+} from "./oauth-manager.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
+
+export {
+  areOAuthCredentialsEquivalent,
+  hasUsableOAuthCredential,
+  shouldBootstrapFromExternalCliCredential,
+  shouldReplaceStoredOAuthCredential,
+} from "./oauth-manager.js";
 
 export type ExternalCliResolvedProfile = {
   profileId: string;
@@ -21,25 +33,6 @@ type ExternalCliSyncProvider = {
   provider: string;
   readCredentials: () => OAuthCredential | null;
 };
-
-export function areOAuthCredentialsEquivalent(
-  a: OAuthCredential | undefined,
-  b: OAuthCredential,
-): boolean {
-  if (!a || a.type !== "oauth") {
-    return false;
-  }
-  return (
-    a.provider === b.provider &&
-    a.access === b.access &&
-    a.refresh === b.refresh &&
-    a.expires === b.expires &&
-    a.email === b.email &&
-    a.enterpriseUrl === b.enterpriseUrl &&
-    a.projectId === b.projectId &&
-    a.accountId === b.accountId
-  );
-}
 
 function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -79,53 +72,6 @@ export function isSafeToUseExternalCliCredential(
     return false;
   }
   return true;
-}
-
-function hasNewerStoredOAuthCredential(
-  existing: OAuthCredential | undefined,
-  incoming: OAuthCredential,
-): boolean {
-  return Boolean(
-    existing &&
-    existing.provider === incoming.provider &&
-    Number.isFinite(existing.expires) &&
-    (!Number.isFinite(incoming.expires) || existing.expires > incoming.expires),
-  );
-}
-
-export function shouldReplaceStoredOAuthCredential(
-  existing: OAuthCredential | undefined,
-  incoming: OAuthCredential,
-): boolean {
-  if (!existing || existing.type !== "oauth") {
-    return true;
-  }
-  if (areOAuthCredentialsEquivalent(existing, incoming)) {
-    return false;
-  }
-  return !hasNewerStoredOAuthCredential(existing, incoming);
-}
-
-export function hasUsableOAuthCredential(
-  credential: OAuthCredential | undefined,
-  now = Date.now(),
-): boolean {
-  return hasUsableOAuthCredentialShared(credential, { now });
-}
-
-export function shouldBootstrapFromExternalCliCredential(params: {
-  existing: OAuthCredential | undefined;
-  imported: OAuthCredential;
-  now?: number;
-}): boolean {
-  const now = params.now ?? Date.now();
-  if (!isSafeToUseExternalCliCredential(params.existing, params.imported)) {
-    return false;
-  }
-  if (hasUsableOAuthCredential(params.existing, now)) {
-    return false;
-  }
-  return hasUsableOAuthCredential(params.imported, now);
 }
 
 const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
