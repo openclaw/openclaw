@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readAcpSessionEntry } from "openclaw/plugin-sdk/acp-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   formatThreadBindingDurationLabel,
@@ -12,7 +13,6 @@ import {
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { readAcpSessionEntry } from "openclaw/plugin-sdk/acp-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { normalizeAccountId, isAcpSessionKey } from "openclaw/plugin-sdk/routing";
@@ -441,28 +441,16 @@ export function createTelegramThreadBindingManager(
     });
   }
 
-  // Clean up bindings to stale/failed ACP sessions on startup
-  // Group bindings by targetSessionKey to avoid redundant session store reads
-  // Only process ACP runtime sessions (skip plugin-bound sessions like "plugin-binding:*")
-  const bindingsByTargetSession = new Map<string, TelegramThreadBindingRecord[]>();
+  const acpSessionKeys = new Set<string>();
   for (const binding of getThreadBindingsState().bindingsByAccountConversation.values()) {
-    if (binding.targetKind !== "acp") {
+    if (binding.targetKind !== "acp" || !isAcpSessionKey(binding.targetSessionKey)) {
       continue;
     }
-    // Skip plugin-bound sessions — they use "plugin-binding:*" keys, not ACP session keys
-    if (!isAcpSessionKey(binding.targetSessionKey)) {
-      continue;
-    }
-    const existing = bindingsByTargetSession.get(binding.targetSessionKey);
-    if (existing) {
-      existing.push(binding);
-    } else {
-      bindingsByTargetSession.set(binding.targetSessionKey, [binding]);
-    }
+    acpSessionKeys.add(binding.targetSessionKey);
   }
 
   const staleSessionKeys = new Set<string>();
-  for (const targetSessionKey of bindingsByTargetSession.keys()) {
+  for (const targetSessionKey of acpSessionKeys) {
     const sessionEntry = readAcpSessionEntry({ sessionKey: targetSessionKey });
     if (!sessionEntry || sessionEntry.storeReadFailed) {
       continue;
