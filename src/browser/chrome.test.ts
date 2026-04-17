@@ -220,6 +220,22 @@ describe("browser chrome helpers", () => {
     exists.mockRestore();
   });
 
+  it("expands tilde in custom executablePath", () => {
+    const homedir = "/home/testuser";
+    vi.spyOn(os, "homedir").mockReturnValue(homedir);
+    const exists = mockExistsSync((pathValue) => pathValue.includes("chromium"));
+    const exe = resolveBrowserExecutableForPlatform(
+      { executablePath: "~/chromium/chrome" } as Parameters<
+        typeof resolveBrowserExecutableForPlatform
+      >[0],
+      "linux",
+    );
+    expect(exe?.kind).toBe("custom");
+    expect(exe?.path).toContain("chromium");
+    expect(exe?.path).not.toContain("~");
+    exists.mockRestore();
+  });
+
   it("reports reachability based on /json/version", async () => {
     vi.stubGlobal(
       "fetch",
