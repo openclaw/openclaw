@@ -9,7 +9,7 @@ import {
 } from "../../test/helpers/plugins/onboard-config.js";
 import { applyOpencodeZenConfig, applyOpencodeZenProviderConfig } from "./onboard.js";
 
-const MODEL_REF = "opencode/claude-opus-4-6";
+const MODEL_REF = "opencode/claude-opus-4-7";
 
 describe("opencode onboard", () => {
   it("adds allowlist entry and preserves alias", () => {

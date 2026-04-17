@@ -4,7 +4,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 
-export const OPENCODE_ZEN_DEFAULT_MODEL_REF = "opencode/claude-opus-4-6";
+export const OPENCODE_ZEN_DEFAULT_MODEL_REF = "opencode/claude-opus-4-7";
 
 export function applyOpencodeZenProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   return {
