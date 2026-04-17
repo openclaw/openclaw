@@ -52,6 +52,7 @@ import { buildSdkHooks } from "./hooks-adapter.js";
 import { loadWorkspaceHookEntries } from "../../hooks/workspace.js";
 import { importFileModule, resolveFunctionModuleExport } from "../../hooks/module-loader.js";
 import type { HookEntry } from "../../hooks/types.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 
 const log = createSubsystemLogger("agents/claude-sdk");
 
@@ -64,15 +65,36 @@ function resolveClaudeSdkRuntimeConfig(
   params: RunEmbeddedPiAgentParams,
 ): AgentRuntimeClaudeSdkConfig | undefined {
   const list = params.config?.agents?.list;
-  if (!Array.isArray(list)) {
+  if (!Array.isArray(list) || !params.agentId) {
     return undefined;
   }
-  const agentEntry = list.find((entry) => entry.id === params.agentId);
+  // Match the normalization used elsewhere in agent routing so an entry
+  // declared as `id: "MyAgent"` still resolves when the runtime is
+  // invoked with the lowercased/sanitized form.
+  const normalizedTarget = normalizeAgentId(params.agentId);
+  const agentEntry = list.find(
+    (entry) => normalizeAgentId(entry.id) === normalizedTarget,
+  );
   const runtime = agentEntry?.runtime;
   if (!runtime || runtime.type !== "claude-sdk") {
     return undefined;
   }
   return runtime.claudeSdk;
+}
+
+/**
+ * Heuristic: does this model id look like a Claude-family model? We
+ * forward it to the SDK only when it does, otherwise we let the SDK
+ * pick its own default rather than forward a non-Anthropic id that
+ * would fail the subprocess immediately. Matches "claude-*" (e.g.
+ * "claude-sonnet-4-5-20250929") and the bare "claude" alias.
+ */
+function isClaudeModelId(model: string | undefined): model is string {
+  if (!model) {
+    return false;
+  }
+  const trimmed = model.trim().toLowerCase();
+  return trimmed === "claude" || trimmed.startsWith("claude-");
 }
 
 /**
@@ -187,6 +209,22 @@ async function buildNativeSdkHooks(
  */
 async function buildNativeMcpServers(
   params: RunEmbeddedPiAgentParams,
+  /**
+   * Composed abort signal from run.ts that fires on BOTH the upstream
+   * abortSignal and the per-run timeout. Passing this (rather than just
+   * `params.abortSignal`) ensures that tool execution stops when the
+   * run's timeoutMs fires — otherwise long-running tool side effects
+   * can continue after the SDK run has already been canceled.
+   */
+  runAbortSignal: AbortSignal,
+  /**
+   * Model identity for provider-scoped tool policies (tools.byProvider).
+   * Derived from the SDK runtime's effective model in run.ts — if we
+   * pass undefined here, provider-specific allow/deny/profile rules
+   * in config are silently skipped and the SDK-native inventory can
+   * expose tools the embedded runtime correctly filters out.
+   */
+  modelIdentity: { modelProvider?: string; modelId?: string },
 ): Promise<Record<string, McpServerConfig> | undefined> {
   if (params.disableTools) {
     return undefined;
@@ -201,7 +239,9 @@ async function buildNativeMcpServers(
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     config: params.config,
-    abortSignal: params.abortSignal,
+    abortSignal: runAbortSignal,
+    modelProvider: modelIdentity.modelProvider,
+    modelId: modelIdentity.modelId,
     messageProvider: params.messageProvider,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
@@ -365,7 +405,27 @@ export async function runClaudeSdkAgent(
   let stopReason = "completed";
   let aborted = false;
 
-  const effectiveModel = runtimeConfig?.model ?? params.model ?? "";
+  // Model selection priority (highest → lowest):
+  //   1. agents.runtime.claudeSdk.model (explicit per-agent override)
+  //   2. params.model IF it looks like a Claude model
+  //   3. undefined (let the SDK pick its default Claude model)
+  //
+  // Rationale: params.model frequently comes from the global
+  // agents.defaults (e.g. openai/gpt-5.4). Forwarding a non-Anthropic
+  // model id into the SDK makes the subprocess fail immediately with
+  // an unsupported-model error. Falling back to the SDK default is
+  // safer than propagating a model the SDK cannot handle.
+  const effectiveModel =
+    runtimeConfig?.model ?? (isClaudeModelId(params.model) ? params.model : undefined);
+  // Provider identity for tools.byProvider policy resolution inside
+  // createOpenClawCodingTools. We pin "anthropic" because every run
+  // through this adapter goes through Anthropic's SDK; the specific
+  // model id is whatever we resolved above (or undefined, meaning the
+  // SDK will pick).
+  const modelIdentity = {
+    modelProvider: "anthropic",
+    modelId: effectiveModel,
+  };
   const thinkBudget = mapThinkBudget(params.thinkLevel);
   const maxTurns = runtimeConfig?.maxTurns;
 
@@ -392,7 +452,11 @@ export async function runClaudeSdkAgent(
   // an in-process MCP server. Failure is survivable: if policy
   // resolution or tool assembly throws, we log and fall through to
   // built-in-only tools rather than crashing the run.
-  const nativeMcpServers = await buildNativeMcpServers(params).catch((err) => {
+  const nativeMcpServers = await buildNativeMcpServers(
+    params,
+    abortController.signal,
+    modelIdentity,
+  ).catch((err) => {
     log.warn(
       `[claude-sdk] native tool inventory build failed for runId=${params.runId}: ` +
         `${(err as Error).message}; falling back to SDK built-in tools only`,
@@ -418,7 +482,7 @@ export async function runClaudeSdkAgent(
         abortController,
         cwd: params.workspaceDir,
         env: mergedEnv,
-        model: effectiveModel || undefined,
+        model: effectiveModel,
         maxTurns,
         systemPrompt: systemPromptOption,
         ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
@@ -522,7 +586,7 @@ export async function runClaudeSdkAgent(
       agentMeta: {
         sessionId: params.sessionId,
         provider: "anthropic",
-        model: effectiveModel,
+        model: effectiveModel ?? "",
       },
     },
   };
