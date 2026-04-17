@@ -142,18 +142,16 @@ describe("matrix thread bindings", () => {
       parentConversationId?: string;
     },
   ) {
-    await vi.waitFor(async () => {
-      const persistedRaw = await fs.readFile(bindingsPath, "utf-8");
-      expect(JSON.parse(persistedRaw)).toMatchObject({
-        version: 1,
-        bindings: [
-          expect.objectContaining({
-            conversationId: expected.conversationId,
-            parentConversationId: expected.parentConversationId ?? "!room:example",
-            targetSessionKey: expected.targetSessionKey,
-          }),
-        ],
-      });
+    const persistedRaw = await fs.readFile(bindingsPath, "utf-8");
+    expect(JSON.parse(persistedRaw)).toMatchObject({
+      version: 1,
+      bindings: [
+        expect.objectContaining({
+          conversationId: expected.conversationId,
+          parentConversationId: expected.parentConversationId ?? "!room:example",
+          targetSessionKey: expected.targetSessionKey,
+        }),
+      ],
     });
   }
 

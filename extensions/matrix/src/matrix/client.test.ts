@@ -780,6 +780,7 @@ describe("resolveMatrixAuth", () => {
     setMatrixAuthClientDepsForTest({
       MatrixClient: MockMatrixClient as unknown as typeof import("./sdk.js").MatrixClient,
       ensureMatrixSdkLoggingConfigured: ensureMatrixSdkLoggingConfiguredMock,
+      retryMinDelayMs: 0,
     });
   });
 

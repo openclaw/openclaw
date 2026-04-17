@@ -12,10 +12,6 @@ import { resolveChannelCapabilities } from "../../../config/channel-capabilities
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
-import {
-  ensureGlobalUndiciEnvProxyDispatcher,
-  ensureGlobalUndiciStreamTimeouts,
-} from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import {
   isOllamaCompatProvider,
@@ -186,6 +182,7 @@ import { splitSdkTools } from "../tool-split.js";
 import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
+import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import {
   assembleAttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -423,10 +420,7 @@ export async function runEmbeddedAttempt(
 ): Promise<EmbeddedRunAttemptResult> {
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const runAbortController = new AbortController();
-  // Proxy bootstrap must happen before timeout tuning so the timeouts wrap the
-  // active EnvHttpProxyAgent instead of being replaced by a bare proxy dispatcher.
-  ensureGlobalUndiciEnvProxyDispatcher();
-  ensureGlobalUndiciStreamTimeouts({ timeoutMs: params.timeoutMs });
+  configureEmbeddedAttemptHttpRuntime({ timeoutMs: params.timeoutMs });
 
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,

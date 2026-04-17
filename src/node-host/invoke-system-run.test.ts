@@ -13,7 +13,11 @@ import {
   type Mock,
   vi,
 } from "vitest";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
@@ -474,6 +478,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       sendInvokeResult,
       sendExecFinishedEvent,
       preferMacAppExecHost: params.preferMacAppExecHost,
+      loadConfig: () => getRuntimeConfigSnapshot() ?? {},
     });
 
     return {
