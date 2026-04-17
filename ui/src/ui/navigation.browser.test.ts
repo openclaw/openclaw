@@ -173,7 +173,7 @@ describe("control UI routing", () => {
     expect(header.querySelector(".nav-collapse-toggle")).not.toBeNull();
   });
 
-  it("preserves the active session when opening chat from sidebar navigation", async () => {
+  it("preserves session navigation and keeps focus mode scoped to chat", async () => {
     const app = mountApp("/sessions?session=agent:main:subagent:task-123");
     await app.updateComplete;
 
@@ -186,11 +186,6 @@ describe("control UI routing", () => {
     expect(app.sessionKey).toBe("agent:main:subagent:task-123");
     expect(window.location.pathname).toBe("/chat");
     expect(window.location.search).toBe("?session=agent%3Amain%3Asubagent%3Atask-123");
-  });
-
-  it("keeps focus mode scoped to the chat tab", async () => {
-    const app = mountApp("/chat");
-    await app.updateComplete;
 
     const shell = app.querySelector(".shell");
     expect(shell).not.toBeNull();
@@ -203,9 +198,11 @@ describe("control UI routing", () => {
     await app.updateComplete;
     expect(shell?.classList.contains("shell--chat-focus")).toBe(true);
 
-    const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/channels"]');
-    expect(link).not.toBeNull();
-    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    const channelsLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/channels"]');
+    expect(channelsLink).not.toBeNull();
+    channelsLink?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }),
+    );
 
     await app.updateComplete;
     expect(app.tab).toBe("channels");
