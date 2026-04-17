@@ -177,6 +177,7 @@ export const plansHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const previousPlan = getPlanById(params.planId);
       const result = updatePlanStatus({
         planId: params.planId,
         status: params.status,
@@ -184,10 +185,9 @@ export const plansHandlers: GatewayRequestHandlers = {
       try {
         await persistSessionPlanStatus(result.plan);
       } catch (error) {
-        restorePlanRecord({
-          ...result.plan,
-          status: result.previousStatus,
-        });
+        if (previousPlan) {
+          restorePlanRecord(previousPlan);
+        }
         throw error;
       }
       respond(true, result, undefined);

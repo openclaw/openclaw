@@ -64,10 +64,32 @@ function findPlanIdByTitleFromRespond(
 function findPlanByTitleFromRespond(
   call: RespondCall | undefined,
   title: string,
-): { planId: string; status: string } | undefined {
+):
+  | {
+      planId: string;
+      status: string;
+      updatedAt?: number;
+      reviewedAt?: number;
+      approvedAt?: number;
+      rejectedAt?: number;
+    }
+  | undefined {
   return (
-    (call?.[1] as { plans?: Array<{ planId: string; title: string; status: string }> } | undefined)
-      ?.plans ?? []
+    (
+      call?.[1] as
+        | {
+            plans?: Array<{
+              planId: string;
+              title: string;
+              status: string;
+              updatedAt?: number;
+              reviewedAt?: number;
+              approvedAt?: number;
+              rejectedAt?: number;
+            }>;
+          }
+        | undefined
+    )?.plans ?? []
   ).find((plan) => plan.title === title);
 }
 
@@ -365,6 +387,9 @@ describe("plans gateway handlers", () => {
     const failedListCall = failedList.respond.mock.calls[0] as RespondCall | undefined;
     const failedPlan = findPlanByTitleFromRespond(failedListCall, "Session rejected plan");
     expect(failedPlan?.status).toBe("ready_for_review");
+    expect(failedPlan?.updatedAt).toBe(500);
+    expect(failedPlan?.reviewedAt).toBeUndefined();
+    expect(failedPlan?.rejectedAt).toBeUndefined();
   });
 
   it("allows retry after session plan artifact persistence fails once", async () => {
@@ -413,6 +438,15 @@ describe("plans gateway handlers", () => {
     const firstCall = firstAttempt.respond.mock.calls[0] as RespondCall | undefined;
     expect(firstCall?.[0]).toBe(false);
     expect(firstCall?.[2]?.message).toContain("session artifact persist failed");
+
+    const failedList = listPlansCall();
+    await failedList.invoke();
+    const failedListCall = failedList.respond.mock.calls[0] as RespondCall | undefined;
+    const failedPlan = findPlanByTitleFromRespond(failedListCall, "Session retry plan");
+    expect(failedPlan?.status).toBe("ready_for_review");
+    expect(failedPlan?.updatedAt).toBe(600);
+    expect(failedPlan?.reviewedAt).toBeUndefined();
+    expect(failedPlan?.approvedAt).toBeUndefined();
 
     const secondAttempt = createInvokeParams("plans.updateStatus", {
       planId: sessionPlanId,
