@@ -1501,7 +1501,7 @@ async function runLightDreaming(params: {
   config: LightDreamingConfig;
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
-  deferredNarratives?: Promise<void>[];
+  detachNarratives?: boolean;
   nowMs?: number;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
@@ -1570,8 +1570,8 @@ async function runLightDreaming(params: {
       timezone: params.config.timezone,
       logger: params.logger,
     });
-    if (params.deferredNarratives) {
-      params.deferredNarratives.push(task);
+    if (params.detachNarratives) {
+      void task.catch(() => undefined);
     } else {
       await task;
     }
@@ -1584,7 +1584,7 @@ async function runRemDreaming(params: {
   config: RemDreamingConfig;
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
-  deferredNarratives?: Promise<void>[];
+  detachNarratives?: boolean;
   nowMs?: number;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
@@ -1655,8 +1655,8 @@ async function runRemDreaming(params: {
       timezone: params.config.timezone,
       logger: params.logger,
     });
-    if (params.deferredNarratives) {
-      params.deferredNarratives.push(task);
+    if (params.detachNarratives) {
+      void task.catch(() => undefined);
     } else {
       await task;
     }
@@ -1680,7 +1680,7 @@ export async function runDreamingSweepPhases(params: {
   cfg?: DreamingHostConfig;
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
-  deferredNarratives?: Promise<void>[];
+  detachNarratives?: boolean;
   nowMs?: number;
 }): Promise<void> {
   // Normalize nowMs once so all phase timestamps and narrative session keys are consistent.
@@ -1698,7 +1698,7 @@ export async function runDreamingSweepPhases(params: {
       logger: params.logger,
       subagent: params.subagent,
       nowMs: sweepNowMs,
-      deferredNarratives: params.deferredNarratives,
+      detachNarratives: params.detachNarratives,
     });
     // Defensive cleanup: ensure the light-phase narrative session is deleted even if
     // generateAndAppendDreamNarrative's primary cleanup was skipped due to an error.
@@ -1724,7 +1724,7 @@ export async function runDreamingSweepPhases(params: {
       logger: params.logger,
       subagent: params.subagent,
       nowMs: sweepNowMs,
-      deferredNarratives: params.deferredNarratives,
+      detachNarratives: params.detachNarratives,
     });
     // Defensive cleanup: ensure the REM-phase narrative session is deleted.
     if (params.subagent) {

@@ -536,8 +536,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   let totalApplied = 0;
   let failedWorkspaces = 0;
   const pluginConfig = params.cfg ? resolveMemoryCorePluginConfig(params.cfg) : undefined;
-  const deferNarratives = params.trigger === "cron";
-  const deferredNarratives: Promise<void>[] = [];
+  const detachNarratives = params.trigger === "cron";
   for (const workspaceDir of workspaces) {
     try {
       const sweepNowMs = Date.now();
@@ -547,7 +546,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         cfg: params.cfg,
         logger: params.logger,
         subagent: params.subagent,
-        deferredNarratives: deferNarratives ? deferredNarratives : undefined,
+        detachNarratives,
         nowMs: sweepNowMs,
       });
 
@@ -634,8 +633,8 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
           timezone: params.config.timezone,
           logger: params.logger,
         });
-        if (deferNarratives) {
-          deferredNarratives.push(task);
+        if (detachNarratives) {
+          void task.catch(() => undefined);
         } else {
           await task;
         }
@@ -646,11 +645,6 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         `memory-core: dreaming promotion failed for workspace ${workspaceDir}: ${formatErrorMessage(err)}`,
       );
     }
-  }
-  if (deferNarratives && deferredNarratives.length > 0) {
-    // Keep managed cron diary generation bounded by the slowest narrative run
-    // instead of serializing phase-by-phase across every workspace.
-    await Promise.allSettled(deferredNarratives);
   }
   params.logger.info(
     `memory-core: dreaming promotion complete (workspaces=${workspaces.length}, candidates=${totalCandidates}, applied=${totalApplied}, failed=${failedWorkspaces}).`,

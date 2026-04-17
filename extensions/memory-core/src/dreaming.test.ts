@@ -1908,13 +1908,15 @@ describe("short-term dreaming trigger", () => {
 
     expect(result?.handled).toBe(true);
     expect(subagent.run).toHaveBeenCalled();
-    expect(subagent.waitForRun).toHaveBeenCalled();
-    expect(subagent.getSessionMessages).toHaveBeenCalled();
-    expect(subagent.deleteSession).toHaveBeenCalled();
     const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
     expect(memoryText).toContain("Move backups to S3 Glacier.");
-    const dreamsText = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(dreamsText).toContain("A diary entry.");
+    await vi.waitFor(async () => {
+      expect(subagent.waitForRun).toHaveBeenCalled();
+      expect(subagent.getSessionMessages).toHaveBeenCalled();
+      expect(subagent.deleteSession).toHaveBeenCalled();
+      const dreamsText = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+      expect(dreamsText).toContain("A diary entry.");
+    });
   });
 
   it("skips dreaming promotion cleanly when limit is zero", async () => {
