@@ -5,7 +5,7 @@
  * approval requests as QQ messages with inline keyboard buttons and handle
  * resolved/expired lifecycle events.
  *
- * This file is lazily imported by approval-native.ts to avoid loading
+ * This file is lazily imported by capability.ts to avoid loading
  * heavy dependencies on the critical startup path.
  */
 
@@ -13,7 +13,6 @@ import type { ChannelApprovalNativeRuntimeSpec } from "openclaw/plugin-sdk/appro
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { resolveApprovalRequestSessionConversation } from "openclaw/plugin-sdk/approval-native-runtime";
-import { resolveQQBotAccount } from "./config.js";
 import {
   buildExecApprovalText,
   buildPluginApprovalText,
@@ -21,14 +20,15 @@ import {
   resolveApprovalTarget,
   type ExecApprovalRequest,
   type PluginApprovalRequest,
-} from "./engine/approval/index.js";
-import { getMessageApi, accountToCreds } from "./engine/messaging/sender.js";
-import type { ChatScope, InlineKeyboard, MessageResponse } from "./engine/types.js";
+} from "../../engine/approval/index.js";
+import { getMessageApi, accountToCreds } from "../../engine/messaging/sender.js";
+import type { ChatScope, InlineKeyboard, MessageResponse } from "../../engine/types.js";
 import {
   resolveQQBotExecApprovalConfig,
   isQQBotExecApprovalClientEnabled,
   shouldHandleQQBotExecApprovalRequest,
-} from "./exec-approvals.js";
+} from "../../exec-approvals.js";
+import { resolveQQBotAccount } from "../config.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 

@@ -12,7 +12,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
-import { listQQBotAccountIds, resolveQQBotAccount } from "./config.js";
+import { listQQBotAccountIds, resolveQQBotAccount } from "./bridge/config.js";
 import type { QQBotExecApprovalConfig } from "./types.js";
 
 function normalizeApproverId(value: string | number): string | undefined {

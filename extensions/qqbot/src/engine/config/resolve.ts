@@ -4,7 +4,7 @@
  *
  * Resolves account IDs, default account selection, and base account
  * info from raw config objects. Secret/credential resolution is
- * intentionally left to the outer layer (src/config.ts) so that
+ * intentionally left to the outer layer (src/bridge/config.ts) so that
  * this module stays framework-agnostic and self-contained.
  */
 

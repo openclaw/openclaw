@@ -1,25 +1,28 @@
 import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { qqbotBasePluginFields } from "./channel-base.js";
-import { getQQBotApprovalCapability } from "./approval-native.js";
-import { DEFAULT_ACCOUNT_ID, resolveQQBotAccount } from "./config.js";
+// Register the PlatformAdapter before any core/ module is used.
+import "./bridge/bootstrap.js";
+import { getQQBotApprovalCapability } from "./bridge/approval/capability.js";
+import { qqbotConfigAdapter, qqbotMeta, qqbotSetupAdapterShared } from "./bridge/config-shared.js";
+import { DEFAULT_ACCOUNT_ID, resolveQQBotAccount } from "./bridge/config.js";
+import { getQQBotRuntime } from "./bridge/runtime.js";
+import { qqbotSetupWizard } from "./bridge/setup/surface.js";
+import { qqbotChannelConfigSchema } from "./config-schema.js";
 import { clearAccountCredentials } from "./engine/config/credentials.js";
 import {
   normalizeTarget as coreNormalizeTarget,
   looksLikeQQBotTarget,
 } from "./engine/messaging/target-parser.js";
-import { getQQBotRuntime } from "./runtime.js";
-// Re-export text helpers from engine/.
+// Re-export text helpers from core/.
 export { chunkText, TEXT_CHUNK_LIMIT } from "./engine/utils/text-chunk.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
 // Shared promise so concurrent multi-account startups serialize the dynamic
 // import of the gateway module, avoiding an ESM circular-dependency race.
-let _gatewayModulePromise: Promise<typeof import("./gateway.js")> | undefined;
-
-function loadGatewayModule(): Promise<typeof import("./gateway.js")> {
-  _gatewayModulePromise ??= import("./gateway.js");
+let _gatewayModulePromise: Promise<typeof import("./bridge/gateway.js")> | undefined;
+function loadGatewayModule(): Promise<typeof import("./bridge/gateway.js")> {
+  _gatewayModulePromise ??= import("./bridge/gateway.js");
   return _gatewayModulePromise;
 }
 
@@ -47,7 +50,26 @@ function shouldSuppressLocalQQBotApprovalPrompt(params: {
 }
 
 export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
-  ...qqbotBasePluginFields,
+  id: "qqbot",
+  setupWizard: qqbotSetupWizard,
+  meta: {
+    ...qqbotMeta,
+  },
+  capabilities: {
+    chatTypes: ["direct", "group"],
+    media: true,
+    reactions: false,
+    threads: false,
+    blockStreaming: true,
+  },
+  reload: { configPrefixes: ["channels.qqbot"] },
+  configSchema: qqbotChannelConfigSchema,
+  config: {
+    ...qqbotConfigAdapter,
+  },
+  setup: {
+    ...qqbotSetupAdapterShared,
+  },
   approvalCapability: getQQBotApprovalCapability(),
   messaging: {
     /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */

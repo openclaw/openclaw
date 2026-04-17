@@ -21,15 +21,15 @@ import { resolveApprovalRequestSessionConversation } from "openclaw/plugin-sdk/a
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { resolveQQBotAccount } from "./config.js";
-import { resolveApprovalTarget } from "./engine/approval/index.js";
+import { resolveApprovalTarget } from "../../engine/approval/index.js";
 import {
   isQQBotExecApprovalClientEnabled,
   shouldHandleQQBotExecApprovalRequest,
   isQQBotExecApprovalAuthorizedSender,
   isQQBotExecApprovalApprover,
   resolveQQBotExecApprovalConfig,
-} from "./exec-approvals.js";
+} from "../../exec-approvals.js";
+import { resolveQQBotAccount } from "../config.js";
 
 /**
  * When `execApprovals` is configured, delegate to the profile-based
@@ -204,7 +204,7 @@ function createQQBotApprovalCapability(): ChannelApprovalCapability {
         return result;
       },
       load: async () =>
-        (await import("./approval-handler.runtime.js"))
+        (await import("./handler-runtime.js"))
           .qqbotApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
     }),
   });

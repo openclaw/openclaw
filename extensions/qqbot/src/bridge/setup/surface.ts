@@ -3,9 +3,9 @@ import {
   setSetupChannelEnabled,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { listQQBotAccountIds, resolveQQBotAccount } from "./config.js";
-import { isAccountConfigured } from "./engine/config/resolve.js";
-import { finalizeQQBotSetup } from "./setup-finalize.js";
+import { isAccountConfigured } from "../../engine/config/resolve.js";
+import { listQQBotAccountIds, resolveQQBotAccount } from "../config.js";
+import { finalizeQQBotSetup } from "./finalize.js";
 
 const channel = "qqbot" as const;
 

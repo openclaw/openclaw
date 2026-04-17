@@ -15,8 +15,8 @@ import {
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { registerPlatformAdapter, type PlatformAdapter } from "./engine/adapter/index.js";
-import type { FetchMediaOptions, FetchMediaResult } from "./engine/adapter/types.js";
+import { registerPlatformAdapter, type PlatformAdapter } from "../engine/adapter/index.js";
+import type { FetchMediaOptions, FetchMediaResult } from "../engine/adapter/types.js";
 
 const builtinAdapter: PlatformAdapter = {
   async validateRemoteUrl(_url: string, _options?: { allowPrivate?: boolean }): Promise<void> {

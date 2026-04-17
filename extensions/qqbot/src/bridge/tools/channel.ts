@@ -1,9 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { getAccessToken } from "../../engine/messaging/sender.js";
+import { ChannelApiSchema, executeChannelApi } from "../../engine/tools/channel-api.js";
+import type { ChannelApiParams } from "../../engine/tools/channel-api.js";
+import { debugLog } from "../../engine/utils/log.js";
 import { listQQBotAccountIds, resolveQQBotAccount } from "../config.js";
-import { getAccessToken } from "../engine/messaging/sender.js";
-import { ChannelApiSchema, executeChannelApi } from "../engine/tools/channel-api.js";
-import type { ChannelApiParams } from "../engine/tools/channel-api.js";
-import { debugLog } from "../engine/utils/log.js";
 
 /**
  * Register the QQ channel API proxy tool.

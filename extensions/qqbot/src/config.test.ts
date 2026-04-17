@@ -2,11 +2,15 @@ import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
 import { validateJsonSchemaValue } from "../../../src/plugins/schema-validator.js";
-import { qqbotSetupAdapterShared } from "./channel-config-shared.js";
+import { qqbotSetupAdapterShared } from "./bridge/config-shared.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  resolveDefaultQQBotAccountId,
+  resolveQQBotAccount,
+} from "./bridge/config.js";
 import { qqbotSetupPlugin } from "./channel.setup.js";
 import { QQBotConfigSchema } from "./config-schema.js";
-import { DEFAULT_ACCOUNT_ID, resolveDefaultQQBotAccountId, resolveQQBotAccount } from "./config.js";
-import { makeQqbotDefaultAccountConfig, makeQqbotSecretRefConfig } from "./qqbot-test-support.js";
+
 
 describe("qqbot config", () => {
   it("accepts top-level speech overrides in the manifest schema", () => {

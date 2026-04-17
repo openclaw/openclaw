@@ -1,7 +1,7 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import type { GatewayPluginRuntime } from "./engine/gateway/types.js";
-import { setOpenClawVersion } from "./engine/messaging/sender.js";
+import type { GatewayPluginRuntime } from "../engine/gateway/types.js";
+import { setOpenClawVersion } from "../engine/messaging/sender.js";
 
 const { setRuntime: _setRuntime, getRuntime: getQQBotRuntime } =
   createPluginRuntimeStore<PluginRuntime>({

@@ -10,22 +10,22 @@
 import { createRequire } from "node:module";
 import { resolveRuntimeServiceVersion } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { getPlatformAdapter } from "./engine/adapter/index.js";
-import { parseApprovalButtonData } from "./engine/approval/index.js";
+import { getPlatformAdapter } from "../engine/adapter/index.js";
+import { parseApprovalButtonData } from "../engine/approval/index.js";
 import {
   registerVersionResolver,
   registerPluginVersion,
-} from "./engine/commands/slash-commands-impl.js";
+} from "../engine/commands/slash-commands-impl.js";
 import {
   startGateway as coreStartGateway,
   type CoreGatewayContext,
-} from "./engine/gateway/gateway.js";
-import type { GatewayAccount } from "./engine/gateway/types.js";
-import { initSender } from "./engine/messaging/sender.js";
-import type { InteractionEvent } from "./engine/types.js";
-import { registerTextChunker } from "./engine/utils/text-chunk.js";
+} from "../engine/gateway/gateway.js";
+import type { GatewayAccount } from "../engine/gateway/types.js";
+import { initSender } from "../engine/messaging/sender.js";
+import type { InteractionEvent } from "../engine/types.js";
+import { registerTextChunker } from "../engine/utils/text-chunk.js";
+import type { ResolvedQQBotAccount } from "../types.js";
 import { getQQBotRuntimeForEngine } from "./runtime.js";
-import type { ResolvedQQBotAccount } from "./types.js";
 
 // Register framework SDK version resolver for core/ slash commands.
 registerVersionResolver(resolveRuntimeServiceVersion);
@@ -34,7 +34,7 @@ registerVersionResolver(resolveRuntimeServiceVersion);
 const _require = createRequire(import.meta.url);
 let _pluginVersion = "unknown";
 try {
-  _pluginVersion = _require("../package.json").version ?? "unknown";
+  _pluginVersion = _require("../../package.json").version ?? "unknown";
 } catch {
   /* fallback */
 }

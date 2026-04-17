@@ -1,6 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { RemindSchema, executeRemind } from "../engine/tools/remind-logic.js";
-import type { RemindParams } from "../engine/tools/remind-logic.js";
+import { RemindSchema, executeRemind } from "../../engine/tools/remind-logic.js";
+import type { RemindParams } from "../../engine/tools/remind-logic.js";
 
 export function registerRemindTool(api: OpenClawPluginApi): void {
   api.registerTool(

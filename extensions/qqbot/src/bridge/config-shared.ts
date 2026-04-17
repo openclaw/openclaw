@@ -6,21 +6,21 @@ import {
 } from "openclaw/plugin-sdk/core";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import {
+  describeAccount as engineDescribeAccount,
+  formatAllowFrom as engineFormatAllowFrom,
+  isAccountConfigured as engineIsAccountConfigured,
+} from "../engine/config/resolve.js";
+import {
+  applySetupAccountConfig as engineApplySetupAccountConfig,
+  validateSetupInput as engineValidateSetupInput,
+} from "../engine/config/setup-logic.js";
+import { normalizeLowercaseStringOrEmpty } from "../engine/utils/string-normalize.js";
+import type { ResolvedQQBotAccount } from "../types.js";
+import {
   listQQBotAccountIds,
   resolveDefaultQQBotAccountId,
   resolveQQBotAccount,
 } from "./config.js";
-import {
-  describeAccount as engineDescribeAccount,
-  formatAllowFrom as engineFormatAllowFrom,
-  isAccountConfigured as engineIsAccountConfigured,
-} from "./engine/config/resolve.js";
-import {
-  applySetupAccountConfig as engineApplySetupAccountConfig,
-  validateSetupInput as engineValidateSetupInput,
-} from "./engine/config/setup-logic.js";
-import { normalizeLowercaseStringOrEmpty } from "./engine/utils/string-normalize.js";
-import type { ResolvedQQBotAccount } from "./types.js";
 
 export const qqbotMeta = {
   id: "qqbot",

@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { applyQQBotAccountConfig, resolveQQBotAccount } from "./config.js";
+import { applyQQBotAccountConfig, resolveQQBotAccount } from "../config.js";
 
 type SetupPrompter = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
 type SetupRuntime = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["runtime"];

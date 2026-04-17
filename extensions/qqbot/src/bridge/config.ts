@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { getPlatformAdapter } from "./engine/adapter/index.js";
+import { getPlatformAdapter } from "../engine/adapter/index.js";
 import {
   DEFAULT_ACCOUNT_ID as ENGINE_DEFAULT_ACCOUNT_ID,
   applyAccountConfig,
   listAccountIds,
   resolveAccountBase,
   resolveDefaultAccountId,
-} from "./engine/config/resolve.js";
-import type { ResolvedQQBotAccount, QQBotAccountConfig } from "./types.js";
+} from "../engine/config/resolve.js";
+import type { ResolvedQQBotAccount, QQBotAccountConfig } from "../types.js";
 
 export const DEFAULT_ACCOUNT_ID = ENGINE_DEFAULT_ACCOUNT_ID;
 
