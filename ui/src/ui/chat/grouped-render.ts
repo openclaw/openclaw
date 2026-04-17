@@ -20,6 +20,7 @@ import {
   extractTextCached,
   extractThinkingCached,
   formatReasoningMarkdown,
+  processMessageText,
 } from "./message-extract.ts";
 import {
   isToolResultMessage,
@@ -1066,7 +1067,7 @@ function renderGroupedMessage(
   const hasImages = images.length > 0;
 
   const normalizedMessage = normalizeMessage(message);
-  const extractedText = normalizedMessage.content
+  const rawExtractedText = normalizedMessage.content
     .reduce<string[]>((lines, item) => {
       if (item.type === "text" && typeof item.text === "string") {
         lines.push(item.text);
@@ -1075,6 +1076,11 @@ function renderGroupedMessage(
     }, [])
     .join("\n")
     .trim();
+  // Route through processMessageText so <think>/<final> scaffolding and
+  // inbound metadata sentinels are stripped before render. Previously the
+  // reduced text was rendered verbatim, leaking <final>…</final> tags and
+  // injected "Sender (untrusted metadata):" blocks into the Control UI.
+  const extractedText = rawExtractedText ? processMessageText(rawExtractedText, role) : "";
   const assistantAttachments = normalizedMessage.content.filter(
     (item): item is Extract<MessageContentItem, { type: "attachment" }> =>
       item.type === "attachment",

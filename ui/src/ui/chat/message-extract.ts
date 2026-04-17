@@ -7,7 +7,7 @@ import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
-function processMessageText(text: string, role: string): string {
+export function processMessageText(text: string, role: string): string {
   const shouldStripInboundMetadata = normalizeLowercaseStringOrEmpty(role) === "user";
   if (role === "assistant") {
     return stripThinkingTags(text);
