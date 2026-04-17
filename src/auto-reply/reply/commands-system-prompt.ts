@@ -1,6 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
-import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
+import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import type { EmbeddedContextFile } from "../../agents/pi-embedded-helpers.js";
@@ -13,8 +13,11 @@ import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+
+const log = createSubsystemLogger("commands-system-prompt");
 
 export type CommandsSystemPromptBundle = {
   systemPrompt: string;
@@ -40,6 +43,11 @@ export async function resolveCommandsSystemPromptBundle(
     config: params.cfg,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
+    warn: makeBootstrapWarn({
+      sessionLabel: params.sessionKey ?? targetSessionEntry?.sessionId ?? "",
+      workspaceDir,
+      warn: (message) => log.warn(message),
+    }),
   });
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
