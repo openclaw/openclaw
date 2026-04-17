@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
+import {
+  normalizeProviderConversationId,
+  resolveConversationIdFromTargets,
+} from "../infra/outbound/conversation-id.js";
 import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -160,11 +163,13 @@ export function resolveConversationBindingContext(
     fallbackTo: params.fallbackTo ?? undefined,
   });
   if (resolvedByProvider?.conversationId) {
-    const providerConversationId = normalizeOptionalString(resolvedByProvider.conversationId);
+    const providerConversationId = normalizeProviderConversationId(
+      resolvedByProvider.conversationId,
+    );
     if (!providerConversationId) {
       return null;
     }
-    const providerParentConversationId = normalizeOptionalString(
+    const providerParentConversationId = normalizeProviderConversationId(
       resolvedByProvider.parentConversationId,
     );
     const resolvedParentConversationId =

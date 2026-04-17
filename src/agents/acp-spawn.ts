@@ -41,7 +41,10 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { areHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
-import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
+import {
+  normalizeProviderConversationId,
+  resolveConversationIdFromTargets,
+} from "../infra/outbound/conversation-id.js";
 import { normalizeConversationTargetRef } from "../infra/outbound/session-binding-normalization.js";
 import {
   getSessionBindingService,
@@ -309,13 +312,15 @@ function resolvePluginConversationRefForThreadBinding(params: {
       : getChannelPlugin(params.channelId)?.messaging?.resolveInboundConversation?.(
           resolverParams,
         ));
-  const conversationId = normalizeOptionalString(resolvedConversation?.conversationId);
+  const conversationId = normalizeProviderConversationId(resolvedConversation?.conversationId);
   if (!conversationId) {
     return null;
   }
   return normalizeConversationTargetRef({
     conversationId,
-    parentConversationId: resolvedConversation?.parentConversationId,
+    parentConversationId: normalizeProviderConversationId(
+      resolvedConversation?.parentConversationId,
+    ),
   });
 }
 

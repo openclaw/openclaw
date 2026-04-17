@@ -12,6 +12,26 @@ function resolveExplicitConversationTargetId(target: string): string | undefined
   return undefined;
 }
 
+export function normalizeProviderConversationId(
+  raw: string | undefined | null,
+): string | undefined {
+  const trimmed = normalizeOptionalString(raw);
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const stripped = resolveConversationIdFromTargets({ targets: [trimmed] });
+  if (stripped) {
+    return stripped;
+  }
+
+  if (trimmed.endsWith(":")) {
+    return undefined;
+  }
+
+  return trimmed;
+}
+
 export function resolveConversationIdFromTargets(params: {
   threadId?: string | number;
   targets: Array<string | undefined | null>;

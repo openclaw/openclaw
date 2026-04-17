@@ -22,7 +22,9 @@ import {
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import * as acpSpawnParentStream from "./acp-spawn-parent-stream.js";
 
 function createDefaultSpawnConfig(): OpenClawConfig {
@@ -518,6 +520,7 @@ describe("spawnAcpDirect", () => {
   afterEach(() => {
     resetTaskRegistryForTests();
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
+    setActivePluginRegistry(createTestRegistry());
     clearRuntimeConfigSnapshot();
   });
 
@@ -577,6 +580,57 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls).toHaveLength(2);
     expect(transcriptCalls[0]?.threadId).toBeUndefined();
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
+  });
+
+  it("normalizes provider-resolved Discord thread binding conversation ids on sessions_spawn", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "discord",
+              label: "Discord",
+            }),
+            messaging: {
+              resolveInboundConversation: () => ({
+                conversationId: " channel:parent-channel ",
+                parentConversationId: " channel:guild-channel ",
+              }),
+            },
+          },
+        },
+      ]),
+    );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    expect(result.status, JSON.stringify(result)).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "child",
+        conversation: expect.objectContaining({
+          channel: "discord",
+          accountId: "default",
+          conversationId: "parent-channel",
+          parentConversationId: "guild-channel",
+        }),
+      }),
+    );
   });
 
   it("spawns Matrix thread-bound ACP sessions from top-level room targets", async () => {

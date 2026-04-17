@@ -92,8 +92,111 @@ describe("resolveConversationBindingContext", () => {
       channel: "line",
       accountId: "default",
       conversationId: "user:U1234567890abcdef1234567890abcdef",
-      parentConversationId: "room:R1234567890abcdef1234567890abcd",
+      parentConversationId: "R1234567890abcdef1234567890abcd",
     });
+  });
+
+  it("strips channel prefixes from provider-resolved Discord guild conversations", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "discord",
+              label: "Discord",
+            }),
+            bindings: {
+              resolveCommandConversation: () => ({
+                conversationId: " channel:1469172413324460032 ",
+                parentConversationId: " channel:1468841521313878109 ",
+              }),
+            },
+          },
+        },
+      ]),
+    );
+
+    expect(
+      resolveConversationBindingContext({
+        cfg: {} as OpenClawConfig,
+        channel: "discord",
+        accountId: " default ",
+        originatingTo: "ignored",
+      }),
+    ).toEqual({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1469172413324460032",
+      parentConversationId: "1468841521313878109",
+    });
+  });
+
+  it("preserves provider-resolved Discord DM user identities", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "discord",
+              label: "Discord",
+            }),
+            bindings: {
+              resolveCommandConversation: () => ({
+                conversationId: " user:123456789012345 ",
+              }),
+            },
+          },
+        },
+      ]),
+    );
+
+    expect(
+      resolveConversationBindingContext({
+        cfg: {} as OpenClawConfig,
+        channel: "discord",
+        accountId: " default ",
+        originatingTo: "ignored",
+      }),
+    ).toEqual({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "user:123456789012345",
+    });
+  });
+
+  it("returns null when the provider resolves a prefix-only conversation id", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "discord",
+              label: "Discord",
+            }),
+            bindings: {
+              resolveCommandConversation: () => ({
+                conversationId: " channel: ",
+              }),
+            },
+          },
+        },
+      ]),
+    );
+
+    expect(
+      resolveConversationBindingContext({
+        cfg: {} as OpenClawConfig,
+        channel: "discord",
+        accountId: " default ",
+        originatingTo: "ignored",
+      }),
+    ).toBeNull();
   });
 
   it("normalizes focused binding conversation ids before returning binding context", () => {
