@@ -97,7 +97,9 @@ vi.mock("./controllers/chat.ts", async (importOriginal) => {
 type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
+  chatMessages: Record<string, unknown>[];
   chatStream: string | null;
+  chatStreamStartedAt: number | null;
   chatToolMessages: Record<string, unknown>[];
   toolStreamById: Map<string, unknown>;
   toolStreamOrder: string[];
