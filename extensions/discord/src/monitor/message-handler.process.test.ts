@@ -243,11 +243,25 @@ function getLastRouteUpdate():
 }
 
 function getLastDispatchCtx():
-  | { SessionKey?: string; MessageThreadId?: string | number }
+  | {
+      SessionKey?: string;
+      MessageThreadId?: string | number;
+      To?: string;
+      From?: string;
+      ChatType?: string;
+    }
   | undefined {
   const callArgs = dispatchInboundMessage.mock.calls.at(-1) as unknown[] | undefined;
   const params = callArgs?.[0] as
-    | { ctx?: { SessionKey?: string; MessageThreadId?: string | number } }
+    | {
+        ctx?: {
+          SessionKey?: string;
+          MessageThreadId?: string | number;
+          To?: string;
+          From?: string;
+          ChatType?: string;
+        };
+      }
     | undefined;
   return params?.ctx;
 }
@@ -634,6 +648,26 @@ describe("processDiscordMessage session routing", () => {
       to: "user:U1",
       accountId: "default",
     });
+  });
+
+  it("sets ctx.To to user target for DM inbound so downstream builds direct session keys", async () => {
+    const ctx = await createBaseContext({
+      ...createDirectMessageContextOverrides(),
+      message: {
+        id: "m1",
+        channelId: "dm1",
+        timestamp: new Date().toISOString(),
+        attachments: [],
+      },
+      messageChannelId: "dm1",
+    });
+
+    await processDiscordMessage(ctx as any);
+
+    const dispatchCtx = getLastDispatchCtx();
+    expect(dispatchCtx?.ChatType).toBe("direct");
+    expect(dispatchCtx?.To).toBe("user:U1");
+    expect(dispatchCtx?.To?.startsWith("channel:")).toBe(false);
   });
 
   it("stores group lastRoute with channel target", async () => {

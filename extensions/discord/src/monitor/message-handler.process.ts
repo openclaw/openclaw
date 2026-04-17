@@ -438,17 +438,21 @@ export async function processDiscordMessage(
   const effectiveFrom = isDirectMessage
     ? `discord:${author.id}`
     : (autoThreadContext?.From ?? `discord:channel:${messageChannelId}`);
-  const effectiveTo = autoThreadContext?.To ?? replyTarget;
-  if (!effectiveTo) {
-    runtime.error?.(danger("discord: missing reply target"));
-    return;
-  }
   const dmConversationTarget = isDirectMessage
     ? resolveDiscordConversationIdentity({
         isDirectMessage,
         userId: author.id,
       })
     : undefined;
+  // DMs must land on a user-addressed `ctx.To` so downstream mirror and
+  // delivery-recovery build direct session keys — the underlying
+  // `deliverTarget` still carries the Discord DM channel id because that is
+  // how the Discord API sends the message, so the API path is unchanged.
+  const effectiveTo = autoThreadContext?.To ?? dmConversationTarget ?? replyTarget;
+  if (!effectiveTo) {
+    runtime.error?.(danger("discord: missing reply target"));
+    return;
+  }
   // Keep DM routes user-addressed so follow-up sends resolve direct session keys.
   const lastRouteTo = dmConversationTarget ?? effectiveTo;
 
