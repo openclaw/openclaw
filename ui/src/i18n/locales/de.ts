@@ -150,6 +150,7 @@ export const de: TranslationMap = {
     resize: "Seitenleiste in der Größe ändern",
   },
   tabs: {
+    gdufe: "GDUFE Console",
     agents: "Agenten",
     overview: "Übersicht",
     channels: "Kanäle",
@@ -171,6 +172,7 @@ export const de: TranslationMap = {
     dreams: "Träume",
   },
   subtitles: {
+    gdufe: "Campus assistant workspace with JWXT integration.",
     agents: "Agent-Arbeitsbereiche, Tools und Identitäten verwalten.",
     overview: "Gateway-Status, Einstiegspunkte und eine schnelle Zustandsprüfung.",
     channels: "Kanäle und Einstellungen verwalten.",

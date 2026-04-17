@@ -147,6 +147,7 @@ export const es: TranslationMap = {
     resize: "Redimensionar la barra lateral",
   },
   tabs: {
+    gdufe: "GDUFE Console",
     agents: "Agentes",
     overview: "Resumen",
     channels: "Canales",
@@ -168,6 +169,7 @@ export const es: TranslationMap = {
     dreams: "Sueños",
   },
   subtitles: {
+    gdufe: "Campus assistant workspace with JWXT integration.",
     agents: "Gestionar espacios de trabajo, herramientas e identidades de agentes.",
     overview: "Estado de la puerta de enlace, puntos de entrada y lectura rápida de salud.",
     channels: "Gestionar canales y ajustes.",

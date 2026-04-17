@@ -150,3 +150,6 @@ test/fixtures/openclaw-vitest-unit-report.json
 analysis/
 .artifacts/qa-e2e/
 extensions/qa-lab/web/dist/
+
+# Local side project
+gdufe-campus-agent-plugins-main/

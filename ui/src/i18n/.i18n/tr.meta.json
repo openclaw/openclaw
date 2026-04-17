@@ -1,11 +1,11 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-04-15T05:45:07.081Z",
+  "fallbackKeys": ["subtitles.gdufe", "tabs.gdufe"],
+  "generatedAt": "2026-04-17T02:12:17.651Z",
   "locale": "tr",
   "model": "gpt-5.4",
   "provider": "openai",
-  "sourceHash": "34089e99b81e81139add4dca8eb47a80da365bd90534ac5e5e042474f3816ad6",
-  "totalKeys": 706,
+  "sourceHash": "e7f319979aae69de597ae23247dbcbaa7a377da924b41b0dc4f52206baa87609",
+  "totalKeys": 708,
   "translatedKeys": 706,
   "workflow": 1
 }

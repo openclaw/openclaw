@@ -17,6 +17,14 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).toContain("font-src 'self' https://fonts.gstatic.com");
   });
 
+  it("allows local loopback API targets for browser fetch", () => {
+    const csp = buildControlUiCspHeader();
+    expect(csp).toContain("connect-src 'self' ws: wss:");
+    expect(csp).toContain("http://127.0.0.1:*");
+    expect(csp).toContain("http://localhost:*");
+    expect(csp).toContain("http://openclaw.local:*");
+  });
+
   it("includes inline script hashes in script-src when provided", () => {
     const csp = buildControlUiCspHeader({
       inlineScriptHashes: ["sha256-abc123"],

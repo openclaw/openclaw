@@ -133,6 +133,7 @@ import { renderConfig, type ConfigProps } from "./views/config.ts";
 import { renderDreaming } from "./views/dreaming.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
+import { renderGdufeConsole } from "./views/gdufe-console.ts";
 import { renderLoginGate } from "./views/login-gate.ts";
 import { renderOverview } from "./views/overview.ts";
 
@@ -1831,6 +1832,7 @@ export function renderApp(state: AppViewState) {
               }),
             )
           : nothing}
+        ${state.tab === "gdufe" ? renderGdufeConsole() : nothing}
         ${state.tab === "chat"
           ? renderChat({
               sessionKey: state.sessionKey,

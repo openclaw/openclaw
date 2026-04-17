@@ -146,6 +146,7 @@ export const zh_TW: TranslationMap = {
     resize: "調整側邊欄大小",
   },
   tabs: {
+    gdufe: "GDUFE Console",
     agents: "代理",
     overview: "概覽",
     channels: "頻道",
@@ -167,6 +168,7 @@ export const zh_TW: TranslationMap = {
     dreams: "夢境",
   },
   subtitles: {
+    gdufe: "Campus assistant workspace with JWXT integration.",
     agents: "工作區、工具、身份。",
     overview: "狀態、入口點、健康。",
     channels: "頻道和設置。",

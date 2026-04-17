@@ -150,6 +150,7 @@ export const ja_JP: TranslationMap = {
     resize: "サイドバーのサイズを変更",
   },
   tabs: {
+    gdufe: "GDUFE Console",
     agents: "エージェント",
     overview: "概要",
     channels: "チャンネル",
@@ -171,6 +172,7 @@ export const ja_JP: TranslationMap = {
     dreams: "Dreaming",
   },
   subtitles: {
+    gdufe: "Campus assistant workspace with JWXT integration.",
     agents: "ワークスペース、ツール、ID。",
     overview: "ステータス、エントリーポイント、健全性。",
     channels: "チャンネルと設定。",

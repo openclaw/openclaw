@@ -148,6 +148,7 @@ export const pl: TranslationMap = {
     resize: "Zmień rozmiar paska bocznego",
   },
   tabs: {
+    gdufe: "GDUFE Console",
     agents: "Agenci",
     overview: "Przegląd",
     channels: "Kanały",
@@ -169,6 +170,7 @@ export const pl: TranslationMap = {
     dreams: "Sny",
   },
   subtitles: {
+    gdufe: "Campus assistant workspace with JWXT integration.",
     agents: "Obszary robocze, narzędzia, tożsamości.",
     overview: "Status, punkty dostępu, stan.",
     channels: "Kanały i ustawienia.",

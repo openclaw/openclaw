@@ -4559,3 +4559,288 @@ details[open] > .ov-expandable-toggle::after {
     gap: 4px;
   }
 }
+
+/* ===========================================
+   GDUFE Console
+   =========================================== */
+
+.gdufe-console {
+  display: grid;
+  gap: 14px;
+}
+
+.gdufe-console__status-row {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.gdufe-console__captcha-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 132px;
+  gap: 10px;
+  align-items: end;
+}
+
+.gdufe-console__captcha-field {
+  margin: 0;
+}
+
+.gdufe-console__captcha-preview {
+  min-height: 72px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-elevated) 76%, transparent);
+}
+
+.gdufe-console__captcha-preview img {
+  max-width: 100%;
+  max-height: 70px;
+  display: block;
+  cursor: pointer;
+}
+
+.gdufe-console__stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.gdufe-console__progress {
+  margin-top: 10px;
+  height: 8px;
+  width: 100%;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--secondary) 80%, var(--bg));
+  overflow: hidden;
+}
+
+.gdufe-console__progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--ok) 72%, var(--accent)) 0%,
+    color-mix(in srgb, var(--accent) 70%, var(--ok)) 100%
+  );
+  transition: width var(--duration-normal) var(--ease-out);
+}
+
+.gdufe-console__split-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.gdufe-console__chart-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 94%, var(--bg));
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.gdufe-console__bar-row {
+  display: grid;
+  gap: 4px;
+}
+
+.gdufe-console__bar-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.gdufe-console__bar-track {
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--secondary) 85%, var(--bg));
+  overflow: hidden;
+}
+
+.gdufe-console__bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  min-width: 2px;
+  transition: width var(--duration-normal) var(--ease-out);
+}
+
+.gdufe-console__bar-fill.score-a {
+  background: linear-gradient(90deg, #16a34a 0%, #22c55e 100%);
+}
+
+.gdufe-console__bar-fill.score-b {
+  background: linear-gradient(90deg, #2563eb 0%, #3b82f6 100%);
+}
+
+.gdufe-console__bar-fill.score-c {
+  background: linear-gradient(90deg, #f59e0b 0%, #facc15 100%);
+}
+
+.gdufe-console__bar-fill.score-d {
+  background: linear-gradient(90deg, #b91c1c 0%, #ef4444 100%);
+}
+
+.gdufe-console__trend-row {
+  display: grid;
+  grid-template-columns: 102px minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: 8px;
+}
+
+.gdufe-console__trend-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.gdufe-console__trend-value {
+  font-size: 12px;
+  text-align: right;
+  color: var(--text-strong);
+}
+
+.gdufe-console__toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.gdufe-console__toolbar input,
+.gdufe-console__toolbar select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.gdufe-console__search {
+  min-width: 0;
+}
+
+.gdufe-console__data-block {
+  margin-top: 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.gdufe-console__simple-table {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.gdufe-console__simple-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--card) 92%, var(--bg));
+}
+
+.gdufe-console__simple-row:last-child {
+  border-bottom: none;
+}
+
+.gdufe-console__course-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+  margin-bottom: 2px;
+}
+
+.gdufe-console__course-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.gdufe-console__score-cell {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.gdufe-console__score-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
+}
+
+.gdufe-console__score-tag.score-a {
+  color: #14532d;
+  border-color: #86efac;
+  background: #dcfce7;
+}
+
+.gdufe-console__score-tag.score-b {
+  color: #1e3a8a;
+  border-color: #93c5fd;
+  background: #dbeafe;
+}
+
+.gdufe-console__score-tag.score-c {
+  color: #713f12;
+  border-color: #fcd34d;
+  background: #fef3c7;
+}
+
+.gdufe-console__score-tag.score-d {
+  color: #7f1d1d;
+  border-color: #fca5a5;
+  background: #fee2e2;
+}
+
+.gdufe-console__score-tag.score-na {
+  color: var(--muted);
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--secondary) 78%, transparent);
+}
+
+@media (max-width: 680px) {
+  .gdufe-console__captcha-row {
+    grid-template-columns: 1fr;
+  }
+
+  .gdufe-console__split-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .gdufe-console__toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .gdufe-console__stats {
+    grid-template-columns: 1fr;
+  }
+
+  .gdufe-console__trend-row {
+    grid-template-columns: 92px minmax(0, 1fr) 36px;
+  }
+
+  .gdufe-console__simple-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .gdufe-console__score-cell {
+    justify-items: start;
+  }
+}

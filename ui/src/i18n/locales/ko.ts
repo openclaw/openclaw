@@ -146,6 +146,7 @@ export const ko: TranslationMap = {
     resize: "사이드바 크기 조절",
   },
   tabs: {
+    gdufe: "GDUFE Console",
     agents: "에이전트",
     overview: "개요",
     channels: "채널",
@@ -167,6 +168,7 @@ export const ko: TranslationMap = {
     dreams: "드리밍",
   },
   subtitles: {
+    gdufe: "Campus assistant workspace with JWXT integration.",
     agents: "워크스페이스, 도구, 정체성.",
     overview: "상태, 진입점, 상태 정보.",
     channels: "채널 및 설정.",

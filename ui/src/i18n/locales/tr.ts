@@ -149,6 +149,7 @@ export const tr: TranslationMap = {
     resize: "Kenar çubuğunu yeniden boyutlandır",
   },
   tabs: {
+    gdufe: "GDUFE Console",
     agents: "Aracılar",
     overview: "Genel Bakış",
     channels: "Kanallar",
@@ -170,6 +171,7 @@ export const tr: TranslationMap = {
     dreams: "Düşler",
   },
   subtitles: {
+    gdufe: "Campus assistant workspace with JWXT integration.",
     agents: "Çalışma alanları, araçlar, kimlikler.",
     overview: "Durum, giriş noktaları, sağlık.",
     channels: "Kanallar ve ayarlar.",

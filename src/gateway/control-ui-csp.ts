@@ -32,6 +32,15 @@ function hasScriptSrcAttribute(openTag: string): boolean {
   );
 }
 
+const CONTROL_UI_LOCAL_CONNECT_SOURCES = [
+  "http://127.0.0.1:*",
+  "http://localhost:*",
+  "http://openclaw.local:*",
+  "https://127.0.0.1:*",
+  "https://localhost:*",
+  "https://openclaw.local:*",
+].join(" ");
+
 export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }): string {
   const hashes = opts?.inlineScriptHashes;
   const scriptSrc = hashes?.length
@@ -46,6 +55,6 @@ export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data: https:",
     "font-src 'self' https://fonts.gstatic.com",
-    "connect-src 'self' ws: wss:",
+    `connect-src 'self' ws: wss: ${CONTROL_UI_LOCAL_CONNECT_SOURCES}`,
   ].join("; ");
 }

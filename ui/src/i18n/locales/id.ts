@@ -147,6 +147,7 @@ export const id: TranslationMap = {
     resize: "Ubah ukuran bilah samping",
   },
   tabs: {
+    gdufe: "GDUFE Console",
     agents: "Agen",
     overview: "Ikhtisar",
     channels: "Saluran",
@@ -168,6 +169,7 @@ export const id: TranslationMap = {
     dreams: "Mimpi",
   },
   subtitles: {
+    gdufe: "Campus assistant workspace with JWXT integration.",
     agents: "Ruang kerja, alat, identitas.",
     overview: "Status, titik masuk, kesehatan.",
     channels: "Saluran dan pengaturan.",

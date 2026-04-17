@@ -357,6 +357,8 @@ export async function refreshActiveTab(host: SettingsHost) {
         !host.chatHasAutoScrolled,
       );
       return;
+    case "gdufe":
+      return;
     case "debug":
       await loadDebug(app);
       host.eventLog = host.eventLogBuffer;
@@ -461,7 +463,7 @@ export function syncTabWithLocation(host: SettingsHost, replace: boolean) {
   if (typeof window === "undefined") {
     return;
   }
-  const resolved = tabFromPath(window.location.pathname, host.basePath) ?? "chat";
+  const resolved = tabFromPath(window.location.pathname, host.basePath) ?? "gdufe";
   setTabFromRoute(host, resolved);
   syncUrlWithTab(host, resolved, replace);
 }

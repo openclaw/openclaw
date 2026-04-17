@@ -145,6 +145,7 @@ export const en: TranslationMap = {
     resize: "Resize sidebar",
   },
   tabs: {
+    gdufe: "广财控制台",
     agents: "Agents",
     overview: "Overview",
     channels: "Channels",
@@ -166,6 +167,7 @@ export const en: TranslationMap = {
     dreams: "Dreaming",
   },
   subtitles: {
+    gdufe: "校园助手首页（含教务系统集成）。",
     agents: "Workspaces, tools, identities.",
     overview: "Status, entry points, health.",
     channels: "Channels and settings.",

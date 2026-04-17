@@ -148,6 +148,7 @@ export const uk: TranslationMap = {
     resize: "Змінити розмір бічної панелі",
   },
   tabs: {
+    gdufe: "GDUFE Console",
     agents: "Агенти",
     overview: "Огляд",
     channels: "Канали",
@@ -169,6 +170,7 @@ export const uk: TranslationMap = {
     dreams: "Сни",
   },
   subtitles: {
+    gdufe: "Campus assistant workspace with JWXT integration.",
     agents: "Робочі простори, інструменти, ідентичності.",
     overview: "Стан, точки входу, справність.",
     channels: "Канали та налаштування.",
