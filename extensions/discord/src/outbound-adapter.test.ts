@@ -238,6 +238,7 @@ describe("discordOutbound", () => {
       channel: "discord",
       messageId: "msg-2",
       channelId: "ch-1",
+      meta: { transcriptText: "hello" },
     });
   });
 

@@ -952,6 +952,48 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("mirrors adapter transcriptText from meta over plain mirror text", async () => {
+    const sendPayload = vi.fn().mockResolvedValue({
+      channel: "test-components",
+      messageId: "comp-1",
+      meta: { transcriptText: "Pick a color\n[Red] [Green] [Blue]" },
+    });
+    const sendText = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "test-components",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "test-components" as Parameters<typeof createOutboundTestPlugin>[0]["id"],
+            outbound: { deliveryMode: "direct", sendPayload, sendText },
+          }),
+        },
+      ]),
+    );
+    mocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "test-components" as Parameters<typeof deliverOutboundPayloads>[0]["channel"],
+      to: "target-1",
+      payloads: [{ text: "Pick a color", channelData: { discord: { components: {} } } }],
+      mirror: {
+        sessionKey: "agent:main:discord:channel:dm-1",
+        text: "Pick a color",
+        idempotencyKey: "idem-comp-1",
+      },
+    });
+
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Pick a color\n[Red] [Green] [Blue]",
+        sessionKey: "agent:main:discord:channel:dm-1",
+        idempotencyKey: "idem-comp-1",
+      }),
+    );
+  });
+
   it("emits message_sent success for text-only deliveries", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });

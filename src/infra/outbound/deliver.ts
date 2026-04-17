@@ -786,8 +786,22 @@ async function deliverOutboundPayloadsCore(
     }
   }
   if (params.mirror && results.length > 0) {
+    // Channel adapters (e.g. Discord components) may attach richer transcript text
+    // via meta.transcriptText that includes interactive element labels (buttons,
+    // selects). When every result carries adapter text, use only the enriched text.
+    // For mixed batches (some results enriched, some plain), concatenate the adapter
+    // text with the original mirror text so neither portion is lost.
+    const adapterParts = results
+      .map((r) => (typeof r.meta?.transcriptText === "string" ? r.meta.transcriptText : ""))
+      .filter(Boolean);
+    const allEnriched = adapterParts.length > 0 && adapterParts.length === results.length;
+    const resolvedText = allEnriched
+      ? adapterParts.join("\n")
+      : adapterParts.length > 0
+        ? [params.mirror.text, ...adapterParts].filter(Boolean).join("\n")
+        : params.mirror.text;
     const mirrorText = resolveMirroredTranscriptText({
-      text: params.mirror.text,
+      text: resolvedText,
       mediaUrls: params.mirror.mediaUrls,
     });
     if (mirrorText) {
