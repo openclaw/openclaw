@@ -102,10 +102,12 @@ describe("temporal decay", () => {
     });
 
     const baseScore = decayed[0]?.score;
-    expect(baseScore).toBeDefined();
-    expect(baseScore ?? 1).toBeLessThan(0.001);
-    expect(decayed[1]?.score).toBeCloseTo(baseScore!);
-    expect(decayed[2]?.score).toBeCloseTo(baseScore!);
+    if (baseScore === undefined) {
+      throw new Error("expected a decayed score for the base memory entry");
+    }
+    expect(baseScore).toBeLessThan(0.001);
+    expect(decayed[1]?.score).toBeCloseTo(baseScore);
+    expect(decayed[2]?.score).toBeCloseTo(baseScore);
   });
 
   it("does not decay date-prefixed evergreen memory files", async () => {
