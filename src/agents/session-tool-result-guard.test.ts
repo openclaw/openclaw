@@ -542,4 +542,104 @@ describe("installSessionToolResultGuard", () => {
     );
     expect(syntheticForError).toHaveLength(0);
   });
+
+  describe("toolResultDetailsPersist", () => {
+    function appendToolResultWithDetails(sm: SessionManager, details: unknown) {
+      sm.appendMessage(toolCallMessage);
+      sm.appendMessage(
+        asAppendMessage({
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+          details,
+          isError: false,
+          timestamp: Date.now(),
+        }),
+      );
+    }
+
+    function getPersistedDetails(sm: SessionManager): unknown {
+      const messages = getPersistedMessages(sm);
+      const toolResult = messages.find((m) => m.role === "toolResult") as {
+        details?: unknown;
+      };
+      return toolResult?.details;
+    }
+
+    it("keeps details verbatim when mode is 'full'", () => {
+      const sm = SessionManager.inMemory();
+      installSessionToolResultGuard(sm, {
+        toolResultDetailsPersist: { mode: "full", maxChars: 10 },
+      });
+      const original = { stdout: "x".repeat(5000), exitCode: 0 };
+      appendToolResultWithDetails(sm, original);
+      expect(getPersistedDetails(sm)).toEqual(original);
+    });
+
+    it("drops details entirely when mode is 'none'", () => {
+      const sm = SessionManager.inMemory();
+      installSessionToolResultGuard(sm, {
+        toolResultDetailsPersist: { mode: "none", maxChars: 4000 },
+      });
+      appendToolResultWithDetails(sm, { stdout: "x".repeat(5000), exitCode: 0 });
+      expect(getPersistedDetails(sm)).toBeUndefined();
+    });
+
+    it("truncates large details to a preview marker under 'truncated'", () => {
+      const sm = SessionManager.inMemory();
+      installSessionToolResultGuard(sm, {
+        toolResultDetailsPersist: { mode: "truncated", maxChars: 200 },
+      });
+      const big = { stdout: "x".repeat(5000), exitCode: 0 };
+      appendToolResultWithDetails(sm, big);
+      const persisted = getPersistedDetails(sm) as {
+        __truncated: boolean;
+        originalChars: number;
+        preview: string;
+      };
+      expect(persisted.__truncated).toBe(true);
+      expect(persisted.originalChars).toBeGreaterThan(200);
+      expect(persisted.preview.length).toBe(200);
+    });
+
+    it("keeps small details verbatim under 'truncated' when under the cap", () => {
+      const sm = SessionManager.inMemory();
+      installSessionToolResultGuard(sm, {
+        toolResultDetailsPersist: { mode: "truncated", maxChars: 4000 },
+      });
+      const small = { stdout: "ok", exitCode: 0 };
+      appendToolResultWithDetails(sm, small);
+      expect(getPersistedDetails(sm)).toEqual(small);
+    });
+
+    it("leaves toolResult without details untouched across all modes", () => {
+      for (const mode of ["full", "truncated", "none"] as const) {
+        const sm = SessionManager.inMemory();
+        installSessionToolResultGuard(sm, {
+          toolResultDetailsPersist: { mode, maxChars: 100 },
+        });
+        sm.appendMessage(toolCallMessage);
+        sm.appendMessage(
+          asAppendMessage({
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read",
+            content: [{ type: "text", text: "ok" }],
+            isError: false,
+            timestamp: Date.now(),
+          }),
+        );
+        expect(getPersistedDetails(sm)).toBeUndefined();
+      }
+    });
+
+    it("defaults to 'full' when no policy is provided (backwards compatible)", () => {
+      const sm = SessionManager.inMemory();
+      installSessionToolResultGuard(sm);
+      const original = { stdout: "x".repeat(5000), exitCode: 0 };
+      appendToolResultWithDetails(sm, original);
+      expect(getPersistedDetails(sm)).toEqual(original);
+    });
+  });
 });

@@ -86,6 +86,24 @@ export type AgentContextLimitsConfig = {
   memoryGetDefaultLines?: number;
   /** Max chars kept for a single live tool result before truncation (default: 16000). */
   toolResultMaxChars?: number;
+  /**
+   * How to persist the structured `details` field of a tool result into the
+   * session transcript. `details` never reaches the model prompt, but it does
+   * land in the session jsonl and is re-read on every chat.history load, so
+   * large details payloads (exec stdout/stderr, browser page metadata) can
+   * dominate session I/O without ever helping the agent.
+   *
+   * - `full` keeps details verbatim (current behavior, default).
+   * - `truncated` JSON-serializes details and caps to `toolResultDetailsMaxChars`,
+   *   replacing it with `{ __truncated: true, originalChars, preview }`.
+   * - `none` drops details entirely.
+   */
+  toolResultDetailsPersist?: "full" | "truncated" | "none";
+  /**
+   * Cap applied to the JSON serialization of tool-result `details` when
+   * `toolResultDetailsPersist = "truncated"` (default: 4000).
+   */
+  toolResultDetailsMaxChars?: number;
   /** Max chars retained from post-compaction AGENTS.md context injection (default: 1800). */
   postCompactionMaxChars?: number;
 };
