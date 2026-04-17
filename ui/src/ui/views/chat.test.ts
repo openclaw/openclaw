@@ -1703,6 +1703,30 @@ describe("chat view", () => {
     expect(container.textContent).toContain("real reply");
   });
 
+  it("still renders legitimate messages that start with System without exec leak markers", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          messages: [
+            {
+              id: "user-visible-system-prefix",
+              role: "user",
+              content: [
+                { type: "text", text: "System: please reset the session when you're ready." },
+              ],
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("System: please reset the session when you're ready.");
+  });
+
   it("renders canvas-only assistant bubbles", () => {
     const container = document.createElement("div");
     render(

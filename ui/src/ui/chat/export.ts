@@ -1,3 +1,4 @@
+import { shouldHideHistoryMessage } from "./history-filter.ts";
 import { extractTextCached } from "./message-extract.ts";
 
 /**
@@ -24,6 +25,9 @@ export function buildChatMarkdown(messages: unknown[], assistantName: string): s
   }
   const lines: string[] = [`# Chat with ${assistantName}`, ""];
   for (const msg of history) {
+    if (shouldHideHistoryMessage(msg)) {
+      continue;
+    }
     const m = msg as Record<string, unknown>;
     const role = m.role === "user" ? "You" : m.role === "assistant" ? assistantName : "Tool";
     const content = extractTextCached(msg) ?? "";
