@@ -21,12 +21,11 @@ const INLINE_METADATA_TAG_TRAILING_RE = new RegExp(
   `\\s+${INLINE_METADATA_TAG_RE.source}\\s*$`,
   "i",
 );
+const JSON_METADATA_LINE_START_RE = /^\s*(?:[{[]|,|")/;
 const JSON_METADATA_KEY_RE =
   /"(?:message_id|message_id_full|sender_id|chat_id|reply_to|reply_to_id|timestamp|thread_id)"\s*:/i;
 const TEXT_METADATA_KEY_RE =
   /\b(?:message_id|message_id_full|sender_id|chat_id|reply_to|reply_to_id|thread_id)\s*[:=]/i;
-const JSON_METADATA_LINE_RE =
-  /^\s*(?:[{[,]|\s)*"(?:message_id|message_id_full|sender_id|chat_id|reply_to|reply_to_id|timestamp|thread_id)"\s*:\s*.+$/i;
 const TEXT_METADATA_LINE_RE =
   /^\s*(?:[-*]\s*)?(?:message_id|message_id_full|sender_id|chat_id|reply_to|reply_to_id|thread_id)\s*[:=]\s*.+$/i;
 
@@ -60,7 +59,7 @@ function stripRolePrefix(text: string): { prefix: string; body: string } {
   const timestampStripped = sourceStripped.replace(LEADING_TIMESTAMP_PREFIX_RE, "");
   const match = timestampStripped.match(ROLE_PREFIX_RE);
   if (!match) {
-    return { prefix: "", body: timestampStripped };
+    return { prefix: "", body: text };
   }
   return { prefix: match[0], body: timestampStripped.slice(match[0].length) };
 }
@@ -84,7 +83,7 @@ function isStandaloneMetadataLine(line: string): boolean {
   if (/^[{}[\],]+$/.test(line) || line === "```json" || line === "```") {
     return true;
   }
-  if (JSON_METADATA_LINE_RE.test(line)) {
+  if (JSON_METADATA_LINE_START_RE.test(line) && JSON_METADATA_KEY_RE.test(line)) {
     return true;
   }
   if (TEXT_METADATA_LINE_RE.test(line)) {
