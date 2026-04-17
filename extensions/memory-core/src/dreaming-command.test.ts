@@ -14,7 +14,8 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function resolveStoredDreaming(config: OpenClawConfig): Record<string, unknown> {
-  const entry = asRecord(config.plugins?.entries?.["memory-core"]);
+  const pluginId = config.plugins?.slots?.memory || "memory-core";
+  const entry = asRecord(config.plugins?.entries?.[pluginId]);
   const pluginConfig = asRecord(entry?.config);
   return asRecord(pluginConfig?.dreaming) ?? {};
 }
@@ -161,6 +162,46 @@ describe("memory-core /dreaming command", () => {
     expect(result.text).toContain("Dreaming enabled.");
   });
 
+  it("persists dreaming config on the selected memory slot", async () => {
+    const { command, runtime, getRuntimeConfig } = createHarness({
+      plugins: {
+        slots: {
+          memory: "memory-lancedb-pro",
+        },
+        entries: {
+          "memory-lancedb-pro": {
+            config: {
+              dreaming: {
+                frequency: "0 3 * * *",
+              },
+            },
+          },
+          "memory-core": {
+            config: {
+              dreaming: {
+                frequency: "15 */8 * * *",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const result = await command.handler(createCommandContext("on"));
+
+    expect(runtime.config.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(resolveStoredDreaming(getRuntimeConfig())).toMatchObject({
+      enabled: true,
+      frequency: "0 3 * * *",
+    });
+    const memoryCoreEntry = asRecord(getRuntimeConfig().plugins?.entries?.["memory-core"]);
+    const memoryCoreConfig = asRecord(memoryCoreEntry?.config);
+    expect(asRecord(memoryCoreConfig?.dreaming)).toMatchObject({
+      frequency: "15 */8 * * *",
+    });
+    expect(result.text).toContain("Dreaming enabled.");
+  });
+
   it("returns status without mutating config", async () => {
     const { command, runtime } = createHarness({
       plugins: {
@@ -187,6 +228,45 @@ describe("memory-core /dreaming command", () => {
     expect(result.text).toContain("- enabled: off (America/Los_Angeles)");
     expect(result.text).toContain("- sweep cadence: 15 */8 * * *");
     expect(result.text).toContain("- promotion policy: score>=0.8, recalls>=3, uniqueQueries>=3");
+    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("shows selected-slot dreaming status without mutating config", async () => {
+    const { command, runtime } = createHarness({
+      plugins: {
+        slots: {
+          memory: "memory-lancedb-pro",
+        },
+        entries: {
+          "memory-lancedb-pro": {
+            config: {
+              dreaming: {
+                enabled: true,
+                frequency: "0 3 * * *",
+              },
+            },
+          },
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: false,
+                frequency: "15 */8 * * *",
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          userTimezone: "America/New_York",
+        },
+      },
+    });
+
+    const result = await command.handler(createCommandContext("status"));
+
+    expect(result.text).toContain("- enabled: on (America/New_York)");
+    expect(result.text).toContain("- sweep cadence: 0 3 * * *");
     expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
   });
 

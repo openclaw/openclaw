@@ -1,20 +1,20 @@
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
-import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  resolveMemoryCorePluginConfig,
+  resolveMemoryDreamingConfig,
+  resolveMemoryDreamingPluginId,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 
-function resolveMemoryCorePluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
-  const entry = asRecord(cfg.plugins?.entries?.["memory-core"]);
-  return asRecord(entry?.config) ?? {};
-}
-
 function updateDreamingEnabledInConfig(cfg: OpenClawConfig, enabled: boolean): OpenClawConfig {
   const entries = { ...cfg.plugins?.entries };
-  const existingEntry = asRecord(entries["memory-core"]) ?? {};
+  const pluginId = resolveMemoryDreamingPluginId(cfg);
+  const existingEntry = asRecord(entries[pluginId]) ?? {};
   const existingConfig = asRecord(existingEntry.config) ?? {};
   const existingSleep = asRecord(existingConfig.dreaming) ?? {};
-  entries["memory-core"] = {
+  entries[pluginId] = {
     ...existingEntry,
     config: {
       ...existingConfig,
