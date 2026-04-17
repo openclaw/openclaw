@@ -279,7 +279,7 @@ describe("external cli oauth resolution", () => {
     expect(profiles).toEqual([]);
   });
 
-  it("overlays fresher external cli oauth over an older still-usable local credential", () => {
+  it("does not overlay fresh external cli oauth over a still-usable local credential", () => {
     mocks.readCodexCliCredentialsCached.mockReturnValue(
       makeOAuthCredential({
         provider: "openai-codex",
@@ -301,14 +301,6 @@ describe("external cli oauth resolution", () => {
       ),
     );
 
-    expect(profiles).toEqual([
-      expect.objectContaining({
-        profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
-        credential: expect.objectContaining({
-          access: "fresh-cli-access",
-          refresh: "fresh-cli-refresh",
-        }),
-      }),
-    ]);
+    expect(profiles).toEqual([]);
   });
 });

@@ -7,6 +7,7 @@ import {
   MINIMAX_CLI_PROFILE_ID,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./constants.js";
+import { log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
@@ -46,9 +47,9 @@ function hasNewerStoredOAuthCredential(
 ): boolean {
   return Boolean(
     existing &&
-      existing.provider === incoming.provider &&
-      Number.isFinite(existing.expires) &&
-      (!Number.isFinite(incoming.expires) || existing.expires > incoming.expires),
+    existing.provider === incoming.provider &&
+    Number.isFinite(existing.expires) &&
+    (!Number.isFinite(incoming.expires) || existing.expires > incoming.expires),
   );
 }
 
@@ -119,7 +120,7 @@ function resolveExternalCliSyncProvider(params: {
   return provider;
 }
 
-export function readManagedExternalCliCredential(params: {
+export function readExternalCliBootstrapCredential(params: {
   profileId: string;
   credential: OAuthCredential;
 }): OAuthCredential | null {
@@ -129,6 +130,8 @@ export function readManagedExternalCliCredential(params: {
   }
   return provider.readCredentials();
 }
+
+export const readManagedExternalCliCredential = readExternalCliBootstrapCredential;
 
 export function resolveExternalCliAuthProfiles(
   store: AuthProfileStore,
@@ -142,18 +145,29 @@ export function resolveExternalCliAuthProfiles(
     }
     const existing = store.profiles[providerConfig.profileId];
     const existingOAuth = existing?.type === "oauth" ? existing : undefined;
-    const shouldOverlay =
-      shouldBootstrapFromExternalCliCredential({
+    if (
+      !shouldBootstrapFromExternalCliCredential({
         existing: existingOAuth,
         imported: creds,
         now,
-      }) ||
-      !existingOAuth ||
-      shouldReplaceStoredOAuthCredential(existingOAuth, creds) ||
-      areOAuthCredentialsEquivalent(existingOAuth, creds);
-    if (!shouldOverlay) {
+      })
+    ) {
+      if (existingOAuth) {
+        log.debug("kept usable local oauth over external cli bootstrap", {
+          profileId: providerConfig.profileId,
+          provider: providerConfig.provider,
+          localExpires: existingOAuth.expires,
+          externalExpires: creds.expires,
+        });
+      }
       continue;
     }
+    log.debug("used external cli oauth bootstrap because local oauth was missing or unusable", {
+      profileId: providerConfig.profileId,
+      provider: providerConfig.provider,
+      localExpires: existingOAuth?.expires,
+      externalExpires: creds.expires,
+    });
     profiles.push({
       profileId: providerConfig.profileId,
       credential: creds,
