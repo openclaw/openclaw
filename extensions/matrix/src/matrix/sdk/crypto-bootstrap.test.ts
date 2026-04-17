@@ -222,6 +222,26 @@ describe("MatrixCryptoBootstrapper", () => {
     );
   });
 
+  it("refreshes published cross-signing keys before importing private keys from secret storage", async () => {
+    const bootstrapCrossSigning = vi.fn(async () => {});
+    const userHasCrossSigningKeys = vi.fn(async () => true);
+    const { bootstrapper, crypto } = createBootstrapperHarness({
+      bootstrapCrossSigning,
+      getDeviceVerificationStatus: vi.fn(async () => createVerifiedDeviceStatus()),
+      isCrossSigningReady: vi.fn(async () => true),
+      userHasCrossSigningKeys,
+    });
+
+    await bootstrapper.bootstrap(crypto, {
+      allowAutomaticCrossSigningReset: false,
+    });
+
+    expect(userHasCrossSigningKeys).toHaveBeenCalledWith("@bot:example.org", true);
+    expect(userHasCrossSigningKeys.mock.invocationCallOrder[0]).toBeLessThan(
+      bootstrapCrossSigning.mock.invocationCallOrder[0],
+    );
+  });
+
   it("passes explicit secret-storage repair allowance only when requested", async () => {
     const deps = createBootstrapperDeps();
     const crypto = createCryptoApi({
