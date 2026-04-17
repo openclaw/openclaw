@@ -84,6 +84,7 @@ export type FollowupRun = {
     enforceFinalTag?: boolean;
     skipProviderRuntimeHints?: boolean;
     silentExpected?: boolean;
+    cleanupBundleMcpOnRunEnd?: boolean;
   };
 };
 

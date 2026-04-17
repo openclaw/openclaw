@@ -177,6 +177,7 @@ export function createCronPromptExecutor(params: {
           bootstrapContextRunKind: "cron",
           toolsAllow: params.agentPayload?.toolsAllow,
           runId: params.cronSession.sessionEntry.sessionId,
+          cleanupBundleMcpOnRunEnd: params.job.sessionTarget === "isolated",
           requireExplicitMessageTarget: params.toolPolicy.requireExplicitMessageTarget,
           disableMessageTool: params.toolPolicy.disableMessageTool,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,

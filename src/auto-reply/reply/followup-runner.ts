@@ -249,6 +249,7 @@ export function createFollowupRunner(params: {
                 verboseLevel: run.verboseLevel,
                 reasoningLevel: run.reasoningLevel,
                 suppressToolErrorWarnings: opts?.suppressToolErrorWarnings,
+                cleanupBundleMcpOnRunEnd: run.cleanupBundleMcpOnRunEnd,
                 execOverrides: run.execOverrides,
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,

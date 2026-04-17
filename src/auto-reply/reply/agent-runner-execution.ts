@@ -1001,6 +1001,7 @@ export async function runAgentTurnWithFallback(params: {
                 suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
                 bootstrapContextMode: params.opts?.bootstrapContextMode,
                 bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
+                cleanupBundleMcpOnRunEnd: effectiveRun.cleanupBundleMcpOnRunEnd,
                 images: params.opts?.images,
                 imageOrder: params.opts?.imageOrder,
                 abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,

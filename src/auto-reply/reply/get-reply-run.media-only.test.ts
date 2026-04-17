@@ -737,6 +737,19 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.suppressTyping).toBe(true);
   });
 
+  it("threads bundle MCP cleanup into queued followup runs", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          cleanupBundleMcpOnRunEnd: true,
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.run.cleanupBundleMcpOnRunEnd).toBe(true);
+  });
+
   it("routes queued system events into user prompt text, not system prompt context", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Model switched.");
 

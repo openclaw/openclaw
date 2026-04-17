@@ -186,10 +186,52 @@ describe("session MCP runtime", () => {
       workspaceDir,
       cfg,
     });
-    await materializeBundleMcpToolsForRun({ runtime: runtimeB });
+    const materializedB = await materializeBundleMcpToolsForRun({ runtime: runtimeB });
+    await materializedB.tools[0].execute("call-session-b", {}, undefined, undefined);
 
     expect(runtimeA).not.toBe(runtimeB);
     expect(await fs.readFile(startupCounterPath, "utf8")).toBe("2");
+  });
+
+  it("retries failed catalog discovery across fresh runtimes", async () => {
+    const workspaceDir = await makeTempDir("openclaw-bundle-mcp-tools-");
+    const startupCounterPath = path.join(workspaceDir, "bundle-starts.txt");
+    const serverScriptPath = path.join(workspaceDir, "servers", "configured-probe.mjs");
+
+    const cfg = {
+      mcp: {
+        servers: {
+          configuredProbe: {
+            command: "node",
+            args: [serverScriptPath],
+          },
+        },
+      },
+    };
+
+    const runtimeA = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-catalog-failure-a",
+      sessionKey: "agent:test:session-catalog-failure-a",
+      workspaceDir,
+      cfg,
+    });
+    const materializedA = await materializeBundleMcpToolsForRun({ runtime: runtimeA });
+
+    expect(materializedA.tools).toEqual([]);
+
+    await writeBundleProbeMcpServer(serverScriptPath, { startupCounterPath });
+
+    const runtimeB = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-catalog-failure-b",
+      sessionKey: "agent:test:session-catalog-failure-b",
+      workspaceDir,
+      cfg,
+    });
+    const materializedB = await materializeBundleMcpToolsForRun({ runtime: runtimeB });
+
+    expect(materializedB.tools.map((tool) => tool.name)).toEqual(["configuredProbe__bundle_probe"]);
+    await materializedB.tools[0].execute("call-configured-probe", {}, undefined, undefined);
+    expect(await fs.readFile(startupCounterPath, "utf8")).toBe("1");
   });
 
   it("recreates the session runtime when MCP config changes", async () => {
@@ -358,7 +400,8 @@ describe("session MCP runtime", () => {
     });
 
     expect(runtimeB).not.toBe(runtimeA);
-    await materializeBundleMcpToolsForRun({ runtime: runtimeB });
+    const materializedB = await materializeBundleMcpToolsForRun({ runtime: runtimeB });
+    await materializedB.tools[0].execute("call-session-e", {}, undefined, undefined);
     expect(await fs.readFile(startupCounterPath, "utf8")).toBe("2");
   });
 });

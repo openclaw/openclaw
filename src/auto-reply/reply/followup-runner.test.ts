@@ -956,6 +956,35 @@ describe("createFollowupRunner compaction", () => {
 });
 
 describe("createFollowupRunner bootstrap warning dedupe", () => {
+  it("forwards bundle MCP cleanup into drained followup runs", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          cleanupBundleMcpOnRunEnd: true,
+        },
+      }),
+    );
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+      | {
+          cleanupBundleMcpOnRunEnd?: boolean;
+        }
+      | undefined;
+    expect(call?.cleanupBundleMcpOnRunEnd).toBe(true);
+  });
+
   it("passes stored warning signature history to embedded followup runs", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [],

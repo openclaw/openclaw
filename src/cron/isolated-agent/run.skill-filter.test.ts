@@ -13,11 +13,13 @@ import {
   logWarnMock,
   makeCronSession,
   makeCronSessionEntry,
+  mockRunCronFallbackPassthrough,
   resolveAgentConfigMock,
   resolveAgentSkillsFilterMock,
   resolveAllowedModelRefMock,
   resolveCronSessionMock,
   runCliAgentMock,
+  runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -125,6 +127,16 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     expect(resolveCronSessionMock).toHaveBeenCalledOnce();
     expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
       forceNew: true,
+    });
+  });
+
+  it("cleans up bundle MCP runtimes after isolated cron runs", async () => {
+    mockRunCronFallbackPassthrough();
+    await runSkillFilterCase();
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      cleanupBundleMcpOnRunEnd: true,
     });
   });
 
