@@ -469,7 +469,7 @@ export async function resolveApiKeyForProfile(
   } catch (error) {
     const refreshedStore =
       error instanceof OAuthManagerRefreshError
-        ? error.refreshedStore
+        ? error.getRefreshedStore()
         : loadAuthProfileStoreForSecretsRuntime(params.agentDir);
     const fallbackProfileId = suggestOAuthProfileIdForLegacyDefault({
       cfg,

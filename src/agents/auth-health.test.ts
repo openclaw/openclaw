@@ -127,6 +127,7 @@ describe("buildAuthHealthSummary", () => {
           access: "expired-access",
           refresh: "expired-refresh",
           expires: now - 10_000,
+          accountId: "acct-cli",
         },
       },
     };
