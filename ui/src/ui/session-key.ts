@@ -13,9 +13,11 @@ export const DEFAULT_AGENT_ID = "main";
 export const DEFAULT_MAIN_KEY = "main";
 
 const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+const VALID_SESSION_PART_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
 const LEADING_DASH_RE = /^-+/;
 const TRAILING_DASH_RE = /-+$/;
+const MAX_SESSION_PART_LENGTH = 64;
 
 export function parseAgentSessionKey(
   sessionKey: string | undefined | null,
@@ -64,6 +66,30 @@ export function buildAgentMainSessionKey(params: {
   const agentId = normalizeAgentId(params.agentId);
   const mainKey = normalizeMainKey(params.mainKey);
   return `agent:${agentId}:${mainKey}`;
+}
+
+export function normalizeDashboardSessionPart(value: string): string {
+  const cleaned = normalizeLowercaseStringOrEmpty(value)
+    .replace(INVALID_CHARS_RE, "-")
+    .replace(LEADING_DASH_RE, "")
+    .replace(TRAILING_DASH_RE, "")
+    .slice(0, MAX_SESSION_PART_LENGTH);
+  return VALID_SESSION_PART_RE.test(cleaned) ? cleaned : "session";
+}
+
+export function normalizeDashboardSessionUniqueId(value: string): string {
+  const cleaned = normalizeLowercaseStringOrEmpty(value)
+    .replace(INVALID_CHARS_RE, "-")
+    .replace(LEADING_DASH_RE, "")
+    .replace(TRAILING_DASH_RE, "")
+    .slice(0, MAX_SESSION_PART_LENGTH);
+  return cleaned || "id";
+}
+
+export function buildDashboardSessionMainKey(params: { name: string; uniqueId: string }): string {
+  const sessionName = normalizeDashboardSessionPart(params.name);
+  const uniqueId = normalizeDashboardSessionUniqueId(params.uniqueId);
+  return `dashboard:${sessionName}:${uniqueId}`;
 }
 
 export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {

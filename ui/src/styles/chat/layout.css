@@ -921,6 +921,16 @@
   text-overflow: ellipsis;
 }
 
+.chat-controls__new-session {
+  padding: 6px 8px;
+  line-height: 1;
+}
+
+.chat-controls__new-session svg {
+  width: 16px;
+  height: 16px;
+}
+
 .chat-controls__model select {
   max-width: 320px;
 }

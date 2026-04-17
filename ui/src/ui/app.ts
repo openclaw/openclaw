@@ -1,6 +1,5 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { resolveAgentIdFromSessionKey } from "../../../src/routing/session-key.js";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -29,6 +28,7 @@ import {
   handleFirstUpdated,
   handleUpdated,
 } from "./app-lifecycle.ts";
+import { switchChatSession } from "./app-render.helpers.ts";
 import { renderApp } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
@@ -69,15 +69,25 @@ import type {
 } from "./controllers/dreaming.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import { loadSessions as loadSessionsInternal } from "./controllers/sessions.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillDetail,
   SkillMessage,
 } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
+import { GatewayRequestError } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import {
+  buildAgentMainSessionKey,
+  buildDashboardSessionMainKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "./session-key.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type {
   AgentsListResult,
@@ -115,6 +125,37 @@ declare global {
 }
 
 const bootAssistantIdentity = normalizeAssistantIdentity({});
+
+export function shouldUseOptimisticNewSessionFallback(error: unknown): boolean {
+  if (!(error instanceof GatewayRequestError)) {
+    return true;
+  }
+  if (error.gatewayCode !== "INVALID_REQUEST") {
+    return false;
+  }
+  return normalizeLowercaseStringOrEmpty(error.message).includes("unknown method");
+}
+
+export function resolveNewSessionAgentId(params: {
+  sessionKey: string;
+  sessionsResult: OpenClawApp["sessionsResult"];
+  assistantAgentId: string | null;
+}): string | null {
+  const scopedSessionAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
+  const normalizedScopedSessionAgentId = scopedSessionAgentId
+    ? normalizeAgentId(scopedSessionAgentId)
+    : null;
+  const activeSessionExists =
+    params.sessionsResult?.sessions?.some((row) => row.key === params.sessionKey) ?? false;
+  const sessionAgentId = activeSessionExists ? normalizedScopedSessionAgentId : null;
+  if (sessionAgentId) {
+    return sessionAgentId;
+  }
+  if (normalizedScopedSessionAgentId && normalizedScopedSessionAgentId !== "main") {
+    return null;
+  }
+  return "main";
+}
 
 function resolveOnboardingMode(): boolean {
   if (!window.location.search) {
@@ -216,6 +257,9 @@ export class OpenClawApp extends LitElement {
   @state() execApprovalError: string | null = null;
   @state() pendingGatewayUrl: string | null = null;
   pendingGatewayToken: string | null = null;
+
+  @state() newSessionModalOpen = false;
+  @state() newSessionName = "";
 
   @state() configLoading = false;
   @state() configRaw = "{\n}\n";
@@ -782,6 +826,98 @@ export class OpenClawApp extends LitElement {
   handleGatewayUrlCancel() {
     this.pendingGatewayUrl = null;
     this.pendingGatewayToken = null;
+  }
+
+  handleNewSessionOpen() {
+    this.newSessionModalOpen = true;
+    this.newSessionName = "";
+  }
+
+  async handleNewSessionConfirm() {
+    const name = this.newSessionName.trim();
+    if (!name) {
+      return;
+    }
+    let agentId = resolveNewSessionAgentId({
+      sessionKey: this.sessionKey,
+      sessionsResult: this.sessionsResult,
+      assistantAgentId: this.assistantAgentId,
+    });
+    const scopedSessionAgentId = parseAgentSessionKey(this.sessionKey)?.agentId;
+    const normalizedScopedSessionAgentId = scopedSessionAgentId
+      ? normalizeAgentId(scopedSessionAgentId)
+      : null;
+    const activeSessionMissingFromList =
+      this.sessionsResult?.sessions?.every((row) => row.key !== this.sessionKey) ?? false;
+    const shouldRetrySessionLookup =
+      !agentId &&
+      this.client &&
+      this.connected &&
+      (!this.sessionsResult ||
+        (normalizedScopedSessionAgentId !== null &&
+          normalizedScopedSessionAgentId !== "main" &&
+          activeSessionMissingFromList));
+    if (shouldRetrySessionLookup) {
+      await loadSessionsInternal(this as Parameters<typeof loadSessionsInternal>[0], {
+        activeMinutes: 0,
+        limit: 0,
+        includeGlobal: true,
+        includeUnknown: true,
+      });
+      agentId = resolveNewSessionAgentId({
+        sessionKey: this.sessionKey,
+        sessionsResult: this.sessionsResult,
+        assistantAgentId: this.assistantAgentId,
+      });
+    }
+    if (!agentId) {
+      this.lastError = "Still loading agent context. Try again in a moment.";
+      return;
+    }
+    this.newSessionModalOpen = false;
+    this.newSessionName = "";
+    const newKey = buildAgentMainSessionKey({
+      agentId,
+      mainKey: buildDashboardSessionMainKey({
+        name,
+        uniqueId: generateUUID(),
+      }),
+    });
+    if (!this.client || !this.connected) {
+      this.lastError = "Disconnected before creating session. Reconnect and try again.";
+      return;
+    }
+    try {
+      const result = (await this.client.request("sessions.create", {
+        key: newKey,
+        agentId,
+        label: name,
+      })) as {
+        ok: boolean;
+        key?: string;
+      };
+      if (result?.ok && result.key) {
+        switchChatSession(this as Parameters<typeof switchChatSession>[0], result.key);
+        return;
+      }
+    } catch (error) {
+      if (shouldUseOptimisticNewSessionFallback(error)) {
+        switchChatSession(this as Parameters<typeof switchChatSession>[0], newKey);
+        return;
+      }
+      this.lastError =
+        error instanceof Error
+          ? `Failed to create session: ${error.message}`
+          : "Failed to create session";
+      return;
+    }
+    this.lastError = "Failed to create session";
+    return;
+  }
+
+  handleNewSessionCancel() {
+    this.newSessionModalOpen = false;
+    this.newSessionName = "";
   }
 
   // Sidebar handlers for tool output viewing

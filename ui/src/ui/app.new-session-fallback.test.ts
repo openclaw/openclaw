@@ -1,0 +1,124 @@
+import { describe, expect, it } from "vitest";
+import { resolveNewSessionAgentId, shouldUseOptimisticNewSessionFallback } from "./app.ts";
+import { GatewayRequestError } from "./gateway.ts";
+import type { SessionsListResult } from "./types.ts";
+
+function makeSessionsResult(keys: string[]): SessionsListResult {
+  return {
+    ts: 0,
+    path: "sessions.json",
+    count: keys.length,
+    defaults: {
+      modelProvider: null,
+      model: null,
+      contextTokens: null,
+    },
+    sessions: keys.map((key) => ({
+      key,
+      kind: "direct",
+      updatedAt: 0,
+    })),
+  };
+}
+
+describe("shouldUseOptimisticNewSessionFallback", () => {
+  it("allows fallback for transport errors", () => {
+    expect(shouldUseOptimisticNewSessionFallback(new Error("gateway not connected"))).toBe(true);
+  });
+
+  it("rejects fallback for unavailable gateway responses", () => {
+    const error = new GatewayRequestError({
+      code: "UNAVAILABLE",
+      message: "temporary failure",
+    });
+    expect(shouldUseOptimisticNewSessionFallback(error)).toBe(false);
+  });
+
+  it("allows fallback for compatibility unknown-method failures", () => {
+    const error = new GatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: "unknown method: sessions.create",
+    });
+    expect(shouldUseOptimisticNewSessionFallback(error)).toBe(true);
+  });
+
+  it("rejects fallback for authorization/scope failures", () => {
+    const error = new GatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: "missing scope: operator.write",
+    });
+    expect(shouldUseOptimisticNewSessionFallback(error)).toBe(false);
+  });
+});
+
+describe("resolveNewSessionAgentId", () => {
+  it("uses agent id from active server-known session", () => {
+    const agentId = resolveNewSessionAgentId({
+      sessionKey: "agent:ops:dashboard:abc",
+      sessionsResult: makeSessionsResult(["agent:ops:dashboard:abc"]),
+      assistantAgentId: "main",
+    });
+
+    expect(agentId).toBe("ops");
+  });
+
+  it("normalizes agent id from an active server-known session key", () => {
+    const agentId = resolveNewSessionAgentId({
+      sessionKey: "agent:ops$$:dashboard:abc",
+      sessionsResult: makeSessionsResult(["agent:ops$$:dashboard:abc"]),
+      assistantAgentId: "main",
+    });
+
+    expect(agentId).toBe("ops");
+  });
+
+  it("ignores URL-injected unknown non-main keys and waits for trusted context", () => {
+    const agentId = resolveNewSessionAgentId({
+      sessionKey: "agent:victim:dashboard:evil",
+      sessionsResult: makeSessionsResult(["agent:trusted:main"]),
+      assistantAgentId: "trusted",
+    });
+
+    expect(agentId).toBeNull();
+  });
+
+  it("falls back to main when no trusted source is available", () => {
+    const agentId = resolveNewSessionAgentId({
+      sessionKey: "main",
+      sessionsResult: null,
+      assistantAgentId: null,
+    });
+
+    expect(agentId).toBe("main");
+  });
+
+  it("does not use assistant fallback for unscoped/main keys", () => {
+    const agentId = resolveNewSessionAgentId({
+      sessionKey: "main",
+      sessionsResult: null,
+      assistantAgentId: "ops",
+    });
+
+    expect(agentId).toBe("main");
+  });
+
+  it("waits for trusted context when active key is scoped to a non-main agent", () => {
+    const agentId = resolveNewSessionAgentId({
+      sessionKey: "agent:ops:dashboard:pending",
+      sessionsResult: null,
+      assistantAgentId: null,
+    });
+
+    expect(agentId).toBeNull();
+  });
+
+  it("defers assistant fallback when current key is an untrusted non-main scoped key", () => {
+    const agentId = resolveNewSessionAgentId({
+      sessionKey: "agent:ops:dashboard:pending",
+      sessionsResult: null,
+      assistantAgentId: "trusted",
+    });
+
+    expect(agentId).toBeNull();
+  });
+});

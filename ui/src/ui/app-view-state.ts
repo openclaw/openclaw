@@ -115,6 +115,8 @@ export type AppViewState = {
   execApprovalBusy: boolean;
   execApprovalError: string | null;
   pendingGatewayUrl: string | null;
+  newSessionModalOpen: boolean;
+  newSessionName: string;
   configLoading: boolean;
   configRaw: string;
   configRawOriginal: string;
@@ -393,6 +395,9 @@ export type AppViewState = {
     handleExecApprovalDecision: (decision: "allow-once" | "allow-always" | "deny") => Promise<void>;
     handleGatewayUrlConfirm: () => void;
     handleGatewayUrlCancel: () => void;
+    handleNewSessionOpen: () => void;
+    handleNewSessionConfirm: () => Promise<void>;
+    handleNewSessionCancel: () => void;
     handleConfigLoad: () => Promise<void>;
     handleConfigSave: () => Promise<void>;
     handleConfigApply: () => Promise<void>;

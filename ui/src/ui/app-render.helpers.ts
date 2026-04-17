@@ -216,6 +216,15 @@ export function renderChatSessionSelect(state: AppViewState) {
           )}
         </select>
       </label>
+      <button
+        class="btn btn--ghost chat-controls__new-session"
+        title="New session"
+        aria-label="New session"
+        ?disabled=${!state.connected}
+        @click=${() => state.handleNewSessionOpen()}
+      >
+        ${icons.plus}
+      </button>
       ${modelSelect} ${thinkingSelect}
     </div>
   `;
