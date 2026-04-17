@@ -941,6 +941,9 @@ describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => 
 
   it("keeps explicit 402 rate-limit messages in the rate_limit lane", () => {
     const transientMessage = "rate limit exceeded";
+    expect(classifyFailoverReasonFromHttpStatus(402, `402: ${transientMessage}`)).toBe(
+      "rate_limit",
+    );
     expect(classifyFailoverReason(`HTTP 402 Payment Required: ${transientMessage}`)).toBe(
       "rate_limit",
     );

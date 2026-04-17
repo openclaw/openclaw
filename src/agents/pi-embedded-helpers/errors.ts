@@ -609,7 +609,7 @@ function classifyFailoverClassificationFromHttpStatus(
         return toReasonClassification(reasonFrom402Text);
       }
       return typeof explicitStatus === "number"
-        ? toReasonClassification("billing")
+        ? toReasonClassification(classify402Message(message))
         : messageClassification;
     }
     return toReasonClassification(classify402Message(message));
