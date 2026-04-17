@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { loadBundledCapabilityRuntimeRegistry } from "../../../src/plugins/bundled-capability-runtime.js";
 import { resolveManifestContractOwnerPluginId } from "../../../src/plugins/manifest-registry.js";
 import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../../../src/plugins/web-provider-public-artifacts.explicit.js";
 import { resolvePluginWebSearchProviders } from "../../../src/plugins/web-search-providers.runtime.js";
@@ -95,21 +94,18 @@ export function describeBundledWebSearchFastPathContract(pluginId: string) {
       }
     });
 
-    it("keeps fast-path provider metadata aligned with the bundled runtime registry", async () => {
+    it("keeps fast-path provider metadata aligned with bundled public artifacts", async () => {
       const fastPathProviders = resolvePluginWebSearchProviders({
         origin: "bundled",
         onlyPluginIds: [pluginId],
+        mode: "setup",
       }).filter((provider) => provider.pluginId === pluginId);
-      const pluginSdkResolution = process.env.VITEST ? "src" : "dist";
-      const bundledProviderEntries = loadBundledCapabilityRuntimeRegistry({
-        pluginIds: [pluginId],
-        pluginSdkResolution,
-      })
-        .webSearchProviders.filter((entry) => entry.pluginId === pluginId)
-        .map((entry) => ({
-          pluginId: entry.pluginId,
-          ...entry.provider,
-        }));
+      const bundledProviderEntries =
+        resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+          onlyPluginIds: [pluginId],
+        })?.filter((entry) => entry.pluginId === pluginId) ?? [];
+
+      expect(bundledProviderEntries.length).toBeGreaterThan(0);
 
       expect(
         sortComparableEntries(
