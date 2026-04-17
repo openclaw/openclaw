@@ -14,6 +14,7 @@ const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 const STARTUP_CONTEXT_PREFIX = "[Startup context loaded by runtime]";
+const SYSTEM_EVENT_LINE_RE = /^System(?: \(untrusted\))?: \[/;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
@@ -86,7 +87,24 @@ function isRuntimeInjectedUserMessage(message: unknown): boolean {
   if (typeof text !== "string") {
     return false;
   }
-  return text.trimStart().startsWith(STARTUP_CONTEXT_PREFIX);
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith(STARTUP_CONTEXT_PREFIX)) {
+    return true;
+  }
+  // Check if message is entirely system event lines (with optional blank lines)
+  const lines = trimmed.split("\n");
+  let hasSystemLine = false;
+  for (const line of lines) {
+    if (SYSTEM_EVENT_LINE_RE.test(line)) {
+      hasSystemLine = true;
+      continue;
+    }
+    // Non-system line that's not blank = user content exists
+    if (line.trim() !== "") {
+      return false;
+    }
+  }
+  return hasSystemLine;
 }
 
 function shouldHideHistoryMessage(message: unknown): boolean {

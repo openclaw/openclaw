@@ -643,6 +643,86 @@ describe("loadChatHistory", () => {
     expect(state.chatMessages).toHaveLength(2);
   });
 
+  it("filters user messages that are only system event lines", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "System: [2026-04-17T13:30:00.000Z] Heartbeat wake\nSystem: [2026-04-17T13:30:01.000Z] Checking status",
+          },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "OK" }] },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toEqual(messages[1]);
+  });
+
+  it("filters user messages with untrusted system event lines", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "System (untrusted): [2026-04-17T13:30:00.000Z] Cron trigger fired",
+          },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "OK" }] },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toEqual(messages[1]);
+  });
+
+  it("keeps user messages that start with system event but have user text", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "System: [2026-04-17T13:30:00.000Z] Wake\n\nActual user message here",
+          },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "OK" }] },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toHaveLength(2);
+  });
+
   it("keeps a user message even if it matches the synthetic repair text", async () => {
     const messages = [
       {
