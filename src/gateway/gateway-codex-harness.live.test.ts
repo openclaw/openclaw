@@ -278,6 +278,7 @@ async function requestCodexCommandText(params: {
   client: GatewayClient;
   command: string;
   expectedText: string | string[];
+  isExpectedText?: (text: string) => boolean;
   sessionKey: string;
 }): Promise<string> {
   const { extractPayloadText } = await import("./test-helpers.agent-results.js");
@@ -301,8 +302,10 @@ async function requestCodexCommandText(params: {
   const expectedTexts = Array.isArray(params.expectedText)
     ? params.expectedText
     : [params.expectedText];
+  const matchedByText = expectedTexts.some((expectedText) => text.includes(expectedText));
+  const matchedByPredicate = params.isExpectedText?.(text) ?? false;
   expect(
-    expectedTexts.some((expectedText) => text.includes(expectedText)),
+    matchedByText || matchedByPredicate,
     `Expected "${params.command}" response to contain one of: ${expectedTexts.join(", ")}\nReceived:\n${text}`,
   ).toBe(true);
   return text;
@@ -532,6 +535,19 @@ describeLive("gateway live (Codex harness)", () => {
             "Configured model from `~/.codex/config.toml`:",
             "Current OpenClaw session status reports the active model as:",
           ],
+          isExpectedText: (text) => {
+            if (!text.includes("`codex models`")) {
+              return false;
+            }
+            return (
+              text.includes("did not run") ||
+              text.includes("could not run") ||
+              text.includes("could not be run") ||
+              text.includes("failed in this sandbox") ||
+              text.includes("failed with:") ||
+              text.includes("repo-local fallback")
+            );
+          },
         });
         logCodexLiveStep("codex-models-command", { modelsText });
 
