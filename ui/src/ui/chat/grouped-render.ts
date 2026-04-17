@@ -1492,6 +1492,12 @@ function renderGroupedMessage(
   const toolPreview =
     markdown && !toolSummaryLabel ? markdown.trim().replace(/\s+/g, " ").slice(0, 120) : "";
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
+  const toolMessageLabel =
+    singleToolCard && !markdown && !hasImages && !hasMedia
+      ? singleToolCard.outputText?.trim()
+        ? "Tool output"
+        : "Tool call"
+      : "Tool output";
 
   const hasActions = canCopyMarkdown || canExpand;
   
@@ -1509,8 +1515,14 @@ function renderGroupedMessage(
     }, 100);
   };
 
+  // FIXED: Tool message expansion respects autoExpandToolCalls
   const detailsId = generateDetailsId(message, 0);
   const storedState = getDetailsState(detailsId);
+  // Determine initial open state:
+  // 1. If user has explicitly set state in localStorage, use that
+  // 2. Otherwise, respect autoExpandToolCalls preference for initial state
+  // 3. Default to false if no preference and no stored state
+  let isOpen: boolean;
   const hasStoredState = (() => {
     try {
       const storage = getSafeLocalStorage();
@@ -1521,122 +1533,13 @@ function renderGroupedMessage(
       return false;
     }
   })();
-
-  let isOpen: boolean;
-
+  
   if (hasStoredState) {
-    // User manually set this - respect their choice
     isOpen = storedState;
   } else {
-    // No stored preference - use autoExpandToolCalls setting
     isOpen = opts.autoExpandToolCalls ?? false;
   }
 
-  // For tool messages: MEDIA is ALWAYS visible, text/markdown goes inside details
-  if (isToolMessage) {
-    const hasTextContent = !!(markdown || reasoningMarkdown || jsonResult || hasToolCards);
-    
-    return html`
-      <div 
-        class="${bubbleClasses}"
-        style="${styleString}"
-        ${ref(resizeRef)}
-      >
-        ${renderReplyPill(normalizedMessage.replyTarget)}
-        ${hasActions
-          ? html`<div class="chat-bubble-actions">
-              ${canExpand ? renderExpandButton(markdown!, onOpenSidebar!) : nothing}
-              ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
-            </div>`
-          : nothing}
-        
-        <!-- MEDIA - ALWAYS VISIBLE (outside details) -->
-        ${renderMessageImages(images)}
-        ${renderMessageMedia(audioBlocks, videoBlocks)}
-        ${renderAssistantAttachments(
-          assistantAttachments,
-          opts.localMediaPreviewRoots ?? [],
-          opts.basePath,
-          opts.assistantAttachmentAuthToken,
-          opts.onRequestUpdate,
-        )}
-        
-        <!-- TEXT/CONTENT - Inside collapsible details -->
-        ${hasTextContent ? html`
-          <details 
-            class="chat-tool-msg-collapse"
-            ?open=${isOpen}
-            @toggle=${(e: Event) => {
-              const details = e.currentTarget as HTMLDetailsElement;
-              saveDetailsState(detailsId, details.open);
-              if (details.open) {
-                setTimeout(() => {
-                  details.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                }, 50);
-              }
-            }}
-          >
-            <summary class="chat-tool-msg-summary">
-              <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
-              <span class="chat-tool-msg-summary__label">Details</span>
-              ${toolSummaryLabel
-                ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
-                : toolPreview
-                  ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
-                  : nothing}
-            </summary>
-            <div class="chat-tool-msg-body">
-              ${reasoningMarkdown
-                ? html`<div class="chat-thinking">
-                    ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
-                  </div>`
-                : nothing}
-              ${jsonResult
-                ? html`<details class="chat-json-collapse">
-                    <summary class="chat-json-summary">
-                      <span class="chat-json-badge">JSON</span>
-                      <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
-                    </summary>
-                    <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
-                  </details>`
-                : markdown
-                  ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                      ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
-                    </div>
-                    ${markdown.includes("youtube.com/watch") ||
-                      markdown.includes("youtube.com/embed") ||
-                      markdown.includes("youtu.be/") ||
-                      markdown.includes("player.vimeo.com")
-                        ? renderVideoEmbed(markdown, opts.allowExternalEmbedUrls ?? false)
-                        : nothing}`
-                  : nothing}
-              ${hasToolCards
-                ? singleToolCard && !markdown && !hasImages && !hasMedia
-                  ? renderExpandedToolCardContent(
-                      singleToolCard,
-                      onOpenSidebar,
-                      opts.canvasHostUrl,
-                      opts.embedSandboxMode ?? "scripts",
-                      opts.allowExternalEmbedUrls ?? false,
-                    )
-                  : renderInlineToolCards(toolCards, {
-                      messageKey,
-                      onOpenSidebar,
-                      isToolExpanded: opts.isToolExpanded,
-                      onToggleToolExpanded: opts.onToggleToolExpanded,
-                      canvasHostUrl: opts.canvasHostUrl,
-                      embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-                      allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
-                    })
-                : nothing}
-            </div>
-          </details>
-        ` : nothing}
-      </div>
-    `;
-  }
-
-  // Regular (non-tool) message rendering
   return html`
     <div 
       class="${bubbleClasses}"
@@ -1650,61 +1553,143 @@ function renderGroupedMessage(
             ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
           </div>`
         : nothing}
-      ${renderMessageImages(images)}
-      ${renderMessageMedia(audioBlocks, videoBlocks)}
-      ${renderAssistantAttachments(
-        assistantAttachments,
-        opts.localMediaPreviewRoots ?? [],
-        opts.basePath,
-        opts.assistantAttachmentAuthToken,
-        opts.onRequestUpdate,
-      )}
-      ${reasoningMarkdown
-        ? html`<div class="chat-thinking">
-            ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
-          </div>`
-        : nothing}
-      ${normalizedRole === "assistant" && assistantViewBlocks.length > 0
-        ? html`${assistantViewBlocks.map(
-            (block) => html`${renderToolPreview(block.preview, "chat_message", {
-              onOpenSidebar,
-              rawText: block.rawText ?? null,
-              canvasHostUrl: opts.canvasHostUrl,
-              embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-            })}
-            ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
-          )}`
-        : nothing}
-      ${jsonResult
-        ? html`<details class="chat-json-collapse">
-            <summary class="chat-json-summary">
-              <span class="chat-json-badge">JSON</span>
-              <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
-            </summary>
-            <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
-          </details>`
-        : markdown
-          ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-              ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
-            </div>
-            ${markdown.includes("youtube.com/watch") ||
-              markdown.includes("youtube.com/embed") ||
-              markdown.includes("youtu.be/") ||
-              markdown.includes("player.vimeo.com")
-                ? renderVideoEmbed(markdown, opts.allowExternalEmbedUrls ?? false)
-                : nothing}`
-          : nothing}
-      ${hasToolCards
-        ? renderInlineToolCards(toolCards, {
-            messageKey,
-            onOpenSidebar,
-            isToolExpanded: opts.isToolExpanded,
-            onToggleToolExpanded: opts.onToggleToolExpanded,
-            canvasHostUrl: opts.canvasHostUrl,
-            embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-            allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
-          })
-        : nothing}
+      ${isToolMessage
+        ? html`
+            <details 
+              class="chat-tool-msg-collapse"
+              ?open=${isOpen}
+              @toggle=${(e: Event) => {
+                const details = e.currentTarget as HTMLDetailsElement;
+                saveDetailsState(detailsId, details.open);
+                if (details.open) {
+                  setTimeout(() => {
+                    details.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                  }, 50);
+                }
+              }}
+            >
+              <summary class="chat-tool-msg-summary">
+                <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
+                <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
+                ${toolSummaryLabel
+                  ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
+                  : toolPreview
+                    ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
+                    : nothing}
+              </summary>
+              <div class="chat-tool-msg-body">
+                ${renderMessageImages(images)}
+                ${renderMessageMedia(audioBlocks, videoBlocks)}
+                ${renderAssistantAttachments(
+                  assistantAttachments,
+                  opts.localMediaPreviewRoots ?? [],
+                  opts.basePath,
+                  opts.assistantAttachmentAuthToken,
+                  opts.onRequestUpdate,
+                )}
+                ${reasoningMarkdown
+                  ? html`<div class="chat-thinking">
+                      ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                    </div>`
+                  : nothing}
+                ${jsonResult
+                  ? html`<details class="chat-json-collapse">
+                      <summary class="chat-json-summary">
+                        <span class="chat-json-badge">JSON</span>
+                        <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
+                      </summary>
+                      <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
+                    </details>`
+                  : markdown
+                    ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
+                        ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+                      </div>
+                      ${markdown.includes("youtube.com/watch") ||
+                        markdown.includes("youtube.com/embed") ||
+                        markdown.includes("youtu.be/") ||
+                        markdown.includes("player.vimeo.com")
+                          ? renderVideoEmbed(markdown, opts.allowExternalEmbedUrls ?? false)
+                          : nothing}`
+                    : nothing}
+                ${hasToolCards
+                  ? singleToolCard && !markdown && !hasImages && !hasMedia
+                    ? renderExpandedToolCardContent(
+                        singleToolCard,
+                        onOpenSidebar,
+                        opts.canvasHostUrl,
+                        opts.embedSandboxMode ?? "scripts",
+                        opts.allowExternalEmbedUrls ?? false,
+                      )
+                    : renderInlineToolCards(toolCards, {
+                        messageKey,
+                        onOpenSidebar,
+                        isToolExpanded: opts.isToolExpanded,
+                        onToggleToolExpanded: opts.onToggleToolExpanded,
+                        canvasHostUrl: opts.canvasHostUrl,
+                        embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+                        allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+                      })
+                  : nothing}
+              </div>
+            </details>
+          `
+        : html`
+            ${renderMessageImages(images)}
+            ${renderMessageMedia(audioBlocks, videoBlocks)}
+            ${renderAssistantAttachments(
+              assistantAttachments,
+              opts.localMediaPreviewRoots ?? [],
+              opts.basePath,
+              opts.assistantAttachmentAuthToken,
+              opts.onRequestUpdate,
+            )}
+            ${reasoningMarkdown
+              ? html`<div class="chat-thinking">
+                  ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                </div>`
+              : nothing}
+            ${normalizedRole === "assistant" && assistantViewBlocks.length > 0
+              ? html`${assistantViewBlocks.map(
+                  (block) => html`${renderToolPreview(block.preview, "chat_message", {
+                    onOpenSidebar,
+                    rawText: block.rawText ?? null,
+                    canvasHostUrl: opts.canvasHostUrl,
+                    embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+                  })}
+                  ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
+                )}`
+              : nothing}
+            ${jsonResult
+              ? html`<details class="chat-json-collapse">
+                  <summary class="chat-json-summary">
+                    <span class="chat-json-badge">JSON</span>
+                    <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
+                  </summary>
+                  <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
+                </details>`
+              : markdown
+                ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
+                    ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+                  </div>
+                  ${markdown.includes("youtube.com/watch") ||
+                    markdown.includes("youtube.com/embed") ||
+                    markdown.includes("youtu.be/") ||
+                    markdown.includes("player.vimeo.com")
+                      ? renderVideoEmbed(markdown, opts.allowExternalEmbedUrls ?? false)
+                      : nothing}`
+                : nothing}
+            ${hasToolCards
+              ? renderInlineToolCards(toolCards, {
+                  messageKey,
+                  onOpenSidebar,
+                  isToolExpanded: opts.isToolExpanded,
+                  onToggleToolExpanded: opts.onToggleToolExpanded,
+                  canvasHostUrl: opts.canvasHostUrl,
+                  embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+                  allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+                })
+              : nothing}
+          `}
     </div>
   `;
 }

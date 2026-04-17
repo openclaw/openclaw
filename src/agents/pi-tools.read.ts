@@ -246,9 +246,9 @@ function createSandboxReadOperations(params: SandboxToolParams) {
       if (typeof (params.bridge as any).readdir === 'function') {
         return await (params.bridge as any).readdir({ filePath, cwd: params.root });
       }
-      // Fallback: return empty array with console warning
-      console.warn(`Directory listing not fully supported in sandbox mode for ${filePath}. Bridge missing readdir implementation.`);
-      return [];
+      // Fallback: throw an error since directory listing is not supported
+      // This ensures the base tool's error handling can provide meaningful feedback
+      throw new Error(`Directory listing not supported in sandbox mode for ${filePath}. The current bridge implementation does not support readdir.`);
     },
     access: (filePath: string) =>
       params.bridge.stat({ filePath, cwd: params.root }).then((s) => {
@@ -382,6 +382,7 @@ function getAudioMimeType(ext: string): string {
     aac: "audio/aac",
     opus: "audio/opus",
     wma: "audio/x-ms-wma",
+    webm: "audio/webm", // Add WebM audio MIME type
   };
   return mimeMap[ext] ?? "audio/mpeg";
 }
@@ -762,7 +763,11 @@ export function wrapToolWorkspaceRootGuardWithOptions(
 
 // Supported media file extensions for the read tool
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "bmp", "webp", "svg"]);
-const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma"]);
+// FIX: Add webm to audio extensions to properly handle audio-only WebM files
+// WebM can contain either video or audio. By including it in both sets, we prioritize audio
+// detection by checking audio extensions first. This ensures audio-only WebM files are
+// correctly identified as audio rather than video.
+const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma", "webm"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi", "mkv", "m4v", "mpg", "mpeg"]);
 const MAX_DIR_ENTRIES = 200;
 
@@ -877,7 +882,24 @@ export function createOpenClawReadTool(
 
         let result: AgentToolResult;
 
-        if (IMAGE_EXTENSIONS.has(ext)) {
+        // Check audio extensions first to prioritize audio detection
+        // This ensures audio-only WebM files are correctly identified as audio
+        if (AUDIO_EXTENSIONS.has(ext)) {
+          const mimeType = getAudioMimeType(ext);
+
+          result = {
+            toolCallId,
+            content: [
+              {
+                type: "audio",
+                url: mediaUrl,
+                filename: fileName,
+                mimeType: mimeType,
+              } as any,
+            ],
+            details: { path: inputPath, size: fileSize },
+          } as AgentToolResult;
+        } else if (IMAGE_EXTENSIONS.has(ext)) {
           if (signal?.aborted) {
             throw new Error("Read operation aborted");
           }
@@ -968,21 +990,6 @@ export function createOpenClawReadTool(
               details: { path: inputPath, size: fileBuffer.length },
             } as AgentToolResult;
           }
-        } else if (AUDIO_EXTENSIONS.has(ext)) {
-          const mimeType = getAudioMimeType(ext);
-
-          result = {
-            toolCallId,
-            content: [
-              {
-                type: "audio",
-                url: mediaUrl,
-                filename: fileName,
-                mimeType: mimeType,
-              } as any,
-            ],
-            details: { path: inputPath, size: fileSize },
-          } as AgentToolResult;
         } else if (VIDEO_EXTENSIONS.has(ext)) {
           const mimeType = getVideoMimeType(ext);
 
