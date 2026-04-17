@@ -27,6 +27,14 @@ vi.mock("../config/io.js", () => ({
   readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
 }));
 
+vi.mock("../cli/command-secret-targets.js", () => ({
+  getAgentRuntimeCommandSecretTargetIds: (params?: { includeChannelTargets?: boolean }) =>
+    new Set([
+      "models.providers.*.apiKey",
+      ...(params?.includeChannelTargets === true ? ["channels.telegram.botToken"] : []),
+    ]),
+}));
+
 const setRuntimeConfigSnapshotMock = vi.hoisted(() =>
   vi.fn<(cfg: OpenClawConfig, sourceConfig: OpenClawConfig) => void>(),
 );
