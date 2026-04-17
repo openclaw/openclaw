@@ -9,7 +9,6 @@ cat > "${OPENCLAW_STATE_DIR:-/data/.openclaw}/openclaw.json" << 'EOF'
     "bind": "lan",
     "port": 8080,
     "controlUi": {
-      "basePath": "/openclaw",
       "dangerouslyAllowHostHeaderOriginFallback": true,
       "dangerouslyDisableDeviceAuth": true
     }
