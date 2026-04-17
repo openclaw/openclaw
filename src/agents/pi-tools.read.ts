@@ -67,6 +67,21 @@ type OpenClawReadToolOptions = {
   transformForTransport?: boolean; // Apply transport transformation
 };
 
+// Helper function to resolve absolute paths within workspace
+function resolveWorkspacePath(relativePath: string, root: string): string {
+  // If the path is already absolute, check if it's within root
+  if (path.isAbsolute(relativePath)) {
+    // If it's within root, use it directly
+    if (relativePath.startsWith(root)) {
+      return relativePath;
+    }
+    // Otherwise, resolve relative to root (maintains original behavior for relative paths)
+    return path.join(root, relativePath);
+  }
+  // Relative path: join with root
+  return path.join(root, relativePath);
+}
+
 // --- OPERATIONS HELPERS ---
 
 function createSandboxReadOperations(params: SandboxToolParams) {
@@ -178,7 +193,11 @@ function createHostEditOperations(
         relativePath,
         data,
       }),
-    access: (relativePath: string) => fs.access(path.join(root, relativePath)),
+    access: (relativePath: string) => {
+      // Resolve the path correctly for absolute paths within workspace
+      const resolvedPath = resolveWorkspacePath(relativePath, root);
+      return fs.access(resolvedPath);
+    },
   };
 }
 
