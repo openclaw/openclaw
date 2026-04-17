@@ -52,21 +52,22 @@ export function loadRouterConfig(opts: {
     const configPath = path.join(instancesDir, discordUserId, "openclaw.json");
 
     let gatewayToken = "";
+    // Each instance gets a unique host port: base, base+2, base+4, ...
+    // This matches the Docker Compose port mapping pattern.
     let port = basePort + portOffset * 2;
 
     if (fs.existsSync(configPath)) {
       try {
         const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
         gatewayToken = raw?.gateway?.auth?.token ?? "";
-        if (raw?.gateway?.port) {
-          port = Number(raw.gateway.port);
-        }
+        // Don't read port from instance config — that's the container-internal
+        // port (always 18789). The host-mapped port is computed from the offset.
       } catch {
         // Fall through with defaults
       }
     }
 
-    // Also check env vars for token/port overrides
+    // Env vars override computed values
     const envToken = process.env[`OPENCLAW_${discordUserId}_TOKEN`];
     const envPort = process.env[`OPENCLAW_${discordUserId}_PORT`];
     if (envToken) {
