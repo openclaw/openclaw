@@ -38,7 +38,6 @@ describe("memory vector degradation warnings", () => {
       vectorReady: true,
       chunkCount: 1,
       warningShown: false,
-      path: "MEMORY.md",
       warn,
     });
 
