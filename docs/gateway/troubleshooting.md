@@ -355,6 +355,87 @@ Related:
 - [/automation/cron-jobs](/automation/cron-jobs)
 - [/gateway/heartbeat](/gateway/heartbeat)
 
+## Isolated cron payload.model silently runs on the wrong provider
+
+Use this when an isolated cron job declares `"model": "ollama/..."` (or another specific provider) in its `payload.model`, the run completes with `lastStatus: "ok"`, but the actual inference ran on the configured agent default instead of the payload override.
+
+Symptoms:
+
+- Cron `lastStatus: "ok"` on every run, yet usage shows on a cloud provider's billing when the cron was meant to run on a local or cheaper model.
+- Embedded-run logs show `provider=<agent default>` rather than the requested `payload.model`.
+- Run durations much shorter than expected for the declared model (for example, 3-8 s cloud responses for a job pointed at a local 70B model that would take 60-300 s).
+
+Detection:
+
+```bash
+openclaw cron runs --id <jobId> --limit 5
+openclaw logs --follow
+```
+
+Look for `embedded run start: runId=... provider=<x> model=<y>` in the logs for the job's run window. Compare `<x>/<y>` against `payload.model` on the job. A mismatch confirms the silent fallback.
+
+Fix (workaround, until the upstream root-cause fixes land):
+
+1. Register the target provider as an auth profile so the provider is actually resolvable at run time. Add to `~/.openclaw/openclaw.json`:
+
+   ```json5
+   "auth": {
+     "profiles": {
+       "anthropic:default": { "provider": "anthropic", "mode": "api_key" },
+       "ollama:default":    { "provider": "ollama",    "mode": "api_key" }
+     }
+   }
+   ```
+
+   Mirror the credential entry in the agent's `auth-profiles.json`:
+
+   ```json5
+   "ollama:default": { "type": "api_key", "provider": "ollama", "key": "ollama-local" }
+   ```
+
+2. Add the specific model to `agents.defaults.models` so it passes the allowlist check:
+
+   ```json5
+   "agents": { "defaults": { "models": {
+     "anthropic/claude-opus-4-6": { "alias": "opus" },
+     "ollama/qwen2.5:72b":        { "alias": "qwen" }
+   }}}
+   ```
+
+3. Define a per-agent profile in `agents.list` whose `primary` is the model the cron should use, with `fallbacks: []`. The empty fallback list is load-bearing: it bypasses the fallback-candidate path that would otherwise append the configured global primary as a fallback and trigger the silent-switch behaviour.
+
+   ```json5
+   "agents": {
+     "list": [
+       { "id": "main", "name": "Main", "default": true, "workspace": "~/.openclaw/workspace" },
+       { "id": "worker-qwen",
+         "workspace": "~/.openclaw/workspace",
+         "model": { "primary": "ollama/qwen2.5:72b", "fallbacks": [] }
+       }
+     ]
+   }
+   ```
+
+   The `main` entry must come first with `"default": true`, otherwise the default-agent resolver promotes whichever entry is first.
+
+4. Point each affected cron job at the worker profile by setting its `agentId`. The `cron add` API silently ignores `agentId` in the payload; use `cron update` after creation, or edit `~/.openclaw/cron/jobs.json` directly while the gateway is paused.
+
+   ```bash
+   openclaw cron edit <jobId> --agent worker-qwen
+   ```
+
+5. Force-run the job and verify the log shows the intended provider:
+
+   ```bash
+   openclaw cron run <jobId>
+   ```
+
+Related:
+
+- [/automation/cron-jobs#troubleshooting](/automation/cron-jobs#troubleshooting)
+- [/providers/ollama](/providers/ollama)
+- [/concepts/model-failover](/concepts/model-failover)
+
 ## Node paired tool fails
 
 If a node is paired but tools fail, isolate foreground, permission, and approval state.
