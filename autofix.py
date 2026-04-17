@@ -418,7 +418,16 @@ def apply_patches(repo: str, branch: str, patches: list[FilePatch], dry_run: boo
             print(f"  comments_addressed: {p.comments_addressed}")
         return True
 
-    work_dir = Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "autofix-work"
+    # Use RUNNER_TEMP (GitHub Actions) or the standard platform temp dir.
+    # /tmp doesn't exist on Windows, so prefer TEMP/TMPDIR first before
+    # falling back.
+    tmp_base = (
+        os.environ.get("RUNNER_TEMP")
+        or os.environ.get("TEMP")
+        or os.environ.get("TMPDIR")
+        or "/tmp"
+    )
+    work_dir = Path(tmp_base) / "autofix-work"
     if work_dir.exists():
         shutil.rmtree(work_dir, ignore_errors=True)
 
@@ -434,6 +443,12 @@ def apply_patches(repo: str, branch: str, patches: list[FilePatch], dry_run: boo
     if clone_result.returncode != 0:
         print(f"git clone failed: {clone_result.stderr}", file=sys.stderr)
         return False
+
+    # Set the commit identity locally in case the caller's global git
+    # config isn't set (common on fresh CI runners; no-op otherwise since
+    # local config overrides global only when set).
+    git("config", "user.name", "PR Autofix Bot", cwd=str(work_dir))
+    git("config", "user.email", "autofix-bot@users.noreply.github.com", cwd=str(work_dir))
 
     for patch in patches:
         fp = work_dir / patch.path
@@ -487,15 +502,18 @@ def run_pipeline(repo: str, pr: int, dry_run: bool = False) -> int:
     head_ref = pr_info["head"]["ref"]
     head_sha = pr_info["head"]["sha"]
     head_repo = pr_info["head"]["repo"]["full_name"]
-    if head_repo != repo and not dry_run:
+    # The PR's branch lives on `head_repo`, which may be a fork of `repo`.
+    # Push commits to head_repo (requires GITHUB_TOKEN to have write access
+    # there -- for your own fork that's just your PAT with repo scope).
+    # Comments/replies still go to `repo` (that's where the PR itself lives).
+    if head_repo != repo:
         print(
-            f"autofix: PR head is on a fork ({head_repo}), but autofix runs "
-            f"against {repo}. Cannot push back to the PR branch. Forcing dry-run.",
+            f"autofix: PR head is on fork {head_repo}; pushing fixes there "
+            f"(base repo {repo} is used for PR comments only).",
             file=sys.stderr,
         )
-        dry_run = True
 
-    loop_error = check_autofix_loop(repo, head_ref)
+    loop_error = check_autofix_loop(head_repo, head_ref)
     if loop_error:
         print(loop_error, file=sys.stderr)
         try:
@@ -520,7 +538,7 @@ def run_pipeline(repo: str, pr: int, dry_run: bool = False) -> int:
     patches: list[FilePatch] = []
     for path, fc in capped:
         try:
-            original = fetch_file_content(repo, head_sha, path)
+            original = fetch_file_content(head_repo, head_sha, path)
         except Exception as e:
             print(f"autofix: could not fetch {path}@{head_sha}: {e}", file=sys.stderr)
             continue
@@ -536,7 +554,7 @@ def run_pipeline(repo: str, pr: int, dry_run: bool = False) -> int:
         print("autofix: no patches generated.")
         return 0
 
-    success = apply_patches(repo, head_ref, patches, dry_run)
+    success = apply_patches(head_repo, head_ref, patches, dry_run)
     if not success or dry_run:
         return 0 if dry_run else 1
 

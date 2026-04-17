@@ -75,12 +75,20 @@ try {
     }
 
     Set-Location $RepoRoot
-    Write-Log "Starting autofix run — repo=$Repo pr=#$PrNumber dry=$DryRun"
+    # Pre-build the log message as a variable and pass via named param.
+    # A previous run produced a malformed first log line that bound
+    # "repo=openclaw/openclaw" to -Level instead of "INFO" -- the
+    # symptom of PowerShell splitting a single quoted arg into multiple
+    # positional args. Explicit -Message removes the ambiguity.
+    $StartMsg = "Starting autofix run. repo=$Repo pr=#$PrNumber dry=$DryRun"
+    Write-Log -Message $StartMsg
 
     # Preserve the user's claude login session. The task runs as the
     # logged-in user, so ~/.claude/ is already accessible; no env
-    # override needed.
+    # override needed. `-u` disables Python's output buffering so stdout
+    # lines land in the log as they're written, not only on exit.
     $Args = @(
+        "-u",
         "autofix.py",
         "--repo", $Repo,
         "--pr", $PrNumber
@@ -88,10 +96,7 @@ try {
     if ($DryRun) { $Args += "--dry-run" }
 
     # Spawn python and capture both streams to the log. Wrap each arg
-    # in literal double-quotes so paths with spaces stay intact. Use
-    # single-quoted "' + string for the wrapping quote to avoid
-    # PowerShell's fiddly backtick-quote escape-inside-double-quote
-    # parsing.
+    # in literal double-quotes so paths with spaces stay intact.
     $ProcessInfo = New-Object System.Diagnostics.ProcessStartInfo
     $ProcessInfo.FileName = "python"
     $QuotedArgs = $Args | ForEach-Object { '"' + $_ + '"' }
@@ -102,22 +107,23 @@ try {
     $ProcessInfo.UseShellExecute = $false
     $ProcessInfo.CreateNoWindow = $true
 
+    # Stream stdout line-by-line so Python's output lands in the log as
+    # it's produced, not buffered until exit. stderr is drained after
+    # the process finishes -- autofix.py's stderr is minimal (error
+    # tracebacks only), well under the pipe buffer, so no deadlock risk.
     $Process = [System.Diagnostics.Process]::Start($ProcessInfo)
-    $StdOut = $Process.StandardOutput.ReadToEnd()
-    $StdErr = $Process.StandardError.ReadToEnd()
+
+    while (-not $Process.StandardOutput.EndOfStream) {
+        $line = $Process.StandardOutput.ReadLine()
+        if ($line) { Write-Log "  $line" "OUT" }
+    }
+
     $Process.WaitForExit()
     $ExitCode = $Process.ExitCode
 
-    # Single-quoted pattern so PowerShell doesn't try to interpret \r/\n.
-    # -split applies the pattern as a regex.
-    $LineSplit = '\r?\n'
-    if ($StdOut) {
-        foreach ($line in $StdOut -split $LineSplit) {
-            if ($line) { Write-Log "  $line" "OUT" }
-        }
-    }
+    $StdErr = $Process.StandardError.ReadToEnd()
     if ($StdErr) {
-        foreach ($line in $StdErr -split $LineSplit) {
+        foreach ($line in $StdErr -split '\r?\n') {
             if ($line) { Write-Log "  $line" "ERR" }
         }
     }
