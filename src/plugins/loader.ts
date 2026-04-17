@@ -1561,6 +1561,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         });
       };
 
+      const allowSetupOnlyChannelRegistration =
+        !(candidate.origin === "workspace" && !enableState.enabled) &&
+        !validateOnly &&
+        onlyPluginIdSet
+          ? manifestRecord.channels.length > 0
+          : false;
+
       const registrationMode = enableState.enabled
         ? !validateOnly &&
           shouldLoadChannelPluginInSetupRuntime({
@@ -1574,10 +1581,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           })
           ? "setup-runtime"
           : "full"
-        : includeSetupOnlyChannelPlugins &&
-            !validateOnly &&
-            onlyPluginIdSet &&
-            manifestRecord.channels.length > 0
+        : includeSetupOnlyChannelPlugins && allowSetupOnlyChannelRegistration
           ? "setup-only"
           : null;
 

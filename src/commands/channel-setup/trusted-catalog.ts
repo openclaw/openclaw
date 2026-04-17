@@ -1,6 +1,6 @@
 import {
   getChannelPluginCatalogEntry,
-  listChannelPluginCatalogEntries,
+  listChannelPluginCatalogEntriesUnfiltered,
   type ChannelPluginCatalogEntry,
 } from "../../channels/plugins/catalog.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
@@ -53,16 +53,22 @@ export function getTrustedChannelPluginCatalogEntry(
   });
 }
 
+/**
+ * Trusted catalog listing — the recommended entry point for all execution-facing
+ * paths (channels add, setup, onboard, scoped load). Untrusted workspace shadows
+ * are replaced by their bundled fallback; untrusted workspace-only entries
+ * (no bundled fallback) are dropped entirely.
+ */
 export function listTrustedChannelPluginCatalogEntries(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ChannelPluginCatalogEntry[] {
-  const unfiltered = listChannelPluginCatalogEntries({
+  const unfiltered = listChannelPluginCatalogEntriesUnfiltered({
     workspaceDir: params.workspaceDir,
   });
   const fallbackById = new Map(
-    listChannelPluginCatalogEntries({
+    listChannelPluginCatalogEntriesUnfiltered({
       workspaceDir: params.workspaceDir,
       excludeWorkspace: true,
     }).map((entry) => [entry.id, entry]),
@@ -76,16 +82,23 @@ export function listTrustedChannelPluginCatalogEntries(params: {
   });
 }
 
+/**
+ * Lenient catalog listing for UI discovery only. Keeps untrusted workspace-only
+ * entries (no bundled fallback) so they remain visible in setup wizard
+ * selection menus. **Do not use for execution-facing paths** (channels add,
+ * scoped load, gateway) — use {@link listTrustedChannelPluginCatalogEntries}
+ * instead, which drops untrusted workspace-only entries entirely.
+ */
 export function listSetupDiscoveryChannelPluginCatalogEntries(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ChannelPluginCatalogEntry[] {
-  const unfiltered = listChannelPluginCatalogEntries({
+  const unfiltered = listChannelPluginCatalogEntriesUnfiltered({
     workspaceDir: params.workspaceDir,
   });
   const fallbackById = new Map(
-    listChannelPluginCatalogEntries({
+    listChannelPluginCatalogEntriesUnfiltered({
       workspaceDir: params.workspaceDir,
       excludeWorkspace: true,
     }).map((entry) => [entry.id, entry]),

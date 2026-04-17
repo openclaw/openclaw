@@ -449,6 +449,102 @@ describe("channelsAddCommand", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
+  it("falls back to the bundled entry for an untrusted workspace shadow", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    setActivePluginRegistry(createTestRegistry());
+    const workspaceShadow: ChannelPluginCatalogEntry = {
+      id: "msteams",
+      pluginId: "evil-msteams-shadow",
+      origin: "workspace",
+      meta: {
+        id: "msteams",
+        label: "Microsoft Teams",
+        selectionLabel: "Microsoft Teams",
+        docsPath: "/channels/msteams",
+        blurb: "teams channel",
+      },
+      install: {
+        npmSpec: "evil-msteams-shadow",
+      },
+    };
+    const bundledEntry = createMSTeamsCatalogEntry();
+    catalogMocks.listChannelPluginCatalogEntries.mockImplementation(
+      (opts?: { excludeWorkspace?: boolean }) =>
+        opts?.excludeWorkspace ? [bundledEntry] : [workspaceShadow],
+    );
+    registerMSTeamsSetupPlugin("msteams");
+
+    await channelsAddCommand(
+      {
+        channel: "msteams",
+        account: "default",
+        token: "tenant-scoped",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({ entry: bundledEntry }),
+    );
+    expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalledWith(
+      expect.objectContaining({ entry: workspaceShadow }),
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("keeps trusted workspace overrides eligible for channels add", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["trusted-msteams-shadow"],
+        },
+      },
+    });
+    setActivePluginRegistry(createTestRegistry());
+    const workspaceEntry: ChannelPluginCatalogEntry = {
+      id: "msteams",
+      pluginId: "trusted-msteams-shadow",
+      origin: "workspace",
+      meta: {
+        id: "msteams",
+        label: "Microsoft Teams",
+        selectionLabel: "Microsoft Teams",
+        docsPath: "/channels/msteams",
+        blurb: "teams channel",
+      },
+      install: {
+        npmSpec: "trusted-msteams-shadow",
+      },
+    };
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([workspaceEntry]);
+    vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
+      cfg,
+      installed: true,
+      pluginId: "trusted-msteams-shadow",
+    }));
+    registerMSTeamsSetupPlugin("trusted-msteams-shadow");
+
+    await channelsAddCommand(
+      {
+        channel: "msteams",
+        account: "default",
+        token: "tenant-scoped",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({ entry: workspaceEntry }),
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("runs post-setup hooks after writing config", async () => {
     const afterAccountConfigWritten = vi.fn().mockResolvedValue(undefined);
     await runSignalAddCommand(afterAccountConfigWritten);

@@ -1,5 +1,5 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { listChannelPluginCatalogEntries } from "../../channels/plugins/catalog.js";
+import { listChannelPluginCatalogEntriesUnfiltered } from "../../channels/plugins/catalog.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
@@ -13,6 +13,7 @@ import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js"
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
 import { isCatalogChannelInstalled } from "../channel-setup/discovery.js";
+import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
 import {
   createChannelOnboardingPostWriteHookCollector,
   runCollectedChannelOnboardingPostWriteHooks,
@@ -35,7 +36,14 @@ function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
     return undefined;
   }
   const workspaceDir = cfg ? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) : undefined;
-  return listChannelPluginCatalogEntries({ workspaceDir }).find((entry) => {
+  const catalogEntries = cfg
+    ? listTrustedChannelPluginCatalogEntries({
+        cfg,
+        workspaceDir,
+        env: process.env,
+      })
+    : listChannelPluginCatalogEntriesUnfiltered({ workspaceDir });
+  return catalogEntries.find((entry) => {
     if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
       return true;
     }

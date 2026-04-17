@@ -1,7 +1,7 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   getChannelPluginCatalogEntry,
-  listChannelPluginCatalogEntries,
+  listChannelPluginCatalogEntriesUnfiltered,
   type ChannelPluginCatalogEntry,
 } from "../../channels/plugins/catalog.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
@@ -55,7 +55,7 @@ export function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nu
     return undefined;
   }
   const workspaceDir = cfg ? resolveWorkspaceDir(cfg) : undefined;
-  return listChannelPluginCatalogEntries({ workspaceDir }).find((entry) => {
+  return listChannelPluginCatalogEntriesUnfiltered({ workspaceDir }).find((entry) => {
     if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
       return true;
     }
@@ -104,7 +104,7 @@ function resolveTrustedCatalogEntry(params: {
     if (!trimmed) {
       return undefined;
     }
-    return listChannelPluginCatalogEntries({
+    return listChannelPluginCatalogEntriesUnfiltered({
       workspaceDir: params.workspaceDir,
       excludeWorkspace: true,
     }).find((entry) => {
