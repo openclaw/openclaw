@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { __testing as externalAuthTesting } from "./external-auth.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -33,6 +34,19 @@ vi.mock("../cli-credentials.js", () => ({
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
   writeCodexCliCredentials: () => true,
+}));
+
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthProviders: () => [{ id: "anthropic" }, { id: "openai-codex" }],
+  getOAuthApiKey: vi.fn(async (provider: string, credentials: Record<string, OAuthCredential>) => {
+    const credential = credentials[provider];
+    return credential
+      ? {
+          apiKey: credential.access,
+          newCredentials: credential,
+        }
+      : null;
+  }),
 }));
 
 vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
@@ -86,6 +100,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
     formatProviderAuthProfileApiKeyWithPluginMock.mockReset();
     formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
+    externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
     clearRuntimeAuthProfileStoreSnapshots();
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-mirror-"));
     process.env.OPENCLAW_STATE_DIR = tempRoot;
@@ -98,6 +113,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
   afterEach(async () => {
     envSnapshot.restore();
     resetFileLockStateForTest();
+    externalAuthTesting.resetResolveExternalAuthProfilesForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     if (resetOAuthRefreshQueuesForTest) {
       resetOAuthRefreshQueuesForTest();
