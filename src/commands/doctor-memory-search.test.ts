@@ -151,6 +151,7 @@ describe("noteMemorySearchHealth", () => {
     getActiveMemorySearchManager.mockResolvedValue({
       manager: {
         status: () => ({ workspaceDir: "/tmp/agent-default/workspace", backend: "builtin" }),
+        probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
         close: vi.fn(async () => {}),
       },
     });
@@ -169,6 +170,55 @@ describe("noteMemorySearchHealth", () => {
     await noteMemorySearchHealth(cfg, {});
 
     expect(note).not.toHaveBeenCalled();
+  });
+
+  it("uses active runtime embedding probe for non-core memory plugins", async () => {
+    const nonCoreCfg = {
+      plugins: {
+        slots: {
+          memory: "memory-lancedb-pro",
+        },
+      },
+    } as OpenClawConfig;
+
+    await noteMemorySearchHealth(nonCoreCfg, {});
+
+    expect(getActiveMemorySearchManager).toHaveBeenCalledWith({
+      cfg: nonCoreCfg,
+      agentId: "agent-default",
+      purpose: "status",
+    });
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("surfaces runtime probe failures for non-core memory plugins without touching memory-core metadata", async () => {
+    const nonCoreCfg = {
+      plugins: {
+        slots: {
+          memory: "memory-lancedb-pro",
+        },
+      },
+    } as OpenClawConfig;
+    getActiveMemorySearchManager.mockResolvedValueOnce({
+      manager: {
+        status: () => ({ workspaceDir: "/tmp/agent-default/workspace", backend: "builtin" }),
+        probeEmbeddingAvailability: vi.fn(async () => ({
+          ok: false,
+          error: "missing OPENAI_API_KEY",
+        })),
+        close: vi.fn(async () => {}),
+      },
+    });
+
+    await noteMemorySearchHealth(nonCoreCfg, {});
+
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain(
+      'Active memory plugin "memory-lancedb-pro" is selected, but embeddings are not ready.',
+    );
+    expect(message).toContain("missing OPENAI_API_KEY");
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
   });
 
   it("warns when local provider with default model but gateway probe reports not ready", async () => {

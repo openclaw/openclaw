@@ -22,6 +22,7 @@ import {
   type DreamingArtifactsAuditSummary,
   type ShortTermAuditSummary,
 } from "../plugin-sdk/memory-core-engine-runtime.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import {
   getActiveMemorySearchManager,
   resolveActiveMemoryBackendConfig,
@@ -31,6 +32,14 @@ import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { isRecord } from "./doctor/shared/legacy-config-record-shared.js";
+
+function selectedMemorySlotPluginId(cfg: OpenClawConfig): string | null {
+  return normalizePluginsConfig(cfg.plugins).slots.memory ?? null;
+}
+
+function shouldUseBundledMemoryCoreDoctor(cfg: OpenClawConfig): boolean {
+  return selectedMemorySlotPluginId(cfg) === "memory-core";
+}
 
 function resolveSuggestedRemoteMemoryProvider(): string | undefined {
   return listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata().find(
@@ -108,6 +117,9 @@ function buildDreamingArtifactIssueNote(audit: DreamingArtifactsAuditSummary): s
 }
 
 export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void> {
+  if (!shouldUseBundledMemoryCoreDoctor(cfg)) {
+    return;
+  }
   try {
     const context = await resolveRuntimeMemoryAuditContext(cfg);
     const workspaceDir = context?.workspaceDir?.trim();
@@ -142,6 +154,9 @@ export async function maybeRepairMemoryRecallHealth(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
 }): Promise<void> {
+  if (!shouldUseBundledMemoryCoreDoctor(params.cfg)) {
+    return;
+  }
   try {
     const context = await resolveRuntimeMemoryAuditContext(params.cfg);
     const workspaceDir = context?.workspaceDir?.trim();
@@ -234,6 +249,41 @@ export async function noteMemorySearchHealth(
   const agentDir = resolveAgentDir(cfg, agentId);
   const resolved = resolveMemorySearchConfig(cfg, agentId);
   const hasRemoteApiKey = hasConfiguredMemorySecretInput(resolved?.remote?.apiKey);
+  if (!shouldUseBundledMemoryCoreDoctor(cfg)) {
+    const { manager, error } = await getActiveMemorySearchManager({
+      cfg,
+      agentId,
+      purpose: "status",
+    });
+    if (!manager) {
+      note(
+        `Active memory plugin "${selectedMemorySlotPluginId(cfg) ?? "unknown"}" is selected, but memory search is unavailable${error ? `: ${error}` : "."}`,
+        "Memory search",
+      );
+      return;
+    }
+    try {
+      const embedding = await manager.probeEmbeddingAvailability();
+      if (embedding.ok) {
+        return;
+      }
+      const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
+      note(
+        [
+          `Active memory plugin "${selectedMemorySlotPluginId(cfg) ?? "unknown"}" is selected, but embeddings are not ready.`,
+          embedding.error ? `Details: ${embedding.error}` : null,
+          gatewayProbeWarning ? gatewayProbeWarning : null,
+          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        "Memory search",
+      );
+      return;
+    } finally {
+      await manager.close?.().catch(() => undefined);
+    }
+  }
 
   if (!resolved) {
     note("Memory search is explicitly disabled (enabled: false).", "Memory search");
