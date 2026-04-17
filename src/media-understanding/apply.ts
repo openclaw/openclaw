@@ -49,7 +49,7 @@ export type ApplyMediaUnderstandingResult = {
 
 const CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["image", "audio", "video"];
 const EMPTY_VOICE_NOTE_PLACEHOLDER =
-  "[Voice note was empty or contained only silence — no speech detected]";
+  "[Voice note could not be transcribed because the audio attachment was too small]";
 const EXTRA_TEXT_MIMES = [
   "application/xml",
   "text/xml",
