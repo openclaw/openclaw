@@ -1,6 +1,34 @@
+version: '3.8'
+
 services:
   openclaw-gateway:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    container_name: openclaw-safe
+
+    # ── Security flags ──────────────────────────────────────────
+    security_opt:
+      - no-new-privileges:true   # Block privilege escalation via sudo/setuid
+
+    cap_drop:
+      - ALL                      # Drop all Linux capabilities by default
+    cap_add:
+      - NET_BIND_SERVICE         # Re-add only what's needed (port binding)
+
+    read_only: true              # Root filesystem is read-only; blocks backdoor installs
+    user: "1000:1000"            # Run as the node user (NOT nobody — volume mounts are
+                                 # owned by uid 1000; nobody at uid 65534 would fail writes)
+
+    # ── Writable scratch space (required since root FS is read-only) ────
+    tmpfs:
+      - /tmp:mode=1777
+
+    # ── Resource limits (prevent runaway loops) ──────────────────
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -10,9 +38,14 @@ services:
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       TZ: ${OPENCLAW_TZ:-UTC}
+
+    env_file:
+      - .env                     # Keep API keys out of compose file
+
+    # ── Volume mounts ────────────────────────────────────────────
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw           # Config + state (rw — gateway writes session state)
+      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace  # Agent workspace (rw)
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
@@ -21,9 +54,14 @@ services:
       # - /var/run/docker.sock:/var/run/docker.sock
     # group_add:
     #   - "${DOCKER_GID:-999}"
+
+    # ── Network isolation ────────────────────────────────────────
+    networks:
+      - openclaw-isolated        # Isolated bridge — no sibling container cross-talk
     ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"   # Localhost only — not 0.0.0.0
+      - "127.0.0.1:${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+
     init: true
     restart: unless-stopped
     command:
@@ -50,13 +88,17 @@ services:
       start_period: 20s
 
   openclaw-cli:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
-    network_mode: "service:openclaw-gateway"
-    cap_drop:
-      - NET_RAW
-      - NET_ADMIN
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    network_mode: "service:openclaw-gateway"   # Shares gateway's network namespace
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+      - NET_RAW
+      - NET_ADMIN
+    user: "1000:1000"
+    env_file:
+      - .env
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -76,3 +118,10 @@ services:
     entrypoint: ["node", "dist/index.js"]
     depends_on:
       - openclaw-gateway
+
+networks:
+  openclaw-isolated:
+    driver: bridge
+    # NOTE: internal:true is intentionally omitted — OpenClaw requires outbound internet
+    # access for AI provider APIs (Anthropic) and channel polling (Telegram, Discord, etc.).
+    # The isolation here prevents cross-container traffic, not egress.
