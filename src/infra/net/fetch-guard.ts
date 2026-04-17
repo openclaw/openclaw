@@ -125,7 +125,7 @@ function assertExplicitProxySupportsPinnedDns(
 
 function createPolicyDispatcherWithoutPinnedDns(
   dispatcherPolicy?: PinnedDispatcherPolicy,
-): Dispatcher | null {
+): Dispatcher {
   if (!dispatcherPolicy) {
     // Without a caller-supplied policy we would otherwise fall through to the
     // ambient global dispatcher. Undici 8 negotiates HTTP/2 via ALPN by
