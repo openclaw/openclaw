@@ -49,6 +49,8 @@ const PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE =
   "Proxy notice: Status: Internal Server Error";
 const MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE =
   `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; upstream connect error`;
+const INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE =
+  `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; code:500`;
 
 function expectMessageMatches(
   matcher: (message: string) => boolean,
@@ -839,6 +841,12 @@ describe("isFailoverErrorMessage", () => {
     expect(classifyFailoverReason(MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE)).toBe("timeout");
     expect(isFailoverErrorMessage(MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE)).toBe(true);
   });
+
+  it("keeps status prose retryable when it is explicitly paired with code 500", () => {
+    expect(isTimeoutErrorMessage(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe(false);
+    expect(classifyFailoverReason(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe("timeout");
+    expect(isFailoverErrorMessage(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe(true);
+  });
 });
 
 describe("parseImageSizeError", () => {
@@ -1282,5 +1290,9 @@ describe("classifyProviderRuntimeFailureKind", () => {
 
   it("does not classify plain status text with internal server error wording as timeout", () => {
     expectNotFailoverSample(PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE);
+  });
+
+  it("classifies internal server error status prose with code 500 as timeout", () => {
+    expect(classifyFailoverReason(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe("timeout");
   });
 });
