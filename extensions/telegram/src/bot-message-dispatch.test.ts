@@ -121,6 +121,8 @@ vi.mock("./sticker-cache.js", () => ({
 }));
 
 let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
+let getTelegramAbortFenceSizeForTests: typeof import("./bot-message-dispatch.js").getTelegramAbortFenceSizeForTests;
+let resetTelegramAbortFenceForTests: typeof import("./bot-message-dispatch.js").resetTelegramAbortFenceForTests;
 
 const telegramDepsForTest: TelegramBotDeps = {
   loadConfig: loadConfig as TelegramBotDeps["loadConfig"],
@@ -151,10 +153,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
   type TelegramMessageContext = Parameters<typeof dispatchTelegramMessage>[0]["context"];
 
   beforeAll(async () => {
-    ({ dispatchTelegramMessage } = await import("./bot-message-dispatch.js"));
+    ({
+      dispatchTelegramMessage,
+      getTelegramAbortFenceSizeForTests,
+      resetTelegramAbortFenceForTests,
+    } = await import("./bot-message-dispatch.js"));
   });
 
   beforeEach(() => {
+    resetTelegramAbortFenceForTests();
     createTelegramDraftStream.mockReset();
     dispatchReplyWithBufferedBlockDispatcher.mockReset();
     deliverReplies.mockReset();
@@ -2867,6 +2874,29 @@ describe("dispatchTelegramMessage draft streaming", () => {
         replies: [{ text: "Old reply final" }],
       }),
     );
+  });
+
+  it("releases the abort fence when pre-dispatch setup throws", async () => {
+    describeStickerImage.mockRejectedValueOnce(new Error("sticker setup failed"));
+
+    await expect(
+      dispatchWithContext({
+        context: createContext({
+          ctxPayload: {
+            SessionKey: "s1",
+            Body: "earlier request",
+            RawBody: "earlier request",
+            MediaPath: "/tmp/sticker.png",
+            Sticker: {
+              fileId: "file-id",
+              fileUniqueId: "file-unique-id",
+            },
+          } as never,
+        }),
+      }),
+    ).rejects.toThrow("sticker setup failed");
+
+    expect(getTelegramAbortFenceSizeForTests()).toBe(0);
   });
 
   it("keeps older answer finalization when abort targets a different session", async () => {

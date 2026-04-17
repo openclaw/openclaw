@@ -189,6 +189,14 @@ function endTelegramAbortFence(key: string): void {
   }
 }
 
+export function getTelegramAbortFenceSizeForTests(): number {
+  return telegramAbortFenceByKey.size;
+}
+
+export function resetTelegramAbortFenceForTests(): void {
+  telegramAbortFenceByKey.clear();
+}
+
 function resolveTelegramReasoningLevel(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
@@ -260,12 +268,13 @@ export const dispatchTelegramMessage = async ({
       key: dispatchFenceKey,
       generation: abortFenceGeneration,
     });
-  abortFenceGeneration = beginTelegramAbortFence({
-    key: dispatchFenceKey,
-    supersede: isAbortRequestText(
-      ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body ?? "",
-    ),
-  });
+  const releaseAbortFence = () => {
+    if (abortFenceGeneration === undefined) {
+      return;
+    }
+    endTelegramAbortFence(dispatchFenceKey);
+    abortFenceGeneration = undefined;
+  };
   const draftMaxChars = Math.min(textLimit, 4096);
   const tableMode = resolveMarkdownTableMode({
     cfg,
@@ -488,54 +497,66 @@ export const dispatchTelegramMessage = async ({
 
   const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
 
+  abortFenceGeneration = beginTelegramAbortFence({
+    key: dispatchFenceKey,
+    supersede: isAbortRequestText(
+      ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body ?? "",
+    ),
+  });
+
   // Handle uncached stickers: get a dedicated vision description before dispatch
   // This ensures we cache a raw description rather than a conversational response
   const sticker = ctxPayload.Sticker;
   if (sticker?.fileId && sticker.fileUniqueId && ctxPayload.MediaPath) {
-    const agentDir = resolveAgentDir(cfg, route.agentId);
-    const stickerSupportsVision = await resolveStickerVisionSupport(cfg, route.agentId);
-    let description = sticker.cachedDescription ?? null;
-    if (!description) {
-      description = await describeStickerImage({
-        imagePath: ctxPayload.MediaPath,
-        cfg,
-        agentDir,
-        agentId: route.agentId,
-      });
-    }
-    if (description) {
-      // Format the description with sticker context
-      const stickerContext = [sticker.emoji, sticker.setName ? `from "${sticker.setName}"` : null]
-        .filter(Boolean)
-        .join(" ");
-      const formattedDesc = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${description}`;
-
-      sticker.cachedDescription = description;
-      if (!stickerSupportsVision) {
-        // Update context to use description instead of image
-        ctxPayload.Body = formattedDesc;
-        ctxPayload.BodyForAgent = formattedDesc;
-        // Drop only the sticker attachment; keep replied media context if present.
-        pruneStickerMediaFromContext(ctxPayload, {
-          stickerMediaIncluded: ctxPayload.StickerMediaIncluded,
+    try {
+      const agentDir = resolveAgentDir(cfg, route.agentId);
+      const stickerSupportsVision = await resolveStickerVisionSupport(cfg, route.agentId);
+      let description = sticker.cachedDescription ?? null;
+      if (!description) {
+        description = await describeStickerImage({
+          imagePath: ctxPayload.MediaPath,
+          cfg,
+          agentDir,
+          agentId: route.agentId,
         });
       }
+      if (description) {
+        // Format the description with sticker context
+        const stickerContext = [sticker.emoji, sticker.setName ? `from "${sticker.setName}"` : null]
+          .filter(Boolean)
+          .join(" ");
+        const formattedDesc = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${description}`;
 
-      // Cache the description for future encounters
-      if (sticker.fileId) {
-        cacheSticker({
-          fileId: sticker.fileId,
-          fileUniqueId: sticker.fileUniqueId,
-          emoji: sticker.emoji,
-          setName: sticker.setName,
-          description,
-          cachedAt: new Date().toISOString(),
-          receivedFrom: ctxPayload.From,
-        });
-        logVerbose(`telegram: cached sticker description for ${sticker.fileUniqueId}`);
-      } else {
-        logVerbose(`telegram: skipped sticker cache (missing fileId)`);
+        sticker.cachedDescription = description;
+        if (!stickerSupportsVision) {
+          // Update context to use description instead of image
+          ctxPayload.Body = formattedDesc;
+          ctxPayload.BodyForAgent = formattedDesc;
+          // Drop only the sticker attachment; keep replied media context if present.
+          pruneStickerMediaFromContext(ctxPayload, {
+            stickerMediaIncluded: ctxPayload.StickerMediaIncluded,
+          });
+        }
+
+        // Cache the description for future encounters
+        if (sticker.fileId) {
+          cacheSticker({
+            fileId: sticker.fileId,
+            fileUniqueId: sticker.fileUniqueId,
+            emoji: sticker.emoji,
+            setName: sticker.setName,
+            description,
+            cachedAt: new Date().toISOString(),
+            receivedFrom: ctxPayload.From,
+          });
+          logVerbose(`telegram: cached sticker description for ${sticker.fileUniqueId}`);
+        } else {
+          logVerbose(`telegram: skipped sticker cache (missing fileId)`);
+        }
       }
+    } catch (err) {
+      releaseAbortFence();
+      throw err;
     }
   }
 
@@ -612,41 +633,47 @@ export const dispatchTelegramMessage = async ({
       groupId: deliveryBaseOptions.mirrorGroupId,
     });
   };
-  const deliverLaneText = createLaneTextDeliverer({
-    lanes,
-    archivedAnswerPreviews,
-    activePreviewLifecycleByLane,
-    retainPreviewOnCleanupByLane,
-    draftMaxChars,
-    applyTextToPayload,
-    sendPayload,
-    flushDraftLane,
-    stopDraftLane: async (lane) => {
-      await lane.stream?.stop();
-    },
-    editPreview: async ({ messageId, text, previewButtons }) => {
-      if (isDispatchSuperseded()) {
-        return;
-      }
-      await (telegramDeps.editMessageTelegram ?? editMessageTelegram)(chatId, messageId, text, {
-        api: bot.api,
-        cfg,
-        accountId: route.accountId,
-        linkPreview: telegramCfg.linkPreview,
-        buttons: previewButtons,
-      });
-    },
-    deletePreviewMessage: async (messageId) => {
-      if (isDispatchSuperseded()) {
-        return;
-      }
-      await bot.api.deleteMessage(chatId, messageId);
-    },
-    log: logVerbose,
-    markDelivered: () => {
-      deliveryState.markDelivered();
-    },
-  });
+  let deliverLaneText: ReturnType<typeof createLaneTextDeliverer>;
+  try {
+    deliverLaneText = createLaneTextDeliverer({
+      lanes,
+      archivedAnswerPreviews,
+      activePreviewLifecycleByLane,
+      retainPreviewOnCleanupByLane,
+      draftMaxChars,
+      applyTextToPayload,
+      sendPayload,
+      flushDraftLane,
+      stopDraftLane: async (lane) => {
+        await lane.stream?.stop();
+      },
+      editPreview: async ({ messageId, text, previewButtons }) => {
+        if (isDispatchSuperseded()) {
+          return;
+        }
+        await (telegramDeps.editMessageTelegram ?? editMessageTelegram)(chatId, messageId, text, {
+          api: bot.api,
+          cfg,
+          accountId: route.accountId,
+          linkPreview: telegramCfg.linkPreview,
+          buttons: previewButtons,
+        });
+      },
+      deletePreviewMessage: async (messageId) => {
+        if (isDispatchSuperseded()) {
+          return;
+        }
+        await bot.api.deleteMessage(chatId, messageId);
+      },
+      log: logVerbose,
+      markDelivered: () => {
+        deliveryState.markDelivered();
+      },
+    });
+  } catch (err) {
+    releaseAbortFence();
+    throw err;
+  }
 
   let queuedFinal = false;
   let hadErrorReplyFailureOrSkip = false;
@@ -675,29 +702,41 @@ export const dispatchTelegramMessage = async ({
     }
   }
 
-  if (statusReactionController) {
-    void statusReactionController.setThinking();
+  try {
+    if (statusReactionController) {
+      void statusReactionController.setThinking();
+    }
+  } catch (err) {
+    releaseAbortFence();
+    throw err;
   }
 
-  const { onModelSelected, ...replyPipeline } = (
-    telegramDeps.createChannelReplyPipeline ?? createChannelReplyPipeline
-  )({
-    cfg,
-    agentId: route.agentId,
-    channel: "telegram",
-    accountId: route.accountId,
-    typing: {
-      start: sendTyping,
-      onStartError: (err) => {
-        logTypingFailure({
-          log: logVerbose,
-          channel: "telegram",
-          target: String(chatId),
-          error: err,
-        });
+  let onModelSelected: ReturnType<typeof createChannelReplyPipeline>["onModelSelected"];
+  let replyPipeline: Omit<ReturnType<typeof createChannelReplyPipeline>, "onModelSelected">;
+  try {
+    ({ onModelSelected, ...replyPipeline } = (
+      telegramDeps.createChannelReplyPipeline ?? createChannelReplyPipeline
+    )({
+      cfg,
+      agentId: route.agentId,
+      channel: "telegram",
+      accountId: route.accountId,
+      typing: {
+        start: sendTyping,
+        onStartError: (err) => {
+          logTypingFailure({
+            log: logVerbose,
+            channel: "telegram",
+            target: String(chatId),
+            error: err,
+          });
+        },
       },
-    },
-  });
+    }));
+  } catch (err) {
+    releaseAbortFence();
+    throw err;
+  }
 
   let dispatchError: unknown;
   try {
@@ -1047,8 +1086,7 @@ export const dispatchTelegramMessage = async ({
       }
     } finally {
       dispatchWasSuperseded = isDispatchSuperseded();
-      endTelegramAbortFence(dispatchFenceKey);
-      abortFenceGeneration = undefined;
+      releaseAbortFence();
     }
   }
   if (dispatchWasSuperseded) {
