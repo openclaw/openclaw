@@ -704,9 +704,9 @@ function resolveAsyncHeartbeatRelayPolicy(params: {
   turnSource?: DeliveryContext;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   shouldInspectPendingEvents: boolean;
-}): AsyncHeartbeatRelayPolicy | false {
+}): AsyncHeartbeatRelayPolicy | undefined {
   if (!params.shouldInspectPendingEvents || params.pendingEventEntries.length === 0) {
-    return false;
+    return undefined;
   }
 
   const baseSessionKey = resolveHeartbeatBaseSessionKey(params.sessionKey, params.entry);
