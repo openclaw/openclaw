@@ -28,7 +28,7 @@ describe("live-agent-probes", () => {
         attempt: 1,
         exactReply: spec.name,
       }),
-    ).toContain("Return only a tool call");
+    ).toContain(`reply exactly: ${spec.name}`);
     expect(
       buildLiveCronProbeMessage({
         agent: "codex",
@@ -36,7 +36,7 @@ describe("live-agent-probes", () => {
         attempt: 1,
         exactReply: spec.name,
       }),
-    ).toContain("Return only the tool call");
+    ).toContain("ask me to retry");
     expect(
       buildLiveCronProbeMessage({
         agent: "codex",
