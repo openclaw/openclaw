@@ -10,7 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- macOS/screen snapshots: reject malformed `screen.snapshot` params, bound large snapshot payloads before base64 JSON emission, and return stable capture-failure errors instead of leaking framework detail. (#68181) Thanks @shaun0927.
+- macOS/screen snapshots: reject malformed `screen.snapshot` params, bound large snapshot payloads before base64 JSON emission, and return stable capture-failure errors instead of leaking framework detail. (#68186) Thanks @shaun0927.
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.
 - Gateway/hello-ok: always report negotiated auth metadata for successful shared-auth handshakes, including control-ui bypass coverage when no device token is issued. (#67810) Thanks @BunsDev.
 - OpenAI Codex/Responses: unify native Responses API capability detection so Codex OAuth requests emit the required `store: false` field on the native Responses path. (#67918) Thanks @obviyus.
