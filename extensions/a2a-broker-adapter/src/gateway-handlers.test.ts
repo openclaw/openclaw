@@ -29,9 +29,18 @@ describe("a2a gateway handlers (plugin-local)", () => {
       method: "a2a.task.request",
       taskId: "task-1",
     });
-    mockBrokerClient.cancelTask.mockResolvedValue(null);
-    mockBrokerClient.updateTask.mockResolvedValue(null);
-    mockBrokerClient.statusTask.mockResolvedValue(null);
+    mockBrokerClient.updateTask.mockResolvedValue({
+      method: "a2a.task.update",
+      taskId: "task-1",
+    });
+    mockBrokerClient.cancelTask.mockResolvedValue({
+      method: "a2a.task.cancel",
+      taskId: "task-1",
+    });
+    mockBrokerClient.statusTask.mockResolvedValue({
+      method: "a2a.task.status",
+      taskId: "task-1",
+    });
 
     const mod = await import("./gateway-handlers.js");
     handleA2ATaskRequest = mod.handleA2ATaskRequest;
@@ -90,7 +99,10 @@ describe("a2a gateway handlers (plugin-local)", () => {
     await handleA2ATaskUpdate(opts as never);
 
     expect(mockBrokerClient.updateTask).toHaveBeenCalledTimes(1);
-    expect(opts.respond).toHaveBeenCalledWith(true, null);
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ method: "a2a.task.update" }),
+    );
   });
 
   it("a2a.task.cancel delegates to broker client", async () => {
@@ -106,7 +118,10 @@ describe("a2a gateway handlers (plugin-local)", () => {
     await handleA2ATaskCancel(opts as never);
 
     expect(mockBrokerClient.cancelTask).toHaveBeenCalledTimes(1);
-    expect(opts.respond).toHaveBeenCalledWith(true, null);
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ method: "a2a.task.cancel" }),
+    );
   });
 
   it("a2a.task.status delegates to broker client", async () => {
@@ -119,7 +134,10 @@ describe("a2a gateway handlers (plugin-local)", () => {
     await handleA2ATaskStatus(opts as never);
 
     expect(mockBrokerClient.statusTask).toHaveBeenCalledTimes(1);
-    expect(opts.respond).toHaveBeenCalledWith(true, null);
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ method: "a2a.task.status" }),
+    );
   });
 
   it("returns error when broker client is not initialized", async () => {

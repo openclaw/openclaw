@@ -341,6 +341,12 @@ importers:
         specifier: ^11.12.3
         version: 11.12.3
 
+  extensions/a2a-broker-adapter:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/acpx:
     dependencies:
       acpx:

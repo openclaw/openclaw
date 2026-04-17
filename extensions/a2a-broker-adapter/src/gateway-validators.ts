@@ -1,7 +1,7 @@
 /**
  * Plugin-local AJV validators for A2A gateway method params.
  */
-import Ajv from "ajv";
+import AjvPkg, { type ErrorObject } from "ajv";
 import type {
   A2ATaskCancelParams,
   A2ATaskRequestParams,
@@ -15,17 +15,28 @@ import {
   A2ATaskUpdateParamsSchema,
 } from "./gateway-schema.js";
 
-const ajv = new Ajv({ allErrors: true, strict: false, removeAdditional: false });
+type Validator<T> = ((data: unknown) => data is T) & {
+  errors?: ErrorObject[] | null;
+};
+
+const ajv = new (AjvPkg as unknown as new (opts?: object) => import("ajv").default)({
+  allErrors: true,
+  strict: false,
+  removeAdditional: false,
+});
 
 export const validateA2ATaskRequestParams = ajv.compile<A2ATaskRequestParams>(
   A2ATaskRequestParamsSchema,
-);
-export const validateA2ATaskUpdateParams =
-  ajv.compile<A2ATaskUpdateParams>(A2ATaskUpdateParamsSchema);
-export const validateA2ATaskCancelParams =
-  ajv.compile<A2ATaskCancelParams>(A2ATaskCancelParamsSchema);
-export const validateA2ATaskStatusParams =
-  ajv.compile<A2ATaskStatusParams>(A2ATaskStatusParamsSchema);
+) as Validator<A2ATaskRequestParams>;
+export const validateA2ATaskUpdateParams = ajv.compile<A2ATaskUpdateParams>(
+  A2ATaskUpdateParamsSchema,
+) as Validator<A2ATaskUpdateParams>;
+export const validateA2ATaskCancelParams = ajv.compile<A2ATaskCancelParams>(
+  A2ATaskCancelParamsSchema,
+) as Validator<A2ATaskCancelParams>;
+export const validateA2ATaskStatusParams = ajv.compile<A2ATaskStatusParams>(
+  A2ATaskStatusParamsSchema,
+) as Validator<A2ATaskStatusParams>;
 
 /**
  * Minimal validation helper — replaces core assertValidParams.
@@ -33,13 +44,15 @@ export const validateA2ATaskStatusParams =
  */
 export function validateParams<T>(
   params: unknown,
-  validate: (data: unknown) => data is T,
+  validate: Validator<T>,
   method: string,
 ): { valid: true; data: T } | { valid: false; error: { code: string; message: string } } {
   if (validate(params)) {
     return { valid: true, data: params };
   }
-  const errors = validate.errors?.map((e) => `${e.instancePath || "/"}: ${e.message}`).join("; ");
+  const errors = validate.errors
+    ?.map((e: ErrorObject) => `${e.instancePath || "/"}: ${e.message}`)
+    .join("; ");
   return {
     valid: false,
     error: { code: "INVALID_REQUEST", message: `invalid ${method} params: ${errors || "unknown"}` },

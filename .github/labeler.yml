@@ -257,6 +257,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/acpx/**"
+"extensions: a2a-broker-adapter":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/a2a-broker-adapter/**"
 "extensions: arcee":
   - changed-files:
       - any-glob-to-any-file:

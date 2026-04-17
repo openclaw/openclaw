@@ -28,9 +28,9 @@ import { a2aError, A2AErrorCodes } from "./plugin-errors.js";
 
 type BrokerClient = {
   requestTask(params: A2ATaskRequestParams): Promise<unknown>;
-  updateTask(params: A2ATaskUpdateParams): Promise<null>;
-  cancelTask(params: A2ATaskCancelParams): Promise<null>;
-  statusTask(params: A2ATaskStatusParams): Promise<null>;
+  updateTask(params: A2ATaskUpdateParams): Promise<unknown>;
+  cancelTask(params: A2ATaskCancelParams): Promise<unknown>;
+  statusTask(params: A2ATaskStatusParams): Promise<unknown>;
 };
 
 let _brokerClient: BrokerClient | null | undefined;
@@ -92,7 +92,7 @@ export async function handleA2ATaskUpdate(opts: GatewayRequestHandlerOptions): P
   }
   try {
     const result = await broker.updateTask(check.data);
-    if (!result) {
+    if (result == null) {
       opts.respond(
         false,
         undefined,
@@ -128,7 +128,7 @@ export async function handleA2ATaskCancel(opts: GatewayRequestHandlerOptions): P
   }
   try {
     const result = await broker.cancelTask(check.data);
-    if (!result) {
+    if (result == null) {
       opts.respond(
         false,
         undefined,
@@ -164,7 +164,7 @@ export async function handleA2ATaskStatus(opts: GatewayRequestHandlerOptions): P
   }
   try {
     const result = await broker.statusTask(check.data);
-    if (!result) {
+    if (result == null) {
       opts.respond(
         false,
         undefined,
