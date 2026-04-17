@@ -12,6 +12,25 @@ const listChannelSetupPlugins = vi.hoisted(() => vi.fn((): unknown[] => []));
 const loadChannelSetupPluginRegistrySnapshotForChannel = vi.hoisted(() =>
   vi.fn((_params?: unknown) => ({ channels: [], channelSetups: [] })),
 );
+const resolveChannelSetupEntries = vi.hoisted(() =>
+  vi.fn(
+    (
+      _params?: unknown,
+    ): {
+      entries: unknown[];
+      installedCatalogEntries: unknown[];
+      installableCatalogEntries: unknown[];
+      installedCatalogById: Map<unknown, unknown>;
+      installableCatalogById: Map<unknown, unknown>;
+    } => ({
+      entries: [],
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
+    }),
+  ),
+);
 const collectChannelStatus = vi.hoisted(() =>
   vi.fn(async (_params?: unknown) => ({
     installedPlugins: [],
@@ -42,7 +61,7 @@ vi.mock("../channels/registry.js", () => ({
 }));
 
 vi.mock("../commands/channel-setup/discovery.js", () => ({
-  resolveChannelSetupEntries: vi.fn(),
+  resolveChannelSetupEntries: (params?: unknown) => resolveChannelSetupEntries(params),
   shouldShowChannelInSetup: () => true,
 }));
 
@@ -100,6 +119,13 @@ describe("setupChannels workspace shadow exclusion", () => {
     loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue({
       channels: [],
       channelSetups: [],
+    });
+    resolveChannelSetupEntries.mockReturnValue({
+      entries: [],
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
     });
     collectChannelStatus.mockResolvedValue({
       installedPlugins: [],
@@ -162,5 +188,42 @@ describe("setupChannels workspace shadow exclusion", () => {
         workspaceDir: "/tmp/openclaw-workspace",
       }),
     );
+  });
+
+  it("defers status and setup-plugin loads until a channel is selected", async () => {
+    resolveChannelSetupEntries.mockReturnValue({
+      entries: [
+        {
+          id: "telegram",
+          meta: { id: "telegram", label: "Telegram", blurb: "" },
+        },
+      ],
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
+    });
+    const select = vi.fn(async () => "__done__");
+
+    await setupChannels(
+      {} as never,
+      {} as never,
+      {
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => undefined),
+        select,
+      } as never,
+      {
+        deferStatusUntilSelection: true,
+        skipConfirm: true,
+      },
+    );
+
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
+    expect(collectChannelStatus).not.toHaveBeenCalled();
+    expect(listTrustedChannelPluginCatalogEntries).not.toHaveBeenCalled();
+    expect(listChannelSetupPlugins).not.toHaveBeenCalled();
+    expect(getChannelSetupPlugin).not.toHaveBeenCalled();
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
   });
 });

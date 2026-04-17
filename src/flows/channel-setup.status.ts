@@ -35,6 +35,18 @@ export type ChannelSetupSelectionContribution = FlowContribution & {
   source: "catalog" | "core" | "plugin";
 };
 
+type ChannelSetupSelectionEntry = {
+  id: ChannelChoice;
+  meta: {
+    id: string;
+    label: string;
+    selectionLabel?: string;
+    exposure?: { setup?: boolean };
+    showConfigured?: boolean;
+    showInSetup?: boolean;
+  };
+};
+
 function buildChannelSetupSelectionContribution(params: {
   channel: ChannelChoice;
   label: string;
@@ -235,33 +247,35 @@ export function resolveChannelSelectionNoteLines(params: {
 }
 
 export function resolveChannelSetupSelectionContributions(params: {
-  entries: Array<{
-    id: ChannelChoice;
-    meta: {
-      id: string;
-      label: string;
-      selectionLabel?: string;
-      exposure?: { setup?: boolean };
-      showConfigured?: boolean;
-      showInSetup?: boolean;
-    };
-  }>;
+  entries: ChannelSetupSelectionEntry[];
   statusByChannel: Map<ChannelChoice, { selectionHint?: string }>;
   resolveDisabledHint: (channel: ChannelChoice) => string | undefined;
 }): ChannelSetupSelectionContribution[] {
+  const bundledChannelIds = new Set(listChatChannels().map((channel) => channel.id));
   return params.entries
     .filter((entry) => shouldShowChannelInSetup(entry.meta))
+    .toSorted((left, right) => compareChannelSetupSelectionEntries(left, right))
     .map((entry) => {
       const disabledHint = params.resolveDisabledHint(entry.id);
-      const hint =
-        [params.statusByChannel.get(entry.id)?.selectionHint, disabledHint]
-          .filter(Boolean)
-          .join(" · ") || undefined;
+      const statusHint = params.statusByChannel.get(entry.id)?.selectionHint;
+      const hint = [statusHint, disabledHint].filter(Boolean).join(" · ") || undefined;
       return buildChannelSetupSelectionContribution({
         channel: entry.id,
         label: entry.meta.selectionLabel ?? entry.meta.label,
         hint,
-        source: listChatChannels().some((channel) => channel.id === entry.id) ? "core" : "plugin",
+        source: bundledChannelIds.has(entry.id) ? "core" : "plugin",
       });
     });
+}
+
+function compareChannelSetupSelectionEntries(
+  left: ChannelSetupSelectionEntry,
+  right: ChannelSetupSelectionEntry,
+): number {
+  const leftLabel = left.meta.selectionLabel ?? left.meta.label;
+  const rightLabel = right.meta.selectionLabel ?? right.meta.label;
+  return (
+    leftLabel.localeCompare(rightLabel, undefined, { numeric: true, sensitivity: "base" }) ||
+    left.id.localeCompare(right.id, undefined, { numeric: true, sensitivity: "base" })
+  );
 }
