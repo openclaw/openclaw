@@ -1136,6 +1136,13 @@ export async function spawnAcpDirect(
       const entry = store[sessionKey] as SessionEntry | undefined;
       if (!entry?.acp?.mode || entry.acp.mode !== "persistent") {
         wasResolved = false;
+        // Backfill spawnedBy: the initial patch omitted it because
+        // wasResolved was true, but the session was actually recreated.
+        await callGateway({
+          method: "sessions.patch",
+          params: { key: sessionKey, spawnedBy: requesterInternalKey },
+          timeoutMs: 5_000,
+        });
       }
     }
     const initializedSession = await initializeAcpSpawnRuntime({
