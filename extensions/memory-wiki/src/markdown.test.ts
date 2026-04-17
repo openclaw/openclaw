@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createWikiPageFilename, slugifyWikiSegment } from "./markdown.js";
+import { createWikiPageFilename, extractWikiLinks, slugifyWikiSegment } from "./markdown.js";
+
+describe("extractWikiLinks", () => {
+  it("ignores reply tags and other wikilinks inside fenced code blocks", () => {
+    const markdown = `# Example\n\nReal link: [[entities/reid|Reid]]\n\n\`\`\`markdown\n[[reply_to_current]]\n[[entities/arden|Arden]]\n\`\`\``;
+
+    expect(extractWikiLinks(markdown)).toEqual(["entities/reid"]);
+  });
+});
 
 describe("slugifyWikiSegment", () => {
   it("preserves Unicode letters and numbers in wiki slugs", () => {
