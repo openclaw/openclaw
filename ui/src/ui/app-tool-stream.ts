@@ -471,7 +471,62 @@ type PlanApprovalHost = ToolStreamHost & {
    * user doesn't have to click "Open plan" first.
    */
   openPlanInSidebar?: (request: PlanApprovalRequest) => void;
+  /**
+   * Optional live-plan hook — fires every time the agent calls
+   * update_plan. The host re-renders the sidebar content with the
+   * current plan state so the user always sees the latest checklist
+   * (boxes ticking off as the agent steps through after approval).
+   */
+  refreshLivePlanSidebar?: (plan: PlanApprovalRequest["plan"], summary?: string) => void;
 };
+
+/**
+ * Detect update_plan tool calls in the live tool-event stream and
+ * emit the parsed plan steps. We listen on the start phase (when
+ * args are present) since that's when the plan payload is freshest.
+ */
+function maybeForwardLivePlanUpdate(host: PlanApprovalHost, payload: AgentEventPayload): void {
+  const data = payload.data ?? {};
+  if (data.name !== "update_plan") {
+    return;
+  }
+  if (data.phase !== "start" && data.phase !== "result") {
+    return;
+  }
+  const args = (data.args ?? data.params) as Record<string, unknown> | undefined;
+  if (!args || typeof args !== "object") {
+    return;
+  }
+  const rawPlan = (args as { plan?: unknown }).plan;
+  if (!Array.isArray(rawPlan) || rawPlan.length === 0) {
+    return;
+  }
+  const plan: PlanApprovalRequest["plan"] = [];
+  for (const entry of rawPlan) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const step = (entry as Record<string, unknown>).step;
+    const status = (entry as Record<string, unknown>).status;
+    const activeForm = (entry as Record<string, unknown>).activeForm;
+    if (typeof step !== "string" || typeof status !== "string") {
+      continue;
+    }
+    plan.push({
+      step,
+      status,
+      ...(typeof activeForm === "string" && activeForm.trim() ? { activeForm } : {}),
+    });
+  }
+  if (plan.length === 0) {
+    return;
+  }
+  try {
+    host.refreshLivePlanSidebar?.(plan, undefined);
+  } catch {
+    // ignore — sidebar refresh is best-effort
+  }
+}
 
 function handlePlanApprovalEvent(host: PlanApprovalHost, payload: AgentEventPayload): void {
   const data = payload.data ?? {};
@@ -574,6 +629,12 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (sessionKey && sessionKey !== host.sessionKey) {
     return;
   }
+
+  // PR-8 follow-up: forward live update_plan calls to the sidebar
+  // refresh hook so the user always sees the current plan state
+  // (boxes ticking off as the agent steps through after approval).
+  // Runs alongside the normal tool-stream path; doesn't replace it.
+  maybeForwardLivePlanUpdate(host as PlanApprovalHost, payload);
 
   const data = payload.data ?? {};
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
