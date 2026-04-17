@@ -1,5 +1,7 @@
 import {
-  createModelCatalogPresetAppliers,
+  applyAgentDefaultModelPrimary,
+  applyOnboardAuthAgentModelsAndProviders,
+  type ModelProviderConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import {
@@ -11,20 +13,51 @@ import {
 
 export { ABLITERATION_DEFAULT_MODEL_REF };
 
-const abliterationPresetAppliers = createModelCatalogPresetAppliers({
-  primaryModelRef: ABLITERATION_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig) => ({
-    providerId: "abliteration",
+function applyAbliterationProviderConfigInternal(cfg: OpenClawConfig): OpenClawConfig {
+  const providerId = "abliteration";
+  const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
+  const existingProvider = providers[providerId];
+  const existingModels = existingProvider?.models ?? [];
+  const catalogModels = ABLITERATION_MODEL_CATALOG.map(buildAbliterationModelDefinition);
+  const mergedModels =
+    existingModels.length > 0
+      ? [
+          ...existingModels,
+          ...catalogModels.filter(
+            (model) => !existingModels.some((existing) => existing.id === model.id),
+          ),
+        ]
+      : catalogModels;
+  const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {};
+  const normalizedApiKey = typeof existingApiKey === "string" ? existingApiKey.trim() : undefined;
+
+  providers[providerId] = {
+    ...existingProviderRest,
     api: "anthropic-messages",
     baseUrl: ABLITERATION_BASE_URL,
-    catalogModels: ABLITERATION_MODEL_CATALOG.map(buildAbliterationModelDefinition),
-  }),
-});
+    authHeader: true,
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : catalogModels,
+  };
+
+  const agentModels = { ...cfg.agents?.defaults?.models };
+  agentModels[ABLITERATION_DEFAULT_MODEL_REF] = {
+    ...agentModels[ABLITERATION_DEFAULT_MODEL_REF],
+  };
+
+  return applyOnboardAuthAgentModelsAndProviders(cfg, {
+    agentModels,
+    providers,
+  });
+}
 
 export function applyAbliterationProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return abliterationPresetAppliers.applyProviderConfig(cfg);
+  return applyAbliterationProviderConfigInternal(cfg);
 }
 
 export function applyAbliterationConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return abliterationPresetAppliers.applyConfig(cfg);
+  return applyAgentDefaultModelPrimary(
+    applyAbliterationProviderConfigInternal(cfg),
+    ABLITERATION_DEFAULT_MODEL_REF,
+  );
 }

@@ -16,6 +16,7 @@ describe("abliteration onboard", () => {
     expect(cfg.models?.providers?.abliteration).toMatchObject({
       baseUrl: "https://api.abliteration.ai",
       api: "anthropic-messages",
+      authHeader: true,
     });
     expectProviderOnboardPrimaryModel({
       applyConfig: applyAbliterationConfig,
@@ -40,6 +41,7 @@ describe("abliteration onboard", () => {
       legacyApi: "openai-completions",
     });
     const ids = provider?.models.map((m) => m.id);
+    expect(provider?.authHeader).toBe(true);
     expect(ids).toContain("old-model");
     expect(ids).toContain(ABLITERATION_DEFAULT_MODEL_REF.replace(/^abliteration\//, ""));
   });

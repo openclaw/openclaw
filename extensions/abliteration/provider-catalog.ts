@@ -9,6 +9,7 @@ export function buildAbliterationProvider(): ModelProviderConfig {
   return {
     baseUrl: ABLITERATION_BASE_URL,
     api: "anthropic-messages",
+    authHeader: true,
     models: ABLITERATION_MODEL_CATALOG.map(buildAbliterationModelDefinition),
   };
 }

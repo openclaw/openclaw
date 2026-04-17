@@ -42,6 +42,7 @@ describe("abliteration provider plugin", () => {
 
     expect(catalog.provider.api).toBe("anthropic-messages");
     expect(catalog.provider.baseUrl).toBe("https://api.abliteration.ai");
+    expect(catalog.provider.authHeader).toBe(true);
     expect(catalog.provider.models?.map((model) => model.id)).toEqual(["abliterated-model"]);
     expect(catalog.provider.models?.[0]).toMatchObject({
       cost: {
