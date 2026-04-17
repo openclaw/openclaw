@@ -6,7 +6,11 @@ import {
   isRedactedSessionsSpawnAttachment,
   sanitizeToolUseResultPairing,
 } from "../../session-transcript-repair.js";
-import { extractToolCallsFromAssistant } from "../../tool-call-id.js";
+import {
+  extractToolCallsFromAssistant,
+  sanitizeToolCallIdsForCloudCodeAssist,
+  type ToolCallIdMode,
+} from "../../tool-call-id.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
@@ -636,20 +640,26 @@ function trimWhitespaceFromToolCallNamesInMessage(
   normalizeToolCallIdsInMessage(message);
 }
 
-function collectUnknownToolNameFromMessage(
+function classifyToolCallMessage(
   message: unknown,
   allowedToolNames?: Set<string>,
-): string | undefined {
+):
+  | { kind: "none" }
+  | { kind: "allowed" }
+  | { kind: "incomplete" }
+  | { kind: "unknown"; toolName: string } {
   if (!message || typeof message !== "object" || !allowedToolNames || allowedToolNames.size === 0) {
-    return undefined;
+    return { kind: "none" };
   }
   const content = (message as { content?: unknown }).content;
   if (!Array.isArray(content)) {
-    return undefined;
+    return { kind: "none" };
   }
 
   let unknownToolName: string | undefined;
   let sawToolCall = false;
+  let sawAllowedToolCall = false;
+  let sawIncompleteToolCall = false;
   for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
@@ -661,10 +671,12 @@ function collectUnknownToolNameFromMessage(
     sawToolCall = true;
     const rawName = typeof typedBlock.name === "string" ? typedBlock.name.trim() : "";
     if (!rawName) {
-      return undefined;
+      sawIncompleteToolCall = true;
+      continue;
     }
     if (resolveExactAllowedToolName(rawName, allowedToolNames)) {
-      return undefined;
+      sawAllowedToolCall = true;
+      continue;
     }
     const normalizedUnknownToolName = normalizeToolName(rawName);
     if (!unknownToolName) {
@@ -672,11 +684,20 @@ function collectUnknownToolNameFromMessage(
       continue;
     }
     if (unknownToolName !== normalizedUnknownToolName) {
-      return undefined;
+      sawIncompleteToolCall = true;
     }
   }
 
-  return sawToolCall ? unknownToolName : undefined;
+  if (!sawToolCall) {
+    return { kind: "none" };
+  }
+  if (sawAllowedToolCall) {
+    return { kind: "allowed" };
+  }
+  if (sawIncompleteToolCall) {
+    return { kind: "incomplete" };
+  }
+  return unknownToolName ? { kind: "unknown", toolName: unknownToolName } : { kind: "incomplete" };
 }
 
 function rewriteUnknownToolLoopMessage(message: unknown, toolName: string): void {
@@ -694,27 +715,41 @@ function rewriteUnknownToolLoopMessage(message: unknown, toolName: string): void
 function guardUnknownToolLoopInMessage(
   message: unknown,
   state: UnknownToolLoopGuardState,
-  params: { allowedToolNames?: Set<string>; threshold?: number; countAttempt: boolean },
-): void {
+  params: {
+    allowedToolNames?: Set<string>;
+    threshold?: number;
+    countAttempt: boolean;
+    resetOnAllowedTool?: boolean;
+    resetOnMissingUnknownTool?: boolean;
+  },
+): boolean {
   const threshold = params.threshold;
   if (threshold === undefined || threshold <= 0) {
-    return;
+    return false;
   }
 
-  const unknownToolName = collectUnknownToolNameFromMessage(message, params.allowedToolNames);
-  if (!unknownToolName) {
-    if (params.countAttempt) {
+  const toolCallState = classifyToolCallMessage(message, params.allowedToolNames);
+  if (toolCallState.kind === "allowed") {
+    if (params.resetOnAllowedTool === true) {
       state.lastUnknownToolName = undefined;
       state.count = 0;
     }
-    return;
+    return false;
   }
+  if (toolCallState.kind !== "unknown") {
+    if (params.countAttempt && params.resetOnMissingUnknownTool !== false) {
+      state.lastUnknownToolName = undefined;
+      state.count = 0;
+    }
+    return false;
+  }
+  const unknownToolName = toolCallState.toolName;
 
   if (!params.countAttempt) {
     if (state.lastUnknownToolName === unknownToolName && state.count > threshold) {
       rewriteUnknownToolLoopMessage(message, unknownToolName);
     }
-    return;
+    return false;
   }
 
   if (message && typeof message === "object") {
@@ -722,7 +757,7 @@ function guardUnknownToolLoopInMessage(
       if (state.lastUnknownToolName === unknownToolName && state.count > threshold) {
         rewriteUnknownToolLoopMessage(message, unknownToolName);
       }
-      return;
+      return true;
     }
     state.countedMessages.add(message);
   }
@@ -737,6 +772,7 @@ function guardUnknownToolLoopInMessage(
   if (state.count > threshold) {
     rewriteUnknownToolLoopMessage(message, unknownToolName);
   }
+  return true;
 }
 
 function wrapStreamTrimToolCallNames(
@@ -757,6 +793,7 @@ function wrapStreamTrimToolCallNames(
       allowedToolNames,
       threshold: options?.unknownToolThreshold,
       countAttempt: !streamAttemptAlreadyCounted,
+      resetOnAllowedTool: true,
     });
     return message;
   };
@@ -776,12 +813,18 @@ function wrapStreamTrimToolCallNames(
             trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
             trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
             if (event.message && typeof event.message === "object") {
-              guardUnknownToolLoopInMessage(event.message, unknownToolGuardState, {
-                allowedToolNames,
-                threshold: options?.unknownToolThreshold,
-                countAttempt: true,
-              });
-              streamAttemptAlreadyCounted = true;
+              const countedStreamAttempt = guardUnknownToolLoopInMessage(
+                event.message,
+                unknownToolGuardState,
+                {
+                  allowedToolNames,
+                  threshold: options?.unknownToolThreshold,
+                  countAttempt: !streamAttemptAlreadyCounted,
+                  resetOnAllowedTool: true,
+                  resetOnMissingUnknownTool: false,
+                },
+              );
+              streamAttemptAlreadyCounted ||= countedStreamAttempt;
             }
             guardUnknownToolLoopInMessage(event.partial, unknownToolGuardState, {
               allowedToolNames,
@@ -827,6 +870,25 @@ export function wrapStreamFnTrimToolCallNames(
       state: unknownToolGuardState,
     });
   };
+}
+
+export function sanitizeReplayToolCallIdsForStream(params: {
+  messages: AgentMessage[];
+  mode: ToolCallIdMode;
+  allowedToolNames?: Set<string>;
+  preserveNativeAnthropicToolUseIds?: boolean;
+  preserveReplaySafeThinkingToolCallIds?: boolean;
+  repairToolUseResultPairing?: boolean;
+}): AgentMessage[] {
+  const sanitized = sanitizeToolCallIdsForCloudCodeAssist(params.messages, params.mode, {
+    preserveNativeAnthropicToolUseIds: params.preserveNativeAnthropicToolUseIds,
+    preserveReplaySafeThinkingToolCallIds: params.preserveReplaySafeThinkingToolCallIds,
+    allowedToolNames: params.allowedToolNames,
+  });
+  if (!params.repairToolUseResultPairing) {
+    return sanitized;
+  }
+  return sanitizeToolUseResultPairing(sanitized);
 }
 
 export function wrapStreamFnSanitizeMalformedToolCalls(

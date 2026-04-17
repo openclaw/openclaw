@@ -79,6 +79,7 @@ import {
   registerRuntimeConfigWriteListener,
   resetConfigRuntimeState as resetConfigRuntimeStateState,
   setRuntimeConfigSnapshot as setRuntimeConfigSnapshotState,
+  getRuntimeConfigSnapshotRefreshHandler as getRuntimeConfigSnapshotRefreshHandlerState,
   setRuntimeConfigSnapshotRefreshHandler as setRuntimeConfigSnapshotRefreshHandlerState,
   type RuntimeConfigWriteNotification,
 } from "./runtime-snapshot.js";
@@ -154,6 +155,11 @@ export type ConfigWriteOptions = {
    * Avoids rereading the full config just to prepare an immediate write.
    */
   baseSnapshot?: ConfigFileSnapshot;
+  /**
+   * Internal one-shot CLI fast path. When no runtime snapshot is active, skip
+   * the post-write runtime snapshot refresh/reload tail entirely.
+   */
+  skipRuntimeSnapshotRefresh?: boolean;
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -1407,6 +1413,45 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     );
   }
 
+  async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
+    maybeLoadDotEnvForConfig(deps.env);
+    const exists = deps.fs.existsSync(configPath);
+    if (!exists) {
+      return {};
+    }
+
+    try {
+      const raw = deps.fs.readFileSync(configPath, "utf-8");
+      const parsedRes = parseConfigJson5(raw, deps.json5);
+      if (!parsedRes.ok) {
+        return {};
+      }
+
+      const recovered = await maybeRecoverSuspiciousConfigRead({
+        deps,
+        configPath,
+        raw,
+        parsed: parsedRes.parsed,
+      });
+
+      let resolved: unknown;
+      try {
+        resolved = resolveConfigIncludesForRead(recovered.parsed, configPath, deps);
+      } catch {
+        return coerceConfig(recovered.parsed);
+      }
+
+      const readResolution = resolveConfigForRead(resolved, deps.env);
+      const legacyResolution = resolveLegacyConfigForRead(
+        readResolution.resolvedConfigRaw,
+        recovered.parsed,
+      );
+      return coerceConfig(legacyResolution.effectiveConfigRaw);
+    } catch {
+      return {};
+    }
+  }
+
   async function writeConfigFile(
     cfg: OpenClawConfig,
     options: ConfigWriteOptions = {},
@@ -1668,6 +1713,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     configPath,
     loadConfig,
     readBestEffortConfig,
+    readSourceConfigBestEffort,
     readConfigFileSnapshot,
     readConfigFileSnapshotForWrite,
     writeConfigFile,
@@ -1762,6 +1808,10 @@ export async function readBestEffortConfig(): Promise<OpenClawConfig> {
   return await createConfigIO().readBestEffortConfig();
 }
 
+export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
+  return await createConfigIO().readSourceConfigBestEffort();
+}
+
 export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
   return await createConfigIO().readConfigFileSnapshot();
 }
@@ -1799,7 +1849,15 @@ export async function writeConfigFile(
       envSnapshotForRestore: options.envSnapshotForRestore,
     }),
     unsetPaths: options.unsetPaths,
+    skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,
   });
+  if (
+    options.skipRuntimeSnapshotRefresh &&
+    !hadRuntimeSnapshot &&
+    !getRuntimeConfigSnapshotRefreshHandlerState()
+  ) {
+    return;
+  }
   const notifyCommittedWrite = () => {
     const currentRuntimeConfig = getRuntimeConfigSnapshotState();
     if (!currentRuntimeConfig) {

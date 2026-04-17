@@ -33,6 +33,12 @@ type BootstrapContext = {
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
 };
+
+function normalizeMockProviderId(providerId?: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(providerId);
+  return normalized === "z.ai" || normalized === "z-ai" ? "zai" : normalized;
+}
+
 type SessionManagerMocks = {
   getLeafEntry: UnknownMock;
   branch: UnknownMock;
@@ -47,6 +53,8 @@ type AttemptSpawnWorkspaceHoisted = {
   createAgentSessionMock: UnknownMock;
   sessionManagerOpenMock: UnknownMock;
   resolveSandboxContextMock: UnknownMock;
+  ensureGlobalUndiciEnvProxyDispatcherMock: UnknownMock;
+  ensureGlobalUndiciStreamTimeoutsMock: UnknownMock;
   buildEmbeddedMessageActionDiscoveryInputMock: UnknownMock;
   subscribeEmbeddedPiSessionMock: Mock<SubscribeEmbeddedPiSessionFn>;
   acquireSessionWriteLockMock: Mock<AcquireSessionWriteLockFn>;
@@ -71,6 +79,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const createAgentSessionMock = vi.fn();
   const sessionManagerOpenMock = vi.fn();
   const resolveSandboxContextMock = vi.fn();
+  const ensureGlobalUndiciEnvProxyDispatcherMock = vi.fn();
+  const ensureGlobalUndiciStreamTimeoutsMock = vi.fn();
   const buildEmbeddedMessageActionDiscoveryInputMock = vi.fn((params: unknown) => params);
   const installToolResultContextGuardMock = vi.fn(() => () => {});
   const flushPendingToolResultsAfterIdleMock = vi.fn(async () => {});
@@ -135,6 +145,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     createAgentSessionMock,
     sessionManagerOpenMock,
     resolveSandboxContextMock,
+    ensureGlobalUndiciEnvProxyDispatcherMock,
+    ensureGlobalUndiciStreamTimeoutsMock,
     buildEmbeddedMessageActionDiscoveryInputMock,
     subscribeEmbeddedPiSessionMock,
     acquireSessionWriteLockMock,
@@ -209,8 +221,10 @@ vi.mock("../../../infra/machine-name.js", () => ({
 }));
 
 vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
-  ensureGlobalUndiciEnvProxyDispatcher: () => {},
-  ensureGlobalUndiciStreamTimeouts: () => {},
+  ensureGlobalUndiciEnvProxyDispatcher: (...args: unknown[]) =>
+    hoisted.ensureGlobalUndiciEnvProxyDispatcherMock(...args),
+  ensureGlobalUndiciStreamTimeouts: (...args: unknown[]) =>
+    hoisted.ensureGlobalUndiciStreamTimeoutsMock(...args),
 }));
 
 vi.mock("../../bootstrap-files.js", async () => {
@@ -403,7 +417,19 @@ vi.mock("../../../image-generation/runtime.js", () => ({
 }));
 
 vi.mock("../../model-selection.js", () => ({
-  normalizeProviderId: (providerId?: string) => normalizeLowercaseStringOrEmpty(providerId),
+  findNormalizedProviderValue: <T>(entries: Record<string, T> | undefined, provider: string) => {
+    if (!entries) {
+      return undefined;
+    }
+    const providerKey = normalizeMockProviderId(provider);
+    for (const [key, value] of Object.entries(entries)) {
+      if (normalizeMockProviderId(key) === providerKey) {
+        return value;
+      }
+    }
+    return undefined;
+  },
+  normalizeProviderId: normalizeMockProviderId,
   resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-test" }),
 }));
 
@@ -683,6 +709,8 @@ export function resetEmbeddedAttemptHarness(
   hoisted.createAgentSessionMock.mockReset();
   hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
   hoisted.resolveSandboxContextMock.mockReset();
+  hoisted.ensureGlobalUndiciEnvProxyDispatcherMock.mockReset();
+  hoisted.ensureGlobalUndiciStreamTimeoutsMock.mockReset();
   hoisted.buildEmbeddedMessageActionDiscoveryInputMock
     .mockReset()
     .mockImplementation((params) => params);

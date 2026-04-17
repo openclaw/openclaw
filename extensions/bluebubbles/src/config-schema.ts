@@ -40,6 +40,28 @@ const bluebubblesNetworkSchema = z
   .strict()
   .optional();
 
+const bluebubblesCatchupSchema = z
+  .object({
+    /** Replay messages delivered while the gateway was unreachable. Defaults to on. */
+    enabled: z.boolean().optional(),
+    /** Hard ceiling on lookback window. Clamped to [1, 720] minutes. */
+    maxAgeMinutes: z.number().int().positive().optional(),
+    /** Upper bound on messages replayed in a single startup pass. Clamped to [1, 500]. */
+    perRunLimit: z.number().int().positive().optional(),
+    /** First-run lookback used when no cursor has been persisted yet. Clamped to [1, 720]. */
+    firstRunLookbackMinutes: z.number().int().positive().optional(),
+    /**
+     * Consecutive-failure ceiling per message GUID. After this many failed
+     * processMessage attempts against the same GUID, catchup logs a WARN
+     * and skips the message on subsequent sweeps (letting the cursor
+     * advance past a permanently malformed payload). Defaults to 10.
+     * Clamped to [1, 1000].
+     */
+    maxFailureRetries: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 const bluebubblesAccountSchema = z
   .object({
     name: z.string().optional(),
@@ -62,6 +84,7 @@ const bluebubblesAccountSchema = z
     mediaLocalRoots: z.array(z.string()).optional(),
     sendReadReceipts: z.boolean().optional(),
     network: bluebubblesNetworkSchema,
+    catchup: bluebubblesCatchupSchema,
     blockStreaming: z.boolean().optional(),
     groups: z.object({}).catchall(bluebubblesGroupConfigSchema).optional(),
   })

@@ -199,7 +199,10 @@ describe("resolveGatewayInstallToken", () => {
           },
         },
       }),
-      expect.objectContaining({ baseSnapshot: expect.any(Object) }),
+      expect.objectContaining({
+        baseSnapshot: expect.any(Object),
+        skipRuntimeSnapshotRefresh: true,
+      }),
     );
   });
 

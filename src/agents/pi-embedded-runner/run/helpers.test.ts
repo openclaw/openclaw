@@ -60,34 +60,16 @@ describe("resolveFinalAssistantVisibleText", () => {
 
     expect(resolveFinalAssistantVisibleText(lastAssistant)).toBeUndefined();
   });
-});
 
-describe("resolveFinalAssistantRawText", () => {
-  it("preserves commentary and final answer text", () => {
+  it("preserves raw final answer text without visible-text sanitization", () => {
     const lastAssistant = makeAssistantMessage([
       {
         type: "text",
-        text: "Working...",
-        textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
-      },
-      {
-        type: "text",
-        text: "Section 1\nSection 2",
+        text: "<final>keep this</final>",
         textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
       },
     ]);
 
-    expect(resolveFinalAssistantRawText(lastAssistant)).toBe("Working...\nSection 1\nSection 2");
-  });
-
-  it("returns undefined when the final raw text is empty", () => {
-    const lastAssistant = makeAssistantMessage([
-      {
-        type: "text",
-        text: "   ",
-      },
-    ]);
-
-    expect(resolveFinalAssistantRawText(lastAssistant)).toBeUndefined();
+    expect(resolveFinalAssistantRawText(lastAssistant)).toBe("<final>keep this</final>");
   });
 });

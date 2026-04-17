@@ -193,7 +193,7 @@ function appendCronDeliveryInstruction(params: {
   if (!params.deliveryRequested) {
     return params.commandBody;
   }
-  return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+  return `${params.commandBody}\n\nReturn your response as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
 }
 
 function resolvePositiveContextTokens(value: unknown): number | undefined {
@@ -240,7 +240,7 @@ type PreparedCronRunContext = {
   persistSessionEntry: PersistCronSessionEntry;
   withRunSession: WithRunSession;
   agentPayload: Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
-  resolvedDelivery: Awaited<ReturnType<typeof resolveDeliveryTarget>>;
+  resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryRequested: boolean;
   toolPolicy: ReturnType<typeof resolveCronToolPolicy>;
   skillsSnapshot: SkillSnapshot;
