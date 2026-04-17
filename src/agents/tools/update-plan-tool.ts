@@ -234,8 +234,16 @@ export function createUpdatePlanTool(options?: CreateUpdatePlanToolOptions): Any
         });
       }
 
+      // PR-8 follow-up: return non-empty content. Empty content arrays
+      // trip third-party transcript-pairing extensions (lossless-claw)
+      // which inject `[lossless-claw] missing tool result` placeholders
+      // into the agent's read-time context, polluting it with synthetic
+      // errors. Non-empty content satisfies the pairing check and keeps
+      // the agent's view of past turns clean.
+      const stepCount = plan.length;
+      const summaryLine = `Plan updated (${stepCount} ${stepCount === 1 ? "step" : "steps"}).`;
       return {
-        content: [],
+        content: [{ type: "text" as const, text: summaryLine }],
         details: {
           status: "updated" as const,
           ...(explanation ? { explanation } : {}),
