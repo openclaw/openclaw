@@ -432,25 +432,23 @@ jobs:
           OPENCLAW_DISCORD_SMOKE_CHANNEL_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_CHANNEL_ID }}
           OPENCLAW_RELEASE_CHECK_OS: ${{ matrix.os_id }}
           OPENCLAW_RELEASE_CHECK_RUNNER: ${{ matrix.runner }}
+          CHECK_CANDIDATE_TGZ: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate/${{ needs.prepare.outputs.candidate_file_name }}
+          CHECK_CANDIDATE_VERSION: ${{ needs.prepare.outputs.candidate_version }}
+          CHECK_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          CHECK_BASELINE_SPEC: ${{ needs.prepare.outputs.baseline_spec }}
+          CHECK_PREVIOUS_VERSION: ${{ inputs.previous_version }}
+          CHECK_BASELINE_TGZ: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline/${{ needs.prepare.outputs.baseline_file_name }}
+          CHECK_PROVIDER: ${{ inputs.provider }}
+          CHECK_MODE: ${{ matrix.lane }}
+          CHECK_SUITE: ${{ matrix.suite }}
+          CHECK_REF: ${{ inputs.ref }}
+          CHECK_OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}
         run: |
           DISCORD_ARGS=()
           if [[ -n "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_GUILD_ID}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_CHANNEL_ID}" ]]; then
             DISCORD_ARGS+=(--run-discord-roundtrip true)
           fi
-          pnpm dlx "tsx@${TSX_VERSION}" workflow/scripts/openclaw-cross-os-release-checks.ts \
-            --candidate-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/candidate/${{ needs.prepare.outputs.candidate_file_name }}" \
-            --candidate-version "${{ needs.prepare.outputs.candidate_version }}" \
-            --source-sha "${{ needs.prepare.outputs.source_sha }}" \
-            --baseline-spec "${{ needs.prepare.outputs.baseline_spec }}" \
-            --previous-version "${{ inputs.previous_version }}" \
-            --baseline-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/baseline/${{ needs.prepare.outputs.baseline_file_name }}" \
-            --provider "${{ inputs.provider }}" \
-            --mode "${{ matrix.lane }}" \
-            --suite "${{ matrix.suite }}" \
-            --ref "${{ inputs.ref }}" \
-            "${DISCORD_ARGS[@]}" \
-            --output-dir "$RUNNER_TEMP/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}"
-
+          node --disable-warning=ExperimentalWarning scripts/openclaw-cross-os-release-checks.ts             --candidate-tgz "${CHECK_CANDIDATE_TGZ}"             --candidate-version "${CHECK_CANDIDATE_VERSION}"             --source-sha "${CHECK_SOURCE_SHA}"             --baseline-spec "${CHECK_BASELINE_SPEC}"             --previous-version "${CHECK_PREVIOUS_VERSION}"             --baseline-tgz "${CHECK_BASELINE_TGZ}"             --provider "${CHECK_PROVIDER}"             --mode "${CHECK_MODE}"             --suite "${CHECK_SUITE}"             --ref "${CHECK_REF}"             "${DISCORD_ARGS[@]}"             --output-dir "${CHECK_OUTPUT_DIR}"
       - name: Summarize release checks
         if: always()
         shell: bash
