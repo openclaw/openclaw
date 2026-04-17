@@ -555,8 +555,8 @@ export async function compactEmbeddedPiSessionDirect(
           ],
         })
       : undefined;
-    const effectiveTools = applyFinalEffectiveToolPolicy({
-      tools: [...tools, ...(bundleMcpRuntime?.tools ?? []), ...(bundleLspRuntime?.tools ?? [])],
+    const filteredBundledTools = applyFinalEffectiveToolPolicy({
+      bundledTools: [...(bundleMcpRuntime?.tools ?? []), ...(bundleLspRuntime?.tools ?? [])],
       config: params.config,
       sandboxToolPolicy: sandbox?.tools,
       sessionKey: sandboxSessionKey,
@@ -576,6 +576,7 @@ export async function compactEmbeddedPiSessionDirect(
       senderIsOwner: params.senderIsOwner,
       warn: (message) => log.warn(message),
     });
+    const effectiveTools = [...tools, ...filteredBundledTools];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
     logProviderToolSchemaDiagnostics({
       tools: effectiveTools,

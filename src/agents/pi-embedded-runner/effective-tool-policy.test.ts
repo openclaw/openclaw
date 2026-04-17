@@ -16,21 +16,31 @@ function makeTool(name: string, ownerOnly = false): AnyAgentTool {
 describe("applyFinalEffectiveToolPolicy", () => {
   it("filters bundled tools through the configured allowlist", () => {
     const filtered = applyFinalEffectiveToolPolicy({
-      tools: [makeTool("message"), makeTool("mcp__bundle__fs_delete")],
-      config: { tools: { allow: ["message"] } },
+      bundledTools: [makeTool("mcp__bundle__fs_delete"), makeTool("mcp__bundle__fs_read")],
+      config: { tools: { allow: ["mcp__bundle__fs_read"] } },
       warn: () => {},
     });
 
-    expect(filtered.map((tool) => tool.name)).toEqual(["message"]);
+    expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__fs_read"]);
   });
 
-  it("applies owner-only filtering after bundle tools are merged", () => {
+  it("applies owner-only filtering to bundled tools", () => {
     const filtered = applyFinalEffectiveToolPolicy({
-      tools: [makeTool("message"), makeTool("mcp__bundle__admin", true)],
+      bundledTools: [makeTool("mcp__bundle__read"), makeTool("mcp__bundle__admin", true)],
       senderIsOwner: false,
       warn: () => {},
     });
 
-    expect(filtered.map((tool) => tool.name)).toEqual(["message"]);
+    expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__read"]);
+  });
+
+  it("returns the empty array unchanged when there are no bundled tools", () => {
+    const filtered = applyFinalEffectiveToolPolicy({
+      bundledTools: [],
+      config: { tools: { allow: ["message"] } },
+      warn: () => {},
+    });
+
+    expect(filtered).toEqual([]);
   });
 });

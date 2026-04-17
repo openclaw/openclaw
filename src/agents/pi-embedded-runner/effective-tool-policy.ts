@@ -18,7 +18,12 @@ import {
 import type { AnyAgentTool } from "../tools/common.js";
 
 type FinalEffectiveToolPolicyParams = {
-  tools: AnyAgentTool[];
+  // Tools appended to the core tool set after `createOpenClawCodingTools()`
+  // has already applied owner-only and tool-policy filtering (e.g. bundled
+  // MCP/LSP tools). Only these are filtered here; re-running the pipeline over
+  // the already-filtered core tools would drop plugin tools whose WeakMap
+  // metadata no longer survives core-tool wrapping/normalization.
+  bundledTools: AnyAgentTool[];
   config?: OpenClawConfig;
   sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
   sessionKey?: string;
@@ -42,6 +47,9 @@ type FinalEffectiveToolPolicyParams = {
 export function applyFinalEffectiveToolPolicy(
   params: FinalEffectiveToolPolicyParams,
 ): AnyAgentTool[] {
+  if (params.bundledTools.length === 0) {
+    return params.bundledTools;
+  }
   const {
     agentId,
     globalPolicy,
@@ -85,7 +93,7 @@ export function applyFinalEffectiveToolPolicy(
     isSubagentSessionKey(params.sessionKey) && params.sessionKey
       ? resolveSubagentToolPolicyForSession(params.config, params.sessionKey)
       : undefined;
-  const ownerFiltered = applyOwnerOnlyToolPolicy(params.tools, params.senderIsOwner === true);
+  const ownerFiltered = applyOwnerOnlyToolPolicy(params.bundledTools, params.senderIsOwner === true);
   return applyToolPolicyPipeline({
     tools: ownerFiltered,
     toolMeta: (tool) => getPluginToolMeta(tool),
