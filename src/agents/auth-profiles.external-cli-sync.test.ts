@@ -154,6 +154,7 @@ describe("external cli oauth resolution", () => {
         access: "fresh-cli-access",
         refresh: "fresh-cli-refresh",
         expires: Date.now() + 5 * 24 * 60 * 60_000,
+        accountId: "acct-123",
       });
 
       expect(
@@ -174,6 +175,7 @@ describe("external cli oauth resolution", () => {
             access: "expired-local-access",
             refresh: "expired-local-refresh",
             expires: Date.now() - 60_000,
+            accountId: "acct-123",
           }),
           imported,
         }),
@@ -255,6 +257,7 @@ describe("external cli oauth resolution", () => {
         access: "codex-fresh-access",
         refresh: "codex-fresh-refresh",
         expires: Date.now() + 5 * 24 * 60 * 60_000,
+        accountId: "acct-codex",
       }),
     );
     mocks.readMiniMaxCliCredentialsCached.mockReturnValue(
@@ -263,6 +266,7 @@ describe("external cli oauth resolution", () => {
         access: "minimax-fresh-access",
         refresh: "minimax-fresh-refresh",
         expires: Date.now() + 5 * 24 * 60 * 60_000,
+        email: "minimax@example.com",
       }),
     );
 
@@ -274,12 +278,14 @@ describe("external cli oauth resolution", () => {
           access: "codex-stale-access",
           refresh: "codex-stale-refresh",
           expires: Date.now() - 5_000,
+          accountId: "acct-codex",
         }),
         [MINIMAX_CLI_PROFILE_ID]: makeOAuthCredential({
           provider: "minimax-portal",
           access: "minimax-stale-access",
           refresh: "minimax-stale-refresh",
           expires: Date.now() - 5_000,
+          email: "minimax@example.com",
         }),
       },
     });
