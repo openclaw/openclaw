@@ -98,10 +98,12 @@ async function deliverRestartSentinelNotice(params: {
         deps: params.deps,
         bestEffort: false,
         skipQueue: true,
-        // Phase 4 Discord Surface Overhaul: restart sentinel notices are
-        // boot-class operator signals. Delivery policy reroutes them to the
-        // configured operator channel (or suppresses when unset) instead of
-        // posting into user-facing threads.
+        // Phase 4 REWORK (origin-respect): restart sentinel notices are
+        // boot-class signals and are delivered at the sentinel's own stored
+        // delivery context (see the `!channel || !to` suppress guard in
+        // `scheduleRestartSentinelWake` for the no-origin case). Tagging with
+        // `messageClass: "boot"` keeps sanitizer/classification wiring
+        // consistent; the policy no longer reroutes to an operator bucket.
         messageClass: "boot",
       });
       if (results.length > 0) {

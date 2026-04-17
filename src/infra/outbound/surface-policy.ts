@@ -5,6 +5,16 @@
 // every outcome. The return values are pre-allocated frozen constants so hot
 // paths (e.g. ACP parent stream emit) do not allocate a new object per
 // decision — see the bound-delivery-router for performance-sensitive uses.
+//
+// Phase 4 REWORK (origin-respect routing): the prior policy rerouted boot /
+// resume and `notifyPolicy === "operator_only"` traffic into a configured
+// `channels.operator` bucket. That was the wrong model — it collapsed all
+// noise into a single bucket regardless of where a message originated. The
+// correct principle is "every message lands on the surface that originated
+// it; if there is no genuine origin, suppress silently." This file keeps
+// `messageClass` tagging (Phase 3 sanitizer depends on it) and the
+// suppress-when-no-origin branch, but no longer reroutes to an operator
+// bucket.
 
 import type { TaskNotifyPolicy } from "../../tasks/task-registry.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -22,23 +32,13 @@ export type ResolvedSurfaceTarget = {
 export type DeliverySuppressionReason =
   | "class_suppressed_for_surface"
   | "session_not_bound"
-  | "operator_only_no_channel"
+  | "no_origin"
   | "duplicate_terminal"
   | "backoff_active";
 
-export type DeliveryReroutingReason =
-  | "boot_to_operator_channel"
-  | "thread_bound_in_thread_only"
-  | "cron_to_operator_channel";
-
 export type DeliveryDecision =
   | { outcome: "deliver" }
-  | { outcome: "suppress"; reason: DeliverySuppressionReason }
-  | {
-      outcome: "reroute";
-      target: ResolvedSurfaceTarget;
-      reason: DeliveryReroutingReason;
-    };
+  | { outcome: "suppress"; reason: DeliverySuppressionReason };
 
 export type DeliveryDecisionInput = {
   messageClass: MessageClass;
@@ -48,7 +48,6 @@ export type DeliveryDecisionInput = {
     channel?: string;
   };
   notifyPolicy?: TaskNotifyPolicy;
-  operatorChannel?: ResolvedSurfaceTarget;
 };
 
 // Pre-allocated constants. `Object.freeze` is defensive but also ensures
@@ -58,13 +57,19 @@ const SUPPRESS_INTERNAL: DeliveryDecision = Object.freeze({
   outcome: "suppress",
   reason: "class_suppressed_for_surface",
 });
-const SUPPRESS_OPERATOR_NO_CHANNEL: DeliveryDecision = Object.freeze({
+const SUPPRESS_NO_ORIGIN: DeliveryDecision = Object.freeze({
   outcome: "suppress",
-  reason: "operator_only_no_channel",
+  reason: "no_origin",
 });
 
+function hasValidOrigin(surface: DeliveryContext): boolean {
+  const channel = typeof surface.channel === "string" ? surface.channel.trim() : "";
+  const to = typeof surface.to === "string" ? surface.to.trim() : "";
+  return channel.length > 0 && to.length > 0;
+}
+
 export function planDelivery(input: DeliveryDecisionInput): DeliveryDecision {
-  const { messageClass, notifyPolicy, operatorChannel } = input;
+  const { messageClass, notifyPolicy, surface } = input;
 
   // CRITICAL: blocked MUST always deliver, even when policy would otherwise
   // suppress. This preserves the Blocked-Child Protocol invariant: the user
@@ -73,18 +78,15 @@ export function planDelivery(input: DeliveryDecisionInput): DeliveryDecision {
     return DELIVER;
   }
 
-  // Boot/resume classes are operator-plane signals. Route them to the
-  // operator channel when one is configured; otherwise suppress (they do not
-  // belong on user-facing surfaces).
+  // Boot/resume classes are operator-plane signals. They must respect the
+  // surface that originated them (e.g. the sentinel's own stored target, or
+  // the boot-session's bound surface). When the caller truly has no origin,
+  // suppress silently rather than synthesizing a destination.
   if (messageClass === "boot" || messageClass === "resume") {
-    if (operatorChannel) {
-      return {
-        outcome: "reroute",
-        target: operatorChannel,
-        reason: "boot_to_operator_channel",
-      };
+    if (hasValidOrigin(surface)) {
+      return DELIVER;
     }
-    return SUPPRESS_OPERATOR_NO_CHANNEL;
+    return SUPPRESS_NO_ORIGIN;
   }
 
   // Internal narration is never surfaced on user-facing channels.
@@ -98,21 +100,14 @@ export function planDelivery(input: DeliveryDecisionInput): DeliveryDecision {
     return SUPPRESS_INTERNAL;
   }
 
-  // notifyPolicy: "operator_only" routes progress/completion traffic to the
-  // operator channel when one exists, otherwise suppresses it.
-  if (notifyPolicy === "operator_only") {
-    if (operatorChannel) {
-      return {
-        outcome: "reroute",
-        target: operatorChannel,
-        reason: "cron_to_operator_channel",
-      };
-    }
-    return SUPPRESS_OPERATOR_NO_CHANNEL;
+  // Anything with genuinely no origin is suppressed — every message must land
+  // on the surface that created it.
+  if (!hasValidOrigin(surface)) {
+    return SUPPRESS_NO_ORIGIN;
   }
 
-  // Default: the caller's surface is appropriate for this class.
-  // Details like in-thread "clean completion" behavior for thread-bound
-  // sessions are handled by the caller in Phase 3 of the surface overhaul.
+  // Default: the caller's surface is appropriate for this class. Details like
+  // in-thread "clean completion" behavior for thread-bound sessions are
+  // handled by the caller in Phase 3 of the surface overhaul.
   return DELIVER;
 }

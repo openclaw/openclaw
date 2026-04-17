@@ -1229,18 +1229,22 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
-  // Phase 4 Discord Surface Overhaul: delivery-policy gate at the outbound
+  // Phase 4 REWORK (origin-respect): delivery-policy gate at the outbound
   // chokepoint. When a call site tags an emission with `messageClass`, the
-  // helper must consult `planDelivery` BEFORE enqueueing for transport and
-  // honor suppress / reroute / deliver outcomes.
-  describe("Phase 4 messageClass gate", () => {
-    it("suppresses boot-class deliveries with no operator channel configured", async () => {
+  // helper consults `planDelivery` BEFORE enqueueing for transport. Every
+  // message lands on the surface that originated it. Messages with no origin
+  // (boot/resume with empty channel+to) are suppressed silently; nothing is
+  // rerouted to a configured operator bucket.
+  describe("Phase 4 messageClass gate (origin-respect)", () => {
+    it("suppresses boot-class deliveries when no origin surface is available", async () => {
       const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "should-not-fire" });
 
       const results = await deliverOutboundPayloads({
-        cfg: {}, // no channels.operator configured
+        cfg: {},
+        // `channel` is required to be a valid OutboundChannel; the origin
+        // gap here comes from an empty `to` string (no routable recipient).
         channel: "whatsapp",
-        to: "+1555",
+        to: "",
         payloads: [{ text: "Back online" }],
         deps: { whatsapp: sendWhatsApp },
         messageClass: "boot",
@@ -1251,47 +1255,45 @@ describe("deliverOutboundPayloads", () => {
       expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
     });
 
-    it("reroutes boot-class deliveries to the configured operator channel", async () => {
-      const sendWhatsAppUser = vi.fn().mockResolvedValue({ messageId: "user-should-not-fire" });
-      const sendWhatsAppOperator = vi.fn().mockResolvedValue({ messageId: "ops-ok" });
-
-      // Single whatsapp deps entry in this test env — to assert reroute we
-      // change the target "to" to the operator value and verify the deps
-      // adapter was called with that target.
-      const cfg: OpenClawConfig = {
-        channels: {
-          operator: {
-            channel: "whatsapp",
-            to: "+5550999",
-          },
-        },
-      };
+    it("delivers boot-class messages at their configured origin surface", async () => {
+      const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "boot-at-origin" });
 
       const results = await deliverOutboundPayloads({
-        cfg,
+        cfg: {},
         channel: "whatsapp",
-        to: "+1555", // original (user-facing) target
+        to: "+1555",
         payloads: [{ text: "Back online" }],
-        deps: { whatsapp: sendWhatsAppOperator },
+        deps: { whatsapp: sendWhatsApp },
         messageClass: "boot",
       });
 
       expect(results).toHaveLength(1);
-      expect(sendWhatsAppUser).not.toHaveBeenCalled();
-      // Queue enqueue must carry the rerouted channel/to, not the original.
+      // Origin surface is preserved — no reroute to any operator bucket.
       expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "whatsapp",
-          to: "+5550999",
-        }),
+        expect.objectContaining({ channel: "whatsapp", to: "+1555" }),
       );
-      // Deps adapter receives the rerouted target as the first positional
-      // argument (see test-helpers/infra/deliver-test-outbounds.ts).
-      expect(sendWhatsAppOperator).toHaveBeenCalledWith(
-        "+5550999",
-        expect.any(String),
-        expect.any(Object),
+      expect(sendWhatsApp).toHaveBeenCalledWith("+1555", expect.any(String), expect.any(Object));
+    });
+
+    it("delivers progress-class cron sends at the job's own target", async () => {
+      // No channels.operator anywhere — the job's own delivery target is
+      // respected verbatim. This is the canonical cron case.
+      const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "cron-at-target" });
+
+      const results = await deliverOutboundPayloads({
+        cfg: {},
+        channel: "whatsapp",
+        to: "+1555",
+        payloads: [{ text: "cron tick" }],
+        deps: { whatsapp: sendWhatsApp },
+        messageClass: "progress",
+      });
+
+      expect(results).toHaveLength(1);
+      expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: "whatsapp", to: "+1555" }),
       );
+      expect(sendWhatsApp).toHaveBeenCalledWith("+1555", expect.any(String), expect.any(Object));
     });
 
     it("delivers ordinary progress sends untouched when no messageClass is provided", async () => {
@@ -1312,47 +1314,22 @@ describe("deliverOutboundPayloads", () => {
       );
     });
 
-    it("suppresses operator_only cron progress when no operator channel is configured", async () => {
+    it("suppresses sends when notifyPolicy is silent", async () => {
       const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "should-not-fire" });
 
       const results = await deliverOutboundPayloads({
-        cfg: {}, // no channels.operator configured
+        cfg: {},
         channel: "whatsapp",
         to: "+1555",
-        payloads: [{ text: "main-auto-continue tick" }],
+        payloads: [{ text: "silent" }],
         deps: { whatsapp: sendWhatsApp },
         messageClass: "progress",
-        notifyPolicy: "operator_only",
+        notifyPolicy: "silent",
       });
 
       expect(results).toEqual([]);
       expect(sendWhatsApp).not.toHaveBeenCalled();
       expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
-    });
-
-    it("reroutes operator_only cron progress to the operator channel when configured", async () => {
-      const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "ops-ok" });
-      const cfg: OpenClawConfig = {
-        channels: {
-          operator: {
-            channel: "whatsapp",
-            to: "+5550999",
-          },
-        },
-      };
-
-      const results = await deliverOutboundPayloads({
-        cfg,
-        channel: "whatsapp",
-        to: "+1555",
-        payloads: [{ text: "main-auto-continue tick" }],
-        deps: { whatsapp: sendWhatsApp },
-        messageClass: "progress",
-        notifyPolicy: "operator_only",
-      });
-
-      expect(results).toHaveLength(1);
-      expect(sendWhatsApp).toHaveBeenCalledWith("+5550999", expect.any(String), expect.any(Object));
     });
   });
 });

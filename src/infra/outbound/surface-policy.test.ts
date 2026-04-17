@@ -1,15 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  planDelivery,
-  type DeliveryDecisionInput,
-  type ResolvedSurfaceTarget,
-} from "./surface-policy.js";
+import { planDelivery, type DeliveryDecisionInput } from "./surface-policy.js";
 
 const baseSurface = { channel: "discord", to: "channel:123" };
-const operatorChannel: ResolvedSurfaceTarget = {
-  channel: "discord",
-  to: "operator-ch",
-};
 
 function makeInput(overrides: Partial<DeliveryDecisionInput>): DeliveryDecisionInput {
   return {
@@ -21,7 +13,7 @@ function makeInput(overrides: Partial<DeliveryDecisionInput>): DeliveryDecisionI
 
 describe("planDelivery", () => {
   it("ALWAYS delivers blocked messages (Blocked-Child Protocol invariant)", () => {
-    // Even with silent policy, no operator channel, and a user surface: blocked MUST pass through.
+    // Even with silent policy and no valid surface: blocked MUST pass through.
     const decision = planDelivery(
       makeInput({
         messageClass: "blocked",
@@ -31,12 +23,11 @@ describe("planDelivery", () => {
     expect(decision.outcome).toBe("deliver");
   });
 
-  it("delivers blocked even with operator_only policy", () => {
+  it("delivers blocked even when origin is missing", () => {
     const decision = planDelivery(
       makeInput({
         messageClass: "blocked",
-        notifyPolicy: "operator_only",
-        operatorChannel,
+        surface: { channel: "", to: "" },
       }),
     );
     expect(decision.outcome).toBe("deliver");
@@ -54,42 +45,47 @@ describe("planDelivery", () => {
     });
   });
 
-  it("reroutes boot class to operator channel when available", () => {
+  it("delivers boot class at its origin surface", () => {
     const decision = planDelivery(
       makeInput({
         messageClass: "boot",
-        operatorChannel,
       }),
     );
-    expect(decision).toMatchObject({
-      outcome: "reroute",
-      reason: "boot_to_operator_channel",
-      target: operatorChannel,
-    });
+    expect(decision.outcome).toBe("deliver");
   });
 
-  it("suppresses boot class when no operator channel is available", () => {
+  it("suppresses boot class when no origin surface is available", () => {
     const decision = planDelivery(
       makeInput({
         messageClass: "boot",
+        surface: { channel: "", to: "" },
       }),
     );
     expect(decision).toMatchObject({
       outcome: "suppress",
-      reason: "operator_only_no_channel",
+      reason: "no_origin",
     });
   });
 
-  it("reroutes resume class like boot", () => {
+  it("delivers resume class at its origin surface", () => {
     const decision = planDelivery(
       makeInput({
         messageClass: "resume",
-        operatorChannel,
+      }),
+    );
+    expect(decision.outcome).toBe("deliver");
+  });
+
+  it("suppresses resume class when origin is missing", () => {
+    const decision = planDelivery(
+      makeInput({
+        messageClass: "resume",
+        surface: { channel: "", to: "" },
       }),
     );
     expect(decision).toMatchObject({
-      outcome: "reroute",
-      reason: "boot_to_operator_channel",
+      outcome: "suppress",
+      reason: "no_origin",
     });
   });
 
@@ -108,33 +104,29 @@ describe("planDelivery", () => {
     }
   });
 
-  it("reroutes progress/completion to operator channel when notifyPolicy is operator_only", () => {
+  it("delivers progress/completion at their origin surface when notifyPolicy is operator_only", () => {
+    // operator_only no longer reroutes — with a valid origin, it passes through.
     for (const messageClass of ["progress", "completion", "final_reply"] as const) {
       const decision = planDelivery(
         makeInput({
           messageClass,
           notifyPolicy: "operator_only",
-          operatorChannel,
         }),
       );
-      expect(decision).toMatchObject({
-        outcome: "reroute",
-        reason: "cron_to_operator_channel",
-        target: operatorChannel,
-      });
+      expect(decision.outcome).toBe("deliver");
     }
   });
 
-  it("suppresses when operator_only policy has no operator channel", () => {
+  it("suppresses progress when there is no valid origin surface", () => {
     const decision = planDelivery(
       makeInput({
         messageClass: "progress",
-        notifyPolicy: "operator_only",
+        surface: { channel: "", to: "" },
       }),
     );
     expect(decision).toMatchObject({
       outcome: "suppress",
-      reason: "operator_only_no_channel",
+      reason: "no_origin",
     });
   });
 

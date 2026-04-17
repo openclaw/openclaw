@@ -15,7 +15,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
-import type { MessageClass } from "../../infra/outbound/message-class.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import {
@@ -23,7 +22,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import type { TaskNotifyPolicy } from "../../tasks/task-registry.types.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
@@ -266,27 +264,6 @@ function pruneCompletedDirectCronDeliveries(now: number) {
 function resolveCronDeliveryScheduledAtMs(params: { job: CronJob; runStartedAt: number }): number {
   const scheduledAt = params.job.state?.nextRunAtMs;
   return hasScheduledNextRunAtMs(scheduledAt) ? scheduledAt : params.runStartedAt;
-}
-
-/**
- * Phase 4 Discord Surface Overhaul: classify a cron job's delivery as
- * operator-only when its id matches one of the well-known "internal ops"
- * prefixes. These jobs exist to keep the main session alive (watchdog) or
- * report ACP task completion (reporter) — neither should post anything
- * user-visible when an operator channel is configured.
- *
- * The match list is intentionally narrow: adding a new prefix here is an
- * explicit policy decision, not a side effect of renaming a job.
- */
-const OPERATOR_ONLY_CRON_JOB_ID_PREFIXES = ["main-auto-continue-", "acp-completion-"] as const;
-
-export function cronJobDefaultsToOperatorOnly(jobId: string): boolean {
-  for (const prefix of OPERATOR_ONLY_CRON_JOB_ID_PREFIXES) {
-    if (jobId.startsWith(prefix)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function resolveCronDeliveryStartDelayMs(params: { job: CronJob; runStartedAt: number }): number {
@@ -610,19 +587,11 @@ export async function dispatchCronDelivery(
           }
         : undefined;
 
-      // Phase 4 Discord Surface Overhaul: classify cron deliveries so the
-      // delivery policy can reroute operator-only traffic (watchdog /
-      // completion reporter) to the configured operator channel, or suppress
-      // it when unset. Keep the `progress` class here so the policy's
-      // `operator_only` notifyPolicy branch is the decision point — boot is
-      // reserved for literal gateway restart / boot-session origins.
-      const defaultsToOperatorOnly = cronJobDefaultsToOperatorOnly(params.job.id);
-      const cronMessageClass: MessageClass | undefined = defaultsToOperatorOnly
-        ? "progress"
-        : undefined;
-      const cronNotifyPolicy: TaskNotifyPolicy | undefined = defaultsToOperatorOnly
-        ? "operator_only"
-        : undefined;
+      // Phase 4 REWORK (origin-respect): cron deliveries pass through their
+      // own `job.delivery` configured target verbatim — no reroute to an
+      // operator bucket. Keep `messageClass: "progress"` tagging so the
+      // Phase 3 sanitizer still runs on the outbound payload, and so the
+      // policy gate can honor `notifyPolicy: "silent"` on future callers.
       const runDelivery = async () =>
         await deliverOutboundPayloads({
           cfg: params.cfgWithAgentDefaults,
@@ -643,8 +612,7 @@ export async function dispatchCronDelivery(
           // entry that replays on the next restart.
           // See: https://github.com/openclaw/openclaw/issues/40545
           skipQueue: true,
-          messageClass: cronMessageClass,
-          notifyPolicy: cronNotifyPolicy,
+          messageClass: "progress",
         });
       const deliveryResults = options?.retryTransient
         ? await retryTransientDirectCronDelivery({

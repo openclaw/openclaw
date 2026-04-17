@@ -34,7 +34,6 @@ import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js"
 import type { OutboundIdentity } from "./identity.js";
 import type { MessageClass } from "./message-class.js";
 import type { DeliveryMirror } from "./mirror.js";
-import { resolveOperatorChannel } from "./operator-channel.js";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
@@ -297,11 +296,11 @@ type DeliverOutboundPayloadsCoreParams = {
    * Classification of this delivery (Phase 4 Discord Surface Overhaul).
    *
    * When set, `deliverOutboundPayloads` applies `planDelivery` BEFORE
-   * enqueuing for transport and can:
-   * - suppress the send entirely (e.g. boot/resume with no operator channel
-   *   configured, or `notifyPolicy === "silent"`),
-   * - reroute to the configured operator channel (e.g. boot/resume with an
-   *   operator channel set, or `notifyPolicy === "operator_only"`).
+   * enqueuing for transport and can suppress the send entirely (e.g.
+   * boot/resume with no origin surface available, or
+   * `notifyPolicy === "silent"`). Origin-respect routing: when a valid
+   * surface is present, the policy passes the send through at that surface
+   * — nothing is ever rerouted to a configured operator bucket.
    *
    * Absent = legacy behavior: no pre-send policy evaluation. Existing call
    * sites that already classified upstream (ACP parent-stream fast path) do
@@ -309,13 +308,10 @@ type DeliverOutboundPayloadsCoreParams = {
    */
   messageClass?: MessageClass;
   /**
-   * Task notify policy for this delivery (Phase 4 Discord Surface Overhaul).
+   * Task notify policy for this delivery.
    *
-   * Required companion to `messageClass` for cron-originated traffic where
-   * `"operator_only"` means "route internal ops chatter (watchdog,
-   * completion reporter) to the operator channel, or suppress when unset".
-   * `"silent"` means "never emit". Only honored when `messageClass` is also
-   * provided.
+   * Honored only when `messageClass` is also provided. `"silent"` means
+   * "never emit". Other policies ride through origin-respect routing.
    */
   notifyPolicy?: TaskNotifyPolicy;
 };
@@ -517,17 +513,17 @@ async function applyMessageSendingHook(params: {
 }
 
 /**
- * Evaluate the Phase 4 delivery policy for a tagged outbound send.
+ * Evaluate the delivery policy for a tagged outbound send.
  *
  * Returns `"suppress"` when the policy says the send must be dropped entirely
- * (no queue write, no adapter call, zero user-visible trace). Returns a new
- * params object when the policy says "reroute to operator channel" (channel,
- * to, accountId, and threadId are rewritten). Returns the original params
- * unchanged when no `messageClass` was provided or the policy says "deliver".
+ * (no queue write, no adapter call, zero user-visible trace). Returns the
+ * original params unchanged when no `messageClass` was provided or the policy
+ * says "deliver".
  *
- * Callers MUST use the returned value as the single source of truth for
- * subsequent steps (queue write, adapter handler creation) to avoid splitting
- * routing between pre-policy and post-policy values.
+ * Phase 4 REWORK (origin-respect): the policy no longer reroutes boot /
+ * resume / operator-only traffic into a configured operator-channel bucket.
+ * Every message lands on the surface that originated it, or is suppressed
+ * silently when no origin exists.
  */
 function applyMessageClassGate(
   params: DeliverOutboundPayloadsParams,
@@ -535,7 +531,6 @@ function applyMessageClassGate(
   if (!params.messageClass) {
     return params;
   }
-  const operatorChannel = resolveOperatorChannel(params.cfg);
   const decision = planDelivery({
     messageClass: params.messageClass,
     surface: {
@@ -544,53 +539,28 @@ function applyMessageClassGate(
       accountId: params.accountId,
       threadId: params.threadId ?? undefined,
     },
-    operatorChannel,
     notifyPolicy: params.notifyPolicy,
   });
   if (decision.outcome === "deliver") {
     return params;
   }
-  if (decision.outcome === "suppress") {
-    log.debug("deliverOutboundPayloads suppressed by delivery policy", {
-      channel: params.channel,
-      to: params.to,
-      messageClass: params.messageClass,
-      reason: decision.reason,
-    });
-    return "suppress";
-  }
-  // reroute: rewrite routing to the operator channel target. threadId on
-  // ResolvedSurfaceTarget is string|number, but DeliverOutboundPayloadsParams
-  // allows null as well — pass through as-is.
-  log.info("deliverOutboundPayloads rerouted to operator channel", {
-    fromChannel: params.channel,
-    fromTo: params.to,
-    toChannel: decision.target.channel,
-    toTo: decision.target.to,
+  log.debug("deliverOutboundPayloads suppressed by delivery policy", {
+    channel: params.channel,
+    to: params.to,
     messageClass: params.messageClass,
     reason: decision.reason,
   });
-  // Reroute casts through Exclude<OutboundChannel, "none"> because the plan
-  // step is a pure string but we trust the caller's config to configure the
-  // operator channel against a valid channel plugin id.
-  const rerouted: DeliverOutboundPayloadsParams = {
-    ...params,
-    channel: decision.target.channel as Exclude<OutboundChannel, "none">,
-    to: decision.target.to,
-    accountId: decision.target.accountId,
-    threadId: decision.target.threadId ?? undefined,
-  };
-  return rerouted;
+  return "suppress";
 }
 
 export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
-  // Phase 4 Discord Surface Overhaul: if the caller tagged this delivery with
+  // Phase 4 (rework, origin-respect): if the caller tagged this delivery with
   // a `messageClass`, consult `planDelivery` BEFORE touching the write-ahead
-  // queue or transport layer. This short-circuits boot/resume/operator-only
-  // traffic (suppress or reroute) at the single outbound chokepoint, so every
-  // path that flows through here inherits the policy.
+  // queue or transport layer. This short-circuits no-origin boot/resume and
+  // silent-policy traffic (suppress) at the single outbound chokepoint. Every
+  // other tagged send falls through to the original surface — no bucket reroute.
   const gatedParams = applyMessageClassGate(params);
   if (gatedParams === "suppress") {
     return [];

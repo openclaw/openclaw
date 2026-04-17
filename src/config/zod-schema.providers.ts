@@ -70,20 +70,8 @@ function getDirectChannelRuntimeSchema(channelId: string): ChannelConfigRuntimeS
 function hasPluginOwnedChannelConfig(
   value: ChannelsConfig,
 ): value is ChannelsConfig & Record<string, unknown> {
-  return Object.keys(value).some(
-    (key) => key !== "defaults" && key !== "modelByChannel" && key !== "operator",
-  );
+  return Object.keys(value).some((key) => key !== "defaults" && key !== "modelByChannel");
 }
-
-const ChannelOperatorTargetSchema = z
-  .object({
-    channel: z.string().min(1),
-    to: z.string().min(1),
-    accountId: z.string().optional(),
-    threadId: z.union([z.string(), z.number()]).optional(),
-  })
-  .strict()
-  .optional();
 
 function addLegacyChannelAcpBindingIssues(
   value: unknown,
@@ -163,9 +151,6 @@ export const ChannelsSchema: z.ZodType<ChannelsConfig | undefined> = z
       .strict()
       .optional(),
     modelByChannel: ChannelModelByChannelSchema,
-    // Phase 4 Discord Surface Overhaul: operator-visibility surface for
-    // boot/resume/cron operator-only signals.
-    operator: ChannelOperatorTargetSchema,
   })
   .passthrough() // Allow extension channel configs (nostr, matrix, zalo, etc.)
   .superRefine((value, ctx) => {
