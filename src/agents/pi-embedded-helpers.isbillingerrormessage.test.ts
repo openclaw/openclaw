@@ -45,6 +45,12 @@ const GROQ_TOO_MANY_REQUESTS_MESSAGE =
   "429 Too Many Requests: Too many requests were sent in a given timeframe.";
 const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
   "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance."; // pragma: allowlist secret
+const PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE =
+  "Proxy notice: Status: Internal Server Error";
+const MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE =
+  `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; upstream connect error`;
+const INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE =
+  `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; code:500`;
 
 function expectMessageMatches(
   matcher: (message: string) => boolean,
@@ -62,6 +68,12 @@ function expectTimeoutFailoverSamples(samples: readonly string[]) {
     expect(classifyFailoverReason(sample)).toBe("timeout");
     expect(isFailoverErrorMessage(sample)).toBe(true);
   }
+}
+
+function expectNotFailoverSample(sample: string) {
+  expect(isTimeoutErrorMessage(sample)).toBe(false);
+  expect(classifyFailoverReason(sample)).toBeNull();
+  expect(isFailoverErrorMessage(sample)).toBe(false);
 }
 
 describe("isAuthPermanentErrorMessage", () => {
@@ -811,6 +823,30 @@ describe("isFailoverErrorMessage", () => {
     expect(classifyFailoverReason(sample)).toBe(null);
     expect(isFailoverErrorMessage(sample)).toBe(false);
   });
+
+  it("matches google INTERNAL status errors as timeout", () => {
+    const sample =
+      "provider=google model=gemini-3.1-flash-lite-preview got status: INTERNAL upstream failure code:500";
+    expect(isTimeoutErrorMessage(sample)).toBe(true);
+    expect(classifyFailoverReason(sample)).toBe("timeout");
+    expect(isFailoverErrorMessage(sample)).toBe(true);
+  });
+
+  it("does not treat plain status text with internal-server-error wording as timeout", () => {
+    expectNotFailoverSample(PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE);
+  });
+
+  it("keeps mixed upstream server errors retryable when they also mention status prose", () => {
+    expect(isTimeoutErrorMessage(MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE)).toBe(false);
+    expect(classifyFailoverReason(MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE)).toBe("timeout");
+    expect(isFailoverErrorMessage(MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE)).toBe(true);
+  });
+
+  it("keeps status prose retryable when it is explicitly paired with code 500", () => {
+    expect(isTimeoutErrorMessage(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe(false);
+    expect(classifyFailoverReason(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe("timeout");
+    expect(isFailoverErrorMessage(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe(true);
+  });
 });
 
 describe("parseImageSizeError", () => {
@@ -1229,5 +1265,34 @@ describe("classifyProviderRuntimeFailureKind", () => {
         'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
       ),
     ).not.toBe("proxy");
+  });
+
+  it("classifies google-style INTERNAL status payloads as timeout", () => {
+    expect(
+      classifyFailoverReason(
+        'ERROR provider=google model=gemini-3.1-flash-lite-preview: got status: INTERNAL, details: {"code":500,"status":"INTERNAL"}',
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        'got status: INTERNAL. {"error":{"code":500,"message":"Internal error encountered.","status":"INTERNAL"}}',
+      ),
+    ).toBe("timeout");
+  });
+
+  it("does not classify google-style INTERNAL payloads without a 500 code as timeout", () => {
+    const sample =
+      'got status: INTERNAL. {"error":{"code":400,"message":"Request malformed","status":"INTERNAL"}}';
+    expect(isTimeoutErrorMessage(sample)).toBe(false);
+    expect(classifyFailoverReason(sample)).toBeNull();
+    expect(isFailoverErrorMessage(sample)).toBe(false);
+  });
+
+  it("does not classify plain status text with internal server error wording as timeout", () => {
+    expectNotFailoverSample(PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE);
+  });
+
+  it("classifies internal server error status prose with code 500 as timeout", () => {
+    expect(classifyFailoverReason(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe("timeout");
   });
 });
