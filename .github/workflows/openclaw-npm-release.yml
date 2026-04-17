@@ -79,6 +79,10 @@ jobs:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
 
+      - name: Sync local actions from workflow ref
+        # Обеспечивает наличие локальных действий даже при проверке старого тега/SHA
+        run: git checkout ${{ github.sha }} -- .github/actions
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -296,6 +300,10 @@ jobs:
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
+
+      - name: Sync local actions from workflow ref
+        # Обеспечивает наличие локальных действий даже при проверке старого тега/SHA
+        run: git checkout ${{ github.sha }} -- .github/actions
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
