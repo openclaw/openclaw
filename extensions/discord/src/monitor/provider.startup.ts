@@ -214,21 +214,31 @@ export async function fetchDiscordBotIdentity(params: {
   logStartupPhase: (phase: string, details?: string) => void;
 }) {
   params.logStartupPhase("fetch-bot-identity:start");
+  let botUser: Awaited<ReturnType<Client["fetchUser"]>>;
   try {
-    const botUser = await params.client.fetchUser("@me");
-    const botUserId = botUser?.id;
-    const botUserName =
-      normalizeOptionalString(botUser?.username) ?? normalizeOptionalString(botUser?.globalName);
-    params.logStartupPhase(
-      "fetch-bot-identity:done",
-      `botUserId=${botUserId ?? "<missing>"} botUserName=${botUserName ?? "<missing>"}`,
-    );
-    return { botUserId, botUserName };
+    botUser = await params.client.fetchUser("@me");
   } catch (err) {
+    // Fail fast: running without botUserId silently disables self-message
+    // filtering and the guild mention-gate (see issue #42219). Let the
+    // provider supervisor restart us instead of serving in that state.
     params.runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
     params.logStartupPhase("fetch-bot-identity:error", String(err));
-    return { botUserId: undefined, botUserName: undefined };
+    throw err instanceof Error ? err : new Error(`discord: fetch bot identity failed: ${String(err)}`);
   }
+  const botUserId = botUser?.id;
+  const botUserName =
+    normalizeOptionalString(botUser?.username) ?? normalizeOptionalString(botUser?.globalName);
+  if (!botUserId) {
+    const message = "discord: fetchUser(\"@me\") returned no id";
+    params.runtime.error?.(danger(message));
+    params.logStartupPhase("fetch-bot-identity:error", message);
+    throw new Error(message);
+  }
+  params.logStartupPhase(
+    "fetch-bot-identity:done",
+    `botUserId=${botUserId} botUserName=${botUserName ?? "<missing>"}`,
+  );
+  return { botUserId, botUserName };
 }
 
 export function registerDiscordMonitorListeners(params: {

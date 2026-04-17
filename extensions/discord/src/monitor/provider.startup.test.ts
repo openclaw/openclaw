@@ -70,7 +70,7 @@ vi.mock("./presence.js", () => ({
   resolveDiscordPresenceUpdate: vi.fn(() => undefined),
 }));
 
-import { createDiscordMonitorClient } from "./provider.startup.js";
+import { createDiscordMonitorClient, fetchDiscordBotIdentity } from "./provider.startup.js";
 
 describe("createDiscordMonitorClient", () => {
   it("adds listener compat for legacy voice plugins", () => {
@@ -121,5 +121,54 @@ describe("createDiscordMonitorClient", () => {
     expect(result.client.listeners).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "legacy-voice-listener" })]),
     );
+  });
+});
+
+describe("fetchDiscordBotIdentity", () => {
+  const makeRuntime = () =>
+    ({
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    }) as unknown as Parameters<typeof fetchDiscordBotIdentity>[0]["runtime"];
+
+  it("returns identity on success", async () => {
+    const logStartupPhase = vi.fn();
+    const client = {
+      fetchUser: vi.fn().mockResolvedValue({ id: "bot-123", username: "openclaw-bot" }),
+    } as unknown as Parameters<typeof fetchDiscordBotIdentity>[0]["client"];
+    const result = await fetchDiscordBotIdentity({
+      client,
+      runtime: makeRuntime(),
+      logStartupPhase,
+    });
+    expect(result).toEqual({ botUserId: "bot-123", botUserName: "openclaw-bot" });
+    expect(logStartupPhase).toHaveBeenCalledWith("fetch-bot-identity:start");
+  });
+
+  it("rethrows when fetchUser rejects so the supervisor can restart", async () => {
+    const runtime = makeRuntime();
+    const logStartupPhase = vi.fn();
+    const failure = new Error("network down");
+    const client = {
+      fetchUser: vi.fn().mockRejectedValue(failure),
+    } as unknown as Parameters<typeof fetchDiscordBotIdentity>[0]["client"];
+    await expect(
+      fetchDiscordBotIdentity({ client, runtime, logStartupPhase }),
+    ).rejects.toBe(failure);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("failed to fetch bot identity"));
+    expect(logStartupPhase).toHaveBeenCalledWith("fetch-bot-identity:error", expect.any(String));
+  });
+
+  it("throws when fetchUser resolves without an id (prevents degraded mention-gating)", async () => {
+    const runtime = makeRuntime();
+    const logStartupPhase = vi.fn();
+    const client = {
+      fetchUser: vi.fn().mockResolvedValue({ username: "openclaw-bot" }),
+    } as unknown as Parameters<typeof fetchDiscordBotIdentity>[0]["client"];
+    await expect(
+      fetchDiscordBotIdentity({ client, runtime, logStartupPhase }),
+    ).rejects.toThrow(/no id/);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("no id"));
   });
 });
