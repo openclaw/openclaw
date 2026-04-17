@@ -271,9 +271,9 @@ function shouldSuppressProbeConsoleLine(params: {
   }
   const isProbeSuppressedSubsystem =
     params.subsystem === "agent/embedded" ||
-    params.subsystem.startsWith("agent/embedded/") ||
+    params.subsystem?.startsWith("agent/embedded/") ||
     params.subsystem === "model-fallback" ||
-    params.subsystem.startsWith("model-fallback/");
+    params.subsystem?.startsWith("model-fallback/");
   if (!isProbeSuppressedSubsystem) {
     return false;
   }
