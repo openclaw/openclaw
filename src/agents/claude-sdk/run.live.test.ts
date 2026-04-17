@@ -53,11 +53,22 @@ describeLive("runClaudeSdkAgent (live, OPENCLAW_LIVE_TEST=1)", () => {
       workspaceDir,
       agentDir,
       runId: `live-run-${Date.now()}`,
-      timeoutMs: 60_000,
+      // The SDK's Claude Code subprocess does real first-launch init
+      // (plugin discovery, MCP handshake, sub-agent catalog). 4 min is
+      // comfortable headroom for a cold start on a developer machine.
+      timeoutMs: 4 * 60_000,
       prompt: "",
       ...overrides,
     } as RunEmbeddedPiAgentParams;
   }
+
+  // Timeout set generous (5 min) because the Claude Code subprocess the
+  // SDK spawns does first-run initialization on cold launch — loading
+  // the .claude/agents/ sub-agents, plugin MCP servers, cached models,
+  // etc. Real-world happy-path calls are much faster once warm; the
+  // timeout here only has to accommodate the worst cold-start case on
+  // a developer machine.
+  const RUN_TIMEOUT_MS = 5 * 60_000;
 
   it("answers a trivial prompt via the Claude.ai subscription", async () => {
     const result = await runClaudeSdkAgent(
@@ -68,7 +79,7 @@ describeLive("runClaudeSdkAgent (live, OPENCLAW_LIVE_TEST=1)", () => {
     );
     expect(result.payloads?.[0]?.text ?? "").toMatch(/CLAUDE-SDK-OK/);
     expect(result.meta.agentMeta?.provider).toBe("anthropic");
-  }, 120_000);
+  }, RUN_TIMEOUT_MS);
 
   it("writes the pi-ai JSONL mirror to the session file", async () => {
     await runClaudeSdkAgent(
@@ -85,5 +96,5 @@ describeLive("runClaudeSdkAgent (live, OPENCLAW_LIVE_TEST=1)", () => {
       .map((line) => JSON.parse(line) as { type: string });
     expect(lines[0]?.type).toBe("system");
     expect(lines.some((l) => l.type === "assistant")).toBe(true);
-  }, 120_000);
+  }, RUN_TIMEOUT_MS);
 });
