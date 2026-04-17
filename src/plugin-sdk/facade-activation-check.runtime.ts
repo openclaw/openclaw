@@ -201,31 +201,55 @@ function readBundledPluginManifestRecordFromDir(params: {
   pluginsRoot: string;
   resolvedDirName: string;
 }): FacadePluginManifestLike | null {
-  const manifestPath = path.join(
-    params.pluginsRoot,
-    params.resolvedDirName,
-    "openclaw.plugin.json",
-  );
-  if (!fs.existsSync(manifestPath)) {
+  const pluginRoot = path.join(params.pluginsRoot, params.resolvedDirName);
+  const manifestPath = path.join(pluginRoot, "openclaw.plugin.json");
+  if (fs.existsSync(manifestPath)) {
+    try {
+      const raw = JSON5.parse(fs.readFileSync(manifestPath, "utf8")) as {
+        id?: unknown;
+        enabledByDefault?: unknown;
+        channels?: unknown;
+      };
+      if (typeof raw.id === "string" && raw.id.trim().length > 0) {
+        return {
+          id: raw.id,
+          origin: "bundled",
+          enabledByDefault: raw.enabledByDefault === true,
+          rootDir: pluginRoot,
+          channels: Array.isArray(raw.channels)
+            ? raw.channels.filter((entry): entry is string => typeof entry === "string")
+            : [],
+        };
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  const packageJsonPath = path.join(pluginRoot, "package.json");
+  if (!fs.existsSync(packageJsonPath)) {
     return null;
   }
   try {
-    const raw = JSON5.parse(fs.readFileSync(manifestPath, "utf8")) as {
-      id?: unknown;
-      enabledByDefault?: unknown;
-      channels?: unknown;
+    const raw = JSON5.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+      name?: unknown;
     };
-    if (typeof raw.id !== "string" || raw.id.trim().length === 0) {
+    if (typeof raw.name !== "string" || raw.name.trim().length === 0) {
+      return null;
+    }
+    const packageName = raw.name.trim();
+    const id = packageName.startsWith("@openclaw/")
+      ? packageName.slice("@openclaw/".length)
+      : packageName;
+    if (!id) {
       return null;
     }
     return {
-      id: raw.id,
+      id,
       origin: "bundled",
-      enabledByDefault: raw.enabledByDefault === true,
-      rootDir: path.join(params.pluginsRoot, params.resolvedDirName),
-      channels: Array.isArray(raw.channels)
-        ? raw.channels.filter((entry): entry is string => typeof entry === "string")
-        : [],
+      enabledByDefault: false,
+      rootDir: pluginRoot,
+      channels: [],
     };
   } catch {
     return null;
