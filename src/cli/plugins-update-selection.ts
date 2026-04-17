@@ -20,6 +20,11 @@ export function resolvePluginUpdateSelection(params: {
 
   const parsedSpec = parseRegistryNpmSpec(params.rawId);
   if (!parsedSpec || parsedSpec.selectorKind === "none") {
+    // rawId is a plain plugin id — look it up and force @latest for npm plugins
+    const record = params.installs[params.rawId];
+    if (record?.source === "npm") {
+      return { pluginIds: [params.rawId], specOverrides: { [params.rawId]: "@latest" } };
+    }
     return { pluginIds: [params.rawId] };
   }
 
