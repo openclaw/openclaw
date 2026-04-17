@@ -3,18 +3,9 @@ name: CodeQL
 on:
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "**/*.md"
-      - "**/*.mdx"
-      - "LICENSE"
-      - ".github/CODEOWNERS"
-      - ".github/labeler.yml"
-      - ".github/PULL_REQUEST_TEMPLATE/**"
-      - ".github/ISSUE_TEMPLATE/**"
   workflow_dispatch:
   schedule:
-    - cron: "0 6 * * 1"
+    - cron: "0 6 * * *"
 
 concurrency:
   group: codeql-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
