@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 - OpenAI Codex/OAuth: treat the OpenAI TLS prerequisites probe as advisory instead of a hard blocker, so Codex sign-in can still proceed when the speculative Node/OpenSSL precheck fails but the real OAuth flow still works. Thanks @vincentkoc.
 - Models status/OAuth health: align OAuth health reporting with the same effective credential view runtime uses, so expired refreshable sessions stop showing healthy by default and fresher imported Codex CLI credentials surface correctly in `models status`, doctor, and gateway auth status. Thanks @vincentkoc.
 - Twitch/setup: load Twitch through the bundled setup-entry discovery path and keep setup/status account detection aligned with runtime config. (#68008) Thanks @gumadeiras.
+- Feishu/card actions: resolve card-action chat type from the Feishu chat API when stored context is missing, preferring `chat_mode` over `chat_type`, so DM-originated card actions no longer bypass `dmPolicy` by falling through to the group handling path. (#68201)
 
 ## 2026.4.15
 
