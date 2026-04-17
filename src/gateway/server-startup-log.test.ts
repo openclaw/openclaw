@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectProxyEnvMismatch, logGatewayStartup } from "./server-startup-log.js";
 
 vi.mock("../infra/net/proxy-env.js", () => ({
-  hasProxyEnvConfigured: vi.fn(() => false),
+  hasEnvHttpProxyConfigured: vi.fn(() => false),
 }));
 
 describe("gateway startup log", () => {
@@ -79,8 +79,8 @@ describe("gateway startup log", () => {
 
   describe("proxy env mismatch warning", () => {
     it("warns when proxy env is set but remote providers lack proxy config", async () => {
-      const { hasProxyEnvConfigured } = await import("../infra/net/proxy-env.js");
-      vi.mocked(hasProxyEnvConfigured).mockReturnValue(true);
+      const { hasEnvHttpProxyConfigured } = await import("../infra/net/proxy-env.js");
+      vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
 
       const result = collectProxyEnvMismatch({
         models: {
@@ -104,8 +104,8 @@ describe("gateway startup log", () => {
     });
 
     it("does not warn when all remote providers have proxy configured", async () => {
-      const { hasProxyEnvConfigured } = await import("../infra/net/proxy-env.js");
-      vi.mocked(hasProxyEnvConfigured).mockReturnValue(true);
+      const { hasEnvHttpProxyConfigured } = await import("../infra/net/proxy-env.js");
+      vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
 
       const result = collectProxyEnvMismatch({
         models: {
@@ -123,8 +123,8 @@ describe("gateway startup log", () => {
     });
 
     it("does not warn when no proxy env is set", async () => {
-      const { hasProxyEnvConfigured } = await import("../infra/net/proxy-env.js");
-      vi.mocked(hasProxyEnvConfigured).mockReturnValue(false);
+      const { hasEnvHttpProxyConfigured } = await import("../infra/net/proxy-env.js");
+      vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(false);
 
       const result = collectProxyEnvMismatch({
         models: {
@@ -141,8 +141,8 @@ describe("gateway startup log", () => {
     });
 
     it("does not warn for local providers", async () => {
-      const { hasProxyEnvConfigured } = await import("../infra/net/proxy-env.js");
-      vi.mocked(hasProxyEnvConfigured).mockReturnValue(true);
+      const { hasEnvHttpProxyConfigured } = await import("../infra/net/proxy-env.js");
+      vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
 
       const result = collectProxyEnvMismatch({
         models: {
@@ -159,8 +159,8 @@ describe("gateway startup log", () => {
     });
 
     it("does not warn for RFC 1918 private LAN providers", async () => {
-      const { hasProxyEnvConfigured } = await import("../infra/net/proxy-env.js");
-      vi.mocked(hasProxyEnvConfigured).mockReturnValue(true);
+      const { hasEnvHttpProxyConfigured } = await import("../infra/net/proxy-env.js");
+      vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
 
       const result = collectProxyEnvMismatch({
         models: {

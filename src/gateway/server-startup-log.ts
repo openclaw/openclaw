@@ -2,7 +2,7 @@ import chalk from "chalk";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
+import { hasEnvHttpProxyConfigured } from "../infra/net/proxy-env.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../security/dangerous-config-flags.js";
 
@@ -77,7 +77,12 @@ function isLocalOrPrivateProviderUrl(baseUrl: string): boolean {
 }
 
 export function collectProxyEnvMismatch(cfg: OpenClawConfig): string | null {
-  if (!hasProxyEnvConfigured()) {
+  // Use hasEnvHttpProxyConfigured (not hasProxyEnvConfigured) because the
+  // env-proxy transport path follows resolveEnvHttpProxyUrl semantics which
+  // intentionally ignores ALL_PROXY. Checking hasProxyEnvConfigured would
+  // fire when only ALL_PROXY is set, but the suggested env-proxy fix would
+  // not actually pick up that variable — creating a persistent false-positive.
+  if (!hasEnvHttpProxyConfigured("https") && !hasEnvHttpProxyConfigured("http")) {
     return null;
   }
 
@@ -98,7 +103,7 @@ export function collectProxyEnvMismatch(cfg: OpenClawConfig): string | null {
   }
 
   return (
-    `proxy env detected (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY) but not used by providers: ${unconfigured.join(", ")}. ` +
+    `proxy env detected (HTTP_PROXY/HTTPS_PROXY) but not used by providers: ${unconfigured.join(", ")}. ` +
     `Consider setting models.providers.<name>.request.proxy.mode = "env-proxy"`
   );
 }
