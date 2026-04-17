@@ -6,6 +6,7 @@ import {
   stripMarkdown,
 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
+import { createBlueBubblesClient, createBlueBubblesClientFromParts } from "./client.js";
 import {
   fetchBlueBubblesServerInfo,
   getCachedBlueBubblesPrivateApiStatus,
@@ -15,16 +16,7 @@ import type { OpenClawConfig } from "./runtime-api.js";
 import { warnBlueBubbles } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
-import {
-  blueBubblesFetchWithTimeout,
-  buildBlueBubblesApiUrl,
-  type BlueBubblesSendTarget,
-  type SsrFPolicy,
-} from "./types.js";
-
-function blueBubblesPolicy(allowPrivateNetwork: boolean | undefined): SsrFPolicy {
-  return allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
-}
+import { type BlueBubblesSendTarget } from "./types.js";
 
 export type BlueBubblesSendOpts = {
   serverUrl?: string;
@@ -206,25 +198,22 @@ async function queryChats(params: {
   limit: number;
   allowPrivateNetwork?: boolean;
 }): Promise<BlueBubblesChatRecord[]> {
-  const url = buildBlueBubblesApiUrl({
+  const client = createBlueBubblesClientFromParts({
     baseUrl: params.baseUrl,
-    path: "/api/v1/chat/query",
     password: params.password,
+    allowPrivateNetwork: params.allowPrivateNetwork === true,
+    timeoutMs: params.timeoutMs,
   });
-  const res = await blueBubblesFetchWithTimeout(
-    url,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        limit: params.limit,
-        offset: params.offset,
-        with: ["participants"],
-      }),
+  const res = await client.request({
+    method: "POST",
+    path: "/api/v1/chat/query",
+    body: {
+      limit: params.limit,
+      offset: params.offset,
+      with: ["participants"],
     },
-    params.timeoutMs,
-    blueBubblesPolicy(params.allowPrivateNetwork),
-  );
+    timeoutMs: params.timeoutMs,
+  });
   if (!res.ok) {
     return [];
   }
@@ -341,26 +330,23 @@ export async function createChatForHandle(params: {
   timeoutMs?: number;
   allowPrivateNetwork?: boolean;
 }): Promise<{ chatGuid: string | null; messageId: string }> {
-  const url = buildBlueBubblesApiUrl({
+  const client = createBlueBubblesClientFromParts({
     baseUrl: params.baseUrl,
-    path: "/api/v1/chat/new",
     password: params.password,
+    allowPrivateNetwork: params.allowPrivateNetwork === true,
+    timeoutMs: params.timeoutMs,
   });
   const payload = {
     addresses: [params.address],
     message: params.message ?? "",
     tempGuid: `temp-${crypto.randomUUID()}`,
   };
-  const res = await blueBubblesFetchWithTimeout(
-    url,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-    params.timeoutMs,
-    blueBubblesPolicy(params.allowPrivateNetwork),
-  );
+  const res = await client.request({
+    method: "POST",
+    path: "/api/v1/chat/new",
+    body: payload,
+    timeoutMs: params.timeoutMs,
+  });
   if (!res.ok) {
     const errorText = await res.text();
     if (
@@ -539,21 +525,18 @@ export async function sendMessageBlueBubbles(
     payload.effectId = effectId;
   }
 
-  const url = buildBlueBubblesApiUrl({
-    baseUrl,
-    path: "/api/v1/message/text",
-    password,
+  const client = createBlueBubblesClient({
+    cfg: opts.cfg ?? {},
+    accountId: opts.accountId,
+    serverUrl: opts.serverUrl,
+    password: opts.password,
   });
-  const res = await blueBubblesFetchWithTimeout(
-    url,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-    opts.timeoutMs,
-    blueBubblesPolicy(allowPrivateNetwork),
-  );
+  const res = await client.request({
+    method: "POST",
+    path: "/api/v1/message/text",
+    body: payload,
+    timeoutMs: opts.timeoutMs,
+  });
   if (!res.ok) {
     const errorText = await res.text();
     throw new Error(`BlueBubbles send failed (${res.status}): ${errorText || "unknown"}`);
