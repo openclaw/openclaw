@@ -5,12 +5,8 @@ import type { OpenClawConfig } from "../config/types.js";
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleSync: vi.fn(),
 }));
-const bootstrapRegistryMocks = vi.hoisted(() => ({
-  getBootstrapChannelPlugin: vi.fn(),
-}));
 
 vi.mock("../plugins/public-surface-loader.js", () => publicSurfaceLoaderMocks);
-vi.mock("../channels/plugins/bootstrap-registry.js", () => bootstrapRegistryMocks);
 
 import {
   resolveChannelInboundAttachmentRoots,
@@ -40,7 +36,6 @@ function createContext(provider: string, accountId = "work"): MsgContext {
 
 beforeEach(() => {
   publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockReset();
-  bootstrapRegistryMocks.getBootstrapChannelPlugin.mockReset();
 });
 
 describe("channel inbound roots fast path", () => {
@@ -73,7 +68,6 @@ describe("channel inbound roots fast path", () => {
         ctx: createContext("imessage"),
       }),
     ).toEqual(["/remote/work"]);
-    expect(bootstrapRegistryMocks.getBootstrapChannelPlugin).not.toHaveBeenCalled();
     expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
       {
         dirName: "imessage",
@@ -82,14 +76,9 @@ describe("channel inbound roots fast path", () => {
     );
   });
 
-  it("falls back to generic contract artifacts before full channel bootstrap", () => {
+  it("does not load broad generic contract artifacts on the media-root path", () => {
     publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(
       ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-        if (dirName === "legacy-channel" && artifactBasename === "contract-api.js") {
-          return {
-            resolveRemoteInboundAttachmentRoots: () => ["/legacy-remote"],
-          };
-        }
         throw unableToResolve(dirName, artifactBasename);
       },
     );
@@ -97,46 +86,26 @@ describe("channel inbound roots fast path", () => {
     expect(
       resolveChannelRemoteInboundAttachmentRoots({
         cfg,
-        ctx: createContext("legacy-channel"),
+        ctx: createContext("whatsapp"),
       }),
-    ).toEqual(["/legacy-remote"]);
-    expect(bootstrapRegistryMocks.getBootstrapChannelPlugin).not.toHaveBeenCalled();
+    ).toBeUndefined();
     expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
       {
-        dirName: "legacy-channel",
+        dirName: "whatsapp",
         artifactBasename: "media-contract-api.js",
       },
     );
-    expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
-      {
-        dirName: "legacy-channel",
-        artifactBasename: "contract-api.js",
-      },
-    );
-  });
-
-  it("uses channel bootstrap when no public root contract exists", () => {
-    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(
-      ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-        throw unableToResolve(dirName, artifactBasename);
-      },
-    );
-    bootstrapRegistryMocks.getBootstrapChannelPlugin.mockReturnValue({
-      messaging: {
-        resolveRemoteInboundAttachmentRoots: ({ accountId }: { accountId?: string }) => [
-          `/bootstrap/${accountId}`,
-        ],
-      },
-    });
-
     expect(
-      resolveChannelRemoteInboundAttachmentRoots({
-        cfg,
-        ctx: createContext("bootstrap-channel"),
-      }),
-    ).toEqual(["/bootstrap/work"]);
-    expect(bootstrapRegistryMocks.getBootstrapChannelPlugin).toHaveBeenCalledWith(
-      "bootstrap-channel",
-    );
+      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
+    ).not.toHaveBeenCalledWith({
+      dirName: "whatsapp",
+      artifactBasename: "contract-api.js",
+    });
+    expect(
+      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
+    ).not.toHaveBeenCalledWith({
+      dirName: "whatsapp",
+      artifactBasename: "index.js",
+    });
   });
 });
