@@ -974,6 +974,31 @@ describe("chat view", () => {
     );
   });
 
+  it("does not render blocked local transcript image paths", () => {
+    const container = document.createElement("div");
+
+    renderGroupedMessage(
+      container,
+      {
+        id: "user-history-image-blocked",
+        role: "user",
+        content: "",
+        MediaPath: "/Users/test/Documents/private.png",
+        MediaType: "image/png",
+        timestamp: Date.now(),
+      },
+      "user",
+      {
+        showToolCalls: false,
+        basePath: "/openclaw",
+        assistantAttachmentAuthToken: "session-token",
+        localMediaPreviewRoots: ["/tmp/openclaw"],
+      },
+    );
+
+    expect(container.querySelector(".chat-message-image")).toBeNull();
+  });
+
   it("skips non-image transcript media paths after history reload", () => {
     const container = document.createElement("div");
 
