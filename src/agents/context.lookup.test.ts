@@ -216,6 +216,18 @@ describe("lookupContextTokens", () => {
           expectedCalls: 0,
         },
         {
+          argv: ["node", "openclaw", "sessions"],
+          expectedCalls: 0,
+        },
+        {
+          argv: ["node", "openclaw", "sessions", "--json"],
+          expectedCalls: 0,
+        },
+        {
+          argv: ["node", "openclaw", "sessions", "--active", "10"],
+          expectedCalls: 0,
+        },
+        {
           argv: ["node", "scripts/test-built-plugin-singleton.mjs"],
           expectedCalls: 0,
         },
