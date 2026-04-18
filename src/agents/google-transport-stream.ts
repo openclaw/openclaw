@@ -10,7 +10,14 @@ import {
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../infra/google-api-base-url.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { stripInvalidGoogleThinkingBudget } from "./google-thinking-compat.js";
+import {
+  isGoogleGemini3FlashModel,
+  isGoogleGemini3ProModel,
+  resolveGoogleGemini3ThinkingLevel,
+  stripInvalidGoogleThinkingBudget,
+  type GoogleThinkingInputLevel,
+  type GoogleThinkingLevel,
+} from "./google-thinking-compat.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -29,8 +36,6 @@ type GoogleTransportModel = Model<"google-generative-ai"> & {
   headers?: Record<string, string>;
   provider: string;
 };
-
-type GoogleThinkingLevel = "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
 
 type GoogleTransportOptions = SimpleStreamOptions & {
   cachedContent?: string;
@@ -114,14 +119,6 @@ type GoogleSseChunk = {
 
 let toolCallCounter = 0;
 
-function isGemini3ProModel(modelId: string): boolean {
-  return /gemini-3(?:\.\d+)?-pro/.test(normalizeLowercaseStringOrEmpty(modelId));
-}
-
-function isGemini3FlashModel(modelId: string): boolean {
-  return /gemini-3(?:\.\d+)?-flash/.test(normalizeLowercaseStringOrEmpty(modelId));
-}
-
 function requiresToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
 }
@@ -189,37 +186,29 @@ function buildGoogleRequestUrl(model: GoogleTransportModel): string {
 }
 
 function resolveThinkingLevel(level: ThinkingLevel, modelId: string): GoogleThinkingLevel {
-  if (isGemini3ProModel(modelId)) {
-    switch (level) {
-      case "minimal":
-      case "low":
-        return "LOW";
-      case "medium":
-      case "high":
-      case "xhigh":
-        return "HIGH";
-    }
-  }
-  switch (level) {
-    case "minimal":
-      return "MINIMAL";
-    case "low":
-      return "LOW";
-    case "medium":
-      return "MEDIUM";
-    case "high":
-    case "xhigh":
-      return "HIGH";
+  const resolved = resolveGoogleGemini3ThinkingLevel({ modelId, thinkingLevel: level });
+  if (resolved) {
+    return resolved;
   }
   throw new Error("Unsupported thinking level");
 }
 
+function resolveExplicitThinkingLevel(
+  level: GoogleThinkingLevel,
+  modelId: string,
+): GoogleThinkingLevel {
+  return (
+    resolveGoogleGemini3ThinkingLevel({
+      modelId,
+      thinkingLevel: level.toLowerCase() as GoogleThinkingInputLevel,
+    }) ?? level
+  );
+}
+
 function getDisabledThinkingConfig(modelId: string): Record<string, unknown> | undefined {
-  if (isGemini3ProModel(modelId)) {
-    return { thinkingLevel: "LOW" };
-  }
-  if (isGemini3FlashModel(modelId)) {
-    return { thinkingLevel: "MINIMAL" };
+  const thinkingLevel = resolveGoogleGemini3ThinkingLevel({ modelId, thinkingLevel: "off" });
+  if (thinkingLevel) {
+    return { thinkingLevel };
   }
   return normalizeGoogleThinkingConfig(modelId, { thinkingBudget: 0 });
 }
@@ -255,16 +244,24 @@ function resolveGoogleThinkingConfig(
     }
     const config: Record<string, unknown> = { includeThoughts: true };
     if (options.thinking.level) {
-      config.thinkingLevel = options.thinking.level;
+      config.thinkingLevel = resolveExplicitThinkingLevel(options.thinking.level, model.id);
     } else if (typeof options.thinking.budgetTokens === "number") {
-      config.thinkingBudget = options.thinking.budgetTokens;
+      const thinkingLevel = resolveGoogleGemini3ThinkingLevel({
+        modelId: model.id,
+        thinkingBudget: options.thinking.budgetTokens,
+      });
+      if (thinkingLevel) {
+        config.thinkingLevel = thinkingLevel;
+      } else {
+        config.thinkingBudget = options.thinking.budgetTokens;
+      }
     }
     return normalizeGoogleThinkingConfig(model.id, config);
   }
   if (!options?.reasoning) {
     return getDisabledThinkingConfig(model.id);
   }
-  if (isGemini3ProModel(model.id) || isGemini3FlashModel(model.id)) {
+  if (isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id)) {
     return {
       includeThoughts: true,
       thinkingLevel: resolveThinkingLevel(options.reasoning, model.id),

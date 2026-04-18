@@ -12,6 +12,9 @@ const GEMINI_2_5_FLASH_PREFIX = "gemini-2.5-flash";
 const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
+const GEMINI_PRO_LATEST_ID = "gemini-pro-latest";
+const GEMINI_FLASH_LATEST_ID = "gemini-flash-latest";
+const GEMINI_FLASH_LITE_LATEST_ID = "gemini-flash-lite-latest";
 const GEMMA_PREFIX = "gemma-";
 const GEMINI_2_5_PRO_TEMPLATE_IDS = ["gemini-2.5-pro"] as const;
 const GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS = ["gemini-2.5-flash-lite"] as const;
@@ -128,7 +131,7 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       cliTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
       preferExternalFirstForCli: true,
     };
-  } else if (lower.startsWith(GEMINI_3_1_PRO_PREFIX)) {
+  } else if (lower.startsWith(GEMINI_3_1_PRO_PREFIX) || lower === GEMINI_PRO_LATEST_ID) {
     family = {
       googleTemplateIds: GEMINI_3_1_PRO_TEMPLATE_IDS,
       cliTemplateIds: GEMINI_3_1_PRO_TEMPLATE_IDS,
@@ -136,12 +139,15 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     if (params.providerId === "google" || params.providerId === GOOGLE_GEMINI_CLI_PROVIDER_ID) {
       patch = { reasoning: true };
     }
-  } else if (lower.startsWith(GEMINI_3_1_FLASH_LITE_PREFIX)) {
+  } else if (
+    lower.startsWith(GEMINI_3_1_FLASH_LITE_PREFIX) ||
+    lower === GEMINI_FLASH_LITE_LATEST_ID
+  ) {
     family = {
       googleTemplateIds: GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS,
       cliTemplateIds: GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS,
     };
-  } else if (lower.startsWith(GEMINI_3_1_FLASH_PREFIX)) {
+  } else if (lower.startsWith(GEMINI_3_1_FLASH_PREFIX) || lower === GEMINI_FLASH_LATEST_ID) {
     family = {
       googleTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
       cliTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
@@ -182,6 +188,11 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
 export function isModernGoogleModel(modelId: string): boolean {
   const lower = normalizeOptionalLowercaseString(modelId) ?? "";
   return (
-    lower.startsWith("gemini-2.5") || lower.startsWith("gemini-3") || lower.startsWith(GEMMA_PREFIX)
+    lower.startsWith("gemini-2.5") ||
+    lower.startsWith("gemini-3") ||
+    lower === GEMINI_PRO_LATEST_ID ||
+    lower === GEMINI_FLASH_LATEST_ID ||
+    lower === GEMINI_FLASH_LITE_LATEST_ID ||
+    lower.startsWith(GEMMA_PREFIX)
   );
 }
