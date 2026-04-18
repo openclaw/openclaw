@@ -137,10 +137,12 @@ const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
  * causing the reply to appear as a topic (话题) under the original message.
  */
 const ReplyInThreadSchema = z.enum(["disabled", "enabled"]).optional();
+const MentionForwardModeSchema = z.enum(["auto", "none"]).optional();
 
 export const FeishuGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    mentionForwardMode: MentionForwardModeSchema,
     tools: ToolPolicySchema,
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
@@ -164,6 +166,7 @@ const FeishuSharedConfigShape = {
   groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   groupSenderAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   requireMention: z.boolean().optional(),
+  mentionForwardMode: MentionForwardModeSchema,
   groups: z.record(z.string(), FeishuGroupSchema.optional()).optional(),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),

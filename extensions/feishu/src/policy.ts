@@ -188,11 +188,7 @@ export function resolveFeishuReplyPolicy(params: {
    * @-mentions are still delivered to the agent.
    */
   groupPolicy?: "open" | "allowlist" | "disabled" | "allowall";
-}): { requireMention: boolean } {
-  if (params.isDirectMessage) {
-    return { requireMention: false };
-  }
-
+}): { requireMention: boolean; forwardMentionTargets: boolean } {
   const feishuCfg = params.cfg.channels?.feishu;
   const resolvedCfg = resolveMergedAccountConfig<FeishuConfig>({
     channelConfig: feishuCfg,
@@ -201,10 +197,23 @@ export function resolveFeishuReplyPolicy(params: {
     normalizeAccountId,
     omitKeys: ["defaultAccount"],
   });
-  const groupRequireMention = resolveFeishuGroupConfig({
-    cfg: resolvedCfg,
-    groupId: params.groupId,
-  })?.requireMention;
+  const groupConfig = params.isDirectMessage
+    ? undefined
+    : resolveFeishuGroupConfig({
+        cfg: resolvedCfg,
+        groupId: params.groupId,
+      });
+  const forwardMentionTargets =
+    (groupConfig?.mentionForwardMode ?? resolvedCfg.mentionForwardMode ?? "auto") !== "none";
+
+  if (params.isDirectMessage) {
+    return {
+      requireMention: false,
+      forwardMentionTargets,
+    };
+  }
+
+  const groupRequireMention = groupConfig?.requireMention;
 
   return {
     requireMention:
@@ -213,5 +222,6 @@ export function resolveFeishuReplyPolicy(params: {
         : typeof resolvedCfg.requireMention === "boolean"
           ? resolvedCfg.requireMention
           : params.groupPolicy !== "open",
+    forwardMentionTargets,
   };
 }
