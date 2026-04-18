@@ -6,9 +6,8 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { captureEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
-import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
-import { setTempStateDir } from "./skills-install.download-test-utils.js";
 import { installSkill } from "./skills-install.js";
 import {
   runCommandWithTimeoutMock,
@@ -47,25 +46,28 @@ metadata: {"openclaw":{"install":[{"id":"deps","kind":"node","package":"example-
 }
 
 const workspaceSuite = createFixtureSuite("openclaw-skills-install-");
-let tempHome: TempHomeEnv;
 
 beforeAll(async () => {
-  tempHome = await createTempHomeEnv("openclaw-skills-install-home-");
   await workspaceSuite.setup();
 });
 
 afterAll(async () => {
   resetGlobalHookRunner();
   await workspaceSuite.cleanup();
-  await tempHome.restore();
 });
 
 async function withWorkspaceCase(
   run: (params: { workspaceDir: string; stateDir: string }) => Promise<void>,
 ): Promise<void> {
   const workspaceDir = await workspaceSuite.createCaseDir("case");
-  const stateDir = setTempStateDir(workspaceDir);
-  await run({ workspaceDir, stateDir });
+  const stateDir = path.join(workspaceDir, "state");
+  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  try {
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    await run({ workspaceDir, stateDir });
+  } finally {
+    envSnapshot.restore();
+  }
 }
 
 describe("installSkill code safety scanning", () => {

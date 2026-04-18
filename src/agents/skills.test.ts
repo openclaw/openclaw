@@ -12,20 +12,19 @@ import { withPathResolutionEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
+import { buildWorkspaceSkillCommandSpecs } from "./skills/command-specs.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
-  buildWorkspaceSkillCommandSpecs,
-  buildWorkspaceSkillsPrompt,
-  type SkillEntry,
-  type SkillSnapshot,
-} from "./skills.js";
-import { getActiveSkillEnvKeys } from "./skills/env-overrides.js";
+  getActiveSkillEnvKeys,
+} from "./skills/env-overrides.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
 } from "./skills/home-env.test-support.js";
+import type { SkillEntry, SkillSnapshot } from "./skills/types.js";
+import { buildWorkspaceSkillsPrompt } from "./skills/workspace.js";
 
 vi.mock("./skills/plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],
