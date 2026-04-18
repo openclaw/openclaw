@@ -200,36 +200,19 @@ describe("exec approvals store helpers", () => {
     expect(fs.existsSync(path.join(realHome, ".openclaw"))).toBe(false);
   });
 
-  it("refuses to traverse a symlinked .openclaw dir even when HOME itself is real", () => {
-    // Regression test: on AWS deployments, HOME is real (/home/ubuntu) but
-    // ~/.openclaw is a symlink to OPENCLAW_STATE_DIR (/data/openclaw).
-    // The exec approvals system should not block in this case — it should
-    // use the real resolved path rather than tripping on the symlink.
-    //
-    // Currently this test FAILS (demonstrating the bug): the check uses
-    // resolveRequiredHomeDir() as the trusted root and walks from there,
-    // hitting the symlink at ~/.openclaw and throwing.
-    //
-    // The fix: when OPENCLAW_STATE_DIR is set, use its real path as the
-    // trusted root for the approvals path check instead of HOME.
+  it("allows a symlinked .openclaw dir when OPENCLAW_STATE_DIR points at the same real path", () => {
+    // Regression: AWS deployments symlink ~/.openclaw -> OPENCLAW_STATE_DIR.
     const realHome = makeTempDir();
     tempDirs.push(realHome);
     const realStateDir = makeTempDir();
     tempDirs.push(realStateDir);
 
-    // Set HOME to a real (non-symlinked) directory.
     process.env.OPENCLAW_HOME = realHome;
-
-    // Make ~/.openclaw a symlink to realStateDir, as AWS deployments do.
-    const symlinkDotOpenclaw = path.join(realHome, ".openclaw");
-    fs.symlinkSync(realStateDir, symlinkDotOpenclaw);
-
-    // With OPENCLAW_STATE_DIR pointing directly at the real dir, the
-    // approvals system should resolve through it cleanly without throwing.
     const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = realStateDir;
+    fs.symlinkSync(realStateDir, path.join(realHome, ".openclaw"));
+
     try {
-      // This should NOT throw — OPENCLAW_STATE_DIR resolves to a real path.
       expect(() =>
         saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
       ).not.toThrow();
@@ -253,12 +236,12 @@ describe("exec approvals store helpers", () => {
     tempDirs.push(otherDir);
 
     process.env.OPENCLAW_HOME = realHome;
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = realStateDir;
 
     // ~/.openclaw points at otherDir, not realStateDir.
     fs.symlinkSync(otherDir, path.join(realHome, ".openclaw"));
 
-    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       expect(() =>
         saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),

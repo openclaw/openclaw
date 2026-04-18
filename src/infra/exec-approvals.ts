@@ -246,6 +246,13 @@ function ensureDir(filePath: string, env: NodeJS.ProcessEnv = process.env) {
   const dir = path.dirname(filePath);
   const trustedRoot = resolveApprovalsPathTrustedRoot(env);
   assertNoSymlinkPathComponents(dir, trustedRoot);
+  // When OPENCLAW_STATE_DIR shifts the trusted root away from HOME, also verify
+  // that HOME itself contains no symlink components — without descending into
+  // .openclaw, which may intentionally be a symlink to the state dir.
+  const homeRoot = resolveRequiredHomeDir(env);
+  if (homeRoot !== trustedRoot) {
+    assertNoSymlinkPathComponents(homeRoot, homeRoot);
+  }
   fs.mkdirSync(dir, { recursive: true });
   const dirStat = fs.lstatSync(dir);
   if (dirStat.isSymbolicLink()) {
