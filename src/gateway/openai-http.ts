@@ -12,7 +12,7 @@ import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.j
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { transcribeFirstAudio } from "../media-understanding/audio-preflight.js";
-import { estimateBase64DecodedBytes } from "../media/base64.js";
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "../media/base64.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import {
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
@@ -75,7 +75,6 @@ type OpenAiChatCompletionRequest = {
 };
 
 const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
-const IMAGE_ONLY_USER_MESSAGE = "User sent image(s) with no text.";
 const DEFAULT_OPENAI_MAX_IMAGE_PARTS = 8;
 const DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
 const DEFAULT_OPENAI_MAX_AUDIO_PARTS = 4;
@@ -600,13 +599,24 @@ async function resolveAudiosForRequest(
       );
     }
 
+    // Node's base64 decoder is lenient and silently drops invalid characters,
+    // so a malformed payload would stage an empty/truncated file and surface
+    // as a confusing "no transcript" 200 response. Mirror the image/file paths
+    // (media/input-files.ts:{280,335}) which gate Buffer.from("base64") behind
+    // canonicalizeBase64; here we map the failure to an Error so the handler's
+    // try/catch returns 400 invalid_request_error instead.
+    const canonicalAudioData = canonicalizeBase64(part.data);
+    if (!canonicalAudioData) {
+      throw new Error("input_audio base64 source has invalid 'data' field");
+    }
+
     // transcribeFirstAudio consumes attachments via MsgContext with file paths,
     // mirroring the Telegram/LINE voice preflight flow. We stage the decoded
     // audio to a tmp file so the STT runner can open it.
     const extGuess = part.mime.split("/")[1] ?? "wav";
     const safeExt = extGuess.replace(/[^a-z0-9]/gi, "") || "wav";
     const tmpPath = pathJoin(tmpdir(), `openclaw-audio-${randomUUID()}.${safeExt}`);
-    await writeFile(tmpPath, Buffer.from(part.data, "base64"));
+    await writeFile(tmpPath, Buffer.from(canonicalAudioData, "base64"));
     try {
       // transcribeFirstAudio expects a full MsgContext (channel id, sender,
       // timestamps, etc.), but its audio-preflight code path only reads
@@ -708,11 +718,58 @@ export const __testOnlyOpenAiHttp = {
   extractAudioParts,
   extractFileParts,
   hasVideoUrlPart,
+  resolveActiveTurnContext,
+  buildAgentPrompt,
 };
+
+/**
+ * Synthesise a user-message placeholder for an active user turn that carries
+ * only media (image/audio/file) with no accompanying text. Without this, a
+ * text-less turn gets skipped entirely and the previous turn's text would
+ * leak into the agent prompt as "current message" (stale-text bug); first
+ * turns with no prior text would trip the "Missing user message" 400 gate.
+ */
+function buildActiveUserTurnPlaceholder(activeTurnContext: ActiveTurnContext): string {
+  const parts: string[] = [];
+  if (activeTurnContext.urls.length > 0) {
+    parts.push(
+      activeTurnContext.urls.length === 1 ? "1 image" : `${activeTurnContext.urls.length} images`,
+    );
+  }
+  if (activeTurnContext.audioParts.length > 0) {
+    parts.push(
+      activeTurnContext.audioParts.length === 1
+        ? "1 audio clip"
+        : `${activeTurnContext.audioParts.length} audio clips`,
+    );
+  }
+  if (activeTurnContext.fileParts.length > 0) {
+    const names = activeTurnContext.fileParts
+      .map((p) => p.filename.trim())
+      .filter((name) => name.length > 0);
+    if (names.length > 0) {
+      parts.push(
+        names.length === 1
+          ? `file "${names[0]}"`
+          : `files: ${names.map((n) => `"${n}"`).join(", ")}`,
+      );
+    } else {
+      parts.push(
+        activeTurnContext.fileParts.length === 1
+          ? "1 file"
+          : `${activeTurnContext.fileParts.length} files`,
+      );
+    }
+  }
+  if (parts.length === 0) {
+    return "";
+  }
+  return `User attached ${parts.join(" + ")} with no accompanying text.`;
+}
 
 function buildAgentPrompt(
   messagesUnknown: unknown,
-  activeUserMessageIndex: number,
+  activeTurnContext: ActiveTurnContext,
 ): {
   message: string;
   extraSystemPrompt?: string;
@@ -728,7 +785,6 @@ function buildAgentPrompt(
     }
     const role = normalizeOptionalString(msg.role) ?? "";
     const content = extractTextContent(msg.content).trim();
-    const hasImage = extractImageUrls(msg.content).length > 0;
     if (!role) {
       continue;
     }
@@ -744,12 +800,14 @@ function buildAgentPrompt(
       continue;
     }
 
-    // Keep the image-only placeholder scoped to the active user turn so we don't
-    // mention historical image-only turns whose bytes are intentionally not replayed.
+    // For the active user turn, synthesise a placeholder when text is empty so
+    // media-only turns (image/audio/file) still contribute a "current message"
+    // entry. Historical media-only turns are intentionally skipped — their
+    // bytes are not replayed, and mentioning them here would confuse the agent.
+    const isActiveUserTurn =
+      normalizedRole === "user" && i === activeTurnContext.activeUserMessageIndex;
     const messageContent =
-      normalizedRole === "user" && !content && hasImage && i === activeUserMessageIndex
-        ? IMAGE_ONLY_USER_MESSAGE
-        : content;
+      !content && isActiveUserTurn ? buildActiveUserTurnPlaceholder(activeTurnContext) : content;
     if (!messageContent) {
       continue;
     }
@@ -888,8 +946,25 @@ export async function handleOpenAiHttpRequest(
     });
     return true;
   }
-  const activeTurnContext = resolveActiveTurnContext(payload.messages);
-  const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);
+  // Parsing content blocks (file_data data URIs in particular) can throw on
+  // malformed input. Catching here turns those errors into 400
+  // invalid_request_error instead of bubbling up to the Node http server as
+  // an unhandled exception that becomes a 500.
+  let activeTurnContext: ActiveTurnContext;
+  try {
+    activeTurnContext = resolveActiveTurnContext(payload.messages);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    logWarn(`openai-compat: invalid content block: ${detail}`);
+    sendJson(res, 400, {
+      error: {
+        message: `Invalid content in \`messages\`: ${detail}`,
+        type: "invalid_request_error",
+      },
+    });
+    return true;
+  }
+  const prompt = buildAgentPrompt(payload.messages, activeTurnContext);
   let images: ImageContent[] = [];
   try {
     images = await resolveImagesForRequest(activeTurnContext, limits);

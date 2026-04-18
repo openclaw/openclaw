@@ -146,6 +146,23 @@ describe("openai-http audio resolver", () => {
       ),
     ).rejects.toThrow(/Too many input_audio parts/);
   });
+
+  it("rejects audio parts with malformed base64 before staging the tmp file", async () => {
+    // Regression: Node's Buffer.from(..., "base64") silently drops invalid
+    // characters, so without a canonicalizeBase64 gate a malformed payload
+    // produced an empty tmp file and surfaced as a silent 200 with no
+    // transcript. The handler wraps this throw in its try/catch → 400.
+    const limits = __testOnlyOpenAiHttp.resolveOpenAiChatCompletionsLimits(undefined);
+    await expect(
+      __testOnlyOpenAiHttp.resolveAudiosForRequest(
+        {
+          audioParts: [{ data: "not base64 @#$%^&", mime: "audio/wav" }],
+        },
+        limits,
+      ),
+    ).rejects.toThrow(/invalid 'data' field|base64/i);
+    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("openai-http file resolver", () => {
@@ -257,5 +274,149 @@ describe("openai-http limits resolution for multimodal config", () => {
     expect(limits.files.maxTotalBytes).toBe(8642);
     expect(limits.files.maxChars).toBe(9999);
     expect(limits.files.allowedMimes.has("text/plain")).toBe(true);
+  });
+});
+
+describe("openai-http active-turn parsing error handling", () => {
+  it("propagates malformed file_data errors so the handler can map them to 400", () => {
+    // Regression: resolveActiveTurnContext used to let these exceptions bubble
+    // past the handler's try/catch and surface as 500s.
+    expect(() =>
+      __testOnlyOpenAiHttp.resolveActiveTurnContext([
+        {
+          role: "user",
+          content: [
+            {
+              type: "file",
+              file: { file_data: "data:text/plain,SGVsbG8=", filename: "a.txt" },
+            },
+          ],
+        },
+      ]),
+    ).toThrow(/must be base64 encoded/);
+  });
+
+  it("does not throw on structurally valid but media-only user turns", () => {
+    expect(() =>
+      __testOnlyOpenAiHttp.resolveActiveTurnContext([
+        {
+          role: "user",
+          content: [
+            {
+              type: "file",
+              file: {
+                file_data: "data:text/plain;base64,SGVsbG8=",
+                filename: "note.txt",
+              },
+            },
+          ],
+        },
+      ]),
+    ).not.toThrow();
+  });
+});
+
+describe("openai-http buildAgentPrompt: media-only active user turns", () => {
+  it("first-turn file-only: synthesises a filename-aware placeholder (avoids Missing user message 400)", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "file",
+            file: { file_data: "data:text/plain;base64,SGVsbG8=", filename: "report.pdf" },
+          },
+        ],
+      },
+    ];
+    const ctx = __testOnlyOpenAiHttp.resolveActiveTurnContext(messages);
+    const { message } = __testOnlyOpenAiHttp.buildAgentPrompt(messages, ctx);
+    expect(message).not.toBe("");
+    expect(message).toContain("report.pdf");
+    expect(message).toMatch(/file|attached/i);
+  });
+
+  it("subsequent file-only: placeholder becomes current message (no stale prior text leak)", () => {
+    const messages = [
+      { role: "user", content: "what did we decide?" },
+      { role: "assistant", content: "we agreed to ship on Friday." },
+      {
+        role: "user",
+        content: [
+          {
+            type: "file",
+            file: { file_data: "data:text/plain;base64,SGVsbG8=", filename: "minutes.md" },
+          },
+        ],
+      },
+    ];
+    const ctx = __testOnlyOpenAiHttp.resolveActiveTurnContext(messages);
+    const { message } = __testOnlyOpenAiHttp.buildAgentPrompt(messages, ctx);
+    // The current-message portion must reference the file, NOT reuse the prior
+    // user's "what did we decide?" as the current question.
+    expect(message).toContain("minutes.md");
+    // History block may still contain prior text, but it must not be the
+    // tail / current message. The current-message block is the synthesised
+    // placeholder referencing the filename.
+    const tail = message.split(/User:\s*/).pop() ?? "";
+    expect(tail).toContain("minutes.md");
+    expect(tail).not.toMatch(/^what did we decide\?$/);
+  });
+
+  it("subsequent audio-only: placeholder replaces stale prior text as current message", () => {
+    const audioData = Buffer.from("audio").toString("base64");
+    const messages = [
+      { role: "user", content: "status?" },
+      { role: "assistant", content: "all green." },
+      {
+        role: "user",
+        content: [{ type: "input_audio", input_audio: { data: audioData, format: "wav" } }],
+      },
+    ];
+    const ctx = __testOnlyOpenAiHttp.resolveActiveTurnContext(messages);
+    const { message } = __testOnlyOpenAiHttp.buildAgentPrompt(messages, ctx);
+    expect(message).toMatch(/audio/i);
+    const tail = message.split(/User:\s*/).pop() ?? "";
+    expect(tail).not.toBe("status?");
+  });
+
+  it("subsequent image-only: placeholder scopes mention to the active turn only", () => {
+    const messages = [
+      { role: "user", content: "last question" },
+      { role: "assistant", content: "answered." },
+      {
+        role: "user",
+        content: [{ type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } }],
+      },
+    ];
+    const ctx = __testOnlyOpenAiHttp.resolveActiveTurnContext(messages);
+    const { message } = __testOnlyOpenAiHttp.buildAgentPrompt(messages, ctx);
+    expect(message).toMatch(/image/i);
+    const tail = message.split(/User:\s*/).pop() ?? "";
+    expect(tail).not.toBe("last question");
+  });
+
+  it("does not synthesise a placeholder for non-active historical media turns", () => {
+    // Only the last user message is treated as active; historical media-only
+    // turns should not get mentioned (their bytes are not replayed).
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } }],
+      },
+      { role: "assistant", content: "ok." },
+      { role: "user", content: "and this?" },
+    ];
+    const ctx = __testOnlyOpenAiHttp.resolveActiveTurnContext(messages);
+    const { message } = __testOnlyOpenAiHttp.buildAgentPrompt(messages, ctx);
+    expect(message).toContain("and this?");
+    expect(message).not.toMatch(/image/i);
+  });
+
+  it("turns with no text and no media still produce empty prompt (caller surfaces 400)", () => {
+    const messages = [{ role: "user", content: "" }];
+    const ctx = __testOnlyOpenAiHttp.resolveActiveTurnContext(messages);
+    const { message } = __testOnlyOpenAiHttp.buildAgentPrompt(messages, ctx);
+    expect(message).toBe("");
   });
 });
