@@ -21,6 +21,9 @@
   - `token + operator.open_id + action.tag + action.value + chat_id`
 - 对 Vincent OS 当前 `limited trial` 的结论：
   - 这条 source 修复已经有明确代码与测试证据，不再是运行 blocker。
+- 当前 owner 边界：
+  - `Mira/OpenClaw` 是 Vincent clarification card 的 live sender + callback owner
+  - 这条链直接写回 Vincent OS canonical return / apply，不再经过 `my-claw` relay
 
 ## 最新验证
 
@@ -34,6 +37,10 @@ node scripts/run-vitest.mjs run extensions/feishu/src/monitor.card-action.lifecy
 - 结果：
   - `pass`
   - `1 file / 3 tests`
+- `2026-04-18 22:38 +08:00` 已完成一次真实 owner-check：
+  - `Mira` 发卡，message id 为 `om_x100b510d29120788b2bccbe23ffe523`
+  - Vincent 点击按钮后，Vincent OS canonical repo 生成新的 `RETURN` 与 `APPLY-LOG`
+  - 结果确认：后续所有 Mira clarification 发卡与按钮回传都只走 `Mira/OpenClaw -> Vincent OS`
 
 ## 风险与边界
 

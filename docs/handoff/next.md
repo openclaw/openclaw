@@ -17,6 +17,9 @@ node scripts/run-vitest.mjs run extensions/feishu/src/monitor.card-action.lifecy
    - `commit`
    - `push`
    - `PR`
+4. 如果后续要排查 Vincent clarification callback：
+   - 默认从 `OpenClaw feishu:main` 的 live owner 视角排查
+   - 不要再把 `my-claw` 当这条链的 receiver 或 fallback
 
 ## 当前默认判断
 
