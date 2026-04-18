@@ -169,13 +169,23 @@ type ResizeCacheValue = {
 };
 
 const DEFAULT_RESIZE_CACHE_MAX_BYTES = 64 * 1024 * 1024; // 64 MiB
+
+// Only bare positive integer byte counts are accepted. Human-readable suffixes
+// like "64M" or "64MiB" are intentionally rejected: `Number.parseInt` silently
+// truncates at the first non-digit character, so accepting them would turn
+// `OPENCLAW_IMAGE_RESIZE_CACHE_MAX_BYTES=64M` into a 64-byte cap and evict
+// every cache entry on insert.
 function parseCacheByteLimit(): number {
   const raw = process.env.OPENCLAW_IMAGE_RESIZE_CACHE_MAX_BYTES;
-  if (typeof raw !== "string" || raw.trim().length === 0) {
+  if (typeof raw !== "string") {
     return DEFAULT_RESIZE_CACHE_MAX_BYTES;
   }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return DEFAULT_RESIZE_CACHE_MAX_BYTES;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0 || String(parsed) !== trimmed) {
     return DEFAULT_RESIZE_CACHE_MAX_BYTES;
   }
   return parsed;

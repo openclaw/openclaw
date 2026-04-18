@@ -241,6 +241,79 @@ describe("tool image sanitizing", () => {
       expect(stats.entryCount).toBe(2);
     }, 20_000);
 
+    describe("OPENCLAW_IMAGE_RESIZE_CACHE_MAX_BYTES parsing", () => {
+      const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
+      const envKey = "OPENCLAW_IMAGE_RESIZE_CACHE_MAX_BYTES";
+      const originalEnv = process.env[envKey];
+
+      function applyEnv(value: string | undefined): void {
+        if (value === undefined) {
+          delete process.env[envKey];
+        } else {
+          process.env[envKey] = value;
+        }
+        // resetResizeCache re-reads the env to recompute maxBytes.
+        __testing.resetResizeCache();
+      }
+
+      function restoreEnv(): void {
+        if (originalEnv === undefined) {
+          delete process.env[envKey];
+        } else {
+          process.env[envKey] = originalEnv;
+        }
+        __testing.resetResizeCache();
+      }
+
+      it("accepts bare positive integer byte counts", () => {
+        try {
+          applyEnv("12345");
+          expect(__testing.getResizeCacheStats().maxBytes).toBe(12345);
+        } finally {
+          restoreEnv();
+        }
+      });
+
+      it("falls back to default for human-readable suffixes like '64M' (prevents silent 64-byte cap)", () => {
+        try {
+          for (const bad of ["64M", "64MiB", "64MB", "1G", "1GiB", "5k"]) {
+            applyEnv(bad);
+            expect(
+              __testing.getResizeCacheStats().maxBytes,
+              `value ${JSON.stringify(bad)} should fall back to default`,
+            ).toBe(DEFAULT_MAX_BYTES);
+          }
+        } finally {
+          restoreEnv();
+        }
+      });
+
+      it("falls back to default for non-integer, non-positive, or junk values", () => {
+        try {
+          for (const bad of ["0", "-5", "64.5", "1e6", "abc", "  ", "12 34"]) {
+            applyEnv(bad);
+            expect(
+              __testing.getResizeCacheStats().maxBytes,
+              `value ${JSON.stringify(bad)} should fall back to default`,
+            ).toBe(DEFAULT_MAX_BYTES);
+          }
+        } finally {
+          restoreEnv();
+        }
+      });
+
+      it("falls back to default when the env var is unset or empty", () => {
+        try {
+          applyEnv(undefined);
+          expect(__testing.getResizeCacheStats().maxBytes).toBe(DEFAULT_MAX_BYTES);
+          applyEnv("");
+          expect(__testing.getResizeCacheStats().maxBytes).toBe(DEFAULT_MAX_BYTES);
+        } finally {
+          restoreEnv();
+        }
+      });
+    });
+
     it("bounds cache memory by evicting past the byte cap", async () => {
       // Size the cap at 1 byte so every insert forces immediate eviction;
       // this deterministically proves the eviction loop runs regardless of
