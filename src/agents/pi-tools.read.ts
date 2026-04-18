@@ -51,6 +51,28 @@ interface ContentBlock {
   text?: string;
 }
 
+interface ImageSanitizationLimits {
+  maxBytes?: number;
+  maxDimensionPx?: number;
+}
+
+interface ResizeImageOptions {
+  maxBytes: number;
+  maxDimensionPx: number;
+  initialQuality?: number;
+  minQuality?: number;
+  maxAttempts?: number;
+}
+
+interface ResizeImageResult {
+  buffer: Buffer;
+  mimeType: string;
+  success: boolean;
+  error?: string;
+  attempts: number;
+  finalQuality: number;
+}
+
 // Helper function to expand tilde to OS home directory
 function expandTildeToOsHome(filePath: string): string {
   const home = resolveOsHomeDir();
@@ -82,26 +104,22 @@ const CLAUDE_PARAM_GROUPS = {
 
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
-  imageSanitization?: import("./image-sanitization.js").ImageSanitizationLimits;
+  imageSanitization?: ImageSanitizationLimits;
   root?: string;
   containerWorkdir?: string;
   bridge?: SandboxFsBridge;
   getBaseUrl?: () => string;
-  transformForTransport?: boolean; // Apply transport transformation
+  transformForTransport?: boolean;
 };
 
 // Helper function to resolve absolute paths within workspace
 function resolveWorkspacePath(relativePath: string, root: string): string {
-  // If the path is already absolute, check if it's within root
   if (path.isAbsolute(relativePath)) {
-    // If it's within root, use it directly
     if (relativePath.startsWith(root)) {
       return relativePath;
     }
-    // Otherwise, resolve relative to root (maintains original behavior for relative paths)
     return path.join(root, relativePath);
   }
-  // Relative path: join with root
   return path.join(root, relativePath);
 }
 
@@ -141,17 +159,12 @@ async function readTextFileStreaming(
       
       totalLines++;
       
-      // Check if we've reached the requested range
       const isInRange = currentLineNumber >= startLine && (endLine === undefined || currentLineNumber < endLine);
       
       if (isInRange) {
-        // Always add newline except for the last line we're collecting
-        // Since we don't know if this is the last line until we've processed all lines,
-        // we'll add newline to all collected lines and strip trailing newline at the end
         const lineWithNewline = line + "\n";
         const lineChars = lineWithNewline.length;
         
-        // Check if adding this line would exceed maxChars
         if (collectedChars + lineChars > maxChars) {
           const remainingChars = maxChars - collectedChars;
           if (remainingChars > 0) {
@@ -173,14 +186,12 @@ async function readTextFileStreaming(
       
       currentLineNumber++;
       
-      // Stop if we've collected the requested range
       if (endLine !== undefined && currentLineNumber >= endLine) {
         rl.close();
         readStream.destroy();
         return;
       }
       
-      // Stop if we've reached truncation limit
       if (isTruncated) {
         rl.close();
         readStream.destroy();
@@ -190,18 +201,15 @@ async function readTextFileStreaming(
     rl.on("close", () => {
       let content = lines.join("");
       
-      // Remove trailing newline if present (since we added newline to all lines)
       if (content.endsWith("\n")) {
         content = content.slice(0, -1);
       }
       
-      // Apply final truncation if needed (for cases where we didn't hit the line limit)
       if (content.length > maxChars) {
         content = content.slice(0, maxChars);
         isTruncated = true;
       }
       
-      // Add truncation notice
       if (isTruncated) {
         content += `\n\n... [Content truncated to ${maxChars} chars]`;
       }
@@ -224,7 +232,7 @@ async function readTextFileStreaming(
   });
 }
 
-// Helper function for bridge mode (falls back to full read since bridges don't support streaming)
+// Helper function for bridge mode
 async function readTextFileBridge(
   bridge: SandboxFsBridge,
   filePath: string,
@@ -256,21 +264,111 @@ async function readTextFileBridge(
   return { content, truncated, totalLines };
 }
 
-// Helper function to detect if a WebM file is audio-only using magic bytes
+// Helper function to detect if a WebM file is audio-only
 async function isWebmAudioOnly(filePath: string): Promise<boolean> {
   try {
-    // Read first 8KB for magic byte detection
     const { buffer } = await readLocalFileSafely({ filePath, maxBytes: 8192 });
     const mime = await detectMime({ buffer, filePath });
     const kind = kindFromMime(mime);
-    
-    // If detected as audio, it's audio-only WebM
-    // If detected as video, it contains video tracks
     return kind === 'audio';
   } catch (error) {
     console.warn(`Failed to detect WebM type for ${filePath}, treating as video:`, error);
-    return false; // Safer to treat as video on error
+    return false;
   }
+}
+
+/**
+ * Iteratively resizes an image until it meets byte size limits or quality minimum is reached
+ * Uses progressive quality reduction and dimension constraints
+ */
+async function resizeImageToSizeLimit(
+  fileBuffer: Buffer,
+  fileName: string,
+  options: ResizeImageOptions
+): Promise<ResizeImageResult> {
+  const {
+    maxBytes,
+    maxDimensionPx,
+    initialQuality = 85,
+    minQuality = 30,
+    maxAttempts = 5
+  } = options;
+  
+  let currentBuffer = fileBuffer;
+  let currentMimeType = "image/jpeg";
+  let currentQuality = initialQuality;
+  let attempts = 0;
+  
+  // Check if resizing is needed
+  if (currentBuffer.length <= maxBytes) {
+    return {
+      buffer: currentBuffer,
+      mimeType: currentMimeType,
+      success: true,
+      attempts: 0,
+      finalQuality: initialQuality
+    };
+  }
+  
+  console.log(`Resizing image ${fileName}: initial=${Math.round(currentBuffer.length / 1024)}KB, limit=${Math.round(maxBytes / 1024)}KB`);
+  
+  while (attempts < maxAttempts && currentBuffer.length > maxBytes && currentQuality >= minQuality) {
+    try {
+      // Log current state for debugging
+      let dimensions = "";
+      try {
+        const meta = await getImageMetadata(currentBuffer);
+        if (meta?.width && meta?.height) {
+          dimensions = `, dimensions=${meta.width}x${meta.height}`;
+        }
+      } catch {
+        // Metadata extraction failure is non-critical
+      }
+      
+      console.log(`Resize attempt ${attempts + 1}/${maxAttempts}: quality=${currentQuality}${dimensions}`);
+      
+      const resized = await resizeToJpeg({
+        buffer: currentBuffer,
+        maxSide: maxDimensionPx,
+        quality: currentQuality,
+        withoutEnlargement: true,
+      });
+      
+      currentBuffer = Buffer.from(resized);
+      currentMimeType = "image/jpeg";
+      
+      // Reduce quality for next iteration if still too large
+      if (currentBuffer.length > maxBytes) {
+        currentQuality = Math.max(minQuality, currentQuality - 15);
+      }
+      
+      attempts++;
+    } catch (error) {
+      console.error(`Resize attempt ${attempts + 1} failed for ${fileName}:`, error);
+      return {
+        buffer: currentBuffer,
+        mimeType: currentMimeType,
+        success: false,
+        error: `Resize failed: ${error instanceof Error ? error.message : String(error)}`,
+        attempts: attempts + 1,
+        finalQuality: currentQuality
+      };
+    }
+  }
+  
+  const success = currentBuffer.length <= maxBytes;
+  
+  if (!success) {
+    console.warn(`Image ${fileName} still exceeds limit after ${attempts} attempts: ${Math.round(currentBuffer.length / 1024)}KB > ${Math.round(maxBytes / 1024)}KB`);
+  }
+  
+  return {
+    buffer: currentBuffer,
+    mimeType: currentMimeType,
+    success,
+    attempts,
+    finalQuality: currentQuality
+  };
 }
 
 // --- OPERATIONS HELPERS ---
@@ -280,14 +378,10 @@ function createSandboxReadOperations(params: SandboxToolParams) {
     readFile: (filePath: string) => params.bridge.readFile({ filePath, cwd: params.root }),
     stat: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }),
     readdir: async (filePath: string) => {
-      // Attempt to use readdir if available on the bridge
       const bridgeWithReaddir = params.bridge as BridgeWithReaddir;
       if (typeof bridgeWithReaddir.readdir === 'function') {
         return await bridgeWithReaddir.readdir({ filePath, cwd: params.root });
       }
-      // Throw an error instead of returning empty array
-      // This ensures the base tool can provide meaningful error feedback
-      // rather than silently reporting an empty directory
       throw new Error(
         `Directory listing not supported in sandbox mode for ${filePath}. ` +
         `The current bridge implementation does not support readdir operations.`
@@ -334,7 +428,6 @@ function createHostWriteOperations(
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
-    // When workspaceOnly is false, allow writes anywhere on the host
     return {
       mkdir: async (dir: string) => {
         const resolved = path.resolve(expandTildeToOsHome(dir));
@@ -344,7 +437,6 @@ function createHostWriteOperations(
     } as const;
   }
 
-  // When workspaceOnly is true, enforce workspace boundary
   return {
     writeFile: (relativePath: string, data: string) =>
       writeFileWithinRoot({
@@ -372,7 +464,6 @@ function createHostEditOperations(
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
-    // When workspaceOnly is false, allow edits anywhere on the host
     return {
       readFile: async (filePath: string) => {
         const resolved = path.resolve(expandTildeToOsHome(filePath));
@@ -387,7 +478,6 @@ function createHostEditOperations(
     } as const;
   }
 
-  // When workspaceOnly is true, enforce workspace boundary
   return {
     readFile: (relativePath: string) =>
       readFileWithinRoot({ rootDir: root, relativePath }).then((res) => res.buffer),
@@ -398,7 +488,6 @@ function createHostEditOperations(
         data,
       }),
     access: (relativePath: string) => {
-      // Resolve the path correctly for absolute paths within workspace
       const resolvedPath = resolveWorkspacePath(relativePath, root);
       return fs.access(resolvedPath);
     },
@@ -444,16 +533,12 @@ function getVideoMimeType(ext: string): string {
 }
 
 function normalizePathForUrl(filePath: string): string {
-  // Convert Windows backslashes to forward slashes
   const normalized = filePath.replace(/\\/g, "/");
   
-  // Handle Windows drive letters: "C:/" -> "/C:/"
-  // This ensures the URL path is absolute and valid
   if (/^[a-zA-Z]:\//.test(normalized) || /^[a-zA-Z]:$/.test(normalized)) {
     return `/${normalized}`;
   }
   
-  // Ensure Unix absolute paths start with /
   if (!normalized.startsWith("/") && path.isAbsolute(filePath)) {
     return `/${normalized}`;
   }
@@ -464,11 +549,7 @@ function normalizePathForUrl(filePath: string): string {
 function getMediaUrl(filePath: string, getBaseUrl?: () => string): string {
   const normalizedPath = normalizePathForUrl(filePath);
   const encodedPath = normalizedPath.split("/").map(encodeURIComponent).join("/");
-  
-  // Use dynamic base URL if provided, otherwise fall back to localhost
   const baseUrl = getBaseUrl?.() || "http://localhost:18791";
-  
-  // Ensure no double slashes
   const cleanBaseUrl = baseUrl.replace(/\/$/, "");
   return `${cleanBaseUrl}${encodedPath}`;
 }
@@ -477,7 +558,7 @@ type SandboxToolParams = {
   root: string;
   bridge: SandboxFsBridge;
   modelContextWindowTokens?: number;
-  imageSanitization?: import("./image-sanitization.js").ImageSanitizationLimits;
+  imageSanitization?: ImageSanitizationLimits;
 };
 
 export function createSandboxedReadTool(params: SandboxToolParams) {
@@ -489,7 +570,7 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
     modelContextWindowTokens: params.modelContextWindowTokens,
     imageSanitization: params.imageSanitization,
     bridge: params.bridge,
-    transformForTransport: false, // Webchat doesn't need transform
+    transformForTransport: false,
   } as OpenClawReadToolOptions);
 }
 
@@ -563,7 +644,6 @@ function mapContainerPathToWorkspaceRoot(params: {
     if (localFilePath) {
       candidate = localFilePath;
     } else {
-      // Windows fallback: handle container-style file:///workspace/... paths
       let parsed: URL;
       try {
         parsed = new URL(candidate);
@@ -583,14 +663,12 @@ function mapContainerPathToWorkspaceRoot(params: {
       } catch {
         return params.filePath;
       }
-      // Only map if the path is within the container workdir
       if (
         normalizedPathname === normalizedWorkdir ||
         normalizedPathname.startsWith(`${normalizedWorkdir}/`)
       ) {
         candidate = normalizedPathname;
       } else {
-        // Not a container workdir path, keep original
         return params.filePath;
       }
     }
@@ -803,41 +881,41 @@ export function wrapToolWorkspaceRootGuardWithOptions(
   };
 }
 
-// Supported media file extensions for the read tool
+// Supported media file extensions
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "bmp", "webp", "svg"]);
-// Audio and video extensions (webm will be detected at runtime)
 const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "mov", "avi", "mkv", "m4v", "mpg", "mpeg"]);
-// WebM requires detection to determine if audio-only or video
 const WEBM_EXTENSION = "webm";
 
-// Transform function for transports to use
+// Type guard for content blocks
+function isTextOrImageContent(block: ContentBlock): boolean {
+  return block.type === "text" || block.type === "image";
+}
+
+// Transform function for transports
 export function transformToolResultForTransport(result: AgentToolResult): AgentToolResult {
   if (!result.content || !Array.isArray(result.content)) {
     return result;
   }
 
   const transformedContent = result.content.map((block: ContentBlock) => {
-    // Transform image blocks - convert to text with just filename
     if (block.type === 'image' && block.source && block.source.type === 'base64') {
       return {
-        type: 'text',
+        type: 'text' as const,
         text: block.filename ?? 'image',
       };
     }
     
-    // Audio blocks - convert to text with just filename
     if (block.type === 'audio') {
       return {
-        type: 'text',
+        type: 'text' as const,
         text: block.filename ?? 'audio',
       };
     }
     
-    // Video blocks - convert to text with just filename
     if (block.type === 'video') {
       return {
-        type: 'text',
+        type: 'text' as const,
         text: block.filename ?? 'video',
       };
     }
@@ -845,9 +923,14 @@ export function transformToolResultForTransport(result: AgentToolResult): AgentT
     return block;
   });
 
+  // Filter to only text and image blocks, then cast to the expected type
+  const filteredContent = transformedContent.filter(
+    (block) => block.type === 'text' || block.type === 'image'
+  );
+  
   return {
     ...result,
-    content: transformedContent,
+    content: filteredContent as AgentToolResult['content'],
   };
 }
 
@@ -917,12 +1000,11 @@ export function createOpenClawReadTool(
 
         const ext = inputPath.toLowerCase().split(".").pop() ?? "";
         const fileName = path.basename(inputPath);
-        
         const mediaUrl = getMediaUrl(inputPath, options?.getBaseUrl);
 
         let result: AgentToolResult;
 
-        // Handle WebM files with magic byte detection
+        // Handle WebM files
         if (ext === WEBM_EXTENSION) {
           const isAudioOnly = await isWebmAudioOnly(inputPath);
           
@@ -951,7 +1033,9 @@ export function createOpenClawReadTool(
               details: { path: inputPath, size: fileSize, detectedAs: "video" },
             } as AgentToolResult;
           }
-        } else if (AUDIO_EXTENSIONS.has(ext)) {
+        } 
+        // Handle audio files
+        else if (AUDIO_EXTENSIONS.has(ext)) {
           const mimeType = getAudioMimeType(ext);
           const audioContent: ContentBlock = {
             type: "audio",
@@ -964,7 +1048,9 @@ export function createOpenClawReadTool(
             content: [audioContent],
             details: { path: inputPath, size: fileSize },
           } as AgentToolResult;
-        } else if (IMAGE_EXTENSIONS.has(ext)) {
+        } 
+        // Handle image files with sanitization
+        else if (IMAGE_EXTENSIONS.has(ext)) {
           if (signal?.aborted) {
             throw new Error("Read operation aborted");
           }
@@ -982,78 +1068,82 @@ export function createOpenClawReadTool(
           }
 
           let mimeType = getImageMimeType(ext);
-          let sanitizationFailed = false;
-
+          
+          // Apply image sanitization if configured
           if (options?.imageSanitization) {
-            try {
-              const maxDimensionPx = options.imageSanitization.maxDimensionPx || 3840;
-              const maxBytes = options.imageSanitization.maxBytes || 5 * 1024 * 1024;
-
-              // Always check byte size first, regardless of metadata availability
-              const needsByteSizeSanitization = fileBuffer.length > maxBytes;
-
-              let meta = null;
+            const maxBytes = options.imageSanitization.maxBytes ?? 5 * 1024 * 1024;
+            const maxDimensionPx = options.imageSanitization.maxDimensionPx ?? 3840;
+            
+            // Check if sanitization is needed
+            let needsSanitization = fileBuffer.length > maxBytes;
+            
+            if (!needsSanitization) {
               try {
-                meta = await getImageMetadata(fileBuffer);
+                const meta = await getImageMetadata(fileBuffer);
+                if (meta?.width && meta?.height) {
+                  needsSanitization = meta.width > maxDimensionPx || meta.height > maxDimensionPx;
+                }
               } catch (metaError) {
                 console.warn(`Image metadata extraction failed for ${fileName}:`, metaError);
-                // Continue with sanitization even if metadata extraction fails
               }
-
-              const needsDimensionSanitization = meta?.width && meta?.height && 
-                (meta.width > maxDimensionPx || meta.height > maxDimensionPx);
-
-              // Apply sanitization if either condition is met
-              if (needsByteSizeSanitization || needsDimensionSanitization) {
-                try {
-                  const resized = await resizeToJpeg({
-                    buffer: fileBuffer,
-                    maxSide: maxDimensionPx,
-                    quality: 85,
-                    withoutEnlargement: true,
-                  });
-                  fileBuffer = Buffer.from(resized);
-                  mimeType = "image/jpeg";
-                } catch (resizeError) {
-                  console.error(`Image resize failed for ${fileName}:`, resizeError);
-                  sanitizationFailed = true;
-                  // Don't rethrow - we'll handle the failure by returning a text error
+            }
+            
+            if (needsSanitization) {
+              const resizeResult = await resizeImageToSizeLimit(fileBuffer, fileName, {
+                maxBytes,
+                maxDimensionPx,
+                initialQuality: 85,
+                minQuality: 30,
+                maxAttempts: 5,
+              });
+              
+              if (!resizeResult.success) {
+                // Return error message instead of oversized/invalid image
+                result = {
+                  toolCallId,
+                  content: [
+                    {
+                      type: "text",
+                      text: `Error: Unable to process image '${fileName}'. ${resizeResult.error || `Could not resize to meet ${Math.round(maxBytes / 1024)}KB limit after ${resizeResult.attempts} attempts.`}`,
+                    },
+                  ],
+                  details: { 
+                    path: inputPath, 
+                    error: "Image sanitization failed",
+                    originalSize: fileBuffer.length,
+                    resizeAttempts: resizeResult.attempts,
+                  },
+                } as AgentToolResult;
+                
+                if (options?.transformForTransport) {
+                  result = transformToolResultForTransport(result);
                 }
+                return result;
               }
-            } catch (sanitizeError) {
-              console.error(`Image sanitization failed for ${fileName}:`, sanitizeError);
-              sanitizationFailed = true;
+              
+              fileBuffer = resizeResult.buffer;
+              mimeType = resizeResult.mimeType;
+              
+              console.log(`Image ${fileName} resized successfully: ${Math.round(fileBuffer.length / 1024)}KB (quality: ${resizeResult.finalQuality}, attempts: ${resizeResult.attempts})`);
             }
           }
-
-          // If sanitization failed, return error text instead of potentially invalid image data
-          if (sanitizationFailed) {
-            result = {
-              toolCallId,
-              content: [
-                { 
-                  type: "text", 
-                  text: `Error: Unable to process image file '${fileName}'. The file may be corrupted, malformed, or too large to handle.` 
-                },
-              ],
-              details: { path: inputPath, error: "Image sanitization failed" },
-            } as AgentToolResult;
-          } else {
-            const imageContent: ContentBlock = {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: mimeType,
-                data: fileBuffer.toString("base64"),
-              },
-            };
-            result = {
-              toolCallId,
-              content: [imageContent, { type: "text", text: fileName }],
-              details: { path: inputPath, size: fileBuffer.length },
-            } as AgentToolResult;
-          }
-        } else if (VIDEO_EXTENSIONS.has(ext)) {
+          
+          const imageContent: ContentBlock = {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: mimeType,
+              data: fileBuffer.toString("base64"),
+            },
+          };
+          result = {
+            toolCallId,
+            content: [imageContent, { type: "text", text: fileName }],
+            details: { path: inputPath, size: fileBuffer.length },
+          } as AgentToolResult;
+        } 
+        // Handle video files
+        else if (VIDEO_EXTENSIONS.has(ext)) {
           const mimeType = getVideoMimeType(ext);
           const videoContent: ContentBlock = {
             type: "video",
@@ -1066,7 +1156,9 @@ export function createOpenClawReadTool(
             content: [videoContent],
             details: { path: inputPath, size: fileSize },
           } as AgentToolResult;
-        } else {
+        } 
+        // Handle text files
+        else {
           if (signal?.aborted) {
             throw new Error("Read operation aborted");
           }
