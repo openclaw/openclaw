@@ -137,7 +137,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
   // Track current blockquote prefix so continuation chunks re-open it.
   let openBlockquote = "";
 
-  const flush = () => {
+  const flush = (opts?: { continueBlockquote?: boolean }) => {
     if (!current) {
       return;
     }
@@ -153,7 +153,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
     }
     // Re-open blockquote context on next chunk so Discord keeps rendering
     // continuation lines inside the quote block.
-    if (openBlockquote && !openFence) {
+    if (opts?.continueBlockquote && openBlockquote && !openFence) {
       current = openBlockquote;
       currentLines = 1;
     }
@@ -206,7 +206,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
       const wouldExceedLines = nextLines > lineLimit;
 
       if ((wouldExceedChars || wouldExceedLines) && current.length > 0) {
-        flush();
+        flush({ continueBlockquote: isLineContinuation });
       }
 
       if (current.length > 0) {
