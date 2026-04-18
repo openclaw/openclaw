@@ -43,11 +43,13 @@ import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 type SubagentAnnounceDeps = {
   callGateway: typeof callGateway;
   loadConfig: typeof loadConfig;
+  loadSubagentRegistryRuntime: typeof loadSubagentRegistryRuntime;
 };
 
 const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
   callGateway,
   loadConfig,
+  loadSubagentRegistryRuntime,
 };
 
 let subagentAnnounceDeps: SubagentAnnounceDeps = defaultSubagentAnnounceDeps;
@@ -255,9 +257,12 @@ async function resolveSubagentAnnounceTarget(params: {
     };
   }
 
-  const runtime = params.subagentRegistryRuntime ?? (await loadSubagentRegistryRuntime());
-  if (runtime.shouldIgnorePostCompletionAnnounceForSession(requesterSessionKey)) {
-    return { kind: "ignore" };
+  const runtime =
+    params.subagentRegistryRuntime ?? (await subagentAnnounceDeps.loadSubagentRegistryRuntime());
+  if (!runtime.isSubagentSessionRunActive(requesterSessionKey)) {
+    if (runtime.shouldIgnorePostCompletionAnnounceForSession(requesterSessionKey)) {
+      return { kind: "ignore" };
+    }
   }
 
   const parentSessionEntry = loadSessionEntryByKey(requesterSessionKey);
@@ -460,7 +465,7 @@ export async function runSubagentAnnounceFlow(params: {
       | Awaited<ReturnType<typeof loadSubagentRegistryRuntime>>
       | undefined;
     try {
-      subagentRegistryRuntime = await loadSubagentRegistryRuntime();
+      subagentRegistryRuntime = await subagentAnnounceDeps.loadSubagentRegistryRuntime();
       if (
         requesterDepth >= 1 &&
         subagentRegistryRuntime.shouldIgnorePostCompletionAnnounceForSession(
