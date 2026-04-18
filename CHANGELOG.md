@@ -1217,6 +1217,7 @@ Docs: https://docs.openclaw.ai
 - Active Memory: raise the blocking recall timeout ceiling to 120 seconds and reject larger config values during plugin schema validation. Fixes #68410. (#68480) Thanks @Bartok9.
 - Control UI/chat: keep history-backed user image uploads visible after chat reload while filtering blocked or non-image transcript media paths. (#68415) Thanks @mraleko.
 - Matrix/plugins: keep remaining Matrix event helpers on the canonical `matrix-js-sdk` subpath so build and plugin-load entrypoint checks stay consistent. (#68498) Thanks @masatohoshino.
+- Agents/tool-images: memoize `resizeImageBase64IfNeeded` with a collision-safe, memory-bounded cache so session-history images are not re-decoded through sharp on every turn. Fixes #64418. (#68677) Thanks @nitinjwadhawan.
 
 ## 2026.4.15
 

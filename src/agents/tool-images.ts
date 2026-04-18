@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -145,7 +146,135 @@ function inferImageFileName(params: {
   return undefined;
 }
 
+// Session history is re-sanitized on every turn via `sanitizeSessionMessagesImages`,
+// which means `resizeImageBase64IfNeeded` is invoked for the same historical image
+// on every message. Both the `getImageMetadata` header read and any `resizeToJpeg`
+// call are expensive (sharp image decode), so we memoize the result.
+//
+// Cache-key note (defends against the P1 cache-key collision flagged during
+// review of #64514): the key MUST be a hash of the full base64 payload plus
+// the output limits. Hashing only a prefix of the base64 collides across
+// different images that share JPEG/PNG header bytes (SOI + APP0/JFIF +
+// quantisation + Huffman tables routinely fill 600+ bytes before pixel data),
+// which would silently substitute one image's bytes for another's in the
+// session context. SHA-256 on multi-MB base64 is sub-millisecond and far
+// cheaper than the sharp decode we are skipping on a cache hit.
+type ResizeCacheValue = {
+  base64: string;
+  mimeType: string;
+  resized: boolean;
+  width: number | undefined;
+  height: number | undefined;
+  approxBytes: number;
+};
+
+const DEFAULT_RESIZE_CACHE_MAX_BYTES = 64 * 1024 * 1024; // 64 MiB
+function parseCacheByteLimit(): number {
+  const raw = process.env.OPENCLAW_IMAGE_RESIZE_CACHE_MAX_BYTES;
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return DEFAULT_RESIZE_CACHE_MAX_BYTES;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_RESIZE_CACHE_MAX_BYTES;
+  }
+  return parsed;
+}
+
+let resizeCacheMaxBytes = parseCacheByteLimit();
+const resizeCache = new Map<string, ResizeCacheValue>();
+let resizeCacheTotalBytes = 0;
+let resizeCacheHits = 0;
+let resizeCacheMisses = 0;
+
+function computeResizeCacheKey(base64: string, maxDimensionPx: number, maxBytes: number): string {
+  const hash = createHash("sha256");
+  hash.update(`${maxDimensionPx}:${maxBytes}:`);
+  hash.update(base64);
+  return hash.digest("hex");
+}
+
+function evictResizeCacheUntilBelow(limitBytes: number): void {
+  if (resizeCacheTotalBytes <= limitBytes) {
+    return;
+  }
+  // Map preserves insertion order; oldest entries live at the head.
+  for (const [key, entry] of resizeCache) {
+    if (resizeCacheTotalBytes <= limitBytes) {
+      break;
+    }
+    resizeCache.delete(key);
+    resizeCacheTotalBytes -= entry.approxBytes;
+  }
+}
+
+function recordResizeCacheEntry(key: string, entry: ResizeCacheValue): void {
+  const existing = resizeCache.get(key);
+  if (existing) {
+    resizeCache.delete(key);
+    resizeCacheTotalBytes -= existing.approxBytes;
+  }
+  resizeCache.set(key, entry);
+  resizeCacheTotalBytes += entry.approxBytes;
+  if (resizeCacheTotalBytes > resizeCacheMaxBytes) {
+    evictResizeCacheUntilBelow(resizeCacheMaxBytes);
+  }
+}
+
+function lookupResizeCache(key: string): ResizeCacheValue | undefined {
+  const entry = resizeCache.get(key);
+  if (!entry) {
+    return undefined;
+  }
+  // LRU touch: move to tail by delete+set so it survives evictions longer.
+  resizeCache.delete(key);
+  resizeCache.set(key, entry);
+  return entry;
+}
+
 async function resizeImageBase64IfNeeded(params: {
+  base64: string;
+  mimeType: string;
+  maxDimensionPx: number;
+  maxBytes: number;
+  label?: string;
+  fileName?: string;
+}): Promise<{
+  base64: string;
+  mimeType: string;
+  resized: boolean;
+  width?: number;
+  height?: number;
+}> {
+  const cacheKey = computeResizeCacheKey(params.base64, params.maxDimensionPx, params.maxBytes);
+  const cached = lookupResizeCache(cacheKey);
+  if (cached) {
+    resizeCacheHits += 1;
+    return {
+      base64: cached.base64,
+      mimeType: cached.mimeType,
+      resized: cached.resized,
+      width: cached.width,
+      height: cached.height,
+    };
+  }
+  resizeCacheMisses += 1;
+
+  const result = await computeResizeImageBase64(params);
+  recordResizeCacheEntry(cacheKey, {
+    base64: result.base64,
+    mimeType: result.mimeType,
+    resized: result.resized,
+    width: result.width,
+    height: result.height,
+    // Upper bound for eviction accounting. Cheap to compute and matches the
+    // dominant memory contribution of an entry (the base64 string itself).
+    approxBytes: result.base64.length,
+  });
+  return result;
+}
+
+async function computeResizeImageBase64(params: {
   base64: string;
   mimeType: string;
   maxDimensionPx: number;
@@ -360,3 +489,39 @@ export async function sanitizeToolResultImages(
   const next = await sanitizeContentBlocksImages(content, label, opts);
   return { ...result, content: next };
 }
+
+export const __testing = {
+  resetResizeCache(): void {
+    resizeCache.clear();
+    resizeCacheTotalBytes = 0;
+    resizeCacheHits = 0;
+    resizeCacheMisses = 0;
+    resizeCacheMaxBytes = parseCacheByteLimit();
+  },
+  setResizeCacheMaxBytes(value: number): void {
+    resizeCacheMaxBytes = Math.max(1, Math.floor(value));
+    evictResizeCacheUntilBelow(resizeCacheMaxBytes);
+  },
+  getResizeCacheStats(): {
+    entryCount: number;
+    totalBytes: number;
+    maxBytes: number;
+    hits: number;
+    misses: number;
+  } {
+    return {
+      entryCount: resizeCache.size,
+      totalBytes: resizeCacheTotalBytes,
+      maxBytes: resizeCacheMaxBytes,
+      hits: resizeCacheHits,
+      misses: resizeCacheMisses,
+    };
+  },
+  // Exposed so tests can directly assert the key-collision safety property
+  // called out on PR #64514: two inputs that share a long leading prefix
+  // must still produce distinct keys. Going through `sanitizeContentBlocksImages`
+  // alone cannot prove this because the cache is only populated on the
+  // success path, and two different payloads can silently converge on the
+  // same stats with a colliding key.
+  computeResizeCacheKey,
+};
