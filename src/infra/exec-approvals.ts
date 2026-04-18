@@ -234,7 +234,7 @@ function resolveApprovalsPathTrustedRoot(env: NodeJS.ProcessEnv = process.env): 
   const stateDir = env.OPENCLAW_STATE_DIR?.trim();
   if (stateDir) {
     try {
-      return fs.realpathSync(stateDir);
+      return fs.realpathSync(expandHomePrefix(stateDir));
     } catch {
       // State dir not yet created; fall through to HOME-based root.
     }
