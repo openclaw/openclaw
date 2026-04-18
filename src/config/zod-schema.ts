@@ -17,6 +17,8 @@ import {
   ModelsConfigSchema,
   SecretInputSchema,
   SecretsConfigSchema,
+  formatLiteLLMMediaRoutingAliasMessage,
+  getLiteLLMMediaRoutingAliasRef,
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { PluginInstallRecordShape } from "./zod-schema.installs.js";
@@ -154,6 +156,74 @@ const SkillEntrySchema = z
     config: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
+
+function toolsMediaImageCanFallBackToAgentDefaults(cfg: {
+  tools?: {
+    media?: {
+      models?: unknown[];
+      image?: {
+        enabled?: boolean;
+        models?: unknown[];
+      };
+    };
+  };
+}): boolean {
+  const media = cfg.tools?.media;
+  if (!media) {
+    return false;
+  }
+  if ((media.models?.length ?? 0) > 0 || (media.image?.models?.length ?? 0) > 0) {
+    return false;
+  }
+  return media.image?.enabled !== false;
+}
+
+function addToolsMediaImageFallbackAliasIssues(
+  cfg: {
+    tools?: {
+      media?: {
+        models?: unknown[];
+        image?: {
+          enabled?: boolean;
+          models?: unknown[];
+        };
+      };
+    };
+    agents?: {
+      defaults?: {
+        imageModel?: string | { primary?: string; fallbacks?: string[] };
+      };
+    };
+  },
+  ctx: z.RefinementCtx,
+) {
+  if (!toolsMediaImageCanFallBackToAgentDefaults(cfg)) {
+    return;
+  }
+  const imageModel = cfg.agents?.defaults?.imageModel;
+  if (!imageModel) {
+    return;
+  }
+  const addIssue = (path: Array<string | number>, ref: string | undefined) => {
+    const aliasModel = getLiteLLMMediaRoutingAliasRef(ref);
+    if (!aliasModel) {
+      return;
+    }
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path,
+      message: `${formatLiteLLMMediaRoutingAliasMessage(aliasModel)} tools.media.image may fall back to this config when no explicit media image models are set.`,
+    });
+  };
+  if (typeof imageModel === "string") {
+    addIssue(["agents", "defaults", "imageModel"], imageModel);
+    return;
+  }
+  addIssue(["agents", "defaults", "imageModel", "primary"], imageModel.primary);
+  for (const [idx, ref] of (imageModel.fallbacks ?? []).entries()) {
+    addIssue(["agents", "defaults", "imageModel", "fallbacks", idx], ref);
+  }
+}
 
 const PluginEntrySchema = z
   .object({
@@ -983,6 +1053,8 @@ export const OpenClawSchema = z
   })
   .strict()
   .superRefine((cfg, ctx) => {
+    addToolsMediaImageFallbackAliasIssues(cfg, ctx);
+
     const agents = cfg.agents?.list ?? [];
     if (agents.length === 0) {
       return;

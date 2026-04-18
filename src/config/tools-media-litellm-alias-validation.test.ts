@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
 describe("tools.media LiteLLM alias validation", () => {
-  it("rejects shared tools.media models that use LiteLLM routing aliases", async () => {
-    const res = await validateConfigObject({
+  it("rejects shared tools.media models that use LiteLLM routing aliases", () => {
+    const res = validateConfigObject({
       tools: {
         media: {
           models: [
@@ -19,6 +19,9 @@ describe("tools.media LiteLLM alias validation", () => {
     });
 
     expect(res.ok).toBe(false);
+    if (res.ok) {
+      throw new Error("expected config validation to fail");
+    }
     expect(res.issues).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -31,11 +34,11 @@ describe("tools.media LiteLLM alias validation", () => {
     );
   });
 
-  it("rejects capability-specific tools.media models that use LiteLLM routing aliases", async () => {
-    const res = await validateConfigObject({
+  it("rejects capability-specific tools.media models that use LiteLLM routing aliases", () => {
+    const res = validateConfigObject({
       tools: {
         media: {
-          image: {
+          audio: {
             models: [
               {
                 provider: "litellm",
@@ -49,17 +52,55 @@ describe("tools.media LiteLLM alias validation", () => {
     });
 
     expect(res.ok).toBe(false);
+    if (res.ok) {
+      throw new Error("expected config validation to fail");
+    }
     expect(res.issues).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          path: "tools.media.image.models.0.model",
+          path: "tools.media.audio.models.0.model",
         }),
       ]),
     );
   });
 
-  it("accepts direct providers and concrete LiteLLM model ids", async () => {
-    const direct = await validateConfigObject({
+  it("rejects agents.defaults.imageModel aliases when tools.media.image may fall back to them", () => {
+    const res = validateConfigObject({
+      tools: {
+        media: {
+          image: {
+            enabled: true,
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          imageModel: {
+            primary: "litellm/vision",
+            fallbacks: ["litellm/complex", "openai/gpt-4o-mini"],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      throw new Error("expected config validation to fail");
+    }
+    expect(res.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "agents.defaults.imageModel.primary",
+        }),
+        expect.objectContaining({
+          path: "agents.defaults.imageModel.fallbacks.0",
+        }),
+      ]),
+    );
+  });
+
+  it("accepts direct providers and concrete LiteLLM model ids", () => {
+    const direct = validateConfigObject({
       tools: {
         media: {
           models: [
@@ -74,7 +115,7 @@ describe("tools.media LiteLLM alias validation", () => {
       },
       agents: { defaults: { imageModel: { primary: "litellm/gpt-4o-mini" } } },
     });
-    const concreteLiteLLM = await validateConfigObject({
+    const concreteLiteLLM = validateConfigObject({
       tools: {
         media: {
           models: [

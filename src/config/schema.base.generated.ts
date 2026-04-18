@@ -23925,7 +23925,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.media.image.models": {
       label: "Image Understanding Models",
-      help: "Ordered model preferences specifically for image understanding when you want to override shared media models. Put the most reliable multimodal model first to reduce fallback attempts.",
+      help: "Ordered model preferences specifically for image understanding when you want to override shared media models. Put the most reliable multimodal model first to reduce fallback attempts, and avoid LiteLLM routing aliases in tools.media model lists.",
       tags: ["models", "media", "tools"],
     },
     "tools.media.image.scope": {
@@ -23935,7 +23935,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.media.models": {
       label: "Media Understanding Shared Models",
-      help: "Shared fallback model list used by media understanding tools when modality-specific model lists are not set. Keep this aligned with available multimodal providers to avoid runtime fallback churn.",
+      help: "Shared fallback model list used by media understanding tools when modality-specific model lists are not set. Prefer direct providers or concrete model ids here; avoid LiteLLM routing aliases like vision/simple/medium/complex in tools.media.",
       tags: ["models", "media", "tools"],
     },
     "tools.media.concurrency": {
@@ -24102,7 +24102,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.media.video.models": {
       label: "Video Understanding Models",
-      help: "Ordered model preferences specifically for video understanding before shared media fallback applies. Prioritize models with strong multimodal video support to minimize degraded summaries.",
+      help: "Ordered model preferences specifically for video understanding before shared media fallback applies. Prioritize models with strong multimodal video support and avoid LiteLLM routing aliases in tools.media model lists.",
       tags: ["models", "media", "tools"],
     },
     "tools.media.video.scope": {

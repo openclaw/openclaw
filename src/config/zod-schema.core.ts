@@ -748,21 +748,57 @@ const ProviderOptionsSchema = z
 
 const LITELLM_MEDIA_ROUTING_ALIAS_MODELS = new Set(["vision", "simple", "medium", "complex"]);
 
+function normalizeLiteLLMMediaRoutingAliasModel(
+  provider: string | undefined,
+  model: string | undefined,
+): string | undefined {
+  const normalizedProvider = provider?.trim().toLowerCase();
+  const normalizedModel = model?.trim().toLowerCase();
+  if (
+    normalizedProvider !== "litellm" ||
+    !normalizedModel ||
+    !LITELLM_MEDIA_ROUTING_ALIAS_MODELS.has(normalizedModel)
+  ) {
+    return undefined;
+  }
+  return normalizedModel;
+}
+
+export function getLiteLLMMediaRoutingAliasRef(ref: string | undefined): string | undefined {
+  const trimmed = ref?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const slashIdx = trimmed.indexOf("/");
+  if (slashIdx <= 0 || slashIdx >= trimmed.length - 1) {
+    return undefined;
+  }
+  return normalizeLiteLLMMediaRoutingAliasModel(
+    trimmed.slice(0, slashIdx),
+    trimmed.slice(slashIdx + 1),
+  );
+}
+
+export function formatLiteLLMMediaRoutingAliasMessage(model: string): string {
+  return (
+    "LiteLLM routing aliases are not allowed in tools.media. Use a direct provider " +
+    `(for example openai/gpt-4o-mini) or a concrete LiteLLM model id instead of litellm/${model}.`
+  );
+}
+
 function addLiteLLMMediaAliasIssue(params: {
   value: { provider?: string; model?: string } | undefined;
   ctx: z.RefinementCtx;
   pathPrefix: Array<string | number>;
 }) {
-  const provider = params.value?.provider?.trim().toLowerCase();
-  const model = params.value?.model?.trim().toLowerCase();
-  if (provider !== "litellm" || !model || !LITELLM_MEDIA_ROUTING_ALIAS_MODELS.has(model)) {
+  const model = normalizeLiteLLMMediaRoutingAliasModel(params.value?.provider, params.value?.model);
+  if (!model) {
     return;
   }
   params.ctx.addIssue({
     code: z.ZodIssueCode.custom,
     path: [...params.pathPrefix, "model"],
-    message:
-      'LiteLLM routing aliases are not allowed in tools.media. Use a direct provider (for example openai/gpt-4o-mini) or a concrete LiteLLM model id instead of litellm/' + model + '.',
+    message: formatLiteLLMMediaRoutingAliasMessage(model),
   });
 }
 
