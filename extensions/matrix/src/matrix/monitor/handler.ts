@@ -273,14 +273,15 @@ function resolveMatrixMentionPrecheckText(params: {
  * This ensures that messages like "@bot:server /new" are recognized as slash commands.
  * Similar to Feishu's normalizeMentions and Mattermost's stripMentionPrefix.
  */
-function stripMatrixMentionPrefixes(text: string, mentionRegexes: RegExp[]): string {
+export function stripMatrixMentionPrefixes(text: string, mentionRegexes: RegExp[]): string {
   if (!text || mentionRegexes.length === 0) {
     return text;
   }
   let result = text;
   for (const pattern of mentionRegexes) {
     // Match mention at the start of the text, followed by optional whitespace
-    const match = result.match(new RegExp(`^(${pattern.source})\\s*`));
+    // Preserve the original regex flags (e.g., "i" for case-insensitive)
+    const match = result.match(new RegExp(`^(${pattern.source})\\s*`, pattern.flags));
     if (match) {
       result = result.slice(match[0].length).trimStart();
       break; // Only strip the first mention prefix

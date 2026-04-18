@@ -1,24 +1,5 @@
 import { describe, expect, it } from "vitest";
-
-/**
- * Test helper to strip mention prefixes from text for slash command detection.
- * This is the test for the fix of issue #68547.
- */
-function stripMatrixMentionPrefixes(text: string, mentionRegexes: RegExp[]): string {
-  if (!text || mentionRegexes.length === 0) {
-    return text;
-  }
-  let result = text;
-  for (const pattern of mentionRegexes) {
-    // Match mention at the start of the text, followed by optional whitespace
-    const match = result.match(new RegExp(`^(${pattern.source})\\s*`));
-    if (match) {
-      result = result.slice(match[0].length).trimStart();
-      break; // Only strip the first mention prefix
-    }
-  }
-  return result;
-}
+import { stripMatrixMentionPrefixes } from "./handler";
 
 describe("stripMatrixMentionPrefixes", () => {
   it("returns original text when mentionRegexes is empty", () => {
@@ -46,8 +27,16 @@ describe("stripMatrixMentionPrefixes", () => {
     expect(result).toBe("/help");
   });
 
-  it("strips mention prefix with display name", () => {
-    const mentionRegexes = [/@OpenClaw Bot\b/];
+  it("strips mention prefix with display name (case-insensitive)", () => {
+    // Regex with case-insensitive flag (as produced by buildMentionRegexes)
+    const mentionRegexes = [/@OpenClaw Bot\b/i];
+    const text = "@openclaw bot /model";
+    const result = stripMatrixMentionPrefixes(text, mentionRegexes);
+    expect(result).toBe("/model");
+  });
+
+  it("strips mention prefix with display name (exact case)", () => {
+    const mentionRegexes = [/@OpenClaw Bot\b/i];
     const text = "@OpenClaw Bot /model";
     const result = stripMatrixMentionPrefixes(text, mentionRegexes);
     expect(result).toBe("/model");
@@ -101,5 +90,15 @@ describe("stripMatrixMentionPrefixes", () => {
     const text = "@bot:server hello world";
     const result = stripMatrixMentionPrefixes(text, mentionRegexes);
     expect(result).toBe("hello world");
+  });
+
+  it("preserves regex flags when stripping (case-insensitive match)", () => {
+    // This test specifically verifies the fix for the regex flags issue
+    // The regex has the 'i' flag for case-insensitive matching
+    const mentionRegexes = [/@TestBot:server\b/i];
+    // Text with different casing should still match and be stripped
+    const text = "@TESTBOT:SERVER /command";
+    const result = stripMatrixMentionPrefixes(text, mentionRegexes);
+    expect(result).toBe("/command");
   });
 });
