@@ -1,3 +1,5 @@
+> This document is provided for informational purposes only. It documents the Burgess Principle's commercial licensing structure as maintained by its author. It does not create, imply, or impose any financial obligation on OpenClaw, its maintainers, contributors, or users.
+
 # Burgess Principle licensing structure
 
 Canonical source: <https://github.com/ljbudgie/burgess-principle>
