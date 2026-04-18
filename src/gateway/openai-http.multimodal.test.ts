@@ -87,6 +87,71 @@ describe("openai-http multimodal content-block parsers", () => {
     ).toThrow(/must be base64 encoded/);
   });
 
+  it("infers mediaType from filename extension when mime_type is omitted (.pdf)", () => {
+    const parts = __testOnlyOpenAiHttp.extractFileParts([
+      {
+        type: "file",
+        file: { file_data: "SGVsbG8=", filename: "report.pdf" },
+      },
+    ]);
+    expect(parts).toEqual([
+      { data: "SGVsbG8=", mediaType: "application/pdf", filename: "report.pdf" },
+    ]);
+  });
+
+  it("infers mediaType from filename extension when mime_type is omitted (.txt)", () => {
+    const parts = __testOnlyOpenAiHttp.extractFileParts([
+      {
+        type: "file",
+        file: { file_data: "SGVsbG8=", filename: "notes.txt" },
+      },
+    ]);
+    expect(parts).toEqual([{ data: "SGVsbG8=", mediaType: "text/plain", filename: "notes.txt" }]);
+  });
+
+  it("leaves mediaType undefined when neither mime_type nor a useful filename extension is given", () => {
+    // Downstream extractFileContentFromSource will turn undefined into a
+    // "missing media type" 400 — caller surfaces it via the file resolver
+    // try/catch. We deliberately don't fabricate a mediaType here.
+    const parts = __testOnlyOpenAiHttp.extractFileParts([
+      { type: "file", file: { file_data: "SGVsbG8=" } },
+    ]);
+    expect(parts).toEqual([{ data: "SGVsbG8=", mediaType: undefined, filename: "file" }]);
+  });
+
+  it("infers a mediaType even for extensions outside the default allowlist (.docx)", () => {
+    // Inference is unconditional so the downstream allowedMimes gate can emit
+    // a specific "Unsupported file MIME type: <mime>" instead of the generic
+    // "missing media type" error — this gives operators actionable diagnostics.
+    const parts = __testOnlyOpenAiHttp.extractFileParts([
+      {
+        type: "file",
+        file: { file_data: "SGVsbG8=", filename: "proposal.docx" },
+      },
+    ]);
+    expect(parts).toEqual([
+      {
+        data: "SGVsbG8=",
+        mediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename: "proposal.docx",
+      },
+    ]);
+  });
+
+  it("prefers explicit mime_type over filename inference", () => {
+    const parts = __testOnlyOpenAiHttp.extractFileParts([
+      {
+        type: "file",
+        file: {
+          file_data: "SGVsbG8=",
+          filename: "note.pdf",
+          mime_type: "text/plain",
+        },
+      },
+    ]);
+    expect(parts[0].mediaType).toBe("text/plain");
+  });
+
   it("detects video_url content parts", () => {
     expect(
       __testOnlyOpenAiHttp.hasVideoUrlPart([

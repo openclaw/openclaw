@@ -27,6 +27,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { mimeTypeFromFilePath } from "../media/mime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -420,6 +421,17 @@ function resolveFilePart(part: unknown): ParsedFilePart | undefined {
   }
   if (!base64Data) {
     throw new Error("file file_data missing payload");
+  }
+  // OpenAI-compat clients commonly send `file_data` + `filename` with no
+  // explicit `mime_type` (and no `data:<mime>;base64,` envelope). Rather than
+  // hard-failing downstream with "input_file missing media type", infer from
+  // the filename extension when we can. Downstream allowedMimes enforcement
+  // (input-files.ts:371) still rejects unsupported types with a clear 400.
+  if (!mediaType) {
+    const inferred = mimeTypeFromFilePath(filename);
+    if (inferred) {
+      mediaType = inferred;
+    }
   }
   return { data: base64Data, mediaType, filename };
 }
