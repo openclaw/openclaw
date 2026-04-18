@@ -53,7 +53,33 @@ describe("exec approval followup", () => {
         channel: undefined,
         to: undefined,
       }),
-      { expectFinal: true },
+      { expectFinal: false },
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("only waits for accepted when resuming a session followup", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValueOnce({
+      status: "accepted",
+      runId: "run-followup-accepted",
+    });
+
+    await expect(
+      sendExecApprovalFollowup({
+        approvalId: "req-accepted-only",
+        sessionKey: "agent:main:main",
+        resultText: "Exec finished (gateway id=req-accepted-only, code 0)\nok",
+      }),
+    ).resolves.toBe(true);
+
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "agent",
+      expect.any(Object),
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        idempotencyKey: "exec-approval-followup:req-accepted-only",
+      }),
+      { expectFinal: false },
     );
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -104,7 +130,7 @@ describe("exec approval followup", () => {
         threadId: target.threadId,
         idempotencyKey: `exec-approval-followup:req-${target.channel}`,
       }),
-      { expectFinal: true },
+      { expectFinal: false },
     );
     expect(sendMessage).not.toHaveBeenCalled();
   });
