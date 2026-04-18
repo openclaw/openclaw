@@ -10,10 +10,10 @@ import {
 } from "../tasks/task-executor.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
+  buildStoredUserDeliveryPayload,
   captureSubagentCompletionReply,
   runSubagentAnnounceFlow,
   type SubagentRunOutcome,
-  __testing as subagentAnnounceTesting,
 } from "./subagent-announce.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -185,7 +185,7 @@ export function createSubagentRegistryLifecycleController(params: {
       });
       entry.frozenResultText = captured?.trim() ? capFrozenResultText(captured) : null;
       entry.userDeliveryPayload = entry.frozenResultText
-        ? subagentAnnounceTesting.buildStoredUserDeliveryPayload(entry.frozenResultText)
+        ? buildStoredUserDeliveryPayload(entry.frozenResultText)
         : null;
     } catch {
       entry.frozenResultText = null;
@@ -245,7 +245,7 @@ export function createSubagentRegistryLifecycleController(params: {
       }
       entry.frozenResultText = nextFrozen;
       entry.frozenResultCapturedAt = capturedAt;
-      entry.userDeliveryPayload = subagentAnnounceTesting.buildStoredUserDeliveryPayload(nextFrozen);
+      entry.userDeliveryPayload = buildStoredUserDeliveryPayload(nextFrozen);
       changed = true;
     }
     if (changed) {

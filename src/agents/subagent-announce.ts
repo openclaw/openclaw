@@ -142,7 +142,7 @@ function tryExtractNamedUserDeliverySection(text: string): string {
   return (endMatch ? afterMarker.slice(0, endMatch.index) : afterMarker).trim();
 }
 
-function extractUserFacingCompletionPayload(text: string): {
+export function extractUserFacingCompletionPayload(text: string): {
   text: string;
   source: StoredUserDeliveryPayload["source"];
 } {
@@ -178,7 +178,7 @@ function extractUserFacingCompletionPayload(text: string): {
   };
 }
 
-function buildStoredUserDeliveryPayload(resultText: string): StoredUserDeliveryPayload {
+export function buildStoredUserDeliveryPayload(resultText: string): StoredUserDeliveryPayload {
   const extracted = extractUserFacingCompletionPayload(resultText);
   return {
     text: extracted.text,
@@ -728,9 +728,7 @@ export async function runSubagentAnnounceFlow(params: {
 }
 
 export const __testing = {
-  buildStoredUserDeliveryPayload,
   buildDirectUserCompletionPrompt,
-  extractUserFacingCompletionPayload,
   setDepsForTest(overrides?: Partial<SubagentAnnounceDeps>) {
     subagentAnnounceDeps = overrides
       ? {

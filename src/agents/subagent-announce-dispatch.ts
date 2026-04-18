@@ -236,7 +236,8 @@ export async function runSubagentAnnounceDispatch(params: {
     finalResult = fallbackDirect;
     return withPhases(finalResult);
   } finally {
-    finalizePersistedAnnounceDeliveryClaim(params.announceId, claim.token, finalResult);
+    const token = claim.status === "started" ? claim.token : undefined;
+    finalizePersistedAnnounceDeliveryClaim(params.announceId, token, finalResult);
   }
 }
 

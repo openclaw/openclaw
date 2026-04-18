@@ -56,19 +56,18 @@ function splitIMessageTextSafely(text: string, limit: number): string[] {
 }
 
 function chunkIMessageText(text: string, limit: number): string[] {
-  const normalized = normalizeIMessageDeliveryText(text ?? "");
-  if (!normalized) {
+  if (!text) {
     return [];
   }
-  if (limit <= 0 || normalized.length <= limit) {
-    return [normalized];
+  if (limit <= 0 || text.length <= limit) {
+    return [text];
   }
-  const paragraphs = normalized
+  const paragraphs = text
     .split(/\n{2,}/)
     .map((part) => part.trim())
     .filter(Boolean);
   if (paragraphs.length <= 1) {
-    return splitIMessageTextSafely(normalized, limit);
+    return splitIMessageTextSafely(text, limit);
   }
   const chunks: string[] = [];
   let current = "";
