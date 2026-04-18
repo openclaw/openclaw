@@ -15,7 +15,7 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(false);
   });
 
-  it("returns false for ACP slash commands", () => {
+  it("returns true for ACP slash commands", () => {
     const ctx = buildTestCtx({
       Provider: "discord",
       Surface: "discord",
@@ -24,7 +24,19 @@ describe("shouldBypassAcpDispatchForCommand", () => {
       BodyForAgent: "/acp cancel",
     });
 
-    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(false);
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it("returns true for ACP diagnostics commands", () => {
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "/acp doctor",
+      BodyForCommands: "/acp doctor",
+      BodyForAgent: "/acp doctor",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
   });
 
   it("returns true for ACP reset-tail slash commands", () => {

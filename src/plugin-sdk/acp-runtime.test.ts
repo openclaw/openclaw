@@ -209,4 +209,29 @@ describe("tryDispatchAcpReplyHook", () => {
       }),
     );
   });
+
+  it("does not let ACP claim /acp commands before local command handling", async () => {
+    bypassMock.mockResolvedValue(true);
+    dispatchMock.mockResolvedValue(undefined);
+
+    const result = await tryDispatchAcpReplyHook(
+      {
+        ...event,
+        ctx: buildTestCtx({
+          SessionKey: "agent:test:session",
+          CommandBody: "/acp cancel",
+          BodyForCommands: "/acp cancel",
+          BodyForAgent: "/acp cancel",
+        }),
+      },
+      ctx,
+    );
+
+    expect(result).toBeUndefined();
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bypassForCommand: true,
+      }),
+    );
+  });
 });
