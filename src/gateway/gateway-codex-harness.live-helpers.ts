@@ -42,18 +42,23 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
 
 export function isExpectedCodexModelsCommandText(text: string): boolean {
   const normalized = text.toLowerCase();
+  const mentionsCodexModelsCommand =
+    text.includes("`codex models`") || text.includes("`/codex models`");
   const isSandboxFallback =
-    text.includes("`codex models`") &&
-    (text.includes("did not run") ||
-      text.includes("could not run") ||
-      text.includes("could not be run") ||
-      text.includes("failed in this sandbox") ||
-      text.includes("failed with:") ||
-      text.includes("repo-local fallback") ||
-      text.includes("sandbox blocks") ||
-      text.includes("interactive in this environment") ||
-      text.includes("sandboxed session") ||
-      text.includes("required user namespace"));
+    mentionsCodexModelsCommand &&
+    (normalized.includes("did not run") ||
+      normalized.includes("could not run") ||
+      normalized.includes("could not be run") ||
+      normalized.includes("failed in this sandbox") ||
+      normalized.includes("failed with:") ||
+      normalized.includes("fails to start") ||
+      normalized.includes("repo-local fallback") ||
+      normalized.includes("sandbox blocks") ||
+      normalized.includes("interactive in this environment") ||
+      normalized.includes("sandboxed session") ||
+      normalized.includes("required user namespace") ||
+      normalized.includes("user-namespace restriction") ||
+      normalized.includes("bwrap: no permissions to create a new namespace"));
 
   const mentionsConfiguredModels =
     normalized.includes("configured model") ||

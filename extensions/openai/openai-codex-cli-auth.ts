@@ -22,6 +22,7 @@ export const OPENAI_CODEX_DEFAULT_PROFILE_ID = `${PROVIDER_ID}:default`;
 type CodexCliAuthFile = {
   auth_mode?: unknown;
   tokens?: {
+    id_token?: unknown;
     access_token?: unknown;
     refresh_token?: unknown;
     account_id?: unknown;
@@ -76,7 +77,8 @@ function oauthCredentialMatches(a: OAuthCredential, b: OAuthCredential): boolean
     a.displayName === b.displayName &&
     a.enterpriseUrl === b.enterpriseUrl &&
     a.projectId === b.projectId &&
-    a.accountId === b.accountId
+    a.accountId === b.accountId &&
+    a.idToken === b.idToken
   );
 }
 
@@ -131,6 +133,7 @@ export function readOpenAICodexCliOAuthProfile(params: {
   }
 
   const accountId = trimNonEmptyString(authFile.tokens?.account_id);
+  const idToken = trimNonEmptyString(authFile.tokens?.id_token);
   const identity = resolveCodexAuthIdentity({ accessToken: access });
   const credential: OAuthCredential = {
     type: "oauth",
@@ -139,6 +142,7 @@ export function readOpenAICodexCliOAuthProfile(params: {
     refresh,
     expires: resolveCodexAccessTokenExpiry(access) ?? 0,
     ...(accountId ? { accountId } : {}),
+    ...(idToken ? { idToken } : {}),
     ...(identity.email ? { email: identity.email } : {}),
     ...(identity.profileName ? { displayName: identity.profileName } : {}),
   };

@@ -5,9 +5,10 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreForLocalUpdate,
   listProfilesForProvider,
   type OAuthCredential,
+  type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { loginOpenAICodexOAuth } from "openclaw/plugin-sdk/provider-auth-login";
@@ -285,9 +286,7 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
 async function runImportOpenAICodexCliAuth(ctx: ProviderAuthContext) {
   const profile = readOpenAICodexCliOAuthProfile({
     env: ctx.env ?? process.env,
-    store: ensureAuthProfileStore(ctx.agentDir, {
-      allowKeychainPrompt: false,
-    }),
+    store: ensureAuthProfileStoreForLocalUpdate(ctx.agentDir),
   });
   if (!profile) {
     throw new Error(
@@ -295,20 +294,38 @@ async function runImportOpenAICodexCliAuth(ctx: ProviderAuthContext) {
     );
   }
 
-  return buildOauthProviderAuthResult({
-    providerId: PROVIDER_ID,
+  return {
+    profiles: [{ profileId: profile.profileId, credential: profile.credential }],
+    configPatch: {
+      agents: {
+        defaults: {
+          models: {
+            [OPENAI_CODEX_DEFAULT_MODEL]: {},
+          },
+        },
+      },
+    },
     defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
-    access: profile.credential.access,
-    refresh: profile.credential.refresh,
-    expires: profile.credential.expires,
-    email: profile.credential.email,
-    displayName: profile.credential.displayName,
-    profilePrefix: "default",
-    credentialExtra: profile.credential.accountId
-      ? { accountId: profile.credential.accountId }
-      : {},
     notes: ["Imported existing Codex CLI login into OpenClaw canonical auth."],
+  } satisfies ProviderAuthResult;
+}
+
+function ensureOpenAICodexCatalogAuthStore(ctx: { agentDir?: string; env?: NodeJS.ProcessEnv }) {
+  const store = ensureAuthProfileStoreForLocalUpdate(ctx.agentDir);
+  const profile = readOpenAICodexCliOAuthProfile({
+    env: ctx.env ?? process.env,
+    store,
   });
+  if (!profile) {
+    return store;
+  }
+  return {
+    ...store,
+    profiles: {
+      ...store.profiles,
+      [profile.profileId]: profile.credential,
+    },
+  };
 }
 
 function buildOpenAICodexAuthDoctorHint(ctx: { profileId?: string }) {
@@ -350,9 +367,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     catalog: {
       order: "profile",
       run: async (ctx) => {
-        const authStore = ensureAuthProfileStore(ctx.agentDir, {
-          allowKeychainPrompt: false,
-        });
+        const authStore = ensureOpenAICodexCatalogAuthStore(ctx);
         if (listProfilesForProvider(authStore, PROVIDER_ID).length === 0) {
           return null;
         }
@@ -395,6 +410,13 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     fetchUsageSnapshot: async (ctx) =>
       await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn),
     refreshOAuth: async (cred) => await refreshOpenAICodexOAuthCredential(cred),
+    resolveExternalAuthProfiles: (ctx) => {
+      const profile = readOpenAICodexCliOAuthProfile({
+        env: ctx.env,
+        store: ctx.store,
+      });
+      return profile ? [{ ...profile, persistence: "runtime-only" }] : [];
+    },
     augmentModelCatalog: (ctx) => {
       const gpt54Template = findCatalogTemplate({
         entries: ctx.entries,

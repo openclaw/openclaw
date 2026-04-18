@@ -32,6 +32,16 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexModelsCommandText(text)).toBe(true);
   });
 
+  it("accepts sandbox namespace failures with current-session model fallback", () => {
+    const text = [
+      "I can’t enumerate `/codex models` from this sandbox because the local `codex` CLI fails to start here with a user-namespace restriction (`bwrap: No permissions to create a new namespace`).",
+      "",
+      "What I can confirm from the current session is that it’s running on `codex/gpt-5.4`.",
+    ].join("\n");
+
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
   it("rejects unrelated codex command output", () => {
     expect(isExpectedCodexModelsCommandText("Codex is healthy.")).toBe(false);
   });

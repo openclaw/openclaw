@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../../test-utils/env.js";
+import { __testing as externalAuthTesting } from "./external-auth.js";
 import {
   createOAuthManager,
   isSafeToAdoptBootstrapOAuthIdentity,
@@ -9,7 +11,11 @@ import {
   isSafeToOverwriteStoredOAuthIdentity,
   OAuthManagerRefreshError,
 } from "./oauth-manager.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  ensureAuthProfileStore,
+  saveAuthProfileStore,
+} from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
@@ -24,8 +30,17 @@ function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCreden
 }
 
 const tempDirs: string[] = [];
+const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"]);
+
+beforeEach(() => {
+  externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
+  clearRuntimeAuthProfileStoreSnapshots();
+});
 
 afterEach(async () => {
+  envSnapshot.restore();
+  externalAuthTesting.resetResolveExternalAuthProfilesForTest();
+  clearRuntimeAuthProfileStoreSnapshots();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -75,7 +90,7 @@ describe("isSafeToOverwriteStoredOAuthIdentity", () => {
 });
 
 describe("isSafeToAdoptMainStoreOAuthIdentity", () => {
-  it("requires positive identity binding before adopting from the main store", () => {
+  it("allows identity-less credentials to adopt from the main store", () => {
     expect(
       isSafeToAdoptMainStoreOAuthIdentity(
         createCredential({
@@ -88,7 +103,7 @@ describe("isSafeToAdoptMainStoreOAuthIdentity", () => {
           accountId: "acct-main",
         }),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("accepts matching account identities", () => {
@@ -131,8 +146,15 @@ describe("OAuthManagerRefreshError", () => {
 
 describe("createOAuthManager", () => {
   it("refreshes with the adopted external oauth credential", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-refresh-"));
-    tempDirs.push(agentDir);
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-refresh-"));
+    tempDirs.push(tempRoot);
+    process.env.OPENCLAW_STATE_DIR = tempRoot;
+    const mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
+    const agentDir = path.join(tempRoot, "agents", "sub", "agent");
+    process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
+    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.mkdir(mainAgentDir, { recursive: true });
     const profileId = "minimax-portal:default";
     const localCredential = createCredential({
       provider: "minimax-portal",
@@ -148,6 +170,7 @@ describe("createOAuthManager", () => {
         },
       },
       agentDir,
+      { filterExternalAuthProfiles: false },
     );
 
     const manager = createOAuthManager({

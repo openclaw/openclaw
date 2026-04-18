@@ -42,6 +42,7 @@ describe("readOpenAICodexCliOAuthProfile", () => {
       JSON.stringify({
         auth_mode: "chatgpt",
         tokens: {
+          id_token: "id-token",
           access_token: accessToken,
           refresh_token: "refresh-token",
           account_id: "acct_123",
@@ -61,6 +62,7 @@ describe("readOpenAICodexCliOAuthProfile", () => {
         access: accessToken,
         refresh: "refresh-token",
         accountId: "acct_123",
+        idToken: "id-token",
         email: "codex@example.com",
       },
     });
@@ -172,6 +174,7 @@ describe("readOpenAICodexCliOAuthProfile", () => {
       JSON.stringify({
         auth_mode: "chatgpt",
         tokens: {
+          id_token: "id-token",
           access_token: accessToken,
           refresh_token: "refresh-token",
           account_id: "acct_123",
@@ -201,6 +204,7 @@ describe("readOpenAICodexCliOAuthProfile", () => {
         access: accessToken,
         refresh: "refresh-token",
         accountId: "acct_123",
+        idToken: "id-token",
         email: "codex@example.com",
       },
     });
@@ -217,6 +221,7 @@ describe("readOpenAICodexCliOAuthProfile", () => {
       JSON.stringify({
         auth_mode: "chatgpt",
         tokens: {
+          id_token: "id-token",
           access_token: accessToken,
           refresh_token: "refresh-token",
           account_id: "acct_123",
@@ -254,6 +259,7 @@ describe("readOpenAICodexCliOAuthProfile", () => {
       JSON.stringify({
         auth_mode: "chatgpt",
         tokens: {
+          id_token: "id-token",
           access_token: accessToken,
           refresh_token: "refresh-token",
           account_id: "acct_123",
@@ -281,6 +287,7 @@ describe("readOpenAICodexCliOAuthProfile", () => {
         access: accessToken,
         refresh: "refresh-token",
         accountId: "acct_123",
+        idToken: "id-token",
         email: "codex@example.com",
       },
     });
