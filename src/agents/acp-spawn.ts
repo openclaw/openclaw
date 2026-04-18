@@ -73,6 +73,7 @@ import {
 } from "./acp-spawn-parent-stream.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import { resolveSpawnedWorkspaceInheritance } from "./spawned-context.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
@@ -105,6 +106,10 @@ export type SpawnAcpContext = {
   agentThreadId?: string | number;
   /** Group chat ID for channels that distinguish group vs. topic (e.g. Telegram). */
   agentGroupId?: string;
+  /** Group space label (guild/team id) from the originating channel context. */
+  agentGroupSpace?: string | null;
+  /** Trusted provider role ids for the requester in this group turn. */
+  agentMemberRoleIds?: string[];
   sandboxed?: boolean;
 };
 
@@ -716,6 +721,7 @@ function prepareAcpThreadBinding(params: {
 function resolveAcpSpawnRequesterState(params: {
   cfg: OpenClawConfig;
   parentSessionKey?: string;
+  targetAgentId: string;
   ctx: SpawnAcpContext;
 }): AcpSpawnRequesterState {
   const bindingService = getSessionBindingService();
@@ -751,11 +757,16 @@ function resolveAcpSpawnRequesterState(params: {
             requesterAgentId,
           })
         : false,
-    origin: normalizeDeliveryContext({
-      channel: params.ctx.agentChannel,
-      accountId: params.ctx.agentAccountId,
-      to: params.ctx.agentTo,
-      threadId: params.ctx.agentThreadId,
+    origin: resolveRequesterOriginForChild({
+      cfg: params.cfg,
+      targetAgentId: params.targetAgentId,
+      requesterAgentId: normalizeAgentId(requesterAgentId),
+      requesterChannel: params.ctx.agentChannel,
+      requesterAccountId: params.ctx.agentAccountId,
+      requesterTo: params.ctx.agentTo,
+      requesterThreadId: params.ctx.agentThreadId,
+      requesterGroupSpace: params.ctx.agentGroupSpace,
+      requesterMemberRoleIds: params.ctx.agentMemberRoleIds,
     }),
   };
 }
@@ -1040,18 +1051,6 @@ export async function spawnAcpDirect(
     });
   }
 
-  const requesterState = resolveAcpSpawnRequesterState({
-    cfg,
-    parentSessionKey,
-    ctx,
-  });
-  const { effectiveStreamToParent } = resolveAcpSpawnStreamPlan({
-    spawnMode,
-    requestThreadBinding,
-    streamToParentRequested,
-    requester: requesterState,
-  });
-
   const targetAgentResult = resolveTargetAcpAgentId({
     requestedAgentId: params.agentId,
     cfg,
@@ -1072,6 +1071,18 @@ export async function spawnAcpDirect(
       error: agentPolicyError.message,
     });
   }
+  const requesterState = resolveAcpSpawnRequesterState({
+    cfg,
+    parentSessionKey,
+    targetAgentId,
+    ctx,
+  });
+  const { effectiveStreamToParent } = resolveAcpSpawnStreamPlan({
+    spawnMode,
+    requestThreadBinding,
+    streamToParentRequested,
+    requester: requesterState,
+  });
 
   const sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
   const runtimeMode = resolveAcpSessionMode(spawnMode);
@@ -1099,10 +1110,10 @@ export async function spawnAcpDirect(
   if (requestThreadBinding) {
     const prepared = prepareAcpThreadBinding({
       cfg,
-      channel: ctx.agentChannel,
-      accountId: ctx.agentAccountId,
-      to: ctx.agentTo,
-      threadId: ctx.agentThreadId,
+      channel: requesterState.origin?.channel,
+      accountId: requesterState.origin?.accountId,
+      to: requesterState.origin?.to,
+      threadId: requesterState.origin?.threadId,
       groupId: ctx.agentGroupId,
     });
     if (!prepared.ok) {
