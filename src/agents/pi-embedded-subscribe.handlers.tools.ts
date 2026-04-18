@@ -444,7 +444,7 @@ function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
  */
 function readPlanProposalDetails(
   result: unknown,
-): { plan: AgentApprovalPlanStep[]; summary?: string } | null {
+): { plan: AgentApprovalPlanStep[]; summary?: string; title?: string } | null {
   const details = readToolResultDetailsRecord(result);
   if (!details || details.status !== "approval_requested") {
     return null;
@@ -474,8 +474,12 @@ function readPlanProposalDetails(
     return null;
   }
   const rawSummary = details.summary;
+  // PR-9 Tier 1: surface explicit `title` field if the agent supplied
+  // one via exit_plan_mode. Fallback to summary handled by the caller.
+  const rawTitle = details.title;
   return {
     plan,
+    ...(typeof rawTitle === "string" && rawTitle.trim() ? { title: rawTitle.trim() } : {}),
     ...(typeof rawSummary === "string" && rawSummary.trim() ? { summary: rawSummary } : {}),
   };
 }
@@ -1471,11 +1475,19 @@ export async function handleToolExecutionEnd(
       if (ctx.params.sessionKey) {
         await persistPlanApprovalRequest(ctx.params.sessionKey, approvalId, ctx.log);
       }
+      // PR-9 Tier 1: prefer explicit `title` for the approval-card
+      // header. Falls back to `summary` (with "Plan approval —" prefix)
+      // for backwards-compat with agents that only supplied `summary`.
+      const approvalTitle = details.title
+        ? details.title
+        : details.summary
+          ? `Plan approval — ${details.summary}`
+          : "Plan approval requested";
       const approvalData: AgentApprovalEventData = {
         phase: "requested",
         kind: "plugin",
         status: "pending",
-        title: details.summary ? `Plan approval — ${details.summary}` : "Plan approval requested",
+        title: approvalTitle,
         itemId,
         toolCallId,
         approvalId,

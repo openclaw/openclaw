@@ -65,13 +65,51 @@ export function createCompactionDiagId(): string {
   return `ovf-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
 
-const BASE_RUN_RETRY_ITERATIONS = 24;
-const RUN_RETRY_ITERATIONS_PER_PROFILE = 8;
-const MIN_RUN_RETRY_ITERATIONS = 32;
-const MAX_RUN_RETRY_ITERATIONS = 160;
+// PR-9 Tier 1: previous defaults (24 + 8*profiles, floor 32, cap 160)
+// caused premature cutoffs on long research/build tasks where 32 turns
+// is well below the realistic budget. The user explicitly traded the
+// risk of one stuck-agent thrash session for the certainty of more
+// frequent successful long runs ("prefer 2 hours thrashing in rare
+// case over frequent premature cutoffs"). New defaults give main
+// agents effectively-unlimited budget; subagents get a separate
+// (lower) cap because they're typically narrow research tasks.
+const BASE_RUN_RETRY_ITERATIONS = 200;
+const RUN_RETRY_ITERATIONS_PER_PROFILE = 50;
+const MIN_RUN_RETRY_ITERATIONS = 500;
+const MAX_RUN_RETRY_ITERATIONS = 1000;
 
-// Defensive guard for the outer run loop across all retry branches.
-export function resolveMaxRunRetryIterations(profileCandidateCount: number): number {
+/**
+ * Subagent retry cap. Subagents (`lightContext: true` spawns) are
+ * intentionally narrow and shouldn't exceed this even if the main
+ * agent's per-config override is much higher. Set to 200 — large
+ * enough for multi-step research, small enough to surface a stuck
+ * subagent before it burns the parent's budget.
+ */
+export const SUBAGENT_MAX_RUN_RETRY_ITERATIONS = 200;
+
+/**
+ * Defensive guard for the outer run loop across all retry branches.
+ *
+ * PR-9 Tier 1: optional override `userMaxIterations` reads from
+ * `agents.defaults.embeddedPi.maxIterations` (or per-agent override
+ * `agents.list[<id>].embeddedPi.maxIterations`). When provided, it
+ * fully replaces the computed value (clamped to a sane positive int
+ * range). When undefined, the historical scaled formula applies with
+ * the new floor / ceiling.
+ */
+export function resolveMaxRunRetryIterations(
+  profileCandidateCount: number,
+  userMaxIterations?: number,
+): number {
+  if (
+    typeof userMaxIterations === "number" &&
+    Number.isFinite(userMaxIterations) &&
+    userMaxIterations > 0
+  ) {
+    // Clamp to [1, 100_000] — generous upper bound; if an operator
+    // wants effectively-unlimited, 100_000 is more than enough.
+    return Math.min(100_000, Math.max(1, Math.floor(userMaxIterations)));
+  }
   const scaled =
     BASE_RUN_RETRY_ITERATIONS +
     Math.max(1, profileCandidateCount) * RUN_RETRY_ITERATIONS_PER_PROFILE;
