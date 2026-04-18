@@ -764,34 +764,62 @@ function formatAutoEnabledActivationReason(
   return reasons.join("; ");
 }
 
-// Roll back partial array registrations when register() throws. Consumers of
-// registry.httpRoutes / registry.services / registry.hooks / etc. iterate
-// these arrays without status filtering, so without this snapshot an error-
-// status plugin's half-registered entries would still be served. `plugins`
-// and `diagnostics` are intentionally excluded because the caller's
-// error-recording path populates them.
-function captureRegistryArraySnapshot(registry: PluginRegistry): Map<string, unknown[]> {
-  const snapshot = new Map<string, unknown[]>();
+// Roll back partial registrations when register() throws. Consumers of
+// registry.httpRoutes / registry.services / registry.hooks / registry
+// .gatewayHandlers / etc. iterate or look up these fields without status
+// filtering, so without this snapshot an error-status plugin's half-
+// registered entries would still be served. `plugins` and `diagnostics` are
+// intentionally excluded because the caller's error-recording path populates
+// them.
+//
+// Array fields (httpRoutes, services, hooks, commands, ...) are captured with
+// .slice() and restored in place. Plain-object registries (gatewayHandlers,
+// gatewayMethodScopes) are captured as shallow key snapshots and restored by
+// deleting keys the failed plugin added.
+type RegistryRollbackSnapshot = {
+  arrays: Map<string, unknown[]>;
+  objectKeys: Map<string, Set<string>>;
+};
+
+function captureRegistryRollbackSnapshot(registry: PluginRegistry): RegistryRollbackSnapshot {
+  const arrays = new Map<string, unknown[]>();
+  const objectKeys = new Map<string, Set<string>>();
   for (const [key, value] of Object.entries(registry)) {
     if (key === "plugins" || key === "diagnostics") {
       continue;
     }
     if (Array.isArray(value)) {
-      snapshot.set(key, value.slice());
+      arrays.set(key, value.slice());
+      continue;
+    }
+    if (value && typeof value === "object") {
+      objectKeys.set(key, new Set(Object.keys(value as Record<string, unknown>)));
     }
   }
-  return snapshot;
+  return { arrays, objectKeys };
 }
 
-function restoreRegistryArraySnapshot(
+function restoreRegistryRollbackSnapshot(
   registry: PluginRegistry,
-  snapshot: Map<string, unknown[]>,
+  snapshot: RegistryRollbackSnapshot,
 ): void {
-  for (const [key, previous] of snapshot) {
+  for (const [key, previous] of snapshot.arrays) {
     const target = (registry as unknown as Record<string, unknown>)[key];
     if (Array.isArray(target)) {
       target.length = 0;
       target.push(...previous);
+    }
+  }
+  for (const [key, previousKeys] of snapshot.objectKeys) {
+    const target = (registry as unknown as Record<string, unknown>)[key];
+    if (!target || typeof target !== "object") {
+      continue;
+    }
+    const record = target as Record<string, unknown>;
+    for (const fieldKey of Object.keys(record)) {
+      if (!previousKeys.has(fieldKey)) {
+        delete record[fieldKey];
+      }
     }
   }
 }
@@ -1781,12 +1809,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
       const previousMemoryPromptSupplements = listMemoryPromptSupplements();
       const previousMemoryRuntime = getMemoryRuntime();
-      // Snapshot every array field on the registry so we can roll back the
-      // partial contributions a failing register() leaves behind. Consumers
-      // such as plugins-http, services, and hook-runner iterate these arrays
-      // without filtering by status, so orphan entries from error-status
-      // plugins would otherwise be served as if the plugin had loaded cleanly.
-      const previousRegistryArrays = captureRegistryArraySnapshot(registry);
+      // Snapshot every array + object registration field so we can roll back
+      // the partial contributions a failing register() leaves behind.
+      // Consumers such as plugins-http, services, hook-runner, and gateway
+      // method dispatch iterate or look up these fields without filtering by
+      // status, so orphan entries from error-status plugins would otherwise
+      // be served as if the plugin had loaded cleanly.
+      const previousRegistryState = captureRegistryRollbackSnapshot(registry);
 
       try {
         const result = register(api);
@@ -1824,7 +1853,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           flushPlanResolver: previousMemoryFlushPlanResolver,
           runtime: previousMemoryRuntime,
         });
-        restoreRegistryArraySnapshot(registry, previousRegistryArrays);
+        restoreRegistryRollbackSnapshot(registry, previousRegistryState);
         recordPluginError({
           logger,
           registry,

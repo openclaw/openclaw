@@ -30,6 +30,43 @@ describe("plugin register() throw rolls back partial registry contributions", ()
     cleanupPluginLoaderFixturesForTest();
   });
 
+  it("clears newly-registered gatewayHandlers/gatewayMethodScopes when register fails", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "partial-gateway",
+      filename: "partial-gateway.cjs",
+      body: `module.exports = {
+        id: "partial-gateway",
+        register(api) {
+          api.registerGatewayMethod(
+            "plugin.orphan.ping",
+            async () => ({ ok: true }),
+            { scope: "operator.read" },
+          );
+          throw new Error("register failed after gateway method");
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["partial-gateway"],
+        },
+      },
+      onlyPluginIds: ["partial-gateway"],
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "partial-gateway")?.status).toBe("error");
+    // gatewayHandlers and gatewayMethodScopes are plain-object registries, not
+    // arrays, so the rollback must specifically clear newly-added keys.
+    expect(registry.gatewayHandlers["plugin.orphan.ping"]).toBeUndefined();
+    expect(registry.gatewayMethodScopes?.["plugin.orphan.ping"]).toBeUndefined();
+  });
+
   it("clears newly-registered httpRoutes/services when register fails", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
