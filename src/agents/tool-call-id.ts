@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  isAllowedToolCallName,
+  isRedactedSessionsSpawnAttachment,
+  normalizeAllowedToolNames,
+} from "./tool-call-shared.js";
 
 export type ToolCallIdMode = "strict" | "strict9";
 const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
-const REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT = "__OPENCLAW_REDACTED__";
-const SESSIONS_SPAWN_ATTACHMENT_METADATA_KEYS = ["name", "encoding", "mimeType"] as const;
-const TOOL_CALL_NAME_MAX_CHARS = 64;
-const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
 
 const STRICT9_LEN = 9;
 const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
@@ -111,46 +112,6 @@ function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
   return hasInput || hasArguments;
 }
 
-function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): Set<string> | null {
-  if (!allowedToolNames) {
-    return null;
-  }
-  const normalized = new Set<string>();
-  for (const name of allowedToolNames) {
-    if (typeof name !== "string") {
-      continue;
-    }
-    const trimmed = name.trim();
-    if (!trimmed) {
-      continue;
-    }
-    normalized.add(normalizeLowercaseStringOrEmpty(trimmed));
-  }
-  return normalized.size > 0 ? normalized : null;
-}
-
-function isRedactedSessionsSpawnAttachment(item: unknown): boolean {
-  if (!item || typeof item !== "object") {
-    return false;
-  }
-  const attachment = item as Record<string, unknown>;
-  if (attachment.content !== REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT) {
-    return false;
-  }
-  for (const key of Object.keys(attachment)) {
-    if (key === "content") {
-      continue;
-    }
-    if (!(SESSIONS_SPAWN_ATTACHMENT_METADATA_KEYS as readonly string[]).includes(key)) {
-      return false;
-    }
-    if (typeof attachment[key] !== "string" || attachment[key].trim().length === 0) {
-      return false;
-    }
-  }
-  return true;
-}
-
 function toolCallNeedsReplayMutation(block: ReplaySafeToolCallBlock): boolean {
   const rawName = typeof block.name === "string" ? block.name : undefined;
   const trimmedName = rawName?.trim();
@@ -175,26 +136,6 @@ function toolCallNeedsReplayMutation(block: ReplaySafeToolCallBlock): boolean {
     }
   }
   return false;
-}
-
-function hasReplaySafeToolCallName(
-  block: ReplaySafeToolCallBlock,
-  allowedToolNames: Set<string> | null,
-): boolean {
-  if (typeof block.name !== "string") {
-    return false;
-  }
-  const trimmed = block.name.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (trimmed.length > TOOL_CALL_NAME_MAX_CHARS || !TOOL_CALL_NAME_RE.test(trimmed)) {
-    return false;
-  }
-  if (!allowedToolNames) {
-    return true;
-  }
-  return allowedToolNames.has(normalizeLowercaseStringOrEmpty(trimmed));
 }
 
 function isReplaySafeThinkingAssistantMessage(
@@ -227,7 +168,7 @@ function isReplaySafeThinkingAssistantMessage(
       !hasToolCallInput(typedBlock) ||
       !toolCallId ||
       seenToolCallIds.has(toolCallId) ||
-      !hasReplaySafeToolCallName(typedBlock, allowedToolNames) ||
+      !isAllowedToolCallName(typedBlock.name, allowedToolNames) ||
       toolCallNeedsReplayMutation(typedBlock)
     ) {
       return false;
