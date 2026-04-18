@@ -475,12 +475,13 @@ export const dispatchTelegramMessage = async ({
           : undefined;
 
   const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
+  const shouldSupersedeAbortFence =
+    ctxPayload.CommandAuthorized &&
+    isAbortRequestText(ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body ?? "");
 
   abortFenceGeneration = beginTelegramAbortFence({
     key: dispatchFenceKey,
-    supersede: isAbortRequestText(
-      ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body ?? "",
-    ),
+    supersede: shouldSupersedeAbortFence,
   });
 
   const replyQuoteText =

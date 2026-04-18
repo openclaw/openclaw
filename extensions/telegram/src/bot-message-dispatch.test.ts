@@ -2780,6 +2780,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
           Body: "abort",
           RawBody: "abort",
           CommandBody: "abort",
+          CommandAuthorized: true,
         } as never,
       }),
     });
@@ -2863,6 +2864,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
           Body: "abort",
           RawBody: "abort",
           CommandBody: "abort",
+          CommandAuthorized: true,
         } as never,
       }),
     });
@@ -2933,6 +2935,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
           Body: "abort",
           RawBody: "abort",
           CommandBody: "abort",
+          CommandAuthorized: true,
         } as never,
       }),
     });
@@ -3038,6 +3041,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
           Body: "abort",
           RawBody: "abort",
           CommandBody: "abort",
+          CommandAuthorized: true,
         } as never,
       }),
     });
@@ -3130,6 +3134,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
           Body: "abort",
           RawBody: "abort",
           CommandBody: "abort",
+          CommandAuthorized: true,
         } as never,
       }),
     });
@@ -3219,6 +3224,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
           Body: "abort",
           RawBody: "abort",
           CommandBody: "abort",
+          CommandAuthorized: true,
         } as never,
       }),
       bot,
@@ -3299,6 +3305,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
           Body: "abort",
           RawBody: "abort",
           CommandBody: "abort",
+          CommandAuthorized: true,
         } as never,
       }),
     });
@@ -3436,6 +3443,89 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(statusReactionController.cancelPending.mock.invocationCallOrder[0]).toBeLessThan(
       statusReactionController.setThinking.mock.invocationCallOrder[1],
+    );
+  });
+
+  it("does not supersede the same session for unauthorized abort-looking commands", async () => {
+    let releaseFirstFinal!: () => void;
+    const firstFinalGate = new Promise<void>((resolve) => {
+      releaseFirstFinal = resolve;
+    });
+    let resolvePreviewVisible!: () => void;
+    const previewVisible = new Promise<void>((resolve) => {
+      resolvePreviewVisible = resolve;
+    });
+
+    const firstAnswerDraft = createTestDraftStream({
+      messageId: 1001,
+      onUpdate: (text) => {
+        if (text === "Old reply partial") {
+          resolvePreviewVisible();
+        }
+      },
+    });
+    const firstReasoningDraft = createDraftStream();
+    const unauthorizedAnswerDraft = createDraftStream();
+    const unauthorizedReasoningDraft = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => firstAnswerDraft)
+      .mockImplementationOnce(() => firstReasoningDraft)
+      .mockImplementationOnce(() => unauthorizedAnswerDraft)
+      .mockImplementationOnce(() => unauthorizedReasoningDraft);
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Old reply partial" });
+        await firstFinalGate;
+        await dispatcherOptions.deliver({ text: "Old reply final" }, { kind: "final" });
+        return { queuedFinal: true };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "Unauthorized stop" }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    const firstPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "earlier request",
+          RawBody: "earlier request",
+        } as never,
+      }),
+    });
+
+    await previewVisible;
+
+    const unauthorizedPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "/stop",
+          RawBody: "/stop",
+          CommandBody: "/stop",
+          CommandAuthorized: false,
+        } as never,
+      }),
+    });
+
+    await vi.waitFor(() => {
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [{ text: "Unauthorized stop" }],
+        }),
+      );
+    });
+
+    releaseFirstFinal();
+    await Promise.all([firstPromise, unauthorizedPromise]);
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      1001,
+      "Old reply final",
+      expect.any(Object),
     );
   });
 
