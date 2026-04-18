@@ -4,6 +4,24 @@ import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 
+function resolveJsonPointer(root: Record<string, unknown>, ref: string): unknown {
+  if (!ref.startsWith("#/")) {
+    return undefined;
+  }
+  const segments = ref
+    .slice(2)
+    .split("/")
+    .map((segment) => segment.replaceAll("~1", "/").replaceAll("~0", "~"));
+  let current: unknown = root;
+  for (const segment of segments) {
+    if (!current || typeof current !== "object") {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+}
+
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
   let baseSchema: ReturnType<typeof buildConfigSchema>;
@@ -232,9 +250,8 @@ describe("config schema", () => {
       properties?: Record<string, unknown>;
     };
 
-    // $defs should be hoisted to root level with namespaced key
     expect(schema.$defs).toBeDefined();
-    expect(schema.$defs?.["qqbot__account"]).toBeDefined();
+    expect(schema.$defs?.["plugin|qqbot|account"]).toBeDefined();
 
     // Plugin config should have rewritten $ref
     const pluginsNode = schema.properties?.plugins as Record<string, unknown> | undefined;
@@ -247,10 +264,7 @@ describe("config schema", () => {
     const pluginConfigProps = pluginConfigSchema?.properties as Record<string, unknown> | undefined;
     const accountProp = pluginConfigProps?.account as Record<string, unknown> | undefined;
 
-    // $ref should point to namespaced definition at root
-    expect(accountProp?.$ref).toBe("#/$defs/qqbot__account");
-
-    // Plugin config should NOT have its own $defs
+    expect(accountProp?.$ref).toBe("#/$defs/plugin|qqbot|account");
     expect(pluginConfigSchema?.$defs).toBeUndefined();
   });
 
@@ -283,9 +297,8 @@ describe("config schema", () => {
       properties?: Record<string, unknown>;
     };
 
-    // $defs should be hoisted to root level with namespaced key
     expect(schema.$defs).toBeDefined();
-    expect(schema.$defs?.["custom-channel__settings"]).toBeDefined();
+    expect(schema.$defs?.["channel|custom-channel|settings"]).toBeDefined();
 
     // Channel schema should have rewritten $ref
     const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
@@ -294,10 +307,7 @@ describe("config schema", () => {
     const channelSchemaProps = channelSchema?.properties as Record<string, unknown> | undefined;
     const settingsProp = channelSchemaProps?.settings as Record<string, unknown> | undefined;
 
-    // $ref should point to namespaced definition at root
-    expect(settingsProp?.$ref).toBe("#/$defs/custom-channel__settings");
-
-    // Channel schema should NOT have its own $defs
+    expect(settingsProp?.$ref).toBe("#/$defs/channel|custom-channel|settings");
     expect(channelSchema?.$defs).toBeUndefined();
   });
 
@@ -333,15 +343,140 @@ describe("config schema", () => {
 
     const schema = res.schema as { $defs?: Record<string, unknown> };
 
-    // Both defs should be hoisted
-    expect(schema.$defs?.["nested-plugin__parent"]).toBeDefined();
-    expect(schema.$defs?.["nested-plugin__child"]).toBeDefined();
+    expect(schema.$defs?.["plugin|nested-plugin|parent"]).toBeDefined();
+    expect(schema.$defs?.["plugin|nested-plugin|child"]).toBeDefined();
 
-    // The nested $ref inside parent should also be rewritten
-    const parentDef = schema.$defs?.["nested-plugin__parent"] as Record<string, unknown> | undefined;
+    const parentDef = schema.$defs?.["plugin|nested-plugin|parent"] as
+      | Record<string, unknown>
+      | undefined;
     const parentProps = parentDef?.properties as Record<string, unknown> | undefined;
     const childRef = parentProps?.child as Record<string, unknown> | undefined;
-    expect(childRef?.$ref).toBe("#/$defs/nested-plugin__child");
+    expect(childRef?.$ref).toBe("#/$defs/plugin|nested-plugin|child");
+  });
+
+  it("uses pointer-safe hoisted keys for slash-delimited plugin ids", () => {
+    const res = buildConfigSchema({
+      plugins: [
+        {
+          id: "pack/one",
+          name: "Pack One",
+          configSchema: {
+            type: "object",
+            properties: {
+              account: { $ref: "#/$defs/account" },
+            },
+            $defs: {
+              account: {
+                type: "object",
+                properties: {
+                  token: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const schema = res.schema as {
+      $defs?: Record<string, unknown>;
+      properties?: Record<string, unknown>;
+    };
+    const pluginsNode = schema.properties?.plugins as Record<string, unknown> | undefined;
+    const pluginsProps = pluginsNode?.properties as Record<string, unknown> | undefined;
+    const entriesNode = pluginsProps?.entries as Record<string, unknown> | undefined;
+    const entryProps = entriesNode?.properties as Record<string, unknown> | undefined;
+    const pluginEntry = entryProps?.["pack/one"] as Record<string, unknown> | undefined;
+    const configSchema = (pluginEntry?.properties as Record<string, unknown> | undefined)?.config as
+      | Record<string, unknown>
+      | undefined;
+    const accountProp = (configSchema?.properties as Record<string, unknown> | undefined)
+      ?.account as Record<string, unknown> | undefined;
+
+    expect(schema.$defs?.["plugin|pack%2Fone|account"]).toBeDefined();
+    expect(accountProp?.$ref).toBe("#/$defs/plugin|pack%2Fone|account");
+    expect(
+      resolveJsonPointer(schema as Record<string, unknown>, String(accountProp?.$ref)),
+    ).toEqual(schema.$defs?.["plugin|pack%2Fone|account"]);
+  });
+
+  it("keeps plugin and channel defs distinct when they share an id", () => {
+    const res = buildConfigSchema({
+      plugins: [
+        {
+          id: "shared",
+          name: "Shared Plugin",
+          configSchema: {
+            type: "object",
+            properties: {
+              pluginValue: { $ref: "#/$defs/config" },
+            },
+            $defs: {
+              config: {
+                type: "object",
+                properties: {
+                  from: { const: "plugin" },
+                },
+              },
+            },
+          },
+        },
+      ],
+      channels: [
+        {
+          id: "shared",
+          label: "Shared Channel",
+          configSchema: {
+            type: "object",
+            properties: {
+              channelValue: { $ref: "#/$defs/config" },
+            },
+            $defs: {
+              config: {
+                type: "object",
+                properties: {
+                  from: { const: "channel" },
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const schema = res.schema as {
+      $defs?: Record<string, unknown>;
+      properties?: Record<string, unknown>;
+    };
+    const pluginsNode = schema.properties?.plugins as Record<string, unknown> | undefined;
+    const pluginEntries = (
+      (pluginsNode?.properties as Record<string, unknown> | undefined)?.entries as
+        | Record<string, unknown>
+        | undefined
+    )?.properties as Record<string, unknown> | undefined;
+    const pluginConfig = (
+      (pluginEntries?.shared as Record<string, unknown> | undefined)?.properties as
+        | Record<string, unknown>
+        | undefined
+    )?.config as Record<string, unknown> | undefined;
+    const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
+    const channelConfig = (channelsNode?.properties as Record<string, unknown> | undefined)
+      ?.shared as Record<string, unknown> | undefined;
+    const pluginRef = (pluginConfig?.properties as Record<string, unknown> | undefined)
+      ?.pluginValue as Record<string, unknown> | undefined;
+    const channelRef = (channelConfig?.properties as Record<string, unknown> | undefined)
+      ?.channelValue as Record<string, unknown> | undefined;
+
+    expect(schema.$defs?.["plugin|shared|config"]).toBeDefined();
+    expect(schema.$defs?.["channel|shared|config"]).toBeDefined();
+    expect(pluginRef?.$ref).toBe("#/$defs/plugin|shared|config");
+    expect(channelRef?.$ref).toBe("#/$defs/channel|shared|config");
+    expect(resolveJsonPointer(schema as Record<string, unknown>, String(pluginRef?.$ref))).toEqual(
+      schema.$defs?.["plugin|shared|config"],
+    );
+    expect(resolveJsonPointer(schema as Record<string, unknown>, String(channelRef?.$ref))).toEqual(
+      schema.$defs?.["channel|shared|config"],
+    );
   });
 
   it("adds heartbeat target hints with dynamic channels", () => {

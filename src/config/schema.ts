@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
@@ -30,6 +31,11 @@ type JsonSchemaObject = JsonSchemaNode & {
 
 const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
   asSchemaObject<JsonSchemaObject>(value);
+
+const asJsonSchemaDefs = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 
 const FORBIDDEN_LOOKUP_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 const LOOKUP_SCHEMA_STRING_KEYS = new Set([
@@ -319,16 +325,54 @@ function applyHeartbeatTargetHints(
   return next;
 }
 
+type HoistedDefSource = "plugin" | "channel";
+
+function encodeHoistedDefPart(value: string): string {
+  return encodeURIComponent(value).replaceAll("~", "%7E");
+}
+
+function buildHoistedDefKey(source: HoistedDefSource, ownerId: string, defName: string): string {
+  return `${source}|${encodeHoistedDefPart(ownerId)}|${encodeHoistedDefPart(defName)}`;
+}
+
+function mergeHoistedDefs(
+  rootSchema: JsonSchemaObject,
+  hoistedDefs: Record<string, unknown>,
+): void {
+  if (Object.keys(hoistedDefs).length === 0) {
+    return;
+  }
+
+  const rootDefs = { ...asJsonSchemaDefs(rootSchema.$defs) };
+  for (const [key, value] of Object.entries(hoistedDefs)) {
+    const current = rootDefs[key];
+    if (current !== undefined && !isDeepStrictEqual(current, value)) {
+      throw new Error(`Conflicting config schema $defs entry: ${key}`);
+    }
+    if (current === undefined) {
+      rootDefs[key] = cloneSchema(value);
+    }
+  }
+  rootSchema.$defs = rootDefs;
+}
+
 /**
  * Recursively rewrites `$ref` pointers in a schema object.
- * If the ref matches `#/$defs/<name>`, it is rewritten to `#/$defs/<prefix>__<name>`.
+ * If the ref matches `#/$defs/<name>`, it is rewritten to a pointer-safe
+ * root-level def key that also encodes whether the source came from a plugin
+ * or a channel schema.
  */
-function rewriteDefsRefs(obj: unknown, prefix: string, originalDefNames: Set<string>): unknown {
+function rewriteDefsRefs(
+  obj: unknown,
+  source: HoistedDefSource,
+  ownerId: string,
+  originalDefNames: Set<string>,
+): unknown {
   if (obj === null || typeof obj !== "object") {
     return obj;
   }
   if (Array.isArray(obj)) {
-    return obj.map((item) => rewriteDefsRefs(item, prefix, originalDefNames));
+    return obj.map((item) => rewriteDefsRefs(item, source, ownerId, originalDefNames));
   }
   const record = obj as Record<string, unknown>;
   const result: Record<string, unknown> = {};
@@ -336,25 +380,26 @@ function rewriteDefsRefs(obj: unknown, prefix: string, originalDefNames: Set<str
     if (key === "$ref" && typeof value === "string") {
       const match = value.match(/^#\/\$defs\/(.+)$/);
       if (match && originalDefNames.has(match[1])) {
-        result[key] = `#/$defs/${prefix}__${match[1]}`;
+        result[key] = `#/$defs/${buildHoistedDefKey(source, ownerId, match[1])}`;
       } else {
         result[key] = value;
       }
     } else {
-      result[key] = rewriteDefsRefs(value, prefix, originalDefNames);
+      result[key] = rewriteDefsRefs(value, source, ownerId, originalDefNames);
     }
   }
   return result;
 }
 
 /**
- * Extracts $defs from a plugin schema, namespaces them by plugin id,
- * rewrites $ref pointers, and returns the processed schema along with
- * the namespaced definitions to hoist to root.
+ * Extracts $defs from a plugin or channel schema, namespaces them safely,
+ * rewrites local $ref pointers, and returns the processed schema along with
+ * the hoisted definitions for the root schema.
  */
 function extractAndNamespaceDefs(
   pluginSchema: JsonSchemaObject,
-  pluginId: string,
+  source: HoistedDefSource,
+  ownerId: string,
 ): { schema: JsonSchemaObject; defs: Record<string, unknown> } {
   const defs = pluginSchema.$defs;
   if (!defs || typeof defs !== "object" || Array.isArray(defs)) {
@@ -364,18 +409,17 @@ function extractAndNamespaceDefs(
   const defNames = new Set(Object.keys(defs));
   const namespacedDefs: Record<string, unknown> = {};
 
-  // Namespace each definition by prefixing with plugin id
+  // Namespace each definition with its source surface and a pointer-safe id.
   for (const [name, def] of Object.entries(defs)) {
-    const namespacedName = `${pluginId}__${name}`;
-    // Also rewrite any $refs inside the definition itself
-    namespacedDefs[namespacedName] = rewriteDefsRefs(def, pluginId, defNames);
+    const namespacedName = buildHoistedDefKey(source, ownerId, name);
+    namespacedDefs[namespacedName] = rewriteDefsRefs(def, source, ownerId, defNames);
   }
 
-  // Clone schema without $defs and rewrite all $refs
   const { $defs: _removed, ...schemaWithoutDefs } = pluginSchema;
   const rewrittenSchema = rewriteDefsRefs(
     schemaWithoutDefs,
-    pluginId,
+    source,
+    ownerId,
     defNames,
   ) as JsonSchemaObject;
 
@@ -395,9 +439,6 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
   const entryProperties = entriesNode.properties ?? {};
   entriesNode.properties = entryProperties;
 
-  // Collect all hoisted $defs from plugins
-  const hoistedDefs: Record<string, unknown> = {};
-
   for (const plugin of plugins) {
     if (!plugin.configSchema) {
       continue;
@@ -411,11 +452,10 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
 
     // Extract and namespace $defs from plugin schema
     const { schema: processedPluginSchema, defs } = rawPluginSchema
-      ? extractAndNamespaceDefs(rawPluginSchema, plugin.id)
+      ? extractAndNamespaceDefs(rawPluginSchema, "plugin", plugin.id)
       : { schema: rawPluginSchema, defs: {} };
 
-    // Merge hoisted definitions
-    Object.assign(hoistedDefs, defs);
+    mergeHoistedDefs(root, defs);
 
     const nextConfigSchema =
       baseConfigSchema &&
@@ -434,12 +474,6 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
     entryProperties[plugin.id] = entryObject;
   }
 
-  // Hoist all collected $defs to root level
-  if (Object.keys(hoistedDefs).length > 0) {
-    const existingDefs = (root.$defs as Record<string, unknown>) ?? {};
-    root.$defs = { ...existingDefs, ...hoistedDefs };
-  }
-
   return next;
 }
 
@@ -453,9 +487,6 @@ function applyChannelSchemas(schema: ConfigSchema, channels: ChannelUiMetadata[]
   const channelProps = channelsNode.properties ?? {};
   channelsNode.properties = channelProps;
 
-  // Collect all hoisted $defs from channels
-  const hoistedDefs: Record<string, unknown> = {};
-
   for (const channel of channels) {
     if (!channel.configSchema) {
       continue;
@@ -465,11 +496,10 @@ function applyChannelSchemas(schema: ConfigSchema, channels: ChannelUiMetadata[]
 
     // Extract and namespace $defs from channel schema
     const { schema: processedIncoming, defs } = rawIncoming
-      ? extractAndNamespaceDefs(rawIncoming, channel.id)
+      ? extractAndNamespaceDefs(rawIncoming, "channel", channel.id)
       : { schema: rawIncoming, defs: {} };
 
-    // Merge hoisted definitions
-    Object.assign(hoistedDefs, defs);
+    mergeHoistedDefs(root, defs);
 
     if (
       existing &&
@@ -483,12 +513,6 @@ function applyChannelSchemas(schema: ConfigSchema, channels: ChannelUiMetadata[]
     } else {
       channelProps[channel.id] = cloneSchema(channel.configSchema);
     }
-  }
-
-  // Hoist all collected $defs to root level
-  if (Object.keys(hoistedDefs).length > 0) {
-    const existingDefs = (root.$defs as Record<string, unknown>) ?? {};
-    root.$defs = { ...existingDefs, ...hoistedDefs };
   }
 
   return next;
