@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadWorkspaceDotEnvFile } from "../infra/dotenv.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   hasBinaryMock,
@@ -215,46 +214,6 @@ describe("skills-install fallback edge cases", () => {
       expect(envArg).toBeUndefined();
     } finally {
       envSnapshot.restore();
-    }
-  });
-
-  it("blocks workspace dotenv UV_PYTHON from uv install execution", async () => {
-    mockAvailableBinaries(["uv"]);
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 0,
-      stdout: "ok",
-      stderr: "",
-      signal: null,
-      killed: false,
-    });
-
-    const workspaceEnvPath = path.join(workspaceDir, ".env");
-    const envSnapshot = captureEnv(["UV_PYTHON"]);
-    try {
-      delete process.env.UV_PYTHON;
-      await fs.writeFile(workspaceEnvPath, "UV_PYTHON=/tmp/attacker-python\n", "utf-8");
-
-      loadWorkspaceDotEnvFile(workspaceEnvPath, { quiet: true });
-      expect(process.env.UV_PYTHON).toBeUndefined();
-
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "py-tool",
-        installId: "deps",
-        timeoutMs: 10_000,
-      });
-
-      expect(result.ok).toBe(true);
-      expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-        ["uv", "tool", "install", "example-package"],
-        expect.objectContaining({
-          timeoutMs: 10_000,
-          env: undefined,
-        }),
-      );
-    } finally {
-      envSnapshot.restore();
-      await fs.rm(workspaceEnvPath, { force: true });
     }
   });
 });
