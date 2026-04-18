@@ -80,6 +80,40 @@ function oauthCredentialMatches(a: OAuthCredential, b: OAuthCredential): boolean
   );
 }
 
+function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeAuthEmailToken(value: string | undefined): string | undefined {
+  return normalizeAuthIdentityToken(value)?.toLowerCase();
+}
+
+// Keep this overwrite guard aligned with the canonical OAuth identity-copy rule
+// in src/agents/auth-profiles/oauth.ts without widening the plugin SDK surface.
+function isSafeToReplaceStoredIdentity(
+  existing: Pick<OAuthCredential, "accountId" | "email">,
+  incoming: Pick<OAuthCredential, "accountId" | "email">,
+): boolean {
+  const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
+  const incomingAccountId = normalizeAuthIdentityToken(incoming.accountId);
+  const existingEmail = normalizeAuthEmailToken(existing.email);
+  const incomingEmail = normalizeAuthEmailToken(incoming.email);
+
+  if (existingAccountId !== undefined && incomingAccountId !== undefined) {
+    return existingAccountId === incomingAccountId;
+  }
+  if (existingEmail !== undefined && incomingEmail !== undefined) {
+    return existingEmail === incomingEmail;
+  }
+
+  const existingHasIdentity = existingAccountId !== undefined || existingEmail !== undefined;
+  if (existingHasIdentity) {
+    return false;
+  }
+  return true;
+}
+
 export function readOpenAICodexCliOAuthProfile(params: {
   env?: NodeJS.ProcessEnv;
   store: AuthProfileStore;
@@ -114,6 +148,13 @@ export function readOpenAICodexCliOAuthProfile(params: {
     existingOAuth &&
     hasUsableOAuthCredential(existingOAuth) &&
     !oauthCredentialMatches(existingOAuth, credential)
+  ) {
+    return null;
+  }
+  if (
+    existingOAuth &&
+    !oauthCredentialMatches(existingOAuth, credential) &&
+    !isSafeToReplaceStoredIdentity(existingOAuth, credential)
   ) {
     return null;
   }
