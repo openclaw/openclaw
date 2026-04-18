@@ -456,6 +456,21 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         return result("preview-retained");
       }
     }
+    // Guard: if the archived preview already displays exactly this text,
+    // sending a replacement would produce a visible duplicate message in
+    // chats where preview cleanup is disabled (deleteIfUnused: false).
+    // Treat the archived preview itself as the delivered final.
+    if (archivedPreview.textSnapshot === text && text.length > 0) {
+      params.log(
+        `telegram: answer suppressing duplicate final send; archived preview ${archivedPreview.messageId} already shows identical text`,
+      );
+      params.retainPreviewOnCleanupByLane.answer = true;
+      params.markDelivered();
+      return result("preview-finalized", {
+        content: text,
+        messageId: archivedPreview.messageId,
+      });
+    }
     // Send the replacement message first, then clean up the old preview.
     // This avoids the visual "disappear then reappear" flash.
     const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
