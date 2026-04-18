@@ -75,7 +75,7 @@ exit 0
     const pollAttemptIncrement = "set /a attempts+=1";
     const pollNetstatCheck = `netstat -ano | findstr /R /C:":${port} .*LISTENING" >nul`;
     const forceKillLabel = ":force_kill_listener";
-    const forceKillCommand = "taskkill /F /PID %%P >nul 2>&1";
+    const forceKillCommand = "taskkill /F /PID %%P >>";
     const portReleasedLabel = ":port_released";
     const runCommand = 'schtasks /Run /TN "';
     const endIndex = content.indexOf(endCommand);
@@ -151,7 +151,7 @@ exit 0
       await cleanupScript(scriptPath);
     });
 
-    it("captures macOS launchctl stderr to ~/.openclaw/logs/update-restart.log (#68486)", async () => {
+    it("captures macOS launchctl stderr to ~/.openclaw/logs/gateway-restart.log (#68486)", async () => {
       // Silent failure in macOS update restart helper: previously every
       // launchctl call redirected stderr to /dev/null and the final kickstart
       // was chained with `|| true`, so bootstrap/kickstart failures were
@@ -166,7 +166,7 @@ exit 0
         HOME: "/Users/testuser",
       });
       expect(content).toContain(
-        "exec >>'/Users/testuser/.openclaw/logs/update-restart.log' 2>&1 || true",
+        "exec >>'/Users/testuser/.openclaw/logs/gateway-restart.log' 2>&1 || true",
       );
       // Every launchctl call should allow output through now (no `2>/dev/null`)
       // and the final kickstart must not swallow its exit code.
@@ -187,7 +187,7 @@ exit 0
 
       expect(content).toContain("mkdir -p '/tmp/openclaw-state/logs' 2>/dev/null || true");
       expect(content).toContain(
-        "exec >>'/tmp/openclaw-state/logs/update-restart.log' 2>&1 || true",
+        "exec >>'/tmp/openclaw-state/logs/gateway-restart.log' 2>&1 || true",
       );
       await cleanupScript(scriptPath);
     });
@@ -220,13 +220,13 @@ exit 0
       const result = await executeScript(scriptPath, {
         PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
       });
-      const log = await fs.readFile(path.join(stateDir, "logs", "update-restart.log"), "utf-8");
+      const log = await fs.readFile(path.join(stateDir, "logs", "gateway-restart.log"), "utf-8");
 
       expect(result.code).toBe(42);
-      expect(log).toContain("openclaw update restart attempt (label=ai.openclaw.gateway)");
+      expect(log).toContain("openclaw restart attempt source=update target=ai.openclaw.gateway");
       expect(log).toContain("launchctl kickstart -k gui/501/ai.openclaw.gateway");
-      expect(log).toContain("openclaw update restart failed status=42");
-      expect(log).not.toContain("openclaw update restart done");
+      expect(log).toContain("openclaw restart failed source=update status=42");
+      expect(log).not.toContain("openclaw restart done source=update");
     });
 
     it("continues the macOS restart path when log setup fails", async () => {
@@ -279,11 +279,11 @@ exit 0
       const result = await executeScript(scriptPath, {
         PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
       });
-      const log = await fs.readFile(path.join(stateDir, "logs", "update-restart.log"), "utf-8");
+      const log = await fs.readFile(path.join(stateDir, "logs", "gateway-restart.log"), "utf-8");
 
       expect(result.code).toBeNull();
-      expect(log).toContain("label=ai.openclaw.$(echo injected)");
-      expect(log).not.toContain("label=ai.openclaw.injected");
+      expect(log).toContain("target=ai.openclaw.$(echo injected)");
+      expect(log).not.toContain("target=ai.openclaw.injected");
     });
 
     it("uses OPENCLAW_LAUNCHD_LABEL override on macOS", async () => {
@@ -306,8 +306,10 @@ exit 0
       });
       expect(scriptPath.endsWith(".bat")).toBe(true);
       expect(content).toContain("@echo off");
+      expect(content).toContain("gateway-restart.log");
+      expect(content).toContain("openclaw restart attempt source=update target=OpenClaw Gateway");
       expect(content).toContain('schtasks /End /TN "OpenClaw Gateway"');
-      expect(content).toContain('schtasks /Run /TN "OpenClaw Gateway"');
+      expect(content).toContain('schtasks /Run /TN "OpenClaw Gateway" >>');
       expectWindowsRestartWaitOrdering(content);
       // Batch self-cleanup
       expect(content).toContain('del "%~f0"');
