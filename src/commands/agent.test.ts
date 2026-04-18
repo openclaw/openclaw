@@ -5,11 +5,13 @@ import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.j
 import "./agent-command.test-mocks.js";
 import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
+import * as attemptExecutionRuntimeModule from "../agents/command/attempt-execution.runtime.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emitAgentEvent,
@@ -24,10 +26,22 @@ const configIoMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
 }));
+const contextEngineMocks = vi.hoisted(() => ({
+  resolveContextEngine: vi.fn(async () => ({ info: { id: "default", name: "Default" } })),
+  runContextEngineMaintenance: vi.fn(async () => undefined),
+}));
 
 vi.mock("../config/io.js", () => ({
   loadConfig: configIoMocks.loadConfig,
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
+}));
+
+vi.mock("../context-engine/registry.js", () => ({
+  resolveContextEngine: contextEngineMocks.resolveContextEngine,
+}));
+
+vi.mock("../agents/pi-embedded-runner/context-engine-maintenance.js", () => ({
+  runContextEngineMaintenance: contextEngineMocks.runContextEngineMaintenance,
 }));
 
 vi.mock("../agents/auth-profiles/store.js", () => {
@@ -446,6 +460,61 @@ describe("agentCommand", () => {
 
       const matching = assistantEvents.filter((evt) => evt.text === "hello");
       expect(matching).toHaveLength(1);
+    });
+  });
+
+  it("runs CLI turn maintenance after persisting CLI transcripts", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions-cli.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:test-cli": {
+          sessionId: "session-cli",
+          updatedAt: Date.now(),
+          contextTokens: 8192,
+          totalTokens: 4097,
+        },
+      });
+      mockConfig(home, store);
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "hello from cli" }],
+        meta: {
+          durationMs: 5,
+          executionTrace: {
+            winnerProvider: "claude-cli",
+            winnerModel: "opus",
+            fallbackUsed: false,
+            runner: "cli",
+          },
+          agentMeta: { sessionId: "session-cli", provider: "claude-cli", model: "opus" },
+        },
+      } as never);
+
+      vi.mocked(attemptExecutionRuntimeModule.persistCliTurnTranscript).mockImplementationOnce(
+        async (params: { sessionEntry?: SessionEntry }) => ({
+          ...(params.sessionEntry ?? { sessionId: "session-cli", updatedAt: Date.now() }),
+          sessionFile: path.join(home, "agents", "main", "sessions", "session-cli.jsonl"),
+          contextTokens: 8192,
+          totalTokens: 4097,
+        }),
+      );
+
+      await agentCommand({ message: "hi", sessionKey: "agent:main:test-cli" }, runtime);
+
+      expect(vi.mocked(attemptExecutionRuntimeModule.persistCliTurnTranscript)).toHaveBeenCalled();
+      expect(contextEngineMocks.resolveContextEngine).toHaveBeenCalledTimes(1);
+      expect(contextEngineMocks.runContextEngineMaintenance).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: "turn",
+          sessionId: "session-cli",
+          sessionKey: "agent:main:test-cli",
+          sessionFile: path.join(home, "agents", "main", "sessions", "session-cli.jsonl"),
+          runtimeContext: expect.objectContaining({
+            tokenBudget: 8192,
+            currentTokenCount: 4097,
+          }),
+        }),
+      );
     });
   });
 

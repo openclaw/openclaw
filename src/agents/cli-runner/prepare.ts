@@ -3,7 +3,7 @@ import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
 } from "../../gateway/mcp-http.loopback-runtime.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import {
   buildBootstrapInjectionStats,
   buildBootstrapPromptWarning,
@@ -117,6 +117,7 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: params.agentId,
   });
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   let mcpLoopbackRuntime = backendResolved.bundleMcp
     ? prepareDeps.getActiveMcpLoopbackRuntime()
     : undefined;
@@ -241,7 +242,9 @@ export async function prepareCliRunContext(
   return {
     params,
     started,
+    agentDir,
     workspaceDir,
+    contextTokenBudget: params.contextTokenBudget,
     backendResolved,
     preparedBackend,
     reusableCliSession,

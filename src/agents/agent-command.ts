@@ -77,6 +77,9 @@ type SkillsRuntime = typeof import("./skills.js");
 type SkillsFilterRuntime = typeof import("./skills/filter.js");
 type SkillsRefreshStateRuntime = typeof import("./skills/refresh-state.js");
 type SkillsRemoteRuntime = typeof import("../infra/skills-remote.js");
+type ContextEngineRegistryRuntime = typeof import("../context-engine/registry.js");
+type ContextEngineMaintenanceRuntime =
+  typeof import("./pi-embedded-runner/context-engine-maintenance.js");
 
 let attemptExecutionRuntimePromise: Promise<AttemptExecutionRuntime> | undefined;
 let acpManagerRuntimePromise: Promise<AcpManagerRuntime> | undefined;
@@ -92,6 +95,8 @@ let skillsRuntimePromise: Promise<SkillsRuntime> | undefined;
 let skillsFilterRuntimePromise: Promise<SkillsFilterRuntime> | undefined;
 let skillsRefreshStateRuntimePromise: Promise<SkillsRefreshStateRuntime> | undefined;
 let skillsRemoteRuntimePromise: Promise<SkillsRemoteRuntime> | undefined;
+let contextEngineRegistryRuntimePromise: Promise<ContextEngineRegistryRuntime> | undefined;
+let contextEngineMaintenanceRuntimePromise: Promise<ContextEngineMaintenanceRuntime> | undefined;
 
 function loadAttemptExecutionRuntime(): Promise<AttemptExecutionRuntime> {
   attemptExecutionRuntimePromise ??= import("./command/attempt-execution.runtime.js");
@@ -163,6 +168,16 @@ function loadSkillsRemoteRuntime(): Promise<SkillsRemoteRuntime> {
   return skillsRemoteRuntimePromise;
 }
 
+function loadContextEngineRegistryRuntime(): Promise<ContextEngineRegistryRuntime> {
+  contextEngineRegistryRuntimePromise ??= import("../context-engine/registry.js");
+  return contextEngineRegistryRuntimePromise;
+}
+
+function loadContextEngineMaintenanceRuntime(): Promise<ContextEngineMaintenanceRuntime> {
+  contextEngineMaintenanceRuntimePromise ??= import("./pi-embedded-runner/context-engine-maintenance.js");
+  return contextEngineMaintenanceRuntimePromise;
+}
+
 async function resolveAgentCommandDeps(deps: CliDeps | undefined): Promise<CliDeps> {
   if (deps) {
     return deps;
@@ -207,6 +222,41 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
   await persistSessionEntryBase({
     ...params,
     clearedFields: OVERRIDE_FIELDS_CLEARED_BY_DELETE,
+  });
+}
+
+async function runCliTurnContextEngineMaintenance(params: {
+  cfg: import("../config/types.openclaw.js").OpenClawConfig;
+  sessionId: string;
+  sessionKey: string;
+  sessionEntry?: SessionEntry;
+}): Promise<void> {
+  const sessionFile = normalizeOptionalString(params.sessionEntry?.sessionFile);
+  if (!sessionFile) {
+    return;
+  }
+
+  const { resolveContextEngine } = await loadContextEngineRegistryRuntime();
+  const { runContextEngineMaintenance } = await loadContextEngineMaintenanceRuntime();
+  const contextEngine = await resolveContextEngine(params.cfg);
+  await runContextEngineMaintenance({
+    contextEngine,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sessionFile,
+    reason: "turn",
+    runtimeContext: {
+      ...(typeof params.sessionEntry?.contextTokens === "number" &&
+      Number.isFinite(params.sessionEntry.contextTokens) &&
+      params.sessionEntry.contextTokens > 0
+        ? { tokenBudget: Math.floor(params.sessionEntry.contextTokens) }
+        : {}),
+      ...(typeof params.sessionEntry?.totalTokens === "number" &&
+      Number.isFinite(params.sessionEntry.totalTokens) &&
+      params.sessionEntry.totalTokens > 0
+        ? { currentTokenCount: Math.floor(params.sessionEntry.totalTokens) }
+        : {}),
+    },
   });
 }
 
@@ -884,6 +934,7 @@ async function agentCommandInternal(
               skillsSnapshot,
               resolvedVerboseLevel,
               agentDir,
+              contextTokenBudget: sessionEntry?.contextTokens ?? agentCfg?.contextTokens,
               authProfileProvider: providerForAuthProfileValidation,
               sessionStore,
               storePath,
@@ -1047,6 +1098,12 @@ async function agentCommandInternal(
           sessionAgentId,
           threadId: opts.threadId,
           sessionCwd: workspaceDir,
+        });
+        await runCliTurnContextEngineMaintenance({
+          cfg,
+          sessionId,
+          sessionKey: sessionKey ?? sessionId,
+          sessionEntry,
         });
       } catch (error) {
         log.warn(

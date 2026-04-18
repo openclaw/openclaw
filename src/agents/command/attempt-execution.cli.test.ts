@@ -122,6 +122,7 @@ describe("CLI attempt execution", () => {
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
       agentDir: tmpDir,
+      contextTokenBudget: 123_456,
       onAgentEvent: vi.fn(),
       authProfileProvider: "claude-cli",
       sessionStore,
@@ -131,6 +132,8 @@ describe("CLI attempt execution", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(2);
     expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionId).toBe("stale-cli-session");
+    expect(runCliAgentMock.mock.calls[0]?.[0]?.agentDir).toBe(tmpDir);
+    expect(runCliAgentMock.mock.calls[0]?.[0]?.contextTokenBudget).toBe(123_456);
     expect(runCliAgentMock.mock.calls[1]?.[0]?.cliSessionId).toBeUndefined();
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();

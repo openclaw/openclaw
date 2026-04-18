@@ -242,6 +242,7 @@ export function runAgentAttempt(params: {
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
   sessionHasHistory?: boolean;
+  contextTokenBudget?: number;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
@@ -264,9 +265,11 @@ export function runAgentAttempt(params: {
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         agentId: params.sessionAgentId,
+        agentDir: params.agentDir,
         sessionFile: params.sessionFile,
         workspaceDir: params.workspaceDir,
         config: params.cfg,
+        contextTokenBudget: params.contextTokenBudget,
         prompt: effectivePrompt,
         provider: params.providerOverride,
         model: params.modelOverride,
@@ -287,6 +290,27 @@ export function runAgentAttempt(params: {
         messageProvider: params.messageChannel,
         agentAccountId: params.runContext.accountId,
         senderIsOwner: params.opts.senderIsOwner,
+        onResetReusableCliSession: async () => {
+          if (!params.sessionKey || !params.sessionStore || !params.storePath) {
+            return;
+          }
+          const entry = params.sessionStore[params.sessionKey];
+          if (!entry) {
+            return;
+          }
+          const updatedEntry = { ...entry };
+          clearCliSession(updatedEntry, params.providerOverride);
+          updatedEntry.updatedAt = Date.now();
+          await persistSessionEntry({
+            sessionStore: params.sessionStore,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+            entry: updatedEntry,
+            clearedFields: ["cliSessionBindings", "cliSessionIds", "claudeCliSessionId"],
+          });
+          params.sessionStore[params.sessionKey] = updatedEntry;
+          params.sessionEntry = updatedEntry;
+        },
       });
     return runCliWithSession(cliSessionBinding?.sessionId).catch(async (err) => {
       if (

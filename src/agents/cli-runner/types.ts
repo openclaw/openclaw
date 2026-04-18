@@ -13,9 +13,11 @@ export type RunCliAgentParams = {
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
+  agentDir?: string;
   sessionFile: string;
   workspaceDir: string;
   config?: OpenClawConfig;
+  contextTokenBudget?: number;
   prompt: string;
   provider: string;
   model?: string;
@@ -38,6 +40,7 @@ export type RunCliAgentParams = {
   senderIsOwner?: boolean;
   abortSignal?: AbortSignal;
   replyOperation?: ReplyOperation;
+  onResetReusableCliSession?: () => Promise<void>;
 };
 
 export type CliPreparedBackend = {
@@ -55,7 +58,9 @@ export type CliReusableSession = {
 export type PreparedCliRunContext = {
   params: RunCliAgentParams;
   started: number;
+  agentDir?: string;
   workspaceDir: string;
+  contextTokenBudget?: number;
   backendResolved: ResolvedCliBackend;
   preparedBackend: CliPreparedBackend;
   reusableCliSession: CliReusableSession;
@@ -67,4 +72,6 @@ export type PreparedCliRunContext = {
   heartbeatPrompt?: string;
   authEpoch?: string;
   extraSystemPromptHash?: string;
+  reseedPrompt?: string;
+  forceFreshSession?: boolean;
 };
