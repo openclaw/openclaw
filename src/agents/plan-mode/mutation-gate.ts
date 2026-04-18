@@ -149,7 +149,24 @@ export function checkMutationGate(
     // Uses word-boundary regex to avoid false matches on substrings
     // (e.g., -executable should not match -exec). Tabs are treated as
     // whitespace separators alongside spaces.
-    const DANGEROUS_FLAGS = ["-delete", "-exec", "-execdir", "--delete", "-rf", "--output"];
+    // PR-D review fix (Copilot #3096526195 / #3105045300): `find` is in
+    // the read-only prefix allowlist but several `find` flags actually
+    // write files: `-fprint <file>`, `-fprint0 <file>`, `-fprintf <file>
+    // <fmt>`, `-fls <file>`. Add to the dangerous-flag set so a command
+    // like `find . -fprint /tmp/out.txt` is blocked in plan mode rather
+    // than silently mutating the filesystem.
+    const DANGEROUS_FLAGS = [
+      "-delete",
+      "-exec",
+      "-execdir",
+      "--delete",
+      "-rf",
+      "--output",
+      "-fprint",
+      "-fprint0",
+      "-fprintf",
+      "-fls",
+    ];
     const hasFlag = DANGEROUS_FLAGS.some((f) => {
       const escaped = f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       return new RegExp(`(?:^|[\\s])${escaped}(?:[\\s=]|$)`, "i").test(cmd);

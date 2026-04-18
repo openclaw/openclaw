@@ -656,17 +656,24 @@ describe("resolveAgentAutoContinue per-field merge (Codex P2 #67538 r3095650458)
     });
   });
 
+  // PR-D review fix (Copilot #3096802942 / #3096802964 / #3105171975 /
+  // #3105216698 / #3096802909): test values lowered to fit the Zod
+  // schema cap of `.max(10)` so the configurations exercised here are
+  // ones a real user could actually load. The merge-cascade behavior
+  // is identical at any value within bounds; the original 12/20 values
+  // were chosen for visual distinctness from the default 3, but 7/9
+  // provide the same distinctness within bounds.
   it("agents.defaults overrides default constants per field", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
-          embeddedPi: { autoContinue: { enabled: true, maxCycles: 12 } },
+          embeddedPi: { autoContinue: { enabled: true, maxCycles: 7 } },
         },
       },
     };
     const result = resolveAgentAutoContinue(cfg);
     expect(result.enabled).toBe(true);
-    expect(result.maxCycles).toBe(12);
+    expect(result.maxCycles).toBe(7);
     expect(result.stopOnMutation).toBe(true); // inherits from constant default
   });
 
@@ -678,7 +685,7 @@ describe("resolveAgentAutoContinue per-field merge (Codex P2 #67538 r3095650458)
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
-          embeddedPi: { autoContinue: { maxCycles: 20, stopOnMutation: false } },
+          embeddedPi: { autoContinue: { maxCycles: 9, stopOnMutation: false } },
         },
         list: [
           {
@@ -690,7 +697,7 @@ describe("resolveAgentAutoContinue per-field merge (Codex P2 #67538 r3095650458)
     };
     const result = resolveAgentAutoContinue(cfg, "writer");
     expect(result.enabled).toBe(true); // from per-agent
-    expect(result.maxCycles).toBe(20); // INHERITED from defaults — NOT reset to constant 3
+    expect(result.maxCycles).toBe(9); // INHERITED from defaults — NOT reset to constant 3
     expect(result.stopOnMutation).toBe(false); // INHERITED from defaults — NOT reset to true
   });
 
@@ -698,7 +705,7 @@ describe("resolveAgentAutoContinue per-field merge (Codex P2 #67538 r3095650458)
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
-          embeddedPi: { autoContinue: { enabled: true, maxCycles: 20 } },
+          embeddedPi: { autoContinue: { enabled: true, maxCycles: 9 } },
         },
         list: [
           {

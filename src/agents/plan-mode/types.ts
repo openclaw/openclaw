@@ -110,9 +110,16 @@ function sanitizeFeedbackForInjection(raw: string): string {
  * Builds the structured context injection for a plan decision.
  * This is injected into the agent's next turn context, not as a
  * system message but as a structured block the runner can parse.
+ *
+ * PR-D review fix (Copilot #3105045307): the `decision` parameter
+ * accepts `"timed_out"` as the canonical name (matching
+ * `PlanApprovalState`) plus the legacy `"expired"` alias for backward
+ * compat with any callers that haven't been updated. Both render the
+ * same text. Prefer `"timed_out"` in new code so downstream parsers
+ * map state names consistently across the codebase.
  */
 export function buildPlanDecisionInjection(
-  decision: "rejected" | "expired",
+  decision: "rejected" | "expired" | "timed_out",
   feedback?: string,
   rejectionCount?: number,
 ): string {
@@ -127,7 +134,7 @@ export function buildPlanDecisionInjection(
         "Multiple revisions have been rejected. Consider asking the user to clarify their goal before proposing another plan.",
       );
     }
-  } else if (decision === "expired") {
+  } else if (decision === "expired" || decision === "timed_out") {
     lines.push(
       "Your plan proposal timed out. The user has not responded. You remain in plan mode. You may re-propose when the user returns.",
     );
