@@ -52,6 +52,16 @@ type ImageBlock = {
   alt?: string;
 };
 
+type ImageRenderOptions = {
+  localMediaPreviewRoots?: readonly string[];
+  basePath?: string;
+  authToken?: string | null;
+};
+
+type RenderableImageBlock = ImageBlock & {
+  displayUrl: string;
+};
+
 function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
   if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
     images.push(block);
@@ -130,6 +140,15 @@ function extractImages(message: unknown): ImageBlock[] {
           appendImageBlock(images, { url: imageUrl.url });
         }
       } else if (b.type === "input_image") {
+        const imageUrl = b.image_url;
+        if (typeof imageUrl === "string") {
+          appendImageBlock(images, { url: imageUrl });
+        } else if (imageUrl && typeof imageUrl === "object") {
+          const url = (imageUrl as Record<string, unknown>).url;
+          if (typeof url === "string") {
+            appendImageBlock(images, { url });
+          }
+        }
         const source = b.source as Record<string, unknown> | undefined;
         if (typeof source?.url === "string") {
           appendImageBlock(images, { url: source.url });
@@ -651,14 +670,25 @@ function isAvatarUrl(value: string): boolean {
   );
 }
 
-function renderMessageImages(
+function resolveRenderableMessageImages(
   images: ImageBlock[],
-  opts?: {
-    localMediaPreviewRoots?: readonly string[];
-    basePath?: string;
-    authToken?: string | null;
-  },
-) {
+  opts?: ImageRenderOptions,
+): RenderableImageBlock[] {
+  return images.flatMap((img) => {
+    const isLocalImage = isLocalAssistantAttachmentSource(img.url);
+    const canProxyLocalImage =
+      isLocalImage && isLocalAttachmentPreviewAllowed(img.url, opts?.localMediaPreviewRoots ?? []);
+    if (isLocalImage && !canProxyLocalImage) {
+      return [];
+    }
+    const displayUrl = canProxyLocalImage
+      ? buildAssistantAttachmentUrl(img.url, opts?.basePath, opts?.authToken)
+      : img.url;
+    return [{ ...img, displayUrl }];
+  });
+}
+
+function renderMessageImages(images: RenderableImageBlock[]) {
   if (images.length === 0) {
     return nothing;
   }
@@ -669,26 +699,16 @@ function renderMessageImages(
 
   return html`
     <div class="chat-message-images">
-      ${images.map((img) => {
-        const isLocalImage = isLocalAssistantAttachmentSource(img.url);
-        const canProxyLocalImage =
-          isLocalImage &&
-          isLocalAttachmentPreviewAllowed(img.url, opts?.localMediaPreviewRoots ?? []);
-        if (isLocalImage && !canProxyLocalImage) {
-          return nothing;
-        }
-        const imageUrl = canProxyLocalImage
-          ? buildAssistantAttachmentUrl(img.url, opts?.basePath, opts?.authToken)
-          : img.url;
-        return html`
+      ${images.map(
+        (img) => html`
           <img
-            src=${imageUrl}
+            src=${img.displayUrl}
             alt=${img.alt ?? "Attached image"}
             class="chat-message-image"
-            @click=${() => openImage(imageUrl)}
+            @click=${() => openImage(img.displayUrl)}
           />
-        `;
-      })}
+        `,
+      )}
     </div>
   `;
 }
@@ -1155,7 +1175,12 @@ function renderGroupedMessage(
 
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCards(message, messageKey) : [];
   const hasToolCards = toolCards.length > 0;
-  const images = extractImages(message);
+  const imageRenderOptions = {
+    localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
+    basePath: opts.basePath,
+    authToken: opts.assistantAttachmentAuthToken,
+  };
+  const images = resolveRenderableMessageImages(extractImages(message), imageRenderOptions);
   const hasImages = images.length > 0;
 
   const normalizedMessage = normalizeMessage(message);
@@ -1256,11 +1281,7 @@ function renderGroupedMessage(
               ${toolMessageExpanded
                 ? html`
                     <div class="chat-tool-msg-body">
-                      ${renderMessageImages(images, {
-                        localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
-                        basePath: opts.basePath,
-                        authToken: opts.assistantAttachmentAuthToken,
-                      })}
+                      ${renderMessageImages(images)}
                       ${renderAssistantAttachments(
                         assistantAttachments,
                         opts.localMediaPreviewRoots ?? [],
@@ -1316,11 +1337,7 @@ function renderGroupedMessage(
             </div>
           `
         : html`
-            ${renderMessageImages(images, {
-              localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
-              basePath: opts.basePath,
-              authToken: opts.assistantAttachmentAuthToken,
-            })}
+            ${renderMessageImages(images)}
             ${renderAssistantAttachments(
               assistantAttachments,
               opts.localMediaPreviewRoots ?? [],
