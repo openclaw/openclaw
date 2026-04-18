@@ -1,4 +1,4 @@
-import { mkdir, stat, symlink, writeFile } from "node:fs/promises";
+import * as fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
@@ -47,7 +47,7 @@ describe("readSecretFileSync", () => {
   it("reads and trims a regular secret file", async () => {
     const dir = await createTempDir();
     const file = path.join(dir, "secret.txt");
-    await writeFile(file, " top-secret \n", "utf8");
+    await fsPromises.writeFile(file, " top-secret \n", "utf8");
 
     expect(readSecretFileSync(file, "Gateway password")).toBe("top-secret");
     expect(tryReadSecretFileSync(file, "Gateway password")).toBe("top-secret");
@@ -90,7 +90,7 @@ describe("readSecretFileSync", () => {
       name: "rejects files larger than the secret-file limit",
       setup: async (dir: string) => {
         const file = path.join(dir, "secret.txt");
-        await writeFile(file, "x".repeat(DEFAULT_SECRET_FILE_MAX_BYTES + 1), "utf8");
+        await fsPromises.writeFile(file, "x".repeat(DEFAULT_SECRET_FILE_MAX_BYTES + 1), "utf8");
         return file;
       },
       expectedMessage: (file: string) =>
@@ -100,7 +100,7 @@ describe("readSecretFileSync", () => {
       name: "rejects non-regular files",
       setup: async (dir: string) => {
         const nestedDir = path.join(dir, "secret-dir");
-        await mkdir(nestedDir);
+        await fsPromises.mkdir(nestedDir);
         return nestedDir;
       },
       expectedMessage: (file: string) => `Gateway password file at ${file} must be a regular file.`,
@@ -110,8 +110,8 @@ describe("readSecretFileSync", () => {
       setup: async (dir: string) => {
         const target = path.join(dir, "target.txt");
         const link = path.join(dir, "secret-link.txt");
-        await writeFile(target, "top-secret\n", "utf8");
-        await symlink(target, link);
+        await fsPromises.writeFile(target, "top-secret\n", "utf8");
+        await fsPromises.symlink(target, link);
         return link;
       },
       options: { rejectSymlink: true },
@@ -121,7 +121,7 @@ describe("readSecretFileSync", () => {
       name: "rejects empty secret files after trimming",
       setup: async (dir: string) => {
         const file = path.join(dir, "secret.txt");
-        await writeFile(file, " \n\t ", "utf8");
+        await fsPromises.writeFile(file, " \n\t ", "utf8");
         return file;
       },
       expectedMessage: (file: string) => `Gateway password file at ${file} is empty.`,
@@ -136,7 +136,7 @@ describe("readSecretFileSync", () => {
       pathValue: async () =>
         createSecretPath(async (dir) => {
           const file = path.join(dir, "secret.txt");
-          await writeFile(file, " \n\t ", "utf8");
+          await fsPromises.writeFile(file, " \n\t ", "utf8");
           return file;
         }),
       label: "Gateway password",
@@ -154,8 +154,8 @@ describe("readSecretFileSync", () => {
         createSecretPath(async (dir) => {
           const target = path.join(dir, "target.txt");
           const link = path.join(dir, "secret-link.txt");
-          await writeFile(target, "top-secret\n", "utf8");
-          await symlink(target, link);
+          await fsPromises.writeFile(target, "top-secret\n", "utf8");
+          await fsPromises.symlink(target, link);
           return link;
         }),
       label: "Telegram bot token",
@@ -207,8 +207,8 @@ describe("writePrivateSecretFileAtomic", () => {
       secret: '{"ok":true}',
     });
     if (process.platform !== "win32") {
-      const dirStat = await stat(path.dirname(file));
-      const fileStat = await stat(file);
+      const dirStat = await fsPromises.stat(path.dirname(file));
+      const fileStat = await fsPromises.stat(file);
       expect(dirStat.mode & 0o777).toBe(PRIVATE_SECRET_DIR_MODE);
       expect(fileStat.mode & 0o777).toBe(PRIVATE_SECRET_FILE_MODE);
     }
@@ -219,9 +219,9 @@ describe("writePrivateSecretFileAtomic", () => {
     const nestedDir = path.join(dir, "nested");
     const target = path.join(dir, "outside.txt");
     const link = path.join(nestedDir, "auth.json");
-    await mkdir(nestedDir);
-    await writeFile(target, "outside", "utf8");
-    await symlink(target, link);
+    await fsPromises.mkdir(nestedDir);
+    await fsPromises.writeFile(target, "outside", "utf8");
+    await fsPromises.symlink(target, link);
 
     await expect(
       writePrivateSecretFileAtomic({
@@ -235,13 +235,43 @@ describe("writePrivateSecretFileAtomic", () => {
   it("rejects symlinked path components", async () => {
     const dir = await createTempDir();
     const targetDir = path.join(dir, "outside-dir");
-    await mkdir(targetDir);
-    await symlink(targetDir, path.join(dir, "linked"));
+    await fsPromises.mkdir(targetDir);
+    await fsPromises.symlink(targetDir, path.join(dir, "linked"));
 
     await expect(
       writePrivateSecretFileAtomic({
         rootDir: dir,
         filePath: path.join(dir, "linked", "auth.json"),
+        content: '{"ok":true}\n',
+      }),
+    ).rejects.toThrow("must not be a symlink");
+  });
+
+  it("tightens an existing world-readable directory before writing secrets", async () => {
+    const dir = await createTempDir();
+    const nestedDir = path.join(dir, "nested");
+    await fsPromises.mkdir(nestedDir, { mode: 0o777 });
+    if (process.platform !== "win32") {
+      await writePrivateSecretFileAtomic({
+        rootDir: dir,
+        filePath: path.join(nestedDir, "auth.json"),
+        content: '{"ok":true}\n',
+      });
+      const dirStat = await fsPromises.stat(nestedDir);
+      expect(dirStat.mode & 0o777).toBe(PRIVATE_SECRET_DIR_MODE);
+    }
+  });
+
+  it("rejects a parent directory symlink before it can escape the private root", async () => {
+    const dir = await createTempDir();
+    const targetDir = await createTempDir();
+    const aliasDir = path.join(dir, "nested");
+    await fsPromises.symlink(targetDir, aliasDir);
+
+    await expect(
+      writePrivateSecretFileAtomic({
+        rootDir: dir,
+        filePath: path.join(aliasDir, "auth.json"),
         content: '{"ok":true}\n',
       }),
     ).rejects.toThrow("must not be a symlink");

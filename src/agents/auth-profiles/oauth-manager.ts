@@ -10,6 +10,7 @@ import {
   areOAuthCredentialsEquivalent,
   hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
+  isSafeToAdoptMainStoreOAuthIdentity,
   isSafeToOverwriteStoredOAuthIdentity,
   overlayRuntimeExternalOAuthProfiles,
   shouldBootstrapFromExternalCliCredential,
@@ -34,10 +35,6 @@ export type OAuthManagerAdapter = {
     credential: OAuthCredential;
   }) => OAuthCredential | null;
   isRefreshTokenReusedError: (error: unknown) => boolean;
-  isSafeToCopyOAuthIdentity: (
-    existing: Pick<OAuthCredential, "accountId" | "email">,
-    incoming: Pick<OAuthCredential, "accountId" | "email">,
-  ) => boolean;
 };
 
 export type ResolvedOAuthAccess = {
@@ -90,6 +87,7 @@ export {
   areOAuthCredentialsEquivalent,
   hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
+  isSafeToAdoptMainStoreOAuthIdentity,
   isSafeToOverwriteStoredOAuthIdentity,
   overlayRuntimeExternalOAuthProfiles,
   shouldBootstrapFromExternalCliCredential,
@@ -199,7 +197,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         Number.isFinite(mainCred.expires) &&
         (!Number.isFinite(params.credential.expires) ||
           mainCred.expires > params.credential.expires) &&
-        adapter.isSafeToCopyOAuthIdentity(params.credential, mainCred)
+        isSafeToAdoptMainStoreOAuthIdentity(params.credential, mainCred)
       ) {
         params.store.profiles[params.profileId] = { ...mainCred };
         saveAuthProfileStore(params.store, params.agentDir);
@@ -327,7 +325,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               mainCred?.type === "oauth" &&
               mainCred.provider === cred.provider &&
               hasUsableOAuthCredential(mainCred) &&
-              adapter.isSafeToCopyOAuthIdentity(cred, mainCred)
+              isSafeToAdoptMainStoreOAuthIdentity(cred, mainCred)
             ) {
               store.profiles[params.profileId] = { ...mainCred };
               saveAuthProfileStore(store, params.agentDir);
@@ -344,7 +342,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               mainCred?.type === "oauth" &&
               mainCred.provider === cred.provider &&
               hasUsableOAuthCredential(mainCred) &&
-              !adapter.isSafeToCopyOAuthIdentity(cred, mainCred)
+              !isSafeToAdoptMainStoreOAuthIdentity(cred, mainCred)
             ) {
               log.warn("refused to adopt fresh main-store OAuth credential: identity mismatch", {
                 profileId: params.profileId,
@@ -537,7 +535,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             mainCred?.type === "oauth" &&
             mainCred.provider === params.credential.provider &&
             hasUsableOAuthCredential(mainCred) &&
-            adapter.isSafeToCopyOAuthIdentity(params.credential, mainCred)
+            isSafeToAdoptMainStoreOAuthIdentity(params.credential, mainCred)
           ) {
             refreshedStore.profiles[params.profileId] = { ...mainCred };
             saveAuthProfileStore(refreshedStore, params.agentDir);

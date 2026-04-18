@@ -2,15 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-
-const mocks = vi.hoisted(() => ({
-  ensureAuthProfileStore: vi.fn(),
-}));
-
-vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
-}));
+import { saveAuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 let bridgeCodexAppServerStartOptions: typeof import("./auth-bridge.js").bridgeCodexAppServerStartOptions;
 
@@ -29,7 +22,6 @@ describe("bridgeCodexAppServerStartOptions", () => {
   });
 
   afterEach(async () => {
-    mocks.ensureAuthProfileStore.mockReset();
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
@@ -38,19 +30,22 @@ describe("bridgeCodexAppServerStartOptions", () => {
   it("bridges canonical OpenClaw oauth into an isolated CODEX_HOME", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     tempDirs.push(agentDir);
-    mocks.ensureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {
-        "openai-codex:default": {
-          type: "oauth",
-          provider: "openai-codex",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 60_000,
-          accountId: "acct-123",
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+            accountId: "acct-123",
+          },
         },
       },
-    });
+      agentDir,
+    );
 
     const result = await bridgeCodexAppServerStartOptions({
       startOptions: {
@@ -98,10 +93,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       args: ["app-server"],
       headers: { authorization: "Bearer dev-token" },
     };
-    mocks.ensureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {},
-    });
+    saveAuthProfileStore({ version: 1, profiles: {} }, agentDir);
 
     await expect(
       bridgeCodexAppServerStartOptions({
@@ -115,18 +107,21 @@ describe("bridgeCodexAppServerStartOptions", () => {
   it("refuses to overwrite a symlinked auth bridge file", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     tempDirs.push(agentDir);
-    mocks.ensureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {
-        "openai-codex:default": {
-          type: "oauth",
-          provider: "openai-codex",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 60_000,
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
         },
       },
-    });
+      agentDir,
+    );
 
     const codexHome = resolveHashedCodexHome(agentDir, "openai-codex:default");
     await fs.mkdir(codexHome, { recursive: true });

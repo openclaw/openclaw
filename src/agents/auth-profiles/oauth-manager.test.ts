@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createOAuthManager,
   isSafeToAdoptBootstrapOAuthIdentity,
+  isSafeToAdoptMainStoreOAuthIdentity,
   isSafeToOverwriteStoredOAuthIdentity,
   OAuthManagerRefreshError,
 } from "./oauth-manager.js";
@@ -70,6 +71,33 @@ describe("isSafeToOverwriteStoredOAuthIdentity", () => {
 
     expect(isSafeToOverwriteStoredOAuthIdentity(existing, incoming)).toBe(false);
     expect(isSafeToAdoptBootstrapOAuthIdentity(existing, incoming)).toBe(true);
+  });
+});
+
+describe("isSafeToAdoptMainStoreOAuthIdentity", () => {
+  it("requires positive identity binding before adopting from the main store", () => {
+    expect(
+      isSafeToAdoptMainStoreOAuthIdentity(
+        createCredential({
+          access: "sub-access",
+          refresh: "sub-refresh",
+        }),
+        createCredential({
+          access: "main-access",
+          refresh: "main-refresh",
+          accountId: "acct-main",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("accepts matching account identities", () => {
+    expect(
+      isSafeToAdoptMainStoreOAuthIdentity(
+        createCredential({ accountId: "acct-123" }),
+        createCredential({ access: "main-access", refresh: "main-refresh", accountId: "acct-123" }),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -140,7 +168,6 @@ describe("createOAuthManager", () => {
           expires: Date.now() - 30_000,
         }),
       isRefreshTokenReusedError: () => false,
-      isSafeToCopyOAuthIdentity: () => true,
     });
 
     const result = await manager.resolveOAuthAccess({
