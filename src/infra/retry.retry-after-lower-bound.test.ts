@@ -109,6 +109,37 @@ describe("retryAsync respects server-supplied Retry-After as a lower bound", () 
     expect(delays[0]).toBeLessThan(1_000);
   });
 
+  it("does not round a non-integer retryAfterMs below its lower bound", async () => {
+    // Retry-After is typed as `number` (milliseconds), so non-integer values
+    // are legal. With `Math.round` in positive mode, `retryAfterMs=1.4` and
+    // `fraction=0` produce `Math.round(1.4 * 1) = 1`, which dips below the
+    // caller's lower bound. `Math.ceil` in positive mode closes that gap.
+    randomMocks.generateSecureFraction.mockReturnValue(0);
+
+    vi.useFakeTimers();
+    const delays: number[] = [];
+    const fn = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("429 non-integer retry-after"))
+      .mockResolvedValueOnce("ok");
+
+    const promise = retryAsync(fn, {
+      attempts: 2,
+      minDelayMs: 0,
+      maxDelayMs: 10,
+      jitter: 0.5,
+      retryAfterMs: () => 1.4,
+      onRetry: (info) => delays.push(info.delayMs),
+    });
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toBe("ok");
+
+    expect(delays).toHaveLength(1);
+    // Ceil-to-integer invariant: delay is at least the ceiling of the
+    // caller-supplied lower bound, never below it.
+    expect(delays[0]).toBeGreaterThanOrEqual(2);
+  });
+
   it("never schedules a delay below retryAfterMs even at the low end of jitter", async () => {
     // fraction = 0 is the adversarial case: symmetric jitter yields -jitter,
     // i.e. delay = base * (1 - jitter), which would violate the Retry-After
