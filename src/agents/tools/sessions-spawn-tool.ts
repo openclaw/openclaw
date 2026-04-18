@@ -101,7 +101,7 @@ const SessionsSpawnToolSchema = Type.Object({
   resumeSessionId: Type.Optional(
     Type.String({
       description:
-        'Resume an existing agent session by its ID (e.g. a Codex session UUID from ~/.codex/sessions/). Requires runtime="acp". The agent replays conversation history via session/load instead of starting fresh.',
+        'Resume an existing agent session by its ID (e.g. a Codex session UUID from ~/.codex/sessions/). Only applies when runtime="acp"; silently ignored for runtime="subagent". The agent replays conversation history via session/load instead of starting fresh.',
     }),
   ),
   model: Type.Optional(Type.String()),
@@ -176,7 +176,13 @@ export function createSessionsSpawnTool(
       const label = readStringParam(params, "label") ?? "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
       const requestedAgentId = readStringParam(params, "agentId");
-      const resumeSessionId = readStringParam(params, "resumeSessionId");
+      // ACP-only fields: schema-strict LLMs (e.g. gpt-5.4) auto-fill these on
+      // every call regardless of the runtime they also set. The subagent code
+      // path never consumes either field, so silently drop them when
+      // runtime!=="acp" instead of failing the whole spawn. ACP semantics are
+      // preserved: fields still flow through unchanged when runtime==="acp".
+      const resumeSessionId =
+        runtime === "acp" ? readStringParam(params, "resumeSessionId") : undefined;
       const modelOverride = readStringParam(params, "model");
       const thinkingOverrideRaw = readStringParam(params, "thinking");
       const cwd = readStringParam(params, "cwd");
@@ -185,7 +191,8 @@ export function createSessionsSpawnTool(
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const expectsCompletionMessage = params.expectsCompletionMessage !== false;
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
-      const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const streamTo =
+        runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
       if (runtime === "acp" && lightContext) {
         throw new Error("lightContext is only supported for runtime='subagent'.");
@@ -212,22 +219,6 @@ export function createSessionsSpawnTool(
         : undefined;
 
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
-
-      if (streamTo && runtime !== "acp") {
-        return jsonResult({
-          status: "error",
-          error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
-          ...roleContext,
-        });
-      }
-
-      if (resumeSessionId && runtime !== "acp") {
-        return jsonResult({
-          status: "error",
-          error: `resumeSessionId is only supported for runtime=acp; got runtime=${runtime}`,
-          ...roleContext,
-        });
-      }
 
       if (runtime === "acp") {
         const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await loadAcpSpawnModule();
