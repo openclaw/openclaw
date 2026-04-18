@@ -670,9 +670,13 @@ function renderMessageImages(
   return html`
     <div class="chat-message-images">
       ${images.map((img) => {
+        const isLocalImage = isLocalAssistantAttachmentSource(img.url);
         const canProxyLocalImage =
-          isLocalAssistantAttachmentSource(img.url) &&
+          isLocalImage &&
           isLocalAttachmentPreviewAllowed(img.url, opts?.localMediaPreviewRoots ?? []);
+        if (isLocalImage && !canProxyLocalImage) {
+          return nothing;
+        }
         const imageUrl = canProxyLocalImage
           ? buildAssistantAttachmentUrl(img.url, opts?.basePath, opts?.authToken)
           : img.url;
