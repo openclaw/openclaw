@@ -237,13 +237,18 @@ export function createSubagentRunManager(params: {
       outcome: undefined,
       frozenResultText: undefined,
       frozenResultCapturedAt: undefined,
+      userDeliveryPayload: undefined,
       fallbackFrozenResultText: preserveFrozenResultFallback ? source.frozenResultText : undefined,
       fallbackFrozenResultCapturedAt: preserveFrozenResultFallback
         ? source.frozenResultCapturedAt
         : undefined,
+      fallbackUserDeliveryPayload: preserveFrozenResultFallback
+        ? source.userDeliveryPayload
+        : undefined,
       cleanupCompletedAt: undefined,
       cleanupHandled: false,
       completionAnnouncedAt: undefined,
+      deliveryClaim: undefined,
       suppressAnnounceReason: undefined,
       announceRetryCount: undefined,
       lastAnnounceRetryAt: undefined,
@@ -322,6 +327,9 @@ export function createSubagentRunManager(params: {
       archiveAtMs,
       cleanupHandled: false,
       completionAnnouncedAt: undefined,
+      deliveryClaim: undefined,
+      userDeliveryPayload: undefined,
+      fallbackUserDeliveryPayload: undefined,
       wakeOnDescendantSettle: undefined,
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,

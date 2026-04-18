@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildAnnounceIdFromChildRun } from "./announce-idempotency.js";
 import {
+  __testing as dispatchTesting,
   mapQueueOutcomeToDeliveryResult,
   runSubagentAnnounceDispatch,
 } from "./subagent-announce-dispatch.js";
@@ -28,6 +30,10 @@ describe("mapQueueOutcomeToDeliveryResult", () => {
 });
 
 describe("runSubagentAnnounceDispatch", () => {
+  afterEach(() => {
+    dispatchTesting.setDepsForTest();
+  });
+
   async function runNonCompletionDispatch(params: {
     queueOutcome: "none" | "queued" | "steered";
     directDelivered?: boolean;
@@ -69,7 +75,7 @@ describe("runSubagentAnnounceDispatch", () => {
     ]);
   });
 
-  it("uses direct-first ordering for completion mode", async () => {
+  it("uses queue-first ordering for completion mode", async () => {
     const queue = vi.fn(async () => "queued" as const);
     const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
 
@@ -79,20 +85,19 @@ describe("runSubagentAnnounceDispatch", () => {
       direct,
     });
 
-    expect(direct).toHaveBeenCalledTimes(1);
-    expect(queue).not.toHaveBeenCalled();
-    expect(result.path).toBe("direct");
+    expect(queue).toHaveBeenCalledTimes(1);
+    expect(direct).not.toHaveBeenCalled();
+    expect(result.path).toBe("queued");
     expect(result.phases).toEqual([
-      { phase: "direct-primary", delivered: true, path: "direct", error: undefined },
+      { phase: "queue-primary", delivered: true, path: "queued", error: undefined },
     ]);
   });
 
-  it("falls back to queue when completion direct send fails", async () => {
-    const queue = vi.fn(async () => "steered" as const);
+  it("falls back to direct when completion queue cannot deliver", async () => {
+    const queue = vi.fn(async () => "none" as const);
     const direct = vi.fn(async () => ({
-      delivered: false,
+      delivered: true,
       path: "direct" as const,
-      error: "network",
     }));
 
     const result = await runSubagentAnnounceDispatch({
@@ -101,16 +106,16 @@ describe("runSubagentAnnounceDispatch", () => {
       direct,
     });
 
-    expect(direct).toHaveBeenCalledTimes(1);
     expect(queue).toHaveBeenCalledTimes(1);
-    expect(result.path).toBe("steered");
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(result.path).toBe("direct");
     expect(result.phases).toEqual([
-      { phase: "direct-primary", delivered: false, path: "direct", error: "network" },
-      { phase: "queue-fallback", delivered: true, path: "steered", error: undefined },
+      { phase: "queue-primary", delivered: false, path: "none", error: undefined },
+      { phase: "direct-primary", delivered: true, path: "direct", error: undefined },
     ]);
   });
 
-  it("returns direct failure when completion fallback queue cannot deliver", async () => {
+  it("returns direct failure when completion direct fallback cannot deliver", async () => {
     const queue = vi.fn(async () => "none" as const);
     const direct = vi.fn(async () => ({
       delivered: false,
@@ -130,8 +135,8 @@ describe("runSubagentAnnounceDispatch", () => {
       error: "failed",
     });
     expect(result.phases).toEqual([
+      { phase: "queue-primary", delivered: false, path: "none", error: undefined },
       { phase: "direct-primary", delivered: false, path: "direct", error: "failed" },
-      { phase: "queue-fallback", delivered: false, path: "none", error: undefined },
     ]);
   });
 
@@ -154,17 +159,13 @@ describe("runSubagentAnnounceDispatch", () => {
     });
   });
 
-  it("preserves direct failure when completion dispatch aborts before fallback queue", async () => {
+  it("preserves queue result when completion dispatch aborts before direct fallback", async () => {
     const controller = new AbortController();
-    const queue = vi.fn(async () => "queued" as const);
-    const direct = vi.fn(async () => {
+    const queue = vi.fn(async () => {
       controller.abort();
-      return {
-        delivered: false,
-        path: "direct" as const,
-        error: "direct failed before abort",
-      };
+      return "none" as const;
     });
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
 
     const result = await runSubagentAnnounceDispatch({
       expectsCompletionMessage: true,
@@ -173,19 +174,18 @@ describe("runSubagentAnnounceDispatch", () => {
       direct,
     });
 
-    expect(direct).toHaveBeenCalledTimes(1);
-    expect(queue).not.toHaveBeenCalled();
+    expect(queue).toHaveBeenCalledTimes(1);
+    expect(direct).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       delivered: false,
-      path: "direct",
-      error: "direct failed before abort",
+      path: "none",
     });
     expect(result.phases).toEqual([
       {
-        phase: "direct-primary",
+        phase: "queue-primary",
         delivered: false,
-        path: "direct",
-        error: "direct failed before abort",
+        path: "none",
+        error: undefined,
       },
     ]);
   });
@@ -208,6 +208,109 @@ describe("runSubagentAnnounceDispatch", () => {
     expect(result).toEqual({
       delivered: false,
       path: "none",
+      phases: [],
+    });
+  });
+
+  it("short-circuits when the announce was already delivered", async () => {
+    const announceId = buildAnnounceIdFromChildRun({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-1",
+    });
+    dispatchTesting.setDepsForTest({
+      getRuns: () =>
+        new Map([
+          [
+            "run-1",
+            {
+              runId: "run-1",
+              childSessionKey: "agent:main:subagent:worker",
+              requesterSessionKey: "agent:main:main",
+              requesterDisplayKey: "main",
+              task: "task",
+              cleanup: "keep",
+              createdAt: 1,
+              completionAnnouncedAt: 10,
+              deliveryClaim: {
+                announceId,
+                state: "delivered",
+                token: "token-1",
+                path: "queued",
+                claimedAt: 5,
+                updatedAt: 10,
+              },
+            },
+          ],
+        ]),
+      persist: vi.fn(),
+    });
+    const queue = vi.fn(async () => "queued" as const);
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+
+    const result = await runSubagentAnnounceDispatch({
+      announceId,
+      expectsCompletionMessage: true,
+      queue,
+      direct,
+    });
+
+    expect(queue).not.toHaveBeenCalled();
+    expect(direct).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      delivered: true,
+      path: "queued",
+      phases: [],
+    });
+  });
+
+  it("rejects a concurrent in-flight announce claim", async () => {
+    const announceId = buildAnnounceIdFromChildRun({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-2",
+    });
+    dispatchTesting.setDepsForTest({
+      getRuns: () =>
+        new Map([
+          [
+            "run-2",
+            {
+              runId: "run-2",
+              childSessionKey: "agent:main:subagent:worker",
+              requesterSessionKey: "agent:main:main",
+              requesterDisplayKey: "main",
+              task: "task",
+              cleanup: "keep",
+              createdAt: 1,
+              deliveryClaim: {
+                announceId,
+                state: "claimed",
+                token: "token-2",
+                path: "none",
+                claimedAt: 5,
+                updatedAt: 5,
+              },
+            },
+          ],
+        ]),
+      now: () => 10,
+      persist: vi.fn(),
+    });
+    const queue = vi.fn(async () => "queued" as const);
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+
+    const result = await runSubagentAnnounceDispatch({
+      announceId,
+      expectsCompletionMessage: true,
+      queue,
+      direct,
+    });
+
+    expect(queue).not.toHaveBeenCalled();
+    expect(direct).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      delivered: false,
+      path: "none",
+      error: "delivery-already-in-flight",
       phases: [],
     });
   });

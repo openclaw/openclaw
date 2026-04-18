@@ -13,6 +13,7 @@ import {
   captureSubagentCompletionReply,
   runSubagentAnnounceFlow,
   type SubagentRunOutcome,
+  __testing as subagentAnnounceTesting,
 } from "./subagent-announce.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -183,8 +184,12 @@ export function createSubagentRegistryLifecycleController(params: {
         waitForReply: entry.expectsCompletionMessage === true,
       });
       entry.frozenResultText = captured?.trim() ? capFrozenResultText(captured) : null;
+      entry.userDeliveryPayload = entry.frozenResultText
+        ? subagentAnnounceTesting.buildStoredUserDeliveryPayload(entry.frozenResultText)
+        : null;
     } catch {
       entry.frozenResultText = null;
+      entry.userDeliveryPayload = null;
     }
     entry.frozenResultCapturedAt = Date.now();
     return true;
@@ -240,6 +245,7 @@ export function createSubagentRegistryLifecycleController(params: {
       }
       entry.frozenResultText = nextFrozen;
       entry.frozenResultCapturedAt = capturedAt;
+      entry.userDeliveryPayload = subagentAnnounceTesting.buildStoredUserDeliveryPayload(nextFrozen);
       changed = true;
     }
     if (changed) {
@@ -406,6 +412,7 @@ export function createSubagentRegistryLifecycleController(params: {
       entry.wakeOnDescendantSettle = undefined;
       entry.fallbackFrozenResultText = undefined;
       entry.fallbackFrozenResultCapturedAt = undefined;
+      entry.fallbackUserDeliveryPayload = undefined;
       const completionReason = resolveCleanupCompletionReason(entry);
       await emitCompletionEndedHookIfNeeded(entry, completionReason);
       const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
@@ -415,6 +422,7 @@ export function createSubagentRegistryLifecycleController(params: {
       if (cleanup === "delete") {
         entry.frozenResultText = undefined;
         entry.frozenResultCapturedAt = undefined;
+        entry.userDeliveryPayload = undefined;
       }
       completeCleanupBookkeeping({
         runId,
@@ -461,6 +469,7 @@ export function createSubagentRegistryLifecycleController(params: {
       entry.wakeOnDescendantSettle = undefined;
       entry.fallbackFrozenResultText = undefined;
       entry.fallbackFrozenResultCapturedAt = undefined;
+      entry.fallbackUserDeliveryPayload = undefined;
       const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
       if (shouldDeleteAttachments) {
         await safeRemoveAttachmentsDir(entry);
@@ -533,7 +542,9 @@ export function createSubagentRegistryLifecycleController(params: {
         timeoutMs: params.subagentAnnounceTimeoutMs,
         cleanup: entry.cleanup,
         roundOneReply: entry.frozenResultText ?? undefined,
+        roundOneUserDeliveryPayload: entry.userDeliveryPayload ?? undefined,
         fallbackReply: entry.fallbackFrozenResultText ?? undefined,
+        fallbackUserDeliveryPayload: entry.fallbackUserDeliveryPayload ?? undefined,
         waitForCompletion: false,
         startedAt: entry.startedAt,
         endedAt: entry.endedAt,
@@ -580,6 +591,7 @@ export function createSubagentRegistryLifecycleController(params: {
       entry.cleanupHandled = false;
       entry.cleanupCompletedAt = undefined;
       entry.completionAnnouncedAt = undefined;
+      entry.deliveryClaim = undefined;
       mutated = true;
     }
 

@@ -19,6 +19,11 @@ export type AgentTaskCompletionInternalEvent = {
   status: AgentInternalEventStatus;
   statusLabel: string;
   result: string;
+  userDeliveryPayload?: {
+    text: string;
+    source: "empty" | "child-blocks" | "named-section" | "sanitized-fallback";
+    capturedAt: number;
+  };
   mediaUrls?: string[];
   statsLine?: string;
   replyInstruction: string;

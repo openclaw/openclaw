@@ -1702,7 +1702,7 @@ describe("subagent announce formatting", () => {
     expect(new Set(idempotencyKeys).size).toBe(2);
   });
 
-  it("prefers direct delivery first for completion-mode and then queues on direct failure", async () => {
+  it("prefers queue delivery first for active completion-mode parents", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     sessionStore = {
@@ -1714,10 +1714,6 @@ describe("subagent announce formatting", () => {
         queueDebounceMs: 0,
       },
     };
-    agentSpy
-      .mockRejectedValueOnce(new Error("direct delivery unavailable"))
-      .mockResolvedValueOnce({ runId: "run-main", status: "ok" });
-
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:worker",
       childRunId: "run-completion-direct-fallback",
@@ -1729,14 +1725,12 @@ describe("subagent announce formatting", () => {
 
     expect(didAnnounce).toBe(true);
     expect(sendSpy).not.toHaveBeenCalled();
-    expect(agentSpy).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(agentSpy).toHaveBeenCalledTimes(1);
+    });
     expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
       method: "agent",
       params: { sessionKey: "agent:main:main", channel: "whatsapp", to: "+1555", deliver: true },
-    });
-    expect(agentSpy.mock.calls[1]?.[0]).toMatchObject({
-      method: "agent",
-      params: { sessionKey: "agent:main:main" },
     });
   });
 

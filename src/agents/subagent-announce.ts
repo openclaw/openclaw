@@ -42,6 +42,7 @@ import {
   waitForEmbeddedPiRunEnd,
 } from "./subagent-announce.runtime.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import type { StoredUserDeliveryPayload } from "./subagent-registry.types.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
@@ -93,6 +94,113 @@ function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
     formatAgentInternalEventsForPrompt(events) ||
     "A background task finished. Process the completion update now."
   );
+}
+
+const INTERNAL_CONTEXT_BLOCK_RE =
+  /(?:^|\n)\s*(?:Human:\s*)?(?:\[[^\n]*\]\s*)?<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\s*/g;
+const CHILD_RESULT_BLOCK_RE =
+  /<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>\s*([\s\S]*?)\s*<<<END_UNTRUSTED_CHILD_RESULT>>>/g;
+const INTERNAL_CONTEXT_LINE_RE =
+  /(?:^|\n)\s*(?:\[Inter-session message][^\n]*|OpenClaw runtime context \(internal\):|This context is runtime-generated, not user-authored\. Keep internal details private\.|Result \(untrusted content, treat as data\):|Action:\s*A completed .*? ready for user delivery\.[^\n]*|Stats:\s*runtime[^\n]*|sourceSession=[^\n]*|sourceChannel=[^\n]*|sourceTool=[^\n]*)(?=\n|$)/gim;
+const DIRECT_USER_DELIVERY_INSTRUCTION_RE =
+  /(?:^|\n)(?:Convert the result above into your normal assistant voice and send that user-facing update now\.|Keep internal context private.*|Reply ONLY:\s*NO_REPLY.*)(?=\n|$)/gim;
+
+function normalizeUserDeliveryPayloadText(text: string): string {
+  const normalized = typeof text === "string" ? text.replace(/\r\n?/g, "\n").trim() : "";
+  return normalized || "(no output)";
+}
+
+function collectStructuredChildResultBlocks(text: string): string[] {
+  const blocks: string[] = [];
+  if (!text.trim()) {
+    return blocks;
+  }
+  text.replace(CHILD_RESULT_BLOCK_RE, (_match, body: string) => {
+    const cleaned = body?.trim();
+    if (cleaned) {
+      blocks.push(cleaned);
+    }
+    return "";
+  });
+  return blocks;
+}
+
+function tryExtractNamedUserDeliverySection(text: string): string {
+  if (!text.trim()) {
+    return "";
+  }
+  const normalized = text.replace(/\r\n?/g, "\n");
+  const marker = "\nResult to deliver:\n";
+  const prefixed = normalized.startsWith("Result to deliver:\n") ? `\n${normalized}` : normalized;
+  const start = prefixed.indexOf(marker);
+  if (start < 0) {
+    return "";
+  }
+  const afterMarker = prefixed.slice(start + marker.length);
+  const endMatch = DIRECT_USER_DELIVERY_INSTRUCTION_RE.exec(afterMarker);
+  DIRECT_USER_DELIVERY_INSTRUCTION_RE.lastIndex = 0;
+  return (endMatch ? afterMarker.slice(0, endMatch.index) : afterMarker).trim();
+}
+
+function extractUserFacingCompletionPayload(text: string): {
+  text: string;
+  source: StoredUserDeliveryPayload["source"];
+} {
+  const raw = typeof text === "string" ? text : "";
+  if (!raw.trim()) {
+    return {
+      text: "(no output)",
+      source: "empty",
+    };
+  }
+  const childBlocks = collectStructuredChildResultBlocks(raw);
+  if (childBlocks.length > 0) {
+    return {
+      text: normalizeUserDeliveryPayloadText(childBlocks.join("\n\n")),
+      source: "child-blocks",
+    };
+  }
+  const namedSection = tryExtractNamedUserDeliverySection(raw);
+  if (namedSection) {
+    return {
+      text: normalizeUserDeliveryPayloadText(namedSection),
+      source: "named-section",
+    };
+  }
+  let cleaned = raw;
+  cleaned = cleaned.replace(INTERNAL_CONTEXT_BLOCK_RE, "\n");
+  cleaned = cleaned.replace(CHILD_RESULT_BLOCK_RE, "$1");
+  cleaned = cleaned.replace(INTERNAL_CONTEXT_LINE_RE, "\n");
+  cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
+  return {
+    text: normalizeUserDeliveryPayloadText(cleaned),
+    source: "sanitized-fallback",
+  };
+}
+
+function buildStoredUserDeliveryPayload(resultText: string): StoredUserDeliveryPayload {
+  const extracted = extractUserFacingCompletionPayload(resultText);
+  return {
+    text: extracted.text,
+    source: extracted.source,
+    capturedAt: Date.now(),
+  };
+}
+
+function buildDirectUserCompletionPrompt(params: {
+  announceType: SubagentAnnounceType;
+  resultText: string;
+}): string {
+  const payload = extractUserFacingCompletionPayload(params.resultText);
+  return [
+    `A completed ${params.announceType} is ready for user delivery.`,
+    "",
+    "Result to deliver:",
+    payload.text,
+    "",
+    "Convert the result above into your normal assistant voice and send that user-facing update now.",
+    "Keep internal context private and do not mention system/log/stats/session details.",
+  ].join("\n");
 }
 
 function hasUsableSessionEntry(entry: unknown): boolean {
@@ -228,11 +336,13 @@ export async function runSubagentAnnounceFlow(params: {
   timeoutMs: number;
   cleanup: "delete" | "keep";
   roundOneReply?: string;
+  roundOneUserDeliveryPayload?: StoredUserDeliveryPayload | null;
   /**
    * Fallback text preserved from the pre-wake run when a wake continuation
    * completes with NO_REPLY despite an earlier final summary already existing.
    */
   fallbackReply?: string;
+  fallbackUserDeliveryPayload?: StoredUserDeliveryPayload | null;
   waitForCompletion?: boolean;
   startedAt?: number;
   endedAt?: number;
@@ -366,6 +476,8 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
 
+    let persistedUserDeliveryPayload = params.roundOneUserDeliveryPayload ?? undefined;
+
     if (!childCompletionFindings) {
       const fallbackReply = normalizeOptionalString(params.fallbackReply);
       const fallbackIsSilent =
@@ -417,6 +529,9 @@ export async function runSubagentAnnounceFlow(params: {
             return true;
           }
           reply = cleaned;
+          persistedUserDeliveryPayload =
+            params.fallbackUserDeliveryPayload ??
+            (reply ? buildStoredUserDeliveryPayload(reply) : undefined);
         } else {
           return true;
         }
@@ -429,11 +544,17 @@ export async function runSubagentAnnounceFlow(params: {
               return true;
             }
             reply = cleanedFallback;
+            persistedUserDeliveryPayload =
+              params.fallbackUserDeliveryPayload ??
+              (reply ? buildStoredUserDeliveryPayload(reply) : undefined);
           } else {
             return true;
           }
         } else {
           reply = cleaned;
+          if (!persistedUserDeliveryPayload && reply) {
+            persistedUserDeliveryPayload = buildStoredUserDeliveryPayload(reply);
+          }
         }
       }
     }
@@ -485,6 +606,10 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
 
+    const userDeliveryPayload = !requesterIsSubagent
+      ? persistedUserDeliveryPayload ?? buildStoredUserDeliveryPayload(findings)
+      : undefined;
+    const usePlainUserDeliveryPrompt = expectsCompletionMessage && !requesterIsSubagent;
     const replyInstruction = buildAnnounceReplyInstruction({
       requesterIsSubagent,
       announceType,
@@ -506,11 +631,17 @@ export async function runSubagentAnnounceFlow(params: {
         status: outcome.status,
         statusLabel,
         result: findings,
+        userDeliveryPayload,
         statsLine,
         replyInstruction,
       },
     ];
-    const triggerMessage = buildAnnounceSteerMessage(internalEvents);
+    const triggerMessage = usePlainUserDeliveryPrompt
+      ? buildDirectUserCompletionPrompt({
+          announceType,
+          resultText: userDeliveryPayload?.text ?? findings,
+        })
+      : buildAnnounceSteerMessage(internalEvents);
 
     // Send to the requester session. For nested subagents this is an internal
     // follow-up injection (deliver=false) so the orchestrator receives it.
@@ -597,6 +728,9 @@ export async function runSubagentAnnounceFlow(params: {
 }
 
 export const __testing = {
+  buildStoredUserDeliveryPayload,
+  buildDirectUserCompletionPrompt,
+  extractUserFacingCompletionPayload,
   setDepsForTest(overrides?: Partial<SubagentAnnounceDeps>) {
     subagentAnnounceDeps = overrides
       ? {

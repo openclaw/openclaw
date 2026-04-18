@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeOutboundText } from "./sanitize-outbound.js";
+import { normalizeIMessageDeliveryText, sanitizeOutboundText } from "./sanitize-outbound.js";
 
 describe("sanitizeOutboundText", () => {
   it("returns empty string unchanged", () => {
@@ -60,5 +60,23 @@ describe("sanitizeOutboundText", () => {
     expect(result).not.toContain("+#+#");
     expect(result).not.toMatch(/assistant to=final/i);
     expect(result).toContain("Actual reply");
+  });
+
+  it("strips leaked OpenClaw internal context envelopes", () => {
+    const text = [
+      "Visible intro",
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "OpenClaw runtime context (internal):",
+      "secret",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "Visible outro",
+    ].join("\n");
+    expect(sanitizeOutboundText(text)).toBe("Visible intro\nVisible outro");
+  });
+
+  it("closes dangling code fences for iMessage delivery", () => {
+    expect(normalizeIMessageDeliveryText("```js\nconst x = 1;")).toBe(
+      "```js\nconst x = 1;\n```",
+    );
   });
 });

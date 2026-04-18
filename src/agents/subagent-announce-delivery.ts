@@ -341,6 +341,7 @@ async function maybeQueueSubagentAnnounce(params: {
   sourceChannel?: string;
   sourceTool?: string;
   internalEvents?: AgentInternalEvent[];
+  forceQueueWhenActive?: boolean;
   signal?: AbortSignal;
 }): Promise<"steered" | "queued" | "none" | "dropped"> {
   if (params.signal?.aborted) {
@@ -373,7 +374,18 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "collect" ||
     queueSettings.mode === "steer-backlog" ||
     queueSettings.mode === "interrupt";
-  if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
+  const mustQueueWhileActive = isActive && params.forceQueueWhenActive === true;
+  const effectiveQueueSettings = mustQueueWhileActive
+    ? {
+        ...queueSettings,
+        mode:
+          shouldFollowup || queueSettings.mode === "steer" ? queueSettings.mode : ("interrupt" as const),
+        debounceMs: 0,
+        cap: Math.max(queueSettings.cap ?? 20, 200),
+        dropPolicy: "old" as const,
+      }
+    : queueSettings;
+  if (isActive && (shouldFollowup || queueSettings.mode === "steer" || mustQueueWhileActive)) {
     const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
     const didQueue = enqueueAnnounce({
       key: buildAnnounceQueueKey(canonicalKey, origin),
@@ -389,7 +401,7 @@ async function maybeQueueSubagentAnnounce(params: {
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
       },
-      settings: queueSettings,
+      settings: effectiveQueueSettings,
       send: sendAnnounce,
     });
     return didQueue ? "queued" : "dropped";
@@ -541,6 +553,7 @@ export async function deliverSubagentAnnouncement(params: {
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   return await runSubagentAnnounceDispatch({
+    announceId: params.announceId,
     expectsCompletionMessage: params.expectsCompletionMessage,
     signal: params.signal,
     queue: async () =>
@@ -555,6 +568,7 @@ export async function deliverSubagentAnnouncement(params: {
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
         internalEvents: params.internalEvents,
+        forceQueueWhenActive: params.expectsCompletionMessage && !params.requesterIsSubagent,
         signal: params.signal,
       }),
     direct: async () =>

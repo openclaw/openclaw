@@ -4,6 +4,7 @@ import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeIMessageDeliveryText } from "./monitor/sanitize-outbound.js";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
@@ -142,7 +143,7 @@ export async function sendMessageIMessage(
       channel: "imessage",
       accountId: account.accountId,
     });
-    message = convertMarkdownTables(message, tableMode);
+    message = convertMarkdownTables(normalizeIMessageDeliveryText(message), tableMode);
   }
   message = stripInlineDirectiveTagsForDelivery(message).text;
   if (!message.trim() && !filePath) {
