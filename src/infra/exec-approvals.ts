@@ -249,13 +249,12 @@ function ensureDir(filePath: string, env: NodeJS.ProcessEnv = process.env) {
   fs.mkdirSync(dir, { recursive: true });
   const dirStat = fs.lstatSync(dir);
   if (dirStat.isSymbolicLink()) {
-    // Allow a symlink dir only when OPENCLAW_STATE_DIR is set; follow it and
-    // verify the target is a real directory.
-    const stateDir = env.OPENCLAW_STATE_DIR?.trim();
-    if (!stateDir) {
+    // Allow a symlink dir only when OPENCLAW_STATE_DIR is set, and only if
+    // the symlink resolves to exactly the trusted root (not just any dir).
+    const realDir = fs.realpathSync(dir);
+    if (realDir !== trustedRoot) {
       throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
     }
-    const realDir = fs.realpathSync(dir);
     const realStat = fs.lstatSync(realDir);
     if (!realStat.isDirectory() || realStat.isSymbolicLink()) {
       throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
