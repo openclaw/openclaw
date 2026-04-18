@@ -251,6 +251,40 @@ backend: when OpenClaw drives a CLI backend, OpenClaw's own tool-policy
 pipeline is the runtime authority, not the subprocess CLI's interactive
 approval UI.
 
+Security posture and override: the CLI subprocess runs inside OpenClaw's
+workspace trust boundary. If you want stricter isolation for the Gemini CLI
+subprocess (matching Aisle-style CWE-250 concerns), override the backend args
+in your config to drop `--yolo` and restore Gemini CLI's built-in per-tool
+approval prompts, or run the gateway inside an external sandbox (container,
+seccomp, restricted user). Example override:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "cliBackends": {
+        "google-gemini-cli": {
+          "args": ["--output-format", "json", "--prompt", "{prompt}"],
+          "resumeArgs": [
+            "--resume",
+            "{sessionId}",
+            "--output-format",
+            "json",
+            "--prompt",
+            "{prompt}"
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+With the override above, Gemini CLI's non-interactive mode will again hide
+destructive built-in tools (`write_file`, `edit`, `run_shell_command`) because
+there is no TTY to confirm them; the trade-off is the #68216 symptom (model
+reports it has no file-writing tool).
+
 Gemini CLI JSON notes:
 
 - Reply text is read from the JSON `response` field.
