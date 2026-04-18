@@ -8,7 +8,11 @@ import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../../infra/file-lock.js";
+import {
+  FILE_LOCK_TIMEOUT_ERROR_CODE,
+  type FileLockTimeoutError,
+  withFileLock,
+} from "../../infra/file-lock.js";
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
   refreshProviderOAuthCredentialWithPlugin,
@@ -296,6 +300,16 @@ function createOAuthRefreshContentionError(params: {
     { cause: params.cause },
   );
   return Object.assign(error, { code: "refresh_contention" as const });
+}
+
+function isGlobalOAuthRefreshLockTimeoutError(
+  error: unknown,
+  refreshLockPath: string,
+): error is FileLockTimeoutError {
+  return (
+    (error as { code?: string } | undefined)?.code === FILE_LOCK_TIMEOUT_ERROR_CODE &&
+    (error as { lockPath?: string } | undefined)?.lockPath === `${refreshLockPath}.lock`
+  );
 }
 
 /**
@@ -745,7 +759,7 @@ async function doRefreshOAuthTokenWithLock(params: {
       }),
     );
   } catch (error) {
-    if ((error as { code?: string }).code === FILE_LOCK_TIMEOUT_ERROR_CODE) {
+    if (isGlobalOAuthRefreshLockTimeoutError(error, globalRefreshLockPath)) {
       throw createOAuthRefreshContentionError({
         profileId: params.profileId,
         provider: params.provider,
