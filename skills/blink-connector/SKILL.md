@@ -592,6 +592,21 @@ blink connector exec reddit r/SUBREDDIT/hot GET '{"limit":"10"}'
 
 # Get user's subscriptions
 blink connector exec reddit subreddits/mine/subscriber GET '{"limit":"25"}'
+
+# Comment on a post (thing_id = t3_POST_ID for posts, t1_COMMENT_ID for replies)
+blink connector exec reddit api/comment POST '{"thing_id":"t3_POST_ID","text":"My comment"}'
+
+# Submit a text post
+blink connector exec reddit api/submit POST '{"sr":"SUBREDDIT","kind":"self","title":"Post title","text":"Post body"}'
+
+# Submit a link post
+blink connector exec reddit api/submit POST '{"sr":"SUBREDDIT","kind":"link","title":"Check this out","url":"https://example.com"}'
+
+# Upvote/downvote (dir: 1=upvote, -1=downvote, 0=unvote)
+blink connector exec reddit api/vote POST '{"id":"t3_POST_ID","dir":"1"}'
+
+# Get comments on a post
+blink connector exec reddit r/SUBREDDIT/comments/POST_ID GET '{"limit":"20","sort":"new"}'
 ```
 
 ### ClickUp
