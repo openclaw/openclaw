@@ -1,7 +1,11 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
+import {
+  __getLmstudioPreloadCooldownSizeForTest,
+  __resetLmstudioPreloadCooldownForTest,
+  wrapLmstudioInferencePreload,
+} from "./stream.js";
 
 const ensureLmstudioModelLoadedMock = vi.hoisted(() => vi.fn());
 const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
@@ -352,6 +356,95 @@ describe("lmstudio stream wrapper", () => {
       ),
     );
     expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(2);
+    nowSpy.mockRestore();
+  });
+
+  it("prunes expired cooldown entries when unrelated preload failures arrive later", async () => {
+    ensureLmstudioModelLoadedMock.mockRejectedValue(new Error("out of memory"));
+    const baseStream = buildDoneStreamFn();
+    const wrapped = wrapLmstudioInferencePreload({
+      provider: "lmstudio",
+      modelId: "qwen3-8b-instruct",
+      config: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://localhost:1234",
+              models: [],
+            },
+          },
+        },
+      },
+      streamFn: baseStream,
+    } as never);
+
+    const baseTime = 1_000_000;
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValue(baseTime);
+    await collectEvents(
+      wrapped(
+        {
+          provider: "lmstudio",
+          api: "openai-completions",
+          id: "qwen3-8b-instruct",
+        } as never,
+        { messages: [] } as never,
+        undefined as never,
+      ),
+    );
+    expect(__getLmstudioPreloadCooldownSizeForTest()).toBe(1);
+
+    nowSpy.mockReturnValue(baseTime + 6_000);
+    await collectEvents(
+      wrapped(
+        {
+          provider: "lmstudio",
+          api: "openai-completions",
+          id: "qwen3-14b-instruct",
+        } as never,
+        { messages: [] } as never,
+        undefined as never,
+      ),
+    );
+    expect(__getLmstudioPreloadCooldownSizeForTest()).toBe(1);
+    nowSpy.mockRestore();
+  });
+
+  it("bounds cooldown state across many unique failing preload keys", async () => {
+    ensureLmstudioModelLoadedMock.mockRejectedValue(new Error("out of memory"));
+    const baseStream = buildDoneStreamFn();
+    const wrapped = wrapLmstudioInferencePreload({
+      provider: "lmstudio",
+      modelId: "qwen3-8b-instruct",
+      config: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://localhost:1234",
+              models: [],
+            },
+          },
+        },
+      },
+      streamFn: baseStream,
+    } as never);
+
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    for (let index = 0; index < 1_100; index += 1) {
+      await collectEvents(
+        wrapped(
+          {
+            provider: "lmstudio",
+            api: "openai-completions",
+            id: `qwen3-unique-${index}`,
+          } as never,
+          { messages: [] } as never,
+          undefined as never,
+        ),
+      );
+    }
+
+    expect(__getLmstudioPreloadCooldownSizeForTest()).toBeLessThanOrEqual(1024);
     nowSpy.mockRestore();
   });
 

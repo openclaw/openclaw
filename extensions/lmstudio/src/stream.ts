@@ -37,6 +37,7 @@ const preloadCooldown = new Map<string, PreloadCooldownEntry>();
 
 const PRELOAD_BACKOFF_BASE_MS = 5_000;
 const PRELOAD_BACKOFF_MAX_MS = 300_000;
+const PRELOAD_COOLDOWN_MAX_ENTRIES = 1024;
 
 function computePreloadBackoffMs(consecutiveFailures: number): number {
   const exponent = Math.max(0, consecutiveFailures - 1);
@@ -48,14 +49,37 @@ function recordPreloadSuccess(preloadKey: string): void {
   preloadCooldown.delete(preloadKey);
 }
 
+function pruneExpiredPreloadCooldownEntries(now: number): void {
+  for (const [key, entry] of preloadCooldown) {
+    if (entry.untilMs <= now) {
+      preloadCooldown.delete(key);
+    }
+  }
+}
+
+function prunePreloadCooldownToLimit(limit: number): void {
+  while (preloadCooldown.size > limit) {
+    const oldestKey = preloadCooldown.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    preloadCooldown.delete(oldestKey);
+  }
+}
+
 function recordPreloadFailure(preloadKey: string, now: number): PreloadCooldownEntry {
+  pruneExpiredPreloadCooldownEntries(now);
   const existing = preloadCooldown.get(preloadKey);
   const consecutiveFailures = (existing?.consecutiveFailures ?? 0) + 1;
+  if (existing) {
+    preloadCooldown.delete(preloadKey);
+  }
   const entry: PreloadCooldownEntry = {
     consecutiveFailures,
     untilMs: now + computePreloadBackoffMs(consecutiveFailures),
   };
   preloadCooldown.set(preloadKey, entry);
+  prunePreloadCooldownToLimit(PRELOAD_COOLDOWN_MAX_ENTRIES);
   return entry;
 }
 
@@ -75,6 +99,11 @@ function isPreloadCoolingDown(preloadKey: string, now: number): PreloadCooldownE
 export function __resetLmstudioPreloadCooldownForTest(): void {
   preloadCooldown.clear();
   preloadInFlight.clear();
+}
+
+/** Test-only hook for asserting cooldown cleanup behavior. */
+export function __getLmstudioPreloadCooldownSizeForTest(): number {
+  return preloadCooldown.size;
 }
 
 function normalizeLmstudioModelKey(modelId: string): string {
@@ -194,7 +223,9 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
       requestedContextLength,
     });
 
-    const cooldownEntry = isPreloadCoolingDown(preloadKey, Date.now());
+    const now = Date.now();
+    pruneExpiredPreloadCooldownEntries(now);
+    const cooldownEntry = isPreloadCoolingDown(preloadKey, now);
     const existing = preloadInFlight.get(preloadKey);
     const preloadPromise: Promise<void> | undefined =
       existing ??
