@@ -33,7 +33,6 @@ import {
   type ChatCommandDefinition,
   type CommandArgDefinition,
   type CommandArgValues,
-  type CommandArgs,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
 import * as pluginRuntime from "openclaw/plugin-sdk/plugin-runtime";
@@ -87,6 +86,10 @@ import type { ThreadBindingManager } from "./thread-bindings.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
+type NativeCommandArgs = {
+  raw?: string;
+  values?: CommandArgValues;
+};
 const log = createSubsystemLogger("discord/native-command");
 // Discord application command and option descriptions are limited to 1-100 chars.
 // https://discord.com/developers/docs/interactions/application-commands#application-command-object-application-command-structure
@@ -360,11 +363,6 @@ function shouldBypassConfiguredAcpEnsure(commandName: string): boolean {
   return normalized === "acp";
 }
 
-function shouldBypassConfiguredAcpGuildGuards(commandName: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(commandName);
-  return normalized === "new" || normalized === "reset";
-}
-
 function resolveDiscordNativeGroupDmAccess(params: {
   isGroupDm: boolean;
   groupEnabled?: boolean;
@@ -558,7 +556,7 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
 function readDiscordCommandArgs(
   interaction: CommandInteraction,
   definitions?: CommandArgDefinition[],
-): CommandArgs | undefined {
+): NativeCommandArgs | undefined {
   if (!definitions || definitions.length === 0) {
     return undefined;
   }
@@ -725,7 +723,7 @@ export function createDiscordNativeCommand(params: {
         ? ({
             ...commandArgs,
             raw: serializeCommandArgs(commandDefinition, commandArgs) ?? commandArgs.raw,
-          } satisfies CommandArgs)
+          } satisfies NativeCommandArgs)
         : undefined;
       const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
       await dispatchDiscordCommandInteraction({
@@ -750,7 +748,7 @@ async function dispatchDiscordCommandInteraction(params: {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   prompt: string;
   command: ChatCommandDefinition;
-  commandArgs?: CommandArgs;
+  commandArgs?: NativeCommandArgs;
   cfg: ReturnType<typeof loadConfig>;
   discordConfig: DiscordConfig;
   accountId: string;
@@ -889,27 +887,11 @@ async function dispatchDiscordCommandInteraction(params: {
       threadBinding: isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined,
       enforceConfiguredBindingReadiness: !shouldBypassConfiguredAcpEnsure(commandName),
     }));
-  const canBypassConfiguredAcpGuildGuards = async () => {
-    if (!interaction.guild || !shouldBypassConfiguredAcpGuildGuards(commandName)) {
-      return false;
-    }
-    const routeState = await getNativeRouteState();
-    return (
-      routeState.effectiveRoute.matchedBy === "binding.channel" ||
-      routeState.boundSessionKey != null ||
-      routeState.configuredBinding != null ||
-      routeState.configuredRoute != null
-    );
-  };
-  if (channelConfig?.enabled === false && !(await canBypassConfiguredAcpGuildGuards())) {
+  if (channelConfig?.enabled === false) {
     await respond("This channel is disabled.");
     return;
   }
-  if (
-    interaction.guild &&
-    channelConfig?.allowed === false &&
-    !(await canBypassConfiguredAcpGuildGuards())
-  ) {
+  if (interaction.guild && channelConfig?.allowed === false) {
     await respond("This channel is not allowed.");
     return;
   }
@@ -924,7 +906,7 @@ async function dispatchDiscordCommandInteraction(params: {
       guildInfo,
       channelConfig,
     });
-    if (!policyAuthorizer.allowed && !(await canBypassConfiguredAcpGuildGuards())) {
+    if (!policyAuthorizer.allowed) {
       await respond("This channel is not allowed.");
       return;
     }
@@ -1006,7 +988,7 @@ async function dispatchDiscordCommandInteraction(params: {
       ownerAllowListConfigured: ownerAllowList != null,
       ownerAllowed: ownerOk,
     });
-    if (!commandAuthorized && !(await canBypassConfiguredAcpGuildGuards())) {
+    if (!commandAuthorized) {
       await respond("You are not authorized to use this command.", { ephemeral: true });
       return;
     }

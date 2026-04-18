@@ -322,6 +322,41 @@ async function expectBoundStatusCommandDirectReply(params: {
   expect(statusCall.sessionKey).toMatch(params.expectedPattern);
 }
 
+async function expectConfiguredAcpCommandBlocked(params: {
+  cfg: OpenClawConfig;
+  interaction: MockCommandInteraction;
+  expectedMessage: string;
+  commandName?: "new" | "reset";
+}) {
+  discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(async () =>
+    createConfiguredRouteState({
+      sessionKey: "agent:codex:acp:binding:discord:default:blocked-channel",
+      agentId: "codex",
+    }),
+  );
+  runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+  const dispatchSpy = createDispatchSpy();
+  const command = await createNativeCommand(params.cfg, {
+    name: params.commandName ?? "new",
+    description:
+      params.commandName === "reset" ? "Reset the current session." : "Start a new session.",
+    acceptsArgs: true,
+  });
+  params.interaction.options.getString.mockReturnValue("continue with deployment");
+
+  await (command as { run: (interaction: unknown) => Promise<void> }).run(
+    params.interaction as unknown,
+  );
+
+  expect(dispatchSpy).not.toHaveBeenCalled();
+  expect(params.interaction.followUp).toHaveBeenCalledWith(
+    expect.objectContaining({
+      content: params.expectedMessage,
+    }),
+  );
+  expect(params.interaction.reply).not.toHaveBeenCalled();
+}
+
 describe("Discord native plugin command dispatch", () => {
   beforeAll(async () => {
     ({ createDiscordNativeCommand, __testing: discordNativeCommandTesting } =
@@ -638,6 +673,122 @@ describe("Discord native plugin command dispatch", () => {
     });
   });
 
+  it("blocks /new on disabled guild channels even when an ACP binding exists", async () => {
+    const guildId = "1459246755253325866";
+    const channelId = "1478836151241412759";
+    const cfg = {
+      commands: {
+        useAccessGroups: false,
+      },
+      channels: {
+        discord: {
+          guilds: {
+            [guildId]: {
+              channels: {
+                [channelId]: {
+                  enabled: false,
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      bindings: [createConfiguredAcpBinding({ channelId, peerKind: "channel", agentId: "codex" })],
+    } as OpenClawConfig;
+    const interaction = createInteraction({
+      channelType: ChannelType.GuildText,
+      channelId,
+      guildId,
+      guildName: "Ops",
+    });
+
+    await expectConfiguredAcpCommandBlocked({
+      cfg,
+      interaction,
+      expectedMessage: "This channel is disabled.",
+    });
+  });
+
+  it("blocks /new on guild channels outside the allowlist even when an ACP binding exists", async () => {
+    const guildId = "1459246755253325866";
+    const channelId = "1478836151241412760";
+    const cfg = {
+      commands: {
+        useAccessGroups: false,
+      },
+      channels: {
+        discord: {
+          groupPolicy: "allowlist",
+          guilds: {
+            [guildId]: {
+              channels: {
+                "1478836151241419999": {
+                  enabled: true,
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      bindings: [createConfiguredAcpBinding({ channelId, peerKind: "channel", agentId: "codex" })],
+    } as OpenClawConfig;
+    const interaction = createInteraction({
+      channelType: ChannelType.GuildText,
+      channelId,
+      guildId,
+      guildName: "Ops",
+    });
+
+    await expectConfiguredAcpCommandBlocked({
+      cfg,
+      interaction,
+      expectedMessage: "This channel is not allowed.",
+    });
+  });
+
+  it("blocks unauthorized /reset senders even when an ACP binding exists", async () => {
+    const guildId = "1459246755253325866";
+    const channelId = "1478836151241412761";
+    const cfg = {
+      commands: {
+        useAccessGroups: false,
+        allowFrom: {
+          discord: ["user:123456789012345678"],
+        },
+      },
+      channels: {
+        discord: {
+          guilds: {
+            [guildId]: {
+              channels: {
+                [channelId]: {
+                  enabled: true,
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      bindings: [createConfiguredAcpBinding({ channelId, peerKind: "channel", agentId: "codex" })],
+    } as OpenClawConfig;
+    const interaction = createInteraction({
+      channelType: ChannelType.GuildText,
+      channelId,
+      guildId,
+      guildName: "Ops",
+    });
+
+    await expectConfiguredAcpCommandBlocked({
+      cfg,
+      interaction,
+      expectedMessage: "You are not authorized to use this command.",
+      commandName: "reset",
+    });
+  });
+
   it("falls back to the routed slash and channel session keys when no bound session exists", async () => {
     const guildId = "1459246755253325866";
     const channelId = "1478836151241412759";
@@ -771,7 +922,7 @@ describe("Discord native plugin command dispatch", () => {
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("allows recovery commands through configured ACP bindings even when ensure fails", async () => {
+  it("blocks /new through configured ACP bindings when guild command authorization fails", async () => {
     const { cfg, interaction } = createConfiguredAcpCase({
       channelType: ChannelType.GuildText,
       channelId: "1479098716916023408",
@@ -787,7 +938,6 @@ describe("Discord native plugin command dispatch", () => {
       }),
     );
     runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
-    const dispatchSpy = createDispatchSpy();
     const command = await createNativeCommand(cfg, {
       name: "new",
       description: "Start a new session.",
@@ -796,18 +946,13 @@ describe("Discord native plugin command dispatch", () => {
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    const dispatchCall = dispatchSpy.mock.calls[0]?.[0] as {
-      ctx?: { SessionKey?: string; CommandTargetSessionKey?: string };
-    };
-    expect(dispatchCall.ctx?.SessionKey).toMatch(/^agent:codex:acp:binding:discord:default:/);
-    expect(dispatchCall.ctx?.CommandTargetSessionKey).toMatch(
-      /^agent:codex:acp:binding:discord:default:/,
-    );
-    expect(interaction.reply).not.toHaveBeenCalledWith(
+    expect(runtimeModuleMocks.dispatchReplyWithDispatcher).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: "Configured ACP binding is unavailable right now. Please try again.",
+        content: "You are not authorized to use this command.",
+        ephemeral: true,
       }),
     );
+    expect(interaction.reply).not.toHaveBeenCalled();
   });
 });
