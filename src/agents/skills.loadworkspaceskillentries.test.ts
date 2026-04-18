@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { withPathResolutionEnv } from "../test-utils/env.js";
-import { writeSkill } from "./skills.e2e-test-helpers.js";
+import { writeSkill, writeWorkspaceSkills } from "./skills.e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
@@ -28,6 +28,18 @@ async function createTempWorkspaceDir() {
 
 function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
   return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => cb());
+}
+
+function captureWarningLogger() {
+  setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+  const warn = vi.fn();
+  loggingState.rawConsole = {
+    log: vi.fn(),
+    info: vi.fn(),
+    warn,
+    error: vi.fn(),
+  };
+  return warn;
 }
 
 beforeAll(async () => {
@@ -141,21 +153,11 @@ describe("loadWorkspaceSkillEntries", () => {
 
   it("applies agent skill filters and replacement semantics", async () => {
     const workspaceDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "github"),
-      name: "github",
-      description: "GitHub",
-    });
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "weather"),
-      name: "weather",
-      description: "Weather",
-    });
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "docs-search"),
-      name: "docs-search",
-      description: "Docs",
-    });
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "github", description: "GitHub" },
+      { name: "weather", description: "Weather" },
+      { name: "docs-search", description: "Docs" },
+    ]);
 
     const defaultEntries = loadWorkspaceSkillEntries(workspaceDir, {
       config: {
@@ -238,14 +240,7 @@ describe("loadWorkspaceSkillEntries", () => {
       await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
       const requestedPath = path.join(workspaceDir, "skills", "escaped-skill");
       await fs.symlink(escapedSkillDir, requestedPath, "dir");
-      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-      const warn = vi.fn();
-      loggingState.rawConsole = {
-        log: vi.fn(),
-        info: vi.fn(),
-        warn,
-        error: vi.fn(),
-      };
+      const warn = captureWarningLogger();
 
       const entries = loadWorkspaceSkillEntries(workspaceDir, {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
@@ -279,14 +274,7 @@ describe("loadWorkspaceSkillEntries", () => {
       await fs.mkdir(bundledDir, { recursive: true });
       const requestedPath = path.join(bundledDir, "escaped-bundled-skill");
       await fs.symlink(escapedSkillDir, requestedPath, "dir");
-      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-      const warn = vi.fn();
-      loggingState.rawConsole = {
-        log: vi.fn(),
-        info: vi.fn(),
-        warn,
-        error: vi.fn(),
-      };
+      const warn = captureWarningLogger();
 
       const entries = loadWorkspaceSkillEntries(workspaceDir, {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
@@ -320,14 +308,7 @@ describe("loadWorkspaceSkillEntries", () => {
       await fs.mkdir(bundledDir, { recursive: true });
       const requestedPath = path.join(bundledDir, "escaped-bundled-skill");
       await fs.symlink(escapedSkillDir, requestedPath, "dir");
-      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-      const warn = vi.fn();
-      loggingState.rawConsole = {
-        log: vi.fn(),
-        info: vi.fn(),
-        warn,
-        error: vi.fn(),
-      };
+      const warn = captureWarningLogger();
 
       loadWorkspaceSkillEntries(workspaceDir, {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
