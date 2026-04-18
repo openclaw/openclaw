@@ -12,7 +12,9 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
     typeof context.channel === "string"
       ? (normalizeMessageChannel(context.channel) ?? context.channel.trim())
       : undefined;
-  const to = normalizeOptionalString(context.to);
+  const rawTo = normalizeOptionalString(context.to);
+  const hasStructuredTargetPrefix = Boolean(rawTo && /^[a-z][a-z0-9_-]*:/i.test(rawTo));
+  const to = channel === "webchat" && !hasStructuredTargetPrefix ? undefined : rawTo;
   const accountId = normalizeAccountId(context.accountId);
   const threadId =
     typeof context.threadId === "number" && Number.isFinite(context.threadId)
