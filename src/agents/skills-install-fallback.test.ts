@@ -3,23 +3,28 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import {
-  hasBinaryMock,
-  runCommandWithTimeoutMock,
-  scanDirectoryWithSummaryMock,
-} from "./skills-install.test-mocks.js";
+import { hasBinaryMock, runCommandWithTimeoutMock } from "./skills-install.test-mocks.js";
+import type { SkillEntry, SkillInstallSpec } from "./skills.js";
+
+const skillsMocks = vi.hoisted(() => ({
+  loadWorkspaceSkillEntries: vi.fn(),
+}));
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
-vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: vi.fn(),
+vi.mock("../plugins/install-security-scan.js", () => ({
+  scanSkillInstallSource: vi.fn(async () => undefined),
 }));
 
-vi.mock("../security/skill-scanner.js", () => ({
-  scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
-}));
+vi.mock("./skills.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./skills.js")>();
+  return {
+    ...actual,
+    loadWorkspaceSkillEntries: skillsMocks.loadWorkspaceSkillEntries,
+  };
+});
 
 let installSkill: typeof import("./skills-install.js").installSkill;
 let skillsInstallTesting: typeof import("./skills-install.js").__testing;
@@ -28,36 +33,25 @@ async function loadSkillsInstallModulesForTest() {
   ({ installSkill, __testing: skillsInstallTesting } = await import("./skills-install.js"));
 }
 
-async function writeSkillWithInstallers(
+function makeSkillEntry(
   workspaceDir: string,
   name: string,
-  installSpecs: Array<Record<string, string>>,
-): Promise<string> {
+  installSpec: SkillInstallSpec,
+): SkillEntry {
   const skillDir = path.join(workspaceDir, "skills", name);
-  await fs.mkdir(skillDir, { recursive: true });
-  await fs.writeFile(
-    path.join(skillDir, "SKILL.md"),
-    `---
-name: ${name}
-description: test skill
-metadata: ${JSON.stringify({ openclaw: { install: installSpecs } })}
----
-
-# ${name}
-`,
-    "utf-8",
-  );
-  await fs.writeFile(path.join(skillDir, "runner.js"), "export {};\n", "utf-8");
-  return skillDir;
-}
-
-async function writeSkillWithInstaller(
-  workspaceDir: string,
-  name: string,
-  kind: string,
-  extra: Record<string, string>,
-): Promise<string> {
-  return writeSkillWithInstallers(workspaceDir, name, [{ id: "deps", kind, ...extra }]);
+  return {
+    skill: {
+      name,
+      description: "test skill",
+      filePath: path.join(skillDir, "SKILL.md"),
+      baseDir: skillDir,
+      source: "openclaw-workspace",
+    } as SkillEntry["skill"],
+    frontmatter: {},
+    metadata: {
+      install: [{ id: "deps", ...installSpec }],
+    },
+  };
 }
 
 function mockAvailableBinaries(binaries: string[]) {
@@ -77,20 +71,22 @@ describe("skills-install fallback edge cases", () => {
 
   beforeAll(async () => {
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fallback-test-"));
-    await writeSkillWithInstaller(workspaceDir, "go-tool-single", "go", {
-      module: "example.com/tool@latest",
-    });
-    await writeSkillWithInstaller(workspaceDir, "py-tool", "uv", {
-      package: "example-package",
-    });
+    skillsMocks.loadWorkspaceSkillEntries.mockReturnValue([
+      makeSkillEntry(workspaceDir, "go-tool-single", {
+        kind: "go",
+        module: "example.com/tool@latest",
+      }),
+      makeSkillEntry(workspaceDir, "py-tool", {
+        kind: "uv",
+        package: "example-package",
+      }),
+    ]);
     await loadSkillsInstallModulesForTest();
   });
 
   beforeEach(() => {
     runCommandWithTimeoutMock.mockReset();
-    scanDirectoryWithSummaryMock.mockReset();
     hasBinaryMock.mockReset();
-    scanDirectoryWithSummaryMock.mockResolvedValue({ critical: 0, warn: 0, findings: [] });
     skillsInstallTesting.setDepsForTest({
       hasBinary: (bin: string) => hasBinaryMock(bin),
       resolveBrewExecutable: () => undefined,

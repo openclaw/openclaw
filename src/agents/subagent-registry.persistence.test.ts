@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +33,7 @@ import {
   loadSubagentRegistryFromDisk,
   resolveSubagentRegistryPath,
 } from "./subagent-registry.store.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => true),
@@ -171,9 +173,22 @@ describe("subagent registry persistence", () => {
     initSubagentRegistry();
   };
 
+  const fastPersistSubagentRunsToDisk = (runs: Map<string, SubagentRunRecord>) => {
+    const registryPath = tempStateDir
+      ? path.join(tempStateDir, "subagents", "runs.json")
+      : resolveSubagentRegistryPath();
+    fsSync.mkdirSync(path.dirname(registryPath), { recursive: true });
+    fsSync.writeFileSync(
+      registryPath,
+      `${JSON.stringify({ version: 2, runs: Object.fromEntries(runs) })}\n`,
+      "utf8",
+    );
+  };
+
   beforeEach(() => {
     __testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
+      persistSubagentRunsToDisk: fastPersistSubagentRunsToDisk,
       runSubagentAnnounceFlow: announceSpy,
     });
     vi.mocked(callGateway).mockReset();
