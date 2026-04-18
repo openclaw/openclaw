@@ -410,7 +410,7 @@ describe("spawnAcpDirect", () => {
           runtimeSessionName,
           ...(cwd ? { runtimeOptions: { cwd }, cwd } : {}),
           identity: {
-            state: "pending",
+            state: "resolved",
             source: "ensure",
             acpxSessionId: "acpx-1",
             agentSessionId: "codex-inner-1",
