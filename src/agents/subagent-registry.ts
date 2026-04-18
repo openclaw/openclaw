@@ -1,12 +1,11 @@
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ensureContextEnginesInitialized as ensureContextEnginesInitializedFn } from "../context-engine/init.js";
-import type { resolveContextEngine as resolveContextEngineFn } from "../context-engine/registry.js";
-import type { SubagentEndReason } from "../context-engine/types.js";
+import type { ContextEngine, SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { importRuntimeModule } from "../shared/runtime-import.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
@@ -75,9 +74,9 @@ type SubagentRegistryDeps = {
   resolveAgentTimeoutMs: typeof resolveAgentTimeoutMs;
   restoreSubagentRunsFromDisk: typeof restoreSubagentRunsFromDisk;
   runSubagentAnnounceFlow: typeof subagentAnnounceModule.runSubagentAnnounceFlow;
-  ensureContextEnginesInitialized?: typeof ensureContextEnginesInitializedFn;
+  ensureContextEnginesInitialized?: () => void;
   ensureRuntimePluginsLoaded?: typeof ensureRuntimePluginsLoadedFn;
-  resolveContextEngine?: typeof resolveContextEngineFn;
+  resolveContextEngine?: (cfg: OpenClawConfig) => Promise<ContextEngine>;
 };
 
 const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
@@ -95,11 +94,33 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
 };
 
 let subagentRegistryDeps: SubagentRegistryDeps = defaultSubagentRegistryDeps;
-let subagentRegistryRuntimePromise: Promise<
-  typeof import("./subagent-registry.runtime.js")
-> | null = null;
+type ContextEngineInitModule = Pick<
+  {
+    ensureContextEnginesInitialized: () => void;
+  },
+  "ensureContextEnginesInitialized"
+>;
+type ContextEngineRegistryModule = Pick<
+  {
+    resolveContextEngine: (cfg: OpenClawConfig) => Promise<ContextEngine>;
+  },
+  "resolveContextEngine"
+>;
+type RuntimePluginsModule = Pick<
+  {
+    ensureRuntimePluginsLoaded: typeof ensureRuntimePluginsLoadedFn;
+  },
+  "ensureRuntimePluginsLoaded"
+>;
+
+const SUBAGENT_REGISTRY_RUNTIME_SPEC = ["./subagent-registry.runtime", ".js"] as const;
+
+let contextEngineInitPromise: Promise<ContextEngineInitModule> | null = null;
+let contextEngineRegistryPromise: Promise<ContextEngineRegistryModule> | null = null;
+let runtimePluginsPromise: Promise<RuntimePluginsModule> | null = null;
 
 let sweeper: NodeJS.Timeout | null = null;
+const resumeRetryTimers = new Set<ReturnType<typeof setTimeout>>();
 let sweepInProgress = false;
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
@@ -119,9 +140,28 @@ const SESSION_RUN_TTL_MS = 5 * 60_000; // 5 minutes
 /** Absolute TTL for orphaned pendingLifecycleError entries. */
 const PENDING_ERROR_TTL_MS = 5 * 60_000; // 5 minutes
 
-function loadSubagentRegistryRuntime() {
-  subagentRegistryRuntimePromise ??= import("./subagent-registry.runtime.js");
-  return subagentRegistryRuntimePromise;
+function loadContextEngineInitModule(): Promise<ContextEngineInitModule> {
+  contextEngineInitPromise ??= importRuntimeModule<ContextEngineInitModule>(
+    import.meta.url,
+    SUBAGENT_REGISTRY_RUNTIME_SPEC,
+  );
+  return contextEngineInitPromise;
+}
+
+function loadContextEngineRegistryModule(): Promise<ContextEngineRegistryModule> {
+  contextEngineRegistryPromise ??= importRuntimeModule<ContextEngineRegistryModule>(
+    import.meta.url,
+    SUBAGENT_REGISTRY_RUNTIME_SPEC,
+  );
+  return contextEngineRegistryPromise;
+}
+
+function loadRuntimePluginsModule(): Promise<RuntimePluginsModule> {
+  runtimePluginsPromise ??= importRuntimeModule<RuntimePluginsModule>(
+    import.meta.url,
+    SUBAGENT_REGISTRY_RUNTIME_SPEC,
+  );
+  return runtimePluginsPromise;
 }
 
 async function ensureSubagentRegistryPluginRuntimeLoaded(params: {
@@ -134,16 +174,17 @@ async function ensureSubagentRegistryPluginRuntimeLoaded(params: {
     ensureRuntimePluginsLoaded(params);
     return;
   }
-  const runtime = await loadSubagentRegistryRuntime();
-  runtime.ensureRuntimePluginsLoaded(params);
+  (await loadRuntimePluginsModule()).ensureRuntimePluginsLoaded(params);
 }
 
 async function resolveSubagentRegistryContextEngine(cfg: OpenClawConfig) {
-  const runtime = await loadSubagentRegistryRuntime();
+  const initModule = await loadContextEngineInitModule();
+  const registryModule = await loadContextEngineRegistryModule();
   const ensureContextEnginesInitialized =
-    subagentRegistryDeps.ensureContextEnginesInitialized ?? runtime.ensureContextEnginesInitialized;
+    subagentRegistryDeps.ensureContextEnginesInitialized ??
+    initModule.ensureContextEnginesInitialized;
   const resolveContextEngine =
-    subagentRegistryDeps.resolveContextEngine ?? runtime.resolveContextEngine;
+    subagentRegistryDeps.resolveContextEngine ?? registryModule.resolveContextEngine;
   ensureContextEnginesInitialized();
   return await resolveContextEngine(cfg);
 }
@@ -284,6 +325,9 @@ async function emitSubagentEndedHookForRun(params: {
   sendFarewell?: boolean;
   accountId?: string;
 }) {
+  if (params.entry.endedHookEmittedAt) {
+    return;
+  }
   const cfg = subagentRegistryDeps.loadConfig();
   await ensureSubagentRegistryPluginRuntimeLoaded({
     config: cfg,
@@ -326,6 +370,7 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
 });
 
 const {
+  clearScheduledResumeTimers,
   completeCleanupBookkeeping,
   completeSubagentRun,
   finalizeResumedAnnounceGiveUp,
@@ -339,22 +384,6 @@ function resumeSubagentRun(runId: string) {
   }
   const entry = subagentRuns.get(runId);
   if (!entry) {
-    return;
-  }
-  const orphanReason = resolveSubagentRunOrphanReason({ entry });
-  if (orphanReason) {
-    if (
-      reconcileOrphanedRun({
-        runId,
-        entry,
-        reason: orphanReason,
-        source: "resume",
-        runs: subagentRuns,
-        resumedRuns,
-      })
-    ) {
-      persistSubagentRuns();
-    }
     return;
   }
   if (entry.cleanupCompletedAt) {
@@ -391,15 +420,38 @@ function resumeSubagentRun(runId: string) {
     now < earliestRetryAt
   ) {
     const waitMs = Math.max(1, earliestRetryAt - now);
-    setTimeout(() => {
+    const scheduledEntry = entry;
+    const timer = setTimeout(() => {
+      resumeRetryTimers.delete(timer);
+      if (subagentRuns.get(runId) !== scheduledEntry) {
+        return;
+      }
       resumedRuns.delete(runId);
       resumeSubagentRun(runId);
-    }, waitMs).unref?.();
+    }, waitMs);
+    timer.unref?.();
+    resumeRetryTimers.add(timer);
     resumedRuns.add(runId);
     return;
   }
 
   if (typeof entry.endedAt === "number" && entry.endedAt > 0) {
+    const orphanReason = resolveSubagentRunOrphanReason({ entry });
+    if (orphanReason) {
+      if (
+        reconcileOrphanedRun({
+          runId,
+          entry,
+          reason: orphanReason,
+          source: "resume",
+          runs: subagentRuns,
+          resumedRuns,
+        })
+      ) {
+        persistSubagentRuns();
+      }
+      return;
+    }
     if (suppressAnnounceForSteerRestart(entry)) {
       resumedRuns.add(runId);
       return;
@@ -414,7 +466,7 @@ function resumeSubagentRun(runId: string) {
   // Wait for completion again after restart.
   const cfg = subagentRegistryDeps.loadConfig();
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, entry.runTimeoutSeconds);
-  void subagentRunManager.waitForSubagentCompletion(runId, waitTimeoutMs);
+  void subagentRunManager.waitForSubagentCompletion(runId, waitTimeoutMs, entry);
   resumedRuns.add(runId);
 }
 
@@ -694,11 +746,18 @@ export function registerSubagentRun(params: {
 }
 
 export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
+  clearScheduledResumeTimers();
+  for (const timer of resumeRetryTimers) {
+    clearTimeout(timer);
+  }
+  resumeRetryTimers.clear();
   subagentRuns.clear();
   resumedRuns.clear();
   endedHookInFlightRunIds.clear();
   clearAllPendingLifecycleErrors();
-  subagentRegistryRuntimePromise = null;
+  contextEngineInitPromise = null;
+  contextEngineRegistryPromise = null;
+  runtimePluginsPromise = null;
   resetAnnounceQueuesForTests();
   stopSweeper();
   sweepInProgress = false;

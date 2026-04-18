@@ -9,6 +9,7 @@ import {
   defineImportedProgramCommandGroupSpecs,
   type CommandGroupDescriptorSpec,
 } from "./command-group-descriptors.js";
+import { loadPrivateQaCliModule } from "./private-qa-cli.js";
 import {
   registerCommandGroupByName,
   registerCommandGroups,
@@ -131,8 +132,13 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
     },
     {
       commandNames: ["qa"],
-      loadModule: () => import("../../plugin-sdk/qa-lab.js"),
+      loadModule: loadPrivateQaCliModule,
       exportName: "registerQaLabCli",
+    },
+    {
+      commandNames: ["proxy"],
+      loadModule: () => import("../proxy-cli.js"),
+      exportName: "registerProxyCli",
     },
     {
       commandNames: ["hooks"],

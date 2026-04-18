@@ -23,8 +23,8 @@ import {
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
   isTransientHttpError,
-  sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
+import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
@@ -308,6 +308,14 @@ function isPureTransientRateLimitSummary(err: unknown): boolean {
       const reason = attempt.reason;
       return reason === "rate_limit" || reason === "overloaded";
     })
+  );
+}
+
+function isPureBillingSummary(err: unknown): boolean {
+  return (
+    isFallbackSummaryError(err) &&
+    err.attempts.length > 0 &&
+    err.attempts.every((attempt) => attempt.reason === "billing")
   );
 }
 
@@ -597,6 +605,15 @@ export async function runAgentTurnWithFallback(params: {
     cfg: runtimeConfig,
     sessionKey: params.sessionKey,
     workspaceDir: params.followupRun.run.workspaceDir,
+    messageProvider: params.followupRun.run.messageProvider,
+    accountId: params.followupRun.originatingAccountId ?? params.followupRun.run.agentAccountId,
+    groupId: params.followupRun.run.groupId,
+    groupChannel: params.followupRun.run.groupChannel,
+    groupSpace: params.followupRun.run.groupSpace,
+    requesterSenderId: params.followupRun.run.senderId,
+    requesterSenderName: params.followupRun.run.senderName,
+    requesterSenderUsername: params.followupRun.run.senderUsername,
+    requesterSenderE164: params.followupRun.run.senderE164,
   });
   let didNotifyAgentRunStart = false;
   const notifyAgentRunStart = () => {
@@ -1320,7 +1337,9 @@ export async function runAgentTurnWithFallback(params: {
         continue;
       }
       const message = formatErrorMessage(err);
-      const isBilling = isBillingErrorMessage(message);
+      const isBilling = isFallbackSummaryError(err)
+        ? isPureBillingSummary(err)
+        : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);

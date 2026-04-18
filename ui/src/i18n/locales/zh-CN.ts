@@ -252,6 +252,17 @@ export const zh_CN: TranslationMap = {
       cost: "费用",
       skills: "技能",
       recentSessions: "最近会话",
+      modelAuth: "模型认证",
+      modelAuthOk: "{count} 正常",
+      modelAuthExpired: "{count} 已过期",
+      modelAuthExpiring: "{count} 即将过期",
+      modelAuthProviders: "{count} 个提供商",
+      modelAuthUsageLeft: "剩余 {pct}%",
+      modelAuthExpiresIn: "于 {when} 过期",
+      modelAuthAttentionExpiredTitle: "模型认证已过期",
+      modelAuthAttentionExpiringTitle: "模型认证即将过期",
+      modelAuthAttentionExpiredDesc: "{providers} — 使用 openclaw models auth 重新认证",
+      modelAuthAttentionExpiringEntry: "{provider}（{when}）",
     },
     attention: {
       title: "注意事项",
@@ -293,8 +304,10 @@ export const zh_CN: TranslationMap = {
     },
     scene: {
       backfill: "回填",
+      dedupeDiary: "去重日记",
       reset: "重置",
       clearGrounded: "清除已落地",
+      repairCache: "修复梦境缓存",
       working: "处理中…",
     },
     phase: {

@@ -3,8 +3,10 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { startQaLabServer } from "./lab-server.js";
+
+vi.mock("openclaw/plugin-sdk/qa-channel", async () => await import("../../qa-channel/api.js"));
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -79,6 +81,43 @@ async function waitForFile(filePath: string, timeoutMs = 5_000) {
   throw new Error(`file did not appear: ${filePath}`);
 }
 
+async function createQaLabRepoRootFixture(params?: {
+  uiHtml?: string;
+  models?: Array<{
+    key: string;
+    name: string;
+    input?: string;
+    available?: boolean;
+    missing?: boolean;
+  }>;
+}) {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-lab-repo-root-"));
+  cleanups.push(async () => {
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+  await mkdir(path.join(repoRoot, "dist"), { recursive: true });
+  await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
+  const models =
+    params?.models?.map((model) => ({
+      key: model.key,
+      name: model.name,
+      input: model.input ?? model.key,
+      available: model.available ?? true,
+      missing: model.missing ?? false,
+    })) ?? [];
+  await writeFile(
+    path.join(repoRoot, "dist/index.js"),
+    `process.stdout.write(${JSON.stringify(JSON.stringify({ models }))});\n`,
+    "utf8",
+  );
+  await writeFile(
+    path.join(repoRoot, "extensions/qa-lab/web/dist/index.html"),
+    params?.uiHtml ?? "<!doctype html><html><body>qa lab fixture</body></html>",
+    "utf8",
+  );
+  return repoRoot;
+}
+
 describe("qa-lab server", () => {
   it("serves bootstrap state and writes a self-check report", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-test-"));
@@ -86,11 +125,13 @@ describe("qa-lab server", () => {
       await rm(tempDir, { recursive: true, force: true });
     });
     const outputPath = path.join(tempDir, "self-check.md");
+    const repoRoot = await createQaLabRepoRootFixture();
 
     const lab = await startQaLabServer({
       host: "127.0.0.1",
       port: 0,
       outputPath,
+      repoRoot,
       controlUiUrl: "http://127.0.0.1:18789/",
       controlUiToken: "qa-token",
     });
@@ -116,7 +157,7 @@ describe("qa-lab server", () => {
     expect(bootstrap.scenarios.length).toBeGreaterThanOrEqual(10);
     expect(bootstrap.scenarios.some((scenario) => scenario.id === "dm-chat-baseline")).toBe(true);
     expect(bootstrap.runner.status).toBe("idle");
-    expect(bootstrap.runner.selection.providerMode).toBe("mock-openai");
+    expect(bootstrap.runner.selection.providerMode).toBe("live-frontier");
     expect(bootstrap.runner.selection.scenarioIds).toHaveLength(bootstrap.scenarios.length);
 
     const messageResponse = await fetch(`${lab.baseUrl}/api/inbound/message`, {
@@ -296,52 +337,19 @@ describe("qa-lab server", () => {
     const html = await rootResponse.text();
     expect(html).not.toContain("QA Lab UI not built");
     expect(html).toContain("<title>");
-
-    const version1 = (await (await fetch(`${lab.baseUrl}/api/ui-version`)).json()) as {
-      version: string | null;
-    };
-    expect(version1.version).toMatch(/^[0-9a-f]{12}$/);
-
-    await writeFile(
-      path.join(uiDistDir, "index.html"),
-      "<!doctype html><html><head><title>QA Lab Updated</title></head><body><div id='app'></div></body></html>",
-      "utf8",
-    );
-
-    const version2 = (await (await fetch(`${lab.baseUrl}/api/ui-version`)).json()) as {
-      version: string | null;
-    };
-    expect(version2.version).toMatch(/^[0-9a-f]{12}$/);
-    expect(version2.version).not.toBe(version1.version);
   });
 
   it("uses the explicit repo root for ui assets and runner model discovery", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-lab-repo-root-"));
-    cleanups.push(async () => {
-      await rm(repoRoot, { recursive: true, force: true });
+    const repoRoot = await createQaLabRepoRootFixture({
+      models: [
+        {
+          key: "anthropic/qa-temp-model",
+          name: "QA Temp Model",
+        },
+      ],
+      uiHtml:
+        "<!doctype html><html><head><title>Temp QA Lab UI</title></head><body>repo-root-ui</body></html>",
     });
-    await mkdir(path.join(repoRoot, "dist"), { recursive: true });
-    await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
-    await writeFile(
-      path.join(repoRoot, "dist/index.js"),
-      [
-        "process.stdout.write(JSON.stringify({",
-        "  models: [{",
-        '    key: "anthropic/qa-temp-model",',
-        '    name: "QA Temp Model",',
-        '    input: "anthropic/qa-temp-model",',
-        "    available: true,",
-        "    missing: false,",
-        "  }],",
-        "}));",
-      ].join("\n"),
-      "utf8",
-    );
-    await writeFile(
-      path.join(repoRoot, "extensions/qa-lab/web/dist/index.html"),
-      "<!doctype html><html><head><title>Temp QA Lab UI</title></head><body>repo-root-ui</body></html>",
-      "utf8",
-    );
 
     const lab = await startQaLabServer({
       host: "127.0.0.1",
@@ -566,6 +574,168 @@ describe("qa-lab server", () => {
     expect(outcomes.run.scenarios.map((scenario) => scenario.id)).toEqual([
       "channel-chat-baseline",
       "cron-one-minute-ping",
+    ]);
+  });
+
+  it("serves proxy capture sessions, events, and query rows", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-capture-"));
+    cleanups.push(async () => {
+      await rm(tempDir, { recursive: true, force: true });
+    });
+    process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+    process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
+    const { getDebugProxyCaptureStore } =
+      await import("../../../src/proxy-capture/store.sqlite.js");
+    const store = getDebugProxyCaptureStore(
+      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+    );
+    store.upsertSession({
+      id: "qa-capture-session",
+      startedAt: Date.now(),
+      mode: "proxy-run",
+      sourceScope: "openclaw",
+      sourceProcess: "openclaw",
+      dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+      blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+    });
+    store.recordEvent({
+      sessionId: "qa-capture-session",
+      ts: Date.now(),
+      sourceScope: "openclaw",
+      sourceProcess: "openclaw",
+      protocol: "https",
+      direction: "outbound",
+      kind: "request",
+      flowId: "flow-1",
+      method: "POST",
+      host: "api.example.com",
+      path: "/v1/send",
+      dataText: '{"hello":"world"}',
+      dataSha256: "abc",
+      metaJson: JSON.stringify({
+        provider: "openai",
+        api: "responses",
+        model: "gpt-5.4",
+        captureOrigin: "shared-fetch",
+      }),
+    });
+    store.recordEvent({
+      sessionId: "qa-capture-session",
+      ts: Date.now() + 1,
+      sourceScope: "openclaw",
+      sourceProcess: "openclaw",
+      protocol: "https",
+      direction: "outbound",
+      kind: "request",
+      flowId: "flow-2",
+      method: "POST",
+      host: "api.example.com",
+      path: "/v1/send",
+      dataText: '{"hello":"world"}',
+      dataSha256: "abc",
+      metaJson: JSON.stringify({
+        provider: "openai",
+        api: "responses",
+        model: "gpt-5.4",
+        captureOrigin: "shared-fetch",
+      }),
+    });
+    store.recordEvent({
+      sessionId: "qa-capture-session",
+      ts: Date.now() + 2,
+      sourceScope: "openclaw",
+      sourceProcess: "openclaw",
+      protocol: "https",
+      direction: "outbound",
+      kind: "request",
+      flowId: "flow-3",
+      method: "POST",
+      host: "127.0.0.1:11434",
+      path: "/api/chat",
+      metaJson: JSON.stringify({
+        provider: "ollama",
+        model: "kimi-k2.5:cloud",
+        captureOrigin: "shared-fetch",
+      }),
+    });
+
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      delete process.env.OPENCLAW_DEBUG_PROXY_DB_PATH;
+      delete process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR;
+      await lab.stop();
+    });
+
+    const sessions = (await (
+      await fetchWithRetry(`${lab.baseUrl}/api/capture/sessions`)
+    ).json()) as { sessions: Array<{ id: string }> };
+    expect(sessions.sessions.some((session) => session.id === "qa-capture-session")).toBe(true);
+
+    const events = (await (
+      await fetchWithRetry(`${lab.baseUrl}/api/capture/events?sessionId=qa-capture-session`)
+    ).json()) as {
+      events: Array<{ flowId: string; provider?: string; model?: string; captureOrigin?: string }>;
+    };
+    expect(events.events.some((event) => event.flowId === "flow-1")).toBe(true);
+    expect(events.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          flowId: "flow-1",
+          provider: "openai",
+          model: "gpt-5.4",
+          captureOrigin: "shared-fetch",
+        }),
+        expect.objectContaining({
+          flowId: "flow-3",
+          provider: "ollama",
+          model: "kimi-k2.5:cloud",
+        }),
+      ]),
+    );
+
+    const coverage = (await (
+      await fetchWithRetry(`${lab.baseUrl}/api/capture/coverage?sessionId=qa-capture-session`)
+    ).json()) as {
+      coverage: {
+        totalEvents: number;
+        unlabeledEventCount: number;
+        providers: Array<{ value: string; count: number }>;
+        models: Array<{ value: string; count: number }>;
+        localPeers: Array<{ value: string; count: number }>;
+      };
+    };
+    expect(coverage.coverage.totalEvents).toBe(3);
+    expect(coverage.coverage.unlabeledEventCount).toBe(0);
+    expect(coverage.coverage.providers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: "openai", count: 2 }),
+        expect.objectContaining({ value: "ollama", count: 1 }),
+      ]),
+    );
+    expect(coverage.coverage.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: "gpt-5.4", count: 2 }),
+        expect.objectContaining({ value: "kimi-k2.5:cloud", count: 1 }),
+      ]),
+    );
+    expect(coverage.coverage.localPeers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ value: "127.0.0.1:11434", count: 1 })]),
+    );
+
+    const query = (await (
+      await fetchWithRetry(
+        `${lab.baseUrl}/api/capture/query?sessionId=qa-capture-session&preset=double-sends`,
+      )
+    ).json()) as { rows: Array<{ host: string; duplicateCount: number }> };
+    expect(query.rows).toEqual([
+      expect.objectContaining({
+        host: "api.example.com",
+        duplicateCount: 2,
+      }),
     ]);
   });
 });

@@ -57,8 +57,10 @@ const installRunEmbeddedMocks = () => {
   vi.doMock("../plugins/hook-runner-global.js", () => ({
     getGlobalHookRunner: vi.fn(() => undefined),
   }));
-  vi.doMock("../context-engine/index.js", () => ({
+  vi.doMock("../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
+  }));
+  vi.doMock("../context-engine/registry.js", () => ({
     resolveContextEngine: vi.fn(async () => ({
       dispose: async () => undefined,
     })),
@@ -436,6 +438,28 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
       expectOpenAiThenGroqAttemptOrder();
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("falls back across providers after a bare leading 402 quota-refresh assistant error", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockPrimaryErrorThenFallbackSuccess(
+        "402 You have reached your subscription quota limit. Please wait for automatic quota refresh in the rolling time window, upgrade to a higher plan, or use a Pay-As-You-Go API Key for unlimited access.",
+      );
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:bare-402-cross-provider",
+        runId: "run:bare-402-cross-provider",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts[0]?.reason).toBe("rate_limit");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+      expectOpenAiThenGroqAttemptOrder();
     });
   });
 

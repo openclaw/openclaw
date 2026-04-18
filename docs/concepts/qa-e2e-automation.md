@@ -62,7 +62,10 @@ That lane provisions a disposable Tuwunel homeserver in Docker, registers
 temporary driver, SUT, and observer users, creates one private room, then runs
 the real Matrix plugin inside a QA gateway child. The live transport lane keeps
 the child config scoped to the transport under test, so Matrix runs without
-`qa-channel` in the child config.
+`qa-channel` in the child config. It writes the structured report artifacts and
+a combined stdout/stderr log into the selected Matrix QA output directory. To
+capture the outer `scripts/run-node.mjs` build/launcher output too, set
+`OPENCLAW_RUN_NODE_OUTPUT_LOG=<path>` to a repo-local log file.
 
 For a transport-real Telegram smoke lane, run:
 
@@ -117,10 +120,31 @@ can write back through the mounted workspace.
 Seed assets live in `qa/`:
 
 - `qa/scenarios/index.md`
-- `qa/scenarios/*.md`
+- `qa/scenarios/<theme>/*.md`
 
 These are intentionally in git so the QA plan is visible to both humans and the
-agent. The baseline list should stay broad enough to cover:
+agent.
+
+`qa-lab` should stay a generic markdown runner. Each scenario markdown file is
+the source of truth for one test run and should define:
+
+- scenario metadata
+- optional category, capability, lane, and risk metadata
+- docs and code refs
+- optional plugin requirements
+- optional gateway config patch
+- the executable `qa-flow`
+
+The reusable runtime surface that backs `qa-flow` is allowed to stay generic
+and cross-cutting. For example, markdown scenarios can combine transport-side
+helpers with browser-side helpers that drive the embedded Control UI through the
+Gateway `browser.request` seam without adding a special-case runner.
+
+Scenario files should be grouped by product capability rather than source tree
+folder. Keep scenario IDs stable when files move; use `docsRefs` and `codeRefs`
+for implementation traceability.
+
+The baseline list should stay broad enough to cover:
 
 - DM and channel chat
 - thread behavior
@@ -131,6 +155,38 @@ agent. The baseline list should stay broad enough to cover:
 - subagent handoff
 - repo-reading and docs-reading
 - one small build task such as Lobster Invaders
+
+## Provider mock lanes
+
+`qa suite` has two local provider mock lanes:
+
+- `mock-openai` is the scenario-aware OpenClaw mock. It remains the default
+  deterministic mock lane for repo-backed QA and parity gates.
+- `aimock` starts an AIMock-backed provider server for experimental protocol,
+  fixture, record/replay, and chaos coverage. It is additive and does not
+  replace the `mock-openai` scenario dispatcher.
+
+Provider-lane implementation lives under `extensions/qa-lab/src/providers/`.
+Each provider owns its defaults, local server startup, gateway model config,
+auth-profile staging needs, and live/mock capability flags. Shared suite and
+gateway code should route through the provider registry instead of branching on
+provider names.
+
+## Transport adapters
+
+`qa-lab` owns a generic transport seam for markdown QA scenarios.
+`qa-channel` is the first adapter on that seam, but the design target is wider:
+future real or synthetic channels should plug into the same suite runner
+instead of adding a transport-specific QA runner.
+
+At the architecture level, the split is:
+
+- `qa-lab` owns generic scenario execution, worker concurrency, artifact writing, and reporting.
+- the transport adapter owns gateway config, readiness, inbound and outbound observation, transport actions, and normalized transport state.
+- markdown scenario files under `qa/scenarios/` define the test run; `qa-lab` provides the reusable runtime surface that executes them.
+
+Maintainer-facing adoption guidance for new channel adapters lives in
+[Testing](/help/testing#adding-a-channel-to-qa).
 
 ## Reporting
 

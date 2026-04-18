@@ -1,5 +1,5 @@
 ---
-title: "Dreaming (experimental)"
+title: "Dreaming"
 summary: "Background memory consolidation with light, deep, and REM phases plus a Dream Diary"
 read_when:
   - You want memory promotion to run automatically
@@ -7,7 +7,7 @@ read_when:
   - You want to tune consolidation without polluting MEMORY.md
 ---
 
-# Dreaming (experimental)
+# Dreaming
 
 Dreaming is the background memory consolidation system in `memory-core`.
 It helps OpenClaw move strong short-term signals into durable memory while
@@ -80,6 +80,9 @@ After each phase has enough material, `memory-core` runs a best-effort backgroun
 subagent turn (using the default runtime model) and appends a short diary entry.
 
 This diary is for human reading in the Dreams UI, not a promotion source.
+Dreaming-generated diary/report artifacts are excluded from short-term
+promotion. Only grounded memory snippets are eligible to promote into
+`MEMORY.md`.
 
 There is also a grounded historical backfill lane for review and recovery work:
 
@@ -212,7 +215,7 @@ All settings live under `plugins.entries.memory-core.config.dreaming`.
 Phase policy, thresholds, and storage behavior are internal implementation
 details (not user-facing config).
 
-See [Memory configuration reference](/reference/memory-config#dreaming-experimental)
+See [Memory configuration reference](/reference/memory-config#dreaming)
 for the full key list.
 
 ## Dreams UI

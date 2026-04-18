@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AuthProfileStore, OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
-import { resolveRequiredHomeDir } from "openclaw/plugin-sdk/provider-auth";
+import {
+  hasUsableOAuthCredential,
+  resolveRequiredHomeDir,
+  type AuthProfileStore,
+  type OAuthCredential,
+} from "openclaw/plugin-sdk/provider-auth";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveCodexAccessTokenExpiry,
   resolveCodexAuthIdentity,
@@ -9,6 +14,7 @@ import {
 import { trimNonEmptyString } from "./openai-codex-shared.js";
 
 const PROVIDER_ID = "openai-codex";
+const log = createSubsystemLogger("openai/codex-cli-auth");
 
 export const CODEX_CLI_PROFILE_ID = `${PROVIDER_ID}:codex-cli`;
 export const OPENAI_CODEX_DEFAULT_PROFILE_ID = `${PROVIDER_ID}:default`;
@@ -42,7 +48,19 @@ function readCodexCliAuthFile(env: NodeJS.ProcessEnv): CodexCliAuthFile | null {
     const raw = fs.readFileSync(authPath, "utf8");
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === "object" ? (parsed as CodexCliAuthFile) : null;
-  } catch {
+  } catch (error) {
+    const code =
+      error instanceof SyntaxError
+        ? "INVALID_JSON"
+        : error instanceof Error && "code" in error
+          ? (error as NodeJS.ErrnoException).code
+          : undefined;
+    if (code === "ENOENT") {
+      return null;
+    }
+    log.debug(
+      `Failed to read Codex CLI auth file (code=${typeof code === "string" ? code : "UNKNOWN"})`,
+    );
     return null;
   }
 }
@@ -53,7 +71,6 @@ function oauthCredentialMatches(a: OAuthCredential, b: OAuthCredential): boolean
     a.provider === b.provider &&
     a.access === b.access &&
     a.refresh === b.refresh &&
-    a.expires === b.expires &&
     a.clientId === b.clientId &&
     a.email === b.email &&
     a.displayName === b.displayName &&
@@ -61,6 +78,40 @@ function oauthCredentialMatches(a: OAuthCredential, b: OAuthCredential): boolean
     a.projectId === b.projectId &&
     a.accountId === b.accountId
   );
+}
+
+function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeAuthEmailToken(value: string | undefined): string | undefined {
+  return normalizeAuthIdentityToken(value)?.toLowerCase();
+}
+
+// Keep this overwrite guard aligned with the canonical OAuth identity-copy rule
+// in src/agents/auth-profiles/oauth.ts without widening the plugin SDK surface.
+function isSafeToReplaceStoredIdentity(
+  existing: Pick<OAuthCredential, "accountId" | "email">,
+  incoming: Pick<OAuthCredential, "accountId" | "email">,
+): boolean {
+  const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
+  const incomingAccountId = normalizeAuthIdentityToken(incoming.accountId);
+  const existingEmail = normalizeAuthEmailToken(existing.email);
+  const incomingEmail = normalizeAuthEmailToken(incoming.email);
+
+  if (existingAccountId !== undefined && incomingAccountId !== undefined) {
+    return existingAccountId === incomingAccountId;
+  }
+  if (existingEmail !== undefined && incomingEmail !== undefined) {
+    return existingEmail === incomingEmail;
+  }
+
+  const existingHasIdentity = existingAccountId !== undefined || existingEmail !== undefined;
+  if (existingHasIdentity) {
+    return false;
+  }
+  return true;
 }
 
 export function readOpenAICodexCliOAuthProfile(params: {
@@ -91,7 +142,28 @@ export function readOpenAICodexCliOAuthProfile(params: {
     ...(identity.profileName ? { displayName: identity.profileName } : {}),
   };
   const existing = params.store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID];
-  if (existing && (existing.type !== "oauth" || !oauthCredentialMatches(existing, credential))) {
+  const existingOAuth =
+    existing?.type === "oauth" && existing.provider === PROVIDER_ID ? existing : undefined;
+  if (existing && !existingOAuth) {
+    log.debug("kept explicit local auth over Codex CLI bootstrap", {
+      profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+      localType: existing.type,
+      localProvider: existing.provider,
+    });
+    return null;
+  }
+  if (
+    existingOAuth &&
+    hasUsableOAuthCredential(existingOAuth) &&
+    !oauthCredentialMatches(existingOAuth, credential)
+  ) {
+    return null;
+  }
+  if (
+    existingOAuth &&
+    !oauthCredentialMatches(existingOAuth, credential) &&
+    !isSafeToReplaceStoredIdentity(existingOAuth, credential)
+  ) {
     return null;
   }
 

@@ -65,6 +65,10 @@ const installPiEmbeddedMock = () =>
 
 installPiEmbeddedMock();
 
+vi.doMock("../agents/pi-embedded-runner/runs.js", () => ({
+  abortEmbeddedPiRun: (...args: unknown[]) => piEmbeddedMocks.abortEmbeddedPiRun(...args),
+}));
+
 const providerUsageMocks = vi.hoisted(() => ({
   loadProviderUsageSummary: vi.fn().mockResolvedValue({
     updatedAt: 0,
@@ -442,7 +446,8 @@ export async function runGreetingPromptForBareNewOrReset(params: {
   expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
   const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
   expect(prompt).toContain("A new session was started via /new or /reset");
-  expect(prompt).toContain("Run your Session Startup sequence");
+  expect(prompt).toContain("Execute your Session Startup sequence now");
+  expect(prompt).toContain("read the required files before responding to the user");
 }
 
 export function installTriggerHandlingE2eTestHooks() {

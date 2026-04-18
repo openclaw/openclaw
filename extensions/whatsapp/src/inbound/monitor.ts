@@ -1,7 +1,7 @@
 import type { AnyMessageContent, proto, WAMessage, WASocket } from "@whiskeysockets/baileys";
 import { createInboundDebouncer, formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
-import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { readWebSelfIdentity } from "../auth-store.js";
@@ -11,9 +11,12 @@ import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from 
 import { resolveJidToE164 } from "../text-runtime.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import {
-  isRecentInboundMessage,
+  claimRecentInboundMessage,
+  commitRecentInboundMessage,
   isRecentOutboundMessage,
+  releaseRecentInboundMessage,
   rememberRecentOutboundMessage,
+  WhatsAppRetryableInboundError,
 } from "./dedupe.js";
 import {
   describeReplyContext,
@@ -31,6 +34,13 @@ import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
 
+function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
+  if (!enabled) {
+    return;
+  }
+  defaultRuntime.log(message);
+}
+
 function isGroupJid(jid: string): boolean {
   return (typeof isJidGroup === "function" ? isJidGroup(jid) : jid.endsWith("@g.us")) === true;
 }
@@ -43,7 +53,11 @@ function shouldClearSocketRefAfterSendFailure(err: unknown): boolean {
   return /closed|reset|disconnect|no active socket/i.test(formatError(err));
 }
 
-export async function monitorWebInbox(options: {
+function isNonEmptyString(value: string | undefined): value is string {
+  return Boolean(value);
+}
+
+export type MonitorWebInboxOptions = {
   verbose: boolean;
   accountId: string;
   authDir: string;
@@ -71,13 +85,16 @@ export async function monitorWebInbox(options: {
   };
   /** Abort in-flight reconnect waits when shutdown becomes terminal. */
   disconnectRetryAbortSignal?: AbortSignal;
-}) {
+};
+
+export async function attachWebInboxToSocket(
+  options: MonitorWebInboxOptions & {
+    sock: WASocket;
+  },
+) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
-  const sock = await createWaSocket(false, options.verbose, {
-    authDir: options.authDir,
-  });
-  await waitForWaConnection(sock);
+  const sock = options.sock;
   const connectedAtMs = Date.now();
   if (options.socketRef) {
     options.socketRef.current = sock;
@@ -106,18 +123,40 @@ export async function monitorWebInbox(options: {
 
   try {
     await sock.sendPresenceUpdate(presence);
-    if (shouldLogVerbose()) {
-      logVerbose(`Sent global '${presence}' presence on connect`);
-    }
+    logWhatsAppVerbose(options.verbose, `Sent global '${presence}' presence on connect`);
   } catch (err) {
-    logVerbose(`Failed to send '${presence}' presence on connect: ${String(err)}`);
+    logWhatsAppVerbose(
+      options.verbose,
+      `Failed to send '${presence}' presence on connect: ${String(err)}`,
+    );
   }
 
   const self = await readWebSelfIdentity(
     options.authDir,
     sock.user as { id?: string | null; lid?: string | null } | undefined,
   );
-  const debouncer = createInboundDebouncer<WebInboundMessage>({
+  type QueuedInboundMessage = WebInboundMessage & {
+    dedupeKey?: string;
+  };
+
+  const finalizeInboundDedupe = async (
+    entries: QueuedInboundMessage[],
+    error?: unknown,
+  ): Promise<void> => {
+    const dedupeKeys = [
+      ...new Set(entries.map((entry) => entry.dedupeKey).filter(isNonEmptyString)),
+    ];
+    if (dedupeKeys.length === 0) {
+      return;
+    }
+    if (error instanceof WhatsAppRetryableInboundError) {
+      dedupeKeys.forEach((dedupeKey) => releaseRecentInboundMessage(dedupeKey, error));
+      return;
+    }
+    await Promise.all(dedupeKeys.map((dedupeKey) => commitRecentInboundMessage(dedupeKey)));
+  };
+
+  const debouncer = createInboundDebouncer<QueuedInboundMessage>({
     debounceMs: options.debounceMs ?? 0,
     buildKey: (msg) => {
       const sender = msg.sender;
@@ -141,27 +180,34 @@ export async function monitorWebInbox(options: {
       if (!last) {
         return;
       }
-      if (entries.length === 1) {
-        await options.onMessage(last);
-        return;
-      }
-      const mentioned = new Set<string>();
-      for (const entry of entries) {
-        for (const jid of entry.mentions ?? entry.mentionedJids ?? []) {
-          mentioned.add(jid);
+      try {
+        if (entries.length === 1) {
+          await options.onMessage(last);
+          await finalizeInboundDedupe(entries);
+          return;
         }
+        const mentioned = new Set<string>();
+        for (const entry of entries) {
+          for (const jid of entry.mentions ?? entry.mentionedJids ?? []) {
+            mentioned.add(jid);
+          }
+        }
+        const combinedBody = entries
+          .map((entry) => entry.body)
+          .filter(Boolean)
+          .join("\n");
+        const combinedMessage: WebInboundMessage = {
+          ...last,
+          body: combinedBody,
+          mentions: mentioned.size > 0 ? Array.from(mentioned) : undefined,
+          mentionedJids: mentioned.size > 0 ? Array.from(mentioned) : undefined,
+        };
+        await options.onMessage(combinedMessage);
+        await finalizeInboundDedupe(entries);
+      } catch (error) {
+        await finalizeInboundDedupe(entries, error);
+        throw error;
       }
-      const combinedBody = entries
-        .map((entry) => entry.body)
-        .filter(Boolean)
-        .join("\n");
-      const combinedMessage: WebInboundMessage = {
-        ...last,
-        body: combinedBody,
-        mentions: mentioned.size > 0 ? Array.from(mentioned) : undefined,
-        mentionedJids: mentioned.size > 0 ? Array.from(mentioned) : undefined,
-      };
-      await options.onMessage(combinedMessage);
     },
     onError: (err) => {
       inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
@@ -222,7 +268,8 @@ export async function monitorWebInbox(options: {
         throw lastErr;
       }
       const delayMs = computeBackoff(disconnectRetryPolicy, attempt);
-      logVerbose(
+      logWhatsAppVerbose(
+        options.verbose,
         `Waiting ${delayMs}ms for WhatsApp reconnect before retrying send to ${jid}: ${formatError(lastErr)}`,
       );
       try {
@@ -257,7 +304,10 @@ export async function monitorWebInbox(options: {
       groupMetaCache.set(jid, entry);
       return entry;
     } catch (err) {
-      logVerbose(`Failed to fetch group metadata for ${jid}: ${String(err)}`);
+      logWhatsAppVerbose(
+        options.verbose,
+        `Failed to fetch group metadata for ${jid}: ${String(err)}`,
+      );
       return { expires: Date.now() + GROUP_META_TTL_MS };
     }
   };
@@ -300,14 +350,11 @@ export async function monitorWebInbox(options: {
         messageId: id,
       })
     ) {
-      logVerbose(`Skipping recent outbound WhatsApp echo ${id} for ${remoteJid}`);
+      logWhatsAppVerbose(
+        options.verbose,
+        `Skipping recent outbound WhatsApp echo ${id} for ${remoteJid}`,
+      );
       return null;
-    }
-    if (id) {
-      const dedupeKey = `${options.accountId}:${remoteJid}:${id}`;
-      if (isRecentInboundMessage(dedupeKey)) {
-        return null;
-      }
     }
     const participantJid = msg.key?.participant ?? undefined;
     const from = group ? remoteJid : await resolveInboundJid(remoteJid);
@@ -341,6 +388,7 @@ export async function monitorWebInbox(options: {
       isFromMe: Boolean(msg.key?.fromMe),
       messageTimestampMs,
       connectedAtMs,
+      verbose: options.verbose,
       sock: { sendMessage: (jid, content) => sendTrackedMessage(jid, content) },
       remoteJid,
     });
@@ -367,16 +415,17 @@ export async function monitorWebInbox(options: {
     if (id && !access.isSelfChat && options.sendReadReceipts !== false) {
       try {
         await sock.readMessages([{ remoteJid, id, participant: participantJid, fromMe: false }]);
-        if (shouldLogVerbose()) {
-          const suffix = participantJid ? ` (participant ${participantJid})` : "";
-          logVerbose(`Marked message ${id} as read for ${remoteJid}${suffix}`);
-        }
+        const suffix = participantJid ? ` (participant ${participantJid})` : "";
+        logWhatsAppVerbose(
+          options.verbose,
+          `Marked message ${id} as read for ${remoteJid}${suffix}`,
+        );
       } catch (err) {
-        logVerbose(`Failed to mark message ${id} read: ${String(err)}`);
+        logWhatsAppVerbose(options.verbose, `Failed to mark message ${id} read: ${String(err)}`);
       }
-    } else if (id && access.isSelfChat && shouldLogVerbose()) {
+    } else if (id && access.isSelfChat && options.verbose) {
       // Self-chat mode: never auto-send read receipts (blue ticks) on behalf of the owner.
-      logVerbose(`Self-chat mode: skipping read receipt for ${id}`);
+      logWhatsAppVerbose(options.verbose, `Self-chat mode: skipping read receipt for ${id}`);
     }
   };
 
@@ -427,7 +476,7 @@ export async function monitorWebInbox(options: {
         mediaFileName = inboundMedia.fileName;
       }
     } catch (err) {
-      logVerbose(`Inbound media download failed: ${String(err)}`);
+      logWhatsAppVerbose(options.verbose, `Inbound media download failed: ${String(err)}`);
     }
 
     return {
@@ -454,7 +503,7 @@ export async function monitorWebInbox(options: {
       try {
         await currentSock.sendPresenceUpdate("composing", chatJid);
       } catch (err) {
-        logVerbose(`Presence update failed: ${String(err)}`);
+        logWhatsAppVerbose(options.verbose, `Presence update failed: ${String(err)}`);
       }
     };
     const reply = async (text: string) => {
@@ -479,7 +528,7 @@ export async function monitorWebInbox(options: {
       },
       "inbound message",
     );
-    const inboundMessage: WebInboundMessage = {
+    const inboundMessage: QueuedInboundMessage = {
       id: inbound.id,
       from: inbound.from,
       conversationId: inbound.from,
@@ -520,6 +569,7 @@ export async function monitorWebInbox(options: {
       mediaPath: enriched.mediaPath,
       mediaType: enriched.mediaType,
       mediaFileName: enriched.mediaFileName,
+      dedupeKey: inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : undefined,
     };
     try {
       const task = Promise.resolve(debouncer.enqueue(inboundMessage));
@@ -563,6 +613,11 @@ export async function monitorWebInbox(options: {
 
       const enriched = await enrichInboundMessage(msg);
       if (!enriched) {
+        continue;
+      }
+
+      const dedupeKey = inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : "";
+      if (dedupeKey && !(await claimRecentInboundMessage(dedupeKey))) {
         continue;
       }
 
@@ -611,14 +666,18 @@ export async function monitorWebInbox(options: {
   void (async () => {
     try {
       const groups = await sock.groupFetchAllParticipating();
-      if (shouldLogVerbose()) {
-        logVerbose(`Hydrated ${Object.keys(groups ?? {}).length} participating groups on connect`);
-      }
+      logWhatsAppVerbose(
+        options.verbose,
+        `Hydrated ${Object.keys(groups ?? {}).length} participating groups on connect`,
+      );
     } catch (err) {
       const error = String(err);
       inboundLogger.warn({ error }, "failed hydrating participating groups on connect");
       inboundConsoleLog.warn(`Failed hydrating participating groups on connect: ${error}`);
-      logVerbose(`Failed to hydrate participating groups on connect: ${error}`);
+      logWhatsAppVerbose(
+        options.verbose,
+        `Failed to hydrate participating groups on connect: ${error}`,
+      );
     }
   })();
 
@@ -643,7 +702,7 @@ export async function monitorWebInbox(options: {
         detachConnectionUpdate();
         closeInboundMonitorSocket(sock);
       } catch (err) {
-        logVerbose(`Socket close failed: ${String(err)}`);
+        logWhatsAppVerbose(options.verbose, `Socket close failed: ${String(err)}`);
       }
     },
     onClose,
@@ -653,4 +712,15 @@ export async function monitorWebInbox(options: {
     // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo)
     ...sendApi,
   } as const;
+}
+
+export async function monitorWebInbox(options: MonitorWebInboxOptions) {
+  const sock = await createWaSocket(false, options.verbose, {
+    authDir: options.authDir,
+  });
+  await waitForWaConnection(sock);
+  return attachWebInboxToSocket({
+    ...options,
+    sock,
+  });
 }

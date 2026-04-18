@@ -7,12 +7,13 @@ import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
@@ -21,7 +22,10 @@ import { normalizeInputProvenance, type InputProvenance } from "../../sessions/i
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { resolveAssistantMessagePhase } from "../../shared/chat-message-content.js";
+import {
+  parseAssistantTextSignature,
+  resolveAssistantMessagePhase,
+} from "../../shared/chat-message-content.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -118,10 +122,19 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return false;
 }
 
-function buildWebchatAudioOnlyAssistantMessage(
+async function buildWebchatAudioOnlyAssistantMessage(
   payloads: ReplyPayload[],
-): { content: Array<Record<string, unknown>>; transcriptText: string } | null {
-  const audioBlocks = buildWebchatAudioContentBlocksFromReplyPayloads(payloads);
+  options?: {
+    localRoots?: readonly string[];
+    onLocalAudioAccessDenied?: (message: string) => void;
+  },
+): Promise<{ content: Array<Record<string, unknown>>; transcriptText: string } | null> {
+  const audioBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads(payloads, {
+    localRoots: options?.localRoots,
+    onLocalAudioAccessDenied: (err) => {
+      options?.onLocalAudioAccessDenied?.(formatForLog(err));
+    },
+  });
   if (audioBlocks.length === 0) {
     return null;
   }
@@ -131,7 +144,7 @@ function buildWebchatAudioOnlyAssistantMessage(
   };
 }
 
-export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
+export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
@@ -685,6 +698,38 @@ function sanitizeChatHistoryContentBlock(
   return { block: changed ? entry : block, changed };
 }
 
+function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
+  content: unknown[];
+  changed: boolean;
+} {
+  const hasExplicitPhasedText = content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const entry = block as { type?: unknown; textSignature?: unknown };
+    return (
+      entry.type === "text" && Boolean(parseAssistantTextSignature(entry.textSignature)?.phase)
+    );
+  });
+  if (!hasExplicitPhasedText) {
+    return { content, changed: false };
+  }
+  const filtered = content.filter((block) => {
+    if (!block || typeof block !== "object") {
+      return true;
+    }
+    const entry = block as { type?: unknown; textSignature?: unknown };
+    if (entry.type !== "text") {
+      return true;
+    }
+    return parseAssistantTextSignature(entry.textSignature)?.phase === "final_answer";
+  });
+  return {
+    content: filtered,
+    changed: filtered.length !== content.length,
+  };
+}
+
 /**
  * Validate that a value is a finite number, returning undefined otherwise.
  */
@@ -822,6 +867,13 @@ function sanitizeChatHistoryMessage(
     if (updated.some((item) => item.changed)) {
       entry.content = updated.map((item) => item.block);
       changed = true;
+    }
+    if (entry.role === "assistant" && Array.isArray(entry.content)) {
+      const sanitizedPhases = sanitizeAssistantPhasedContentBlocks(entry.content);
+      if (sanitizedPhases.changed) {
+        entry.content = sanitizedPhases.content;
+        changed = true;
+      }
     }
   }
 
@@ -2033,11 +2085,16 @@ export const chatHandlers: GatewayRequestHandlers = {
           savedImages: await persistedImagesPromise,
         });
       };
-      const appendWebchatAgentAudioTranscriptIfNeeded = (payload: ReplyPayload) => {
+      const appendWebchatAgentAudioTranscriptIfNeeded = async (payload: ReplyPayload) => {
         if (!agentRunStarted || appendedWebchatAgentAudio || !isMediaBearingPayload(payload)) {
           return;
         }
-        const audioMessage = buildWebchatAudioOnlyAssistantMessage([payload]);
+        const audioMessage = await buildWebchatAudioOnlyAssistantMessage([payload], {
+          localRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
+          onLocalAudioAccessDenied: (message) => {
+            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
+          },
+        });
         if (!audioMessage) {
           return;
         }
@@ -2071,7 +2128,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             case "block":
             case "final":
               deliveredReplies.push({ payload, kind: info.kind });
-              appendWebchatAgentAudioTranscriptIfNeeded(payload);
+              await appendWebchatAgentAudioTranscriptIfNeeded(payload);
               break;
             case "tool":
               // Tool results that carry audio (e.g. the TTS tool) must be promoted
