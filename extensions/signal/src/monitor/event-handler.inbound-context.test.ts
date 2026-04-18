@@ -94,6 +94,19 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
     effectiveWasMentioned: params.wasMentioned === true,
     shouldSkip: false,
   })),
+  resolveInboundMentionDecision: vi.fn(
+    (params: {
+      facts: { canDetectMention?: boolean; wasMentioned?: boolean };
+      policy: { isGroup?: boolean; requireMention?: boolean };
+    }) => ({
+      effectiveWasMentioned: params.facts.wasMentioned === true,
+      shouldSkip:
+        params.policy.isGroup === true &&
+        params.policy.requireMention === true &&
+        params.facts.canDetectMention === true &&
+        params.facts.wasMentioned !== true,
+    }),
+  ),
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
@@ -402,6 +415,12 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
   normalizeE164: vi.fn((value: string | undefined | null) => value ?? undefined),
+  normalizeLowercaseStringOrEmpty: vi.fn((value: unknown) =>
+    typeof value === "string" ? value.trim().toLowerCase() : "",
+  ),
+  normalizeOptionalString: vi.fn((value: unknown) =>
+    typeof value === "string" ? value.trim() || undefined : undefined,
+  ),
 }));
 
 vi.mock("../../../../src/pairing/pairing-store.js", () => ({
