@@ -72,7 +72,14 @@ function applyJitter(delayMs: number, jitter: number, mode: JitterMode = "symmet
   // below the caller's floor.
   const fraction = generateSecureFraction();
   const offset = mode === "positive" ? fraction * jitter : (fraction * 2 - 1) * jitter;
-  return Math.max(0, Math.round(delayMs * (1 + offset)));
+  const raw = delayMs * (1 + offset);
+  // Rounding choice preserves the mode's contract. `positive` guarantees
+  // `delay >= delayMs`, so a non-integer `delayMs` (e.g. retryAfterMs=1.4)
+  // must round *up* — plain `Math.round(1.4)=1` would drop the delay below
+  // the caller's lower bound and violate the Retry-After invariant the
+  // positive branch exists to enforce. Symmetric has no floor contract so
+  // it stays on `Math.round`.
+  return Math.max(0, mode === "positive" ? Math.ceil(raw) : Math.round(raw));
 }
 
 export async function retryAsync<T>(
