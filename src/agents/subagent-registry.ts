@@ -601,7 +601,11 @@ async function sweepSubagentRuns() {
     if (mutated) {
       persistSubagentRuns();
     }
-    if (subagentRuns.size === 0) {
+    // Also require the pending-error map to be drained before stopping. The
+    // same sweep cycle expires those entries via PENDING_ERROR_TTL_MS, so
+    // leaving the sweeper alive is the only way entries scheduled after the
+    // last run was reclaimed can ever be cleaned up on an idle workload.
+    if (subagentRuns.size === 0 && pendingLifecycleErrorByRunId.size === 0) {
       stopSweeper();
     }
   } finally {
@@ -766,6 +770,29 @@ export const __testing = {
           ...overrides,
         }
       : defaultSubagentRegistryDeps;
+  },
+  // Sweeper-drain regression coverage: expose just enough to observe whether the
+  // sweeper self-stops while pendingLifecycleErrorByRunId still has entries.
+  getPendingLifecycleErrorCountForTest(): number {
+    return pendingLifecycleErrorByRunId.size;
+  },
+  getSubagentRunsSizeForTest(): number {
+    return subagentRuns.size;
+  },
+  isSweeperActiveForTest(): boolean {
+    return sweeper !== null;
+  },
+  startSweeperForTest() {
+    startSweeper();
+  },
+  schedulePendingLifecycleErrorForTest(params: { runId: string; endedAt: number; error?: string }) {
+    schedulePendingLifecycleError(params);
+  },
+  async runSweepForTest() {
+    await sweepSubagentRuns();
+  },
+  getPendingErrorTtlMsForTest(): number {
+    return PENDING_ERROR_TTL_MS;
   },
 } as const;
 
