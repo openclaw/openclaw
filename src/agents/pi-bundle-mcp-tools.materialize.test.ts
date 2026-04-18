@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -6,44 +5,19 @@ import {
   makeTempDir,
   startSseProbeServer,
   writeBundleProbeMcpServer,
-  writeClaudeBundle,
-  writeExecutable,
 } from "./pi-bundle-mcp-test-harness.js";
 import {
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
 } from "./pi-bundle-mcp-tools.js";
+import type { McpCatalogTool } from "./pi-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
-
-const require = createRequire(import.meta.url);
-const SDK_SERVER_MCP_PATH = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
-const SDK_SERVER_STDIO_PATH = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
 
 afterEach(async () => {
   await cleanupBundleMcpHarness();
 });
 
-async function createBundleProbeRuntime(params?: { reservedToolNames?: string[] }) {
-  const workspaceDir = await makeTempDir("openclaw-bundle-mcp-tools-");
-  const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "bundle-probe");
-  const serverScriptPath = path.join(pluginRoot, "servers", "bundle-probe.mjs");
-  await writeBundleProbeMcpServer(serverScriptPath);
-  await writeClaudeBundle({ pluginRoot, serverScriptPath });
-
-  return await createBundleMcpToolRuntime({
-    workspaceDir,
-    cfg: {
-      plugins: {
-        entries: {
-          "bundle-probe": { enabled: true },
-        },
-      },
-    },
-    reservedToolNames: params?.reservedToolNames,
-  });
-}
-
-function makeSingleToolRuntime(): SessionMcpRuntime {
+function makeToolRuntime(tools?: McpCatalogTool[]): SessionMcpRuntime {
   return {
     sessionId: "session-collision",
     workspaceDir: "/tmp",
@@ -61,7 +35,7 @@ function makeSingleToolRuntime(): SessionMcpRuntime {
           toolCount: 1,
         },
       },
-      tools: [
+      tools: tools ?? [
         {
           serverName: "bundleProbe",
           safeServerName: "bundleProbe",
@@ -81,28 +55,26 @@ function makeSingleToolRuntime(): SessionMcpRuntime {
 }
 
 describe("createBundleMcpToolRuntime", () => {
-  it("loads bundle MCP tools and executes them", async () => {
-    const runtime = await createBundleProbeRuntime();
+  it("materializes bundle MCP tools and executes them", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime(),
+    });
 
-    try {
-      expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
-      const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
-      expect(result.content[0]).toMatchObject({
-        type: "text",
-        text: "FROM-BUNDLE",
-      });
-      expect(result.details).toEqual({
-        mcpServer: "bundleProbe",
-        mcpTool: "bundle_probe",
-      });
-    } finally {
-      await runtime.dispose();
-    }
+    expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
+    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: "FROM-BUNDLE",
+    });
+    expect(result.details).toEqual({
+      mcpServer: "bundleProbe",
+      mcpTool: "bundle_probe",
+    });
   });
 
   it("disambiguates bundle MCP tools that collide with existing tool names", async () => {
     const runtime = await materializeBundleMcpToolsForRun({
-      runtime: makeSingleToolRuntime(),
+      runtime: makeToolRuntime(),
       reservedToolNames: ["bundleProbe__bundle_probe"],
     });
 
@@ -192,41 +164,39 @@ describe("createBundleMcpToolRuntime", () => {
   });
 
   it("returns tools sorted alphabetically for stable prompt-cache keys", async () => {
-    const workspaceDir = await makeTempDir("openclaw-bundle-mcp-tools-");
-    const serverScriptPath = path.join(workspaceDir, "servers", "multi-tool.mjs");
-    // Register tools in non-alphabetical order; runtime must sort them.
-    await writeExecutable(
-      serverScriptPath,
-      `#!/usr/bin/env node
-import { McpServer } from ${JSON.stringify(SDK_SERVER_MCP_PATH)};
-import { StdioServerTransport } from ${JSON.stringify(SDK_SERVER_STDIO_PATH)};
-const server = new McpServer({ name: "multi", version: "1.0.0" });
-server.tool("zeta", "z", async () => ({ content: [{ type: "text", text: "z" }] }));
-server.tool("alpha", "a", async () => ({ content: [{ type: "text", text: "a" }] }));
-server.tool("mu", "m", async () => ({ content: [{ type: "text", text: "m" }] }));
-await server.connect(new StdioServerTransport());
-`,
-    );
-
-    const runtime = await createBundleMcpToolRuntime({
-      workspaceDir,
-      cfg: {
-        mcp: {
-          servers: {
-            multi: { command: "node", args: [serverScriptPath] },
-          },
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime([
+        {
+          serverName: "multi",
+          safeServerName: "multi",
+          toolName: "zeta",
+          description: "z",
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: "z",
         },
-      },
+        {
+          serverName: "multi",
+          safeServerName: "multi",
+          toolName: "alpha",
+          description: "a",
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: "a",
+        },
+        {
+          serverName: "multi",
+          safeServerName: "multi",
+          toolName: "mu",
+          description: "m",
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: "m",
+        },
+      ]),
     });
 
-    try {
-      expect(runtime.tools.map((tool) => tool.name)).toEqual([
-        "multi__alpha",
-        "multi__mu",
-        "multi__zeta",
-      ]);
-    } finally {
-      await runtime.dispose();
-    }
+    expect(runtime.tools.map((tool) => tool.name)).toEqual([
+      "multi__alpha",
+      "multi__mu",
+      "multi__zeta",
+    ]);
   });
 });
