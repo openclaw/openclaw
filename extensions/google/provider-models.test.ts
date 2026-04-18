@@ -186,6 +186,48 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     });
   });
 
+  it("resolves Gemini latest aliases from current Google templates", () => {
+    const models = [
+      createTemplateModel("google", "gemini-3-pro-preview", { reasoning: true }),
+      createTemplateModel("google", "gemini-3-flash-preview", { reasoning: true }),
+      createTemplateModel("google", "gemini-3.1-flash-lite-preview", { reasoning: true }),
+    ];
+
+    expect(
+      resolveGoogleGeminiForwardCompatModel({
+        providerId: "google",
+        ctx: createContext({ provider: "google", modelId: "gemini-pro-latest", models }),
+      }),
+    ).toMatchObject({
+      provider: "google",
+      id: "gemini-pro-latest",
+      api: "google-generative-ai",
+      reasoning: true,
+    });
+    expect(
+      resolveGoogleGeminiForwardCompatModel({
+        providerId: "google",
+        ctx: createContext({ provider: "google", modelId: "gemini-flash-latest", models }),
+      }),
+    ).toMatchObject({
+      provider: "google",
+      id: "gemini-flash-latest",
+      api: "google-generative-ai",
+      reasoning: true,
+    });
+    expect(
+      resolveGoogleGeminiForwardCompatModel({
+        providerId: "google",
+        ctx: createContext({ provider: "google", modelId: "gemini-flash-lite-latest", models }),
+      }),
+    ).toMatchObject({
+      provider: "google",
+      id: "gemini-flash-lite-latest",
+      api: "google-generative-ai",
+      reasoning: true,
+    });
+  });
+
   it("prefers the flash-lite template before the broader flash prefix", () => {
     const model = resolveGoogleGeminiForwardCompatModel({
       providerId: "google-vertex",
@@ -215,6 +257,12 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     expect(isModernGoogleModel("gemini-2.5-pro")).toBe(true);
     expect(isModernGoogleModel("gemini-2.5-flash-lite")).toBe(true);
     expect(isModernGoogleModel("gemini-1.5-pro")).toBe(false);
+  });
+
+  it("treats Gemini latest aliases as modern google models", () => {
+    expect(isModernGoogleModel("gemini-pro-latest")).toBe(true);
+    expect(isModernGoogleModel("gemini-flash-latest")).toBe(true);
+    expect(isModernGoogleModel("gemini-flash-lite-latest")).toBe(true);
   });
 
   it("treats gemma models as modern google models", () => {

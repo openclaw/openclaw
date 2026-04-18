@@ -2,35 +2,15 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { stripInvalidGoogleThinkingBudget } from "../google-thinking-compat.js";
+import {
+  isGoogleGemini3ThinkingLevelModel,
+  resolveGoogleGemini3ThinkingLevel,
+  stripInvalidGoogleThinkingBudget,
+} from "../google-thinking-compat.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
-
-function isGemini31Model(modelId: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
-}
 
 function isGemma4Model(modelId: string): boolean {
   return normalizeLowercaseStringOrEmpty(modelId).startsWith("gemma-4");
-}
-
-function mapThinkLevelToGoogleThinkingLevel(
-  thinkingLevel: ThinkLevel,
-): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | undefined {
-  switch (thinkingLevel) {
-    case "minimal":
-      return "MINIMAL";
-    case "low":
-      return "LOW";
-    case "medium":
-    case "adaptive":
-      return "MEDIUM";
-    case "high":
-    case "xhigh":
-      return "HIGH";
-    default:
-      return undefined;
-  }
 }
 
 function mapThinkLevelToGemma4ThinkingLevel(
@@ -134,6 +114,22 @@ function sanitizeGoogleThinkingConfigContainer(params: {
 
   const thinkingBudget = thinkingConfigObj.thinkingBudget;
 
+  if (typeof params.modelId === "string" && isGoogleGemini3ThinkingLevelModel(params.modelId)) {
+    const mappedLevel = resolveGoogleGemini3ThinkingLevel({
+      modelId: params.modelId,
+      thinkingLevel: params.thinkingLevel,
+      thinkingBudget: typeof thinkingBudget === "number" ? thinkingBudget : undefined,
+    });
+    delete thinkingConfigObj.thinkingBudget;
+    if (mappedLevel) {
+      thinkingConfigObj.thinkingLevel = mappedLevel;
+    }
+    if (Object.keys(thinkingConfigObj).length === 0) {
+      delete configObj.thinkingConfig;
+    }
+    return;
+  }
+
   if (
     stripInvalidGoogleThinkingBudget({ thinkingConfig: thinkingConfigObj, modelId: params.modelId })
   ) {
@@ -147,21 +143,11 @@ function sanitizeGoogleThinkingConfigContainer(params: {
     return;
   }
 
-  // pi-ai can emit thinkingBudget=-1 for some Gemini 3.1 IDs; a negative budget
+  // pi-ai can emit thinkingBudget=-1 for some Google model IDs; a negative budget
   // is invalid for Google-compatible backends and can lead to malformed handling.
   delete thinkingConfigObj.thinkingBudget;
-
-  if (
-    typeof params.modelId === "string" &&
-    isGemini31Model(params.modelId) &&
-    params.thinkingLevel &&
-    params.thinkingLevel !== "off" &&
-    thinkingConfigObj.thinkingLevel === undefined
-  ) {
-    const mappedLevel = mapThinkLevelToGoogleThinkingLevel(params.thinkingLevel);
-    if (mappedLevel) {
-      thinkingConfigObj.thinkingLevel = mappedLevel;
-    }
+  if (Object.keys(thinkingConfigObj).length === 0) {
+    delete configObj.thinkingConfig;
   }
 }
 
