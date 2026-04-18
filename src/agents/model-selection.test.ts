@@ -548,6 +548,25 @@ describe("model-selection", () => {
         }),
       ).toBeUndefined();
     });
+
+    it("infers provider from provider catalog for slash-containing model id (#68447)", () => {
+      const cfg = {
+        models: {
+          providers: {
+            lmstudio: {
+              models: [{ id: "google/gemma-4-26b-a4b" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "google/gemma-4-26b-a4b",
+        }),
+      ).toBe("lmstudio");
+    });
   });
 
   describe("buildModelAliasIndex", () => {
@@ -807,6 +826,37 @@ describe("model-selection", () => {
         ref: { provider: "opencode-go", model: "kimi-k2.5" },
       });
     });
+
+    it("routes slash-containing model id to explicitly configured provider instead of splitting on slash (#68447)", () => {
+      const cfg = {
+        models: {
+          providers: {
+            lmstudio: {
+              models: [{ id: "google/gemma-4-26b-a4b" }],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "lmstudio/google/gemma-4-26b-a4b": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "google/gemma-4-26b-a4b",
+        defaultProvider: "anthropic",
+      });
+
+      expect(result).toEqual({
+        key: "lmstudio/google/gemma-4-26b-a4b",
+        ref: { provider: "lmstudio", model: "google/gemma-4-26b-a4b" },
+      });
+    });
   });
 
   describe("resolveModelRefFromString", () => {
@@ -929,6 +979,34 @@ describe("model-selection", () => {
       });
 
       expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+    });
+
+    it("routes slash-containing default model to explicitly configured provider (#68447)", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "google/gemma-4-26b-a4b" },
+          },
+        },
+        models: {
+          providers: {
+            lmstudio: {
+              models: [{ id: "google/gemma-4-26b-a4b" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg: cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({
+        provider: "lmstudio",
+        model: "google/gemma-4-26b-a4b",
+      });
     });
 
     it("should fall back to the configured default provider and warn if provider is missing for non-alias", () => {

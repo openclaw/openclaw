@@ -296,15 +296,20 @@ export function resolveConfiguredModelRef(params: {
       if (aliasMatch) {
         return aliasMatch.ref;
       }
+    }
 
-      const inferredProvider = inferUniqueProviderFromConfiguredModels({
-        cfg: params.cfg,
-        model: trimmed,
-      });
-      if (inferredProvider) {
-        return { provider: inferredProvider, model: trimmed };
-      }
+    // Try to infer the provider from configured models/providers before
+    // splitting on "/". This ensures explicit provider config (e.g. LM Studio
+    // with a baseURL) takes precedence over model ID prefix parsing (#68447).
+    const inferredProvider = inferUniqueProviderFromConfiguredModels({
+      cfg: params.cfg,
+      model: trimmed,
+    });
+    if (inferredProvider) {
+      return { provider: inferredProvider, model: trimmed };
+    }
 
+    if (!trimmed.includes("/")) {
       const safeTrimmed = sanitizeModelWarningValue(trimmed);
       const safeResolved = sanitizeForLog(`${params.defaultProvider}/${safeTrimmed}`);
       getLog().warn(
@@ -517,16 +522,28 @@ export function resolveAllowedModelRef(params: {
     defaultProvider: params.defaultProvider,
   });
 
-  const effectiveDefaultProvider = !trimmed.includes("/")
-    ? (inferUniqueProviderFromConfiguredModels({ cfg: params.cfg, model: trimmed }) ??
-      params.defaultProvider)
-    : params.defaultProvider;
-
-  const resolved = resolveModelRefFromString({
-    raw: trimmed,
-    defaultProvider: effectiveDefaultProvider,
-    aliasIndex,
+  // Try to infer the correct provider from the configured models/providers
+  // before splitting on "/". This ensures explicit provider config (e.g. LM
+  // Studio with a baseURL) takes precedence over model ID prefix parsing
+  // (#68447).
+  const inferredProvider = inferUniqueProviderFromConfiguredModels({
+    cfg: params.cfg,
+    model: trimmed,
   });
+
+  let resolved: { ref: ModelRef; alias?: string } | null;
+  if (inferredProvider && trimmed.includes("/")) {
+    // The full model ID (e.g. "google/gemma-4-26b-a4b") is configured under
+    // a specific provider — use it directly without splitting on "/".
+    resolved = { ref: { provider: inferredProvider, model: trimmed } };
+  } else {
+    const effectiveDefaultProvider = inferredProvider ?? params.defaultProvider;
+    resolved = resolveModelRefFromString({
+      raw: trimmed,
+      defaultProvider: effectiveDefaultProvider,
+      aliasIndex,
+    });
+  }
   if (!resolved) {
     return { error: `invalid model: ${trimmed}` };
   }

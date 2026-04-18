@@ -424,15 +424,20 @@ export function resolveConfiguredModelRef(params: {
       if (aliasMatch) {
         return aliasMatch.ref;
       }
+    }
 
-      const inferredProvider = inferUniqueProviderFromConfiguredModels({
-        cfg: params.cfg,
-        model: trimmed,
-      });
-      if (inferredProvider) {
-        return { provider: inferredProvider, model: trimmed };
-      }
+    // Try to infer the provider from configured models/providers before
+    // splitting on "/". This ensures explicit provider config (e.g. LM Studio
+    // with a baseURL) takes precedence over model ID prefix parsing (#68447).
+    const inferredProvider = inferUniqueProviderFromConfiguredModels({
+      cfg: params.cfg,
+      model: trimmed,
+    });
+    if (inferredProvider) {
+      return { provider: inferredProvider, model: trimmed };
+    }
 
+    if (!trimmed.includes("/")) {
       // Default to the configured provider if no provider is specified, but warn as this is deprecated.
       const safeTrimmed = sanitizeModelWarningValue(trimmed);
       const safeResolved = sanitizeForLog(`${params.defaultProvider}/${safeTrimmed}`);
@@ -728,20 +733,30 @@ export function resolveAllowedModelRef(params: {
     defaultProvider: params.defaultProvider,
   });
 
-  // When the model string has no provider prefix ("/"), try to infer the
-  // correct provider from the configured allowlist before falling back to the
-  // session's current default provider. This prevents provider prefix drift
-  // when switching models across different providers (see #48369).
-  const effectiveDefaultProvider = !trimmed.includes("/")
-    ? (inferUniqueProviderFromConfiguredModels({ cfg: params.cfg, model: trimmed }) ??
-      params.defaultProvider)
-    : params.defaultProvider;
-
-  const resolved = resolveModelRefFromString({
-    raw: trimmed,
-    defaultProvider: effectiveDefaultProvider,
-    aliasIndex,
+  // Try to infer the correct provider from the configured models/providers
+  // before falling back to the session's current default provider or splitting
+  // on "/". This prevents provider prefix drift when switching models across
+  // different providers (see #48369) and ensures that explicitly configured
+  // providers (e.g. LM Studio with a baseURL) take precedence over provider
+  // inference from model ID prefixes like "google/" (see #68447).
+  const inferredProvider = inferUniqueProviderFromConfiguredModels({
+    cfg: params.cfg,
+    model: trimmed,
   });
+
+  let resolved: { ref: ModelRef; alias?: string } | null;
+  if (inferredProvider && trimmed.includes("/")) {
+    // The full model ID (e.g. "google/gemma-4-26b-a4b") is configured under
+    // a specific provider — use it directly without splitting on "/".
+    resolved = { ref: { provider: inferredProvider, model: trimmed } };
+  } else {
+    const effectiveDefaultProvider = inferredProvider ?? params.defaultProvider;
+    resolved = resolveModelRefFromString({
+      raw: trimmed,
+      defaultProvider: effectiveDefaultProvider,
+      aliasIndex,
+    });
+  }
   if (!resolved) {
     return { error: `invalid model: ${trimmed}` };
   }
