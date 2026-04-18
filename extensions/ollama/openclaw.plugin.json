@@ -3,6 +3,7 @@
   "enabledByDefault": true,
   "providers": ["ollama"],
   "providerDiscoveryEntry": "./provider-discovery.ts",
+  "syntheticAuthRefs": ["ollama"],
   "providerAuthEnvVars": {
     "ollama": ["OLLAMA_API_KEY"]
   },
