@@ -142,9 +142,14 @@ export async function resolveSlackThreadContextData(params: {
     });
 
     if (threadHistory.length > 0) {
+      const threadHistoryWithoutBots = threadHistory.filter((historyMsg) => !historyMsg.botId);
+      const omittedBotHistoryCount = threadHistory.length - threadHistoryWithoutBots.length;
+
       const uniqueUserIds = [
         ...new Set(
-          threadHistory.map((item) => item.userId).filter((id): id is string => Boolean(id)),
+          threadHistoryWithoutBots
+            .map((item) => item.userId)
+            .filter((id): id is string => Boolean(id)),
         ),
       ];
       const userMap = new Map<string, { name?: string }>();
@@ -156,9 +161,6 @@ export async function resolveSlackThreadContextData(params: {
           }
         }),
       );
-
-      const threadHistoryWithoutBots = threadHistory.filter((historyMsg) => !historyMsg.botId);
-      const omittedBotHistoryCount = threadHistory.length - threadHistoryWithoutBots.length;
 
       const { items: filteredThreadHistory, omitted: omittedHistoryCount } =
         filterSupplementalContextItems({
@@ -185,15 +187,12 @@ export async function resolveSlackThreadContextData(params: {
       const historyParts: string[] = [];
       for (const historyMsg of filteredThreadHistory) {
         const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
-        const msgSenderName =
-          msgUser?.name ?? (historyMsg.botId ? `Bot (${historyMsg.botId})` : "Unknown");
-        const isBot = Boolean(historyMsg.botId);
-        const role = isBot ? "assistant" : "user";
+        const msgSenderName = msgUser?.name ?? "Unknown";
         const msgWithId = `${historyMsg.text}\n[slack message id: ${historyMsg.ts ?? "unknown"} channel: ${params.message.channel}]`;
         historyParts.push(
           formatInboundEnvelope({
             channel: "Slack",
-            from: `${msgSenderName} (${role})`,
+            from: `${msgSenderName} (user)`,
             timestamp: historyMsg.ts ? Math.round(Number(historyMsg.ts) * 1000) : undefined,
             body: msgWithId,
             chatType: "channel",
