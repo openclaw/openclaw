@@ -258,12 +258,30 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
-ENV NODE_ENV=production
+# Install Blink CLI + clawhub at build time so every rebuild ships the newest.
+# NPM_CONFIG_PREFIX points npm-global at the persistent Fly volume so the
+# `node` user can `npm install -g <pkg>` at runtime without sudo.
+RUN npm install -g @blinkdotnew/cli@latest clawhub@latest
+ENV NPM_CONFIG_PREFIX=/data/npm-global
+ENV PATH="/data/npm-global/bin:${PATH}"
 
-# Security hardening: Run as non-root user
-# The node:24-bookworm image includes a 'node' user (uid 1000)
-# This reduces the attack surface by preventing container escape via root privileges
-USER node
+# gosu = drop privileges cleanly from root → node in the entrypoint.
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gosu \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install the Blink Claw entrypoint. Runs as root, seeds /data, writes
+# auth-profiles.json (required by v2026.4.15+ auth resolver), then execs
+# the gateway as the `node` user.
+COPY blink-entrypoint.sh /usr/local/bin/blink-entrypoint.sh
+RUN chmod 755 /usr/local/bin/blink-entrypoint.sh
+
+# OPENCLAW_NO_RESPAWN stops the gateway from daemonizing (Fly init supervises
+# the process directly; daemonization leaves Fly with a dead init and the
+# machine silently crash-loops). Entrypoint exports this too; setting it
+# here too makes direct `docker run` invocations work identically.
+ENV OPENCLAW_NO_RESPAWN=true
+
+ENV NODE_ENV=production
 
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.
@@ -279,4 +297,5 @@ USER node
 # For external access from host/ingress, override bind to "lan" and set auth.
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
+ENTRYPOINT ["/usr/local/bin/blink-entrypoint.sh"]
+CMD ["node", "/app/openclaw.mjs", "gateway", "--allow-unconfigured"]

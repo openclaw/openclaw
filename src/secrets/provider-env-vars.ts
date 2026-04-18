@@ -12,6 +12,10 @@ const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   cerebras: ["CEREBRAS_API_KEY"],
   "anthropic-openai": ["ANTHROPIC_API_KEY"],
   "qwen-dashscope": ["DASHSCOPE_API_KEY"],
+  // Blink AI Gateway (Blink Claw agents) — resolves BLINK_API_KEY to the
+  // `blink` provider via the standard auth pipeline. Works with the
+  // auth-profiles.json resolver so chat requests find the key at runtime.
+  blink: ["BLINK_API_KEY"],
 } as const;
 
 const CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES = {

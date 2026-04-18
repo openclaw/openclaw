@@ -373,5 +373,19 @@ export async function resolveImplicitProviders(
     );
   }
 
+  // Blink AI Gateway — auto-register the provider config (baseUrl, api, models)
+  // when BLINK_API_KEY is set. API key resolution is handled by the standard
+  // auth pipeline via the `blink: ["BLINK_API_KEY"]` entry in
+  // CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES (see src/secrets/provider-env-vars.ts).
+  // The auth pipeline also persists the key to auth-profiles.json on first use.
+  const blinkApiKey = env.BLINK_API_KEY;
+  if (blinkApiKey && !providers.blink) {
+    const { buildBlinkProvider } = await import("./blink-models.js");
+    const resolved = context.resolveProviderApiKey("blink");
+    mergeImplicitProviderSet(providers, {
+      blink: { ...(await buildBlinkProvider()), apiKey: resolved.apiKey ?? blinkApiKey },
+    });
+  }
+
   return providers;
 }

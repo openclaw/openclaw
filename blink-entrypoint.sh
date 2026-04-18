@@ -1,18 +1,74 @@
 #!/bin/bash
-# Blink Claw entrypoint — runs as root, prepares /data, drops to node user.
-# Handles fresh Fly volumes (root-owned /data) gracefully.
+# Blink Claw entrypoint — runs as root, prepares /data, seeds auth, drops to node user.
+#
+# What this does:
+#   1. Creates /data directory tree on fresh Fly volumes (root-owned initially).
+#   2. Writes default /data/openclaw.json if missing.
+#   3. Seeds /data/agents/main/agent/auth-profiles.json with the Blink provider
+#      api_key credential (required by upstream v2026.4.15+ auth resolver).
+#      Rewritten every boot so BLINK_API_KEY rotations propagate automatically.
+#   4. Sources /data/.env (agent-managed secrets via `blink secrets set`).
+#   5. Exports OPENCLAW_NO_RESPAWN=true so the gateway does not daemonize
+#      itself (Fly init supervises the process, daemonization breaks this).
+#   6. Drops privileges to the `node` user and exec's the gateway command.
+set -eu
 
-# Only run setup if /data is not yet owned by node (fresh volume)
-if [ "$(stat -c %U /data 2>/dev/null)" != "node" ]; then
-  mkdir -p /data/workspace /data/agents/main/agent /data/agents/main/sessions \
-           /data/scripts /data/npm-global
-  [ ! -f /data/openclaw.json ] && \
-    echo '{"agents":{"defaults":{"workspace":"/data/workspace"}},"browser":{"noSandbox":true},"gateway":{"auth":{"mode":"token"}}}' > /data/openclaw.json
-  chown -R node:node /data
+STATE_DIR="/data"
+AGENT_DIR="${STATE_DIR}/agents/main/agent"
+AUTH_FILE="${AGENT_DIR}/auth-profiles.json"
+CONFIG_FILE="${STATE_DIR}/openclaw.json"
+ENV_FILE="${STATE_DIR}/.env"
+
+# Fresh-volume setup: create directory tree and default config.
+if [ "$(stat -c %U "${STATE_DIR}" 2>/dev/null || echo root)" != "node" ]; then
+  mkdir -p "${STATE_DIR}/workspace" "${AGENT_DIR}" "${STATE_DIR}/agents/main/sessions" \
+           "${STATE_DIR}/scripts" "${STATE_DIR}/npm-global"
+  if [ ! -f "${CONFIG_FILE}" ]; then
+    echo '{"agents":{"defaults":{"workspace":"/data/workspace"}},"browser":{"noSandbox":true},"gateway":{"auth":{"mode":"token"}}}' > "${CONFIG_FILE}"
+  fi
+  chown -R node:node "${STATE_DIR}"
 fi
 
-# Source agent secrets
-[ -f /data/.env ] && set -a && . /data/.env && set +a
+# Ensure agent dir always exists (for machines with pre-existing volumes that
+# never had this subdirectory — OpenClaw v2026.4.15 requires it).
+mkdir -p "${AGENT_DIR}"
+chown node:node "${AGENT_DIR}"
 
-# Drop to node user and exec the command (CMD or init.cmd)
+# Seed auth-profiles.json with the Blink provider credential.
+# This is required by upstream v2026.4.15+ where the gateway reads API keys
+# from this persisted auth store (not static provider config). We always
+# rewrite on boot so BLINK_API_KEY env-var rotations propagate.
+if [ -n "${BLINK_API_KEY:-}" ]; then
+  # Write atomically via a temp file so concurrent readers never see a partial
+  # JSON document. chmod 600 so the api_key plaintext is only readable by node.
+  TMP_AUTH="${AUTH_FILE}.tmp.$$"
+  cat > "${TMP_AUTH}" <<EOF
+{
+  "version": 1,
+  "profiles": {
+    "blink:default": {
+      "type": "api_key",
+      "provider": "blink",
+      "key": "${BLINK_API_KEY}"
+    }
+  }
+}
+EOF
+  chmod 600 "${TMP_AUTH}"
+  chown node:node "${TMP_AUTH}"
+  mv -f "${TMP_AUTH}" "${AUTH_FILE}"
+fi
+
+# Source agent secrets (set via `blink secrets set` → /data/.env).
+if [ -f "${ENV_FILE}" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${ENV_FILE}"
+  set +a
+fi
+
+# Never let the gateway daemonize — Fly init supervises this process.
+export OPENCLAW_NO_RESPAWN=true
+
+# Drop privileges to node and exec the gateway command.
 exec gosu node "$@"

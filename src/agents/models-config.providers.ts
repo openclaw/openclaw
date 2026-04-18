@@ -1,4 +1,5 @@
 export * from "./models-config.providers.static.js";
+export { buildBlinkProvider, buildBlinkProviderSync, BLINK_DEFAULT_MODEL_ID } from "./blink-models.js";
 export { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 export { normalizeProviders } from "./models-config.providers.normalize.js";
 export type {
