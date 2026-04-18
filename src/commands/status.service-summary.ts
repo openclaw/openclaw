@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { readGatewayServiceState, type GatewayService } from "../daemon/service.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -26,7 +27,11 @@ async function resolveServicePackageRoot(
   }
   const candidates = command.programArguments.filter(isCommandPathCandidate);
   for (const candidate of candidates) {
-    const root = await resolveOpenClawPackageRoot({ argv1: candidate }).catch(() => null);
+    const resolvedCandidate =
+      command.workingDirectory && !path.isAbsolute(candidate)
+        ? path.resolve(command.workingDirectory, candidate)
+        : candidate;
+    const root = await resolveOpenClawPackageRoot({ argv1: resolvedCandidate }).catch(() => null);
     if (root) {
       return root;
     }
