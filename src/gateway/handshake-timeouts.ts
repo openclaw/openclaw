@@ -1,6 +1,6 @@
-export const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 10_000;
+export const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 30_000;
 export const MIN_CONNECT_CHALLENGE_TIMEOUT_MS = 250;
-export const MAX_CONNECT_CHALLENGE_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
+export const MAX_CONNECT_CHALLENGE_TIMEOUT_MS = 30_000;
 
 export function clampConnectChallengeTimeoutMs(timeoutMs: number): number {
   return Math.max(
