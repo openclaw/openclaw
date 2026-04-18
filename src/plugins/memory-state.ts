@@ -274,6 +274,16 @@ function cloneMemoryPublicArtifact(
 export async function listActiveMemoryPublicArtifacts(params: {
   cfg: OpenClawConfig;
 }): Promise<MemoryPluginPublicArtifact[]> {
+  if (!memoryPluginState.capability && params.cfg) {
+    const { resolveRuntimePluginRegistry } = await import("./loader.js");
+    const { buildPluginRuntimeLoadOptions, resolvePluginRuntimeLoadContext } =
+      await import("./runtime/load-context.js");
+    if (!memoryPluginState.capability) {
+      resolveRuntimePluginRegistry(
+        buildPluginRuntimeLoadOptions(resolvePluginRuntimeLoadContext({ config: params.cfg })),
+      );
+    }
+  }
   const artifacts =
     (await memoryPluginState.capability?.capability.publicArtifacts?.listArtifacts(params)) ?? [];
   return artifacts.map(cloneMemoryPublicArtifact).toSorted((left, right) => {

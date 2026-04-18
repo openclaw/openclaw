@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   _resetMemoryPluginState,
   buildMemoryPromptSection,
@@ -81,6 +82,38 @@ function registerMemoryState(params: {
 describe("memory plugin state", () => {
   afterEach(() => {
     clearMemoryPluginState();
+  });
+
+  it("lazy-loads plugins when listActiveMemoryPublicArtifacts is called without registered capability", async () => {
+    const loader = await import("./loader.js");
+    const loadSpy = vi.spyOn(loader, "resolveRuntimePluginRegistry").mockImplementation(() => {
+      registerMemoryCapability("memory-core", {
+        publicArtifacts: {
+          async listArtifacts() {
+            return [
+              {
+                kind: "memory-root",
+                workspaceDir: "/tmp/workspace-a",
+                relativePath: "MEMORY.md",
+                absolutePath: "/tmp/workspace-a/MEMORY.md",
+                agentIds: ["main"],
+                contentType: "markdown" as const,
+              },
+            ];
+          },
+        },
+      });
+      return {} as never;
+    });
+
+    const cfg = { plugins: {} } as unknown as OpenClawConfig;
+    const artifacts = await listActiveMemoryPublicArtifacts({ cfg });
+
+    expect(loadSpy).toHaveBeenCalled();
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]?.kind).toBe("memory-root");
+
+    loadSpy.mockRestore();
   });
 
   it("returns empty defaults when no memory plugin state is registered", () => {
