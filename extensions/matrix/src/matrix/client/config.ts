@@ -1,7 +1,10 @@
-import { formatErrorMessage, type PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
-import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import {
+  coerceSecretRef,
+  normalizeResolvedSecretInputString,
+} from "openclaw/plugin-sdk/secret-input-runtime";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -33,6 +36,7 @@ import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 type MatrixAuthClientDeps = {
   MatrixClient: typeof import("../sdk.js").MatrixClient;
   ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
+  retryMinDelayMs?: number;
 };
 
 type MatrixCredentialsReadDeps = {
@@ -40,12 +44,15 @@ type MatrixCredentialsReadDeps = {
   credentialsMatchConfig: typeof import("../credentials-read.js").credentialsMatchConfig;
 };
 
+type MatrixCredentialsWriteRuntime = typeof import("../credentials-write.runtime.js");
+
 type MatrixSecretInputDeps = {
   resolveConfiguredSecretInputString: typeof import("./config-secret-input.runtime.js").resolveConfiguredSecretInputString;
 };
 
 let matrixAuthClientDepsPromise: Promise<MatrixAuthClientDeps> | undefined;
 let matrixCredentialsReadDepsPromise: Promise<MatrixCredentialsReadDeps> | undefined;
+let matrixCredentialsWriteRuntimePromise: Promise<MatrixCredentialsWriteRuntime> | undefined;
 let matrixSecretInputDepsPromise: Promise<MatrixSecretInputDeps> | undefined;
 let matrixAuthClientDepsForTest: MatrixAuthClientDeps | undefined;
 
@@ -55,6 +62,7 @@ const MATRIX_AUTH_REQUEST_RETRY_RE =
 export function setMatrixAuthClientDepsForTest(deps?: {
   MatrixClient: typeof import("../sdk.js").MatrixClient;
   ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
+  retryMinDelayMs?: number;
 }): void {
   matrixAuthClientDepsForTest = deps;
 }
@@ -80,6 +88,11 @@ async function loadMatrixCredentialsReadDeps(): Promise<MatrixCredentialsReadDep
     }),
   );
   return await matrixCredentialsReadDepsPromise;
+}
+
+async function loadMatrixCredentialsWriteRuntime(): Promise<MatrixCredentialsWriteRuntime> {
+  matrixCredentialsWriteRuntimePromise ??= import("../credentials-write.runtime.js");
+  return await matrixCredentialsWriteRuntimePromise;
 }
 
 async function loadMatrixSecretInputDeps(): Promise<MatrixSecretInputDeps> {
@@ -114,7 +127,7 @@ function credentialsMatchBackfillAuthLineage(params: {
 async function retryMatrixAuthRequest<T>(label: string, run: () => Promise<T>): Promise<T> {
   return await retryAsync(run, {
     attempts: 3,
-    minDelayMs: 250,
+    minDelayMs: matrixAuthClientDepsForTest?.retryMinDelayMs ?? 250,
     maxDelayMs: 1_500,
     jitter: 0.1,
     label,
@@ -346,6 +359,15 @@ async function resolveConfiguredMatrixAuthSecretInput(params: {
     return undefined;
   }
 
+  const ref = coerceSecretRef(configured.value, params.cfg.secrets?.defaults);
+  if (!ref) {
+    return normalizeResolvedSecretInputString({
+      value: configured.value,
+      path: configured.path,
+      defaults: params.cfg.secrets?.defaults,
+    });
+  }
+
   const { resolveConfiguredSecretInputString } = await loadMatrixSecretInputDeps();
   const resolved = await resolveConfiguredSecretInputString({
     config: params.cfg,
@@ -358,13 +380,9 @@ async function resolveConfiguredMatrixAuthSecretInput(params: {
     return resolved.value;
   }
 
-  if (coerceSecretRef(configured.value, params.cfg.secrets?.defaults)) {
-    throw new Error(
-      resolved.unresolvedRefReason ?? `${configured.path} SecretRef could not be resolved.`,
-    );
-  }
-
-  return undefined;
+  throw new Error(
+    resolved.unresolvedRefReason ?? `${configured.path} SecretRef could not be resolved.`,
+  );
 }
 
 function readMatrixBaseConfigField(
@@ -730,12 +748,6 @@ export async function resolveMatrixAuth(params?: {
   const homeserver = await resolveValidatedMatrixHomeserverUrl(resolved.homeserver, {
     dangerouslyAllowPrivateNetwork: resolved.allowPrivateNetwork,
   });
-  let credentialsWriter: typeof import("../credentials-write.runtime.js") | undefined;
-  const loadCredentialsWriter = async () => {
-    credentialsWriter ??= await import("../credentials-write.runtime.js");
-    return credentialsWriter;
-  };
-
   const { loadMatrixCredentials, credentialsMatchConfig } = await loadMatrixCredentialsReadDeps();
   const cached = loadMatrixCredentials(env, accountId);
   const cachedCredentials =
@@ -780,7 +792,7 @@ export async function resolveMatrixAuth(params?: {
       cachedCredentials.userId !== userId ||
       (cachedCredentials.deviceId || undefined) !== knownDeviceId;
     if (shouldRefreshCachedCredentials) {
-      const { saveMatrixCredentials } = await loadCredentialsWriter();
+      const { saveMatrixCredentials } = await loadMatrixCredentialsWriteRuntime();
       await saveMatrixCredentials(
         {
           homeserver,
@@ -792,7 +804,7 @@ export async function resolveMatrixAuth(params?: {
         accountId,
       );
     } else if (hasMatchingCachedToken) {
-      const { touchMatrixCredentials } = await loadCredentialsWriter();
+      const { touchMatrixCredentials } = await loadMatrixCredentialsWriteRuntime();
       await touchMatrixCredentials(env, accountId);
     }
     return {
@@ -813,7 +825,7 @@ export async function resolveMatrixAuth(params?: {
   }
 
   if (cachedCredentials) {
-    const { touchMatrixCredentials } = await loadCredentialsWriter();
+    const { touchMatrixCredentials } = await loadMatrixCredentialsWriteRuntime();
     await touchMatrixCredentials(env, accountId);
     return {
       accountId,
@@ -895,7 +907,7 @@ export async function resolveMatrixAuth(params?: {
     }),
   };
 
-  const { saveMatrixCredentials } = await loadCredentialsWriter();
+  const { saveMatrixCredentials } = await loadMatrixCredentialsWriteRuntime();
   await saveMatrixCredentials(
     {
       homeserver: auth.homeserver,
@@ -964,7 +976,7 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
     return undefined;
   }
 
-  const credentialsWriter = await import("../credentials-write.runtime.js");
+  const credentialsWriter = await loadMatrixCredentialsWriteRuntime();
   const saved = await credentialsWriter.saveBackfilledMatrixDeviceId(
     {
       homeserver: params.auth.homeserver,
