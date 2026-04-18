@@ -21,8 +21,8 @@ describe("ingestMemoryWikiSource", () => {
       nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
     });
 
-    expect(result.pageId).toMatch(/^source\.meeting-notes-[a-f0-9]{8}$/);
-    expect(result.pagePath).toMatch(/^sources\/meeting-notes-[a-f0-9]{8}\.md$/);
+    expect(result.pageId).toMatch(/^source\.meeting-notes-[a-f0-9]{12}$/);
+    expect(result.pagePath).toMatch(/^sources\/meeting-notes-[a-f0-9]{12}\.md$/);
     expect(result.indexUpdatedFiles.length).toBeGreaterThan(0);
     await expect(
       fs.readFile(path.join(config.vault.path, result.pagePath), "utf8"),
@@ -195,8 +195,8 @@ describe("ingestMemoryWikiSource", () => {
       nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
     });
 
-    expect(first.pageId).toMatch(/^source\.hello-world-[a-f0-9]{8}$/);
-    expect(first.pagePath).toMatch(/^sources\/hello-world-[a-f0-9]{8}\.md$/);
+    expect(first.pageId).toMatch(/^source\.hello-world-[a-f0-9]{12}$/);
+    expect(first.pagePath).toMatch(/^sources\/hello-world-[a-f0-9]{12}\.md$/);
     expect(second.pageId).toBe(first.pageId);
     expect(second.pagePath).toBe(first.pagePath);
   });
@@ -347,8 +347,8 @@ describe("ingestMemoryWikiSource", () => {
     });
 
     expect(result.title).toBe("meeting notes");
-    expect(result.pageId).toMatch(/^source\.meeting-notes-[a-f0-9]{8}$/);
-    expect(result.pagePath).toMatch(/^sources\/meeting-notes-[a-f0-9]{8}\.md$/);
+    expect(result.pageId).toMatch(/^source\.meeting-notes-[a-f0-9]{12}$/);
+    expect(result.pagePath).toMatch(/^sources\/meeting-notes-[a-f0-9]{12}\.md$/);
     await expect(
       fs.readFile(path.join(config.vault.path, result.pagePath), "utf8"),
     ).resolves.toContain("title: meeting notes");

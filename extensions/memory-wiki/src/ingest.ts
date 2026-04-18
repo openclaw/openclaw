@@ -108,7 +108,7 @@ async function resolveIngestSourcePageIdentity(params: {
   const titleSlug = slugifyWikiSegment(params.title);
   // Bind identity to the resolved file path so same-source reingest stays stable.
   // Moving the file intentionally creates a new source identity.
-  const sourceHash = createHash("sha1").update(canonicalSourcePath).digest("hex").slice(0, 8);
+  const sourceHash = createHash("sha1").update(canonicalSourcePath).digest("hex").slice(0, 12);
   const pageSlug = `${titleSlug}-${sourceHash}`;
   return {
     pageId: `source.${pageSlug}`,
