@@ -140,7 +140,6 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "models",
   "plugins",
   "secrets",
-  "sessions",
   "status",
   "update",
   "webhooks",
@@ -158,6 +157,9 @@ function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boole
     return false;
   }
   const [primary] = getCommandPathFromArgv(argv);
+  if (primary === "sessions" && argv.includes("--json") && !process.stdout.isTTY) {
+    return false;
+  }
   return Boolean(primary) && !SKIP_EAGER_WARMUP_PRIMARY_COMMANDS.has(primary);
 }
 

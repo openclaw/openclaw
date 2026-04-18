@@ -97,6 +97,23 @@ async function importResolveContextTokensForModel() {
   return resolveContextTokensForModel;
 }
 
+function setStdoutIsTTY(value: boolean): () => void {
+  const stdout = process.stdout as NodeJS.WriteStream & { isTTY?: boolean };
+  const hadOwnIsTTY = Object.prototype.hasOwnProperty.call(stdout, "isTTY");
+  const previousIsTTYDescriptor = Object.getOwnPropertyDescriptor(stdout, "isTTY");
+  Object.defineProperty(stdout, "isTTY", {
+    value,
+    configurable: true,
+  });
+  return () => {
+    if (hadOwnIsTTY && previousIsTTYDescriptor) {
+      Object.defineProperty(stdout, "isTTY", previousIsTTYDescriptor);
+      return;
+    }
+    delete stdout.isTTY;
+  };
+}
+
 describe("lookupContextTokens", () => {
   beforeAll(async () => {
     contextModule = await import("./context.js");
@@ -216,16 +233,14 @@ describe("lookupContextTokens", () => {
           expectedCalls: 0,
         },
         {
-          argv: ["node", "openclaw", "sessions"],
-          expectedCalls: 0,
+          argv: ["node", "openclaw", "sessions", "--json"],
+          expectedCalls: 1,
+          stdoutIsTTY: true,
         },
         {
           argv: ["node", "openclaw", "sessions", "--json"],
           expectedCalls: 0,
-        },
-        {
-          argv: ["node", "openclaw", "sessions", "--active", "10"],
-          expectedCalls: 0,
+          stdoutIsTTY: false,
         },
         {
           argv: ["node", "scripts/test-built-plugin-singleton.mjs"],
@@ -234,10 +249,21 @@ describe("lookupContextTokens", () => {
       ]) {
         const loadConfigMock = vi.fn(() => ({ models: {} }));
         const { ensureOpenClawModelsJson } = mockContextModuleDeps(loadConfigMock);
+        contextModule.resetContextWindowCacheForTest();
         process.argv = scenario.argv;
-        await importFreshContextModule();
-        expect(loadConfigMock).toHaveBeenCalledTimes(scenario.expectedCalls);
-        expect(ensureOpenClawModelsJson).toHaveBeenCalledTimes(scenario.expectedCalls);
+        const restoreStdoutIsTTY =
+          typeof scenario.stdoutIsTTY === "boolean" ? setStdoutIsTTY(scenario.stdoutIsTTY) : null;
+        try {
+          await importFreshContextModule();
+        } finally {
+          restoreStdoutIsTTY?.();
+        }
+        expect(loadConfigMock, scenario.argv.join(" ")).toHaveBeenCalledTimes(
+          scenario.expectedCalls,
+        );
+        expect(ensureOpenClawModelsJson, scenario.argv.join(" ")).toHaveBeenCalledTimes(
+          scenario.expectedCalls,
+        );
       }
     } finally {
       process.argv = argvSnapshot;
