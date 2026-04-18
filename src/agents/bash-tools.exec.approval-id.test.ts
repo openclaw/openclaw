@@ -595,7 +595,7 @@ describe("exec approvals", () => {
       security: "allowlist",
       approvalRunningNoticeMs: 0,
     });
-    const command = `${JSON.stringify(process.execPath)} --version`;
+    const command = "echo allow-always";
 
     const first = await tool.execute("call-gateway-allow-always-initial", {
       command,
@@ -607,13 +607,16 @@ describe("exec approvals", () => {
 
     const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
     await expect
-      .poll(async () => {
-        const raw = await fs.readFile(approvalsPath, "utf8");
-        const parsed = JSON.parse(raw) as {
-          agents?: { main?: { allowlist?: Array<{ source?: string }> } };
-        };
-        return parsed.agents?.main?.allowlist?.some((entry) => entry.source === "allow-always");
-      })
+      .poll(
+        async () => {
+          const raw = await fs.readFile(approvalsPath, "utf8");
+          const parsed = JSON.parse(raw) as {
+            agents?: { main?: { allowlist?: Array<{ source?: string }> } };
+          };
+          return parsed.agents?.main?.allowlist?.some((entry) => entry.source === "allow-always");
+        },
+        { timeout: 1_000, interval: 1 },
+      )
       .toBe(true);
 
     calls.length = 0;
@@ -929,7 +932,7 @@ describe("exec approvals", () => {
             return "";
           }
         },
-        { timeout: 5_000, interval: 50 },
+        { timeout: 1_000, interval: 1 },
       )
       .toBe("ok");
   });
@@ -977,7 +980,7 @@ describe("exec approvals", () => {
             return "";
           }
         },
-        { timeout: 5_000, interval: 50 },
+        { timeout: 1_000, interval: 1 },
       )
       .toBe("ok");
   });
