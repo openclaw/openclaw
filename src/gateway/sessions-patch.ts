@@ -541,6 +541,24 @@ export async function applySessionsPatchToStore(params: {
       // so subsequent reads see no active plan state (matches the
       // sessions.patch { planMode: "normal" } semantics).
       if (next.planMode.mode === "normal") {
+        // PR-12 Bug A1: clean up scheduled nudge crons on EVERY
+        // plan-mode close path (was previously only fired in the
+        // `raw === "normal"` branch above). Without this, every
+        // approve/reject/edit cycle leaks 3 wake-up crons that fire
+        // hours later as orphaned nudges interrupting unrelated work.
+        // Capture the ids BEFORE we rewrite/delete the entry.
+        const previousNudgeIds = next.planMode.nudgeJobIds;
+        if (previousNudgeIds && previousNudgeIds.length > 0) {
+          const ids = [...previousNudgeIds];
+          void (async () => {
+            try {
+              const { cleanupPlanNudges } = await import("../agents/plan-mode/plan-nudge-crons.js");
+              await cleanupPlanNudges({ jobIds: ids });
+            } catch {
+              /* best-effort */
+            }
+          })();
+        }
         // PR-10 auto-mode: preserve `autoApprove` flag across the close
         // so the next enter_plan_mode keeps the toggle. Without this
         // the user would have to re-toggle every plan cycle.
@@ -552,6 +570,9 @@ export async function applySessionsPatchToStore(params: {
             rejectionCount: 0,
             updatedAt: now,
             autoApprove: true,
+            // Note: `nudgeJobIds` is NOT carried forward — they were
+            // just cancelled above. The next enter_plan_mode will
+            // schedule a fresh batch.
           };
         } else {
           delete next.planMode;

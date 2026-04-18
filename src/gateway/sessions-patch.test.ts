@@ -591,6 +591,41 @@ describe("PR-10 plan auto-mode patch routing", () => {
     expect(entry.planMode?.autoApprove).toBe(true);
   });
 
+  test("PR-12 Bug A1: nudgeJobIds dropped from carry-forward planMode entry on approve+autoApprove (was leaked before)", async () => {
+    // Prior bug: every approve/reject/edit cycle left scheduled
+    // nudge crons orphaned because the planApproval branch only
+    // deleted/rewrote `planMode` without calling cleanupPlanNudges
+    // first. Fix: capture the ids BEFORE the rewrite, and the carry-
+    // forward entry must NOT include them — they were just cancelled
+    // and the next enter_plan_mode schedules fresh ones.
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        planMode: {
+          mode: "plan",
+          approval: "pending",
+          approvalId: "leak-test",
+          rejectionCount: 0,
+          updatedAt: 1,
+          autoApprove: true,
+          nudgeJobIds: ["plan-nudge:10min:foo", "plan-nudge:30min:foo", "plan-nudge:60min:foo"],
+        },
+      } as unknown as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "approve", approvalId: "leak-test" },
+        },
+      }),
+    );
+    expect(entry.planMode?.mode).toBe("normal");
+    expect(entry.planMode?.autoApprove).toBe(true);
+    expect(entry.planMode?.nudgeJobIds).toBeUndefined();
+  });
+
   test("clears planMode entry on approve when autoApprove is unset", async () => {
     const store: Record<string, SessionEntry> = {
       [MAIN_SESSION_KEY]: {
