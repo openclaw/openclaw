@@ -74,7 +74,7 @@ const DETAILS_STATE_KEY = "chat:details_state";
 function saveDetailsState(id: string, isOpen: boolean) {
   try {
     const storage = getSafeLocalStorage();
-    if (!storage) {return;}  // Add braces
+    if (!storage) {return;}
     const state = JSON.parse(storage.getItem(DETAILS_STATE_KEY) || "{}");
     state[id] = isOpen;
     storage.setItem(DETAILS_STATE_KEY, JSON.stringify(state));
@@ -84,7 +84,7 @@ function saveDetailsState(id: string, isOpen: boolean) {
 function getDetailsState(id: string): boolean {
   try {
     const storage = getSafeLocalStorage();
-    if (!storage) {return true;}  // Add braces
+    if (!storage) {return true;}
     const state = JSON.parse(storage.getItem(DETAILS_STATE_KEY) || "{}");
     if (state[id] === undefined) {return true;}
     return state[id] === true;
@@ -96,7 +96,6 @@ function getDetailsState(id: string): boolean {
 function generateDetailsId(message: unknown, index: number): string {
   const m = message as Record<string, unknown>;
   const id = m.id || m.messageId || m.timestamp;
-  // Convert id to string safely
   // eslint-disable-next-line @typescript-eslint/no-base-to-string
   const idString = id ? (typeof id === 'object' ? JSON.stringify(id) : String(id)) : 'unknown';
   return `tool-${idString}-${index}`;
@@ -198,7 +197,12 @@ function buildAssistantAttachmentMetaUrl(
   return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
 }
 
-// Fixed extractImages function (only the relevant part showing the fix)
+// Helper function to open image in new tab
+function openImage(url: string) {
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+// Fixed extractImages function with transcript media path support
 function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
@@ -218,30 +222,38 @@ function extractImages(message: unknown): ImageBlock[] {
           const raw = source.data;
           const url = raw.startsWith("data:") ? raw : `data:${mediaType};base64,${raw}`;
           const filename = typeof b.filename === "string" ? b.filename : undefined;
-          images.push({ url, filename, httpUrl: undefined });
+          if (!images.some((img) => img.url === url)) {
+            images.push({ url, filename, httpUrl: undefined });
+          }
         } else if (typeof b.url === "string") {
           const urlValue = b.url;
           
           // Preserve gateway-routed paths - don't rewrite them
           if (isGatewayRoutedPath(urlValue)) {
             const filename = typeof b.filename === "string" ? b.filename : urlValue.split("/").pop();
-            images.push({ url: urlValue, filename, httpUrl: undefined });
+            if (!images.some((img) => img.url === urlValue)) {
+              images.push({ url: urlValue, filename, httpUrl: undefined });
+            }
           }
           // Handle absolute Unix paths (non-gateway) - serve from media server
           else if (urlValue.startsWith("/") && !urlValue.startsWith("//")) {
             const mediaServerUrl = `http://localhost:18791${urlValue}`;
             const filename = typeof b.filename === "string" ? b.filename : urlValue.split("/").pop();
-            images.push({ 
-              url: mediaServerUrl, 
-              filename, 
-              httpUrl: mediaServerUrl 
-            });
+            if (!images.some((img) => img.url === mediaServerUrl)) {
+              images.push({ 
+                url: mediaServerUrl, 
+                filename, 
+                httpUrl: mediaServerUrl 
+              });
+            }
           } else {
             const isMediaServerUrl = urlValue.startsWith("http://localhost:18791/") || 
                                      urlValue.startsWith("http://127.0.0.1:18791/");
             const httpUrl = isMediaServerUrl ? urlValue : undefined;
             const filename = typeof b.filename === "string" ? b.filename : urlValue.split("/").pop();
-            images.push({ url: urlValue, filename, httpUrl });
+            if (!images.some((img) => img.url === urlValue)) {
+              images.push({ url: urlValue, filename, httpUrl });
+            }
           }
         }
       } else if (b.type === "image_url") {
@@ -251,32 +263,88 @@ function extractImages(message: unknown): ImageBlock[] {
           
           // Preserve gateway-routed paths - don't rewrite them
           if (isGatewayRoutedPath(urlValue)) {
-            images.push({
-              url: urlValue,
-              filename: urlValue.split("/").pop(),
-              httpUrl: undefined,
-            });
+            if (!images.some((img) => img.url === urlValue)) {
+              images.push({
+                url: urlValue,
+                filename: urlValue.split("/").pop(),
+                httpUrl: undefined,
+              });
+            }
           }
           // Handle absolute Unix paths (non-gateway) - serve from media server
           else if (urlValue.startsWith("/") && !urlValue.startsWith("//")) {
             const mediaServerUrl = `http://localhost:18791${urlValue}`;
-            images.push({
-              url: mediaServerUrl,
-              filename: urlValue.split("/").pop(),
-              httpUrl: mediaServerUrl,
-            });
+            if (!images.some((img) => img.url === mediaServerUrl)) {
+              images.push({
+                url: mediaServerUrl,
+                filename: urlValue.split("/").pop(),
+                httpUrl: mediaServerUrl,
+              });
+            }
           } else {
             const isMediaServerUrl = urlValue.startsWith("http://localhost:18791/") || 
                                      urlValue.startsWith("http://127.0.0.1:18791/");
             const httpUrl = isMediaServerUrl ? urlValue : undefined;
-            images.push({
-              url: urlValue,
-              filename: urlValue.split("/").pop(),
-              httpUrl,
-            });
+            if (!images.some((img) => img.url === urlValue)) {
+              images.push({
+                url: urlValue,
+                filename: urlValue.split("/").pop(),
+                httpUrl,
+              });
+            }
+          }
+        }
+      } else if (b.type === "input_image") {
+        const imageUrl = b.image_url;
+        if (typeof imageUrl === "string") {
+          if (!images.some((img) => img.url === imageUrl)) {
+            images.push({ url: imageUrl, filename: undefined, httpUrl: undefined });
+          }
+        } else if (imageUrl && typeof imageUrl === "object") {
+          const url = (imageUrl as Record<string, unknown>).url;
+          if (typeof url === "string") {
+            if (!images.some((img) => img.url === url)) {
+              images.push({ url, filename: undefined, httpUrl: undefined });
+            }
+          }
+        }
+        const source = b.source as Record<string, unknown> | undefined;
+        if (typeof source?.url === "string") {
+          if (!images.some((img) => img.url === source.url)) {
+            images.push({ url: source.url, filename: undefined, httpUrl: undefined });
+          }
+        } else if (typeof source?.data === "string") {
+          const mediaType = typeof source.media_type === "string" ? source.media_type : "image/png";
+          const url = source.data.startsWith("data:")
+            ? source.data
+            : `data:${mediaType};base64,${source.data}`;
+          if (!images.some((img) => img.url === url)) {
+            images.push({ url, filename: undefined, httpUrl: undefined });
           }
         }
       }
+    }
+  }
+
+  // Add transcript media paths
+  const transcriptMediaPaths = Array.isArray(m.MediaPaths)
+    ? m.MediaPaths.filter((value): value is string => typeof value === "string")
+    : typeof m.MediaPath === "string"
+      ? [m.MediaPath]
+      : [];
+  const transcriptMediaTypes = Array.isArray(m.MediaTypes)
+    ? m.MediaTypes
+    : typeof m.MediaType === "string"
+      ? [m.MediaType]
+      : [];
+  
+  for (const [index, mediaPath] of transcriptMediaPaths.entries()) {
+    // Check if it's an image
+    const mediaType = transcriptMediaTypes[index];
+    const isImage = !mediaType || (typeof mediaType === "string" && mediaType.startsWith("image/"));
+    
+    if (isImage && !images.some((img) => img.url === mediaPath)) {
+      images.push({ url: mediaPath, filename: mediaPath.split("/").pop(), httpUrl: undefined });
     }
   }
 
@@ -302,45 +370,53 @@ function extractAudioVideoBlocks(message: unknown): { audio: AudioBlock[]; video
 
     if (b.type === "audio") {
       if (typeof b.url === "string") {
-        audio.push({
-          type: "audio",
-          data: b.url,
-          mimeType: typeof b.mimeType === "string" ? b.mimeType : "audio/ogg",
-          filename: typeof b.filename === "string" ? b.filename : undefined,
-        });
+        if (!audio.some((a) => a.data === b.url)) {
+          audio.push({
+            type: "audio",
+            data: b.url,
+            mimeType: typeof b.mimeType === "string" ? b.mimeType : "audio/ogg",
+            filename: typeof b.filename === "string" ? b.filename : undefined,
+          });
+        }
       } else if (typeof b.data === "string") {
         const mimeTypeValue = typeof b.mimeType === "string" ? b.mimeType : "audio/ogg";
         const dataUrl = b.data.startsWith("data:")
           ? b.data
           : `data:${mimeTypeValue};base64,${b.data}`;
-        audio.push({
-          type: "audio",
-          data: dataUrl,
-          mimeType: mimeTypeValue,
-          filename: typeof b.filename === "string" ? b.filename : undefined,
-        });
+        if (!audio.some((a) => a.data === dataUrl)) {
+          audio.push({
+            type: "audio",
+            data: dataUrl,
+            mimeType: mimeTypeValue,
+            filename: typeof b.filename === "string" ? b.filename : undefined,
+          });
+        }
       }
     }
 
     if (b.type === "video") {
       if (typeof b.url === "string") {
-        video.push({
-          type: "video",
-          data: b.url,
-          mimeType: typeof b.mimeType === "string" ? b.mimeType : "video/mp4",
-          filename: typeof b.filename === "string" ? b.filename : undefined,
-        });
+        if (!video.some((v) => v.data === b.url)) {
+          video.push({
+            type: "video",
+            data: b.url,
+            mimeType: typeof b.mimeType === "string" ? b.mimeType : "video/mp4",
+            filename: typeof b.filename === "string" ? b.filename : undefined,
+          });
+        }
       } else if (typeof b.data === "string") {
         const mimeTypeValue = typeof b.mimeType === "string" ? b.mimeType : "video/mp4";
         const dataUrl = b.data.startsWith("data:")
           ? b.data
           : `data:${mimeTypeValue};base64,${b.data}`;
-        video.push({
-          type: "video",
-          data: dataUrl,
-          mimeType: mimeTypeValue,
-          filename: typeof b.filename === "string" ? b.filename : undefined,
-        });
+        if (!video.some((v) => v.data === dataUrl)) {
+          video.push({
+            type: "video",
+            data: dataUrl,
+            mimeType: mimeTypeValue,
+            filename: typeof b.filename === "string" ? b.filename : undefined,
+          });
+        }
       }
     }
   }
@@ -861,9 +937,12 @@ function renderMessageImages(images: ImageBlock[]) {
                     targetWidth = Math.floor(naturalWidth * 0.8);
                   }
                   
+                  // Ensure minimum width and don't exceed parent
+                  targetWidth = Math.max(150, Math.min(targetWidth, 600));
                   bubble.style.width = `${targetWidth}px`;
                 }
               }}
+              @click=${() => openImage(img.httpUrl || img.url)}
             />
             ${img.httpUrl && img.httpUrl.startsWith("http")
               ? html`<a
@@ -1235,7 +1314,7 @@ function renderAssistantAttachments(
   basePath?: string,
   authToken?: string | null,
   onRequestUpdate?: () => void,
-  hasRawMedia?: boolean, // Pass this flag to know if media is already rendered elsewhere
+  hasRawMedia?: boolean,
 ) {
   if (attachments.length === 0) {
     return nothing;
@@ -1278,9 +1357,8 @@ function renderAssistantAttachments(
                 class="chat-assistant-attachment-card__link"
                 href=${attachmentUrl}
                 target="_blank"
-                rel="noreferrer"
-                >${attachment.label}</a
-              >
+                rel="noopener noreferrer"
+              >${attachment.label}</a>
             </div>
           `;
         }
@@ -1297,14 +1375,13 @@ function renderAssistantAttachments(
           }
           return html`
             <div class="chat-assistant-attachment-card chat-assistant-attachment-card--image">
-              <img src=${attachmentUrl} alt=${attachment.label} />
+              <img src=${attachmentUrl} alt=${attachment.label} @click=${() => openImage(attachmentUrl)} />
               <a
                 class="chat-assistant-attachment-card__link"
                 href=${attachmentUrl}
                 target="_blank"
-                rel="noreferrer"
-                >${attachment.label}</a
-              >
+                rel="noopener noreferrer"
+              >${attachment.label}</a>
             </div>
           `;
         }
@@ -1326,9 +1403,8 @@ function renderAssistantAttachments(
                 class="chat-assistant-attachment-card__link"
                 href=${attachmentUrl}
                 target="_blank"
-                rel="noreferrer"
-                >${attachment.label}</a
-              >
+                rel="noopener noreferrer"
+              >${attachment.label}</a>
             </div>
           `;
         }
@@ -1349,9 +1425,8 @@ function renderAssistantAttachments(
               class="chat-assistant-attachment-card__link"
               href=${attachmentUrl}
               target="_blank"
-              rel="noreferrer"
-              >${attachment.label}</a
-            >
+              rel="noopener noreferrer"
+            >${attachment.label}</a>
           </div>
         `;
       })}
@@ -1651,7 +1726,7 @@ function renderGroupedMessage(
                 opts.basePath,
                 opts.assistantAttachmentAuthToken,
                 opts.onRequestUpdate,
-                hasMedia, // Pass whether there's raw media from content blocks
+                hasMedia,
               )}
             </div>
           </details>
@@ -1732,7 +1807,7 @@ function renderGroupedMessage(
     `;
   }
 
-  // Regular (non-tool) message rendering - unchanged
+  // Regular (non-tool) message rendering
   return html`
     <div 
       class="${bubbleClasses}"
@@ -1754,6 +1829,7 @@ function renderGroupedMessage(
         opts.basePath,
         opts.assistantAttachmentAuthToken,
         opts.onRequestUpdate,
+        hasMedia,
       )}
       ${reasoningMarkdown
         ? html`<div class="chat-thinking">
