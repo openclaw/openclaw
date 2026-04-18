@@ -21,8 +21,7 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
 }));
 
-vi.mock("./skills.js", async () => ({
-  ...(await vi.importActual<typeof import("./skills.js")>("./skills.js")),
+vi.mock("./skills.js", () => ({
   hasBinary: (bin: string) => hasBinaryMock(bin),
 }));
 
