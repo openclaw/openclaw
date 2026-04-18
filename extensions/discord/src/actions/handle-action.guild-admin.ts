@@ -26,6 +26,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   const { ctx, resolveChannelId, readParentIdParam } = params;
   const { action, params: actionParams, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(actionParams, "accountId");
+  const senderUserId = normalizeOptionalString(ctx.requesterSenderId);
 
   if (action === "member-info") {
     const userId = readStringParam(actionParams, "userId", { required: true });
@@ -76,6 +77,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         name,
         mediaUrl,
         roleIds,
+        senderUserId,
       },
       cfg,
     );
@@ -107,6 +109,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         description,
         tags,
         mediaUrl,
+        senderUserId,
       },
       cfg,
     );
@@ -125,6 +128,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         guildId,
         userId,
         roleId,
+        senderUserId,
       },
       cfg,
     );
@@ -173,6 +177,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         topic: topic ?? undefined,
         position: position ?? undefined,
         nsfw,
+        senderUserId,
       },
       cfg,
     );
@@ -213,6 +218,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         locked,
         autoArchiveDuration: autoArchiveDuration ?? undefined,
         availableTags,
+        senderUserId,
       },
       cfg,
     );
@@ -223,7 +229,12 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       required: true,
     });
     return await handleDiscordAction(
-      { action: "channelDelete", accountId: accountId ?? undefined, channelId },
+      {
+        action: "channelDelete",
+        accountId: accountId ?? undefined,
+        channelId,
+        senderUserId,
+      },
       cfg,
     );
   }
@@ -247,6 +258,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         channelId,
         parentId: parentId === undefined ? undefined : parentId,
         position: position ?? undefined,
+        senderUserId,
       },
       cfg,
     );
@@ -267,6 +279,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         guildId,
         name,
         position: position ?? undefined,
+        senderUserId,
       },
       cfg,
     );
@@ -287,6 +300,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         categoryId,
         name: name ?? undefined,
         position: position ?? undefined,
+        senderUserId,
       },
       cfg,
     );
@@ -297,7 +311,12 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       required: true,
     });
     return await handleDiscordAction(
-      { action: "categoryDelete", accountId: accountId ?? undefined, categoryId },
+      {
+        action: "categoryDelete",
+        accountId: accountId ?? undefined,
+        categoryId,
+        senderUserId,
+      },
       cfg,
     );
   }
@@ -350,6 +369,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         location,
         entityType,
         image,
+        senderUserId,
       },
       cfg,
       { mediaLocalRoots: ctx.mediaLocalRoots },
@@ -364,7 +384,6 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         integer: true,
       }),
     });
-    const senderUserId = normalizeOptionalString(ctx.requesterSenderId);
     return await handleDiscordAction(
       {
         action: moderation.action,

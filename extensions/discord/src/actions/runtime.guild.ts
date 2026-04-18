@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { PermissionFlagsBits } from "discord-api-types/v10";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { getPresence } from "../monitor/presence-cache.js";
 import {
@@ -19,6 +20,7 @@ import {
   editChannelDiscord,
   fetchChannelInfoDiscord,
   fetchMemberInfoDiscord,
+  hasAnyGuildPermissionDiscord,
   fetchRoleInfoDiscord,
   fetchVoiceStatusDiscord,
   listGuildChannelsDiscord,
@@ -43,6 +45,7 @@ export const discordGuildActionRuntime = {
   editChannelDiscord,
   fetchChannelInfoDiscord,
   fetchMemberInfoDiscord,
+  hasAnyGuildPermissionDiscord,
   fetchRoleInfoDiscord,
   fetchVoiceStatusDiscord,
   listGuildChannelsDiscord,
@@ -69,6 +72,86 @@ type DiscordRoleMutationWithAccount = (
   },
   options: { accountId: string },
 ) => Promise<unknown>;
+
+const guildAdminPermissions: Partial<Record<string, bigint[]>> = {
+  emojiUpload: [
+    PermissionFlagsBits.ManageGuildExpressions,
+    PermissionFlagsBits.CreateGuildExpressions,
+    PermissionFlagsBits.ManageEmojisAndStickers,
+  ],
+  stickerUpload: [
+    PermissionFlagsBits.ManageGuildExpressions,
+    PermissionFlagsBits.CreateGuildExpressions,
+    PermissionFlagsBits.ManageEmojisAndStickers,
+  ],
+  roleAdd: [PermissionFlagsBits.ManageRoles],
+  roleRemove: [PermissionFlagsBits.ManageRoles],
+  eventCreate: [PermissionFlagsBits.ManageEvents, PermissionFlagsBits.CreateEvents],
+  channelCreate: [PermissionFlagsBits.ManageChannels],
+  channelEdit: [PermissionFlagsBits.ManageChannels],
+  channelDelete: [PermissionFlagsBits.ManageChannels],
+  channelMove: [PermissionFlagsBits.ManageChannels],
+  categoryCreate: [PermissionFlagsBits.ManageChannels],
+  categoryEdit: [PermissionFlagsBits.ManageChannels],
+  categoryDelete: [PermissionFlagsBits.ManageChannels],
+  channelPermissionSet: [PermissionFlagsBits.ManageChannels],
+  channelPermissionRemove: [PermissionFlagsBits.ManageChannels],
+};
+
+async function resolveGuildIdForGuildAdminAction(params: {
+  action: string;
+  values: Record<string, unknown>;
+  accountId?: string;
+}): Promise<string | undefined> {
+  const guildId = readStringParam(params.values, "guildId");
+  if (guildId) {
+    return guildId;
+  }
+
+  const channelLikeId =
+    readStringParam(params.values, "channelId") ?? readStringParam(params.values, "categoryId");
+  if (!channelLikeId) {
+    return undefined;
+  }
+
+  const channel = params.accountId
+    ? await discordGuildActionRuntime.fetchChannelInfoDiscord(channelLikeId, {
+        accountId: params.accountId,
+      })
+    : await discordGuildActionRuntime.fetchChannelInfoDiscord(channelLikeId);
+  return "guild_id" in channel ? (channel.guild_id ?? undefined) : undefined;
+}
+
+async function verifySenderGuildAdminPermission(params: {
+  action: string;
+  values: Record<string, unknown>;
+  accountId?: string;
+}) {
+  const requiredPermissions = guildAdminPermissions[params.action];
+  if (!requiredPermissions?.length) {
+    return;
+  }
+
+  const senderUserId = readStringParam(params.values, "senderUserId");
+  if (!senderUserId) {
+    return;
+  }
+
+  const guildId = await resolveGuildIdForGuildAdminAction(params);
+  if (!guildId) {
+    throw new Error(`Guild id required to authorize Discord guild action: ${params.action}`);
+  }
+
+  const hasPermission = await discordGuildActionRuntime.hasAnyGuildPermissionDiscord(
+    guildId,
+    senderUserId,
+    requiredPermissions,
+    params.accountId ? { accountId: params.accountId } : undefined,
+  );
+  if (!hasPermission) {
+    throw new Error("Sender does not have required permissions for this guild action.");
+  }
+}
 
 async function runRoleMutation(params: {
   accountId?: string;
@@ -100,6 +183,7 @@ export async function handleDiscordGuildAction(
   options?: { mediaLocalRoots?: readonly string[] },
 ): Promise<AgentToolResult<unknown>> {
   const accountId = readStringParam(params, "accountId");
+  await verifySenderGuildAdminPermission({ action, values: params, accountId });
   switch (action) {
     case "memberInfo": {
       if (!isActionEnabled("memberInfo")) {
