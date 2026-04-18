@@ -25,6 +25,38 @@ afterAll(async () => {
   await tempHarness.cleanup();
 });
 
+function createEnabledBundleProbeConfig(): OpenClawConfig {
+  return {
+    plugins: {
+      entries: {
+        "bundle-probe": { enabled: true },
+      },
+    },
+  };
+}
+
+async function prepareBundleProbeCliConfig(params?: {
+  additionalConfig?: Parameters<typeof prepareCliBundleMcpConfig>[0]["additionalConfig"];
+}) {
+  const env = captureEnv(["HOME"]);
+  try {
+    process.env.HOME = bundleProbeHomeDir;
+    return await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs"],
+      },
+      workspaceDir: bundleProbeWorkspaceDir,
+      config: createEnabledBundleProbeConfig(),
+      additionalConfig: params?.additionalConfig,
+    });
+  } finally {
+    env.restore();
+  }
+}
+
 describe("prepareCliBundleMcpConfig", () => {
   it("injects a strict empty --mcp-config overlay for bundle-MCP-enabled backends without servers", async () => {
     const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-empty-");
@@ -54,44 +86,20 @@ describe("prepareCliBundleMcpConfig", () => {
   });
 
   it("injects a merged --mcp-config overlay for bundle-MCP-enabled backends", async () => {
-    const env = captureEnv(["HOME"]);
-    try {
-      process.env.HOME = bundleProbeHomeDir;
+    const prepared = await prepareBundleProbeCliConfig();
 
-      const config: OpenClawConfig = {
-        plugins: {
-          entries: {
-            "bundle-probe": { enabled: true },
-          },
-        },
-      };
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(prepared.backend.args).toContain("--strict-mcp-config");
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    expect(typeof generatedConfigPath).toBe("string");
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<string, { args?: string[] }>;
+    };
+    expect(raw.mcpServers?.bundleProbe?.args).toEqual([await fs.realpath(bundleProbeServerPath)]);
+    expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
 
-      const prepared = await prepareCliBundleMcpConfig({
-        enabled: true,
-        mode: "claude-config-file",
-        backend: {
-          command: "node",
-          args: ["./fake-claude.mjs"],
-        },
-        workspaceDir: bundleProbeWorkspaceDir,
-        config,
-      });
-
-      const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-      expect(configFlagIndex).toBeGreaterThanOrEqual(0);
-      expect(prepared.backend.args).toContain("--strict-mcp-config");
-      const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-      expect(typeof generatedConfigPath).toBe("string");
-      const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
-        mcpServers?: Record<string, { args?: string[] }>;
-      };
-      expect(raw.mcpServers?.bundleProbe?.args).toEqual([await fs.realpath(bundleProbeServerPath)]);
-      expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
-
-      await prepared.cleanup?.();
-    } finally {
-      env.restore();
-    }
+    await prepared.cleanup?.();
   });
 
   it("loads workspace bundle MCP plugins from the configured workspace root", async () => {
@@ -150,53 +158,30 @@ describe("prepareCliBundleMcpConfig", () => {
   });
 
   it("merges loopback overlay config with bundle MCP servers", async () => {
-    const env = captureEnv(["HOME"]);
-    try {
-      process.env.HOME = bundleProbeHomeDir;
-
-      const config: OpenClawConfig = {
-        plugins: {
-          entries: {
-            "bundle-probe": { enabled: true },
-          },
-        },
-      };
-
-      const prepared = await prepareCliBundleMcpConfig({
-        enabled: true,
-        mode: "claude-config-file",
-        backend: {
-          command: "node",
-          args: ["./fake-claude.mjs"],
-        },
-        workspaceDir: bundleProbeWorkspaceDir,
-        config,
-        additionalConfig: {
-          mcpServers: {
-            openclaw: {
-              type: "http",
-              url: "http://127.0.0.1:23119/mcp",
-              headers: {
-                Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-              },
+    const prepared = await prepareBundleProbeCliConfig({
+      additionalConfig: {
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:23119/mcp",
+            headers: {
+              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
             },
           },
         },
-      });
+      },
+    });
 
-      const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-      const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-      const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
-        mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
-      };
-      expect(Object.keys(raw.mcpServers ?? {}).toSorted()).toEqual(["bundleProbe", "openclaw"]);
-      expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
-      expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer ${OPENCLAW_MCP_TOKEN}");
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
+    };
+    expect(Object.keys(raw.mcpServers ?? {}).toSorted()).toEqual(["bundleProbe", "openclaw"]);
+    expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
+    expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer ${OPENCLAW_MCP_TOKEN}");
 
-      await prepared.cleanup?.();
-    } finally {
-      env.restore();
-    }
+    await prepared.cleanup?.();
   });
 
   it("preserves extra env values alongside generated MCP config", async () => {
