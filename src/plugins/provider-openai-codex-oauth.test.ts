@@ -238,7 +238,7 @@ describe("loginOpenAICodexOAuth", () => {
     expect(prompter.note).not.toHaveBeenCalledWith("tls fix", "OAuth prerequisites");
   });
 
-  it("fails early with actionable message when TLS preflight fails", async () => {
+  it("surfaces TLS preflight guidance but still attempts OAuth login", async () => {
     mocks.runOpenAIOAuthTlsPreflight.mockResolvedValue({
       ok: false,
       kind: "tls-cert",
@@ -246,6 +246,14 @@ describe("loginOpenAICodexOAuth", () => {
       message: "unable to get local issuer certificate",
     });
     mocks.formatOpenAIOAuthTlsPreflightFix.mockReturnValue("Run brew postinstall openssl@3");
+    const creds = {
+      provider: "openai-codex" as const,
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    };
+    mocks.loginOpenAICodex.mockResolvedValue(creds);
 
     const { prompter } = createPrompter();
     const runtime = createRuntime();
@@ -257,10 +265,11 @@ describe("loginOpenAICodexOAuth", () => {
         isRemote: false,
         openUrl: async () => {},
       }),
-    ).rejects.toThrow("unable to get local issuer certificate");
+    ).resolves.toEqual(creds);
 
-    expect(mocks.loginOpenAICodex).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith("Run brew postinstall openssl@3");
+    expect(mocks.loginOpenAICodex).toHaveBeenCalledOnce();
+    expect(runtime.log).toHaveBeenCalledWith("Run brew postinstall openssl@3");
+    expect(runtime.error).not.toHaveBeenCalledWith("Run brew postinstall openssl@3");
     expect(prompter.note).toHaveBeenCalledWith(
       "Run brew postinstall openssl@3",
       "OAuth prerequisites",

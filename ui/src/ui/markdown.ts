@@ -278,7 +278,6 @@ md.linkify.add("www", {
       break;
     }
     return len;
-
   },
   normalize(match) {
     match.url = "http://" + match.url;

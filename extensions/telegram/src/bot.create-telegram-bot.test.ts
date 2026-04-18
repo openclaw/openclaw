@@ -119,6 +119,10 @@ function installPerKeySequentializer(): void {
   });
 }
 
+function mockTelegramConfigWrites() {
+  return vi.spyOn(configRuntime, "writeConfigFile").mockResolvedValue(undefined);
+}
+
 describe("createTelegramBot", () => {
   beforeAll(() => {
     process.env.TZ = "UTC";
@@ -1465,6 +1469,7 @@ describe("createTelegramBot", () => {
   });
 
   it("retries group migration updates after a bubbled handler failure", async () => {
+    const writeConfigFileSpy = mockTelegramConfigWrites();
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -1514,12 +1519,17 @@ describe("createTelegramBot", () => {
     loadConfig.mockImplementationOnce(() => {
       throw new Error("cfg boom");
     });
-    await expect(runMiddlewareChain(ctx)).rejects.toThrow("cfg boom");
-    const loadConfigCallsAfterFailure = loadConfig.mock.calls.length;
-    await runMiddlewareChain(ctx);
+    try {
+      await expect(runMiddlewareChain(ctx)).rejects.toThrow("cfg boom");
+      const loadConfigCallsAfterFailure = loadConfig.mock.calls.length;
+      await runMiddlewareChain(ctx);
 
-    expect(loadConfigCallsAfterFailure).toBe(loadConfigCallsBeforeRetry + 1);
-    expect(loadConfig.mock.calls.length).toBeGreaterThan(loadConfigCallsAfterFailure);
+      expect(loadConfigCallsAfterFailure).toBe(loadConfigCallsBeforeRetry + 1);
+      expect(loadConfig.mock.calls.length).toBeGreaterThan(loadConfigCallsAfterFailure);
+      expect(writeConfigFileSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      writeConfigFileSpy.mockRestore();
+    }
   });
 
   const groupPolicyCases: Array<{
@@ -3110,6 +3120,7 @@ describe("createTelegramBot", () => {
   });
 
   it("retries group migration updates after a bubbled handler failure", async () => {
+    const writeConfigFileSpy = mockTelegramConfigWrites();
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -3159,12 +3170,17 @@ describe("createTelegramBot", () => {
     loadConfig.mockImplementationOnce(() => {
       throw new Error("cfg boom");
     });
-    await expect(runMiddlewareChain(ctx)).rejects.toThrow("cfg boom");
-    const loadConfigCallsAfterFailure = loadConfig.mock.calls.length;
-    await runMiddlewareChain(ctx);
+    try {
+      await expect(runMiddlewareChain(ctx)).rejects.toThrow("cfg boom");
+      const loadConfigCallsAfterFailure = loadConfig.mock.calls.length;
+      await runMiddlewareChain(ctx);
 
-    expect(loadConfigCallsAfterFailure).toBe(loadConfigCallsBeforeRetry + 1);
-    expect(loadConfig.mock.calls.length).toBeGreaterThan(loadConfigCallsAfterFailure);
+      expect(loadConfigCallsAfterFailure).toBe(loadConfigCallsBeforeRetry + 1);
+      expect(loadConfig.mock.calls.length).toBeGreaterThan(loadConfigCallsAfterFailure);
+      expect(writeConfigFileSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      writeConfigFileSpy.mockRestore();
+    }
   });
 
   it("retries reaction updates after a bubbled enqueue failure", async () => {
