@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, test, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
 import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
@@ -46,28 +46,15 @@ vi.mock("ws", () => ({
 
 let GatewayClient: typeof import("./client.js").GatewayClient;
 
-async function loadFreshGatewayClientModuleForTest() {
-  vi.resetModules();
-  vi.doMock("ws", () => ({
-    WebSocket: class MockWebSocket {
-      on = vi.fn();
-      close = vi.fn();
-      send = vi.fn();
-
-      constructor(url: unknown, opts: unknown) {
-        wsMockState.last = { url, opts };
-      }
-    },
-  }));
-  ({ GatewayClient } = await import("./client.js"));
-}
-
-beforeEach(async () => {
-  wsMockState.last = null;
-  await loadFreshGatewayClientModuleForTest();
-});
-
 describe("GatewayClient", () => {
+  beforeAll(async () => {
+    ({ GatewayClient } = await import("./client.js"));
+  });
+
+  beforeEach(() => {
+    wsMockState.last = null;
+  });
+
   async function withControlUiRoot(
     params: { faviconSvg?: string; indexHtml?: string },
     run: (tmp: string) => Promise<void>,
@@ -378,6 +365,21 @@ describe("resolveNodeCommandAllowlist", () => {
 
   it("treats sms.search as dangerous by default", () => {
     expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("sms.search");
+  });
+
+  it("allows macOS screen.snapshot by default but keeps screen.record gated", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "macOS 26.3.1",
+        deviceFamily: "Mac",
+      },
+    );
+
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).not.toContain("screen.snapshot");
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("screen.record");
+    expect(allow.has("screen.snapshot")).toBe(true);
+    expect(allow.has("screen.record")).toBe(false);
   });
 
   it("can explicitly allow dangerous commands via allowCommands", () => {

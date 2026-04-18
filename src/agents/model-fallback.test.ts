@@ -485,6 +485,16 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("falls back on bare leading 402 quota-refresh errors", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: new Error(
+        "402 You have reached your subscription quota limit. Please wait for automatic quota refresh in the rolling time window, upgrade to a higher plan, or use a Pay-As-You-Go API Key for unlimited access.",
+      ),
+    });
+  });
+
   it("records 400 insufficient_quota payloads as billing during fallback", async () => {
     const cfg = makeCfg();
     const run = vi
@@ -587,6 +597,33 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]?.[0]).toBe("openai");
+    expect(run.mock.calls[1]?.[1]).toBe("gpt-4.1-mini");
+  });
+
+  it("records invalid-model HTTP 400 responses as model_not_found during fallback", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(
+          new Error("HTTP 400: openrouter/__invalid_test_model__ is not a valid model ID"),
+          { status: 400 },
+        ),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openrouter",
+      model: "__invalid_test_model__",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]?.reason).toBe("model_not_found");
     expect(run.mock.calls[1]?.[0]).toBe("openai");
     expect(run.mock.calls[1]?.[1]).toBe("gpt-4.1-mini");
   });

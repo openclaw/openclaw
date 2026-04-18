@@ -30,11 +30,14 @@ vi.mock("../infra/net/proxy-env.js", async () => {
 });
 
 import {
+  createProviderOperationDeadline,
   fetchWithTimeoutGuarded,
   postJsonRequest,
   postTranscriptionRequest,
   readErrorResponse,
+  resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  waitProviderOperationPollInterval,
 } from "./shared.js";
 
 beforeEach(() => {
@@ -44,6 +47,72 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.useRealTimers();
+});
+
+describe("provider operation deadlines", () => {
+  it("keeps default per-call timeouts when no operation timeout is configured", () => {
+    const deadline = createProviderOperationDeadline({
+      label: "video generation",
+    });
+
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(60_000);
+  });
+
+  it("clamps per-call timeouts to the remaining operation deadline", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    const deadline = createProviderOperationDeadline({
+      label: "video generation",
+      timeoutMs: 5_000,
+    });
+
+    vi.setSystemTime(4_250);
+
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(1_750);
+  });
+
+  it("throws once the operation deadline has expired", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    const deadline = createProviderOperationDeadline({
+      label: "video generation",
+      timeoutMs: 2_000,
+    });
+
+    vi.setSystemTime(3_001);
+
+    expect(() => resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toThrow(
+      "video generation timed out after 2000ms",
+    );
+  });
+
+  it("clamps poll waits to the remaining operation deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    const deadline = createProviderOperationDeadline({
+      label: "video generation",
+      timeoutMs: 1_000,
+    });
+    const wait = waitProviderOperationPollInterval({
+      deadline,
+      pollIntervalMs: 10_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(999);
+    let settled = false;
+    void wait.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(wait).resolves.toBeUndefined();
+  });
 });
 
 describe("resolveProviderHttpRequestConfig", () => {

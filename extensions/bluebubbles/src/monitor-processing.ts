@@ -9,10 +9,17 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
-import { downloadBlueBubblesAttachment } from "./attachments.js";
+import {
+  downloadBlueBubblesAttachment,
+  fetchBlueBubblesMessageAttachments,
+} from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
 import { fetchBlueBubblesHistory } from "./history.js";
+import {
+  claimBlueBubblesInboundMessage,
+  resolveBlueBubblesInboundDedupeKey,
+} from "./inbound-dedupe.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
 import {
   buildMessagePlaceholder,
@@ -581,11 +588,102 @@ function buildInboundHistorySnapshot(params: {
   return selected;
 }
 
+function sanitizeForLog(value: unknown, maxLen = 200): string {
+  const cleaned = String(value).replace(/[\r\n\t\p{C}]/gu, " ");
+  return cleaned.length > maxLen ? cleaned.slice(0, maxLen) + "..." : cleaned;
+}
+
+/**
+ * Signal object threaded through `processMessageAfterDedupe` so the outer
+ * wrapper can distinguish "reply delivery failed silently" from "returned
+ * normally after an intentional drop" (fromMe cache, pairing flow, allowlist
+ * block, empty text, etc.).
+ *
+ * Reply delivery errors in the BlueBubbles path surface through the
+ * dispatcher's `onError` callback rather than as thrown exceptions, so a
+ * plain try/catch cannot detect them — see review thread `rwF8` on #66230.
+ */
+type InboundDedupeDeliverySignal = { deliveryFailed: boolean };
+
+/**
+ * Claim → process → finalize/release wrapper around the real inbound flow.
+ *
+ * Claim before doing any work so restart replays and in-flight concurrent
+ * redeliveries both drop cleanly. Finalize (persist the GUID) only when
+ * processing completed cleanly AND any reply dispatch reported success;
+ * release (let a later replay try again) when processing threw OR the reply
+ * pipeline reported a delivery failure via its onError callback.
+ *
+ * The dedupe key follows the same canonicalization rules as the debouncer
+ * (`monitor-debounce.ts`): balloon events (URL previews, stickers) share
+ * a logical identity with their originating text message via
+ * `associatedMessageGuid`, so balloon-first vs text-first event ordering
+ * cannot produce two distinct dedupe keys for the same logical message.
+ */
 export async function processMessage(
   message: NormalizedWebhookMessage,
   target: WebhookTarget,
 ): Promise<void> {
+  const { account, core, runtime } = target;
+
+  const dedupeKey = resolveBlueBubblesInboundDedupeKey(message);
+
+  // Drop BlueBubbles MessagePoller replays after server restart (#19176, #12053).
+  const claim = await claimBlueBubblesInboundMessage({
+    guid: dedupeKey,
+    accountId: account.accountId,
+    onDiskError: (error) =>
+      logVerbose(core, runtime, `inbound-dedupe disk error: ${sanitizeForLog(error)}`),
+  });
+  if (claim.kind === "duplicate" || claim.kind === "inflight") {
+    logVerbose(
+      core,
+      runtime,
+      `drop: ${claim.kind} inbound key=${sanitizeForLog(dedupeKey ?? "")} sender=${sanitizeForLog(message.senderId)}`,
+    );
+    return;
+  }
+
+  const signal: InboundDedupeDeliverySignal = { deliveryFailed: false };
+  try {
+    await processMessageAfterDedupe(message, target, signal);
+  } catch (error) {
+    if (claim.kind === "claimed") {
+      claim.release();
+    }
+    throw error;
+  }
+  if (claim.kind === "claimed") {
+    if (signal.deliveryFailed) {
+      logVerbose(
+        core,
+        runtime,
+        `inbound-dedupe: releasing claim for key=${sanitizeForLog(dedupeKey ?? "")} after reply delivery failure (will retry on replay)`,
+      );
+      claim.release();
+    } else {
+      try {
+        await claim.finalize();
+      } catch (finalizeError) {
+        // commit() already clears inflight state in its finally block, so
+        // no explicit release() needed here — just log the persistence error.
+        logVerbose(
+          core,
+          runtime,
+          `inbound-dedupe: finalize failed for key=${sanitizeForLog(dedupeKey ?? "")}: ${sanitizeForLog(finalizeError)}`,
+        );
+      }
+    }
+  }
+}
+
+async function processMessageAfterDedupe(
+  message: NormalizedWebhookMessage,
+  target: WebhookTarget,
+  dedupeSignal: InboundDedupeDeliverySignal,
+): Promise<void> {
   const { account, config, runtime, core, statusSink } = target;
+
   const pairing = createChannelPairingController({
     core,
     channel: "bluebubbles",
@@ -597,8 +695,52 @@ export async function processMessage(
   const isGroup = typeof groupFlag === "boolean" ? groupFlag : message.isGroup;
 
   const text = message.text.trim();
-  const attachments = message.attachments ?? [];
-  const placeholder = buildMessagePlaceholder(message);
+  let attachments = message.attachments ?? [];
+  const baseUrl = normalizeSecretInputString(account.config.serverUrl);
+  const password = normalizeSecretInputString(account.config.password);
+
+  // BlueBubbles may fire the webhook before attachment indexing is complete,
+  // so the initial `attachments` array can be empty for messages that actually
+  // have media. When the message text is empty (image-only) or this is an
+  // `updated-message` event, wait briefly and re-fetch from the BB API as a
+  // fallback for cases where BB doesn't send a follow-up webhook. (#65430, #67437)
+  // This must run before the !rawBody guard below, otherwise image-only messages
+  // with empty attachments are dropped before the retry can fire.
+  const retryMessageId = message.messageId?.trim();
+  const shouldRetryAttachments =
+    attachments.length === 0 &&
+    retryMessageId &&
+    baseUrl &&
+    password &&
+    (text.length === 0 || message.eventType === "updated-message");
+  if (shouldRetryAttachments) {
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
+      const fetched = await fetchBlueBubblesMessageAttachments(retryMessageId, {
+        baseUrl,
+        password,
+        timeoutMs: 10_000,
+        allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+      });
+      if (fetched.length > 0) {
+        logVerbose(
+          core,
+          runtime,
+          `attachment retry found ${fetched.length} attachment(s) for msgId=${message.messageId}`,
+        );
+        attachments = fetched;
+      }
+    } catch (err) {
+      logVerbose(
+        core,
+        runtime,
+        `attachment retry failed for msgId=${message.messageId}: ${String(err)}`,
+      );
+    }
+  }
+
+  // Recompute placeholder from resolved attachments (may have been updated by retry).
+  const placeholder = buildMessagePlaceholder({ ...message, attachments });
   // Check if text is a tapback pattern (e.g., 'Loved "hello"') and transform to emoji format
   // For tapbacks, we'll append [[reply_to:N]] at the end; for regular messages, prepend it
   const tapbackContext = resolveTapbackContext(message);
@@ -923,9 +1065,6 @@ export async function processMessage(
     logVerbose(core, runtime, `bluebubbles: skipping group message (no mention)`);
     return;
   }
-
-  const baseUrl = normalizeSecretInputString(account.config.serverUrl);
-  const password = normalizeSecretInputString(account.config.password);
 
   if (isGroup && !message.participants?.length && baseUrl && password) {
     try {
@@ -1597,6 +1736,19 @@ export async function processMessage(
         onReplyStart: typingCallbacks?.onReplyStart,
         onIdle: typingCallbacks?.onIdle,
         onError: (err, info) => {
+          // Flag the outer dedupe wrapper so it releases the claim instead
+          // of committing. Without this, a transient BlueBubbles send failure
+          // would permanently block replay-retry for 7 days and the user
+          // would never receive a reply to that message.
+          //
+          // Only the terminal `final` delivery represents the user-visible
+          // answer. The dispatcher continues past `tool` / `block` failures
+          // and may still deliver `final` successfully — releasing the
+          // dedupe claim for those would invite a replay that re-runs tool
+          // side effects and resends partially-delivered content.
+          if (info.kind === "final") {
+            dedupeSignal.deliveryFailed = true;
+          }
           runtime.error?.(`BlueBubbles ${info.kind} reply failed: ${String(err)}`);
         },
       },
