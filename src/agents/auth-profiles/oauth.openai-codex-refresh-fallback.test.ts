@@ -78,6 +78,25 @@ async function readPersistedStore(agentDir: string): Promise<AuthProfileStore> {
   ) as AuthProfileStore;
 }
 
+function mockRotatedOpenAICodexRefresh() {
+  refreshProviderOAuthCredentialWithPluginMock.mockResolvedValueOnce({
+    type: "oauth",
+    provider: "openai-codex",
+    access: "rotated-access-token",
+    refresh: "rotated-refresh-token",
+    expires: Date.now() + 86_400_000,
+    accountId: "acct-rotated",
+  });
+}
+
+function resolveOpenAICodexProfile(params: { profileId: string; agentDir: string }) {
+  return resolveApiKeyForProfile({
+    store: ensureAuthProfileStore(params.agentDir),
+    profileId: params.profileId,
+    agentDir: params.agentDir,
+  });
+}
+
 describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
   const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
   let tempRoot = "";
@@ -168,20 +187,9 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       },
       agentDir,
     );
-    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValueOnce({
-      type: "oauth",
-      provider: "openai-codex",
-      access: "rotated-access-token",
-      refresh: "rotated-refresh-token",
-      expires: Date.now() + 86_400_000,
-      accountId: "acct-rotated",
-    });
+    mockRotatedOpenAICodexRefresh();
 
-    const result = await resolveApiKeyForProfile({
-      store: ensureAuthProfileStore(agentDir),
-      profileId,
-      agentDir,
-    });
+    const result = await resolveOpenAICodexProfile({ profileId, agentDir });
 
     expect(result).toEqual({
       apiKey: "rotated-access-token",
@@ -201,20 +209,9 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       }),
       agentDir,
     );
-    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValueOnce({
-      type: "oauth",
-      provider: "openai-codex",
-      access: "rotated-access-token",
-      refresh: "rotated-refresh-token",
-      expires: Date.now() + 86_400_000,
-      accountId: "acct-rotated",
-    });
+    mockRotatedOpenAICodexRefresh();
 
-    const result = await resolveApiKeyForProfile({
-      store: ensureAuthProfileStore(agentDir),
-      profileId,
-      agentDir,
-    });
+    const result = await resolveOpenAICodexProfile({ profileId, agentDir });
 
     expect(result).toEqual({
       apiKey: "rotated-access-token",
