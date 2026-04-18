@@ -299,6 +299,26 @@ describe("resolveApiKeyForProfile token expiry handling", () => {
 });
 
 describe("resolveApiKeyForProfile secret refs", () => {
+  it("ignores blank api_key credentials", async () => {
+    const profileId = "openrouter:default";
+    const result = await resolveApiKeyForProfile({
+      cfg: cfgFor(profileId, "openrouter", "api_key"),
+      store: {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "api_key",
+            provider: "openrouter",
+            key: "   ",
+          },
+        },
+      },
+      profileId,
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("resolves api_key keyRef from env", async () => {
     const profileId = "openai:default";
     const previous = process.env.OPENAI_API_KEY;
