@@ -131,12 +131,17 @@ async function applyMediaUnderstandingIfNeeded(params: {
   return true;
 }
 
+let linkUnderstandingDisabled = false;
+
 async function applyLinkUnderstandingIfNeeded(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
 }): Promise<boolean> {
   if (!hasLinkCandidate(params.ctx)) {
     return false;
+  }
+  if (linkUnderstandingDisabled) {
+    return false; // skip retry after prior import/apply failure
   }
   const { applyLinkUnderstanding } = await import("../../link-understanding/apply.runtime.js");
   await applyLinkUnderstanding(params);
@@ -248,9 +253,12 @@ export async function getReplyFromConfig(
       // Non-fatal: link-understanding is an optional enrichment step.
       // After in-place upgrades, the hashed chunk may be missing from disk
       // (ERR_MODULE_NOT_FOUND), which should not silently drop the message.
-      finalized.logger?.warn?.(
-        `[getReply] link-understanding import/apply failed (non-fatal): ${linkErr instanceof Error ? linkErr.message : String(linkErr)}`,
-      );
+      if (!linkUnderstandingDisabled) {
+        finalized.logger?.warn?.(
+          `[getReply] link-understanding import/apply failed (non-fatal): ${linkErr instanceof Error ? linkErr.message : String(linkErr)}`,
+        );
+        linkUnderstandingDisabled = true;
+      }
     }
   }
   emitPreAgentMessageHooks({
