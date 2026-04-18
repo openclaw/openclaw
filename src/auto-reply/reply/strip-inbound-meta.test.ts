@@ -274,4 +274,27 @@ describe("per-line system events and internal instructions", () => {
     const input = "Operating System: Linux — works as expected";
     expect(stripInboundMetadata(input)).toBe(input);
   });
+
+  it("strips leading System event lines in stripLeadingInboundMetadata for TUI history", () => {
+    const input = [
+      "System (untrusted): [2026-04-17 06:11:17 UTC] Exec completed (gentle-g, code 0) :: ok",
+      "",
+      "Actual user message",
+    ].join("\n");
+    expect(stripLeadingInboundMetadata(input)).toBe("Actual user message");
+  });
+
+  it("strips internal instruction leak lines in stripLeadingInboundMetadata", () => {
+    const input = [
+      "An async command you ran earlier has completed. The result is shown in the system messages above.",
+      "Current time: Friday, April 17th, 2026 - 6:26 AM (UTC) / 2026-04-17 06:26 UTC",
+      "User question goes here",
+    ].join("\n");
+    expect(stripLeadingInboundMetadata(input)).toBe("User question goes here");
+  });
+
+  it("preserves inline `Operating System:` prose in stripLeadingInboundMetadata", () => {
+    const input = "Operating System: Linux — works as expected";
+    expect(stripLeadingInboundMetadata(input)).toBe(input);
+  });
 });

@@ -288,7 +288,9 @@ export function stripLeadingInboundMetadata(text: string): string {
     return text;
   }
 
-  const lines = stripActiveMemoryPromptPrefixBlocks(text.split("\n"));
+  const lines = stripActiveMemoryPromptPrefixBlocks(text.split("\n")).filter(
+    (line) => !isSystemEventLine(line) && !isInternalInstructionLine(line),
+  );
   let index = 0;
 
   while (index < lines.length && lines[index] === "") {
@@ -299,7 +301,7 @@ export function stripLeadingInboundMetadata(text: string): string {
   }
 
   if (!isInboundMetaSentinelLine(lines[index])) {
-    const strippedNoLeading = stripTrailingUntrustedContextSuffix(lines);
+    const strippedNoLeading = stripTrailingUntrustedContextSuffix(lines.slice(index));
     return strippedNoLeading.join("\n");
   }
 
