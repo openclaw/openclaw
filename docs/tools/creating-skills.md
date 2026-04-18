@@ -48,6 +48,21 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
     to use existing system tools (like `exec` or `browser`). Skills can also
     ship inside plugins alongside the tools they document.
 
+    **Example: Using existing tools**
+    ```markdown
+    ---
+    name: system_info
+    description: Provides system information using the exec tool.
+    ---
+
+    # System Information Skill
+
+    When the user asks about system information, use the `exec` tool to run:
+    - `uname -a` to get OS information
+    - `df -h` to get disk usage
+    - `free -m` to get memory usage
+    ```
+
   </Step>
 
   <Step title="Load the skill">
@@ -99,6 +114,11 @@ The YAML frontmatter supports these fields:
 - **Safety first** — if your skill uses `exec`, ensure prompts don't allow arbitrary command injection from untrusted input
 - **Test locally** — use `openclaw agent --message "..."` to test before sharing
 - **Use ClawHub** — browse and contribute skills at [ClawHub](https://clawhub.ai)
+- **Use clear triggers** — specify exact phrases or scenarios that should trigger the skill
+- **Provide examples** — include concrete examples of user inputs and expected outputs
+- **Handle edge cases** — consider different scenarios and error conditions
+- **Document dependencies** — clearly state any required tools, binaries, or configurations
+- **Keep it focused** — each skill should handle one specific task or set of related tasks
 
 ## Where skills live
 

@@ -404,3 +404,83 @@ scripts/sandbox-setup.sh
 - [ClawDock](/install/clawdock) — Docker Compose community setup
 - [Updating](/install/updating) — keeping OpenClaw up to date
 - [Configuration](/gateway/configuration) — gateway configuration after install
+
+## Docker Best Practices
+
+### Production Deployment
+
+For production deployments, consider these best practices:
+
+1. **Use specific tags** — Instead of `latest`, use specific version tags to ensure consistent deployments
+2. **Set resource limits** — Add CPU and memory limits to your Docker Compose file
+3. **Enable logging** — Configure proper logging for both the gateway and sandbox containers
+4. **Use a reverse proxy** — Add a reverse proxy like Nginx with SSL termination
+5. **Implement health checks** — Use the built-in health check endpoints
+6. **Set up monitoring** — Monitor container health and resource usage
+7. **Regular updates** — Keep your OpenClaw image up to date
+
+### Example Production Compose
+
+```yaml
+version: '3.8'
+services:
+  openclaw-gateway:
+    image: ghcr.io/openclaw/openclaw:2026.2.26
+    restart: unless-stopped
+    ports:
+      - "18789:18789"
+    volumes:
+      - ./config:/home/node/.openclaw
+      - ./workspace:/home/node/.openclaw/workspace
+    environment:
+      - NODE_ENV=production
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: '4G'
+
+  openclaw-cli:
+    image: ghcr.io/openclaw/openclaw:2026.2.26
+    network_mode: "service:openclaw-gateway"
+    volumes:
+      - ./config:/home/node/.openclaw
+      - ./workspace:/home/node/.openclaw/workspace
+```
+
+### Security Best Practices
+
+1. **Run as non-root** — The default image already runs as `node` user (uid 1000)
+2. **Limit network access** — Use appropriate network settings and firewall rules
+3. **Secure secrets** — Use Docker secrets or environment variables for sensitive data
+4. **Update regularly** — Keep the base image and OpenClaw up to date
+5. **Scan for vulnerabilities** — Regularly scan your Docker images for security issues
+6. **Restrict capabilities** — Use appropriate Docker security options
+
+## Common Docker Issues and Solutions
+
+### Performance Issues
+
+- **High memory usage**: Increase container memory limit and check for memory leaks
+- **Slow startup**: Ensure you have enough CPU resources and optimize your config
+- **Network latency**: Check network configuration and consider using host network mode for better performance
+
+### Connectivity Issues
+
+- **Cannot access Control UI**: Check port mapping and firewall settings
+- **Channels not connecting**: Verify network access from the container to external services
+- **Sandbox container issues**: Ensure Docker socket access and proper permissions
+
+### Storage Issues
+
+- **Disk space growth**: Monitor log files and media storage, implement cleanup policies
+- **Permission errors**: Ensure proper ownership of mounted volumes
+- **Data persistence**: Use named volumes for critical data
+
+### Troubleshooting Tips
+
+1. **Check container logs**: `docker compose logs openclaw-gateway`
+2. **Enter the container**: `docker compose exec openclaw-gateway bash`
+3. **Test health endpoints**: `curl http://127.0.0.1:18789/healthz`
+4. **Check container status**: `docker compose ps`
+5. **Restart services**: `docker compose restart openclaw-gateway`

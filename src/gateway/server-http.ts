@@ -13,7 +13,7 @@ import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
@@ -74,6 +74,8 @@ import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+
+const log = createSubsystemLogger("gateway-http");
 
 const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
@@ -392,7 +394,7 @@ export async function runGatewayHttpRequestStages(
       // Log and skip the failing stage so subsequent stages (control-ui,
       // gateway-probes, etc.) remain reachable. A common trigger is a
       // plugin-owned route/runtime code still failing to load an optional dependency.
-      console.error(`[gateway-http] stage "${stage.name}" threw — skipping:`, err);
+      log.error(`stage "${stage.name}" threw — skipping:`, err instanceof Error ? { message: err.message, stack: err.stack } : undefined);
     }
   }
   return false;
@@ -1119,7 +1121,7 @@ export function createGatewayHttpServer(opts: {
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Not Found");
     } catch (err) {
-      console.error("[gateway-http] unhandled error in request handler:", err);
+      log.error(`unhandled error in request handler:`, err instanceof Error ? { message: err.message, stack: err.stack } : undefined);
       res.statusCode = 500;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Internal Server Error");

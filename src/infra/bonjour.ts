@@ -87,8 +87,6 @@ type ServiceStateTracker = {
   sinceMs: number;
 };
 
-type ConsoleLogFn = (...args: unknown[]) => void;
-
 const WATCHDOG_INTERVAL_MS = 5_000;
 const REPAIR_DEBOUNCE_MS = 30_000;
 const STUCK_ANNOUNCING_MS = 8_000;
@@ -145,18 +143,18 @@ function shouldSuppressCiaoConsoleLog(args: unknown[]): boolean {
 }
 
 function installCiaoConsoleNoiseFilter(): () => void {
-  const originalConsoleLog = console.log as ConsoleLogFn;
-  console.log = ((...args: unknown[]) => {
+  const originalConsoleLog = console.log;
+  const filteredConsoleLog = (...args: unknown[]) => {
     if (shouldSuppressCiaoConsoleLog(args)) {
       return;
     }
     originalConsoleLog(...args);
-  }) as ConsoleLogFn;
+  };
+  console.log = filteredConsoleLog;
   return () => {
-    if (console.log === originalConsoleLog) {
-      return;
+    if (console.log === filteredConsoleLog) {
+      console.log = originalConsoleLog;
     }
-    console.log = originalConsoleLog;
   };
 }
 

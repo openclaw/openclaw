@@ -7,6 +7,7 @@ import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 import { GatewayClient } from "../gateway/client.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { isMainModule } from "../infra/is-main.js";
+import { logError } from "../logger.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
@@ -213,7 +214,7 @@ function parseArgs(args: string[]): AcpServerOptions {
 }
 
 function printHelp(): void {
-  console.log(`Usage: openclaw acp [options]
+  process.stdout.write(`Usage: openclaw acp [options]
 
 Gateway-backed ACP server for IDE integration.
 
@@ -237,18 +238,18 @@ Options:
 if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
   const argv = process.argv.slice(2);
   if (argv.includes("--token") || argv.includes("--gateway-token")) {
-    console.error(
+    logError(
       "Warning: --token can be exposed via process listings. Prefer --token-file or OPENCLAW_GATEWAY_TOKEN.",
     );
   }
   if (argv.includes("--password") || argv.includes("--gateway-password")) {
-    console.error(
+    logError(
       "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
     );
   }
   const opts = parseArgs(argv);
   serveAcpGateway(opts).catch((err) => {
-    console.error(String(err));
+    logError(String(err));
     process.exit(1);
   });
 }

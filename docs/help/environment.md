@@ -158,8 +158,117 @@ openclaw gateway run
 Do not rely on writing only to `~/.openclaw/.env` for this variable; Node reads
 `NODE_EXTRA_CA_CERTS` at process startup.
 
+## Common Environment Variables
+
+### Provider API Keys
+
+These are the most commonly used environment variables for model providers:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `OPENAI_API_KEY` | OpenAI API key | `sk-...` |
+| `ANTHROPIC_API_KEY` | Anthropic API key | `sk-ant-api...` |
+| `GROQ_API_KEY` | Groq API key | `gsk-...` |
+| `MISTRAL_API_KEY` | Mistral API key | `mistral-...` |
+| `GOOGLE_API_KEY` | Google AI Studio API key | `AIza...` |
+| `DEEPGRAM_API_KEY` | Deepgram API key (for speech) | `d7...` |
+| `OPENROUTER_API_KEY` | OpenRouter API key | `sk-or-...` |
+
+### Gateway Configuration
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `OPENCLAW_GATEWAY_TOKEN` | Gateway authentication token | `claw_...` |
+| `OPENCLAW_GATEWAY_BIND` | Gateway binding mode | `lan` |
+| `OPENCLAW_GATEWAY_MODE` | Gateway mode | `local` |
+| `OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS` | CORS origins for Control UI | `http://localhost:18789` |
+
+### Runtime Configuration
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `NODE_ENV` | Node.js environment | `production` |
+| `OPENCLAW_LOG_LEVEL` | Log level | `info` |
+| `OPENCLAW_LOAD_SHELL_ENV` | Load shell environment | `1` |
+| `OPENCLAW_THEME` | TUI theme | `dark` |
+
+## Environment Variable Best Practices
+
+### Production Deployments
+
+1. **Use a secrets manager** — For production, use a proper secrets manager instead of .env files
+2. **Limit access** — Restrict access to environment variables containing secrets
+3. **Rotate keys** — Regularly rotate API keys and tokens
+4. **Use specific keys** — Only set the environment variables you actually need
+5. **Document your setup** — Keep track of which variables are used in each environment
+
+### Development Environments
+
+1. **Use .env files** — Store development variables in a .env file
+2. **Ignore .env in git** — Add .env to .gitignore to avoid committing secrets
+3. **Use .env.example** — Provide a template with placeholder values
+4. **Separate environments** — Use different .env files for development, testing, and production
+
+### Docker Deployments
+
+For Docker deployments, you can set environment variables in several ways:
+
+1. **Docker Compose file**:
+   ```yaml
+   services:
+     openclaw-gateway:
+       environment:
+         - OPENAI_API_KEY=sk-...
+         - OPENCLAW_LOG_LEVEL=info
+   ```
+
+2. **Environment file**:
+   ```bash
+   # .env
+   OPENAI_API_KEY=sk-...
+   OPENCLAW_LOG_LEVEL=info
+   ```
+   ```yaml
+   services:
+     openclaw-gateway:
+       env_file:
+         - .env
+   ```
+
+3. **Docker run command**:
+   ```bash
+   docker run -e OPENAI_API_KEY=sk-... openclaw/openclaw
+   ```
+
+## Troubleshooting Environment Variables
+
+### Common Issues
+
+1. **Variables not being loaded** — Check the precedence order and ensure variables are set in the correct location
+2. **Secrets not working** — Verify that secret references are correctly formatted
+3. **Permission issues** — Ensure .env files have proper permissions (e.g., 600 on Linux)
+4. **nvm TLS issues** — See the section above about NODE_EXTRA_CA_CERTS
+
+### Debugging Tips
+
+1. **Check current environment**:
+   ```bash
+   openclaw doctor --env
+   ```
+
+2. **Verify variable substitution**:
+   ```bash
+   openclaw config get --path "models.providers.openai.apiKey"
+   ```
+
+3. **Test with a simple script**:
+   ```bash
+   node -e "console.log(process.env.OPENAI_API_KEY ? 'Set' : 'Not set')"
+   ```
+
 ## Related
 
 - [Gateway configuration](/gateway/configuration)
 - [FAQ: env vars and .env loading](/help/faq#env-vars-and-env-loading)
 - [Models overview](/concepts/models)
+- [Secrets Management](/gateway/secrets)

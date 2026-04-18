@@ -11,8 +11,11 @@ import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-utils.js";
 import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const MAX_MCP_BODY_BYTES = 1_048_576;
+
+const log = createSubsystemLogger("gateway:mcp");
 
 function shouldLogMcpLoopbackHttp(): boolean {
   return (
@@ -25,7 +28,7 @@ function logMcpLoopbackHttp(step: string, details: Record<string, unknown>): voi
   if (!shouldLogMcpLoopbackHttp()) {
     return;
   }
-  console.error(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
+  log.debug(step, details);
 }
 
 export type McpRequestContext = {

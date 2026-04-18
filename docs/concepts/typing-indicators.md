@@ -39,9 +39,11 @@ Order of “how early it fires”:
 
 ```json5
 {
-  agent: {
-    typingMode: "thinking",
-    typingIntervalSeconds: 6,
+  agents: {
+    defaults: {
+      typingMode: "thinking",
+      typingIntervalSeconds: 6,
+    }
   },
 }
 ```

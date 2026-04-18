@@ -1,4 +1,7 @@
 import { clearActiveProgressLine } from "./progress-line.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("terminal");
 
 const RESET_SEQUENCE =
   "\x1b[0m\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[<u\x1b[>4;0m";
@@ -22,11 +25,11 @@ type RestoreTerminalStateOptions = {
 
 function reportRestoreFailure(scope: string, err: unknown, reason?: string): void {
   const suffix = reason ? ` (${reason})` : "";
-  const message = `[terminal] restore ${scope} failed${suffix}: ${String(err)}`;
+  const message = `restore ${scope} failed${suffix}: ${String(err)}`;
   try {
-    process.stderr.write(`${message}\n`);
+    process.stderr.write(`[terminal] ${message}\n`);
   } catch (writeErr) {
-    console.error(`[terminal] restore reporting failed${suffix}: ${String(writeErr)}`);
+    log.error(`restore reporting failed${suffix}: ${String(writeErr)}`);
   }
 }
 

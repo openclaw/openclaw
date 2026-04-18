@@ -19,8 +19,11 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ThinkLevel } from "./directives.js";
 import { resolveStoredModelOverride } from "./stored-model-override.js";
+
+const log = createSubsystemLogger("auto-reply:model-selection");
 
 export type ModelDirectiveSelection = {
   provider: string;
@@ -271,8 +274,8 @@ export async function createModelSelectionState(params: {
       return;
     }
     const suffix = extra ? ` ${extra}` : "";
-    console.log(
-      `[model-selection] session=${params.sessionKey ?? "(no-session)"} stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`,
+    log.debug(
+      `session=${params.sessionKey ?? "(no-session)"} stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`
     );
   };
   const {

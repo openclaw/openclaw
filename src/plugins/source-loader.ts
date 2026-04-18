@@ -1,7 +1,10 @@
 import type { PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { getCachedPluginJitiLoader } from "./jiti-loader-cache.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 export type PluginSourceLoader = (modulePath: string) => unknown;
+
+const log = createSubsystemLogger("plugins");
 
 function shouldProfilePluginSourceLoader(): boolean {
   return process.env.OPENCLAW_PLUGIN_LOAD_PROFILE === "1";
@@ -23,8 +26,8 @@ export function createPluginSourceLoader(): PluginSourceLoader {
     try {
       return jiti(modulePath);
     } finally {
-      console.error(
-        `[plugin-load-profile] phase=source-loader plugin=(direct) elapsedMs=${(performance.now() - startMs).toFixed(1)} source=${modulePath}`,
+      log.debug(
+        `phase=source-loader plugin=(direct) elapsedMs=${(performance.now() - startMs).toFixed(1)} source=${modulePath}`
       );
     }
   };

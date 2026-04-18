@@ -98,10 +98,41 @@ Model note: while many providers and models are supported, prefer a current flag
 
 Runtime: **Node 24 (recommended) or Node 22.16+**.
 
-```bash
-npm install -g openclaw@latest
-# or: pnpm add -g openclaw@latest
+### Quick Start
 
+1. **Install OpenClaw**
+   ```bash
+   # Using pnpm (recommended)
+   pnpm add -g openclaw
+   
+   # Using npm
+   npm install -g openclaw
+   
+   # Using bun
+   bun add -g openclaw
+   ```
+
+2. **Run the onboarding wizard**
+   ```bash
+   openclaw onboard
+   ```
+
+3. **Start the gateway**
+   ```bash
+   openclaw gateway start
+   ```
+
+4. **Connect your channels**
+   Follow the onboarding wizard instructions to connect your favorite messaging channels.
+
+5. **Start chatting**
+   Message your assistant on any connected channel!
+
+### Daemon Installation
+
+To install OpenClaw as a background service that stays running:
+
+```bash
 openclaw onboard --install-daemon
 ```
 

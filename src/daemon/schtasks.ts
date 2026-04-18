@@ -38,9 +38,11 @@ function resolveTaskName(env: GatewayServiceEnv): string {
 function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
   return (
     /access is denied/i.test(params.detail) ||
+    /拒绝访问/i.test(params.detail) ||
     params.code === 124 ||
     /schtasks timed out/i.test(params.detail) ||
-    /schtasks produced no output/i.test(params.detail)
+    /schtasks produced no output/i.test(params.detail) ||
+    /任务计划程序无法创建任务/i.test(params.detail)
   );
 }
 
@@ -73,6 +75,14 @@ function resolveWindowsStartupDir(env: GatewayServiceEnv): string {
     "Programs",
     "Startup",
   );
+}
+
+async function ensureWindowsStartupDir(startupDir: string): Promise<void> {
+  try {
+    await fs.mkdir(startupDir, { recursive: true });
+  } catch (err) {
+    throw new Error(`Failed to create Windows startup directory: ${String(err)}`);
+  }
 }
 
 function sanitizeWindowsFilename(value: string): string {
@@ -824,24 +834,26 @@ async function activateScheduledTask(params: {
   if (create.code !== 0) {
     const detail = create.stderr || create.stdout;
     if (shouldFallbackToStartupEntry({ code: create.code, detail })) {
-      const startupEntryPath = resolveStartupEntryPath(params.env);
-      await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
-      const launcher = buildStartupLauncherScript({
-        description: taskDescription,
-        scriptPath: params.scriptPath,
-      });
-      await fs.writeFile(startupEntryPath, launcher, "utf8");
-      launchFallbackTaskScript(params.scriptPath);
-      writeFormattedLines(
-        params.stdout,
-        [
-          { label: "Installed Windows login item", value: startupEntryPath },
-          { label: "Task script", value: params.scriptPath },
-        ],
-        { leadingBlankLine: true },
-      );
-      return;
-    }
+        const startupEntryPath = resolveStartupEntryPath(params.env);
+        const startupDir = path.dirname(startupEntryPath);
+        await ensureWindowsStartupDir(startupDir);
+        const launcher = buildStartupLauncherScript({
+          description: taskDescription,
+          scriptPath: params.scriptPath,
+        });
+        await fs.writeFile(startupEntryPath, launcher, "utf8");
+        launchFallbackTaskScript(params.scriptPath);
+        writeFormattedLines(
+          params.stdout,
+          [
+            { label: "Installed Windows login item", value: startupEntryPath },
+            { label: "Task script", value: params.scriptPath },
+            { label: "Note", value: "Task creation failed, using startup folder fallback" },
+          ],
+          { leadingBlankLine: true },
+        );
+        return;
+      }
     throw new Error(`schtasks create failed: ${detail}`.trim());
   }
 

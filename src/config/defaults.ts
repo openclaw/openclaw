@@ -6,8 +6,11 @@ import {
   normalizeProviderConfigForConfigDefaults,
 } from "./provider-policy.js";
 import { normalizeTalkConfig } from "./talk.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
+
+const log = createSubsystemLogger("config");
 
 type WarnState = { warned: boolean };
 
@@ -113,7 +116,7 @@ export function applySessionDefaults(
   }
 
   const trimmed = session.mainKey.trim();
-  const warn = options.warn ?? console.warn;
+  const warn = options.warn ?? ((message: string) => log.warn(message));
   const warnState = options.warnState ?? defaultWarnState;
 
   const next: OpenClawConfig = {

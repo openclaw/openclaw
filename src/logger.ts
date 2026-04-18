@@ -84,10 +84,10 @@ export function logError(message: string, runtime: RuntimeEnv = defaultRuntime) 
   });
 }
 
-export function logDebug(message: string) {
+export function logDebug(message: string, runtime: RuntimeEnv = defaultRuntime) {
   // Always emit to file logger (level-filtered); console only when verbose.
   getLogger().debug(message);
   if (isVerbose()) {
-    console.log(theme.muted(message));
+    runtime.log(theme.muted(message));
   }
 }

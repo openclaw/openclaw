@@ -75,7 +75,9 @@ function cancelledPermission(): RequestPermissionResponse {
 
 function promptUserPermission(toolName: string | undefined, toolTitle?: string): Promise<boolean> {
   if (!process.stdin.isTTY || !process.stderr.isTTY) {
-    console.error(`[permission denied] ${toolName ?? "unknown"}: non-interactive terminal`);
+    process.stderr.write(
+      `[permission denied] ${toolName ?? "unknown"}: non-interactive terminal\n`,
+    );
     return Promise.resolve(false);
   }
   return new Promise((resolve) => {
@@ -96,7 +98,7 @@ function promptUserPermission(toolName: string | undefined, toolTitle?: string):
     };
 
     const timeout = setTimeout(() => {
-      console.error(`\n[permission timeout] denied: ${toolName ?? "unknown"}`);
+      process.stderr.write(`\n[permission timeout] denied: ${toolName ?? "unknown"}\n`);
       finish(false);
     }, 30_000);
 
@@ -107,7 +109,9 @@ function promptUserPermission(toolName: string | undefined, toolTitle?: string):
       : (toolName ?? "unknown tool");
     rl.question(`\n[permission] Allow "${label}"? (y/N) `, (answer) => {
       const approved = normalizeLowercaseStringOrEmpty(answer) === "y";
-      console.error(`[permission ${approved ? "approved" : "denied"}] ${toolName ?? "unknown"}`);
+      process.stderr.write(
+        `[permission ${approved ? "approved" : "denied"}] ${toolName ?? "unknown"}\n`,
+      );
       finish(approved);
     });
   });
@@ -117,7 +121,7 @@ export async function resolvePermissionRequest(
   params: RequestPermissionRequest,
   deps: PermissionResolverDeps = {},
 ): Promise<RequestPermissionResponse> {
-  const log = deps.log ?? ((line: string) => console.error(line));
+  const log = deps.log ?? ((line: string) => process.stderr.write(`${line}\n`));
   const prompt = deps.prompt ?? promptUserPermission;
   const cwd = deps.cwd ?? process.cwd();
   const options = params.options ?? [];
@@ -307,19 +311,19 @@ function printSessionUpdate(notification: SessionNotification): void {
       return;
     }
     case "tool_call": {
-      console.log(`\n[tool] ${update.title} (${update.status})`);
+      process.stdout.write(`\n[tool] ${update.title} (${update.status})\n`);
       return;
     }
     case "tool_call_update": {
       if (update.status) {
-        console.log(`[tool update] ${update.toolCallId}: ${update.status}`);
+        process.stdout.write(`[tool update] ${update.toolCallId}: ${update.status}\n`);
       }
       return;
     }
     case "available_commands_update": {
       const names = update.availableCommands?.map((cmd) => `/${cmd.name}`).join(" ");
       if (names) {
-        console.log(`\n[commands] ${names}`);
+        process.stdout.write(`\n[commands] ${names}\n`);
       }
       return;
     }
@@ -331,7 +335,7 @@ function printSessionUpdate(notification: SessionNotification): void {
 export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHandle> {
   const cwd = opts.cwd ?? process.cwd();
   const verbose = Boolean(opts.verbose);
-  const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};
+  const log = verbose ? (msg: string) => process.stderr.write(`[acp-client] ${msg}\n`) : () => {};
 
   ensureOpenClawCliOnPath();
   const serverArgs = buildServerArgs(opts);
@@ -423,9 +427,9 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
     output: process.stdout,
   });
 
-  console.log("OpenClaw ACP client");
-  console.log(`Session: ${sessionId}`);
-  console.log('Type a prompt, or "exit" to quit.\n');
+  process.stdout.write("OpenClaw ACP client\n");
+  process.stdout.write(`Session: ${sessionId}\n`);
+  process.stdout.write('Type a prompt, or "exit" to quit.\n\n');
 
   const prompt = () => {
     rl.question("> ", async (input) => {
@@ -445,9 +449,9 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
           sessionId,
           prompt: [{ type: "text", text }],
         });
-        console.log(`\n[${response.stopReason}]\n`);
+        process.stdout.write(`\n[${response.stopReason}]\n\n`);
       } catch (err) {
-        console.error(`\n[error] ${String(err)}\n`);
+        process.stderr.write(`\n[error] ${String(err)}\n\n`);
       }
 
       prompt();
@@ -457,7 +461,7 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
   prompt();
 
   agent.on("exit", (code) => {
-    console.log(`\nAgent exited with code ${code ?? 0}`);
+    process.stdout.write(`\nAgent exited with code ${code ?? 0}\n`);
     rl.close();
     process.exit(code ?? 0);
   });

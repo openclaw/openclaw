@@ -72,11 +72,13 @@ function createRuntimeIo(): Pick<OutputRuntimeEnv, "log" | "error" | "writeStdou
         return;
       }
       clearActiveProgressLine();
-      console.log(...args);
+      const formatted = args.map(arg => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ');
+      process.stdout.write(`${formatted}\n`);
     },
     error: (...args: Parameters<typeof console.error>) => {
       clearActiveProgressLine();
-      console.error(...args);
+      const formatted = args.map(arg => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ');
+      process.stderr.write(`${formatted}\n`);
     },
     writeStdout,
     writeJson: (value: unknown, space = 2) => {

@@ -88,9 +88,8 @@ if (
     });
 
     child.once("error", (error) => {
-      console.error(
-        "[openclaw] Failed to respawn CLI:",
-        error instanceof Error ? (error.stack ?? error.message) : error,
+      process.stderr.write(
+        `[openclaw] Failed to respawn CLI: ${error instanceof Error ? (error.stack ?? error.message) : error}\n`,
       );
       process.exit(1);
     });
@@ -109,13 +108,14 @@ if (
     Promise.all([import("./version.js"), import("./infra/git-commit.js")])
       .then(([{ VERSION }, { resolveCommitHash }]) => {
         const commit = resolveCommitHash({ moduleUrl: import.meta.url });
-        console.log(commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`);
+        process.stdout.write(
+          `${commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`}\n`,
+        );
         process.exit(0);
       })
       .catch((error) => {
-        console.error(
-          "[openclaw] Failed to resolve version:",
-          error instanceof Error ? (error.stack ?? error.message) : error,
+        process.stderr.write(
+          `[openclaw] Failed to resolve version: ${error instanceof Error ? (error.stack ?? error.message) : error}\n`,
         );
         process.exitCode = 1;
       });
@@ -127,20 +127,20 @@ if (
   if (!ensureCliRespawnReady()) {
     const parsedContainer = parseCliContainerArgs(process.argv);
     if (!parsedContainer.ok) {
-      console.error(`[openclaw] ${parsedContainer.error}`);
+      process.stderr.write(`[openclaw] ${parsedContainer.error}\n`);
       process.exit(2);
     }
 
     const parsed = parseCliProfileArgs(parsedContainer.argv);
     if (!parsed.ok) {
       // Keep it simple; Commander will handle rich help/errors after we strip flags.
-      console.error(`[openclaw] ${parsed.error}`);
+      process.stderr.write(`[openclaw] ${parsed.error}\n`);
       process.exit(2);
     }
 
     const containerTargetName = resolveCliContainerTarget(process.argv);
     if (containerTargetName && parsed.profile) {
-      console.error("[openclaw] --container cannot be combined with --profile/--dev");
+      process.stderr.write("[openclaw] --container cannot be combined with --profile/--dev\n");
       process.exit(2);
     }
 
@@ -173,9 +173,8 @@ export function tryHandleRootHelpFastPath(
   const handleError =
     deps.onError ??
     ((error: unknown) => {
-      console.error(
-        "[openclaw] Failed to display help:",
-        error instanceof Error ? (error.stack ?? error.message) : error,
+      process.stderr.write(
+        `[openclaw] Failed to display help: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
       );
       process.exitCode = 1;
     });
@@ -204,9 +203,8 @@ function runMainOrRootHelp(argv: string[]): void {
   import("./cli/run-main.js")
     .then(({ runCli }) => runCli(argv))
     .catch((error) => {
-      console.error(
-        "[openclaw] Failed to start CLI:",
-        error instanceof Error ? (error.stack ?? error.message) : error,
+      process.stderr.write(
+        `[openclaw] Failed to start CLI: ${error instanceof Error ? (error.stack ?? error.message) : error}\n`,
       );
       process.exitCode = 1;
     });

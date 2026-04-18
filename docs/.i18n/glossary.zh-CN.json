@@ -374,5 +374,425 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "Webhooks",
+    "target": "Webhooks"
+  },
+  {
+    "source": "BlueBubbles",
+    "target": "BlueBubbles"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "Google Chat",
+    "target": "Google Chat"
+  },
+  {
+    "source": "iMessage (legacy)",
+    "target": "iMessage (legacy)"
+  },
+  {
+    "source": "IRC",
+    "target": "IRC"
+  },
+  {
+    "source": "LINE",
+    "target": "LINE"
+  },
+  {
+    "source": "Matrix",
+    "target": "Matrix"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Nextcloud Talk",
+    "target": "Nextcloud Talk"
+  },
+  {
+    "source": "Nostr",
+    "target": "Nostr"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Synology Chat",
+    "target": "Synology Chat"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Tlon",
+    "target": "Tlon"
+  },
+  {
+    "source": "Twitch",
+    "target": "Twitch"
+  },
+  {
+    "source": "Voice Call",
+    "target": "Voice Call"
+  },
+  {
+    "source": "WebChat",
+    "target": "WebChat"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Zalo",
+    "target": "Zalo"
+  },
+  {
+    "source": "Zalo Personal",
+    "target": "Zalo Personal"
+  },
+  {
+    "source": "channels",
+    "target": "channels"
+  },
+  {
+    "source": "config",
+    "target": "config"
+  },
+  {
+    "source": "cron",
+    "target": "cron"
+  },
+  {
+    "source": "gateway",
+    "target": "gateway"
+  },
+  {
+    "source": "/gateway/bonjour",
+    "target": "/gateway/bonjour"
+  },
+  {
+    "source": "/gateway/discovery",
+    "target": "/gateway/discovery"
+  },
+  {
+    "source": "/gateway/configuration",
+    "target": "/gateway/configuration"
+  },
+  {
+    "source": "hooks",
+    "target": "hooks"
+  },
+  {
+    "source": "logs",
+    "target": "logs"
+  },
+  {
+    "source": "memory",
+    "target": "memory"
+  },
+  {
+    "source": "models",
+    "target": "models"
+  },
+  {
+    "source": "plugins",
+    "target": "plugins"
+  },
+  {
+    "source": "setup",
+    "target": "setup"
+  },
+  {
+    "source": "CLI：memory",
+    "target": "CLI：memory"
+  },
+  {
+    "source": "插件SDK设置",
+    "target": "插件SDK设置"
+  },
+  {
+    "source": "memory CLI",
+    "target": "memory CLI"
+  },
+  {
+    "source": "QMD 内存引擎",
+    "target": "QMD 内存引擎"
+  },
+  {
+    "source": "Honcho 内存",
+    "target": "Honcho 内存"
+  },
+  {
+    "source": "内存 Wiki",
+    "target": "内存 Wiki"
+  },
+  {
+    "source": "Qwen Cloud",
+    "target": "Qwen Cloud"
+  },
+  {
+    "source": "MiniMax",
+    "target": "MiniMax"
+  },
+  {
+    "source": "GLM Models",
+    "target": "GLM Models"
+  },
+  {
+    "source": "Models CLI",
+    "target": "Models CLI"
+  },
+  {
+    "source": "ACP 代理",
+    "target": "ACP 代理"
+  },
+  {
+    "source": "SOUL.md个性指南",
+    "target": "SOUL.md个性指南"
+  },
+  {
+    "source": "SOUL.md模板",
+    "target": "SOUL.md模板"
+  },
+  {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "VPS 托管",
+    "target": "VPS 托管"
+  },
+  {
+    "source": "Fly.io",
+    "target": "Fly.io"
+  },
+  {
+    "source": "Hetzner",
+    "target": "Hetzner"
+  },
+  {
+    "source": "exe.dev",
+    "target": "exe.dev"
+  },
+  {
+    "source": "Kubernetes",
+    "target": "Kubernetes"
+  },
+  {
+    "source": "Windows",
+    "target": "Windows"
+  },
+  {
+    "source": "Gateway 运行手册",
+    "target": "Gateway 运行手册"
+  },
+  {
+    "source": "CLI：wiki",
+    "target": "CLI：wiki"
+  },
+  {
+    "source": "插件SDK概述",
+    "target": "插件SDK概述"
+  },
+  {
+    "source": "Alibaba Model Studio",
+    "target": "Alibaba Model Studio"
+  },
+  {
+    "source": "Amazon Bedrock",
+    "target": "Amazon Bedrock"
+  },
+  {
+    "source": "Arcee AI (Trinity models)",
+    "target": "Arcee AI (Trinity models)"
+  },
+  {
+    "source": "BytePlus (国际)",
+    "target": "BytePlus (国际)"
+  },
+  {
+    "source": "ComfyUI",
+    "target": "ComfyUI"
+  },
+  {
+    "source": "Cloudflare AI Gateway",
+    "target": "Cloudflare AI Gateway"
+  },
+  {
+    "source": "DeepSeek",
+    "target": "DeepSeek"
+  },
+  {
+    "source": "fal",
+    "target": "fal"
+  },
+  {
+    "source": "Fireworks",
+    "target": "Fireworks"
+  },
+  {
+    "source": "GitHub Copilot",
+    "target": "GitHub Copilot"
+  },
+  {
+    "source": "GLM models",
+    "target": "GLM models"
+  },
+  {
+    "source": "Google (Gemini)",
+    "target": "Google (Gemini)"
+  },
+  {
+    "source": "Groq (LPU 推理)",
+    "target": "Groq (LPU 推理)"
+  },
+  {
+    "source": "Hugging Face (Inference)",
+    "target": "Hugging Face (Inference)"
+  },
+  {
+    "source": "inferrs (本地模型)",
+    "target": "inferrs (本地模型)"
+  },
+  {
+    "source": "Kilocode",
+    "target": "Kilocode"
+  },
+  {
+    "source": "LiteLLM (统一网关)",
+    "target": "LiteLLM (统一网关)"
+  },
+  {
+    "source": "LM Studio (本地模型)",
+    "target": "LM Studio (本地模型)"
+  },
+  {
+    "source": "Mistral",
+    "target": "Mistral"
+  },
+  {
+    "source": "Moonshot AI (Kimi + Kimi Coding)",
+    "target": "Moonshot AI (Kimi + Kimi Coding)"
+  },
+  {
+    "source": "NVIDIA",
+    "target": "NVIDIA"
+  },
+  {
+    "source": "Ollama (云 + 本地模型)",
+    "target": "Ollama (云 + 本地模型)"
+  },
+  {
+    "source": "OpenAI (API + Codex)",
+    "target": "OpenAI (API + Codex)"
+  },
+  {
+    "source": "OpenCode",
+    "target": "OpenCode"
+  },
+  {
+    "source": "OpenCode Go",
+    "target": "OpenCode Go"
+  },
+  {
+    "source": "OpenRouter",
+    "target": "OpenRouter"
+  },
+  {
+    "source": "Perplexity (网络搜索)",
+    "target": "Perplexity (网络搜索)"
+  },
+  {
+    "source": "Qianfan",
+    "target": "Qianfan"
+  },
+  {
+    "source": "Runway",
+    "target": "Runway"
+  },
+  {
+    "source": "SGLang (本地模型)",
+    "target": "SGLang (本地模型)"
+  },
+  {
+    "source": "StepFun",
+    "target": "StepFun"
+  },
+  {
+    "source": "Synthetic",
+    "target": "Synthetic"
+  },
+  {
+    "source": "Together AI",
+    "target": "Together AI"
+  },
+  {
+    "source": "Venice (Venice AI, 注重隐私)",
+    "target": "Venice (Venice AI, 注重隐私)"
+  },
+  {
+    "source": "Vercel AI Gateway",
+    "target": "Vercel AI Gateway"
+  },
+  {
+    "source": "Vydra",
+    "target": "Vydra"
+  },
+  {
+    "source": "vLLM (本地模型)",
+    "target": "vLLM (本地模型)"
+  },
+  {
+    "source": "Volcengine (Doubao)",
+    "target": "Volcengine (Doubao)"
+  },
+  {
+    "source": "xAI",
+    "target": "xAI"
+  },
+  {
+    "source": "Xiaomi",
+    "target": "Xiaomi"
+  },
+  {
+    "source": "Z.AI",
+    "target": "Z.AI"
+  },
+  {
+    "source": "Deepgram (音频转录)",
+    "target": "Deepgram (音频转录)"
+  },
+  {
+    "source": "Claude Max API Proxy",
+    "target": "Claude Max API Proxy"
+  },
+  {
+    "source": "引导设置（CLI）",
+    "target": "引导设置（CLI）"
+  },
+  {
+    "source": "Lobster",
+    "target": "Lobster"
+  },
+  {
+    "source": "LLM Task",
+    "target": "LLM Task"
+  },
+  {
+    "source": "OpenProse",
+    "target": "OpenProse"
   }
 ]

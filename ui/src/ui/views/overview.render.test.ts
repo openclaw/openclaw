@@ -79,7 +79,7 @@ describe("overview view rendering", () => {
     let select = container.querySelector<HTMLSelectElement>("select");
     expect(i18n.getLocale()).toBe("en");
     expect(select?.value).toBe("zh-CN");
-    expect(select?.selectedOptions[0]?.textContent?.trim()).toBe("简体中文 (Simplified Chinese)");
+    expect(select?.selectedOptions[0]?.textContent?.trim()).toBe("Simplified Chinese");
 
     await i18n.setLocale("zh-CN");
     render(renderOverview(props), container);
@@ -87,7 +87,7 @@ describe("overview view rendering", () => {
 
     select = container.querySelector<HTMLSelectElement>("select");
     expect(select?.value).toBe("zh-CN");
-    expect(select?.selectedOptions[0]?.textContent?.trim()).toBe("简体中文 (简体中文)");
+    expect(select?.selectedOptions[0]?.textContent?.trim()).toBe("简体中文");
 
     await i18n.setLocale("en");
   });

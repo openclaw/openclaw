@@ -2,8 +2,11 @@ import crypto from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 export { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+
+const log = createSubsystemLogger("infra:temp-download");
 
 export type TempDownloadTarget = {
   dir: string;
@@ -50,7 +53,7 @@ async function cleanupTempDir(dir: string) {
     await rm(dir, { recursive: true, force: true });
   } catch (err) {
     if (!isNodeErrorWithCode(err, "ENOENT")) {
-      console.warn(`temp-path cleanup failed for ${dir}: ${String(err)}`);
+      log.warn(`temp-path cleanup failed for ${dir}: ${String(err)}`);
     }
   }
 }

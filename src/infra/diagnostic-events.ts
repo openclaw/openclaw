@@ -1,4 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("diagnostic-events");
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
 
@@ -200,8 +203,8 @@ export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
 export function emitDiagnosticEvent(event: DiagnosticEventInput) {
   const state = getDiagnosticEventsState();
   if (state.dispatchDepth > 100) {
-    console.error(
-      `[diagnostic-events] recursion guard tripped at depth=${state.dispatchDepth}, dropping type=${event.type}`,
+    log.error(
+      `recursion guard tripped at depth=${state.dispatchDepth}, dropping type=${event.type}`,
     );
     return;
   }
@@ -222,8 +225,8 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
           : typeof err === "string"
             ? err
             : String(err);
-      console.error(
-        `[diagnostic-events] listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
+      log.error(
+        `listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
       );
       // Ignore listener failures.
     }

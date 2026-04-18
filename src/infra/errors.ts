@@ -125,18 +125,27 @@ export function detectErrorKind(err: unknown): ErrorKind | undefined {
     message.includes("refusal") ||
     message.includes("content_filter") ||
     message.includes("sensitive") ||
-    message.includes("unhandled stop reason: refusal_policy")
+    message.includes("unhandled stop reason: refusal_policy") ||
+    message.includes("content policy") ||
+    message.includes("policy violation")
   ) {
     return "refusal";
   }
-  if (message.includes("timeout") || code === "etimedout" || code === "timeout") {
+  if (
+    message.includes("timeout") ||
+    code === "etimedout" ||
+    code === "timeout" ||
+    message.includes("timed out") ||
+    message.includes("connection timed out")
+  ) {
     return "timeout";
   }
   if (
     message.includes("rate limit") ||
     message.includes("too many requests") ||
     message.includes("429") ||
-    code === "429"
+    code === "429" ||
+    message.includes("rate limiting")
   ) {
     return "rate_limit";
   }
@@ -144,7 +153,9 @@ export function detectErrorKind(err: unknown): ErrorKind | undefined {
     message.includes("context length") ||
     message.includes("too many tokens") ||
     message.includes("token limit") ||
-    message.includes("context_window")
+    message.includes("context_window") ||
+    message.includes("context size") ||
+    message.includes("maximum context")
   ) {
     return "context_length";
   }

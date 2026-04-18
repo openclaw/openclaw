@@ -51,7 +51,7 @@ function logCliCronProbe(step: string, details?: Record<string, unknown>): void 
     return;
   }
   const suffix = details && Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : "";
-  console.error(`[gateway-cli-live:cron] ${step}${suffix}`);
+  process.stderr.write(`[gateway-cli-live:cron] ${step}${suffix}\n`);
 }
 
 export type BootstrapWorkspaceContext = {

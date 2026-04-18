@@ -198,16 +198,14 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
 
   const isShellSupported = isCompletionShell(shell);
   if (!isShellSupported) {
-    console.error(`Automated installation not supported for ${shell} yet.`);
+    process.stderr.write(`Automated installation not supported for ${shell} yet.\n`);
     return;
   }
 
   const cachePath = resolveCompletionCachePath(shell, binName);
   const cacheExists = await pathExists(cachePath);
   if (!cacheExists) {
-    console.error(
-      `Completion cache not found at ${cachePath}. Run \`${binName} completion --write-state\` first.`,
-    );
+    process.stderr.write(`Completion cache not found at ${cachePath}. Run \`${binName} completion --write-state\` first.\n`);
     return;
   }
 
@@ -226,7 +224,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     profilePath = path.join(home, ".config", "fish", "config.fish");
     sourceLine = formatCompletionSourceLine("fish", binName, cachePath);
   } else {
-    console.error(`Automated installation not supported for ${shell} yet.`);
+    process.stderr.write(`Automated installation not supported for ${shell} yet.\n`);
     return;
   }
 
@@ -235,7 +233,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       await fs.access(profilePath);
     } catch {
       if (!yes) {
-        console.warn(`Profile not found at ${profilePath}. Created a new one.`);
+        process.stderr.write(`Profile not found at ${profilePath}. Created a new one.\n`);
       }
       await fs.mkdir(path.dirname(profilePath), { recursive: true });
       await fs.writeFile(profilePath, "", "utf-8");
@@ -245,21 +243,21 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     const update = updateCompletionProfile(content, binName, cachePath, sourceLine);
     if (!update.changed) {
       if (!yes) {
-        console.log(`Completion already installed in ${profilePath}`);
+        process.stdout.write(`Completion already installed in ${profilePath}\n`);
       }
       return;
     }
 
     if (!yes) {
       const action = update.hadExisting ? "Updating" : "Installing";
-      console.log(`${action} completion in ${profilePath}...`);
+      process.stdout.write(`${action} completion in ${profilePath}...\n`);
     }
 
     await fs.writeFile(profilePath, update.next, "utf-8");
     if (!yes) {
-      console.log(`Completion installed. Restart your shell or run: source ${profilePath}`);
+      process.stdout.write(`Completion installed. Restart your shell or run: source ${profilePath}\n`);
     }
   } catch (err) {
-    console.error(`Failed to install completion: ${err as string}`);
+    process.stderr.write(`Failed to install completion: ${err as string}\n`);
   }
 }

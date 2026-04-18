@@ -1,4 +1,7 @@
 import type { ChannelPairingAdapter } from "./types.adapters.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+
+const log = createSubsystemLogger("channels-pairing");
 
 type PairingNotifyParams = Parameters<NonNullable<ChannelPairingAdapter["notifyApproval"]>>[0];
 
@@ -11,10 +14,10 @@ export function createPairingPrefixStripper(
 
 export function createLoggedPairingApprovalNotifier(
   format: string | ((params: PairingNotifyParams) => string),
-  log: (message: string) => void = console.log,
+  logFn: (message: string) => void = (message) => log.info(message),
 ): NonNullable<ChannelPairingAdapter["notifyApproval"]> {
   return async (params) => {
-    log(typeof format === "function" ? format(params) : format);
+    logFn(typeof format === "function" ? format(params) : format);
   };
 }
 

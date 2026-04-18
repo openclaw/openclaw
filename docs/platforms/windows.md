@@ -18,31 +18,99 @@ Native Windows companion apps are planned.
 
 ## WSL2 (recommended)
 
+WSL2 (Windows Subsystem for Linux) provides the most stable and complete OpenClaw experience on Windows. It runs the full Linux version of OpenClaw inside a lightweight virtual machine.
+
+### WSL2 Benefits
+
+- Full compatibility with all OpenClaw features
+- Better performance for most tasks
+- Access to all Linux-based tools and dependencies
+- More stable service management with systemd
+- Consistent experience with Linux and macOS installations
+
+### Quick WSL2 Setup
+
+1. **Install WSL2** (PowerShell as Administrator):
+   ```powershell
+   wsl --install
+   ```
+
+2. **Enable systemd** (required for OpenClaw gateway):
+   ```bash
+   sudo tee /etc/wsl.conf >/dev/null <<'EOF'
+   [boot]
+   systemd=true
+   EOF
+   ```
+
+3. **Restart WSL**:
+   ```powershell
+   wsl --shutdown
+   ```
+
+4. **Install OpenClaw** (inside WSL):
+   ```bash
+   pnpm add -g openclaw
+   openclaw onboard
+   ```
+
 - [Getting Started](/start/getting-started) (use inside WSL)
 - [Install & updates](/install/updating)
 - Official WSL2 guide (Microsoft): [https://learn.microsoft.com/windows/wsl/install](https://learn.microsoft.com/windows/wsl/install)
 
 ## Native Windows status
 
-Native Windows CLI flows are improving, but WSL2 is still the recommended path.
+Native Windows support is improving, but WSL2 remains the recommended path for the complete OpenClaw experience.
 
-What works well on native Windows today:
+### What Works Well on Native Windows
 
-- website installer via `install.ps1`
-- local CLI use such as `openclaw --version`, `openclaw doctor`, and `openclaw plugins list --json`
-- embedded local-agent/provider smoke such as:
+- **Basic CLI operations**: `openclaw --version`, `openclaw doctor`, `openclaw plugins list --json`
+- **Local agent testing**: `openclaw agent --local --agent main --thinking low -m "Hello"`
+- **Gateway functionality**: Core gateway operations work
+- **Channel connections**: Most messaging channels work with appropriate configuration
 
-```powershell
-openclaw agent --local --agent main --thinking low -m "Reply with exactly WINDOWS-HATCH-OK."
-```
+### Current Native Windows Limitations
 
-Current caveats:
+- **Service management**: Windows Scheduled Tasks are used instead of systemd
+- **Some tools**: Certain Linux-specific tools may have limited functionality
+- **Performance**: Some operations may be slower than on WSL2
+- **Dependency management**: Some dependencies may require additional setup
 
-- `openclaw onboard --non-interactive` still expects a reachable local gateway unless you pass `--skip-health`
-- `openclaw onboard --non-interactive --install-daemon` and `openclaw gateway install` try Windows Scheduled Tasks first
-- if Scheduled Task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately
-- if `schtasks` itself wedges or stops responding, OpenClaw now aborts that path quickly and falls back instead of hanging forever
-- Scheduled Tasks are still preferred when available because they provide better supervisor status
+### Native Windows Setup
+
+1. **Install Node.js**: Download and install from [nodejs.org](https://nodejs.org/)
+   - Recommended: Node 24 or Node 22.16+
+
+2. **Install pnpm**: 
+   ```powershell
+   npm install -g pnpm
+   ```
+
+3. **Install OpenClaw**: 
+   ```powershell
+   pnpm add -g openclaw
+   ```
+
+4. **Run onboarding**: 
+   ```powershell
+   openclaw onboard
+   ```
+
+5. **Start gateway**: 
+   ```powershell
+   openclaw gateway start
+   ```
+
+### Native Windows Service Management
+
+OpenClaw on native Windows uses Windows Scheduled Tasks for service management:
+
+- **Install service**: `openclaw gateway install`
+- **Check status**: `openclaw gateway status`
+- **Start service**: `openclaw gateway start`
+- **Stop service**: `openclaw gateway stop`
+
+If Scheduled Task creation is denied, OpenClaw falls back to a per-user Startup-folder login item.
 
 If you want the native CLI only, without gateway service install, use one of these:
 

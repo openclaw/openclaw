@@ -518,8 +518,8 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
 | Category            | Fields                                                               | Restart needed? |
 | ------------------- | -------------------------------------------------------------------- | --------------- |
 | Channels            | `channels.*`, `web` (WhatsApp) — all built-in and extension channels | No              |
-| Agent & models      | `agent`, `agents`, `models`, `routing`                               | No              |
-| Automation          | `hooks`, `cron`, `agent.heartbeat`                                   | No              |
+| Agent & models      | `agents.defaults`, `agents`, `models`, `routing`                     | No              |
+| Automation          | `hooks`, `cron`, `agents.defaults.heartbeat`                         | No              |
 | Sessions & messages | `session`, `messages`                                                | No              |
 | Tools & media       | `tools`, `browser`, `skills`, `audio`, `talk`                        | No              |
 | UI & misc           | `ui`, `logging`, `identity`, `bindings`                              | No              |

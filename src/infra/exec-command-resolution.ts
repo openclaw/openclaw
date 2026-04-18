@@ -260,6 +260,21 @@ function stripTrailingRedirections(value: string): string {
   }
 }
 
+const regexCache = new Map<string, RegExp>();
+
+function getRegex(pattern: string): RegExp | null {
+  if (regexCache.has(pattern)) {
+    return regexCache.get(pattern)!;
+  }
+  try {
+    const regex = new RegExp(pattern);
+    regexCache.set(pattern, regex);
+    return regex;
+  } catch {
+    return null;
+  }
+}
+
 function matchArgPattern(argPattern: string, argv: string[], platform?: string | null): boolean {
   // Patterns built by buildArgPatternFromArgv use \x00 as the argument separator and
   // always include a trailing \x00 sentinel so that every auto-generated pattern
@@ -280,39 +295,40 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
         ? "\x00\x00" // zero args: double sentinel matches "^\x00\x00$" pattern
         : argsSlice.join(sep) + sep // trailing sentinel to match pattern format
       : argsSlice.join(sep);
-  try {
-    const regex = new RegExp(argPattern);
-    if (regex.test(argsString)) {
-      return true;
-    }
-    // On Windows, LLMs may use forward slashes (`C:/path`) or backslashes
-    // (`C:\path`) interchangeably.  Normalize to backslashes and retry so
-    // that an argPattern built from one style still matches the other.
-    // Use the caller-supplied target platform so Linux gateways evaluating
-    // Windows node commands also perform the normalization.
-    const effectivePlatform = normalizeLowercaseStringOrEmpty(platform ?? process.platform);
-    if (effectivePlatform.startsWith("win")) {
-      const normalized = argsString.replace(/\//g, "\\");
-      if (normalized !== argsString && regex.test(normalized)) {
-        return true;
-      }
-    }
-    // Retry after stripping trailing shell redirections (2>&1, etc.) so that
-    // patterns saved without them still match commands that include them.
-    // Only applies for space-joined (legacy hand-authored) patterns.  For
-    // \x00-joined auto-generated patterns, redirections are already blocked
-    // upstream by findWindowsUnsupportedToken, so any surviving 2>&1 token
-    // is a literal data argument and must not be stripped.
-    if (sep === " ") {
-      const stripped = stripTrailingRedirections(argsString);
-      if (stripped !== argsString && regex.test(stripped)) {
-        return true;
-      }
-    }
-    return false;
-  } catch {
+
+  const regex = getRegex(argPattern);
+  if (!regex) {
     return false;
   }
+
+  if (regex.test(argsString)) {
+    return true;
+  }
+  // On Windows, LLMs may use forward slashes (`C:/path`) or backslashes
+  // (`C:\path`) interchangeably.  Normalize to backslashes and retry so
+  // that an argPattern built from one style still matches the other.
+  // Use the caller-supplied target platform so Linux gateways evaluating
+  // Windows node commands also perform the normalization.
+  const effectivePlatform = normalizeLowercaseStringOrEmpty(platform ?? process.platform);
+  if (effectivePlatform.startsWith("win")) {
+    const normalized = argsString.replace(/\//g, "\\");
+    if (normalized !== argsString && regex.test(normalized)) {
+      return true;
+    }
+  }
+  // Retry after stripping trailing shell redirections (2>&1, etc.) so that
+  // patterns saved without them still match commands that include them.
+  // Only applies for space-joined (legacy hand-authored) patterns.  For
+  // \x00-joined auto-generated patterns, redirections are already blocked
+  // upstream by findWindowsUnsupportedToken, so any surviving 2>&1 token
+  // is a literal data argument and must not be stripped.
+  if (sep === " ") {
+    const stripped = stripTrailingRedirections(argsString);
+    if (stripped !== argsString && regex.test(stripped)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function matchAllowlist(

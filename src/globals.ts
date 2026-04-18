@@ -19,14 +19,14 @@ export function logVerbose(message: string) {
   if (!isVerbose()) {
     return;
   }
-  console.log(theme.muted(message));
+  process.stdout.write(`${theme.muted(message)}\n`);
 }
 
 export function logVerboseConsole(message: string) {
   if (!isVerbose()) {
     return;
   }
-  console.log(theme.muted(message));
+  process.stdout.write(`${theme.muted(message)}\n`);
 }
 
 type ThemeFormatter = (value: string) => string;
