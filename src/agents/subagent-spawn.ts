@@ -222,7 +222,7 @@ function sanitizeMountPathHint(value?: string): string | undefined {
   return trimmed;
 }
 
-export export async function cleanupProvisionalSession(
+export async function cleanupProvisionalSession(
   childSessionKey: string,
   options?: {
     emitLifecycleHooks?: boolean;
