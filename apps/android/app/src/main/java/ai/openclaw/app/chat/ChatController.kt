@@ -482,6 +482,11 @@ class ChatController(
     }
   }
 
+  private fun isCronDeliveryNoise(content: List<ChatMessageContent>): Boolean {
+    val text = content.filter { it.type == "text" }.joinToString("") { it.text ?: "" }.trim()
+    return text.contains("A cron job") && text.contains("just completed successfully")
+  }
+
   private fun parseHistory(
     historyJson: String,
     sessionKey: String,
@@ -497,6 +502,7 @@ class ChatController(
         val obj = item.asObjectOrNull() ?: return@mapNotNull null
         val role = obj["role"].asStringOrNull() ?: return@mapNotNull null
         val content = obj["content"].asArrayOrNull()?.mapNotNull(::parseMessageContent) ?: emptyList()
+        if (role == "user" && isCronDeliveryNoise(content)) return@mapNotNull null
         val ts = obj["timestamp"].asLongOrNull()
         ChatMessage(
           id = UUID.randomUUID().toString(),
@@ -518,7 +524,9 @@ class ChatController(
     val obj = el.asObjectOrNull() ?: return null
     val type = obj["type"].asStringOrNull() ?: "text"
     return if (type == "text") {
-      ChatMessageContent(type = "text", text = obj["text"].asStringOrNull())
+      val raw = obj["text"].asStringOrNull()
+      val cleaned = raw?.let { Regex("""^<final>([\s\S]*)</final>$""").find(it.trim())?.groupValues?.get(1) ?: it }
+      ChatMessageContent(type = "text", text = cleaned)
     } else {
       ChatMessageContent(
         type = type,
