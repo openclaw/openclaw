@@ -115,6 +115,7 @@ export function createMatrixHandlerTestHarness(
       counts: { final: 0, block: 0, tool: 0 },
     }));
   const enqueueSystemEvent = options.enqueueSystemEvent ?? vi.fn();
+  const cfgForHandler = options.cfg ?? {};
 
   const handler = createMatrixRoomMessageHandler({
     client: {
@@ -123,6 +124,9 @@ export function createMatrixHandlerTestHarness(
       ...options.client,
     } as never,
     core: {
+      config: {
+        loadConfig: () => cfgForHandler,
+      },
       channel: {
         pairing: {
           readAllowFromStore,
@@ -193,7 +197,7 @@ export function createMatrixHandlerTestHarness(
         enqueueSystemEvent,
       },
     } as never,
-    cfg: (options.cfg ?? {}) as never,
+    cfg: cfgForHandler as never,
     accountId: options.accountId ?? "ops",
     runtime:
       options.runtime ??

@@ -14,6 +14,7 @@ import type {
   MatrixStreamingMode,
   ReplyToMode,
 } from "../../types.js";
+import { resolveMatrixAccountConfig } from "../account-config.js";
 import { formatMatrixErrorMessage } from "../errors.js";
 import { isMatrixMediaSizeLimitError } from "../media-errors.js";
 import {
@@ -638,10 +639,22 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         };
         const storeAllowFrom = isDirectMessage ? await readStoreAllowFrom() : [];
         const roomUsers = roomConfig?.users ?? [];
+        // Hot-reload: re-read raw allowlist entries from live config on each
+        // inbound message so additions to dm.allowFrom / groupAllowFrom take
+        // effect without restarting the gateway. Display-name resolution still
+        // only runs at startup, so new entries must be full Matrix IDs
+        // (@user:server). Merging with the closure values preserves any
+        // startup-time resolution work.
+        const liveAccountCfg = resolveMatrixAccountConfig({
+          cfg: core.config.loadConfig() as CoreConfig,
+          accountId,
+        });
+        const liveDmAllowFrom = (liveAccountCfg.dm?.allowFrom ?? []).map(String);
+        const liveGroupAllowFrom = (liveAccountCfg.groupAllowFrom ?? []).map(String);
         const accessState = resolveMatrixMonitorAccessState({
-          allowFrom,
+          allowFrom: [...allowFrom, ...liveDmAllowFrom],
           storeAllowFrom,
-          groupAllowFrom,
+          groupAllowFrom: [...groupAllowFrom, ...liveGroupAllowFrom],
           roomUsers,
           senderId,
           isRoom,
