@@ -15,6 +15,7 @@ import { isAbsolute, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
+import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import {
   collectBundledPluginRootRuntimeMirrorErrors,
   collectRootDistBundledRuntimeMirrors,
@@ -43,6 +44,16 @@ type InstalledBundledExtensionManifestRecord = {
 const MAX_BUNDLED_EXTENSION_MANIFEST_BYTES = 1024 * 1024;
 const LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER =
   "Failed to load legacy context engine runtime.";
+const LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS = [
+  "dist/extensions/qa-channel/runtime-api.js",
+  "dist/extensions/qa-lab/runtime-api.js",
+] as const;
+const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = [
+  ...BUNDLED_RUNTIME_SIDECAR_PATHS.filter((relativePath) =>
+    listBundledPluginPackArtifacts().includes(relativePath),
+  ),
+  ...LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS,
+] as const;
 
 export type PublishedInstallScenario = {
   name: string;
@@ -90,7 +101,7 @@ export function collectInstalledPackageErrors(params: {
     );
   }
 
-  for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
+  for (const relativePath of PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS) {
     if (!existsSync(join(params.packageRoot, relativePath))) {
       errors.push(`installed package is missing required bundled runtime sidecar: ${relativePath}`);
     }
@@ -156,20 +167,12 @@ export function resolveInstalledBinaryPath(prefixDir: string, platform = process
     : join(prefixDir, "bin", "openclaw");
 }
 
-function collectExpectedBundledExtensionPackageIds(
-  sourceExtensionsDir = join(process.cwd(), "extensions"),
-): ReadonlySet<string> | null {
-  if (!existsSync(sourceExtensionsDir)) {
-    return null;
-  }
-
+function collectExpectedBundledExtensionPackageIds(): ReadonlySet<string> {
   const ids = new Set<string>();
-  for (const entry of readdirSync(sourceExtensionsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    if (existsSync(join(sourceExtensionsDir, entry.name, "package.json"))) {
-      ids.add(entry.name);
+  for (const relativePath of listBundledPluginPackArtifacts()) {
+    const match = /^dist\/extensions\/([^/]+)\/package\.json$/u.exec(relativePath);
+    if (match) {
+      ids.add(match[1]);
     }
   }
   return ids;
@@ -196,7 +199,7 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
     const extensionDirPath = join(extensionsDir, entry.name);
     const packageJsonPath = join(extensionsDir, entry.name, "package.json");
     if (!existsSync(packageJsonPath)) {
-      if (expectedPackageIds === null || expectedPackageIds.has(entry.name)) {
+      if (expectedPackageIds.has(entry.name)) {
         errors.push(`installed bundled extension manifest missing: ${packageJsonPath}.`);
       }
       continue;

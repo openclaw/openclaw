@@ -26,6 +26,7 @@ describe("matrix harness runtime", () => {
 
       expect(compose).toContain(`image: ${__testing.MATRIX_QA_DEFAULT_IMAGE}`);
       expect(compose).toContain('      - "127.0.0.1:28008:8008"');
+      expect(compose).toContain('TUWUNEL_ALLOW_ENCRYPTION: "true"');
       expect(compose).toContain('TUWUNEL_ALLOW_REGISTRATION: "true"');
       expect(compose).toContain('TUWUNEL_REGISTRATION_TOKEN: "secret-token"');
       expect(compose).toContain('TUWUNEL_SERVER_NAME: "matrix-qa.test"');
@@ -83,6 +84,10 @@ describe("matrix harness runtime", () => {
       expect(result.baseUrl).toBe("http://127.0.0.1:28008/");
       expect(result.stopCommand).toBe(
         `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml down --remove-orphans`,
+      );
+      await result.restartService();
+      expect(calls).toContain(
+        `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml restart matrix-qa-homeserver @/repo/openclaw`,
       );
     } finally {
       await rm(outputDir, { recursive: true, force: true });

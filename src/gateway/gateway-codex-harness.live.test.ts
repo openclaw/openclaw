@@ -10,6 +10,10 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { GatewayClient } from "./client.js";
 import {
+  EXPECTED_CODEX_MODELS_COMMAND_TEXT,
+  isExpectedCodexModelsCommandText,
+} from "./gateway-codex-harness.live-helpers.js";
+import {
   assertCronJobMatches,
   assertCronJobVisibleViaCli,
   assertLiveImageProbeReply,
@@ -27,6 +31,8 @@ const CODEX_HARNESS_IMAGE_PROBE = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE,
 );
 const CODEX_HARNESS_MCP_PROBE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE);
+const CODEX_HARNESS_AUTH_MODE =
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_AUTH === "api-key" ? "api-key" : "codex-auth";
 const describeLive = LIVE && CODEX_HARNESS_LIVE ? describe : describe.skip;
 const describeDisabled = LIVE && !CODEX_HARNESS_LIVE ? describe : describe.skip;
 const CODEX_HARNESS_TIMEOUT_MS = 420_000;
@@ -38,6 +44,7 @@ type EnvSnapshot = {
   configPath?: string;
   gatewayToken?: string;
   openaiApiKey?: string;
+  openaiBaseUrl?: string;
   skipBrowserControl?: string;
   skipCanvas?: string;
   skipChannels?: string;
@@ -60,6 +67,7 @@ function snapshotEnv(): EnvSnapshot {
     configPath: process.env.OPENCLAW_CONFIG_PATH,
     gatewayToken: process.env.OPENCLAW_GATEWAY_TOKEN,
     openaiApiKey: process.env.OPENAI_API_KEY,
+    openaiBaseUrl: process.env.OPENAI_BASE_URL,
     skipBrowserControl: process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER,
     skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
     skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
@@ -74,6 +82,7 @@ function restoreEnv(snapshot: EnvSnapshot): void {
   restoreEnvVar("OPENCLAW_CONFIG_PATH", snapshot.configPath);
   restoreEnvVar("OPENCLAW_GATEWAY_TOKEN", snapshot.gatewayToken);
   restoreEnvVar("OPENAI_API_KEY", snapshot.openaiApiKey);
+  restoreEnvVar("OPENAI_BASE_URL", snapshot.openaiBaseUrl);
   restoreEnvVar("OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", snapshot.skipBrowserControl);
   restoreEnvVar("OPENCLAW_SKIP_CANVAS_HOST", snapshot.skipCanvas);
   restoreEnvVar("OPENCLAW_SKIP_CHANNELS", snapshot.skipChannels);
@@ -272,7 +281,8 @@ async function requestAgentText(params: {
 async function requestCodexCommandText(params: {
   client: GatewayClient;
   command: string;
-  expectedText: string;
+  expectedText: string | string[];
+  isExpectedText?: (text: string) => boolean;
   sessionKey: string;
 }): Promise<string> {
   const { extractPayloadText } = await import("./test-helpers.agent-results.js");
@@ -293,7 +303,15 @@ async function requestCodexCommandText(params: {
     );
   }
   const text = extractPayloadText(payload.result);
-  expect(text).toContain(params.expectedText);
+  const expectedTexts = Array.isArray(params.expectedText)
+    ? params.expectedText
+    : [params.expectedText];
+  const matchedByText = expectedTexts.some((expectedText) => text.includes(expectedText));
+  const matchedByPredicate = params.isExpectedText?.(text) ?? false;
+  expect(
+    matchedByText || matchedByPredicate,
+    `Expected "${params.command}" response to contain one of: ${expectedTexts.join(", ")}\nReceived:\n${text}`,
+  ).toBe(true);
   return text;
 }
 
@@ -405,10 +423,6 @@ describeLive("gateway live (Codex harness)", () => {
     "runs gateway agent turns through the plugin-owned Codex app-server harness",
     async () => {
       const modelKey = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL;
-      const openaiKey = process.env.OPENAI_API_KEY?.trim();
-      if (!openaiKey) {
-        throw new Error("OPENAI_API_KEY is required for the Codex harness live test.");
-      }
       const { clearRuntimeConfigSnapshot } = await import("../config/config.js");
       const { startGatewayServer } = await import("./server.js");
 
@@ -423,6 +437,17 @@ describeLive("gateway live (Codex harness)", () => {
       clearRuntimeConfigSnapshot();
       process.env.OPENCLAW_AGENT_RUNTIME = "codex";
       process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "none";
+      // Keep the runtime fixed on the plugin-owned Codex app-server harness.
+      // CI can opt into API-key auth to avoid stale OAuth refresh secrets,
+      // while local maintainer runs can continue exercising staged ~/.codex auth.
+      // Only the Codex-auth path should force-clear OpenAI overrides; API-key
+      // mode may intentionally point at a custom endpoint.
+      if (CODEX_HARNESS_AUTH_MODE !== "api-key") {
+        delete process.env.OPENAI_BASE_URL;
+        delete process.env.OPENAI_API_KEY;
+      } else if (!process.env.OPENAI_BASE_URL?.trim()) {
+        delete process.env.OPENAI_BASE_URL;
+      }
       process.env.OPENCLAW_CONFIG_PATH = configPath;
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
@@ -475,7 +500,18 @@ describeLive("gateway live (Codex harness)", () => {
           client,
           sessionKey,
           command: "/codex status",
-          expectedText: "Codex app-server:",
+          expectedText: [
+            "Codex app-server:",
+            "Model: `codex/",
+            "Model: codex/",
+            "Session: `agent:dev:live-codex-harness`",
+            "Session: agent:dev:live-codex-harness",
+            "OpenClaw `",
+            "OpenClaw status:",
+            "model `codex/",
+            "session `agent:dev:live-codex-harness`",
+            "Model/status card shown above",
+          ],
         });
         logCodexLiveStep("codex-status-command", { statusText });
 
@@ -483,7 +519,8 @@ describeLive("gateway live (Codex harness)", () => {
           client,
           sessionKey,
           command: "/codex models",
-          expectedText: "Codex models:",
+          expectedText: [...EXPECTED_CODEX_MODELS_COMMAND_TEXT],
+          isExpectedText: isExpectedCodexModelsCommandText,
         });
         logCodexLiveStep("codex-models-command", { modelsText });
 
