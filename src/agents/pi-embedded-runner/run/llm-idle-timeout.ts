@@ -16,6 +16,14 @@ export const DEFAULT_LLM_IDLE_TIMEOUT_MS = DEFAULT_LLM_IDLE_TIMEOUT_SECONDS * 10
 const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 
 /**
+ * Maximum derived LLM idle timeout (5 minutes).
+ * When the idle timeout is derived from a general agent timeout (which can be
+ * hours), cap it to a reasonable value for detecting stalled LLM streams.
+ * An explicit `idleTimeoutSeconds` config is always respected.
+ */
+const MAX_DERIVED_LLM_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
  * Resolves the LLM idle timeout from configuration.
  * @returns Idle timeout in milliseconds, or 0 to disable
  */
@@ -41,7 +49,10 @@ export function resolveLlmIdleTimeoutMs(params?: {
     if (runTimeoutMs >= MAX_SAFE_TIMEOUT_MS) {
       return 0;
     }
-    return clampImplicitTimeoutMs(runTimeoutMs);
+    // Cap derived idle timeouts to a reasonable maximum. A very large run timeout
+    // (e.g. 48 hours) should not disable idle detection — the idle timeout exists
+    // to catch stalled streams, and 5 minutes is already very generous for LLMs.
+    return Math.min(clampTimeoutMs(runTimeoutMs), MAX_DERIVED_LLM_IDLE_TIMEOUT_MS);
   }
 
   const agentTimeoutSeconds = params?.cfg?.agents?.defaults?.timeoutSeconds;
@@ -50,7 +61,15 @@ export function resolveLlmIdleTimeoutMs(params?: {
     Number.isFinite(agentTimeoutSeconds) &&
     agentTimeoutSeconds > 0
   ) {
+<<<<<<< HEAD
     return clampImplicitTimeoutMs(agentTimeoutSeconds * 1000);
+=======
+    // Cap derived idle timeouts to a reasonable maximum.
+    return Math.min(
+      clampTimeoutMs(agentTimeoutSeconds * 1000),
+      MAX_DERIVED_LLM_IDLE_TIMEOUT_MS,
+    );
+>>>>>>> 844aed646c (fix(agents): cap LLM request timeout to prevent lane exhaustion)
   }
 
   if (params?.trigger === "cron") {

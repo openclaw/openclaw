@@ -55,17 +55,15 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
-  it("uses agents.defaults.timeoutSeconds when it is shorter than the default idle watchdog", () => {
-    const cfg = { agents: { defaults: { timeoutSeconds: 30 } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(30_000);
+  it("uses an explicit run timeout override when llm.idleTimeoutSeconds is not set", () => {
+    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 60_000 })).toBe(60_000);
   });
 
-  it("caps an explicit run timeout override at the default idle watchdog", () => {
-    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 900_000 })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
-  });
-
-  it("uses an explicit run timeout override when shorter than the default idle watchdog", () => {
-    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 30_000 })).toBe(30_000);
+  it("caps derived idle timeout to a reasonable maximum", () => {
+    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 900_000 })).toBe(300_000);
+    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 60_000 })).toBe(60_000);
+    const cfg = { agents: { defaults: { timeoutSeconds: 172_800 } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(300_000);
   });
 
   it("disables the idle watchdog when an explicit run timeout disables timeouts", () => {
