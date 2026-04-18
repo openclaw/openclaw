@@ -4,6 +4,7 @@ import WebSocket from "ws";
 import type { RouterConfig, InstanceConfig } from "./config.js";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { startOAuthCallbackServer } from "./oauth-callback.js";
 
 type AgentResult = {
   runId: string;
@@ -47,6 +48,12 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
     headers: { Authorization: `Bot ${discordToken}` },
   }).then((r) => r.json())) as { url?: string };
   const gatewayUrl = gatewayInfo?.url ?? "wss://gateway.discord.gg";
+
+  // Start OAuth callback server for Google auth relay
+  const oauth = startOAuthCallbackServer({
+    instancesDir: config.instancesDir,
+    runtime,
+  });
 
   const inflight = new Set<string>();
   let heartbeatInterval: ReturnType<typeof setInterval> | undefined;
