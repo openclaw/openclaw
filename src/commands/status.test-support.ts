@@ -81,7 +81,29 @@ export const baseStatusOverviewSurface = {
 } as unknown as StatusOverviewSurface;
 
 export const baseStatusSummary = {
-  tasks: { total: 3, active: 1, failures: 0, byStatus: { queued: 1, running: 1 } },
+  tasks: {
+    total: 3,
+    active: 1,
+    terminal: 2,
+    failures: 0,
+    recentFailures: 0,
+    historicalFailures: 0,
+    byStatus: {
+      queued: 1,
+      running: 1,
+      succeeded: 1,
+      failed: 0,
+      timed_out: 0,
+      cancelled: 0,
+      lost: 0,
+    },
+    byRuntime: {
+      subagent: 1,
+      acp: 1,
+      cli: 0,
+      cron: 1,
+    },
+  },
   taskAudit: { errors: 1, warnings: 0 },
   heartbeat: {
     defaultAgentId: "main",

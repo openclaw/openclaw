@@ -9,6 +9,7 @@ import {
   buildStatusSessionsRows,
   buildStatusSystemEventsRows,
   buildStatusSystemEventsTrailer,
+  buildStatusTasksValue,
   statusHealthColumns,
 } from "./status.command-sections.ts";
 
@@ -135,6 +136,55 @@ describe("status.command-sections", () => {
       { Item: "Matrix", Status: "ok(LINKED)", Detail: "linked" },
       { Item: "Signal", Status: "warn(UNLINKED)", Detail: "not linked" },
     ]);
+  });
+
+  it("builds task status text with recent and historical failure evidence", () => {
+    expect(
+      buildStatusTasksValue({
+        summary: {
+          tasks: {
+            total: 4,
+            active: 1,
+            terminal: 3,
+            failures: 2,
+            recentFailures: 1,
+            historicalFailures: 1,
+            byStatus: {
+              queued: 1,
+              running: 0,
+              succeeded: 1,
+              failed: 1,
+              timed_out: 1,
+              cancelled: 0,
+              lost: 0,
+            },
+            byRuntime: {
+              subagent: 2,
+              acp: 1,
+              cli: 0,
+              cron: 1,
+            },
+          },
+          taskAudit: {
+            total: 0,
+            warnings: 0,
+            errors: 0,
+            byCode: {
+              stale_queued: 0,
+              stale_running: 0,
+              lost: 0,
+              delivery_failed: 0,
+              missing_cleanup: 0,
+              inconsistent_timestamps: 0,
+            },
+          },
+        },
+        warn: (value) => `warn(${value})`,
+        muted: (value) => `muted(${value})`,
+      }),
+    ).toBe(
+      "1 active · 1 queued · 0 running · warn(1 recent failure) · muted(1 historical failure) · muted(audit clean) · 4 tracked",
+    );
   });
 
   it("builds footer lines from update and reachability state", () => {

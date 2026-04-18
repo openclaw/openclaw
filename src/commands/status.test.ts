@@ -417,6 +417,8 @@ const mocks = vi.hoisted(() => ({
     active: 0,
     terminal: 0,
     failures: 0,
+    recentFailures: 0,
+    historicalFailures: 0,
     byStatus: {
       queued: 0,
       running: 0,
@@ -887,6 +889,8 @@ describe("statusCommand", () => {
       active: 0,
       terminal: 0,
       failures: 0,
+      recentFailures: 0,
+      historicalFailures: 0,
       byStatus: {
         queued: 0,
         running: 0,
@@ -1071,6 +1075,8 @@ describe("statusCommand", () => {
       active: 1,
       terminal: 0,
       failures: 1,
+      recentFailures: 1,
+      historicalFailures: 0,
       byStatus: {
         queued: 0,
         running: 1,

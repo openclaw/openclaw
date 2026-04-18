@@ -15,6 +15,8 @@ export function mapTaskRunAggregateSummary(summary: TaskRegistrySummary): TaskRu
     active: summary.active,
     terminal: summary.terminal,
     failures: summary.failures,
+    recentFailures: summary.recentFailures,
+    historicalFailures: summary.historicalFailures,
     byStatus: { ...summary.byStatus },
     byRuntime: { ...summary.byRuntime },
   };

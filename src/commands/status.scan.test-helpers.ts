@@ -271,6 +271,8 @@ export function createStatusSummary(
       active: 0,
       terminal: 0,
       failures: 0,
+      recentFailures: 0,
+      historicalFailures: 0,
       byStatus: {
         queued: 0,
         running: 0,

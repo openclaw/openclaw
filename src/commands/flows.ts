@@ -3,16 +3,16 @@ import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
-import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
-import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
 import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
 import type { TaskFlowRecord, TaskFlowStatus } from "../tasks/task-flow-registry.types.js";
 import {
   getTaskFlowById,
   listTaskFlowRecords,
   resolveTaskFlowForLookupToken,
 } from "../tasks/task-flow-runtime-internal.js";
+import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
+import { summarizeTaskFailureEvidence } from "../tasks/task-status.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { isRich, theme } from "../terminal/theme.js";
 
@@ -69,24 +69,9 @@ function formatFlowStatusCell(status: TaskFlowStatus, rich: boolean) {
   return theme.muted(padded);
 }
 
-function countHistoricalFailures(tasks: TaskRecord[]): number {
-  const snapshot = buildTaskStatusSnapshot(tasks);
-  const now = Date.now();
-  return tasks.filter((task) => {
-    if (task.status !== "failed" && task.status !== "timed_out" && task.status !== "lost") {
-      return false;
-    }
-    if (typeof task.cleanupAfter === "number" && task.cleanupAfter <= now) {
-      return false;
-    }
-    return !snapshot.recentTerminal.some((candidate) => candidate.taskId === task.taskId);
-  }).length;
-}
-
 function formatFlowTaskEvidence(tasks: TaskRecord[]): string {
   const taskSummary = summarizeTaskRecords(tasks);
-  const recentFailures = buildTaskStatusSnapshot(tasks).recentFailureCount;
-  const historicalFailures = countHistoricalFailures(tasks);
+  const { recentFailures, historicalFailures } = summarizeTaskFailureEvidence(tasks);
   return [
     `${taskSummary.active} active`,
     `${recentFailures} recent failure${recentFailures === 1 ? "" : "s"}`,
@@ -110,7 +95,9 @@ function formatFlowRows(
   ].join(" ");
   const lines = [rich ? theme.heading(header) : header];
   for (const flow of flows) {
-    const counts = taskEvidenceByFlowId.get(flow.flowId) ?? "0 active · 0 recent failures · 0 historical failures";
+    const counts =
+      taskEvidenceByFlowId.get(flow.flowId) ??
+      "0 active · 0 recent failures · 0 historical failures";
     lines.push(
       [
         shortToken(flow.flowId).padEnd(ID_PAD),
