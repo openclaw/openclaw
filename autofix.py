@@ -578,21 +578,47 @@ def apply_patches(repo: str, branch: str, head_sha: str, patches: list[FilePatch
     # even on push failure or unexpected exception.
     try:
         token = os.environ["GITHUB_TOKEN"]
-        clone_result = git(
-            "clone",
-            "--depth=1",
-            "--branch",
-            branch,
-            f"https://x-access-token:{token}@github.com/{repo}.git",
-            str(work_dir),
+        remote_url = f"https://x-access-token:{token}@github.com/{repo}.git"
+
+        # SHA-pinned fetch: initialize an empty repo and pull exactly
+        # `head_sha`, not the current branch tip. This removes the race
+        # window where `git clone --branch <branch>` would otherwise
+        # fetch whatever HEAD the branch pointed at *now* rather than
+        # the SHA the patches were generated against.
+        #
+        # GitHub has `uploadpack.allowReachableSHA1InWant=true` enabled
+        # by default, so fetching a reachable SHA on any branch works
+        # for both public and private repos. If the SHA is no longer
+        # reachable (e.g., branch force-pushed in the window) the fetch
+        # fails cleanly and we abort rather than clobber newer commits.
+        init_result = git("init", str(work_dir))
+        if init_result.returncode != 0:
+            print(f"git init failed: {init_result.stderr}", file=sys.stderr)
+            return False
+        remote_add = git("remote", "add", "origin", remote_url, cwd=str(work_dir))
+        if remote_add.returncode != 0:
+            print(f"git remote add failed: {remote_add.stderr}", file=sys.stderr)
+            return False
+        fetch_result = git(
+            "fetch", "--depth=1", "origin", head_sha, cwd=str(work_dir)
         )
-        if clone_result.returncode != 0:
-            print(f"git clone failed: {clone_result.stderr}", file=sys.stderr)
+        if fetch_result.returncode != 0:
+            print(
+                f"git fetch by SHA failed (branch may have force-pushed, or the "
+                f"SHA is no longer reachable): {fetch_result.stderr}",
+                file=sys.stderr,
+            )
+            return False
+        checkout_result = git(
+            "checkout", "-b", branch, "FETCH_HEAD", cwd=str(work_dir)
+        )
+        if checkout_result.returncode != 0:
+            print(f"git checkout -b failed: {checkout_result.stderr}", file=sys.stderr)
             return False
 
-        # Verify that the cloned HEAD matches the SHA the patches were
-        # generated against. If not, the branch advanced while we were
-        # running -- abort to avoid clobbering newer commits.
+        # Defense-in-depth: HEAD must equal head_sha after a SHA-pinned
+        # fetch + checkout. Trivially true on success; this check catches
+        # any future refactor that accidentally reintroduces a race.
         head_check = git("rev-parse", "HEAD", cwd=str(work_dir))
         if head_check.returncode != 0:
             print(f"autofix: could not read HEAD: {head_check.stderr}", file=sys.stderr)
@@ -600,8 +626,8 @@ def apply_patches(repo: str, branch: str, head_sha: str, patches: list[FilePatch
         cloned_sha = head_check.stdout.strip()
         if cloned_sha != head_sha:
             print(
-                f"autofix: branch {branch} advanced from {head_sha[:7]} to {cloned_sha[:7]} "
-                "while patches were being generated; aborting to avoid clobbering newer commits.",
+                f"autofix: SHA-pinned fetch landed on {cloned_sha[:7]} not the "
+                f"expected {head_sha[:7]}; aborting to avoid clobbering newer commits.",
                 file=sys.stderr,
             )
             return False
