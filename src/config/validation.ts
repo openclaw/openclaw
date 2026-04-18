@@ -566,6 +566,53 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+function validateGatewayCors(config: OpenClawConfig): ConfigValidationIssue[] {
+  const cors = config.gateway?.http?.cors;
+  if (!cors?.enabled) {
+    return [];
+  }
+
+  if (cors.allowedOrigins?.includes("*") && cors.allowCredentials === true) {
+    return [
+      {
+        path: "gateway.http.cors",
+        message:
+          'gateway.http.cors: allowedOrigins ["*"] with allowCredentials=true is forbidden by the CORS spec. ' +
+          'Remove "*" from allowedOrigins or set allowCredentials=false.',
+      },
+    ];
+  }
+
+  const issues: ConfigValidationIssue[] = [];
+  for (const origin of cors.allowedOrigins ?? []) {
+    if (origin === "*") {
+      continue;
+    }
+    if (origin.length === 0) {
+      issues.push({
+        path: "gateway.http.cors.allowedOrigins",
+        message: "gateway.http.cors.allowedOrigins: empty string is not a valid origin.",
+      });
+      continue;
+    }
+    try {
+      const parsed = new URL(origin);
+      if (parsed.pathname !== "/" || origin.endsWith("/")) {
+        issues.push({
+          path: "gateway.http.cors.allowedOrigins",
+          message: `gateway.http.cors.allowedOrigins: "${origin}" must be scheme://host[:port] with no trailing slash or path.`,
+        });
+      }
+    } catch {
+      issues.push({
+        path: "gateway.http.cors.allowedOrigins",
+        message: `gateway.http.cors.allowedOrigins: "${origin}" is not a valid origin URL.`,
+      });
+    }
+  }
+  return issues;
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -627,6 +674,10 @@ export function validateConfigObjectRaw(
   const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validatedConfig);
   if (gatewayTailscaleBindIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleBindIssues };
+  }
+  const corsIssues = validateGatewayCors(validatedConfig);
+  if (corsIssues.length > 0) {
+    return { ok: false, issues: corsIssues };
   }
   return {
     ok: true,

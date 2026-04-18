@@ -112,6 +112,8 @@ Set `gateway.http.endpoints.chatCompletions.enabled` to `true`:
 }
 ```
 
+For cross-origin browser access, see [Browser access (CORS)](/gateway/configuration#browser-access-cors).
+
 ## Disabling the endpoint
 
 Set `gateway.http.endpoints.chatCompletions.enabled` to `false`:

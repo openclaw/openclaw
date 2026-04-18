@@ -49,6 +49,7 @@ Auth matrix:
   - only lose owner semantics when the caller explicitly narrows scopes and omits `operator.admin`
 
 Enable or disable this endpoint with `gateway.http.endpoints.responses.enabled`.
+For cross-origin browser access, see [Browser access (CORS)](/gateway/configuration#browser-access-cors).
 
 The same compatibility surface also includes:
 
