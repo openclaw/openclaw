@@ -119,6 +119,10 @@
       "types": "./dist/plugin-sdk/channel-setup.d.ts",
       "default": "./dist/plugin-sdk/channel-setup.js"
     },
+    "./plugin-sdk/channel-targets": {
+      "types": "./dist/plugin-sdk/channel-targets.d.ts",
+      "default": "./dist/plugin-sdk/channel-targets.js"
+    },
     "./plugin-sdk/channel-streaming": {
       "types": "./dist/plugin-sdk/channel-streaming.d.ts",
       "default": "./dist/plugin-sdk/channel-streaming.js"
@@ -598,10 +602,6 @@
     "./plugin-sdk/channel-send-result": {
       "types": "./dist/plugin-sdk/channel-send-result.d.ts",
       "default": "./dist/plugin-sdk/channel-send-result.js"
-    },
-    "./plugin-sdk/channel-targets": {
-      "types": "./dist/plugin-sdk/channel-targets.d.ts",
-      "default": "./dist/plugin-sdk/channel-targets.js"
     },
     "./plugin-sdk/feishu": {
       "types": "./dist/plugin-sdk/feishu.d.ts",
