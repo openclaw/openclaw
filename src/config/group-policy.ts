@@ -22,11 +22,15 @@ export type ChannelGroupConfig = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };
 
+export type ChannelGroupPolicyMode = "open" | "allowlist" | "disabled";
+
 export type ChannelGroupPolicy = {
   allowlistEnabled: boolean;
   allowed: boolean;
   groupConfig?: ChannelGroupConfig;
   defaultConfig?: ChannelGroupConfig;
+  /** Resolved `channels.<id>.groupPolicy` (account override included). */
+  groupPolicyMode?: ChannelGroupPolicyMode;
 };
 
 type ChannelGroups = Record<string, ChannelGroupConfig>;
@@ -305,8 +309,6 @@ function resolveChannelGroups(
   return accountGroups ?? channelConfig.groups;
 }
 
-type ChannelGroupPolicyMode = "open" | "allowlist" | "disabled";
-
 function resolveChannelGroupPolicyMode(
   cfg: OpenClawConfig,
   channel: GroupPolicyChannel,
@@ -340,9 +342,9 @@ export function resolveChannelGroupPolicy(params: {
 }): ChannelGroupPolicy {
   const { cfg, channel } = params;
   const groups = resolveChannelGroups(cfg, channel, params.accountId);
-  const groupPolicy = resolveChannelGroupPolicyMode(cfg, channel, params.accountId);
+  const groupPolicyMode = resolveChannelGroupPolicyMode(cfg, channel, params.accountId);
   const hasGroups = Boolean(groups && Object.keys(groups).length > 0);
-  const allowlistEnabled = groupPolicy === "allowlist" || hasGroups;
+  const allowlistEnabled = groupPolicyMode === "allowlist" || hasGroups;
   const normalizedId = params.groupId?.trim();
   const groupConfig = normalizedId
     ? resolveChannelGroupConfig(groups, normalizedId, params.groupIdCaseInsensitive)
@@ -352,9 +354,9 @@ export function resolveChannelGroupPolicy(params: {
   // When groupPolicy is "allowlist" with groupAllowFrom but no explicit groups,
   // allow the group through — sender-level filtering handles access control.
   const senderFilterBypass =
-    groupPolicy === "allowlist" && !hasGroups && Boolean(params.hasGroupAllowFrom);
+    groupPolicyMode === "allowlist" && !hasGroups && Boolean(params.hasGroupAllowFrom);
   const allowed =
-    groupPolicy === "disabled"
+    groupPolicyMode === "disabled"
       ? false
       : !allowlistEnabled || allowAll || Boolean(groupConfig) || senderFilterBypass;
   return {
@@ -362,6 +364,7 @@ export function resolveChannelGroupPolicy(params: {
     allowed,
     groupConfig,
     defaultConfig,
+    groupPolicyMode,
   };
 }
 
@@ -375,7 +378,7 @@ export function resolveChannelGroupRequireMention(params: {
   overrideOrder?: "before-config" | "after-config";
 }): boolean {
   const { requireMentionOverride, overrideOrder = "after-config" } = params;
-  const { groupConfig, defaultConfig } = resolveChannelGroupPolicy(params);
+  const { groupConfig, defaultConfig, groupPolicyMode } = resolveChannelGroupPolicy(params);
   const configMention =
     typeof groupConfig?.requireMention === "boolean"
       ? groupConfig.requireMention
@@ -392,8 +395,7 @@ export function resolveChannelGroupRequireMention(params: {
   if (overrideOrder !== "before-config" && typeof requireMentionOverride === "boolean") {
     return requireMentionOverride;
   }
-  const mode = resolveChannelGroupPolicyMode(params.cfg, params.channel, params.accountId);
-  if (mode === "open") {
+  if (groupPolicyMode === "open") {
     return false;
   }
   return true;
