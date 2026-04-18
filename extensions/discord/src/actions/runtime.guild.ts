@@ -98,6 +98,53 @@ const guildAdminPermissions: Partial<Record<string, bigint[]>> = {
   channelPermissionRemove: [PermissionFlagsBits.ManageChannels],
 };
 
+function assertGuildAdminActionEnabled(
+  action: string,
+  isActionEnabled: ActionGate<DiscordActionConfig>,
+) {
+  switch (action) {
+    case "emojiUpload": {
+      if (!isActionEnabled("emojiUploads")) {
+        throw new Error("Discord emoji uploads are disabled.");
+      }
+      return;
+    }
+    case "stickerUpload": {
+      if (!isActionEnabled("stickerUploads")) {
+        throw new Error("Discord sticker uploads are disabled.");
+      }
+      return;
+    }
+    case "roleAdd":
+    case "roleRemove": {
+      if (!isActionEnabled("roles", false)) {
+        throw new Error("Discord role changes are disabled.");
+      }
+      return;
+    }
+    case "eventCreate": {
+      if (!isActionEnabled("events")) {
+        throw new Error("Discord events are disabled.");
+      }
+      return;
+    }
+    case "channelCreate":
+    case "channelEdit":
+    case "channelDelete":
+    case "channelMove":
+    case "categoryCreate":
+    case "categoryEdit":
+    case "categoryDelete":
+    case "channelPermissionSet":
+    case "channelPermissionRemove": {
+      if (!isActionEnabled("channels")) {
+        throw new Error("Discord channel management is disabled.");
+      }
+      return;
+    }
+  }
+}
+
 async function resolveGuildIdForGuildAdminAction(params: {
   action: string;
   values: Record<string, unknown>;
@@ -134,7 +181,7 @@ async function verifySenderGuildAdminPermission(params: {
 
   const senderUserId = readStringParam(params.values, "senderUserId");
   if (!senderUserId) {
-    return;
+    throw new Error(`Sender identity required to authorize Discord guild action: ${params.action}`);
   }
 
   const guildId = await resolveGuildIdForGuildAdminAction(params);
@@ -183,6 +230,7 @@ export async function handleDiscordGuildAction(
   options?: { mediaLocalRoots?: readonly string[] },
 ): Promise<AgentToolResult<unknown>> {
   const accountId = readStringParam(params, "accountId");
+  assertGuildAdminActionEnabled(action, isActionEnabled);
   await verifySenderGuildAdminPermission({ action, values: params, accountId });
   switch (action) {
     case "memberInfo": {
