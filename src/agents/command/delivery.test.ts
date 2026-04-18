@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -6,6 +7,24 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { deliverAgentCommandResult, normalizeAgentCommandReplyPayloads } from "./delivery.js";
 import type { AgentCommandOpts } from "./types.js";
+
+const deliverOutboundPayloadsMock = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => [] as unknown[]),
+);
+vi.mock("../../infra/outbound/deliver.js", () => ({
+  deliverOutboundPayloads: deliverOutboundPayloadsMock,
+}));
+
+const createReplyMediaPathNormalizerMock = vi.hoisted(() =>
+  vi.fn(
+    (..._args: unknown[]) =>
+      (payload: ReplyPayload) =>
+        Promise.resolve(payload),
+  ),
+);
+vi.mock("../../auto-reply/reply/reply-media-paths.runtime.js", () => ({
+  createReplyMediaPathNormalizer: createReplyMediaPathNormalizerMock,
+}));
 
 type NormalizeParams = Parameters<typeof normalizeAgentCommandReplyPayloads>[0];
 type RunResult = NormalizeParams["result"];
@@ -135,6 +154,94 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(runtime.log).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith("Options: on, off.");
     expect(delivered.payloads).toMatchObject([{ text: "Options: on, off." }]);
+  });
+
+  it("normalizes reply-media paths before outbound delivery", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    const normalizerFn = vi.fn(
+      async (payload: ReplyPayload): Promise<ReplyPayload> => ({
+        ...payload,
+        mediaUrl: "/tmp/agent-workspace/out/photo.png",
+        mediaUrls: ["/tmp/agent-workspace/out/photo.png"],
+      }),
+    );
+    createReplyMediaPathNormalizerMock.mockReturnValue(normalizerFn);
+    deliverOutboundPayloadsMock.mockResolvedValue([]);
+
+    await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "go",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "#general",
+      } as AgentCommandOpts,
+      outboundSession: {
+        key: "agent:tester:slack:direct:alice",
+        agentId: "tester",
+      } as never,
+      sessionEntry: undefined,
+      payloads: [{ text: "here you go", mediaUrls: ["./out/photo.png"] }],
+      result: createResult(),
+    });
+
+    expect(createReplyMediaPathNormalizerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:tester:slack:direct:alice",
+        agentId: "tester",
+        workspaceDir: "/tmp/agent-workspace",
+        messageProvider: "slack",
+      }),
+    );
+    expect(normalizerFn).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrls: ["./out/photo.png"] }),
+    );
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
+    const [firstCallArg] = deliverOutboundPayloadsMock.mock.calls[0] ?? [];
+    const deliverArgs = firstCallArg as { payloads: ReplyPayload[] } | undefined;
+    expect(deliverArgs?.payloads[0]).toMatchObject({
+      mediaUrls: ["/tmp/agent-workspace/out/photo.png"],
+    });
+  });
+
+  it("threads agentId into the normalizer when sessionKey is unresolved", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    createReplyMediaPathNormalizerMock.mockReturnValue(async (payload: ReplyPayload) => payload);
+    deliverOutboundPayloadsMock.mockResolvedValue([]);
+
+    await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "go",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "#general",
+      } as AgentCommandOpts,
+      outboundSession: { agentId: "tester" } as never,
+      sessionEntry: undefined,
+      payloads: [{ text: "here you go", mediaUrls: ["./out/photo.png"] }],
+      result: createResult(),
+    });
+
+    expect(createReplyMediaPathNormalizerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "tester",
+        sessionKey: undefined,
+        workspaceDir: "/tmp/agent-workspace",
+      }),
+    );
   });
 
   it("keeps LINE directive-only replies intact for local preview when delivery is disabled", async () => {

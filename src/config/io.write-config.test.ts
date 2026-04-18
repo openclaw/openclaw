@@ -190,6 +190,77 @@ describe("config io write", () => {
     });
   });
 
+  it("preserves root $schema during partial writes", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            $schema: "https://openclaw.ai/config.json",
+            gateway: { mode: "local" },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      await io.writeConfigFile({
+        gateway: { mode: "local", port: 18789 },
+      });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        $schema?: string;
+        gateway?: { mode?: string; port?: number };
+      };
+      expect(persisted.$schema).toBe("https://openclaw.ai/config.json");
+      expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+    });
+  });
+
+  it("does not inject include-only $schema into the root config during partial writes", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const includePath = path.join(home, ".openclaw", "extra.json5");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        includePath,
+        `${JSON.stringify({ $schema: "https://openclaw.ai/config-from-include.json" }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        configPath,
+        `{\n  "$include": "./extra.json5",\n  "gateway": { "mode": "local" }\n}\n`,
+        "utf-8",
+      );
+
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      await io.writeConfigFile({
+        gateway: { mode: "local", port: 18789 },
+      });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        $schema?: string;
+        gateway?: { mode?: string; port?: number };
+      };
+      expect(persisted).not.toHaveProperty("$schema");
+      expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+    });
+  });
+
   it("writes disabled plugin entries without requiring plugin config", async () => {
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
