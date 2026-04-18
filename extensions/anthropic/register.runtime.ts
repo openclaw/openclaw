@@ -53,16 +53,32 @@ const ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS = [
   "claude-opus-4.5",
 ] as const;
 const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
+const ANTHROPIC_SONNET_47_MODEL_ID = "claude-sonnet-4-7";
+const ANTHROPIC_SONNET_47_DOT_MODEL_ID = "claude-sonnet-4.7";
+const ANTHROPIC_SONNET_47_TEMPLATE_MODEL_IDS = [
+  "claude-sonnet-4-6",
+  "claude-sonnet-4.6",
+  "claude-sonnet-4-5",
+  "claude-sonnet-4.5",
+] as const;
 const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
 const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet-4.5"] as const;
 const ANTHROPIC_MODERN_MODEL_PREFIXES = [
   "claude-opus-4-7",
+  "claude-opus-4.7",
+  "claude-sonnet-4-7",
+  "claude-sonnet-4.7",
   "claude-opus-4-6",
+  "claude-opus-4.6",
   "claude-sonnet-4-6",
+  "claude-sonnet-4.6",
   "claude-opus-4-5",
+  "claude-opus-4.5",
   "claude-sonnet-4-5",
+  "claude-sonnet-4.5",
   "claude-haiku-4-5",
+  "claude-haiku-4.5",
 ] as const;
 const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
   "Anthropic setup-token auth is supported in OpenClaw.",
@@ -251,6 +267,14 @@ function resolveAnthropicForwardCompatModel(
     }) ??
     resolveAnthropic46ForwardCompatModel({
       ctx,
+      dashModelId: ANTHROPIC_SONNET_47_MODEL_ID,
+      dotModelId: ANTHROPIC_SONNET_47_DOT_MODEL_ID,
+      dashTemplateId: ANTHROPIC_SONNET_46_MODEL_ID,
+      dotTemplateId: ANTHROPIC_SONNET_46_DOT_MODEL_ID,
+      fallbackTemplateIds: ANTHROPIC_SONNET_47_TEMPLATE_MODEL_IDS,
+    }) ??
+    resolveAnthropic46ForwardCompatModel({
+      ctx,
       dashModelId: ANTHROPIC_SONNET_46_MODEL_ID,
       dotModelId: ANTHROPIC_SONNET_46_DOT_MODEL_ID,
       dashTemplateId: "claude-sonnet-4-5",
@@ -260,22 +284,18 @@ function resolveAnthropicForwardCompatModel(
   );
 }
 
+// All Claude Opus/Sonnet 4.6+ default to adaptive thinking.
+const ADAPTIVE_DEFAULT_PATTERN = /(opus|sonnet)-4[.-]([6-9]|\d{2,})/;
+
 function shouldUseAnthropicAdaptiveThinkingDefault(modelId: string): boolean {
-  const lowerModelId = normalizeLowercaseStringOrEmpty(modelId);
-  return (
-    lowerModelId.startsWith(ANTHROPIC_OPUS_46_MODEL_ID) ||
-    lowerModelId.startsWith(ANTHROPIC_OPUS_46_DOT_MODEL_ID) ||
-    lowerModelId.startsWith(ANTHROPIC_SONNET_46_MODEL_ID) ||
-    lowerModelId.startsWith(ANTHROPIC_SONNET_46_DOT_MODEL_ID)
-  );
+  return ADAPTIVE_DEFAULT_PATTERN.test(normalizeLowercaseStringOrEmpty(modelId));
 }
 
-function isAnthropicOpus47Model(modelId: string): boolean {
-  const lowerModelId = normalizeLowercaseStringOrEmpty(modelId);
-  return (
-    lowerModelId.startsWith(ANTHROPIC_OPUS_47_MODEL_ID) ||
-    lowerModelId.startsWith(ANTHROPIC_OPUS_47_DOT_MODEL_ID)
-  );
+// Opus 4.7+ supports the native "xhigh" effort level.
+const OPUS_XHIGH_PATTERN = /opus-4[.-]([7-9]|\d{2,})/;
+
+function isAnthropicOpusXHighModel(modelId: string): boolean {
+  return OPUS_XHIGH_PATTERN.test(normalizeLowercaseStringOrEmpty(modelId));
 }
 
 function matchesAnthropicModernModel(modelId: string): boolean {
@@ -489,10 +509,10 @@ export function buildAnthropicProvider(): ProviderPlugin {
     buildReplayPolicy: buildAnthropicReplayPolicy,
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",
-    supportsXHighThinking: ({ modelId }) => isAnthropicOpus47Model(modelId),
+    supportsXHighThinking: ({ modelId }) => isAnthropicOpusXHighModel(modelId),
     wrapStreamFn: wrapAnthropicProviderStream,
     resolveDefaultThinkingLevel: ({ modelId }) =>
-      isAnthropicOpus47Model(modelId)
+      isAnthropicOpusXHighModel(modelId)
         ? "off"
         : matchesAnthropicModernModel(modelId) && shouldUseAnthropicAdaptiveThinkingDefault(modelId)
           ? "adaptive"

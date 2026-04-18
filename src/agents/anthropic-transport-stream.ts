@@ -99,21 +99,16 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
-function isClaudeOpus47Model(modelId: string): boolean {
-  return modelId.includes("opus-4-7") || modelId.includes("opus-4.7");
-}
-
 function isClaudeOpus46Model(modelId: string): boolean {
   return modelId.includes("opus-4-6") || modelId.includes("opus-4.6");
 }
 
+// All Claude Opus/Sonnet 4.6+ use adaptive thinking (type: "adaptive" + output_config.effort)
+// instead of budget-based thinking (type: "enabled" + budget_tokens).
+const ADAPTIVE_THINKING_PATTERN = /(opus|sonnet)-4[.-]([6-9]|\d{2,})/;
+
 function supportsAdaptiveThinking(modelId: string): boolean {
-  return (
-    isClaudeOpus47Model(modelId) ||
-    isClaudeOpus46Model(modelId) ||
-    modelId.includes("sonnet-4-6") ||
-    modelId.includes("sonnet-4.6")
-  );
+  return ADAPTIVE_THINKING_PATTERN.test(modelId);
 }
 
 function mapThinkingLevelToEffort(level: ThinkingLevel, modelId: string): AnthropicAdaptiveEffort {
@@ -124,10 +119,12 @@ function mapThinkingLevelToEffort(level: ThinkingLevel, modelId: string): Anthro
     case "medium":
       return "medium";
     case "xhigh":
-      if (isClaudeOpus47Model(modelId)) {
-        return "xhigh";
+      // Opus 4.6 predates native xhigh effort; map to "max" instead.
+      if (isClaudeOpus46Model(modelId)) {
+        return "max";
       }
-      return isClaudeOpus46Model(modelId) ? "max" : "high";
+      // Opus 4.7+ supports native xhigh effort.
+      return /opus-4[.-]([7-9]|\d{2,})/.test(modelId) ? "xhigh" : "high";
     default:
       return "high";
   }
