@@ -29,8 +29,6 @@ x-openclaw-base: &openclaw-base
     OPENCLAW_LLAMA_GPU: "off"
     # Gateway process skips channel monitors (discord-router handles Discord).
     OPENCLAW_SKIP_CHANNELS: "1"
-    # gogcli keyring password (shared across all instances)
-    GOG_KEYRING_PASSWORD: ${OPENCLAW_GOG_KEYRING_PASSWORD:-openclaw}
 
 services:
   openclaw-263176934089949194:
@@ -41,6 +39,7 @@ services:
       TZ: America/Los_Angeles
       OPENCLAW_GATEWAY_PORT: "18789"
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_263176934089949194_TOKEN:-}
+      GOG_KEYRING_PASSWORD: ${OPENCLAW_263176934089949194_GOG_PASSWORD:-openclaw}
     volumes:
       - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/263176934089949194:/home/node/.openclaw
       - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/263176934089949194/workspace:/home/node/.openclaw/workspace
@@ -69,7 +68,6 @@ services:
     volumes:
       - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/310798523454980098:/home/node/.openclaw
       - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/310798523454980098/workspace:/home/node/.openclaw/workspace
-      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/310798523454980098/gogcli:/home/node/.config/gogcli
       - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/shared/auth/auth-profiles.json:/home/node/.openclaw/agents/main/agent/auth-profiles.json
     ports:
       - "${OPENCLAW_310798523454980098_PORT:-18791}:18789"
