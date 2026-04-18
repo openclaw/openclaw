@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { stripInvalidGoogleThinkingBudget } from "../google-thinking-compat.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 function isGemini31Model(modelId: string): boolean {
@@ -11,12 +12,6 @@ function isGemini31Model(modelId: string): boolean {
 
 function isGemma4Model(modelId: string): boolean {
   return normalizeLowercaseStringOrEmpty(modelId).startsWith("gemma-4");
-}
-
-// Gemini 2.5 Pro only works in thinking mode and rejects thinkingBudget=0 with
-// "Budget 0 is invalid. This model only works in thinking mode."
-function isThinkingRequiredModel(modelId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-2.5-pro");
 }
 
 function mapThinkLevelToGoogleThinkingLevel(
@@ -82,11 +77,27 @@ export function sanitizeGoogleThinkingPayload(params: {
     return;
   }
   const payloadObj = params.payload as Record<string, unknown>;
-  const config = payloadObj.config;
-  if (!config || typeof config !== "object") {
+  sanitizeGoogleThinkingConfigContainer({
+    container: payloadObj.config,
+    modelId: params.modelId,
+    thinkingLevel: params.thinkingLevel,
+  });
+  sanitizeGoogleThinkingConfigContainer({
+    container: payloadObj.generationConfig,
+    modelId: params.modelId,
+    thinkingLevel: params.thinkingLevel,
+  });
+}
+
+function sanitizeGoogleThinkingConfigContainer(params: {
+  container: unknown;
+  modelId?: string;
+  thinkingLevel?: ThinkLevel;
+}): void {
+  if (!params.container || typeof params.container !== "object") {
     return;
   }
-  const configObj = config as Record<string, unknown>;
+  const configObj = params.container as Record<string, unknown>;
   const thinkingConfig = configObj.thinkingConfig;
   if (!thinkingConfig || typeof thinkingConfig !== "object") {
     return;
@@ -123,13 +134,9 @@ export function sanitizeGoogleThinkingPayload(params: {
 
   const thinkingBudget = thinkingConfigObj.thinkingBudget;
 
-  // Gemini 2.5 Pro rejects thinkingBudget=0; remove it so the API uses its default.
   if (
-    thinkingBudget === 0 &&
-    typeof params.modelId === "string" &&
-    isThinkingRequiredModel(params.modelId)
+    stripInvalidGoogleThinkingBudget({ thinkingConfig: thinkingConfigObj, modelId: params.modelId })
   ) {
-    delete thinkingConfigObj.thinkingBudget;
     if (Object.keys(thinkingConfigObj).length === 0) {
       delete configObj.thinkingConfig;
     }

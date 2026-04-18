@@ -33,6 +33,17 @@ describe("sanitizeGoogleThinkingPayload — gemini-2.5-pro zero budget", () => {
     expect(payload.config.thinkingConfig).toHaveProperty("includeThoughts", true);
   });
 
+  it("removes thinkingBudget=0 from native Google generationConfig payloads", () => {
+    const payload = {
+      generationConfig: {
+        thinkingConfig: { thinkingBudget: 0, includeThoughts: true },
+      },
+    };
+    sanitizeGoogleThinkingPayload({ payload, modelId: "gemini-2.5-pro" });
+    expect(payload.generationConfig.thinkingConfig).not.toHaveProperty("thinkingBudget");
+    expect(payload.generationConfig.thinkingConfig).toHaveProperty("includeThoughts", true);
+  });
+
   it("keeps thinkingBudget=0 for gemini-2.5-flash (not thinking-required)", () => {
     const payload = {
       config: {
