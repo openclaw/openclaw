@@ -127,6 +127,38 @@ describe("cli-session helpers", () => {
     ).toEqual({ invalidatedReason: "mcp" });
   });
 
+  it("prioritizes config invalidation over auth when both change simultaneously", () => {
+    const binding = {
+      sessionId: "cli-session-1",
+      authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch-a",
+      extraSystemPromptHash: "prompt-a",
+      mcpConfigHash: "mcp-a",
+    };
+
+    // Auth + system-prompt both changed → system-prompt wins (fresh session)
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:personal",
+        authEpoch: "auth-epoch-a",
+        extraSystemPromptHash: "prompt-b",
+        mcpConfigHash: "mcp-a",
+      }),
+    ).toEqual({ invalidatedReason: "system-prompt" });
+
+    // Auth + MCP both changed → MCP wins (fresh session)
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:personal",
+        authEpoch: "auth-epoch-a",
+        extraSystemPromptHash: "prompt-a",
+        mcpConfigHash: "mcp-b",
+      }),
+    ).toEqual({ invalidatedReason: "mcp" });
+  });
+
   it("does not treat model changes as a session mismatch", () => {
     const binding = {
       sessionId: "cli-session-1",

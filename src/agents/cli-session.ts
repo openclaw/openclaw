@@ -133,20 +133,8 @@ export function resolveCliSessionReuse(params: {
   const currentAuthEpoch = normalizeOptionalString(params.authEpoch);
   const currentExtraSystemPromptHash = normalizeOptionalString(params.extraSystemPromptHash);
   const currentMcpConfigHash = normalizeOptionalString(params.mcpConfigHash);
-  const storedAuthProfileId = normalizeOptionalString(binding?.authProfileId);
-  if (storedAuthProfileId !== currentAuthProfileId) {
-    // Auth profile changed (e.g. account switch or token refresh that
-    // rotates the profile id).  The CLI session's conversation context is
-    // still valid — only the credentials need updating — so we keep the
-    // sessionId so the runner can resume instead of starting fresh.
-    return { sessionId, invalidatedReason: "auth-profile" };
-  }
-  const storedAuthEpoch = normalizeOptionalString(binding?.authEpoch);
-  if (storedAuthEpoch !== currentAuthEpoch) {
-    // Credential content changed within the same profile (token refresh).
-    // Same reasoning: conversation context is unaffected.
-    return { sessionId, invalidatedReason: "auth-epoch" };
-  }
+  // Check config invalidations first — these require a fresh session and
+  // must take priority over auth-only changes that would otherwise resume.
   const storedExtraSystemPromptHash = normalizeOptionalString(binding?.extraSystemPromptHash);
   if (storedExtraSystemPromptHash !== currentExtraSystemPromptHash) {
     // System prompt changed — the model would see stale instructions if
@@ -158,6 +146,17 @@ export function resolveCliSessionReuse(params: {
     // MCP tool configuration changed — available tools differ, so a
     // fresh session is required.
     return { invalidatedReason: "mcp" };
+  }
+  // Auth-only changes: credentials changed but conversation context is
+  // still valid.  Keep the sessionId so the runner resumes instead of
+  // starting fresh.
+  const storedAuthProfileId = normalizeOptionalString(binding?.authProfileId);
+  if (storedAuthProfileId !== currentAuthProfileId) {
+    return { sessionId, invalidatedReason: "auth-profile" };
+  }
+  const storedAuthEpoch = normalizeOptionalString(binding?.authEpoch);
+  if (storedAuthEpoch !== currentAuthEpoch) {
+    return { sessionId, invalidatedReason: "auth-epoch" };
   }
   return { sessionId };
 }
