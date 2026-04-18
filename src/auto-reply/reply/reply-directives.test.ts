@@ -111,4 +111,10 @@ describe("parseReplyDirectives - sticker directive", () => {
     expect(result.sticker).toEqual({ raw: "1070:17844" });
     expect(result.text).toBe("Here is code:\n```txt\nSTICKER:446:1988\n```\nActual sticker below");
   });
+
+  it("ignores prose lines starting with 'Sticker:' (contains spaces)", () => {
+    const result = parseReplyDirectives("Sticker: nice work on that feature");
+    expect(result.sticker).toBeUndefined();
+    expect(result.text).toBe("Sticker: nice work on that feature");
+  });
 });

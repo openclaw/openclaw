@@ -45,7 +45,7 @@ function extractStickerDirective(text: string): { text: string; sticker?: { raw:
       continue;
     }
     const raw = trimmed.slice(trimmed.toLowerCase().indexOf("sticker:") + "sticker:".length).trim();
-    if (raw) {
+    if (raw && !/\s/.test(raw)) {
       if (!sticker) {
         sticker = { raw };
       }
