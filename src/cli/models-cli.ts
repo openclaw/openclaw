@@ -117,7 +117,18 @@ export function registerModelsCli(program: Command) {
     .command("set")
     .description("Set the default model")
     .argument("<model>", "Model id or alias")
-    .action(async (model: string) => {
+    .action(async (model: string, _opts, command) => {
+      // `models --agent <id>` is inherited from the parent for `status`/`list`
+      // read-only commands. `set` writes to `agents.defaults.model.primary`,
+      // which is the global default, not per-agent — so honouring the flag
+      // silently would write the opposite of what the user asked for. Reject
+      // explicitly instead of no-op-accepting a scope that was never wired.
+      const agent = resolveOptionFromCommand<string>(command, "agent");
+      if (agent) {
+        throw new Error(
+          `"openclaw models set" does not support --agent scope; it writes to the global default model. Omit --agent, or edit the agent entry in agents.list directly (agent id: "${agent}").`,
+        );
+      }
       await runModelsCommand(async () => {
         await modelsSetCommand(model, defaultRuntime);
       });
@@ -127,7 +138,14 @@ export function registerModelsCli(program: Command) {
     .command("set-image")
     .description("Set the image model")
     .argument("<model>", "Model id or alias")
-    .action(async (model: string) => {
+    .action(async (model: string, _opts, command) => {
+      // Same rationale as `models set`: --agent is inherited but not wired.
+      const agent = resolveOptionFromCommand<string>(command, "agent");
+      if (agent) {
+        throw new Error(
+          `"openclaw models set-image" does not support --agent scope; it writes to the global default image model. Omit --agent, or edit the agent entry in agents.list directly (agent id: "${agent}").`,
+        );
+      }
       await runModelsCommand(async () => {
         await modelsSetImageCommand(model, defaultRuntime);
       });

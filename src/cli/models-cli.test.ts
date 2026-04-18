@@ -5,6 +5,8 @@ import { registerModelsCli } from "./models-cli.js";
 
 const mocks = vi.hoisted(() => ({
   modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
+  modelsSetCommand: vi.fn().mockResolvedValue(undefined),
+  modelsSetImageCommand: vi.fn().mockResolvedValue(undefined),
   noopAsync: vi.fn(async () => undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
 }));
@@ -33,8 +35,8 @@ vi.mock("../commands/models.js", () => ({
   modelsImageFallbacksRemoveCommand: mocks.noopAsync,
   modelsListCommand: mocks.noopAsync,
   modelsScanCommand: mocks.noopAsync,
-  modelsSetCommand: mocks.noopAsync,
-  modelsSetImageCommand: mocks.noopAsync,
+  modelsSetCommand: mocks.modelsSetCommand,
+  modelsSetImageCommand: mocks.modelsSetImageCommand,
 }));
 
 describe("models cli", () => {
@@ -92,6 +94,42 @@ describe("models cli", () => {
       expect.any(Object),
     );
   });
+
+  it.each([
+    {
+      label: "parent flag",
+      args: ["models", "--agent", "shuri", "set", "anthropic/claude-sonnet-4-6"],
+    },
+    {
+      label: "set flag",
+      args: ["models", "set", "--agent", "shuri", "anthropic/claude-sonnet-4-6"],
+    },
+  ])(
+    "rejects --agent on models set so it cannot silently write to global default (#68391) ($label)",
+    async ({ args }) => {
+      mocks.modelsSetCommand.mockClear();
+      await expect(runModelsCommand(args)).rejects.toThrow(/does not support --agent scope/);
+      expect(mocks.modelsSetCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      label: "parent flag",
+      args: ["models", "--agent", "shuri", "set-image", "openai/dall-e-3"],
+    },
+    {
+      label: "set-image flag",
+      args: ["models", "set-image", "--agent", "shuri", "openai/dall-e-3"],
+    },
+  ])(
+    "rejects --agent on models set-image so it cannot silently write to global default (#68391) ($label)",
+    async ({ args }) => {
+      mocks.modelsSetImageCommand.mockClear();
+      await expect(runModelsCommand(args)).rejects.toThrow(/does not support --agent scope/);
+      expect(mocks.modelsSetImageCommand).not.toHaveBeenCalled();
+    },
+  );
 
   it("shows help for models auth without error exit", async () => {
     const program = new Command();
