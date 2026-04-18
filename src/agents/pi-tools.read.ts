@@ -264,12 +264,27 @@ async function readTextFileBridge(
   return { content, truncated, totalLines };
 }
 
-// Helper function to detect if a WebM file is audio-only
-async function isWebmAudioOnly(filePath: string): Promise<boolean> {
+// Helper function to detect if a WebM file is audio-only using bridge-aware reads
+async function isWebmAudioOnly(filePath: string, bridge?: SandboxFsBridge, cwd?: string): Promise<boolean> {
   try {
-    const { buffer } = await readLocalFileSafely({ filePath, maxBytes: 8192 });
-    const mime = await detectMime({ buffer, filePath });
-    const kind = kindFromMime(mime);
+    let buffer: Buffer;
+    
+    if (bridge && cwd) {
+      // Use bridge for sandboxed reads
+      const result = await bridge.readFile({
+        filePath,
+        cwd,
+      });
+      buffer = Buffer.isBuffer(result) ? result : Buffer.from(result);
+    } else {
+      // Use local filesystem
+      const { buffer: localBuffer } = await readLocalFileSafely({ filePath, maxBytes: 8192 });
+      buffer = localBuffer;
+    }
+    
+    const detectedMime = await detectMime({ buffer, filePath });
+    const mimeType = detectedMime ?? "video/webm"; // Default to video if detection fails
+    const kind = kindFromMime(mimeType);
     return kind === 'audio';
   } catch (error) {
     console.warn(`Failed to detect WebM type for ${filePath}, treating as video:`, error);
@@ -299,8 +314,19 @@ async function resizeImageToSizeLimit(
   let currentQuality = initialQuality;
   let attempts = 0;
   
-  // Check if resizing is needed
-  if (currentBuffer.length <= maxBytes) {
+  // Check dimension constraints first, even if under byte limit
+  let needsDimensionResize = false;
+  try {
+    const meta = await getImageMetadata(currentBuffer);
+    if (meta?.width && meta?.height) {
+      needsDimensionResize = meta.width > maxDimensionPx || meta.height > maxDimensionPx;
+    }
+  } catch (metaError) {
+    console.warn(`Image metadata extraction failed for ${fileName}:`, metaError);
+  }
+  
+  // If under byte limit but needs dimension resize, still resize
+  if (!needsDimensionResize && currentBuffer.length <= maxBytes) {
     return {
       buffer: currentBuffer,
       mimeType: currentMimeType,
@@ -310,9 +336,9 @@ async function resizeImageToSizeLimit(
     };
   }
   
-  console.log(`Resizing image ${fileName}: initial=${Math.round(currentBuffer.length / 1024)}KB, limit=${Math.round(maxBytes / 1024)}KB`);
+  console.log(`Resizing image ${fileName}: initial=${Math.round(currentBuffer.length / 1024)}KB, limit=${Math.round(maxBytes / 1024)}KB, needsDimensionResize=${needsDimensionResize}`);
   
-  while (attempts < maxAttempts && currentBuffer.length > maxBytes && currentQuality >= minQuality) {
+  while (attempts < maxAttempts && (currentBuffer.length > maxBytes || (needsDimensionResize && attempts === 0)) && currentQuality >= minQuality) {
     try {
       // Log current state for debugging
       let dimensions = "";
@@ -343,6 +369,7 @@ async function resizeImageToSizeLimit(
       }
       
       attempts++;
+      needsDimensionResize = false; // After first resize, dimensions are handled
     } catch (error) {
       console.error(`Resize attempt ${attempts + 1} failed for ${fileName}:`, error);
       return {
@@ -929,6 +956,94 @@ export function transformToolResultForTransport(result: AgentToolResult): AgentT
   };
 }
 
+// Helper function to get fallback MIME type from extension
+function getFallbackMimeTypeFromExtension(filePath: string): string {
+  const ext = filePath.toLowerCase().split(".").pop() ?? "";
+  return getFallbackMimeType(ext);
+}
+
+function getFallbackMimeType(ext: string): string {
+  if (IMAGE_EXTENSIONS.has(ext)) return getImageMimeType(ext);
+  if (AUDIO_EXTENSIONS.has(ext)) return getAudioMimeType(ext);
+  if (VIDEO_EXTENSIONS.has(ext)) return getVideoMimeType(ext);
+  if (ext === WEBM_EXTENSION) return "video/webm";
+  return "text/plain";
+}
+
+function getKindFromExtension(filePath: string): string {
+  const ext = filePath.toLowerCase().split(".").pop() ?? "";
+  if (IMAGE_EXTENSIONS.has(ext)) return "image";
+  if (AUDIO_EXTENSIONS.has(ext)) return "audio";
+  if (VIDEO_EXTENSIONS.has(ext) || ext === WEBM_EXTENSION) return "video";
+  return "text";
+}
+
+// Helper function to detect media type from file bytes
+async function detectMediaTypeFromBytes(
+  filePath: string,
+  useBridge: boolean,
+  bridge: SandboxFsBridge | undefined,
+  cwd: string,
+  signal?: AbortSignal
+): Promise<{ mimeType: string; kind: string; extension: string }> {
+  try {
+    let buffer: Buffer;
+    
+    if (useBridge && bridge) {
+      const result = await bridge.readFile({
+        filePath,
+        cwd,
+        signal,
+      });
+      buffer = Buffer.isBuffer(result) ? result : Buffer.from(result);
+    } else {
+      const { buffer: localBuffer } = await readLocalFileSafely({ filePath, maxBytes: 8192 });
+      buffer = localBuffer;
+    }
+    
+    const detectedMime = await detectMime({ buffer, filePath });
+    const mimeType = detectedMime ?? getFallbackMimeTypeFromExtension(filePath);
+    const detectedKind = kindFromMime(mimeType);
+    const kind = detectedKind ?? getKindFromExtension(filePath);
+    const ext = filePath.toLowerCase().split(".").pop() ?? "";
+    
+    return { mimeType, kind, extension: ext };
+  } catch (error) {
+    console.warn(`Failed to detect MIME type for ${filePath}, falling back to extension:`, error);
+    const ext = filePath.toLowerCase().split(".").pop() ?? "";
+    const mimeType = getFallbackMimeType(ext);
+    const kind = getKindFromExtension(filePath);
+    return { mimeType, kind, extension: ext };
+  }
+}
+
+// Helper function to create text fallback for media results
+function createMediaResultWithFallback(
+  toolCallId: string,
+  mediaType: string,
+  fileName: string,
+  mediaUrl: string,
+  mimeType: string,
+  filePath: string,
+  fileSize: number,
+  details: Record<string, unknown>
+): AgentToolResult {
+  const mediaContent: ContentBlock = {
+    type: mediaType as "audio" | "video",
+    url: mediaUrl,
+    filename: fileName,
+    mimeType: mimeType,
+  };
+  
+  const textFallback = `[${mediaType.toUpperCase()}] ${fileName}\nURL: ${mediaUrl}\nType: ${mimeType}\nSize: ${fileSize} bytes`;
+  
+  return {
+    toolCallId,
+    content: [mediaContent, { type: "text", text: textFallback }],
+    details: { path: filePath, size: fileSize, ...details },
+  } as AgentToolResult;
+}
+
 export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
@@ -993,59 +1108,79 @@ export function createOpenClawReadTool(
           return result;
         }
 
-        const ext = inputPath.toLowerCase().split(".").pop() ?? "";
+        // Detect media type from file bytes (not just extension)
+        const { mimeType, kind, extension: detectedExt } = await detectMediaTypeFromBytes(
+          inputPath,
+          useBridge,
+          options?.bridge,
+          rootDirResolved,
+          signal
+        );
+        
         const fileName = path.basename(inputPath);
         const mediaUrl = getMediaUrl(inputPath, options?.getBaseUrl);
 
         let result: AgentToolResult;
 
-        // Handle WebM files
-        if (ext === WEBM_EXTENSION) {
-          const isAudioOnly = await isWebmAudioOnly(inputPath);
-          
-          if (isAudioOnly) {
-            const audioContent: ContentBlock = {
-              type: "audio",
-              url: mediaUrl,
-              filename: fileName,
-              mimeType: "audio/webm",
-            };
-            result = {
-              toolCallId,
-              content: [audioContent],
-              details: { path: inputPath, size: fileSize, detectedAs: "audio" },
-            } as AgentToolResult;
-          } else {
-            const videoContent: ContentBlock = {
-              type: "video",
-              url: mediaUrl,
-              filename: fileName,
-              mimeType: "video/webm",
-            };
-            result = {
-              toolCallId,
-              content: [videoContent],
-              details: { path: inputPath, size: fileSize, detectedAs: "video" },
-            } as AgentToolResult;
-          }
-        } 
-        // Handle audio files
-        else if (AUDIO_EXTENSIONS.has(ext)) {
-          const mimeType = getAudioMimeType(ext);
-          const audioContent: ContentBlock = {
-            type: "audio",
-            url: mediaUrl,
-            filename: fileName,
-            mimeType: mimeType,
-          };
-          result = {
+        // Route based on detected kind, not just extension
+        if (kind === "audio") {
+          result = createMediaResultWithFallback(
             toolCallId,
-            content: [audioContent],
-            details: { path: inputPath, size: fileSize },
-          } as AgentToolResult;
+            "audio",
+            fileName,
+            mediaUrl,
+            mimeType,
+            inputPath,
+            fileSize,
+            { detectedVia: "mime-sniff" }
+          );
         } 
-        // Handle image files with sanitization
-        else if (IMAGE_EXTENSIONS.has(ext)) {
+        else if (kind === "video") {
+          // Special handling for WebM audio-only detection
+          let finalMimeType = mimeType;
+          let isAudioOnly = false;
+          
+          if (detectedExt === WEBM_EXTENSION && mimeType === "video/webm") {
+            // Check if it's actually audio-only using bridge-aware detection
+            isAudioOnly = await isWebmAudioOnly(inputPath, options?.bridge, rootDirResolved);
+            if (isAudioOnly) {
+              finalMimeType = "audio/webm";
+              result = createMediaResultWithFallback(
+                toolCallId,
+                "audio",
+                fileName,
+                mediaUrl,
+                finalMimeType,
+                inputPath,
+                fileSize,
+                { detectedVia: "mime-sniff", webmDetectedAs: "audio-only" }
+              );
+            } else {
+              result = createMediaResultWithFallback(
+                toolCallId,
+                "video",
+                fileName,
+                mediaUrl,
+                finalMimeType,
+                inputPath,
+                fileSize,
+                { detectedVia: "mime-sniff" }
+              );
+            }
+          } else {
+            result = createMediaResultWithFallback(
+              toolCallId,
+              "video",
+              fileName,
+              mediaUrl,
+              finalMimeType,
+              inputPath,
+              fileSize,
+              { detectedVia: "mime-sniff" }
+            );
+          }
+        }
+        else if (kind === "image") {
           if (signal?.aborted) {
             throw new Error("Read operation aborted");
           }
@@ -1062,7 +1197,7 @@ export function createOpenClawReadTool(
             fileBuffer = await fs.readFile(inputPath);
           }
 
-          let mimeType = getImageMimeType(ext);
+          let finalMimeType = mimeType;
           
           // Apply image sanitization if configured
           if (options?.imageSanitization) {
@@ -1117,7 +1252,7 @@ export function createOpenClawReadTool(
               }
               
               fileBuffer = resizeResult.buffer;
-              mimeType = resizeResult.mimeType;
+              finalMimeType = resizeResult.mimeType;
               
               console.log(`Image ${fileName} resized successfully: ${Math.round(fileBuffer.length / 1024)}KB (quality: ${resizeResult.finalQuality}, attempts: ${resizeResult.attempts})`);
             }
@@ -1127,33 +1262,18 @@ export function createOpenClawReadTool(
             type: "image",
             source: {
               type: "base64",
-              media_type: mimeType,
+              media_type: finalMimeType,
               data: fileBuffer.toString("base64"),
             },
           };
           result = {
             toolCallId,
             content: [imageContent, { type: "text", text: fileName }],
-            details: { path: inputPath, size: fileBuffer.length },
+            details: { path: inputPath, size: fileBuffer.length, detectedVia: "mime-sniff" },
           } as AgentToolResult;
         } 
-        // Handle video files
-        else if (VIDEO_EXTENSIONS.has(ext)) {
-          const mimeType = getVideoMimeType(ext);
-          const videoContent: ContentBlock = {
-            type: "video",
-            url: mediaUrl,
-            filename: fileName,
-            mimeType: mimeType,
-          };
-          result = {
-            toolCallId,
-            content: [videoContent],
-            details: { path: inputPath, size: fileSize },
-          } as AgentToolResult;
-        } 
-        // Handle text files
         else {
+          // Handle text files
           if (signal?.aborted) {
             throw new Error("Read operation aborted");
           }
@@ -1192,7 +1312,7 @@ export function createOpenClawReadTool(
           result = {
             toolCallId,
             content: [{ type: "text", text }],
-            details: { path: inputPath, size: fileSize, offset, limit, truncated },
+            details: { path: inputPath, size: fileSize, offset, limit, truncated, detectedVia: "mime-sniff" },
           } as AgentToolResult;
         }
 
