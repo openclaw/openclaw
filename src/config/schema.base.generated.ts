@@ -2819,6 +2819,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           requiresStringContent: {
                             type: "boolean",
                           },
+                          visibleReasoningDetailTypes: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                          },
                           maxTokensField: {
                             anyOf: [
                               {
