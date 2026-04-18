@@ -251,30 +251,27 @@ export const sendHandlers: GatewayRequestHandlers = {
       respond(result.ok, result.payload, result.error, meta);
       return;
     }
-    const resolvedChannel = await resolveRequestedChannel({
-      requestChannel: request.channel,
-      unsupportedMessage: (input) => `unsupported channel: ${input}`,
-      rejectWebchatAsInternalOnly: true,
-    });
-    if ("error" in resolvedChannel) {
-      respond(false, undefined, resolvedChannel.error);
-      return;
-    }
-    const { cfg, channel } = resolvedChannel;
-    const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-    if (!plugin?.actions?.handleAction) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `Channel ${channel} does not support action ${request.action}.`,
-        ),
-      );
-      return;
-    }
-
     const work = (async (): Promise<InflightResult> => {
+      const resolvedChannel = await resolveRequestedChannel({
+        requestChannel: request.channel,
+        unsupportedMessage: (input) => `unsupported channel: ${input}`,
+        rejectWebchatAsInternalOnly: true,
+      });
+      if ("error" in resolvedChannel) {
+        return { ok: false, error: resolvedChannel.error };
+      }
+      const { cfg, channel } = resolvedChannel;
+      const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+      if (!plugin?.actions?.handleAction) {
+        return {
+          ok: false,
+          error: errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Channel ${channel} does not support action ${request.action}.`,
+          ),
+        };
+      }
+
       try {
         const handled = await dispatchChannelMessageAction({
           channel,
@@ -379,30 +376,28 @@ export const sendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const resolvedChannel = await resolveRequestedChannel({
-      requestChannel: request.channel,
-      unsupportedMessage: (input) => `unsupported channel: ${input}`,
-      rejectWebchatAsInternalOnly: true,
-    });
-    if ("error" in resolvedChannel) {
-      respond(false, undefined, resolvedChannel.error);
-      return;
-    }
-    const { cfg, channel } = resolvedChannel;
     const accountId = normalizeOptionalString(request.accountId);
     const threadId = normalizeOptionalString(request.threadId);
-    const outboundChannel = channel;
-    const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-    if (!plugin) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channel}`),
-      );
-      return;
-    }
 
     const work = (async (): Promise<InflightResult> => {
+      const resolvedChannel = await resolveRequestedChannel({
+        requestChannel: request.channel,
+        unsupportedMessage: (input) => `unsupported channel: ${input}`,
+        rejectWebchatAsInternalOnly: true,
+      });
+      if ("error" in resolvedChannel) {
+        return { ok: false, error: resolvedChannel.error };
+      }
+      const { cfg, channel } = resolvedChannel;
+      const outboundChannel = channel;
+      const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+      if (!plugin) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channel}`),
+        };
+      }
+
       try {
         const resolvedTarget = resolveGatewayOutboundTarget({
           channel: outboundChannel,
@@ -562,50 +557,44 @@ export const sendHandlers: GatewayRequestHandlers = {
       respond(result.ok, result.payload, result.error, meta);
       return;
     }
-    const to = request.to.trim();
-    const resolvedChannel = await resolveRequestedChannel({
-      requestChannel: request.channel,
-      unsupportedMessage: (input) => `unsupported poll channel: ${input}`,
-    });
-    if ("error" in resolvedChannel) {
-      respond(false, undefined, resolvedChannel.error);
-      return;
-    }
-    const { cfg, channel } = resolvedChannel;
-    const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-    const outbound = plugin?.outbound;
-    if (
-      typeof request.durationSeconds === "number" &&
-      outbound?.supportsPollDurationSeconds !== true
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `durationSeconds is not supported for ${channel} polls`,
-        ),
-      );
-      return;
-    }
-    if (typeof request.isAnonymous === "boolean" && outbound?.supportsAnonymousPolls !== true) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `isAnonymous is not supported for ${channel} polls`),
-      );
-      return;
-    }
-    const poll = {
-      question: request.question,
-      options: request.options,
-      maxSelections: request.maxSelections,
-      durationSeconds: request.durationSeconds,
-      durationHours: request.durationHours,
-    };
-    const threadId = normalizeOptionalString(request.threadId);
-    const accountId = normalizeOptionalString(request.accountId);
     const work = (async (): Promise<InflightResult> => {
+      const resolvedChannel = await resolveRequestedChannel({
+        requestChannel: request.channel,
+        unsupportedMessage: (input) => `unsupported poll channel: ${input}`,
+      });
+      if ("error" in resolvedChannel) {
+        return { ok: false, error: resolvedChannel.error };
+      }
+      const { cfg, channel } = resolvedChannel;
+      const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+      const outbound = plugin?.outbound;
+      if (
+        typeof request.durationSeconds === "number" &&
+        outbound?.supportsPollDurationSeconds !== true
+      ) {
+        return {
+          ok: false,
+          error: errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `durationSeconds is not supported for ${channel} polls`,
+          ),
+        };
+      }
+      if (typeof request.isAnonymous === "boolean" && outbound?.supportsAnonymousPolls !== true) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, `isAnonymous is not supported for ${channel} polls`),
+        };
+      }
+      const poll = {
+        question: request.question,
+        options: request.options,
+        maxSelections: request.maxSelections,
+        durationSeconds: request.durationSeconds,
+        durationHours: request.durationHours,
+      };
+      const threadId = normalizeOptionalString(request.threadId);
+      const accountId = normalizeOptionalString(request.accountId);
       try {
         if (!outbound?.sendPoll) {
           const error = errorShape(ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`);
@@ -613,7 +602,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         }
         const resolvedTarget = resolveGatewayOutboundTarget({
           channel: channel,
-          to,
+          to: request.to.trim(),
           cfg,
           accountId,
         });
