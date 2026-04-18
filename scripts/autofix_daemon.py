@@ -46,6 +46,7 @@ import atexit
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -78,6 +79,67 @@ def _resolve_repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+_HYDRATION_NOTES: list[str] = []
+
+
+def _hydrate_env_from_windows_user_scope() -> None:
+    """When the daemon is launched from Explorer (double-click) or a
+    Startup-folder shortcut, the new process gets Windows' login env --
+    which does include user-scope env vars set via `setx`. But when
+    it's launched from a shell that doesn't already have those vars
+    (e.g. a build script that used `powershell.exe` with a minimal
+    env), the child process is missing them. Re-read the vars we rely
+    on from the User-scope registry hive so the daemon is robust to
+    how it was started."""
+    if sys.platform != "win32":
+        _HYDRATION_NOTES.append("skipped: not win32")
+        return
+    try:
+        import winreg  # stdlib on Windows
+    except ImportError as exc:
+        _HYDRATION_NOTES.append(f"skipped: winreg import failed: {exc}")
+        return
+    needed = ("GITHUB_TOKEN", "AUTOFIX_TARGET_REPO", "AUTOFIX_TARGET_PR")
+    refreshed: list[str] = []
+    unchanged: list[str] = []
+    missing: list[str] = []
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            for name in needed:
+                try:
+                    value, _ = winreg.QueryValueEx(key, name)
+                except FileNotFoundError:
+                    missing.append(name)
+                    continue
+                if not isinstance(value, str) or not value:
+                    missing.append(name)
+                    continue
+                # Always prefer the registry value. The Windows login
+                # session caches env vars at login time; `setx` updates
+                # the registry but doesn't push the new value into the
+                # already-running session, so child processes spawned
+                # later can still inherit a stale token. Reading from
+                # HKCU\Environment gets the current, post-setx value
+                # regardless of when the session was started.
+                current = os.environ.get(name)
+                if current == value:
+                    unchanged.append(name)
+                    continue
+                os.environ[name] = value
+                refreshed.append(f"{name}(len={len(value)})")
+    except OSError as exc:
+        _HYDRATION_NOTES.append(f"failed opening HKCU\\Environment: {exc}")
+        return
+    if refreshed:
+        _HYDRATION_NOTES.append(f"refreshed from registry: {', '.join(refreshed)}")
+    if unchanged:
+        _HYDRATION_NOTES.append(f"env matches registry: {', '.join(unchanged)}")
+    if missing:
+        _HYDRATION_NOTES.append(f"missing-in-registry: {', '.join(missing)}")
+
+
+_hydrate_env_from_windows_user_scope()
+
 REPO_ROOT = _resolve_repo_root()
 INTERVAL_SEC = int(os.environ.get("AUTOFIX_INTERVAL_SEC", "600"))
 REPO = os.environ.get("AUTOFIX_TARGET_REPO", "openclaw/openclaw")
@@ -104,6 +166,20 @@ def log_line(level: str, msg: str) -> None:
             f.write(line)
     except OSError:
         pass
+
+
+_GATEWAY_PORT = int(os.environ.get("AUTOFIX_GATEWAY_PORT", "18789"))
+
+
+def _gateway_already_listening() -> bool:
+    """Return True if a TCP listener is already bound to the gateway
+    port. Used by the supervisor to avoid spawning a duplicate gateway
+    that would immediately exit with `gateway already running`."""
+    try:
+        with socket.create_connection(("127.0.0.1", _GATEWAY_PORT), timeout=1):
+            return True
+    except (OSError, socket.timeout):
+        return False
 
 
 def _resolve_node_bin() -> Optional[str]:
@@ -157,6 +233,24 @@ class GatewaySupervisor:
 
     def _run_forever(self) -> None:
         while not self._stop_requested:
+            if _gateway_already_listening():
+                # Someone else (a manually-started `openclaw gateway run`,
+                # a leftover process, etc.) is already bound to the
+                # default port. Don't try to spawn a duplicate -- it'd
+                # just exit immediately with "port already in use".
+                # Poll until the port is free, then take over.
+                log_line(
+                    "INFO",
+                    "gateway: port 18789 already in use by another process; "
+                    "waiting for it to free up before spawning our own",
+                )
+                slept = 0
+                while not self._stop_requested and _gateway_already_listening():
+                    time.sleep(10)
+                    slept += 10
+                if self._stop_requested:
+                    return
+                log_line("INFO", "gateway: port 18789 is free; spawning")
             try:
                 self._spawn_and_wait()
             except Exception as exc:
@@ -252,6 +346,9 @@ def main() -> int:
         f"daemon start pid={os.getpid()} root={REPO_ROOT} "
         f"gateway={START_GATEWAY} autofix={START_LOOP}",
     )
+    if _HYDRATION_NOTES:
+        for note in _HYDRATION_NOTES:
+            log_line("INFO", f"env-hydration: {note}")
 
     if not START_GATEWAY and not START_LOOP:
         log_line(

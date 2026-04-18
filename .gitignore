@@ -8,6 +8,7 @@ dist-runtime/
 
 # PyInstaller build artifacts (scripts/build-autofix-exe.ps1)
 /build/
+/dist-autofix/
 /openclaw-autofix.spec
 pnpm-lock.yaml
 bun.lock

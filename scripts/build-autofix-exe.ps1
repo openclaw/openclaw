@@ -16,7 +16,7 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $DaemonScript = Join-Path $RepoRoot "scripts\autofix_daemon.py"
-$DistDir = Join-Path $RepoRoot "dist"
+$DistDir = Join-Path $RepoRoot "dist-autofix"
 $BuildDir = Join-Path $RepoRoot "build"
 $SpecFile = Join-Path $RepoRoot "openclaw-autofix.spec"
 
