@@ -1104,7 +1104,7 @@ describe("deliverOutboundPayloads", () => {
     expect(sendPayload).not.toHaveBeenCalled();
     expect(sendText).not.toHaveBeenCalled();
     expect(logMocks.warn).toHaveBeenCalledWith(
-      "Sticker payload is not supported by channel outbound adapter; skipping delivery",
+      "Structured payload [sticker] not supported by channel; skipping delivery",
       expect.objectContaining({
         channel: "matrix",
         to: "!room:1",
@@ -1114,7 +1114,7 @@ describe("deliverOutboundPayloads", () => {
       expect.objectContaining({
         to: "!room:1",
         success: false,
-        error: "Sticker payload is not supported by channel outbound adapter",
+        error: "Structured payload [sticker] not supported by channel",
       }),
       expect.objectContaining({ channelId: "matrix" }),
     );
@@ -1147,7 +1147,7 @@ describe("deliverOutboundPayloads", () => {
 
     expect(sendText).not.toHaveBeenCalled();
     expect(logMocks.warn).toHaveBeenCalledWith(
-      "Sticker payload is not supported by channel outbound adapter; skipping delivery",
+      "Structured payload [sticker] not supported by channel; skipping delivery",
       expect.objectContaining({
         channel: "matrix",
         to: "!room:1",
@@ -1157,7 +1157,7 @@ describe("deliverOutboundPayloads", () => {
       expect.objectContaining({
         to: "!room:1",
         success: false,
-        error: "Sticker payload is not supported by channel outbound adapter",
+        error: "Structured payload [sticker] not supported by channel",
       }),
       expect.objectContaining({ channelId: "matrix" }),
     );
