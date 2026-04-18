@@ -73,6 +73,42 @@ describe("control UI routing", () => {
     expect(statusDot).not.toBeNull();
     expect(statusDot?.getAttribute("aria-label")).toContain("Online");
 
+    const action = app.querySelector<HTMLButtonElement>("button.sidebar-chat-action");
+    expect(action).not.toBeNull();
+    expect(action?.title).toBe("New chat");
+    expect(action?.querySelector(".nav-item__text")?.textContent?.trim()).toBe("New chat");
+
+    app.applySettings({ ...app.settings, navCollapsed: true });
+    await app.updateComplete;
+
+    const collapsedAction = app.querySelector<HTMLButtonElement>("button.sidebar-chat-action");
+    expect(collapsedAction).not.toBeNull();
+    expect(collapsedAction?.title).toBe("New chat");
+    expect(collapsedAction?.querySelector(".nav-item__text")).toBeNull();
+  });
+
+  it("sidebar body has flex-direction column to prevent chat actions stretching", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    // Verify the DOM structure exists
+    const body = app.querySelector<HTMLElement>(".sidebar-shell__body");
+    expect(body).not.toBeNull();
+    const actions = app.querySelector<HTMLElement>(".sidebar-chat-actions");
+    expect(actions).not.toBeNull();
+
+    // Regression guard: verify the CSS source contains the fix (jsdom doesn't compute external styles)
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const css = readFileSync(resolve(import.meta.dirname, "../styles/layout.css"), "utf8");
+    const bodyBlock = css.match(/\.sidebar-shell__body\s*\{[^}]+\}/)?.[0] ?? "";
+    expect(bodyBlock).toContain("flex-direction: column");
+  });
+
+  it("does not render a desktop sidebar resizer or inject a custom nav width", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
     app.applySettings({ ...app.settings, navWidth: 360 });
     await app.updateComplete;
 

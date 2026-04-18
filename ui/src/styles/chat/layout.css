@@ -52,15 +52,25 @@
 /* Chat thread - scrollable middle section, transparent */
 .chat-thread {
   flex: 1 1 0;
-  /* Grow, shrink, and use 0 base for proper scrolling */
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0 6px 6px;
-  margin: 0 0 0 0;
+  padding: 8px 0 12px;
+  margin: 0;
   min-height: 0;
-  /* Allow shrinking for flex scroll behavior */
-  border-radius: var(--radius-md);
   background: transparent;
+}
+
+.chat-thread-inner {
+  width: min(100%, 920px);
+  margin: 0 auto;
+  padding: 8px 18px 0;
+}
+
+/* When showing welcome state (empty chat), stretch to fill and center */
+.chat-thread-inner:has(.agent-chat__welcome) {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .chat-thread-inner > :first-child {
@@ -477,7 +487,8 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  margin: 0 18px 14px;
+  width: min(100%, 920px);
+  margin: 8px auto 18px;
   padding: 0;
   background: var(--card);
   border: 1px solid var(--border);

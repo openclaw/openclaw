@@ -371,6 +371,8 @@
   min-height: 0;
   flex: 1;
   display: flex;
+  flex-direction: column;
+  overflow-y: auto;
 }
 
 .sidebar-shell__footer {

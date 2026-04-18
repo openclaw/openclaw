@@ -490,7 +490,12 @@
 
   .chat-thread {
     margin-top: 0;
-    padding: 0 8px 12px;
+    padding: 0 0 12px;
+  }
+
+  .chat-thread-inner {
+    width: auto;
+    padding: 0 8px 0;
   }
 
   .chat-msg {
@@ -514,6 +519,7 @@
   }
 
   .agent-chat__input {
+    width: auto;
     margin: 0 8px 10px;
   }
 
