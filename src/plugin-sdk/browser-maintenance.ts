@@ -1,8 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { generateSecureToken } from "../infra/secure-random.js";
-import { runExec } from "../process/exec.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
 type CloseTrackedBrowserTabsParams = {
@@ -15,15 +10,19 @@ type BrowserMaintenanceSurface = {
   closeTrackedBrowserTabsForSessions: (params: CloseTrackedBrowserTabsParams) => Promise<number>;
 };
 
+let cachedBrowserMaintenanceSurface: BrowserMaintenanceSurface | undefined;
+
 function hasRequestedSessionKeys(sessionKeys: Array<string | undefined>): boolean {
   return sessionKeys.some((key) => Boolean(key?.trim()));
 }
 
 function loadBrowserMaintenanceSurface(): BrowserMaintenanceSurface {
-  return loadBundledPluginPublicSurfaceModuleSync<BrowserMaintenanceSurface>({
-    dirName: "browser",
-    artifactBasename: "browser-maintenance.js",
-  });
+  cachedBrowserMaintenanceSurface ??=
+    loadBundledPluginPublicSurfaceModuleSync<BrowserMaintenanceSurface>({
+      dirName: "browser",
+      artifactBasename: "browser-maintenance.js",
+    });
+  return cachedBrowserMaintenanceSurface;
 }
 
 export async function closeTrackedBrowserTabsForSessions(
@@ -44,6 +43,19 @@ export async function closeTrackedBrowserTabsForSessions(
 }
 
 export async function movePathToTrash(targetPath: string): Promise<string> {
+  const [
+    { default: fs },
+    { default: os },
+    { default: path },
+    { generateSecureToken },
+    { runExec },
+  ] = await Promise.all([
+    import("node:fs"),
+    import("node:os"),
+    import("node:path"),
+    import("../infra/secure-random.js"),
+    import("../process/exec.js"),
+  ]);
   try {
     await runExec("trash", [targetPath], { timeoutMs: 10_000 });
     return targetPath;

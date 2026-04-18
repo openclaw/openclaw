@@ -51,5 +51,11 @@ export type SubscribeEmbeddedPiSessionParams = {
   groupId?: string | null;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
+  /**
+   * Exact raw names of non-plugin OpenClaw tools registered for this run.
+   * When provided, MEDIA: passthrough requires an exact match instead of only
+   * a normalized-name collision with a trusted built-in.
+   */
+  builtinToolNames?: ReadonlySet<string>;
   internalEvents?: AgentInternalEvent[];
 };
