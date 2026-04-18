@@ -1,3 +1,4 @@
+import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import {
   hasPotentialConfiguredChannels,
@@ -97,6 +98,28 @@ function extractProviderFromModelRef(value: string): string | null {
     return null;
   }
   return normalizeProviderId(trimmed.slice(0, slash));
+}
+
+function hasConfiguredEmbeddedHarnessRuntime(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  return collectConfiguredAgentHarnessRuntimes(cfg, env).length > 0;
+}
+
+function resolveAgentHarnessOwnerPluginIds(
+  registry: PluginManifestRegistry,
+  runtime: string,
+): string[] {
+  const normalizedRuntime = normalizeOptionalLowercaseString(runtime);
+  if (!normalizedRuntime) {
+    return [];
+  }
+  return registry.plugins
+    .filter((plugin) =>
+      (plugin.activation?.onAgentHarnesses ?? []).some(
+        (entry) => normalizeOptionalLowercaseString(entry) === normalizedRuntime,
+      ),
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean {
@@ -281,6 +304,37 @@ function hasBrowserToolReference(cfg: OpenClawConfig): boolean {
     : false;
 }
 
+function collectConfiguredPluginEntryIds(cfg: OpenClawConfig): string[] {
+  const entries = cfg.plugins?.entries;
+  if (!entries || typeof entries !== "object") {
+    return [];
+  }
+  return Object.keys(entries)
+    .map((pluginId) => pluginId.trim())
+    .filter(Boolean);
+}
+
+function resolveRelevantSetupAutoEnablePluginIds(cfg: OpenClawConfig): string[] {
+  const pluginIds = new Set<string>(collectConfiguredPluginEntryIds(cfg));
+  if (
+    isRecord(cfg.browser) ||
+    isRecord(cfg.plugins?.entries?.browser) ||
+    hasBrowserToolReference(cfg)
+  ) {
+    pluginIds.add("browser");
+  }
+  if (isRecord(cfg.acp) || isRecord(cfg.plugins?.entries?.acpx)) {
+    pluginIds.add("acpx");
+  }
+  if (
+    isRecord(cfg.plugins?.entries?.xai) ||
+    (isRecord(cfg.tools?.web) && isRecord((cfg.tools.web as Record<string, unknown>).x_search))
+  ) {
+    pluginIds.add("xai");
+  }
+  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+}
+
 function hasSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
   const entries = cfg.plugins?.entries;
   if (isRecord(cfg.browser) || isRecord(cfg.acp) || hasBrowserToolReference(cfg)) {
@@ -300,7 +354,7 @@ function hasPluginEntries(cfg: OpenClawConfig): boolean {
   return !!entries && typeof entries === "object" && Object.keys(entries).length > 0;
 }
 
-function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
+function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   const pluginEntries = cfg.plugins?.entries;
   if (Array.isArray(cfg.plugins?.allow) && cfg.plugins.allow.length > 0 && hasPluginEntries(cfg)) {
     return true;
@@ -318,6 +372,9 @@ function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
     return true;
   }
   if (collectModelRefs(cfg).length > 0) {
+    return true;
+  }
+  if (hasConfiguredEmbeddedHarnessRuntime(cfg, env)) {
     return true;
   }
   const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
@@ -357,6 +414,9 @@ export function configMayNeedPluginAutoEnable(
   if (collectModelRefs(cfg).length > 0) {
     return true;
   }
+  if (hasConfiguredEmbeddedHarnessRuntime(cfg, env)) {
+    return true;
+  }
   if (hasConfiguredWebSearchPluginEntry(cfg) || hasConfiguredWebFetchPluginEntry(cfg)) {
     return true;
   }
@@ -367,6 +427,7 @@ export function configMayNeedPluginAutoEnable(
     resolvePluginSetupAutoEnableReasons({
       config: cfg,
       env,
+      pluginIds: resolveRelevantSetupAutoEnablePluginIds(cfg),
     }).length > 0
   );
 }
@@ -381,6 +442,8 @@ export function resolvePluginAutoEnableCandidateReason(
       return `${candidate.providerId} auth configured`;
     case "provider-model-configured":
       return `${candidate.modelRef} model configured`;
+    case "agent-harness-runtime-configured":
+      return `${candidate.runtime} agent harness runtime configured`;
     case "web-fetch-provider-selected":
       return `${candidate.providerId} web fetch provider selected`;
     case "plugin-web-search-configured":
@@ -433,6 +496,17 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     }
   }
 
+  for (const runtime of collectConfiguredAgentHarnessRuntimes(params.config, params.env)) {
+    const pluginIds = resolveAgentHarnessOwnerPluginIds(params.registry, runtime);
+    for (const pluginId of pluginIds) {
+      changes.push({
+        pluginId,
+        kind: "agent-harness-runtime-configured",
+        runtime,
+      });
+    }
+  }
+
   const webFetchProvider =
     typeof params.config.tools?.web?.fetch?.provider === "string"
       ? params.config.tools.web.fetch.provider
@@ -474,6 +548,7 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     for (const entry of resolvePluginSetupAutoEnableReasons({
       config: params.config,
       env: params.env,
+      pluginIds: resolveRelevantSetupAutoEnablePluginIds(params.config),
     })) {
       changes.push({
         pluginId: entry.pluginId,
@@ -640,7 +715,7 @@ export function resolvePluginAutoEnableManifestRegistry(params: {
 }): PluginManifestRegistry {
   return (
     params.manifestRegistry ??
-    (configMayNeedPluginManifestRegistry(params.config)
+    (configMayNeedPluginManifestRegistry(params.config, params.env)
       ? loadPluginManifestRegistry({ config: params.config, env: params.env })
       : EMPTY_PLUGIN_MANIFEST_REGISTRY)
   );
