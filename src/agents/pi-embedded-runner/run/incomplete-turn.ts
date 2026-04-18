@@ -4,6 +4,7 @@ import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-de
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { isStrictAgenticSupportedProviderModel } from "../../execution-contract.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
+import { hasNonzeroUsage } from "../../usage.js";
 import { assessLastAssistantMessage } from "../thinking.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
@@ -210,6 +211,24 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
+  // A normally-terminating stream that produced zero content, zero thinking,
+  // zero tool calls, AND zero tokens in/out is almost always a provider
+  // misconfiguration (wrong baseUrl, bad API version, revoked key) rather
+  // than a genuine empty model response. In that case, surface a detailed
+  // actionable diagnostic instead of the generic "try again" fallback so the
+  // operator can immediately see which provider to inspect.
+  if (
+    isLikelyConfigErrorEmptyStream({
+      payloadCount: params.payloadCount,
+      attempt: params.attempt,
+    })
+  ) {
+    return buildConfigErrorDiagnosticText({
+      assistant: params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant,
+      hadPotentialSideEffects: params.attempt.replayMetadata.hadPotentialSideEffects,
+    });
+  }
+
   return params.attempt.replayMetadata.hadPotentialSideEffects
     ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
     : "⚠️ Agent couldn't generate a response. Please try again.";
@@ -222,6 +241,98 @@ function hasOnlySilentAssistantReply(assistantTexts: readonly string[]): boolean
     nonEmptyTexts.every((text) => isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN))
   );
 }
+
+/**
+ * Detect the fingerprint of a streaming response that completed "successfully"
+ * but produced nothing at all — no content blocks, no thinking blocks, no tool
+ * calls, and zero tokens billed. That combination is not a plausible model
+ * output and almost always indicates the provider endpoint never saw a real
+ * LLM request (wrong baseUrl serving HTML, missing/expired API key, etc.).
+ *
+ * Guardrails:
+ *   - stopReason must be a normal terminator ("stop" or undefined). Real
+ *     error stops (`stopReason === "error"`) already get surfaced via the
+ *     normal error path and carry their own errorMessage.
+ *   - Must have zero assistantTexts so we don't misfire on partial tool-use
+ *     turns that were already captured.
+ *   - Usage must report zero tokens. Any non-zero input/output token count
+ *     means the model actually ran and legitimately chose to say nothing.
+ */
+export function isLikelyConfigErrorEmptyStream(params: {
+  payloadCount: number;
+  attempt: Pick<
+    IncompleteTurnAttempt,
+    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
+  >;
+}): boolean {
+  if (params.payloadCount !== 0) {
+    return false;
+  }
+  if (params.attempt.assistantTexts.join("").trim().length > 0) {
+    return false;
+  }
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  if (!assistant) {
+    return false;
+  }
+  // "error" stops already go through the provider's own errorMessage; this
+  // heuristic is for the silent-drop case where the stream reported stop
+  // with no payload.
+  if (assistant.stopReason !== undefined && assistant.stopReason !== "stop") {
+    return false;
+  }
+  if (Array.isArray(assistant.content) && assistant.content.length > 0) {
+    return false;
+  }
+  if (hasNonzeroUsage(assistant.usage)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Build the user-facing diagnostic text for a likely-config-error empty
+ * stream. Includes the provider and model (when available) plus a concrete
+ * checklist so the operator knows exactly which files to inspect.
+ */
+export function buildConfigErrorDiagnosticText(params: {
+  assistant: { provider?: string; model?: string } | undefined;
+  hadPotentialSideEffects: boolean;
+}): string {
+  const provider = normalizeOptionalIdentifier(params.assistant?.provider);
+  const modelId = normalizeOptionalIdentifier(params.assistant?.model);
+  const providerLine = provider ? `  Provider: ${provider}\n` : "";
+  const modelLine = modelId ? `  Model:    ${modelId}\n` : "";
+  const sideEffectsNote = params.hadPotentialSideEffects
+    ? "\n⚠️ Some tool actions may have already been executed — please verify before retrying."
+    : "";
+  return (
+    "⚠️ Provider returned an empty stream (0 content, 0 tokens).\n" +
+    "This usually indicates a configuration error, not a model issue.\n" +
+    "\n" +
+    providerLine +
+    modelLine +
+    "\n" +
+    "Common causes:\n" +
+    "  1. Wrong baseUrl — check agents/<id>/agent/models.json\n" +
+    "     (OpenRouter uses https://openrouter.ai/api/v1, not /v1)\n" +
+    "  2. Invalid or expired API key for the provider\n" +
+    "  3. Model id not recognized by the selected provider\n" +
+    "  4. Network path returning HTML (e.g., captive portal, proxy)\n" +
+    "\n" +
+    "Run `openclaw doctor` to inspect provider configuration." +
+    sideEffectsNote
+  );
+}
+
+function normalizeOptionalIdentifier(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 
 export function resolveReplayInvalidFlag(params: {
   attempt: RunLivenessAttempt;
