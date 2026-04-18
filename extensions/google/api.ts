@@ -11,6 +11,19 @@ import {
 } from "./provider-policy.js";
 export { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
 export {
+  createGoogleThinkingPayloadWrapper,
+  createGoogleThinkingStreamWrapper,
+  isGoogleGemini3FlashModel,
+  isGoogleGemini3ProModel,
+  isGoogleGemini3ThinkingLevelModel,
+  isGoogleThinkingRequiredModel,
+  resolveGoogleGemini3ThinkingLevel,
+  sanitizeGoogleThinkingPayload,
+  stripInvalidGoogleThinkingBudget,
+  type GoogleThinkingInputLevel,
+  type GoogleThinkingLevel,
+} from "./thinking-api.js";
+export {
   DEFAULT_GOOGLE_API_BASE_URL,
   isGoogleGenerativeAiApi,
   normalizeGoogleApiBaseUrl,

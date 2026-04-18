@@ -160,7 +160,7 @@ function writeMatrixQaProgress(message: string) {
   process.stderr.write(`[matrix-qa] ${message}\n`);
 }
 
-function countMatrixQaStatuses<T extends { status: "fail" | "pass" | "skip" }>(entries: T[]) {
+function countMatrixQaStatuses(entries: Array<{ status: "fail" | "pass" | "skip" }>) {
   return {
     failed: entries.filter((entry) => entry.status === "fail").length,
     passed: entries.filter((entry) => entry.status === "pass").length,
@@ -645,6 +645,23 @@ export async function runMatrixQaLive(params: {
                 scenarioRestartGatewayMs += measuredRestart.durationMs;
                 writeMatrixQaProgress(
                   `gateway restart done ${scenario.id} ${formatMatrixQaDurationMs(measuredRestart.durationMs)}`,
+                );
+              },
+              restartGatewayWithQueuedMessage: async (queueMessage) => {
+                if (!gatewayHarness) {
+                  throw new Error("Matrix restart catchup scenario requires a live gateway");
+                }
+                writeMatrixQaProgress(`gateway restart+queue start ${scenario.id}`);
+                const measuredRestart = await measureMatrixQaStep(async () => {
+                  await scenarioGateway.harness.gateway.restart();
+                  await sleep(250);
+                  await queueMessage();
+                  await waitForMatrixChannelReady(scenarioGateway.harness.gateway, sutAccountId);
+                });
+                gatewayRestartMs += measuredRestart.durationMs;
+                scenarioRestartGatewayMs += measuredRestart.durationMs;
+                writeMatrixQaProgress(
+                  `gateway restart+queue done ${scenario.id} ${formatMatrixQaDurationMs(measuredRestart.durationMs)}`,
                 );
               },
               roomId: provisioning.roomId,

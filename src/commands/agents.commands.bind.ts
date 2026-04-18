@@ -8,6 +8,8 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { requireValidConfig, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 
+type AgentBindingsModule = typeof import("./agents.bindings.js");
+
 type AgentsBindingsListOptions = {
   agent?: string;
   json?: boolean;
@@ -25,6 +27,13 @@ type AgentsUnbindOptions = {
   all?: boolean;
   json?: boolean;
 };
+
+let agentBindingsModulePromise: Promise<AgentBindingsModule> | undefined;
+
+function loadAgentBindingsModule(): Promise<AgentBindingsModule> {
+  agentBindingsModulePromise ??= import("./agents.bindings.js");
+  return agentBindingsModulePromise;
+}
 
 function describeBinding(binding: AgentRouteBinding): string {
   const match = binding.match;
@@ -123,7 +132,7 @@ async function resolveParsedBindingsOrExit(params: {
     return null;
   }
 
-  const { parseBindingSpecs } = await import("./agents.bindings.js");
+  const { parseBindingSpecs } = await loadAgentBindingsModule();
   const parsed = parseBindingSpecs({ agentId: params.agentId, specs, config: params.cfg });
   if (parsed.errors.length > 0) {
     params.runtime.error(parsed.errors.join("\n"));
@@ -248,7 +257,7 @@ export async function agentsBindCommand(
     return;
   }
 
-  const { applyAgentBindings } = await import("./agents.bindings.js");
+  const { applyAgentBindings } = await loadAgentBindingsModule();
   const result = applyAgentBindings(cfg, parsed.bindings);
   if (result.added.length > 0 || result.updated.length > 0) {
     await replaceConfigFile({
@@ -368,7 +377,7 @@ export async function agentsUnbindCommand(
     return;
   }
 
-  const { removeAgentBindings } = await import("./agents.bindings.js");
+  const { removeAgentBindings } = await loadAgentBindingsModule();
   const result = removeAgentBindings(cfg, parsed.bindings);
   if (result.removed.length > 0) {
     await replaceConfigFile({

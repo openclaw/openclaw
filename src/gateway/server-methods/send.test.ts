@@ -991,9 +991,7 @@ describe("gateway send mirroring", () => {
     // forced to false so a non-admin scoped caller cannot unlock owner-only
     // channel actions.
     setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "whatsapp", source: "test", plugin: reactPlugin },
-      ]),
+      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: reactPlugin }]),
       "send-test-owner-derive-non-admin",
     );
     await runMessageActionRequest(
@@ -1011,9 +1009,7 @@ describe("gateway send mirroring", () => {
     // Full operator (admin-scoped): the trusted runtime is allowed to
     // forward the real channel-sender ownership bit. Wire true → true.
     setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "whatsapp", source: "test", plugin: reactPlugin },
-      ]),
+      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: reactPlugin }]),
       "send-test-owner-derive-admin-true",
     );
     await runMessageActionRequest(
@@ -1031,9 +1027,7 @@ describe("gateway send mirroring", () => {
     // Full operator forwarding a non-owner sender: wire false → false
     // (admin scope does not inflate ownership on its own).
     setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "whatsapp", source: "test", plugin: reactPlugin },
-      ]),
+      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: reactPlugin }]),
       "send-test-owner-derive-admin-false",
     );
     await runMessageActionRequest(

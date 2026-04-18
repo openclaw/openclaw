@@ -64,6 +64,7 @@ export type PublishablePluginPackageCandidate<
   packageJson: TPackageJson;
 };
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Release helper preserves caller-specific package.json shape.
 function readPluginPackageJson<TPackageJson extends PluginPackageJson = PluginPackageJson>(
   path: string,
 ): TPackageJson {

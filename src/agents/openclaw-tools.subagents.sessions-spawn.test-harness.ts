@@ -267,37 +267,32 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: () => hoisted.state.configOverride,
-    resolveGatewayPort: () => 18789,
-  };
-});
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => hoisted.state.configOverride,
+  resolveGatewayPort: () => 18789,
+}));
 
-vi.mock("../config/sessions.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
-  return {
-    ...actual,
-    loadSessionStore: () => hoisted.sessionStore,
-    resolveStorePath: () => "/tmp/openclaw-sessions-spawn-test-store.json",
-    updateSessionStore: async (
-      _storePath: string,
-      mutator: (store: typeof hoisted.sessionStore) => void | Promise<void>,
-    ) => {
-      await mutator(hoisted.sessionStore);
-    },
-  };
-});
+vi.mock("../config/sessions.js", () => ({
+  loadSessionStore: () => hoisted.sessionStore,
+  mergeSessionEntry: (existing: object | undefined, patch: object) => ({
+    ...existing,
+    ...patch,
+  }),
+  resolveAgentMainSessionKey: (params: {
+    cfg?: { session?: { mainKey?: string } };
+    agentId: string;
+  }) => `agent:${params.agentId}:${params.cfg?.session?.mainKey ?? "main"}`,
+  resolveStorePath: () => "/tmp/openclaw-sessions-spawn-test-store.json",
+  updateSessionStore: async (
+    _storePath: string,
+    mutator: (store: typeof hoisted.sessionStore) => void | Promise<void>,
+  ) => {
+    await mutator(hoisted.sessionStore);
+  },
+}));
 
 // Same module, different specifier (used by tools under src/agents/tools/*).
-vi.mock("../../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: () => hoisted.state.configOverride,
-    resolveGatewayPort: () => 18789,
-  };
-});
+vi.mock("../../config/config.js", () => ({
+  loadConfig: () => hoisted.state.configOverride,
+  resolveGatewayPort: () => 18789,
+}));

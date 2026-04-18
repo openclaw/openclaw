@@ -5,19 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { __testing as externalAuthTesting } from "./external-auth.js";
+import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
-
-let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
-let resetOAuthRefreshQueuesForTest: typeof import("./oauth.js").resetOAuthRefreshQueuesForTest;
-
-async function loadOAuthModuleForTest() {
-  ({ resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } = await import("./oauth.js"));
-}
 
 function resolveApiKeyForProfileInTest(
   params: Omit<Parameters<typeof resolveApiKeyForProfile>[0], "cfg">,
@@ -75,17 +69,21 @@ vi.mock("./doctor.js", () => ({
   formatAuthDoctorHint: async () => undefined,
 }));
 
-vi.mock("./external-cli-sync.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./external-cli-sync.js")>("./external-cli-sync.js");
-  return {
-    ...actual,
-    syncExternalCliCredentials: () => false,
-    readManagedExternalCliCredential: () => null,
-    resolveExternalCliAuthProfiles: () => [],
-    areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
-  };
-});
+vi.mock("./external-cli-sync.js", () => ({
+  areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
+  hasUsableOAuthCredential: (credential: OAuthCredential | undefined, now = Date.now()) =>
+    credential?.type === "oauth" &&
+    credential.access.trim().length > 0 &&
+    Number.isFinite(credential.expires) &&
+    credential.expires - now > 5 * 60 * 1000,
+  isSafeToUseExternalCliCredential: () => true,
+  readExternalCliBootstrapCredential: () => null,
+  readManagedExternalCliCredential: () => null,
+  resolveExternalCliAuthProfiles: () => [],
+  shouldBootstrapFromExternalCliCredential: () => false,
+  shouldReplaceStoredOAuthCredential: (existing: unknown, incoming: unknown) =>
+    existing !== incoming,
+}));
 
 function createExpiredOauthStore(params: {
   profileId: string;
@@ -134,7 +132,6 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
     process.env.PI_CODING_AGENT_DIR = mainAgentDir;
     await fs.mkdir(mainAgentDir, { recursive: true });
-    await loadOAuthModuleForTest();
     resetOAuthRefreshQueuesForTest();
   });
 
@@ -143,9 +140,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     resetFileLockStateForTest();
     externalAuthTesting.resetResolveExternalAuthProfilesForTest();
     clearRuntimeAuthProfileStoreSnapshots();
-    if (resetOAuthRefreshQueuesForTest) {
-      resetOAuthRefreshQueuesForTest();
-    }
+    resetOAuthRefreshQueuesForTest();
     if (tempRoot) {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }

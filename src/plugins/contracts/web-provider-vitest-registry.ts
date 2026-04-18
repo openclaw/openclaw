@@ -1,4 +1,4 @@
-import { createGeminiWebSearchProvider } from "../../../extensions/google/web-search-contract-api.js";
+import { loadBundledPluginPublicSurfaceSync } from "../../test-utils/bundled-plugin-public-surface.js";
 import type { WebSearchProviderPlugin } from "../types.js";
 
 export type WebSearchProviderContractEntry = {
@@ -9,11 +9,19 @@ export type WebSearchProviderContractEntry = {
 
 let webSearchProviderContractRegistryCache: WebSearchProviderContractEntry[] | null = null;
 
+type GoogleWebSearchContractApiSurface =
+  typeof import("../../../extensions/google/web-search-contract-api.js");
+
 export function loadVitestWebSearchProviderContractRegistry(): WebSearchProviderContractEntry[] {
+  const googleWebSearchContractApi =
+    loadBundledPluginPublicSurfaceSync<GoogleWebSearchContractApiSurface>({
+      pluginId: "google",
+      artifactBasename: "web-search-contract-api.js",
+    });
   webSearchProviderContractRegistryCache ??= [
     {
       pluginId: "google",
-      provider: createGeminiWebSearchProvider(),
+      provider: googleWebSearchContractApi.createGeminiWebSearchProvider(),
       credentialValue: "AIzaSyDUMMY",
     },
   ];

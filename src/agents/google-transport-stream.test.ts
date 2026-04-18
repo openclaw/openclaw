@@ -295,6 +295,113 @@ describe("google transport stream", () => {
     });
   });
 
+  it("omits disabled thinkingBudget=0 for Gemini 2.5 Pro direct payloads", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        maxTokens: 128,
+      } as never,
+    );
+
+    expect(params.generationConfig).toMatchObject({
+      maxOutputTokens: 128,
+    });
+    expect(params.generationConfig).not.toHaveProperty("thinkingConfig");
+  });
+
+  it("strips explicit thinkingBudget=0 but preserves includeThoughts for Gemini 2.5 Pro", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        thinking: {
+          enabled: true,
+          budgetTokens: 0,
+        },
+      } as never,
+    );
+
+    expect(params.generationConfig).toMatchObject({
+      thinkingConfig: { includeThoughts: true },
+    });
+    expect(params.generationConfig).not.toMatchObject({
+      thinkingConfig: { thinkingBudget: 0 },
+    });
+  });
+
+  it.each([
+    ["gemini-pro-latest", "LOW"],
+    ["gemini-flash-latest", "MINIMAL"],
+    ["gemini-flash-lite-latest", "MINIMAL"],
+  ] as const)(
+    "uses thinkingLevel instead of disabled thinkingBudget for %s defaults",
+    (id, level) => {
+      const params = buildGoogleGenerativeAiParams(
+        buildGeminiModel({ id }),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as never,
+        {
+          maxTokens: 128,
+        } as never,
+      );
+
+      expect(params.generationConfig).toMatchObject({
+        maxOutputTokens: 128,
+        thinkingConfig: { thinkingLevel: level },
+      });
+      expect(params.generationConfig).not.toMatchObject({
+        thinkingConfig: { thinkingBudget: 0 },
+      });
+    },
+  );
+
+  it("maps explicit Gemini 3 thinking budgets to thinkingLevel", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-3-flash-preview" }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        thinking: {
+          enabled: true,
+          budgetTokens: 8192,
+        },
+      } as never,
+    );
+
+    expect(params.generationConfig).toMatchObject({
+      thinkingConfig: { includeThoughts: true, thinkingLevel: "MEDIUM" },
+    });
+    expect(params.generationConfig).not.toMatchObject({
+      thinkingConfig: { thinkingBudget: 8192 },
+    });
+  });
+
+  it("normalizes explicit Gemini 3 Pro thinking levels", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        thinking: {
+          enabled: true,
+          level: "MINIMAL",
+        },
+      } as never,
+    );
+
+    expect(params.generationConfig).toMatchObject({
+      thinkingConfig: { includeThoughts: true, thinkingLevel: "LOW" },
+    });
+  });
+
   it("includes cachedContent in direct Gemini payloads when requested", () => {
     const params = buildGoogleGenerativeAiParams(
       buildGeminiModel(),

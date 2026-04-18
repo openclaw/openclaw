@@ -549,7 +549,6 @@ export function resolveProviderRequestCapabilities(
   const policy = resolveProviderRequestPolicy(input, env);
   const provider = policy.provider;
   const api = normalizeOptionalLowercaseString(input.api);
-  const normalizedModelId = normalizeOptionalLowercaseString(input.modelId);
   const endpointClass = policy.endpointClass;
   const isKnownNativeEndpoint =
     endpointClass === "anthropic-public" ||
@@ -573,12 +572,6 @@ export function resolveProviderRequestCapabilities(
 
   let compatibilityFamily: ProviderRequestCompatibilityFamily | undefined;
   if (provider && MOONSHOT_COMPAT_PROVIDERS.has(provider)) {
-    compatibilityFamily = "moonshot";
-  } else if (
-    provider === "ollama" &&
-    normalizedModelId?.startsWith("kimi-k") &&
-    normalizedModelId.includes(":cloud")
-  ) {
     compatibilityFamily = "moonshot";
   }
 

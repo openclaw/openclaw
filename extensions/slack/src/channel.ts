@@ -379,10 +379,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     }),
     resolver: {
       resolveTargets: async ({ cfg, accountId, inputs, kind }) => {
-        const toResolvedTarget = <
-          T extends { input: string; resolved: boolean; id?: string; name?: string },
-        >(
-          entry: T,
+        const toResolvedTarget = (
+          entry: { input: string; resolved: boolean; id?: string; name?: string },
           note?: string,
         ) => ({
           input: entry.input,

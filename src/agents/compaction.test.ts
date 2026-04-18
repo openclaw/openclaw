@@ -57,6 +57,10 @@ function makeMessages(count: number, size: number): AgentMessage[] {
   return Array.from({ length: count }, (_, index) => makeMessage(index + 1, size));
 }
 
+function compareTimestampIds(left: AgentMessage["timestamp"], right: AgentMessage["timestamp"]) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function makeAssistantToolCall(
   timestamp: number,
   toolCallId: string,
@@ -300,8 +304,8 @@ describe("pruneHistoryForContextShare", () => {
     const allIds = [
       ...pruned.droppedMessagesList.map((m) => m.timestamp),
       ...pruned.messages.map((m) => m.timestamp),
-    ].toSorted((a, b) => a - b);
-    const originalIds = messages.map((m) => m.timestamp).toSorted((a, b) => a - b);
+    ].toSorted(compareTimestampIds);
+    const originalIds = messages.map((m) => m.timestamp).toSorted(compareTimestampIds);
     expect(allIds).toEqual(originalIds);
   });
 

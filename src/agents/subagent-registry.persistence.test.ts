@@ -157,13 +157,18 @@ describe("subagent registry persistence", () => {
   const flushQueuedRegistryWork = async () => {
     await Promise.resolve();
     await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 25));
   };
 
-  const restartRegistryAndFlush = async () => {
+  const waitForRegistryWork = async (predicate: () => boolean | Promise<boolean>) => {
+    await vi.waitFor(async () => expect(await predicate()).toBe(true), {
+      interval: 1,
+      timeout: 1_000,
+    });
+  };
+
+  const restartRegistry = () => {
     resetSubagentRegistryForTests({ persist: false });
     initSubagentRegistry();
-    await flushQueuedRegistryWork();
   };
 
   beforeEach(() => {
@@ -260,9 +265,7 @@ describe("subagent registry persistence", () => {
       sessionId: "sess-two",
     });
 
-    resetSubagentRegistryForTests({ persist: false });
-    initSubagentRegistry();
-
+    restartRegistry();
     await flushQueuedRegistryWork();
 
     // announce should NOT be called since cleanupHandled was true
@@ -385,7 +388,18 @@ describe("subagent registry persistence", () => {
     const registryPath = await writePersistedRegistry(persisted);
 
     announceSpy.mockResolvedValueOnce(false);
-    await restartRegistryAndFlush();
+    restartRegistry();
+    await waitForRegistryWork(async () => {
+      const afterFirst = await readPersistedRun<{
+        cleanupHandled?: boolean;
+        cleanupCompletedAt?: number;
+      }>(registryPath, "run-3");
+      return (
+        announceSpy.mock.calls.length === 1 &&
+        afterFirst?.cleanupHandled === false &&
+        afterFirst.cleanupCompletedAt === undefined
+      );
+    });
 
     expect(announceSpy).toHaveBeenCalledTimes(1);
     const afterFirst = await readPersistedRun<{
@@ -396,7 +410,13 @@ describe("subagent registry persistence", () => {
     expect(afterFirst?.cleanupCompletedAt).toBeUndefined();
 
     announceSpy.mockResolvedValueOnce(true);
-    await restartRegistryAndFlush();
+    restartRegistry();
+    await waitForRegistryWork(async () => {
+      const afterSecond = await readPersistedRun<{
+        cleanupCompletedAt?: number;
+      }>(registryPath, "run-3");
+      return announceSpy.mock.calls.length === 2 && afterSecond?.cleanupCompletedAt != null;
+    });
 
     expect(announceSpy).toHaveBeenCalledTimes(2);
     const afterSecond = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
@@ -415,7 +435,18 @@ describe("subagent registry persistence", () => {
     const registryPath = await writePersistedRegistry(persisted);
 
     announceSpy.mockRejectedValueOnce(new Error("announce boom"));
-    await restartRegistryAndFlush();
+    restartRegistry();
+    await waitForRegistryWork(async () => {
+      const afterFirst = await readPersistedRun<{
+        cleanupHandled?: boolean;
+        cleanupCompletedAt?: number;
+      }>(registryPath, "run-reject");
+      return (
+        announceSpy.mock.calls.length === 1 &&
+        afterFirst?.cleanupHandled === false &&
+        afterFirst.cleanupCompletedAt === undefined
+      );
+    });
 
     expect(announceSpy).toHaveBeenCalledTimes(1);
     const afterFirst = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
@@ -425,7 +456,13 @@ describe("subagent registry persistence", () => {
     expect(afterFirst.runs["run-reject"].cleanupCompletedAt).toBeUndefined();
 
     announceSpy.mockResolvedValueOnce(true);
-    await restartRegistryAndFlush();
+    restartRegistry();
+    await waitForRegistryWork(async () => {
+      const afterSecond = await readPersistedRun<{
+        cleanupCompletedAt?: number;
+      }>(registryPath, "run-reject");
+      return announceSpy.mock.calls.length === 2 && afterSecond?.cleanupCompletedAt != null;
+    });
 
     expect(announceSpy).toHaveBeenCalledTimes(2);
     const afterSecond = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
@@ -444,14 +481,27 @@ describe("subagent registry persistence", () => {
     const registryPath = await writePersistedRegistry(persisted);
 
     announceSpy.mockResolvedValueOnce(false);
-    await restartRegistryAndFlush();
+    restartRegistry();
+    await waitForRegistryWork(async () => {
+      const afterFirst = await readPersistedRun<{ cleanupHandled?: boolean }>(
+        registryPath,
+        "run-4",
+      );
+      return announceSpy.mock.calls.length === 1 && afterFirst?.cleanupHandled === false;
+    });
 
     expect(announceSpy).toHaveBeenCalledTimes(1);
     const afterFirst = await readPersistedRun<{ cleanupHandled?: boolean }>(registryPath, "run-4");
     expect(afterFirst?.cleanupHandled).toBe(false);
 
     announceSpy.mockResolvedValueOnce(true);
-    await restartRegistryAndFlush();
+    restartRegistry();
+    await waitForRegistryWork(async () => {
+      const afterSecond = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+        runs?: Record<string, unknown>;
+      };
+      return announceSpy.mock.calls.length === 2 && afterSecond.runs?.["run-4"] === undefined;
+    });
 
     expect(announceSpy).toHaveBeenCalledTimes(2);
     const afterSecond = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
@@ -471,7 +521,13 @@ describe("subagent registry persistence", () => {
       seedChildSessions: false,
     });
 
-    await restartRegistryAndFlush();
+    restartRegistry();
+    await waitForRegistryWork(async () => {
+      const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+        runs?: Record<string, unknown>;
+      };
+      return after.runs?.["run-orphan-restore"] === undefined;
+    });
 
     expect(announceSpy).not.toHaveBeenCalled();
     const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
@@ -511,7 +567,15 @@ describe("subagent registry persistence", () => {
     };
     await fs.writeFile(registryPath, `${JSON.stringify(parsed)}\n`, "utf8");
 
-    await restartRegistryAndFlush();
+    restartRegistry();
+    await waitForRegistryWork(async () => {
+      try {
+        await fs.access(attachmentsDir);
+        return false;
+      } catch (err) {
+        return (err as NodeJS.ErrnoException).code === "ENOENT";
+      }
+    });
 
     await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
     const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
