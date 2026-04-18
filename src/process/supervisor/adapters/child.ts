@@ -1,5 +1,5 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
-import { decodeCapturedOutputBuffer } from "../../../node-host/invoke.js";
+import { spawnSync } from "node:child_process";
 import { killProcessTree } from "../../kill-tree.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import { resolveWindowsCommandShim } from "../../windows-command.js";
@@ -8,6 +8,44 @@ import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
+
+const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
+  65001: "utf-8",
+  54936: "gb18030",
+  936: "gbk",
+  950: "big5",
+  932: "shift_jis",
+  949: "euc-kr",
+  1252: "windows-1252",
+};
+
+let cachedWindowsConsoleEncoding: string | null | undefined;
+
+function resolveWindowsConsoleEncoding(): string | null {
+  if (process.platform !== "win32") {
+    return null;
+  }
+  if (cachedWindowsConsoleEncoding !== undefined) {
+    return cachedWindowsConsoleEncoding;
+  }
+  try {
+    const result = spawnSync("cmd.exe", ["/d", "/s", "/c", "chcp"], {
+      windowsHide: true,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+    const match = raw.match(/\b(\d{3,5})\b/);
+    const codePage = match?.[1] ? Number.parseInt(match[1], 10) : null;
+    cachedWindowsConsoleEncoding =
+      codePage !== null && Number.isFinite(codePage) && codePage > 0
+        ? (WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ?? null)
+        : null;
+  } catch {
+    cachedWindowsConsoleEncoding = null;
+  }
+  return cachedWindowsConsoleEncoding;
+}
 
 function resolveCommand(command: string): string {
   return resolveWindowsCommandShim({
@@ -104,15 +142,25 @@ export async function createChildAdapter(params: {
       }
     : undefined;
 
+  const windowsEncoding = resolveWindowsConsoleEncoding();
+  const stdoutDecoder =
+    windowsEncoding && windowsEncoding !== "utf-8"
+      ? new TextDecoder(windowsEncoding, { fatal: false })
+      : null;
+  const stderrDecoder =
+    windowsEncoding && windowsEncoding !== "utf-8"
+      ? new TextDecoder(windowsEncoding, { fatal: false })
+      : null;
+
   const onStdout = (listener: (chunk: string) => void) => {
     child.stdout.on("data", (chunk: Buffer) => {
-      listener(decodeCapturedOutputBuffer({ buffer: chunk }));
+      listener(stdoutDecoder ? stdoutDecoder.decode(chunk, { stream: true }) : chunk.toString("utf8"));
     });
   };
 
   const onStderr = (listener: (chunk: string) => void) => {
     child.stderr.on("data", (chunk: Buffer) => {
-      listener(decodeCapturedOutputBuffer({ buffer: chunk }));
+      listener(stderrDecoder ? stderrDecoder.decode(chunk, { stream: true }) : chunk.toString("utf8"));
     });
   };
 
