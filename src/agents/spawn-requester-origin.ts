@@ -26,11 +26,19 @@ const KIND_PREFIX_TO_CHAT_TYPE: Readonly<Record<string, ChatType>> = {
 // Matches one leading `<alpha-token>:` wrapper at a time.
 const GENERIC_PREFIX_PATTERN = /^[a-z][a-z0-9_-]*:/i;
 
-function shouldPeelRequesterPrefix(prefix: string, channelId: string | undefined): boolean {
-  if (prefix in KIND_PREFIX_TO_CHAT_TYPE) {
-    return true;
-  }
-  return Boolean(channelId && prefix === `${channelId.trim().toLowerCase()}:`);
+function getKindForRequesterPrefix(prefix: string): ChatType | undefined {
+  return Object.hasOwn(KIND_PREFIX_TO_CHAT_TYPE, prefix)
+    ? KIND_PREFIX_TO_CHAT_TYPE[prefix]
+    : undefined;
+}
+
+function normalizeChannelPrefix(channelId: string | undefined): string | undefined {
+  const normalized = channelId?.trim().toLowerCase();
+  return normalized ? `${normalized}:` : undefined;
+}
+
+function shouldPeelRequesterPrefix(prefix: string, channelPrefix: string | undefined): boolean {
+  return Boolean(getKindForRequesterPrefix(prefix) || prefix === channelPrefix);
 }
 
 export function extractRequesterPeer(
@@ -47,6 +55,7 @@ export function extractRequesterPeer(
   const pluginInferredKind = channelId
     ? (getChannelPlugin(channelId)?.messaging?.inferTargetChatType?.({ to: raw }) ?? undefined)
     : undefined;
+  const channelPrefix = normalizeChannelPrefix(channelId);
   let inferredKind: ChatType | undefined = pluginInferredKind;
   let value = raw;
   while (true) {
@@ -55,11 +64,12 @@ export function extractRequesterPeer(
       break;
     }
     const prefix = match[0].toLowerCase();
-    if (!shouldPeelRequesterPrefix(prefix, channelId)) {
+    if (!shouldPeelRequesterPrefix(prefix, channelPrefix)) {
       break;
     }
-    if (prefix in KIND_PREFIX_TO_CHAT_TYPE) {
-      inferredKind ??= KIND_PREFIX_TO_CHAT_TYPE[prefix];
+    const kindFromPrefix = getKindForRequesterPrefix(prefix);
+    if (kindFromPrefix) {
+      inferredKind ??= kindFromPrefix;
     }
     value = value.slice(prefix.length).trim();
   }
