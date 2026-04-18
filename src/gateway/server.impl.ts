@@ -3,7 +3,7 @@ import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.
 import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createDefaultDeps } from "../cli/deps.js";
-import { isRestartEnabled } from "../config/commands.js";
+import { isRestartEnabled } from "../config/commands.flags.js";
 import {
   type OpenClawConfig,
   applyConfigOverrides,
@@ -18,7 +18,7 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext } from "../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
-import { logAcceptedEnvOption } from "../infra/env.js";
+import { isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -39,6 +39,7 @@ import {
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
+import { closeMcpLoopbackServer } from "./mcp-http.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createChannelManager } from "./server-channels.js";
 import { createGatewayCloseHandler, runGatewayClosePrelude } from "./server-close.js";
@@ -55,7 +56,10 @@ import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-handlers.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
-import { startGatewayRuntimeServices } from "./server-runtime-services.js";
+import {
+  activateGatewayScheduledServices,
+  startGatewayRuntimeServices,
+} from "./server-runtime-services.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
@@ -70,6 +74,7 @@ import {
   prepareGatewayStartupConfig,
 } from "./server-startup-config.js";
 import { prepareGatewayPluginBootstrap } from "./server-startup-plugins.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import { startGatewayEarlyRuntime, startGatewayPostAttachRuntime } from "./server-startup.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
@@ -203,7 +208,7 @@ export async function startGatewayServer(
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
   const minimalTestGateway =
-    process.env.VITEST === "1" && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
+    isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
 
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);
@@ -279,7 +284,14 @@ export async function startGatewayServer(
         log,
       });
   cfgAtStart = controlUiSeed.config;
-  if (authBootstrap.persistedGeneratedToken || controlUiSeed.persistedAllowedOriginsSeed) {
+  // Always capture the final config hash after all startup writes (plugin
+  // auto-enable, auth token generation, control-UI origin seeding) so the
+  // config reloader can recognize its own startup writes and suppress the
+  // spurious hot-reload that would otherwise trigger a SIGUSR1 restart loop.
+  // Previously the hash was only captured when auth or control-UI persisted
+  // changes, missing the plugin auto-enable write performed earlier inside
+  // loadGatewayStartupConfigSnapshot().  See #67436.
+  {
     const startupSnapshot = await readConfigFileSnapshot();
     startupInternalWriteHash = startupSnapshot.hash ?? null;
   }
@@ -445,6 +457,7 @@ export async function startGatewayServer(
     resolvedAuth,
     rateLimiter: authRateLimiter,
     gatewayTls,
+    getResolvedAuth,
     hooksConfig: () => runtimeState?.hooksConfig ?? initialHooksConfig,
     getHookClientIpConfig: () => runtimeState?.hookClientIpConfig ?? initialHookClientIpConfig,
     pluginRegistry,
@@ -502,7 +515,7 @@ export async function startGatewayServer(
       stopModelPricingRefresh: runtimeState.stopModelPricingRefresh,
       stopChannelHealthMonitor: () => runtimeState?.channelHealthMonitor?.stop(),
       clearSecretsRuntimeSnapshot,
-      closeMcpServer: async () => await runtimeState?.mcpServer?.close(),
+      closeMcpServer: async () => await closeMcpLoopbackServer(),
     });
   const closeOnStartupFailure = async () => {
     await runClosePrelude();
@@ -574,7 +587,6 @@ export async function startGatewayServer(
       },
       loadConfig,
     });
-    runtimeState.mcpServer = earlyRuntime.mcpServer;
     runtimeState.bonjourStop = earlyRuntime.bonjourStop;
     runtimeState.skillsChangeUnsub = earlyRuntime.skillsChangeUnsub;
     if (earlyRuntime.maintenance) {
@@ -587,7 +599,6 @@ export async function startGatewayServer(
     Object.assign(
       runtimeState,
       startGatewayEventSubscriptions({
-        minimalTestGateway,
         broadcast,
         broadcastToConnIds,
         nodeSendToSession,
@@ -608,8 +619,6 @@ export async function startGatewayServer(
         minimalTestGateway,
         cfgAtStart,
         channelManager,
-        cron: runtimeState.cronState.cron,
-        logCron,
         log,
       }),
     );
@@ -624,7 +633,9 @@ export async function startGatewayServer(
 
     const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
 
-    const unavailableGatewayMethods = new Set<string>(minimalTestGateway ? [] : ["chat.history"]);
+    const unavailableGatewayMethods = new Set<string>(
+      minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
+    );
     const gatewayRequestContext = createGatewayRequestContext({
       deps,
       runtimeState,
@@ -737,7 +748,6 @@ export async function startGatewayServer(
       bindHosts: httpBindHosts,
       port,
       tlsEnabled: gatewayTls.enabled,
-      pluginCount: pluginRegistry.plugins.length,
       log,
       isNixMode,
       startupStartedAt: opts.startupStartedAt,
@@ -755,6 +765,16 @@ export async function startGatewayServer(
       logChannels,
       unavailableGatewayMethods,
     }));
+
+    // Keep scheduled work inert until post-attach sidecars finish.
+    const activated = activateGatewayScheduledServices({
+      minimalTestGateway,
+      cfgAtStart,
+      cron: runtimeState.cronState.cron,
+      logCron,
+      log,
+    });
+    runtimeState.heartbeatRunner = activated.heartbeatRunner;
 
     runtimeState.configReloader = startManagedGatewayConfigReloader({
       minimalTestGateway,

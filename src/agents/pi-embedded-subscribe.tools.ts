@@ -9,7 +9,7 @@ import {
 } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
-import { type MessagingToolSend } from "./pi-embedded-messaging.js";
+import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;
@@ -211,11 +211,24 @@ export function filterToolResultMediaUrls(
   toolName: string | undefined,
   mediaUrls: string[],
   result?: unknown,
+  builtinToolNames?: ReadonlySet<string>,
 ): string[] {
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
   if (isToolResultMediaTrusted(toolName, result)) {
+    // When the current run provides its exact registered tool names (core
+    // built-ins plus bundled/trusted plugin tools), require the raw emitted
+    // tool name to match one of them before allowing local MEDIA: paths.
+    // This blocks normalized aliases and case-variant collisions such as
+    // "Bash" -> "bash" or "Web_Search" -> "web_search" from inheriting a
+    // registered tool's media trust.
+    if (builtinToolNames !== undefined) {
+      const registeredName = toolName?.trim();
+      if (!registeredName || !builtinToolNames.has(registeredName)) {
+        return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
+      }
+    }
     return mediaUrls;
   }
   return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));

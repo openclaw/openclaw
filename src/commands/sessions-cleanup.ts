@@ -12,6 +12,7 @@ import {
   type SessionEntry,
   type SessionMaintenanceApplyReport,
 } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 import {
@@ -19,12 +20,14 @@ import {
   type SessionStoreTarget,
 } from "./session-store-targets.js";
 import {
+  resolveSessionDisplayDefaults,
+  resolveSessionDisplayModel,
+} from "./sessions-display-model.js";
+import {
   formatSessionAgeCell,
   formatSessionFlagsCell,
   formatSessionKeyCell,
   formatSessionModelCell,
-  resolveSessionDisplayDefaults,
-  resolveSessionDisplayModel,
   SESSION_AGE_PAD,
   SESSION_KEY_PAD,
   SESSION_MODEL_PAD,
@@ -211,7 +214,8 @@ async function previewStoreCleanup(params: {
     missing > 0 ||
     pruned > 0 ||
     capped > 0 ||
-    Boolean((diskBudget?.removedEntries ?? 0) > 0 || (diskBudget?.removedFiles ?? 0) > 0);
+    (diskBudget?.removedEntries ?? 0) > 0 ||
+    (diskBudget?.removedFiles ?? 0) > 0;
 
   const summary: SessionCleanupSummary = {
     agentId: params.target.agentId,
@@ -240,7 +244,7 @@ async function previewStoreCleanup(params: {
 }
 
 function renderStoreDryRunPlan(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   summary: SessionCleanupSummary;
   actionRows: SessionCleanupActionRow[];
   displayDefaults: ReturnType<typeof resolveSessionDisplayDefaults>;
@@ -278,7 +282,7 @@ function renderStoreDryRunPlan(params: {
   ].join(" ");
   params.runtime.log(rich ? theme.heading(header) : header);
   for (const actionRow of params.actionRows) {
-    const model = resolveSessionDisplayModel(params.cfg, actionRow, params.displayDefaults);
+    const model = resolveSessionDisplayModel(params.cfg, actionRow);
     const line = [
       formatCleanupActionCell(actionRow.action, rich),
       formatSessionKeyCell(actionRow.key, rich),
@@ -418,10 +422,8 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
               missingApplied > 0 ||
               appliedReport.pruned > 0 ||
               appliedReport.capped > 0 ||
-              Boolean(
-                (appliedReport.diskBudget?.removedEntries ?? 0) > 0 ||
-                (appliedReport.diskBudget?.removedFiles ?? 0) > 0,
-              ),
+              (appliedReport.diskBudget?.removedEntries ?? 0) > 0 ||
+              (appliedReport.diskBudget?.removedFiles ?? 0) > 0,
             applied: true,
             appliedCount: Object.keys(afterStore).length,
           };

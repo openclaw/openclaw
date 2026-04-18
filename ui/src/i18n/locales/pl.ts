@@ -257,6 +257,18 @@ export const pl: TranslationMap = {
       cost: "Koszt",
       skills: "Skills",
       recentSessions: "Ostatnie sesje",
+      modelAuth: "Uwierzytelnianie modeli",
+      modelAuthOk: "{count} ok",
+      modelAuthExpired: "{count} wygasło",
+      modelAuthExpiring: "{count} wkrótce wygaśnie",
+      modelAuthProviders: "{count} dostawców",
+      modelAuthUsageLeft: "Pozostało {pct}%",
+      modelAuthExpiresIn: "wygasa {when}",
+      modelAuthAttentionExpiredTitle: "Uwierzytelnianie modeli wygasło",
+      modelAuthAttentionExpiringTitle: "Uwierzytelnianie modeli wkrótce wygaśnie",
+      modelAuthAttentionExpiredDesc:
+        "{providers} — uwierzytelnij ponownie za pomocą openclaw models auth",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "Uwaga",
@@ -282,6 +294,7 @@ export const pl: TranslationMap = {
     tabs: {
       scene: "Scena",
       diary: "Dziennik",
+      advanced: "Zaawansowane",
     },
     header: {
       refresh: "Odśwież",
@@ -297,9 +310,43 @@ export const pl: TranslationMap = {
     },
     scene: {
       backfill: "Uzupełnij",
+      dedupeDiary: "Dziennik deduplikacji",
       reset: "Resetuj",
       clearGrounded: "Wyczyść uziemione",
+      repairCache: "Napraw pamięć podręczną snów",
       working: "Przetwarzanie…",
+    },
+    phase: {
+      light: "Lekki",
+      deep: "Głęboki",
+      rem: "Rem",
+      off: "wył.",
+    },
+    advanced: {
+      eyebrow: "Przegląd",
+      title: "Przegląd dziennego dziennika",
+      description:
+        "Sprawdź, co pochodzi z dziennego dziennika, co czeka na awans i co zostało ostatnio awansowane.",
+      summaryFromDailyLog: "z dziennego dziennika",
+      summaryWaiting: "oczekujące",
+      summaryPromotedToday: "awansowane dzisiaj",
+      stagedTitle: "Z dziennego dziennika",
+      stagedDescription:
+        "Kandydaci do odtworzenia wyciągnięci ze starszych wpisów dziennego dziennika.",
+      shortTermTitle: "Oczekujące na awans",
+      shortTermDescription:
+        "Bieżący kandydaci krótkoterminowi czekający na przejście do prawdziwej pamięci.",
+      sortRecent: "Najnowsze",
+      sortSignals: "Najsilniejsze wsparcie",
+      originDailyLog: "odtworzone",
+      originLive: "na żywo",
+      originMixed: "mieszane",
+      promotedTitle: "Ostatnie awanse",
+      promotedDescription: "Elementy, które przeszły już proces awansu.",
+      emptyGrounded: "Obecnie nie ma przygotowanych wpisów do odtworzenia opartych na dzienniku.",
+      emptyShortTerm: "Brak krótkoterminowych wpisów do sprawdzenia.",
+      emptyPromoted: "Brak ostatnich awansów do sprawdzenia.",
+      updatedPrefix: "zaktualizowano",
     },
     stats: {
       shortTerm: "Krótkoterminowe",

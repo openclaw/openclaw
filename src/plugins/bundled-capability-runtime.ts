@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -10,19 +9,55 @@ import {
 import { resolveBundledPluginRepoEntryPath } from "./bundled-plugin-metadata.js";
 import { createCapturedPluginRegistration } from "./captured-registration.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
+import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { unwrapDefaultModuleExport } from "./module-export.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   buildPluginLoaderAliasMap,
-  buildPluginLoaderJitiOptions,
   shouldPreferNativeJiti,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
 import type { OpenClawPluginDefinition, OpenClawPluginModule } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
+
+const CAPABILITY_VITEST_SHIM_ALIASES = [
+  {
+    subpath: "llm-task",
+    target: new URL("./capability-runtime-vitest-shims/llm-task.ts", import.meta.url),
+  },
+  {
+    subpath: "config-runtime",
+    target: new URL("./capability-runtime-vitest-shims/config-runtime.ts", import.meta.url),
+  },
+  {
+    subpath: "media-runtime",
+    target: new URL("./capability-runtime-vitest-shims/media-runtime.ts", import.meta.url),
+  },
+  {
+    subpath: "provider-onboard",
+    target: new URL("../plugin-sdk/provider-onboard.ts", import.meta.url),
+  },
+  {
+    subpath: "speech-core",
+    target: new URL("./capability-runtime-vitest-shims/speech-core.ts", import.meta.url),
+  },
+] as const;
+
+export function buildVitestCapabilityShimAliasMap(): Record<string, string> {
+  return Object.fromEntries(
+    CAPABILITY_VITEST_SHIM_ALIASES.flatMap(({ subpath, target }) => {
+      const targetPath = fileURLToPath(target);
+      return [
+        [`openclaw/plugin-sdk/${subpath}`, targetPath],
+        [`@openclaw/plugin-sdk/${subpath}`, targetPath],
+      ];
+    }),
+  );
+}
 
 function applyVitestCapabilityAliasOverrides(params: {
   aliasMap: Record<string, string>;
@@ -43,36 +78,7 @@ function applyVitestCapabilityAliasOverrides(params: {
     // Capability contract loads only need a narrow SDK slice. Keep those
     // helpers on a tiny source graph so Vitest does not pull the dist chunk
     // bundle that also drags Matrix/WhatsApp code into these tests.
-    "openclaw/plugin-sdk/llm-task": fileURLToPath(
-      new URL("./capability-runtime-vitest-shims/llm-task.ts", import.meta.url),
-    ),
-    "@openclaw/plugin-sdk/llm-task": fileURLToPath(
-      new URL("./capability-runtime-vitest-shims/llm-task.ts", import.meta.url),
-    ),
-    "openclaw/plugin-sdk/config-runtime": fileURLToPath(
-      new URL("./capability-runtime-vitest-shims/config-runtime.ts", import.meta.url),
-    ),
-    "@openclaw/plugin-sdk/config-runtime": fileURLToPath(
-      new URL("./capability-runtime-vitest-shims/config-runtime.ts", import.meta.url),
-    ),
-    "openclaw/plugin-sdk/media-runtime": fileURLToPath(
-      new URL("./capability-runtime-vitest-shims/media-runtime.ts", import.meta.url),
-    ),
-    "@openclaw/plugin-sdk/media-runtime": fileURLToPath(
-      new URL("./capability-runtime-vitest-shims/media-runtime.ts", import.meta.url),
-    ),
-    "openclaw/plugin-sdk/provider-onboard": fileURLToPath(
-      new URL("../plugin-sdk/provider-onboard.ts", import.meta.url),
-    ),
-    "@openclaw/plugin-sdk/provider-onboard": fileURLToPath(
-      new URL("../plugin-sdk/provider-onboard.ts", import.meta.url),
-    ),
-    "openclaw/plugin-sdk/speech-core": fileURLToPath(
-      new URL("./capability-runtime-vitest-shims/speech-core.ts", import.meta.url),
-    ),
-    "@openclaw/plugin-sdk/speech-core": fileURLToPath(
-      new URL("./capability-runtime-vitest-shims/speech-core.ts", import.meta.url),
-    ),
+    ...buildVitestCapabilityShimAliasMap(),
   };
 }
 
@@ -95,12 +101,7 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   definition?: OpenClawPluginDefinition;
   register?: OpenClawPluginDefinition["register"];
 } {
-  const resolved =
-    moduleExport &&
-    typeof moduleExport === "object" &&
-    "default" in (moduleExport as Record<string, unknown>)
-      ? (moduleExport as { default: unknown }).default
-      : moduleExport;
+  const resolved = unwrapDefaultModuleExport(moduleExport);
   if (typeof resolved === "function") {
     return {
       register: resolved as OpenClawPluginDefinition["register"],
@@ -151,6 +152,7 @@ function createCapabilityPluginRecord(params: {
     webFetchProviderIds: [],
     webSearchProviderIds: [],
     memoryEmbeddingProviderIds: [],
+    agentHarnessIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],
@@ -186,7 +188,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
   const env = params.env ?? process.env;
   const pluginIds = new Set(params.pluginIds);
   const registry = createEmptyPluginRegistry();
-  const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+  const jitiLoaders: PluginJitiLoaderCache = new Map();
 
   const getJiti = (modulePath: string) => {
     const tryNative =
@@ -201,20 +203,14 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       pluginSdkResolution: params.pluginSdkResolution,
       env,
     });
-    const cacheKey = JSON.stringify({
-      tryNative,
-      aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
-    });
-    const cached = jitiLoaders.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const loader = createJiti(import.meta.url, {
-      ...buildPluginLoaderJitiOptions(aliasMap),
+    return getCachedPluginJitiLoader({
+      cache: jitiLoaders,
+      modulePath,
+      importerUrl: import.meta.url,
+      jitiFilename: import.meta.url,
+      aliasMap,
       tryNative,
     });
-    jitiLoaders.set(cacheKey, loader);
-    return loader;
   };
 
   const discovery = discoverOpenClawPlugins({
@@ -301,7 +297,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
 
     try {
       const captured = createCapturedPluginRegistration();
-      void register(captured.api);
+      register(captured.api);
       record.cliBackendIds.push(...captured.cliBackends.map((entry) => entry.id));
       record.providerIds.push(...captured.providers.map((entry) => entry.id));
       record.speechProviderIds.push(...captured.speechProviders.map((entry) => entry.id));
@@ -328,6 +324,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       record.memoryEmbeddingProviderIds.push(
         ...captured.memoryEmbeddingProviders.map((entry) => entry.id),
       );
+      record.agentHarnessIds.push(...captured.agentHarnesses.map((entry) => entry.id));
       record.toolNames.push(...captured.tools.map((entry) => entry.name));
 
       registry.cliBackends?.push(
@@ -335,6 +332,15 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           pluginId: record.id,
           pluginName: record.name,
           backend,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.textTransforms.push(
+        ...captured.textTransforms.map((transforms) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          transforms,
           source: record.source,
           rootDir: record.rootDir,
         })),
@@ -434,6 +440,15 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           pluginId: record.id,
           pluginName: record.name,
           provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.agentHarnesses.push(
+        ...captured.agentHarnesses.map((harness) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          harness,
           source: record.source,
           rootDir: record.rootDir,
         })),

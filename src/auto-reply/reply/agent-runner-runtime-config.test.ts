@@ -24,6 +24,7 @@ function makeRun(config: OpenClawConfig): FollowupRun["run"] {
     skillsSnapshot: [],
     ownerNumbers: ["+15550001"],
     enforceFinalTag: false,
+    skipProviderRuntimeHints: true,
     thinkLevel: "medium",
     verboseLevel: "off",
     reasoningLevel: "none",

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
@@ -172,6 +172,7 @@ export function loadEnabledClaudeBundleCommands(params: {
   const registry = loadPluginManifestRegistry({
     workspaceDir: params.workspaceDir,
     config: params.cfg,
+    cache: false,
   });
   const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
   const commands: ClaudeBundleCommandSpec[] = [];

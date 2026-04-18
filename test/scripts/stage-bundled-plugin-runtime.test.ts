@@ -27,7 +27,7 @@ describe("stageBundledPluginRuntime", () => {
         "acpx",
         "skills",
         "acp-router",
-        "SKILL.md",
+        "fixture.txt",
       );
       await fs.promises.mkdir(path.dirname(sourceFile), { recursive: true });
       await fs.promises.writeFile(sourceFile, "skill-body\n", "utf8");
@@ -56,7 +56,7 @@ describe("stageBundledPluginRuntime", () => {
         "acpx",
         "skills",
         "acp-router",
-        "SKILL.md",
+        "fixture.txt",
       );
       expect(await fs.promises.readFile(runtimeFile, "utf8")).toBe("skill-body\n");
       expect(fs.lstatSync(runtimeFile).isSymbolicLink()).toBe(false);

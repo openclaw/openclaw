@@ -8,7 +8,7 @@ export {
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
 } from "../auto-reply/reply/history.js";
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { ReplyPayload } from "../auto-reply/reply-payload.js";
 export { logTypingFailure } from "../channels/logging.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
@@ -31,7 +31,7 @@ export type {
   ChannelMessageActionName,
   ChannelMeta,
   ChannelOutboundAdapter,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type {
   ChannelConfiguredBindingProvider,
   ChannelConfiguredBindingConversationRef,
@@ -75,6 +75,7 @@ export type { RuntimeEnv } from "../runtime.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { evaluateSenderGroupAccessForPolicy } from "./group-access.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
+export { createClackPrompter } from "../wizard/clack-prompter.js";
 export { feishuSetupWizard, feishuSetupAdapter } from "./feishu-setup.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export { readJsonFileWithFallback } from "./json-store.js";

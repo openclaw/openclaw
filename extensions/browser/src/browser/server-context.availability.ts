@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
 import {
   CHROME_MCP_ATTACH_READY_POLL_MS,
   CHROME_MCP_ATTACH_READY_WINDOW_MS,
@@ -6,6 +7,7 @@ import {
   PROFILE_POST_RESTART_WS_TIMEOUT_MS,
   resolveCdpReachabilityTimeouts,
 } from "./cdp-timeouts.js";
+import { redactCdpUrl } from "./cdp.helpers.js";
 import {
   closeChromeMcpSession,
   ensureChromeMcpAvailable,
@@ -58,15 +60,19 @@ export function createProfileAvailability({
   getProfileState,
   setProfileRunning,
 }: AvailabilityDeps): AvailabilityOps {
+  const redactedProfileCdpUrl = redactCdpUrl(profile.cdpUrl) ?? profile.cdpUrl;
   const capabilities = getBrowserProfileCapabilities(profile);
   const resolveTimeouts = (timeoutMs: number | undefined) =>
     resolveCdpReachabilityTimeouts({
       profileIsLoopback: profile.cdpIsLoopback,
+      attachOnly: profile.attachOnly,
       timeoutMs,
       remoteHttpTimeoutMs: state().resolved.remoteCdpTimeoutMs,
       remoteHandshakeTimeoutMs: state().resolved.remoteCdpHandshakeTimeoutMs,
     });
 
+  const getCdpReachabilityPolicy = () =>
+    resolveCdpReachabilityPolicy(profile, state().resolved.ssrfPolicy);
   const isReachable = async (timeoutMs?: number) => {
     if (capabilities.usesChromeMcp) {
       // listChromeMcpTabs creates the session if needed — no separate ensureChromeMcpAvailable call required
@@ -78,7 +84,7 @@ export function createProfileAvailability({
       profile.cdpUrl,
       httpTimeoutMs,
       wsTimeoutMs,
-      state().resolved.ssrfPolicy,
+      getCdpReachabilityPolicy(),
     );
   };
 
@@ -87,7 +93,7 @@ export function createProfileAvailability({
       return await isReachable(timeoutMs);
     }
     const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
-    return await isChromeReachable(profile.cdpUrl, httpTimeoutMs, state().resolved.ssrfPolicy);
+    return await isChromeReachable(profile.cdpUrl, httpTimeoutMs, getCdpReachabilityPolicy());
   };
 
   const attachRunning = (running: NonNullable<ProfileRuntimeState["running"]>) => {
@@ -206,7 +212,7 @@ export function createProfileAvailability({
       if (attachOnly || remoteCdp) {
         throw new BrowserProfileUnavailableError(
           remoteCdp
-            ? `Remote CDP for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`
+            ? `Remote CDP for profile "${profile.name}" is not reachable at ${redactedProfileCdpUrl}.`
             : `Browser attachOnly is enabled and profile "${profile.name}" is not running.`,
         );
       }

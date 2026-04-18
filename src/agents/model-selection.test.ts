@@ -1,7 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import { __testing as setupRegistryRuntimeTesting } from "../plugins/setup-registry.runtime.js";
 import {
   buildAllowedModelSet,
   inferUniqueProviderFromConfiguredModels,
@@ -47,12 +48,30 @@ const ANTHROPIC_OPUS_CATALOG = [
   },
 ];
 
+const ANTHROPIC_OPUS_47_CATALOG = [
+  {
+    provider: "anthropic",
+    id: "claude-opus-4-7",
+    name: "Claude Opus 4.7",
+    reasoning: true,
+  },
+];
+
 function resolveAnthropicOpusThinking(cfg: OpenClawConfig) {
   return resolveThinkingDefault({
     cfg,
     provider: "anthropic",
     model: "claude-opus-4-6",
     catalog: ANTHROPIC_OPUS_CATALOG,
+  });
+}
+
+function resolveAnthropicOpus47Thinking(cfg: OpenClawConfig) {
+  return resolveThinkingDefault({
+    cfg,
+    provider: "anthropic",
+    model: "claude-opus-4-7",
+    catalog: ANTHROPIC_OPUS_47_CATALOG,
   });
 }
 
@@ -135,6 +154,23 @@ describe("model-selection", () => {
   });
 
   describe("isCliProvider", () => {
+    beforeEach(() => {
+      setupRegistryRuntimeTesting.resetRuntimeState();
+      setupRegistryRuntimeTesting.setRuntimeModuleForTest({
+        resolvePluginSetupCliBackend: ({ backend }) =>
+          backend === "claude-cli"
+            ? {
+                pluginId: "anthropic",
+                backend: { id: "claude-cli", config: { command: "claude" } },
+              }
+            : undefined,
+      });
+    });
+
+    afterEach(() => {
+      setupRegistryRuntimeTesting.resetRuntimeState();
+    });
+
     it("returns true for setup-registered cli backends", () => {
       expect(isCliProvider("claude-cli", {} as OpenClawConfig)).toBe(true);
     });
@@ -1138,6 +1174,18 @@ describe("model-selection", () => {
       } as OpenClawConfig;
 
       expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
+    });
+
+    it("keeps thinking off by default for explicitly configured Anthropic Opus 4.7", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(resolveAnthropicOpus47Thinking(cfg)).toBe("off");
     });
 
     it("falls back to low when no provider thinking hook is active", () => {

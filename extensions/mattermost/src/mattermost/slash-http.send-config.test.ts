@@ -54,7 +54,7 @@ vi.mock("./runtime-api.js", () => {
     isRequestBodyLimitError: vi.fn(() => false),
     logTypingFailure: vi.fn(),
     formatInboundFromLabel: vi.fn(() => ""),
-    rawDataToString: vi.fn((value: unknown) => String(value ?? "")),
+    rawDataToString: vi.fn((value: unknown) => (typeof value === "string" ? value : "")),
     readRequestBodyWithLimit: mockState.readRequestBodyWithLimit,
     resolveThreadSessionKeys: vi.fn((params: { baseSessionKey: string }) => ({
       sessionKey: params.baseSessionKey,

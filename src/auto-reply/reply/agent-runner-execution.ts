@@ -23,8 +23,8 @@ import {
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
   isTransientHttpError,
-  sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
+import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
@@ -172,6 +172,7 @@ function setFallbackSelectionStateField(
       }
       return false;
   }
+  throw new Error("Unsupported fallback selection state key");
 }
 
 function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionState {
@@ -307,6 +308,14 @@ function isPureTransientRateLimitSummary(err: unknown): boolean {
       const reason = attempt.reason;
       return reason === "rate_limit" || reason === "overloaded";
     })
+  );
+}
+
+function isPureBillingSummary(err: unknown): boolean {
+  return (
+    isFallbackSummaryError(err) &&
+    err.attempts.length > 0 &&
+    err.attempts.every((attempt) => attempt.reason === "billing")
   );
 }
 
@@ -596,6 +605,15 @@ export async function runAgentTurnWithFallback(params: {
     cfg: runtimeConfig,
     sessionKey: params.sessionKey,
     workspaceDir: params.followupRun.run.workspaceDir,
+    messageProvider: params.followupRun.run.messageProvider,
+    accountId: params.followupRun.originatingAccountId ?? params.followupRun.run.agentAccountId,
+    groupId: params.followupRun.run.groupId,
+    groupChannel: params.followupRun.run.groupChannel,
+    groupSpace: params.followupRun.run.groupSpace,
+    requesterSenderId: params.followupRun.run.senderId,
+    requesterSenderName: params.followupRun.run.senderName,
+    requesterSenderUsername: params.followupRun.run.senderUsername,
+    requesterSenderE164: params.followupRun.run.senderE164,
   });
   let didNotifyAgentRunStart = false;
   const notifyAgentRunStart = () => {
@@ -628,19 +646,42 @@ export async function runAgentTurnWithFallback(params: {
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
-  const persistFallbackCandidateSelection = async (provider: string, model: string) => {
+  const persistFallbackCandidateSelection = async (
+    provider: string,
+    model: string,
+  ): Promise<(() => Promise<void>) | undefined> => {
     if (
       !params.sessionKey ||
       !params.activeSessionStore ||
       (provider === params.followupRun.run.provider && model === params.followupRun.run.model)
     ) {
-      return;
+      return undefined;
     }
 
     const activeSessionEntry =
       params.getActiveSessionEntry() ?? params.activeSessionStore[params.sessionKey];
     if (!activeSessionEntry) {
-      return;
+      return undefined;
+    }
+
+    // Don't overwrite a user-initiated model override (e.g. from /models or
+    // /model) with the fallback model.  The user's explicit selection should
+    // survive transient primary-model failures so subsequent messages still
+    // target the model the user chose.  Fallback persistence is only
+    // appropriate when the override was itself set by a previous fallback
+    // ("auto") or when there is no override yet.
+    //
+    // `modelOverrideSource` was added later, so older persisted sessions can
+    // carry a user-selected override without the source field.  Treat any
+    // entry with a `modelOverride` but missing `modelOverrideSource` as legacy
+    // user state, matching the backward-compat treatment in
+    // session-reset-service.
+    const isUserModelOverride =
+      activeSessionEntry.modelOverrideSource === "user" ||
+      (activeSessionEntry.modelOverrideSource === undefined &&
+        Boolean(normalizeOptionalString(activeSessionEntry.modelOverride)));
+    if (isUserModelOverride) {
+      return undefined;
     }
 
     const previousState = snapshotFallbackSelectionState(activeSessionEntry);
@@ -652,7 +693,7 @@ export async function runAgentTurnWithFallback(params: {
     });
     const nextState = applied.nextState;
     if (!applied.updated || !nextState) {
-      return;
+      return undefined;
     }
     params.activeSessionStore[params.sessionKey] = activeSessionEntry;
 
@@ -845,8 +886,10 @@ export async function runAgentTurnWithFallback(params: {
                     ],
                   images: params.opts?.images,
                   imageOrder: params.opts?.imageOrder,
+                  skillsSnapshot: params.followupRun.run.skillsSnapshot,
                   messageProvider: params.followupRun.run.messageProvider,
                   agentAccountId: params.followupRun.run.agentAccountId,
+                  senderIsOwner: params.followupRun.run.senderIsOwner,
                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                   replyOperation: params.replyOperation,
                 });
@@ -1215,12 +1258,12 @@ export async function runAgentTurnWithFallback(params: {
       fallbackModel = fallbackResult.model;
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
-            provider: String(attempt.provider ?? ""),
-            model: String(attempt.model ?? ""),
-            error: String(attempt.error ?? ""),
-            reason: attempt.reason ? String(attempt.reason) : undefined,
+            provider: attempt.provider,
+            model: attempt.model,
+            error: attempt.error,
+            reason: attempt.reason || undefined,
             status: typeof attempt.status === "number" ? attempt.status : undefined,
-            code: attempt.code ? String(attempt.code) : undefined,
+            code: attempt.code || undefined,
           }))
         : [];
 
@@ -1294,7 +1337,9 @@ export async function runAgentTurnWithFallback(params: {
         continue;
       }
       const message = formatErrorMessage(err);
-      const isBilling = isBillingErrorMessage(message);
+      const isBilling = isFallbackSummaryError(err)
+        ? isPureBillingSummary(err)
+        : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);

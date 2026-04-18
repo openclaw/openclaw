@@ -124,6 +124,7 @@ describe("matrix migration snapshots", () => {
         cfg,
         env: process.env,
       });
+      expect(detection.inspectorAvailable).toBe(true);
       expect(detection.plans).toHaveLength(1);
       expect(detection.warnings).toEqual([]);
       expect(
@@ -167,6 +168,7 @@ describe("matrix migration snapshots", () => {
         cfg,
         env: process.env,
       });
+      expect(detection.inspectorAvailable).toBe(false);
       expect(detection.plans).toHaveLength(1);
       expect(detection.warnings).toContain(
         "Legacy Matrix encrypted state was detected, but the Matrix crypto inspector is unavailable.",

@@ -3,6 +3,8 @@
 This directory holds shared channel test helpers used by core and bundled plugin
 tests.
 
+This file adds channel-specific rules on top of `test/helpers/AGENTS.md`.
+
 ## Bundled Plugin Imports
 
 - Core test helpers in this directory must not hardcode repo-relative imports

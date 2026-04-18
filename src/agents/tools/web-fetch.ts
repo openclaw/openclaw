@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SsrFBlockedError, type LookupFn } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
@@ -40,8 +40,8 @@ export { extractReadableContent } from "./web-fetch-utils.js";
 
 const EXTRACT_MODES = ["markdown", "text"] as const;
 
-const DEFAULT_FETCH_MAX_CHARS = 50_000;
-const DEFAULT_FETCH_MAX_RESPONSE_BYTES = 2_000_000;
+const DEFAULT_FETCH_MAX_CHARS = 20_000;
+const DEFAULT_FETCH_MAX_RESPONSE_BYTES = 750_000;
 const FETCH_MAX_RESPONSE_BYTES_MIN = 32_000;
 const FETCH_MAX_RESPONSE_BYTES_MAX = 10_000_000;
 const DEFAULT_FETCH_MAX_REDIRECTS = 3;

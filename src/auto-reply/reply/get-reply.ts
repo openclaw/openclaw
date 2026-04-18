@@ -13,10 +13,11 @@ import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import type { GetReplyOptions } from "../get-reply-options.types.js";
+import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -35,6 +36,7 @@ import { finalizeInboundContext } from "./inbound-context.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
 import { initSessionState } from "./session.js";
+import { resolveStoredModelOverride } from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
@@ -319,6 +321,17 @@ export async function getReplyFromConfig(
     normalizeOptionalString(sessionEntry.modelOverride) ||
     normalizeOptionalString(sessionEntry.providerOverride),
   );
+  const storedModelOverride = resolveStoredModelOverride({
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    parentSessionKey: sessionEntry.parentSessionKey ?? sessionCtx.ParentSessionKey,
+    defaultProvider,
+  });
+  if (storedModelOverride?.model && !hasResolvedHeartbeatModelOverride) {
+    provider = storedModelOverride.provider ?? defaultProvider;
+    model = storedModelOverride.model;
+  }
   if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
     const resolved = resolveModelRefFromString({
       raw: channelModelOverride.model,

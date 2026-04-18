@@ -368,7 +368,7 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     expect(decision.kind).toBe("dispatch");
   });
 
-  it("treats blank destination_caller_id as missing for real self-chat", () => {
+  it("drops is_from_me outbound when destination_caller_id is blank and sender matches chat_identifier (#63980)", () => {
     const echoCache = createSentMessageCache();
     const selfChatCache = createSelfChatCache();
 
@@ -390,7 +390,7 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
       }),
     );
 
-    expect(decision.kind).toBe("dispatch");
+    expect(decision).toEqual({ kind: "drop", reason: "from me" });
   });
 
   it("drops DM false positives even when participant lists include the local handle", () => {
@@ -441,6 +441,7 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
           guid: "p:0/GUID-abc-def",
           sender: "+15551234567",
           chat_identifier: "+15551234567",
+          destination_caller_id: "+15551234567",
           text: "Hi there!",
           is_from_me: true,
           is_group: false,
@@ -475,6 +476,7 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
           guid: "p:0/GUID-media",
           sender: "+15551234567",
           chat_identifier: "+15551234567",
+          destination_caller_id: "+15551234567",
           text: "",
           is_from_me: true,
           is_group: false,
@@ -508,6 +510,7 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
           guid: "p:0/GUID-different-shape",
           sender: "+15551234567",
           chat_identifier: "+15551234567",
+          destination_caller_id: "+15551234567",
           text: "Numeric id echo",
           is_from_me: true,
           is_group: false,
@@ -541,6 +544,7 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
           guid: "p:0/GUID-user-image",
           sender: "+15551234567",
           chat_identifier: "+15551234567",
+          destination_caller_id: "+15551234567",
           text: "",
           is_from_me: true,
           is_group: false,
@@ -569,6 +573,7 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
           id: 123703,
           sender: "+15551234567",
           chat_identifier: "+15551234567",
+          destination_caller_id: "+15551234567",
           text: "Hello",
           created_at: createdAt,
           is_from_me: true,
@@ -603,12 +608,80 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     expect(second).toEqual({ kind: "drop", reason: "self-chat echo" });
   });
 
+  it("drops outbound DM when sender matches chat_identifier but destination_caller_id is absent (#63980)", () => {
+    const selfChatCache = createSelfChatCache();
+
+    const decision = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 10003,
+          sender: "+15550008888",
+          chat_identifier: "+15550008888",
+          text: "outbound",
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "outbound",
+        bodyText: "outbound",
+        selfChatCache,
+      }),
+    );
+
+    expect(decision).toEqual({ kind: "drop", reason: "from me" });
+  });
+
+  it("drops reflected inbound when destination_caller_id is absent (#63980)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const selfChatCache = createSelfChatCache();
+    const createdAt = "2026-03-24T12:00:00.000Z";
+
+    const outbound = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 10003,
+          sender: "+15550008888",
+          chat_identifier: "+15550008888",
+          text: "outbound",
+          created_at: createdAt,
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "outbound",
+        bodyText: "outbound",
+        selfChatCache,
+      }),
+    );
+    expect(outbound).toEqual({ kind: "drop", reason: "from me" });
+
+    vi.advanceTimersByTime(2200);
+
+    const reflection = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 10004,
+          sender: "+15550008888",
+          chat_identifier: "+15550008888",
+          text: "outbound",
+          created_at: createdAt,
+          is_from_me: false,
+          is_group: false,
+        },
+        messageText: "outbound",
+        bodyText: "outbound",
+        selfChatCache,
+      }),
+    );
+
+    expect(reflection).toEqual({ kind: "drop", reason: "self-chat echo" });
+  });
+
   it("normal DM is_from_me=true is still dropped (regression test)", () => {
     const selfChatCache = createSelfChatCache();
 
-    // Normal DM with is_from_me=true: in iMessage, sender is the local user's
-    // handle and chat_identifier is the OTHER person's handle. They differ,
-    // so this is NOT self-chat.
+    // Normal DM with is_from_me=true: sender may be the local handle and
+    // chat_identifier the other party (they differ), so this is NOT self-chat.
     const decision = resolveIMessageInboundDecision(
       createParams({
         message: {

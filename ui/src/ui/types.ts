@@ -321,7 +321,7 @@ export type GatewaySessionsDefaults = {
   contextTokens: number | null;
 };
 
-export type ChatModelOverride = import("./chat-model-ref.ts").ChatModelOverride;
+export type ChatModelOverride = import("./chat-model-ref.types.ts").ChatModelOverride;
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 
@@ -727,6 +727,15 @@ export type ToolsEffectiveGroup =
   import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveGroup;
 export type ToolsEffectiveResult =
   import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveResult;
+
+export type ModelAuthExpiry =
+  import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthExpiry;
+export type ModelAuthStatusProfile =
+  import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusProfile;
+export type ModelAuthStatusProvider =
+  import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusProvider;
+export type ModelAuthStatusResult =
+  import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusResult;
 
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 
