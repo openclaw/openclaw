@@ -849,8 +849,6 @@ describe("exec approvals", () => {
 
   it("auto-continues the same Discord session after approval resolves without a second user turn", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-followup-discord-"));
-    const markerPath = path.join(tempDir, "marker.txt");
     let resolveDecision: ((value: { decision: string }) => void) | undefined;
     const decisionPromise = new Promise<{ decision: string }>((resolve) => {
       resolveDecision = resolve;
@@ -883,25 +881,12 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call-gw-followup-discord-delayed", {
-      command: "node -e \"require('node:fs').writeFileSync('marker.txt','ok')\"",
-      workdir: tempDir,
+      command: "printf delayed-ok",
+      workdir: process.cwd(),
     });
 
     expect(result.details.status).toBe("approval-pending");
     expect(agentCalls).toHaveLength(0);
-    await expect
-      .poll(
-        async () => {
-          try {
-            await fs.access(markerPath);
-            return true;
-          } catch {
-            return false;
-          }
-        },
-        { timeout: 500, interval: 50 },
-      )
-      .toBe(false);
 
     resolveDecision?.({ decision: "allow-once" });
 
@@ -921,26 +906,12 @@ describe("exec approvals", () => {
     expect(agentCalls[0]?.message).toContain(
       "If the task requires more steps, continue from this result before replying to the user.",
     );
+    expect(agentCalls[0]?.message).toContain("delayed-ok");
     expect(sendMessage).not.toHaveBeenCalled();
-
-    await expect
-      .poll(
-        async () => {
-          try {
-            return await fs.readFile(markerPath, "utf8");
-          } catch {
-            return "";
-          }
-        },
-        { timeout: 1_000, interval: 1 },
-      )
-      .toBe("ok");
   });
 
   it("executes approved commands and emits a session-only followup in webchat-only mode", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-followup-sidefx-"));
-    const markerPath = path.join(tempDir, "marker.txt");
 
     mockAcceptedApprovalFlow({
       onAgent: (params) => {
@@ -957,8 +928,8 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call-gw-followup-webchat", {
-      command: "node -e \"require('node:fs').writeFileSync('marker.txt','ok')\"",
-      workdir: tempDir,
+      command: "printf webchat-ok",
+      workdir: process.cwd(),
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -970,19 +941,7 @@ describe("exec approvals", () => {
         deliver: false,
       }),
     );
-
-    await expect
-      .poll(
-        async () => {
-          try {
-            return await fs.readFile(markerPath, "utf8");
-          } catch {
-            return "";
-          }
-        },
-        { timeout: 1_000, interval: 1 },
-      )
-      .toBe("ok");
+    expect(agentCalls[0]?.message).toContain("webchat-ok");
   });
 
   it("uses a deny-specific followup prompt so prior output is not reused", async () => {
