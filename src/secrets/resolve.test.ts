@@ -237,6 +237,24 @@ describe("secret ref resolver", () => {
     expect(value).toBe("plain-secret");
   });
 
+  itPosix("rejects polluted single-value exec output when jsonOnly is false", async () => {
+    const root = await createCaseDir("exec-plain-polluted");
+    const scriptPath = path.join(root, "resolver-plain-polluted.sh");
+    await writeSecureFile(
+      scriptPath,
+      [
+        "#!/bin/sh",
+        "printf '%s\\n' '[plugins][lcm]Pluginloaded(enabled=true)'",
+        "printf '%s\\n' 'full'",
+      ].join("\n"),
+      0o700,
+    );
+
+    await expect(resolveExecSecret(scriptPath, { jsonOnly: false })).rejects.toThrow(
+      "returned noisy stdout",
+    );
+  });
+
   itPosix(
     "tolerates stdin write errors when exec provider exits before consuming a large request",
     async () => {

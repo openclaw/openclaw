@@ -572,7 +572,18 @@ function parseExecValues(params: {
     try {
       parsed = JSON.parse(trimmed) as unknown;
     } catch {
-      return { [params.ids[0]]: trimmed };
+      const nonEmptyLines = params.stdout
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+      if (nonEmptyLines.length !== 1) {
+        throw providerResolutionError({
+          source: "exec",
+          provider: params.providerName,
+          message: `Exec provider "${params.providerName}" returned noisy stdout; emit a single plain-text line or JSON.`,
+        });
+      }
+      return { [params.ids[0]]: nonEmptyLines[0] };
     }
   } else {
     try {
