@@ -65,12 +65,13 @@ export function resolvePersistCandidateForWrite(params: {
   runtimeConfig: unknown;
   sourceConfig: unknown;
   nextConfig: unknown;
+  rootAuthoredConfig?: unknown;
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
   const projectedSource = projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig);
   const persisted = applyMergePatch(projectedSource, patch);
   return preserveRootSchemaUri({
-    sourceConfig: params.sourceConfig,
+    rootAuthoredConfig: params.rootAuthoredConfig ?? params.sourceConfig,
     nextConfig: params.nextConfig,
     persistedCandidate: persisted,
   });
@@ -88,14 +89,14 @@ function hasOwnRootSchemaKey(value: unknown): boolean {
 }
 
 function preserveRootSchemaUri(params: {
-  sourceConfig: unknown;
+  rootAuthoredConfig: unknown;
   nextConfig: unknown;
   persistedCandidate: unknown;
 }): unknown {
   if (hasOwnRootSchemaKey(params.nextConfig)) {
     return params.persistedCandidate;
   }
-  const sourceSchema = readRootSchemaUri(params.sourceConfig);
+  const sourceSchema = readRootSchemaUri(params.rootAuthoredConfig);
   if (sourceSchema === undefined || !isRecord(params.persistedCandidate)) {
     return params.persistedCandidate;
   }

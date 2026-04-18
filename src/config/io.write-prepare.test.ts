@@ -434,6 +434,28 @@ describe("config io write prepare", () => {
     expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
   });
 
+  it("does not preserve include-only $schema into the root persisted candidate", () => {
+    const sourceConfig = {
+      $schema: "https://openclaw.ai/config-from-include.json",
+      gateway: { mode: "local" },
+    };
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: sourceConfig,
+      sourceConfig,
+      rootAuthoredConfig: {
+        $include: "./extra.json5",
+        gateway: { mode: "local" },
+      },
+      nextConfig: {
+        gateway: { mode: "local", port: 18789 },
+      },
+    }) as Record<string, unknown>;
+
+    expect(persisted).not.toHaveProperty("$schema");
+    expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+  });
+
   it("does not restore root $schema when the next config explicitly clears it", () => {
     const sourceConfig = {
       $schema: "https://openclaw.ai/config.json",
