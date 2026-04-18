@@ -2912,6 +2912,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Provider map keyed by provider ID containing connection/auth settings and concrete model definitions. Use stable provider keys so references from agents and tooling remain portable across environments.",
           },
+          pricing: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+                title: "Model Pricing Enabled",
+                description:
+                  "Enable or disable the model-pricing bootstrap fetch (default: true). Set to false to skip the network call entirely, avoiding a ~30 s timeout on networks that cannot reach the pricing endpoint.",
+              },
+            },
+            additionalProperties: false,
+            title: "Model Pricing",
+            description:
+              "Controls the background model-pricing bootstrap that fetches live per-token costs from the OpenRouter catalog at gateway startup.",
+          },
         },
         additionalProperties: false,
         title: "Models",
@@ -25286,6 +25301,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "models.mode": {
       label: "Model Catalog Mode",
       help: 'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json baseUrl values, while apiKey values are preserved only when the provider is not SecretRef-managed in current config/auth-profile context; SecretRef-managed providers refresh apiKey from current source markers, and matching model contextWindow/maxTokens use the higher value between explicit and implicit entries.',
+      tags: ["models"],
+    },
+    "models.pricing": {
+      label: "Model Pricing",
+      help: "Controls the background model-pricing bootstrap that fetches live per-token costs from the OpenRouter catalog at gateway startup.",
+      tags: ["models"],
+    },
+    "models.pricing.enabled": {
+      label: "Model Pricing Enabled",
+      help: "Enable or disable the model-pricing bootstrap fetch (default: true). Set to false to skip the network call entirely, avoiding a ~30 s timeout on networks that cannot reach the pricing endpoint.",
       tags: ["models"],
     },
     "models.providers": {

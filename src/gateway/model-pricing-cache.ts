@@ -431,6 +431,10 @@ export function startGatewayModelPricingRefresh(params: {
   config: OpenClawConfig;
   fetchImpl?: typeof fetch;
 }): () => void {
+  if (params.config.models?.pricing?.enabled === false) {
+    log.info("disabled via config; skipping bootstrap");
+    return () => {};
+  }
   void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
     log.warn(`pricing bootstrap failed: ${String(error)}`);
   });

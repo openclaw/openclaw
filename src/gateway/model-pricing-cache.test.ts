@@ -17,6 +17,7 @@ import {
   collectConfiguredModelPricingRefs,
   getCachedGatewayModelPricing,
   refreshGatewayModelPricingCache,
+  startGatewayModelPricingRefresh,
 } from "./model-pricing-cache.js";
 
 describe("model-pricing-cache", () => {
@@ -239,6 +240,43 @@ describe("model-pricing-cache", () => {
       output: 2,
       cacheRead: 0,
       cacheWrite: 0,
+    });
+  });
+
+  describe("startGatewayModelPricingRefresh", () => {
+    it("runs the bootstrap by default when pricing config is absent", () => {
+      const fetchImpl = vi.fn();
+      const config = {
+        agents: { defaults: { model: "openai/gpt-5.4" } },
+      } as unknown as OpenClawConfig;
+
+      const stop = startGatewayModelPricingRefresh({ config, fetchImpl });
+      expect(fetchImpl).toHaveBeenCalled();
+      stop();
+    });
+
+    it("runs the bootstrap when models.pricing.enabled is true", () => {
+      const fetchImpl = vi.fn();
+      const config = {
+        agents: { defaults: { model: "openai/gpt-5.4" } },
+        models: { pricing: { enabled: true } },
+      } as unknown as OpenClawConfig;
+
+      const stop = startGatewayModelPricingRefresh({ config, fetchImpl });
+      expect(fetchImpl).toHaveBeenCalled();
+      stop();
+    });
+
+    it("skips bootstrap when models.pricing.enabled is false", () => {
+      const fetchImpl = vi.fn();
+      const config = {
+        agents: { defaults: { model: "openai/gpt-5.4" } },
+        models: { pricing: { enabled: false } },
+      } as unknown as OpenClawConfig;
+
+      const stop = startGatewayModelPricingRefresh({ config, fetchImpl });
+      expect(fetchImpl).not.toHaveBeenCalled();
+      stop();
     });
   });
 });

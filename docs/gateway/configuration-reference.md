@@ -2561,6 +2561,7 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
 ### Provider field details
 
 - `models.mode`: provider catalog behavior (`merge` or `replace`).
+- `models.pricing.enabled`: enable or disable the background model-pricing bootstrap that fetches live per-token costs at gateway startup (default: `true`). Set to `false` to skip the fetch entirely, useful for offline setups or restricted networks where the pricing endpoint is unreachable. See [#53639](https://github.com/openclaw/openclaw/issues/53639).
 - `models.providers`: custom provider map keyed by provider id.
 - `models.providers.*.api`: request adapter (`openai-completions`, `openai-responses`, `anthropic-messages`, `google-generative-ai`, etc).
 - `models.providers.*.apiKey`: provider credential (prefer SecretRef/env substitution).

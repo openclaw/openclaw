@@ -830,6 +830,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Skips upstream TLS certificate verification. Use only for controlled development environments.",
   "models.providers.*.request.allowPrivateNetwork":
     "When true, allow HTTPS to the model base URL when DNS resolves to private, CGNAT, or similar ranges, via the provider HTTP fetch guard (fetchWithSsrFGuard). OpenAI Responses WebSocket reuses request for headers/TLS but does not use that fetch SSRF path. Use only for operator-controlled self-hosted OpenAI-compatible endpoints (LAN, overlay, split DNS). Default is false.",
+  "models.pricing":
+    "Controls the background model-pricing bootstrap that fetches live per-token costs from the OpenRouter catalog at gateway startup.",
+  "models.pricing.enabled":
+    "Enable or disable the model-pricing bootstrap fetch (default: true). Set to false to skip the network call entirely, avoiding a ~30 s timeout on networks that cannot reach the pricing endpoint.",
   "models.providers.*.models":
     "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",

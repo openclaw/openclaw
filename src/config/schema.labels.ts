@@ -478,6 +478,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "acp.runtime.installCommand": "ACP Runtime Install Command",
   models: "Models",
   "models.mode": "Model Catalog Mode",
+  "models.pricing": "Model Pricing",
+  "models.pricing.enabled": "Model Pricing Enabled",
   "models.providers": "Model Providers",
   "models.providers.*.baseUrl": "Model Provider Base URL",
   "models.providers.*.apiKey": "Model Provider API Key", // pragma: allowlist secret
