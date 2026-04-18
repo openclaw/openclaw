@@ -6,9 +6,14 @@ import {
   type InvokeOpenClawHook,
 } from "./hooks-adapter.js";
 
-// Minimal HookEntry factory — we only touch `metadata.events` in the
-// adapter, so the rest is filler to satisfy the type.
-function makeEntry(name: string, events: string[]): HookEntry {
+// Minimal HookEntry factory — we only touch `metadata.events` and
+// optionally `invocation` in the adapter, so the rest is filler to
+// satisfy the type.
+function makeEntry(
+  name: string,
+  events: string[],
+  opts?: { enabled?: boolean },
+): HookEntry {
   return {
     hook: {
       name,
@@ -20,6 +25,9 @@ function makeEntry(name: string, events: string[]): HookEntry {
     },
     frontmatter: {},
     metadata: { events },
+    ...(opts?.enabled !== undefined
+      ? { invocation: { enabled: opts.enabled } }
+      : {}),
   };
 }
 
@@ -106,6 +114,39 @@ describe("buildSdkHooks", () => {
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke.mock.calls[0]?.[0]?.sdkEvent).toBe("UserPromptSubmit");
     expect(invoke.mock.calls[0]?.[0]?.entry).toBe(entries[0]);
+  });
+
+  it("skips entries with invocation.enabled === false and warns", () => {
+    const invoke = vi.fn<InvokeOpenClawHook>(async () => undefined);
+    const warn = vi.fn();
+    const entries = [
+      makeEntry("a", ["session:start"], { enabled: false }),
+      makeEntry("b", ["session:start"]),
+    ];
+
+    const result = buildSdkHooks({ entries, invoke, warn });
+
+    // Only the enabled entry should register a callback.
+    expect(result.SessionStart?.[0]?.hooks).toHaveLength(1);
+    // Warn should mention the skipped entry count.
+    const msgs = warn.mock.calls.map((c) => c[0]);
+    expect(msgs.some((m) => /Skipped 1 hook entry/i.test(m))).toBe(true);
+  });
+
+  it("treats invocation.enabled === true and missing invocation as enabled", () => {
+    const invoke = vi.fn<InvokeOpenClawHook>(async () => undefined);
+    const warn = vi.fn();
+    const entries = [
+      makeEntry("a", ["session:start"], { enabled: true }),
+      makeEntry("b", ["session:start"]),
+    ];
+
+    const result = buildSdkHooks({ entries, invoke, warn });
+
+    expect(result.SessionStart?.[0]?.hooks).toHaveLength(2);
+    // No "Skipped" warning when nothing was disabled.
+    const msgs = warn.mock.calls.map((c) => c[0]);
+    expect(msgs.some((m) => /Skipped/i.test(m))).toBe(false);
   });
 
   it("exports an event map covering every SDK event OpenClaw cares about", () => {

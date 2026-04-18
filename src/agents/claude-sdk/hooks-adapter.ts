@@ -81,8 +81,20 @@ export function buildSdkHooks(
   const warn = params.warn ?? (() => {});
   const grouped = new Map<HookEvent, HookCallback[]>();
   const droppedEvents = new Set<string>();
+  let disabledCount = 0;
 
   for (const entry of entries) {
+    // Respect the per-entry enable policy. `HookInvocationPolicy.enabled`
+    // defaults to true when frontmatter omits it (see
+    // `resolveHookInvocationPolicy`), so `enabled === false` here is an
+    // explicit opt-out and we must not register the hook with the SDK.
+    // Without this check, `enabled: false` in a HOOK.md frontmatter was
+    // silently ignored on the claude-sdk runtime while pi-embedded would
+    // have treated it as disabled — a correctness regression.
+    if (entry.invocation && entry.invocation.enabled === false) {
+      disabledCount += 1;
+      continue;
+    }
     const events = entry.metadata?.events ?? [];
     for (const ev of events) {
       const sdkEvent = OPENCLAW_TO_SDK_EVENT[ev];
@@ -114,6 +126,11 @@ export function buildSdkHooks(
     const names = [...droppedEvents].toSorted((a, b) => a.localeCompare(b)).join(", ");
     warn(
       `[claude-sdk hooks] Dropped ${droppedEvents.size} OpenClaw hook event(s) with no SDK equivalent: ${names}`,
+    );
+  }
+  if (disabledCount > 0) {
+    warn(
+      `[claude-sdk hooks] Skipped ${disabledCount} hook entr${disabledCount === 1 ? "y" : "ies"} with invocation.enabled === false`,
     );
   }
 

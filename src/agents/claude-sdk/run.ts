@@ -53,6 +53,7 @@ import { loadWorkspaceHookEntries } from "../../hooks/workspace.js";
 import { importFileModule, resolveFunctionModuleExport } from "../../hooks/module-loader.js";
 import type { HookEntry } from "../../hooks/types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { collectSdkDisallowedTools } from "./sdk-tool-policy.js";
 
 const log = createSubsystemLogger("agents/claude-sdk");
 
@@ -499,6 +500,21 @@ export async function runClaudeSdkAgent(
     ? ([] as string[])
     : (params.toolsAllow && params.toolsAllow.length > 0 ? params.toolsAllow : undefined);
 
+  // Effective deny list handed to the SDK. This closes a gap where the
+  // claude-sdk runtime was ignoring `tools.deny` and
+  // `tools.byProvider.<provider>.deny` for SDK built-ins (Bash, Read,
+  // Edit, Grep, Glob, ...). Native OpenClaw tools go through
+  // `createOpenClawCodingTools()` which already applies the deny policy,
+  // but the SDK offers its built-in inventory independently — without
+  // this, `tools.deny: ["Bash"]` had no effect under claude-sdk.
+  //
+  // We union:
+  //   * config.tools.deny                         (global)
+  //   * config.tools.byProvider[provider].deny    (per-provider, anthropic)
+  //   * agents.list[<id>].tools.deny              (agent scope)
+  //   * agents.list[<id>].tools.byProvider[provider].deny
+  const disallowedTools = collectSdkDisallowedTools(params);
+
   const onAgentEvent = params.onAgentEvent;
   const onPartialReply = params.onPartialReply;
   const onAssistantMessageStart = params.onAssistantMessageStart;
@@ -541,6 +557,7 @@ export async function runClaudeSdkAgent(
         maxTurns,
         systemPrompt: systemPromptOption,
         ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
+        ...(disallowedTools.length > 0 ? { disallowedTools } : {}),
         ...(thinkBudget !== undefined ? { maxThinkingTokens: thinkBudget } : {}),
         ...(nativeMcpServers ? { mcpServers: nativeMcpServers } : {}),
         ...(sdkHooks ? { hooks: sdkHooks } : {}),
