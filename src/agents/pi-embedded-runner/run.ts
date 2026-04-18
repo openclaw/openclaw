@@ -114,6 +114,7 @@ import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import {
+  resolveCurrentRunAuthProfile,
   resolveEffectiveRuntimeModel,
   resolveHookModelSelection,
   resolvePreferredRunAuthProfile,
@@ -682,6 +683,10 @@ export async function runEmbeddedPiAgent(
             resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
           }
 
+          const preAttemptAuthProfile = resolveCurrentRunAuthProfile({
+            activeAuthProfileId: lastProfileId,
+            lockedProfileId,
+          });
           const attempt = await runEmbeddedAttemptWithBackend({
             sessionId: params.sessionId,
             sessionKey: resolvedSessionKey,
@@ -732,8 +737,8 @@ export async function runEmbeddedPiAgent(
               params.config,
             ),
             resolvedApiKey: resolvedStreamApiKey,
-            authProfileId: lastProfileId,
-            authProfileIdSource: lockedProfileId ? "user" : "auto",
+            authProfileId: preAttemptAuthProfile.authProfileId,
+            authProfileIdSource: preAttemptAuthProfile.authProfileIdSource,
             initialReplayState: accumulatedReplayState,
             authStorage,
             modelRegistry,
@@ -854,6 +859,10 @@ export async function runEmbeddedPiAgent(
             );
             continue;
           }
+          const postAttemptAuthProfile = resolveCurrentRunAuthProfile({
+            activeAuthProfileId: lastProfileId,
+            lockedProfileId,
+          });
           const requestedSelection = shouldSwitchToLiveModel({
             cfg: params.config,
             sessionKey: resolvedSessionKey,
@@ -862,8 +871,8 @@ export async function runEmbeddedPiAgent(
             defaultModel: DEFAULT_MODEL,
             currentProvider: provider,
             currentModel: modelId,
-            currentAuthProfileId: preferredProfileId,
-            currentAuthProfileIdSource: preferredProfileIdSource,
+            currentAuthProfileId: postAttemptAuthProfile.authProfileId,
+            currentAuthProfileIdSource: postAttemptAuthProfile.authProfileIdSource,
           });
           if (requestedSelection && canRestartForLiveSwitch) {
             await clearLiveModelSwitchPending({

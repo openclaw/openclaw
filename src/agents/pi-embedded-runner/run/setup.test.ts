@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveHookModelSelection, resolvePreferredRunAuthProfile } from "./setup.js";
+import {
+  resolveCurrentRunAuthProfile,
+  resolveHookModelSelection,
+  resolvePreferredRunAuthProfile,
+} from "./setup.js";
 
 describe("resolveHookModelSelection", () => {
   it("returns authProfileOverride from before_model_resolve", async () => {
@@ -79,6 +83,31 @@ describe("resolvePreferredRunAuthProfile", () => {
     ).toEqual({
       preferredProfileId: "openai:user-pin",
       preferredProfileIdSource: "user",
+    });
+  });
+});
+
+describe("resolveCurrentRunAuthProfile", () => {
+  it("tracks the active rotated profile instead of a stale preferred profile", () => {
+    expect(
+      resolveCurrentRunAuthProfile({
+        activeAuthProfileId: "openai:rotated",
+      }),
+    ).toEqual({
+      authProfileId: "openai:rotated",
+      authProfileIdSource: "auto",
+    });
+  });
+
+  it("preserves user source for locked profiles", () => {
+    expect(
+      resolveCurrentRunAuthProfile({
+        activeAuthProfileId: "openai:user-pin",
+        lockedProfileId: "openai:user-pin",
+      }),
+    ).toEqual({
+      authProfileId: "openai:user-pin",
+      authProfileIdSource: "user",
     });
   });
 });

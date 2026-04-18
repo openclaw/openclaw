@@ -133,6 +133,27 @@ export function resolvePreferredRunAuthProfile(params: {
   };
 }
 
+export function resolveCurrentRunAuthProfile(params: {
+  activeAuthProfileId?: string;
+  lockedProfileId?: string;
+}): {
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+} {
+  const authProfileId = params.activeAuthProfileId?.trim() || undefined;
+  if (!authProfileId) {
+    return {
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    };
+  }
+
+  return {
+    authProfileId,
+    authProfileIdSource: params.lockedProfileId ? "user" : "auto",
+  };
+}
+
 export function resolveEffectiveRuntimeModel(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
