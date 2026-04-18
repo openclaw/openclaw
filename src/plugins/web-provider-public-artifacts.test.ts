@@ -11,25 +11,26 @@ import {
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "./web-provider-public-artifacts.explicit.js";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function supportsSecretRefWebSearchApiKey(
   plugin: ReturnType<typeof loadPluginManifestRegistry>["plugins"][number],
 ): boolean {
-  const webSearch = plugin.configSchema?.properties?.webSearch;
-  if (!webSearch || typeof webSearch !== "object" || Array.isArray(webSearch)) {
+  const configProperties = isRecord(plugin.configSchema?.["properties"])
+    ? plugin.configSchema["properties"]
+    : undefined;
+  const webSearch = configProperties?.["webSearch"];
+  if (!isRecord(webSearch)) {
     return false;
   }
-  const properties =
-    "properties" in webSearch &&
-    webSearch.properties &&
-    typeof webSearch.properties === "object" &&
-    !Array.isArray(webSearch.properties)
-      ? webSearch.properties
-      : undefined;
-  const apiKey = properties?.apiKey;
-  if (!apiKey || typeof apiKey !== "object" || Array.isArray(apiKey)) {
+  const properties = isRecord(webSearch["properties"]) ? webSearch["properties"] : undefined;
+  const apiKey = properties?.["apiKey"];
+  if (!isRecord(apiKey)) {
     return false;
   }
-  const typeValue = "type" in apiKey ? apiKey.type : undefined;
+  const typeValue = apiKey["type"];
   return Array.isArray(typeValue) && typeValue.includes("object");
 }
 
