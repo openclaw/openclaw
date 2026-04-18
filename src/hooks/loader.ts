@@ -259,7 +259,7 @@ export async function loadInternalHooks(
       if (!handler) {
         log.error(
           `Handler '${safeLogValue(exportName)}' from ${safeLogValue(modulePath)} is not a function`,
-          );
+        );
         continue;
       }
 
