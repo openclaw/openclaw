@@ -492,7 +492,7 @@ function resolveExportedExtensionApiAliasMap(
   }
   const aliasMap: Record<string, string> = {};
   for (const extensionId of readExportedExtensionApiSubpathsFromPackageRoot(packageRoot) ?? []) {
-    const packageName = `openclaw/extensions/${extensionId}/api`;
+    const packageName = ["openclaw", "extensions", extensionId, "api"].join("/");
     for (const kind of orderedKinds) {
       if (kind === "dist") {
         const candidate = path.join(packageRoot, "dist", "extensions", extensionId, "api.js");
