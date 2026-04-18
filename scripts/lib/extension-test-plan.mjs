@@ -197,11 +197,12 @@ function mergeTestPlans(plans) {
   }
 
   const planGroups = [...groupsByConfig.values()]
-    .map((group) => ({
-      ...group,
-      extensionIds: group.extensionIds.toSorted((left, right) => left.localeCompare(right)),
-      roots: [...new Set(group.roots)],
-    }))
+    .map((group) =>
+      Object.assign({}, group, {
+        extensionIds: group.extensionIds.toSorted((left, right) => left.localeCompare(right)),
+        roots: [...new Set(group.roots)],
+      }),
+    )
     .toSorted((left, right) => left.config.localeCompare(right.config));
 
   return {
@@ -279,6 +280,7 @@ export function createExtensionTestShards(params = {}) {
   return shards
     .map((shard, index) =>
       Object.assign(
+        {},
         { index, checkName: `checks-node-extensions-shard-${index + 1}` },
         mergeTestPlans(shard.plans),
       ),

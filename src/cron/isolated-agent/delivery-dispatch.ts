@@ -514,10 +514,9 @@ export async function dispatchCronDelivery(
             return p;
           }
           const normalized = normalizeSilentReplyText(p.text);
-          return {
-            ...p,
+          return Object.assign({}, p, {
             text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
-          };
+          });
         })
         .filter((p) => hasReplyPayloadContent(p, { trimText: true }));
       if (payloadsForDelivery.length === 0) {
