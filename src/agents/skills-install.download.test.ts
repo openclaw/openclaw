@@ -202,22 +202,27 @@ describe("installDownloadSpec extraction safety", () => {
   });
 
   it("allows relative targetDir inside the per-skill tools root", async () => {
-    mockArchiveResponse(new Uint8Array(SAFE_ZIP_BUFFER));
+    mockArchiveResponse(new TextEncoder().encode("payload"));
     const entry = buildEntry("relative-targetdir");
 
-    const result = await installDownloadSkill({
-      name: "relative-targetdir",
-      url: "https://example.invalid/good.zip",
-      archive: "zip",
-      targetDir: "runtime",
+    const result = await installDownloadSpec({
+      entry,
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "https://example.invalid/payload.bin",
+        extract: false,
+        targetDir: "runtime",
+      },
+      timeoutMs: 30_000,
     });
     expect(result.ok).toBe(true);
     expect(
       await fs.readFile(
-        path.join(resolveSkillToolsRootDir(entry), "runtime", "hello.txt"),
+        path.join(resolveSkillToolsRootDir(entry), "runtime", "payload.bin"),
         "utf-8",
       ),
-    ).toBe("hi");
+    ).toBe("payload");
   });
 
   it.runIf(process.platform !== "win32")(
