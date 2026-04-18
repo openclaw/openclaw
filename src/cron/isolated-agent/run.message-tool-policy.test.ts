@@ -47,6 +47,19 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(true);
   }
 
+  async function expectMessageToolEnabledForPlan(plan: {
+    requested: boolean;
+    mode: "none" | "announce";
+    channel?: string;
+    to?: string;
+  }) {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(plan);
+    await runCronIsolatedAgentTurn(makeParams());
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
+  }
+
   beforeEach(() => {
     previousFastTestEnv = clearFastTestEnv();
     resetRunCronIsolatedAgentTurnHarness();
@@ -63,8 +76,8 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     restoreFastTestEnv(previousFastTestEnv);
   });
 
-  it('disables the message tool when delivery.mode is "none"', async () => {
-    await expectMessageToolDisabledForPlan({
+  it('keeps the message tool enabled when delivery.mode is "none"', async () => {
+    await expectMessageToolEnabledForPlan({
       requested: false,
       mode: "none",
     });
