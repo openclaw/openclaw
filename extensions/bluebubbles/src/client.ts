@@ -42,11 +42,19 @@ const DEFAULT_MULTIPART_TIMEOUT_MS = 60_000;
  *     BB Server ships the header-auth change for #66869.
  */
 export interface BlueBubblesAuthStrategy {
+  /**
+   * Stable identifier for this strategy. Used by the client cache fingerprint
+   * so two clients for the same account + credential that differ only in auth
+   * strategy don't silently collapse onto the same cached instance.
+   * (Greptile #68234 P2)
+   */
+  readonly id: string;
   decorate(req: { url: URL; init: RequestInit }): void;
 }
 
 export function blueBubblesQueryStringAuth(password: string): BlueBubblesAuthStrategy {
   return {
+    id: "query-string",
     decorate({ url }) {
       url.searchParams.set("password", password);
     },
@@ -58,6 +66,7 @@ export function blueBubblesHeaderAuth(
   headerName = "X-BB-Password",
 ): BlueBubblesAuthStrategy {
   return {
+    id: `header:${headerName}`,
     decorate({ init }) {
       const headers = new Headers(init.headers ?? undefined);
       headers.set(headerName, password);
@@ -265,6 +274,9 @@ export class BlueBubblesClient {
    * Multipart POST (attachment send, group icon set). The caller supplies the
    * boundary and body parts; the client handles URL construction, auth, and
    * SSRF policy. Timeout defaults to 60s because uploads can be large.
+   *
+   * Auth-decorated headers from `prepared.init` are forwarded via `extraHeaders`
+   * so header-auth strategies keep working on multipart paths. (Greptile #68234 P1)
    */
   async requestMultipart(params: {
     path: string;
@@ -283,6 +295,7 @@ export class BlueBubblesClient {
       parts: params.parts,
       timeoutMs: params.timeoutMs ?? DEFAULT_MULTIPART_TIMEOUT_MS,
       ssrfPolicy: this.ssrfPolicy,
+      extraHeaders: prepared.init.headers,
     });
   }
 
@@ -387,6 +400,13 @@ export class BlueBubblesClient {
     });
     const clientSsrfPolicy = this.ssrfPolicy;
     const effectiveTimeoutMs = params.timeoutMs ?? this.defaultTimeoutMs;
+    // Auth-decorated headers from buildAuthorizedRequest (for header-auth
+    // strategies) must flow through the fetchImpl callback too, otherwise
+    // the runtime might dispatch with only its own default headers. Merge
+    // prepared.init.headers with any headers the runtime supplies; runtime
+    // headers (typically Range for partial reads) win on conflict.
+    // (Greptile #68234 P1)
+    const preparedHeaders = prepared.init.headers;
 
     try {
       const fetched = await getBlueBubblesRuntime().channel.media.fetchRemoteMedia({
@@ -394,13 +414,19 @@ export class BlueBubblesClient {
         filePathHint: params.attachment.transferName ?? params.attachment.guid ?? "attachment",
         maxBytes,
         ssrfPolicy: clientSsrfPolicy,
-        fetchImpl: async (input, init) =>
-          await blueBubblesFetchWithTimeout(
+        fetchImpl: async (input, init) => {
+          const mergedHeaders = new Headers(preparedHeaders);
+          if (init?.headers) {
+            const runtimeHeaders = new Headers(init.headers);
+            runtimeHeaders.forEach((value, key) => mergedHeaders.set(key, value));
+          }
+          return await blueBubblesFetchWithTimeout(
             resolveRequestUrl(input),
-            { ...init, method: init?.method ?? "GET" },
+            { ...init, method: init?.method ?? "GET", headers: mergedHeaders },
             effectiveTimeoutMs,
             clientSsrfPolicy,
-          ),
+          );
+        },
       });
       return {
         buffer: new Uint8Array(fetched.buffer),
@@ -423,13 +449,20 @@ export class BlueBubblesClient {
 
 type CachedClientEntry = {
   client: BlueBubblesClient;
-  /** Fingerprint of {baseUrl, password} — cache hit requires full match. */
+  /** Fingerprint of {baseUrl, password, authStrategy.id} — cache hit requires full match. */
   fingerprint: string;
 };
 const clientFingerprints = new Map<string, CachedClientEntry>();
 
-function buildClientFingerprint(params: { baseUrl: string; password: string }): string {
-  return `${params.baseUrl}|${params.password}`;
+function buildClientFingerprint(params: {
+  baseUrl: string;
+  password: string;
+  authStrategyId: string;
+}): string {
+  // authStrategyId is included so two clients for the same account + credential
+  // that differ only in auth strategy do not silently share a cached instance.
+  // (Greptile #68234 P2)
+  return `${params.baseUrl}|${params.password}|${params.authStrategyId}`;
 }
 
 /**
@@ -447,9 +480,12 @@ export function createBlueBubblesClient(opts: BlueBubblesClientOptions = {}): Bl
     password: opts.password,
   });
   const cacheKey = resolved.accountId || DEFAULT_ACCOUNT_ID;
+  const authFactory = opts.authStrategy ?? blueBubblesQueryStringAuth;
+  const authStrategy = authFactory(resolved.password);
   const fingerprint = buildClientFingerprint({
     baseUrl: resolved.baseUrl,
     password: resolved.password,
+    authStrategyId: authStrategy.id,
   });
   const cached = clientFingerprints.get(cacheKey);
   if (cached && cached.fingerprint === fingerprint) {
@@ -461,7 +497,6 @@ export function createBlueBubblesClient(opts: BlueBubblesClientOptions = {}): Bl
     allowPrivateNetwork: resolved.allowPrivateNetwork,
     allowPrivateNetworkConfig: resolved.allowPrivateNetworkConfig,
   });
-  const authFactory = opts.authStrategy ?? blueBubblesQueryStringAuth;
 
   const client = new BlueBubblesClient({
     accountId: cacheKey,
@@ -471,7 +506,7 @@ export function createBlueBubblesClient(opts: BlueBubblesClientOptions = {}): Bl
     trustedHostname: policyResult.trustedHostname,
     trustedHostnameIsPrivate: policyResult.trustedHostnameIsPrivate,
     defaultTimeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    authStrategy: authFactory(resolved.password),
+    authStrategy,
   });
   clientFingerprints.set(cacheKey, { client, fingerprint });
   return client;

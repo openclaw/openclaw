@@ -191,6 +191,53 @@ describe("auth strategies", () => {
     const headers = new Headers((calledInit as RequestInit | undefined)?.headers);
     expect(headers.get("X-BB-Password")).toBe("s3cret");
   });
+
+  it("header-auth headers flow through requestMultipart (Greptile #68234 P1)", async () => {
+    // Before this fix, requestMultipart discarded prepared.init entirely
+    // and postMultipartFormData built its own hardcoded Content-Type header.
+    // Under header-auth that silently omitted the auth header on every
+    // attachment upload and group-icon set.
+    const client = createBlueBubblesClient({
+      serverUrl: "http://localhost:1234",
+      password: "s3cret",
+      authStrategy: blueBubblesHeaderAuth,
+    });
+    mockFetch.mockImplementation(() => Promise.resolve(new Response("{}", { status: 200 })));
+    await client.requestMultipart({
+      path: "/api/v1/chat/chat-guid/icon",
+      boundary: "----boundary",
+      parts: [new Uint8Array([1, 2, 3])],
+    });
+    const [, calledInit] = mockFetch.mock.calls[0] ?? [];
+    const headers = new Headers((calledInit as RequestInit | undefined)?.headers);
+    expect(headers.get("X-BB-Password")).toBe("s3cret");
+    // And the multipart Content-Type must still be set correctly.
+    expect(headers.get("Content-Type")).toContain("multipart/form-data; boundary=----boundary");
+  });
+
+  it("header-auth headers flow through downloadAttachment fetchImpl (Greptile #68234 P1)", async () => {
+    // Before this fix, downloadAttachment built prepared.init.headers with
+    // the auth header but never forwarded it to the fetchImpl callback,
+    // so header-auth would silently 401 on attachment downloads.
+    const client = createBlueBubblesClient({
+      serverUrl: "http://localhost:1234",
+      password: "s3cret",
+      authStrategy: blueBubblesHeaderAuth,
+    });
+    mockFetch.mockImplementation(() =>
+      Promise.resolve(
+        new Response(Buffer.from([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+      ),
+    );
+    await client.downloadAttachment({ attachment: { guid: "att-1", mimeType: "image/png" } });
+    // fetchRemoteMediaMock delegates to fetchImpl, which calls mockFetch.
+    const [, calledInit] = mockFetch.mock.calls[0] ?? [];
+    const headers = new Headers((calledInit as RequestInit | undefined)?.headers);
+    expect(headers.get("X-BB-Password")).toBe("s3cret");
+  });
 });
 
 // --- Core request path -----------------------------------------------------
@@ -493,6 +540,23 @@ describe("client cache", () => {
       password: "s3cret",
     });
     expect(b.baseUrl).toBe("http://host-b:1234");
+  });
+
+  it("different authStrategy for the same account + credential rebuilds the client (Greptile #68234 P2)", () => {
+    // Before this fix the fingerprint keyed only on {baseUrl, password}.
+    // A second call with a different authStrategy would silently return
+    // the cached first strategy's client.
+    const a = createBlueBubblesClient({
+      serverUrl: "http://localhost:1234",
+      password: "s3cret",
+      // default: blueBubblesQueryStringAuth
+    });
+    const b = createBlueBubblesClient({
+      serverUrl: "http://localhost:1234",
+      password: "s3cret",
+      authStrategy: blueBubblesHeaderAuth,
+    });
+    expect(a).not.toBe(b);
   });
 });
 
