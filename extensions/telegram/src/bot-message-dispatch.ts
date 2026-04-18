@@ -1121,8 +1121,8 @@ export const dispatchTelegramMessage = async ({
         logVerbose(`telegram: status reaction done failed: ${String(err)}`);
       })
       .then(async () => {
-        if (!removeAckAfterReply) return;
-        if (!msg.message_id || !reactionApi) return;
+        if (!removeAckAfterReply) {return;}
+        if (!msg.message_id || !reactionApi) {return;}
         await sleepWithAbort(1500);
         await reactionApi(chatId, msg.message_id, []);
       })
