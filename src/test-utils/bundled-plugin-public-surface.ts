@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-loader.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
@@ -218,5 +218,22 @@ export function resolveRelativeWorkspacePackagePublicModuleId(params: {
   const relativePath = path
     .relative(path.dirname(fromFilePath), targetPath)
     .replaceAll(path.sep, "/");
-  return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
+  const normalizedRelativePath = relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
+  if (path.resolve(path.dirname(fromFilePath), normalizedRelativePath) !== targetPath) {
+    return pathToFileURL(targetPath).href;
+  }
+  return normalizedRelativePath;
+}
+
+export function resolveWorkspacePackagePublicModuleUrl(params: {
+  packageName: string;
+  artifactBasename: string;
+}): string {
+  const targetPath = resolveVitestSourceModulePath(
+    path.resolve(
+      resolveWorkspacePackageDir(params.packageName),
+      normalizeBundledPluginArtifactSubpath(params.artifactBasename),
+    ),
+  );
+  return pathToFileURL(targetPath).href;
 }

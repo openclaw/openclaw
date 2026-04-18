@@ -66,17 +66,21 @@ vi.mock("./external-auth.js", () => ({
   shouldPersistExternalAuthProfile: () => true,
 }));
 
-vi.mock("./external-cli-sync.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./external-cli-sync.js")>("./external-cli-sync.js");
-  return {
-    ...actual,
-    syncExternalCliCredentials: () => false,
-    readManagedExternalCliCredential: () => null,
-    resolveExternalCliAuthProfiles: () => [],
-    areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
-  };
-});
+vi.mock("./external-cli-sync.js", () => ({
+  areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
+  hasUsableOAuthCredential: (credential: OAuthCredential | undefined, now = Date.now()) =>
+    credential?.type === "oauth" &&
+    credential.access.trim().length > 0 &&
+    Number.isFinite(credential.expires) &&
+    credential.expires - now > 5 * 60 * 1000,
+  isSafeToUseExternalCliCredential: () => true,
+  readExternalCliBootstrapCredential: () => null,
+  readManagedExternalCliCredential: () => null,
+  resolveExternalCliAuthProfiles: () => [],
+  shouldBootstrapFromExternalCliCredential: () => false,
+  shouldReplaceStoredOAuthCredential: (existing: unknown, incoming: unknown) =>
+    existing !== incoming,
+}));
 
 function createExpiredOauthStore(params: {
   profileId: string;

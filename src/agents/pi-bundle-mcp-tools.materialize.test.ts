@@ -9,7 +9,11 @@ import {
   writeClaudeBundle,
   writeExecutable,
 } from "./pi-bundle-mcp-test-harness.js";
-import { createBundleMcpToolRuntime } from "./pi-bundle-mcp-tools.js";
+import {
+  createBundleMcpToolRuntime,
+  materializeBundleMcpToolsForRun,
+} from "./pi-bundle-mcp-tools.js";
+import type { SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
 
 const require = createRequire(import.meta.url);
 const SDK_SERVER_MCP_PATH = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
@@ -39,6 +43,43 @@ async function createBundleProbeRuntime(params?: { reservedToolNames?: string[] 
   });
 }
 
+function makeSingleToolRuntime(): SessionMcpRuntime {
+  return {
+    sessionId: "session-collision",
+    workspaceDir: "/tmp",
+    configFingerprint: "fingerprint",
+    createdAt: 0,
+    lastUsedAt: 0,
+    markUsed: () => {},
+    getCatalog: async () => ({
+      version: 1,
+      generatedAt: 0,
+      servers: {
+        bundleProbe: {
+          serverName: "bundleProbe",
+          launchSummary: "bundleProbe",
+          toolCount: 1,
+        },
+      },
+      tools: [
+        {
+          serverName: "bundleProbe",
+          safeServerName: "bundleProbe",
+          toolName: "bundle_probe",
+          description: "Bundle probe",
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: "Bundle probe",
+        },
+      ],
+    }),
+    callTool: async () => ({
+      content: [{ type: "text", text: "FROM-BUNDLE" }],
+      isError: false,
+    }),
+    dispose: async () => {},
+  };
+}
+
 describe("createBundleMcpToolRuntime", () => {
   it("loads bundle MCP tools and executes them", async () => {
     const runtime = await createBundleProbeRuntime();
@@ -60,15 +101,12 @@ describe("createBundleMcpToolRuntime", () => {
   });
 
   it("disambiguates bundle MCP tools that collide with existing tool names", async () => {
-    const runtime = await createBundleProbeRuntime({
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeSingleToolRuntime(),
       reservedToolNames: ["bundleProbe__bundle_probe"],
     });
 
-    try {
-      expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe-2"]);
-    } finally {
-      await runtime.dispose();
-    }
+    expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe-2"]);
   });
 
   it("loads configured stdio MCP tools without a bundle", async () => {
