@@ -243,8 +243,16 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   return providers.values().next().value;
 }
 
-export function resolveAllowlistModelKey(raw: string, defaultProvider: string): string | null {
-  const parsed = parseModelRef(raw, defaultProvider);
+export function resolveAllowlistModelKey(
+  raw: string,
+  defaultProvider: string,
+  cfg?: OpenClawConfig,
+): string | null {
+  const parsed = parseModelRefWithCompatAlias({
+    cfg,
+    raw,
+    defaultProvider,
+  });
   if (!parsed) {
     return null;
   }
@@ -312,6 +320,27 @@ function resolveConfiguredOpenRouterCompatAlias(params: {
   });
 }
 
+function parseModelRefWithCompatAlias(params: {
+  cfg?: OpenClawConfig;
+  raw: string;
+  defaultProvider: string;
+  allowPluginNormalization?: boolean;
+}): ModelRef | null {
+  return (
+    (params.cfg
+      ? resolveConfiguredOpenRouterCompatAlias({
+          cfg: params.cfg,
+          raw: params.raw,
+          defaultProvider: params.defaultProvider,
+          allowPluginNormalization: params.allowPluginNormalization,
+        })
+      : null) ??
+    parseModelRef(params.raw, params.defaultProvider, {
+      allowPluginNormalization: params.allowPluginNormalization,
+    })
+  );
+}
+
 export function buildConfiguredAllowlistKeys(params: {
   cfg: OpenClawConfig | undefined;
   defaultProvider: string;
@@ -323,7 +352,7 @@ export function buildConfiguredAllowlistKeys(params: {
 
   const keys = new Set<string>();
   for (const raw of rawAllowlist) {
-    const key = resolveAllowlistModelKey(raw, params.defaultProvider);
+    const key = resolveAllowlistModelKey(raw, params.defaultProvider, params.cfg);
     if (key) {
       keys.add(key);
     }
@@ -341,7 +370,10 @@ export function buildModelAliasIndex(params: {
 
   const rawModels = params.cfg.agents?.defaults?.models ?? {};
   for (const [keyRaw, entryRaw] of Object.entries(rawModels)) {
-    const parsed = parseModelRef(keyRaw, params.defaultProvider, {
+    const parsed = parseModelRefWithCompatAlias({
+      cfg: params.cfg,
+      raw: keyRaw,
+      defaultProvider: params.defaultProvider,
       allowPluginNormalization: params.allowPluginNormalization,
     });
     if (!parsed) {
@@ -380,7 +412,7 @@ function buildModelCatalogMetadata(params: {
   const aliasByKey = new Map<string, string>();
   const configuredModels = params.cfg.agents?.defaults?.models ?? {};
   for (const [rawKey, entryRaw] of Object.entries(configuredModels)) {
-    const key = resolveAllowlistModelKey(rawKey, params.defaultProvider);
+    const key = resolveAllowlistModelKey(rawKey, params.defaultProvider, params.cfg);
     if (!key) {
       continue;
     }
@@ -442,6 +474,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
 }
 
 export function resolveModelRefFromString(params: {
+  cfg?: OpenClawConfig;
   raw: string;
   defaultProvider: string;
   aliasIndex?: ModelAliasIndex;
@@ -458,7 +491,10 @@ export function resolveModelRefFromString(params: {
       return { ref: aliasMatch.ref, alias: aliasMatch.alias };
     }
   }
-  const parsed = parseModelRef(model, params.defaultProvider, {
+  const parsed = parseModelRefWithCompatAlias({
+    cfg: params.cfg,
+    raw: model,
+    defaultProvider: params.defaultProvider,
     allowPluginNormalization: params.allowPluginNormalization,
   });
   if (!parsed) {
@@ -516,6 +552,7 @@ export function resolveConfiguredModelRef(params: {
     }
 
     const resolved = resolveModelRefFromString({
+      cfg: params.cfg,
       raw: trimmed,
       defaultProvider: params.defaultProvider,
       aliasIndex,
@@ -642,7 +679,11 @@ export function buildAllowedModelSet(params: {
   const defaultModel = params.defaultModel?.trim();
   const defaultRef =
     defaultModel && params.defaultProvider
-      ? parseModelRef(defaultModel, params.defaultProvider)
+      ? parseModelRefWithCompatAlias({
+          cfg: params.cfg,
+          raw: defaultModel,
+          defaultProvider: params.defaultProvider,
+        })
       : null;
   const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
   const catalogKeys = new Set(catalog.map((entry) => modelKey(entry.provider, entry.id)));
@@ -661,7 +702,11 @@ export function buildAllowedModelSet(params: {
   const allowedKeys = new Set<string>();
   const syntheticCatalogEntries = new Map<string, ModelCatalogEntry>();
   for (const raw of rawAllowlist) {
-    const parsed = parseModelRef(raw, params.defaultProvider);
+    const parsed = parseModelRefWithCompatAlias({
+      cfg: params.cfg,
+      raw,
+      defaultProvider: params.defaultProvider,
+    });
     if (!parsed) {
       continue;
     }
@@ -679,7 +724,11 @@ export function buildAllowedModelSet(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   })) {
-    const parsed = parseModelRef(fallback, params.defaultProvider);
+    const parsed = parseModelRefWithCompatAlias({
+      cfg: params.cfg,
+      raw: fallback,
+      defaultProvider: params.defaultProvider,
+    });
     if (parsed) {
       const key = modelKey(parsed.provider, parsed.model);
       allowedKeys.add(key);
@@ -830,6 +879,7 @@ export function resolveAllowedModelRef(params: {
     : params.defaultProvider;
 
   const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
     raw: trimmed,
     defaultProvider: effectiveDefaultProvider,
     aliasIndex,
@@ -886,6 +936,7 @@ export function resolveHooksGmailModel(params: {
   });
 
   const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
     raw: hooksModel,
     defaultProvider: params.defaultProvider,
     aliasIndex,

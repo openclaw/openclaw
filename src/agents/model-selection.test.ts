@@ -1240,6 +1240,59 @@ describe("model-selection", () => {
         key: "openrouter/meta-llama/llama-3.3-70b-instruct:free",
       });
     });
+
+    it("treats raw openrouter:free allowlist entries as allowed in the legacy resolver path", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter:free": {},
+            },
+          },
+        },
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.ai/api/v1",
+              models: [
+                {
+                  id: "deepseek/deepseek-r1-0528:free",
+                  name: "DeepSeek R1 Free",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const catalog = [
+        {
+          provider: "openrouter",
+          id: "deepseek/deepseek-r1-0528:free",
+          name: "DeepSeek R1 Free",
+        },
+      ];
+
+      expect(
+        resolveAllowedModelRef({
+          cfg,
+          catalog,
+          raw: "openrouter:free",
+          defaultProvider: "anthropic",
+        }),
+      ).toEqual({
+        ref: {
+          provider: "openrouter",
+          model: "deepseek/deepseek-r1-0528:free",
+        },
+        key: "openrouter/deepseek/deepseek-r1-0528:free",
+      });
+    });
   });
 
   describe("resolveThinkingDefault", () => {
