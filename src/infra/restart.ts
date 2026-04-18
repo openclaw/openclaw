@@ -133,6 +133,10 @@ export function emitGatewayRestart(): boolean {
   } catch {
     // Roll back the cycle marker so future restart requests can still proceed.
     emittedRestartToken = consumedRestartToken;
+    // Also revert the authorization that was granted for this failed cycle,
+    // otherwise a stray SIGUSR1 arriving within SIGUSR1_AUTH_GRACE_MS can
+    // consume it and trigger an unsanctioned restart path.
+    revertGatewaySigusr1RestartAuthorization();
     return false;
   }
   lastRestartEmittedAt = Date.now();
@@ -164,6 +168,20 @@ function authorizeGatewaySigusr1Restart(delayMs = 0) {
   sigusr1AuthorizedCount += 1;
   if (expiresAt > sigusr1AuthorizedUntil) {
     sigusr1AuthorizedUntil = expiresAt;
+  }
+}
+
+// Reverses a prior authorizeGatewaySigusr1Restart() call when the matching
+// emission aborts before the SIGUSR1 actually reaches a handler. Unlike
+// consumeGatewaySigusr1RestartAuthorization(), this does not advertise that
+// the authorization was "used" — it simply undoes the increment.
+function revertGatewaySigusr1RestartAuthorization() {
+  if (sigusr1AuthorizedCount <= 0) {
+    return;
+  }
+  sigusr1AuthorizedCount -= 1;
+  if (sigusr1AuthorizedCount <= 0) {
+    sigusr1AuthorizedUntil = 0;
   }
 }
 
