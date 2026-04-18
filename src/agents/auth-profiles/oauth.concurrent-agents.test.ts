@@ -3,6 +3,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
+import "./oauth-external-auth-passthrough.test-support.js";
 import {
   OAUTH_AGENT_ENV_KEYS,
   createOAuthMainAgentDir,
@@ -17,7 +19,11 @@ import {
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "./store.js";
-import type { OAuthCredential } from "./types.js";
+
+const {
+  refreshProviderOAuthCredentialWithPluginMock,
+  formatProviderAuthProfileApiKeyWithPluginMock,
+} = getOAuthProviderRuntimeMocks();
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
 let resetOAuthRefreshQueuesForTest: typeof import("./oauth.js").resetOAuthRefreshQueuesForTest;
@@ -26,60 +32,9 @@ async function loadOAuthModuleForTest() {
   ({ resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } = await import("./oauth.js"));
 }
 
-const {
-  refreshProviderOAuthCredentialWithPluginMock,
-  formatProviderAuthProfileApiKeyWithPluginMock,
-} = vi.hoisted(() => ({
-  refreshProviderOAuthCredentialWithPluginMock: vi.fn(
-    async (_params?: { context?: unknown }) => undefined,
-  ),
-  formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
-}));
-
-vi.mock("../cli-credentials.js", () => ({
-  readCodexCliCredentialsCached: () => null,
-  readMiniMaxCliCredentialsCached: () => null,
-  resetCliCredentialCachesForTest: () => undefined,
-  writeCodexCliCredentials: () => true,
-}));
-
 vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthApiKey: vi.fn(async () => null),
   getOAuthProviders: () => [{ id: "openai-codex" }],
-}));
-
-vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
-  formatProviderAuthProfileApiKeyWithPlugin: (params: { context?: { access?: string } }) =>
-    formatProviderAuthProfileApiKeyWithPluginMock() ?? params?.context?.access,
-  refreshProviderOAuthCredentialWithPlugin: refreshProviderOAuthCredentialWithPluginMock,
-}));
-
-vi.mock("./external-auth.js", () => ({
-  overlayExternalAuthProfiles: <T>(store: T) => store,
-  shouldPersistExternalAuthProfile: () => true,
-}));
-
-vi.mock("./doctor.js", () => ({
-  formatAuthDoctorHint: async () => undefined,
-}));
-
-// External-CLI sync does real I/O against the user's Codex/MiniMax CLI
-// credential files; it is slow and can pollute test state. Stub it to a no-op
-// so the suite only exercises in-repo auth-profile logic.
-vi.mock("./external-cli-sync.js", () => ({
-  areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
-  hasUsableOAuthCredential: (credential: OAuthCredential | undefined, now = Date.now()) =>
-    credential?.type === "oauth" &&
-    credential.access.trim().length > 0 &&
-    Number.isFinite(credential.expires) &&
-    credential.expires - now > 5 * 60 * 1000,
-  isSafeToUseExternalCliCredential: () => true,
-  readExternalCliBootstrapCredential: () => null,
-  readManagedExternalCliCredential: () => null,
-  resolveExternalCliAuthProfiles: () => [],
-  shouldBootstrapFromExternalCliCredential: () => false,
-  shouldReplaceStoredOAuthCredential: (existing: unknown, incoming: unknown) =>
-    existing !== incoming,
 }));
 
 describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", () => {
