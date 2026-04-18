@@ -30,6 +30,8 @@ Env vars:
                            on the branch are autofix commits (default 3).
                            Stops runaway ping-pong between autofixer and
                            review tools.
+    AUTOFIX_CLAUDE_TIMEOUT - optional; Claude SDK subprocess timeout in
+                           seconds (default 600).
 """
 
 import argparse
@@ -57,6 +59,7 @@ MAX_FILES = int(os.getenv("AUTOFIX_MAX_FILES", "10"))
 AUTH_MODE = os.getenv("AUTOFIX_AUTH_MODE", "subscription").strip().lower()
 VERIFY_CMD = os.getenv("AUTOFIX_VERIFY_CMD", "").strip()
 MAX_CONSEC = int(os.getenv("AUTOFIX_MAX_CONSEC", "3"))
+CLAUDE_TIMEOUT = int(os.getenv("AUTOFIX_CLAUDE_TIMEOUT", "600"))
 
 
 @dataclass
@@ -298,11 +301,7 @@ def _call_claude_subscription(system: str, user_msg: str) -> str:
         input=prompt,
         capture_output=True,
         text=True,
-        # 10 minutes. A larger source file (e.g. run.ts >1000 LOC) plus
-        # all its review comments can easily take 4-7 minutes for Claude
-        # to analyze + emit a patched file; 5 min hit the 300s timeout
-        # often enough to fail entire runs on complex PRs.
-        timeout=int(os.environ.get("AUTOFIX_CLAUDE_TIMEOUT", "600")),
+        timeout=CLAUDE_TIMEOUT,
         check=False,
         encoding="utf-8",
         errors="replace",
@@ -519,7 +518,7 @@ def _sweep_stale_autofix_work_dirs(tmp_base: Path) -> None:
         pass
 
 
-def apply_patches(repo: str, branch: str, patches: list[FilePatch], dry_run: bool) -> bool:
+def apply_patches(repo: str, branch: str, head_sha: str, patches: list[FilePatch], dry_run: bool) -> bool:
     if dry_run:
         for p in patches:
             print(f"\n--- {p.path} ---")
@@ -566,6 +565,22 @@ def apply_patches(repo: str, branch: str, patches: list[FilePatch], dry_run: boo
         )
         if clone_result.returncode != 0:
             print(f"git clone failed: {clone_result.stderr}", file=sys.stderr)
+            return False
+
+        # Verify that the cloned HEAD matches the SHA the patches were
+        # generated against. If not, the branch advanced while we were
+        # running -- abort to avoid clobbering newer commits.
+        head_check = git("rev-parse", "HEAD", cwd=str(work_dir))
+        if head_check.returncode != 0:
+            print(f"autofix: could not read HEAD: {head_check.stderr}", file=sys.stderr)
+            return False
+        cloned_sha = head_check.stdout.strip()
+        if cloned_sha != head_sha:
+            print(
+                f"autofix: branch {branch} advanced from {head_sha[:7]} to {cloned_sha[:7]} "
+                "while patches were being generated; aborting to avoid clobbering newer commits.",
+                file=sys.stderr,
+            )
             return False
 
         # Set the commit identity locally in case the caller's global git
@@ -680,7 +695,7 @@ def run_pipeline(repo: str, pr: int, dry_run: bool = False) -> int:
         print("autofix: no patches generated.")
         return 0
 
-    success = apply_patches(head_repo, head_ref, patches, dry_run)
+    success = apply_patches(head_repo, head_ref, head_sha, patches, dry_run)
     if not success or dry_run:
         return 0 if dry_run else 1
 

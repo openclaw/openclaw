@@ -29,9 +29,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-
-const log = createSubsystemLogger("agents/claude-sdk");
 
 /**
  * Canonical pi-ai transcript record envelope. Matches the shape that
@@ -63,7 +60,7 @@ export type CanonicalMessage =
       >;
       api: "claude-sdk";
       provider: "anthropic";
-      model: string;
+      model?: string;
       usage: {
         input: number;
         output: number;
@@ -153,22 +150,11 @@ export function openSessionMirror(params: OpenSessionMirrorParams): SessionMirro
   const primaryStream = fs.createWriteStream(params.primaryPath, { flags: "a" });
   const sidecarStream = fs.createWriteStream(sidecarPath, { flags: "a" });
 
-  // Without explicit 'error' listeners, any async write failure (transient
-  // I/O, disk full, EPERM after startup) fires an 'unhandled error' event
-  // that terminates the Node process. The try/catch around
-  // writeSdkMessage in run.ts can't catch async stream events, so one
-  // mirror write failure would bring down an otherwise-recoverable run.
-  // Catching and logging keeps the run alive; we lose that one frame's
-  // evidence trail but the user-visible reply still arrives.
   primaryStream.on("error", (err) => {
-    log.warn(
-      `[claude-sdk] primary session-mirror stream error path=${params.primaryPath} err=${err.message}`,
-    );
+    console.error("[session-mirror] primary stream error:", err);
   });
   sidecarStream.on("error", (err) => {
-    log.warn(
-      `[claude-sdk] sidecar session-mirror stream error path=${sidecarPath} err=${err.message}`,
-    );
+    console.error("[session-mirror] sidecar stream error:", err);
   });
 
   const writeBoth = (line: string): void => {
@@ -261,20 +247,23 @@ export function projectSdkMessage(
     if (content.length === 0) {
       return [];
     }
+    const assistantMessage: CanonicalMessage = {
+      role: "assistant",
+      content,
+      api: "claude-sdk",
+      provider: "anthropic",
+      usage: { ...ZERO_USAGE },
+      stopReason: "stop",
+      timestamp: now,
+    };
+    if (ctx.model) {
+      assistantMessage.model = ctx.model;
+    }
     return [
       {
         type: "message",
         claudeSdk: true,
-        message: {
-          role: "assistant",
-          content,
-          api: "claude-sdk",
-          provider: "anthropic",
-          model: ctx.model ?? "",
-          usage: { ...ZERO_USAGE },
-          stopReason: "stop",
-          timestamp: now,
-        },
+        message: assistantMessage,
       },
     ];
   }

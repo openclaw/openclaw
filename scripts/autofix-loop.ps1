@@ -32,12 +32,7 @@ $ErrorActionPreference = "Stop"
 if (-not $Repo)     { $Repo = "openclaw/openclaw" }
 if (-not $PrNumber) { $PrNumber = 68135 }
 
-# Derive the repo root from this script's location rather than a
-# hardcoded path, so the launcher works for any checkout location
-# (CI workspaces, fork clones not at C:\OpenClaw, etc.). This script
-# lives at <repo>\scripts\autofix-loop.ps1; $PSScriptRoot is scripts/
-# and the repo root is its parent.
-$RepoRoot = Split-Path -Parent $PSScriptRoot
+$RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $LogDir = Join-Path $env:USERPROFILE ".openclaw\autofix"
 $LockFile = Join-Path $LogDir "autofix.lock"
 

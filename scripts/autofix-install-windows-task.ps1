@@ -32,11 +32,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Derive the repo root from this script's location (scripts/ -> ..)
-# rather than hardcoding a path, so the installer works for any
-# checkout location. Downstream the task's WorkingDirectory and the
-# launcher's $RepoRoot both resolve identically via $PSScriptRoot.
-$RepoRoot = Split-Path -Parent $PSScriptRoot
+$RepoRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $LauncherPath = Join-Path $RepoRoot "scripts\autofix-loop.ps1"
 $HiddenWrapperPath = Join-Path $RepoRoot "scripts\autofix-loop-hidden.vbs"
 

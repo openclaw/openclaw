@@ -175,7 +175,8 @@ function serializeSubAgentFrontmatter(params: {
 }): string {
   const lines: string[] = [];
   lines.push("---");
-  lines.push(`name: ${params.name}`);
+  const nameLine = YAML.stringify({ name: params.name }, { lineWidth: 0 }).trimEnd();
+  lines.push(nameLine);
   // Quote the description to keep colons and special chars safe. Use the `yaml`
   // package's string dump for consistent escaping.
   const desc = YAML.stringify({ description: params.description }, { lineWidth: 0 }).trimEnd();
@@ -189,6 +190,11 @@ function serializeSubAgentFrontmatter(params: {
 }
 
 // ---------- Per-skill conversion ----------
+
+function sanitizeFilename(name: string): string {
+  // Remove or replace path separators and other unsafe characters.
+  return name.replace(/[\/\\:*?"<>|]/g, "-").trim();
+}
 
 function convertSkill(params: { skillDir: string; outputDir: string }): SubAgentWrite | null {
   const skillFile = path.join(params.skillDir, "SKILL.md");
@@ -237,7 +243,7 @@ function convertSkill(params: { skillDir: string; outputDir: string }): SubAgent
   const content = chunks.filter((c) => c.length > 0).join("\n") + "\n";
 
   return {
-    outputPath: path.join(params.outputDir, `${name}.md`),
+    outputPath: path.join(params.outputDir, `${sanitizeFilename(name)}.md`),
     content,
   };
 }
@@ -294,6 +300,17 @@ function collectWrites(outputDir: string): { writes: SubAgentWrite[]; skipped: s
   return { writes, skipped };
 }
 
+function isGeneratedSubAgent(filePath: string): boolean {
+  try {
+    const content = fs.readFileSync(filePath, "utf8");
+    // Check for our generated marker at the start of the file.
+    // We use a more specific pattern that includes the YAML structure we generate.
+    return content.startsWith("---\nname: ") && content.includes("\ndescription: ");
+  } catch {
+    return false;
+  }
+}
+
 function writeMode(): number {
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
   const { writes, skipped } = collectWrites(OUTPUT_DIR);
@@ -310,15 +327,17 @@ function writeMode(): number {
       }
       if (!expectedBasenames.has(entry)) {
         const fullPath = path.join(OUTPUT_DIR, entry);
-        // Only remove files that look like generated sub-agents (start with
-        // the "---\nname: " marker). Leave anything else alone.
-        try {
-          const head = fs.readFileSync(fullPath, "utf8").slice(0, 32);
-          if (head.startsWith("---\nname: ")) {
-            fs.unlinkSync(fullPath);
-          }
-        } catch {
-          // Ignore — the file may be unreadable or a directory.
+        // Only remove files that are in our expected output set (i.e., generated
+        // from current SKILL.md files). We determine this by checking if the
+        // basename matches any skill name we're currently generating.
+        // This is more conservative than checking the file header pattern alone.
+        // Files with the same basename as a current skill will be overwritten below;
+        // files with different basenames are left alone unless they match our
+        // generated pattern AND aren't in the current output set.
+        if (isGeneratedSubAgent(fullPath)) {
+          // This looks like a generated file but isn't in our current write set,
+          // so it's likely stale from a removed/renamed skill.
+          fs.unlinkSync(fullPath);
         }
       }
     }
@@ -373,13 +392,8 @@ function checkMode(): number {
           continue;
         }
         const fullPath = path.join(OUTPUT_DIR, entry);
-        try {
-          const head = fs.readFileSync(fullPath, "utf8").slice(0, 32);
-          if (head.startsWith("---\nname: ")) {
-            drifted.push(`stale generated file: ${entry}`);
-          }
-        } catch {
-          // Ignore unreadable entries — not our problem.
+        if (isGeneratedSubAgent(fullPath)) {
+          drifted.push(`stale generated file: ${entry}`);
         }
       }
     } catch {
