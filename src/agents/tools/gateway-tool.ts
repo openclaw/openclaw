@@ -1,10 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { Type } from "@sinclair/typebox";
-import { isRestartEnabled } from "../../config/commands.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { isRestartEnabled } from "../../config/commands.flags.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
@@ -12,6 +12,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { collectEnabledInsecureOrDangerousFlags } from "../../security/dangerous-config-flags.js";
 import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
@@ -113,12 +114,24 @@ function assertGatewayConfigMutationAllowed(params: {
         getValueAtPath(nextConfig, path),
       ),
   );
-  if (changedProtectedPaths.length === 0) {
-    return;
+  if (changedProtectedPaths.length > 0) {
+    throw new Error(
+      `gateway ${params.action} cannot change protected config paths: ${changedProtectedPaths.join(", ")}`,
+    );
   }
-  throw new Error(
-    `gateway ${params.action} cannot change protected config paths: ${changedProtectedPaths.join(", ")}`,
+
+  // Block writes that newly enable any dangerous config flag.
+  // Uses the same flag enumeration as `openclaw security audit`.
+  const currentFlags = new Set(
+    collectEnabledInsecureOrDangerousFlags(params.currentConfig as OpenClawConfig),
   );
+  const nextFlags = collectEnabledInsecureOrDangerousFlags(nextConfig as OpenClawConfig);
+  const newlyEnabled = nextFlags.filter((f) => !currentFlags.has(f));
+  if (newlyEnabled.length > 0) {
+    throw new Error(
+      `gateway ${params.action} cannot enable dangerous config flags: ${newlyEnabled.join(", ")}`,
+    );
+  }
 }
 
 const GATEWAY_ACTIONS = [

@@ -88,6 +88,7 @@ explicitly promotes one as public.
     | `plugin-sdk/channel-config-helpers` | `createHybridChannelConfigAdapter` |
     | `plugin-sdk/channel-config-schema` | Channel config schema types |
     | `plugin-sdk/telegram-command-config` | Telegram custom-command normalization/validation helpers with bundled-contract fallback |
+    | `plugin-sdk/command-gating` | Narrow command authorization gate helpers |
     | `plugin-sdk/channel-policy` | `resolveChannelGroupRequireMention` |
     | `plugin-sdk/channel-lifecycle` | `createAccountStatusSink` |
     | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
@@ -95,6 +96,7 @@ explicitly promotes one as public.
     | `plugin-sdk/messaging-targets` | Target parsing/matching helpers |
     | `plugin-sdk/outbound-media` | Shared outbound media loading helpers |
     | `plugin-sdk/outbound-runtime` | Outbound identity/send delegate helpers |
+    | `plugin-sdk/poll-runtime` | Narrow poll normalization helpers |
     | `plugin-sdk/thread-bindings-runtime` | Thread-binding lifecycle and adapter helpers |
     | `plugin-sdk/agent-media-payload` | Legacy agent media payload builder |
     | `plugin-sdk/conversation-runtime` | Conversation/thread binding, pairing, and configured-binding helpers |
@@ -108,7 +110,10 @@ explicitly promotes one as public.
     | `plugin-sdk/group-access` | Shared group-access decision helpers |
     | `plugin-sdk/direct-dm` | Shared direct-DM auth/guard helpers |
     | `plugin-sdk/interactive-runtime` | Interactive reply payload normalization/reduction helpers |
-    | `plugin-sdk/channel-inbound` | Inbound debounce, mention matching, mention-policy helpers, and envelope helpers |
+    | `plugin-sdk/channel-inbound` | Compatibility barrel for inbound debounce, mention matching, mention-policy helpers, and envelope helpers |
+    | `plugin-sdk/channel-mention-gating` | Narrow mention-policy helpers without the broader inbound runtime surface |
+    | `plugin-sdk/channel-location` | Channel location context and formatting helpers |
+    | `plugin-sdk/channel-logging` | Channel logging helpers for inbound drops and typing/ack failures |
     | `plugin-sdk/channel-send-result` | Reply result types |
     | `plugin-sdk/channel-actions` | `createMessageToolButtonsSchema`, `createMessageToolCardSchema` |
     | `plugin-sdk/channel-targets` | Target parsing/matching helpers |
@@ -149,6 +154,7 @@ explicitly promotes one as public.
     | Subpath | Key exports |
     | --- | --- |
     | `plugin-sdk/command-auth` | `resolveControlCommandGate`, command registry helpers, sender-authorization helpers |
+    | `plugin-sdk/command-status` | Command/help message builders such as `buildCommandsMessagePaginated` and `buildHelpMessage` |
     | `plugin-sdk/approval-auth-runtime` | Approver resolution and same-chat action-auth helpers |
     | `plugin-sdk/approval-client-runtime` | Native exec approval profile/filter helpers |
     | `plugin-sdk/approval-delivery-runtime` | Native approval capability/delivery adapters |
@@ -165,6 +171,7 @@ explicitly promotes one as public.
     | `plugin-sdk/secret-ref-runtime` | Narrow `coerceSecretRef` and SecretRef typing helpers for secret-contract/config parsing |
     | `plugin-sdk/security-runtime` | Shared trust, DM gating, external-content, and secret-collection helpers |
     | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
+    | `plugin-sdk/ssrf-dispatcher` | Narrow pinned-dispatcher helpers without the broad infra runtime surface |
     | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, and SSRF policy helpers |
     | `plugin-sdk/secret-input` | Secret input parsing helpers |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers |
@@ -186,6 +193,7 @@ explicitly promotes one as public.
     | `plugin-sdk/gateway-runtime` | Gateway client and channel-status patch helpers |
     | `plugin-sdk/config-runtime` | Config load/write helpers |
     | `plugin-sdk/telegram-command-config` | Telegram command-name/description normalization and duplicate/conflict checks, even when the bundled Telegram contract surface is unavailable |
+    | `plugin-sdk/text-autolink-runtime` | File-reference autolink detection without the broad text-runtime barrel |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers |
     | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
     | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize helpers |
@@ -210,6 +218,7 @@ explicitly promotes one as public.
     | `plugin-sdk/file-lock` | Re-entrant file-lock helpers |
     | `plugin-sdk/persistent-dedupe` | Disk-backed dedupe cache helpers |
     | `plugin-sdk/acp-runtime` | ACP runtime/session and reply-dispatch helpers |
+    | `plugin-sdk/acp-binding-resolve-runtime` | Read-only ACP binding resolution without lifecycle startup imports |
     | `plugin-sdk/agent-config-primitives` | Narrow agent runtime config-schema primitives |
     | `plugin-sdk/boolean-param` | Loose boolean param reader |
     | `plugin-sdk/dangerous-name-runtime` | Dangerous-name matching resolution helpers |
@@ -218,12 +227,19 @@ explicitly promotes one as public.
     | `plugin-sdk/models-provider-runtime` | `/models` command/provider reply helpers |
     | `plugin-sdk/skill-commands-runtime` | Skill command listing helpers |
     | `plugin-sdk/native-command-registry` | Native command registry/build/serialize helpers |
+    | `plugin-sdk/agent-harness` | Experimental trusted-plugin surface for low-level agent harnesses: harness types, active-run steer/abort helpers, OpenClaw tool bridge helpers, and attempt result utilities |
     | `plugin-sdk/provider-zai-endpoint` | Z.AI endpoint detection helpers |
     | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag and event helpers |
     | `plugin-sdk/error-runtime` | Error graph, formatting, shared error classification helpers, `isApprovalNotFoundError` |
     | `plugin-sdk/fetch-runtime` | Wrapped fetch, proxy, and pinned lookup helpers |
+    | `plugin-sdk/runtime-fetch` | Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
+    | `plugin-sdk/response-limit-runtime` | Bounded response-body reader without the broad media runtime surface |
+    | `plugin-sdk/session-binding-runtime` | Current conversation binding state without configured binding routing or pairing stores |
+    | `plugin-sdk/session-store-runtime` | Session-store read helpers without broad config writes/maintenance imports |
+    | `plugin-sdk/context-visibility-runtime` | Context visibility resolution and supplemental context filtering without broad config/security imports |
+    | `plugin-sdk/string-coerce-runtime` | Narrow primitive record/string coercion and normalization helpers without markdown/logging imports |
     | `plugin-sdk/host-runtime` | Hostname and SCP host normalization helpers |
     | `plugin-sdk/retry-runtime` | Retry config and retry runner helpers |
     | `plugin-sdk/agent-runtime` | Agent dir/identity/workspace helpers |
@@ -262,7 +278,7 @@ explicitly promotes one as public.
     | `plugin-sdk/memory-core` | Bundled memory-core helper surface for manager/config/file/CLI helpers |
     | `plugin-sdk/memory-core-engine-runtime` | Memory index/search runtime facade |
     | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine exports |
-    | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding engine exports |
+    | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding contracts, registry access, local provider, and generic batch/remote helpers |
     | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine exports |
     | `plugin-sdk/memory-core-host-engine-storage` | Memory host storage engine exports |
     | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers |
@@ -301,20 +317,21 @@ methods:
 
 ### Capability registration
 
-| Method                                           | What it registers                |
-| ------------------------------------------------ | -------------------------------- |
-| `api.registerProvider(...)`                      | Text inference (LLM)             |
-| `api.registerCliBackend(...)`                    | Local CLI inference backend      |
-| `api.registerChannel(...)`                       | Messaging channel                |
-| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis   |
-| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription |
-| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions   |
-| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis       |
-| `api.registerImageGenerationProvider(...)`       | Image generation                 |
-| `api.registerMusicGenerationProvider(...)`       | Music generation                 |
-| `api.registerVideoGenerationProvider(...)`       | Video generation                 |
-| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider      |
-| `api.registerWebSearchProvider(...)`             | Web search                       |
+| Method                                           | What it registers                     |
+| ------------------------------------------------ | ------------------------------------- |
+| `api.registerProvider(...)`                      | Text inference (LLM)                  |
+| `api.registerAgentHarness(...)`                  | Experimental low-level agent executor |
+| `api.registerCliBackend(...)`                    | Local CLI inference backend           |
+| `api.registerChannel(...)`                       | Messaging channel                     |
+| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis        |
+| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription      |
+| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions        |
+| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis            |
+| `api.registerImageGenerationProvider(...)`       | Image generation                      |
+| `api.registerMusicGenerationProvider(...)`       | Music generation                      |
+| `api.registerVideoGenerationProvider(...)`       | Video generation                      |
+| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider           |
+| `api.registerWebSearchProvider(...)`             | Web search                            |
 
 ### Tools and commands
 

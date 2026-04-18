@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeString } from "../record-shared.js";
-import type { SnapshotAriaNode } from "./client.js";
+import type { SnapshotAriaNode } from "./client.types.js";
 import {
   getRoleSnapshotStats,
   type RoleRefMap,

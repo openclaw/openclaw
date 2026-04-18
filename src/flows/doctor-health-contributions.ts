@@ -7,13 +7,9 @@ import {
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
-import { runChannelPluginStartupMaintenance } from "../channels/plugins/lifecycle-startup.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import {
-  maybeRepairLegacyOAuthProfileIds,
-  noteAuthProfileHealth,
-  noteLegacyCodexProviderOverride,
-} from "../commands/doctor-auth.js";
+import { maybeRepairLegacyOAuthProfileIds } from "../commands/doctor-auth-legacy-oauth.js";
+import { noteAuthProfileHealth, noteLegacyCodexProviderOverride } from "../commands/doctor-auth.js";
 import { noteBootstrapFileSize } from "../commands/doctor-bootstrap-size.js";
 import { noteChromeMcpBrowserReadiness } from "../commands/doctor-browser.js";
 import { maybeRepairBundledPluginRuntimeDeps } from "../commands/doctor-bundled-plugin-runtime-deps.js";
@@ -50,9 +46,9 @@ import { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } from "../commands/doc
 import { noteOpenAIOAuthTlsPrerequisites } from "../commands/oauth-tls-preflight.js";
 import { applyWizardMetadata, randomToken } from "../commands/onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "../commands/systemd-linger.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH, readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
@@ -61,6 +57,7 @@ import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import { maybeRunDoctorStartupChannelMaintenance } from "./doctor-startup-channel-maintenance.js";
 import type { FlowContribution } from "./types.js";
 
 export type DoctorFlowMode = "local" | "remote";
@@ -146,7 +143,7 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
   await noteAuthProfileHealth({
     cfg: ctx.cfg,
     prompter: ctx.prompter,
-    allowKeychainPrompt: ctx.options.nonInteractive !== true && Boolean(process.stdin.isTTY),
+    allowKeychainPrompt: ctx.options.nonInteractive !== true && process.stdin.isTTY,
   });
   noteLegacyCodexProviderOverride(ctx.cfg);
   ctx.gatewayDetails = buildGatewayConnectionDetails({ config: ctx.cfg });
@@ -294,18 +291,11 @@ async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<v
 }
 
 async function runStartupChannelMaintenanceHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  if (!ctx.prompter.shouldRepair) {
-    return;
-  }
-  await runChannelPluginStartupMaintenance({
+  await maybeRunDoctorStartupChannelMaintenance({
     cfg: ctx.cfg,
     env: process.env,
-    log: {
-      info: (message) => ctx.runtime.log(message),
-      warn: (message) => ctx.runtime.error(message),
-    },
-    trigger: "doctor-fix",
-    logPrefix: "doctor",
+    runtime: ctx.runtime,
+    shouldRepair: ctx.prompter.shouldRepair,
   });
 }
 

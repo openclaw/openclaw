@@ -1,13 +1,22 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMediaGenerationRuntimeMocks,
   resetMusicGenerationRuntimeMocks,
 } from "../../test/helpers/media-generation/runtime-module-mocks.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { generateMusic, listRuntimeMusicGenerationProviders } from "./runtime.js";
 import type { MusicGenerationProvider } from "./types.js";
 
 const mocks = getMediaGenerationRuntimeMocks();
+
+vi.mock("./model-ref.js", () => ({
+  parseMusicGenerationModelRef: mocks.parseMusicGenerationModelRef,
+}));
+
+vi.mock("./provider-registry.js", () => ({
+  getMusicGenerationProvider: mocks.getMusicGenerationProvider,
+  listMusicGenerationProviders: mocks.listMusicGenerationProviders,
+}));
 
 describe("music-generation runtime", () => {
   beforeEach(() => {

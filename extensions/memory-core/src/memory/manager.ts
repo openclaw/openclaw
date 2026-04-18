@@ -15,6 +15,7 @@ import {
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
   type MemorySearchManager,
+  type MemorySearchRuntimeDebug,
   type MemorySearchResult,
   type MemorySource,
   type MemorySyncProgressUpdate,
@@ -291,8 +292,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       maxResults?: number;
       minScore?: number;
       sessionKey?: string;
+      qmdSearchModeOverride?: "query" | "search" | "vsearch";
+      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
     },
   ): Promise<MemorySearchResult[]> {
+    opts?.onDebug?.({ backend: "builtin" });
     let hasIndexedContent = this.hasIndexedContent();
     if (!hasIndexedContent) {
       try {
@@ -341,7 +345,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         return [];
       }
 
-      const fullQueryResults = await this.searchKeyword(cleaned, candidates).catch(() => []);
+      const fullQueryResults = await this.searchKeyword(cleaned, candidates, {
+        boostFallbackRanking: true,
+      }).catch(() => []);
       const resultSets =
         fullQueryResults.length > 0
           ? [fullQueryResults]
@@ -354,7 +360,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
                 });
                 const searchTerms = keywords.length > 0 ? keywords : [cleaned];
                 return searchTerms.map((term) =>
-                  this.searchKeyword(term, candidates).catch(() => []),
+                  this.searchKeyword(term, candidates, { boostFallbackRanking: true }).catch(
+                    () => [],
+                  ),
                 );
               })(),
             );
@@ -491,6 +499,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private async searchKeyword(
     query: string,
     limit: number,
+    options?: { boostFallbackRanking?: boolean },
   ): Promise<Array<MemorySearchResult & { id: string; textScore: number }>> {
     if (!this.fts.enabled || !this.fts.available) {
       return [];
@@ -509,6 +518,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sourceFilter,
       buildFtsQuery: (raw) => this.buildFtsQuery(raw),
       bm25RankToScore,
+      boostFallbackRanking: options?.boostFallbackRanking,
     });
     return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
   }
@@ -605,10 +615,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const setDb = (value: DatabaseSync) => {
       this.db = value;
     };
-    const getVectorReady = () => this.vectorReady;
-    const setVectorReady = (value: Promise<boolean> | null) => {
-      this.vectorReady = value;
-    };
     const getReadonlyRecoveryAttempts = () => this.readonlyRecoveryAttempts;
     const setReadonlyRecoveryAttempts = (value: number) => {
       this.readonlyRecoveryAttempts = value;
@@ -634,12 +640,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       },
       set db(value) {
         setDb(value);
-      },
-      get vectorReady() {
-        return getVectorReady();
-      },
-      set vectorReady(value) {
-        setVectorReady(value);
       },
       vector: this.vector,
       get readonlyRecoveryAttempts() {
@@ -668,6 +668,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       },
       runSync: (nextParams) => this.runSync(nextParams),
       openDatabase: () => this.openDatabase(),
+      resetVectorState: () => this.resetVectorState(),
       ensureSchema: () => this.ensureSchema(),
       readMeta: () => this.readMeta() ?? undefined,
     };

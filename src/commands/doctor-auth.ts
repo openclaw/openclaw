@@ -6,60 +6,27 @@ import {
 import {
   type AuthCredentialReasonCode,
   ensureAuthProfileStore,
-  repairOAuthProfileIdMismatch,
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
 import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
-import type { OpenClawConfig } from "../config/config.js";
+import {
+  buildOAuthRefreshFailureLoginCommand,
+  classifyOAuthRefreshFailure,
+  type OAuthRefreshFailureReason,
+} from "../agents/auth-profiles/oauth-refresh-failure.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import { note } from "../terminal/note.js";
 import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
+export { maybeRepairLegacyOAuthProfileIds } from "./doctor-auth-legacy-oauth.js";
 
 const CODEX_PROVIDER_ID = "openai-codex";
 const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const LEGACY_CODEX_APIS = new Set(["openai-responses", "openai-completions"]);
-
-export async function maybeRepairLegacyOAuthProfileIds(
-  cfg: OpenClawConfig,
-  prompter: DoctorPrompter,
-): Promise<OpenClawConfig> {
-  const store = ensureAuthProfileStore();
-  let nextCfg = cfg;
-  const providers = resolvePluginProviders({
-    config: cfg,
-    env: process.env,
-    mode: "setup",
-  });
-  for (const provider of providers) {
-    for (const repairSpec of provider.oauthProfileIdRepairs ?? []) {
-      const repair = repairOAuthProfileIdMismatch({
-        cfg: nextCfg,
-        store,
-        provider: provider.id,
-        legacyProfileId: repairSpec.legacyProfileId,
-      });
-      if (!repair.migrated || repair.changes.length === 0) {
-        continue;
-      }
-
-      note(repair.changes.map((c) => `- ${c}`).join("\n"), "Auth profiles");
-      const apply = await prompter.confirm({
-        message: `Update ${repairSpec.promptLabel ?? provider.label} OAuth profile id in config now?`,
-        initialValue: true,
-      });
-      if (!apply) {
-        continue;
-      }
-      nextCfg = repair.config;
-    }
-  }
-  return nextCfg;
-}
 
 function hasConfiguredCodexOAuthProfile(cfg: OpenClawConfig): boolean {
   return Object.values(cfg.auth?.profiles ?? {}).some(
@@ -165,6 +132,40 @@ export function resolveUnusableProfileHint(params: {
     }
   }
   return "Wait for cooldown or switch provider.";
+}
+
+function formatOAuthRefreshFailureReason(reason: OAuthRefreshFailureReason | null): string {
+  switch (reason) {
+    case "refresh_token_reused":
+      return "refresh_token_reused";
+    case "invalid_grant":
+      return "invalid_grant";
+    case "sign_in_again":
+      return "sign in again";
+    case "invalid_refresh_token":
+      return "invalid refresh token";
+    case "revoked":
+      return "revoked";
+    default:
+      return "refresh failed";
+  }
+}
+
+export function formatOAuthRefreshFailureDoctorLine(params: {
+  profileId: string;
+  provider: string;
+  message: string;
+}): string | null {
+  const classified = classifyOAuthRefreshFailure(params.message);
+  if (!classified) {
+    return null;
+  }
+  const provider = classified.provider ?? params.provider;
+  const command = buildOAuthRefreshFailureLoginCommand(provider);
+  if (classified.reason) {
+    return `- ${params.profileId}: re-auth required [${formatOAuthRefreshFailureReason(classified.reason)}] — Run \`${command}\`.`;
+  }
+  return `- ${params.profileId}: OAuth refresh failed — Try again; if this persists, run \`${command}\`.`;
 }
 
 export async function resolveAuthIssueHint(
@@ -275,7 +276,14 @@ export async function noteAuthProfileHealth(params: {
           profileId: profile.profileId,
         });
       } catch (err) {
-        errors.push(`- ${profile.profileId}: ${formatErrorMessage(err)}`);
+        const message = formatErrorMessage(err);
+        errors.push(
+          formatOAuthRefreshFailureDoctorLine({
+            profileId: profile.profileId,
+            provider: profile.provider,
+            message,
+          }) ?? `- ${profile.profileId}: ${message}`,
+        );
       }
     }
     if (errors.length > 0) {

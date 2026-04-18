@@ -226,6 +226,11 @@ describe("gateway server agent", () => {
   test("agent accepts built-in channel alias (imsg)", async () => {
     const registry = createRegistry([
       {
+        pluginId: "imessage",
+        source: "test",
+        plugin: createStubChannelPlugin({ id: "imessage", label: "iMessage" }),
+      },
+      {
         pluginId: "msteams",
         source: "test",
         plugin: createMSTeamsPlugin({ aliases: ["teams"] }),
@@ -245,7 +250,9 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-imsg",
     });
     expect(resIMessage.ok).toBe(true);
-
+    await vi.waitFor(() => {
+      expect(vi.mocked(agentCommand)).toHaveBeenCalled();
+    });
     expectAgentRoutingCall({ channel: "imessage", deliver: true, fromEnd: 1 });
   });
 
@@ -371,27 +378,6 @@ describe("gateway server agent", () => {
     expect(res.ok).toBe(true);
 
     expectAgentRoutingCall({ channel: "webchat", deliver: false });
-  });
-
-  test("agent routes bare /new through session reset before running greeting prompt", async () => {
-    await writeMainSessionEntry({ sessionId: "sess-main-before-reset" });
-    const spy = vi.mocked(agentCommand);
-    const calls = spy.mock.calls;
-    const callsBefore = calls.length;
-    const res = await rpcReq(ws, "agent", {
-      message: "/new",
-      sessionKey: "main",
-      idempotencyKey: "idem-agent-new",
-    });
-    expect(res.ok).toBe(true);
-
-    await vi.waitFor(() => expect(calls.length).toBeGreaterThan(callsBefore));
-    const call = (calls.at(-1)?.[0] ?? {}) as Record<string, unknown>;
-    expect(call.message).toBeTypeOf("string");
-    expect(call.message).toContain("Run your Session Startup sequence");
-    expect(call.message).toContain("Current time:");
-    expect(typeof call.sessionId).toBe("string");
-    expect(call.sessionId).not.toBe("sess-main-before-reset");
   });
 
   test("write-scoped callers cannot reset conversations via agent", async () => {

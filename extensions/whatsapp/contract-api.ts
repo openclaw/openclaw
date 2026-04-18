@@ -5,10 +5,10 @@ import {
   isWhatsAppGroupJid as isWhatsAppGroupJidImpl,
   normalizeWhatsAppTarget as normalizeWhatsAppTargetImpl,
 } from "./src/normalize-target.js";
-import {
-  createWhatsAppPollFixture as createWhatsAppPollFixtureImpl,
-  expectWhatsAppPollSent as expectWhatsAppPollSentImpl,
-} from "./src/outbound-test-support.js";
+export {
+  listWhatsAppDirectoryGroupsFromConfig,
+  listWhatsAppDirectoryPeersFromConfig,
+} from "./src/directory-config.js";
 import { resolveWhatsAppRuntimeGroupPolicy as resolveWhatsAppRuntimeGroupPolicyImpl } from "./src/runtime-group-policy.js";
 import {
   canonicalizeLegacySessionKey as canonicalizeLegacySessionKeyImpl,
@@ -20,8 +20,6 @@ export {
 } from "./src/security-contract.js";
 
 export const canonicalizeLegacySessionKey = canonicalizeLegacySessionKeyImpl;
-export const createWhatsAppPollFixture = createWhatsAppPollFixtureImpl;
-export const expectWhatsAppPollSent = expectWhatsAppPollSentImpl;
 export const isLegacyGroupSessionKey = isLegacyGroupSessionKeyImpl;
 export const isWhatsAppGroupJid = isWhatsAppGroupJidImpl;
 export const normalizeWhatsAppTarget = normalizeWhatsAppTargetImpl;

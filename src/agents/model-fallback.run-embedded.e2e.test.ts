@@ -57,8 +57,10 @@ const installRunEmbeddedMocks = () => {
   vi.doMock("../plugins/hook-runner-global.js", () => ({
     getGlobalHookRunner: vi.fn(() => undefined),
   }));
-  vi.doMock("../context-engine/index.js", () => ({
+  vi.doMock("../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
+  }));
+  vi.doMock("../context-engine/registry.js", () => ({
     resolveContextEngine: vi.fn(async () => ({
       dispose: async () => undefined,
     })),
@@ -99,6 +101,7 @@ beforeEach(() => {
 const OVERLOADED_ERROR_PAYLOAD =
   '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
 const RATE_LIMIT_ERROR_MESSAGE = "rate limit exceeded";
+const NO_ENDPOINTS_FOUND_ERROR_MESSAGE = "404 No endpoints found for deepseek/deepseek-r1:free.";
 
 function makeConfig(): OpenClawConfig {
   const apiKeyField = ["api", "Key"].join("");
@@ -388,7 +391,28 @@ function mockAllProvidersOverloaded() {
   });
 }
 
-describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
+describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
+  it("falls back on OpenRouter-style no-endpoints assistant errors", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockPrimaryErrorThenFallbackSuccess(NO_ENDPOINTS_FOUND_ERROR_MESSAGE);
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:model-not-found-no-endpoints",
+        runId: "run:model-not-found-no-endpoints",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts[0]?.reason).toBe("model_not_found");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+      expectOpenAiThenGroqAttemptOrder();
+    });
+  });
+
   it("falls back across providers after overloaded primary failure and persists transient cooldown", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
@@ -414,6 +438,28 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expectOpenAiThenGroqAttemptOrder();
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("falls back across providers after a bare leading 402 quota-refresh assistant error", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockPrimaryErrorThenFallbackSuccess(
+        "402 You have reached your subscription quota limit. Please wait for automatic quota refresh in the rolling time window, upgrade to a higher plan, or use a Pay-As-You-Go API Key for unlimited access.",
+      );
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:bare-402-cross-provider",
+        runId: "run:bare-402-cross-provider",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts[0]?.reason).toBe("rate_limit");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+      expectOpenAiThenGroqAttemptOrder();
     });
   });
 

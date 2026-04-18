@@ -2,15 +2,28 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
+  collectInstalledContextEngineRuntimeErrors,
   collectInstalledMirroredRootDependencyManifestErrors,
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
   resolveInstalledBinaryPath,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
+
+const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
+  (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
+);
+const LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS = [
+  "dist/extensions/qa-channel/runtime-api.js",
+] as const;
+const REQUIRED_INSTALLED_RUNTIME_SIDECAR_PATHS = [
+  ...PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS,
+  ...LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS,
+] as const;
 
 describe("buildPublishedInstallScenarios", () => {
   it("uses a single fresh scenario for plain stable releases", () => {
@@ -41,14 +54,14 @@ describe("buildPublishedInstallScenarios", () => {
 
 describe("buildPublishedInstallCommandArgs", () => {
   it("runs lifecycle scripts for published install verification", () => {
-    const args = buildPublishedInstallCommandArgs("/tmp/openclaw-prefix", "openclaw@2026.4.9");
+    const args = buildPublishedInstallCommandArgs("/tmp/openclaw-prefix", "openclaw@2026.4.10");
 
     expect(args).toEqual([
       "install",
       "-g",
       "--prefix",
       "/tmp/openclaw-prefix",
-      "openclaw@2026.4.9",
+      "openclaw@2026.4.10",
       "--no-fund",
       "--no-audit",
     ]);
@@ -69,13 +82,57 @@ describe("collectInstalledPackageErrors", () => {
     );
     expect(errors).toEqual(
       expect.arrayContaining(
-        BUNDLED_RUNTIME_SIDECAR_PATHS.map(
+        REQUIRED_INSTALLED_RUNTIME_SIDECAR_PATHS.map(
           (relativePath) =>
             `installed package is missing required bundled runtime sidecar: ${relativePath}`,
         ),
       ),
     );
-    expect(errors.length).toBeGreaterThanOrEqual(1 + BUNDLED_RUNTIME_SIDECAR_PATHS.length);
+    expect(errors.length).toBeGreaterThanOrEqual(
+      1 + REQUIRED_INSTALLED_RUNTIME_SIDECAR_PATHS.length,
+    );
+  });
+});
+
+describe("collectInstalledContextEngineRuntimeErrors", () => {
+  function makeInstalledPackageRoot(): string {
+    return mkdtempSync(join(tmpdir(), "openclaw-postpublish-context-engine-"));
+  }
+
+  it("rejects packaged bundles with unresolved legacy context engine runtime loaders", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "runtime-plugins-BUG.js"),
+        'throw new Error("Failed to load legacy context engine runtime.");\n',
+        "utf8",
+      );
+
+      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([
+        "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts packaged bundles that inline the legacy context engine registration", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "runtime-plugins-OK.js"),
+        "registerContextEngineForOwner('legacy', async () => new LegacyContextEngine());\n",
+        "utf8",
+      );
+
+      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
   });
 });
 
@@ -118,7 +175,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.9",
+        version: "2026.4.10",
         dependencies: {},
       });
       writePackageFile(packageRoot, "dist/extensions/slack/package.json", {
@@ -146,7 +203,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.9",
+        version: "2026.4.10",
         optionalDependencies: {
           "@discordjs/opus": "^0.10.0",
         },
@@ -174,7 +231,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.9",
+        version: "2026.4.10",
         dependencies: {
           "@slack/web-api": "^7.16.0",
         },
@@ -204,7 +261,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.9",
+        version: "2026.4.10",
         dependencies: {},
       });
       mkdirSync(join(packageRoot, "dist/extensions/slack"), { recursive: true });
@@ -227,7 +284,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.9",
+        version: "2026.4.10",
         dependencies: {},
       });
       mkdirSync(join(packageRoot, "dist/extensions/slack"), { recursive: true });
@@ -245,12 +302,33 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.9",
+        version: "2026.4.10",
         dependencies: {},
       });
       writePackageFile(packageRoot, "dist/extensions/device-pair/openclaw.plugin.json", {
         id: "device-pair",
       });
+
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts legacy qa channel sidecar directories without package.json", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.10",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist/extensions/qa-channel"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist/extensions/qa-channel/runtime-api.js"),
+        "export {};\n",
+        "utf8",
+      );
 
       expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
     } finally {
@@ -264,7 +342,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.9",
+        version: "2026.4.10",
         dependencies: {},
       });
       writePackageFile(outsideManifestRoot, "package.json", {

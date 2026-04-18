@@ -15,6 +15,18 @@ export function resolveProviderPluginLookupKey(
 ): string {
   const api = normalizeOptionalString(provider?.api) ?? "";
   if (
+    providerKey === "google-antigravity" ||
+    providerKey === "google-vertex" ||
+    api === "google-generative-ai"
+  ) {
+    return "google";
+  }
+  if (
+    provider?.models?.some((model) => normalizeOptionalString(model.api) === "google-generative-ai")
+  ) {
+    return "google";
+  }
+  if (
     api &&
     MODEL_APIS.includes(api as (typeof MODEL_APIS)[number]) &&
     !GENERIC_PROVIDER_APIS.has(api)

@@ -1,5 +1,5 @@
 import { chromium } from "playwright-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import * as chromeModule from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
@@ -15,8 +15,32 @@ import {
   listPagesViaPlaywright,
 } from "./pw-session.js";
 
+vi.mock("openclaw/plugin-sdk/browser-security-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/browser-security-runtime")
+  >("openclaw/plugin-sdk/browser-security-runtime");
+  const lookupFn = async (_hostname: string, options?: { all?: boolean }) => {
+    const result = { address: "93.184.216.34", family: 4 };
+    return options?.all === true ? [result] : result;
+  };
+  return {
+    ...actual,
+    resolvePinnedHostnameWithPolicy: (hostname: string, params: object = {}) =>
+      actual.resolvePinnedHostnameWithPolicy(hostname, { ...params, lookupFn: lookupFn as never }),
+  };
+});
+
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
+
+const PROXY_ENV_KEYS = [
+  "ALL_PROXY",
+  "all_proxy",
+  "HTTP_PROXY",
+  "http_proxy",
+  "HTTPS_PROXY",
+  "https_proxy",
+] as const;
 
 type MockRoute = { continue: () => Promise<void>; abort: () => Promise<void> };
 type MockRequest = {
@@ -126,6 +150,7 @@ async function dispatchMockNavigation(params: {
   getRouteHandler: () => MockRouteHandler | null;
   mainFrame: object;
   url: string;
+  frame?: object;
   isNavigationRequest?: boolean;
   resourceType?: string;
   route?: Partial<MockRoute>;
@@ -137,7 +162,7 @@ async function dispatchMockNavigation(params: {
   const { resourceType } = params;
   await handler(createMockRoute(params.route), {
     isNavigationRequest: () => params.isNavigationRequest ?? true,
-    frame: () => params.mainFrame,
+    frame: () => params.frame ?? params.mainFrame,
     ...(resourceType ? { resourceType: () => resourceType } : {}),
     url: () => params.url,
   });
@@ -169,7 +194,14 @@ function mockBlockedRedirectNavigation(params: {
   });
 }
 
+beforeEach(() => {
+  for (const key of PROXY_ENV_KEYS) {
+    vi.stubEnv(key, "");
+  }
+});
+
 afterEach(async () => {
+  vi.unstubAllEnvs();
   connectOverCdpSpy.mockClear();
   getChromeWebSocketUrlSpy.mockClear();
   await closePlaywrightBrowserConnection().catch(() => {});
@@ -198,6 +230,20 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     });
 
     expect(created.targetId).toBe("TARGET_1");
+    expect(pageGoto).not.toHaveBeenCalled();
+  });
+
+  it("blocks hostname navigation when strict SSRF policy is configured", async () => {
+    const { pageGoto } = installBrowserMocks();
+
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://example.com",
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false, allowedHostnames: ["127.0.0.1"] },
+      }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+
     expect(pageGoto).not.toHaveBeenCalled();
   });
 
@@ -235,6 +281,41 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
 
     expect(pageGoto).toHaveBeenCalledTimes(1);
     expect(pageClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts private subframe document hops without quarantining the page", async () => {
+    const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
+    const subframe = {};
+    const subframeRoute = createMockRoute();
+    pageGoto.mockImplementationOnce(async () => {
+      await dispatchMockNavigation({
+        getRouteHandler,
+        mainFrame,
+        url: "https://93.184.216.34/start",
+      });
+      await dispatchMockNavigation({
+        getRouteHandler,
+        mainFrame,
+        frame: subframe,
+        url: "http://127.0.0.1:18080/internal-hop",
+        route: subframeRoute,
+      });
+      return {
+        request: () => ({
+          url: () => "https://93.184.216.34/start",
+          redirectedFrom: () => null,
+        }),
+      };
+    });
+
+    const created = await createPageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      url: "https://93.184.216.34/start",
+    });
+
+    expect(created.targetId).toBe("TARGET_1");
+    expect(subframeRoute.abort).toHaveBeenCalledTimes(1);
+    expect(pageClose).not.toHaveBeenCalled();
   });
 
   it("preserves the created tab on ordinary navigation failure", async () => {

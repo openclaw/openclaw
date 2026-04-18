@@ -2,6 +2,7 @@ import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { LogService } from "../sdk/logger.js";
+import { awaitMatrixStartupWithAbort } from "../startup-abort.js";
 import { resolveMatrixAuth, resolveMatrixAuthContext } from "./config.js";
 import type { MatrixAuth } from "./types.js";
 
@@ -91,19 +92,22 @@ function deleteSharedClientState(state: SharedMatrixClientState): void {
 
 async function ensureSharedClientStarted(params: {
   state: SharedMatrixClientState;
-  timeoutMs?: number;
-  initialSyncLimit?: number;
   encryption?: boolean;
+  abortSignal?: AbortSignal;
 }): Promise<void> {
+  const waitForStart = async (startPromise: Promise<void>) => {
+    await awaitMatrixStartupWithAbort(startPromise, params.abortSignal);
+  };
+
   if (params.state.started) {
     return;
   }
   if (params.state.startPromise) {
-    await params.state.startPromise;
+    await waitForStart(params.state.startPromise);
     return;
   }
 
-  params.state.startPromise = (async () => {
+  const startPromise = (async () => {
     const client = params.state.client;
 
     // Initialize crypto if enabled
@@ -119,15 +123,19 @@ async function ensureSharedClientStarted(params: {
       }
     }
 
-    await client.start();
+    await client.start({ abortSignal: params.abortSignal });
     params.state.started = true;
   })();
+  // Keep the shared startup lock until the underlying start fully settles, even
+  // if one waiter aborts early while another caller still owns the startup.
+  const guardedStart = startPromise.finally(() => {
+    if (params.state.startPromise === guardedStart) {
+      params.state.startPromise = null;
+    }
+  });
+  params.state.startPromise = guardedStart;
 
-  try {
-    await params.state.startPromise;
-  } finally {
-    params.state.startPromise = null;
-  }
+  await waitForStart(guardedStart);
 }
 
 async function resolveSharedMatrixClientState(
@@ -138,6 +146,7 @@ async function resolveSharedMatrixClientState(
     auth?: MatrixAuth;
     startClient?: boolean;
     accountId?: string | null;
+    abortSignal?: AbortSignal;
   } = {},
 ): Promise<SharedMatrixClientState> {
   const requestedAccountId = normalizeOptionalAccountId(params.accountId);
@@ -168,9 +177,8 @@ async function resolveSharedMatrixClientState(
     if (shouldStart) {
       await ensureSharedClientStarted({
         state: existingState,
-        timeoutMs: params.timeoutMs,
-        initialSyncLimit: auth.initialSyncLimit,
         encryption: auth.encryption,
+        abortSignal: params.abortSignal,
       });
     }
     return existingState;
@@ -182,9 +190,8 @@ async function resolveSharedMatrixClientState(
     if (shouldStart) {
       await ensureSharedClientStarted({
         state: pending,
-        timeoutMs: params.timeoutMs,
-        initialSyncLimit: auth.initialSyncLimit,
         encryption: auth.encryption,
+        abortSignal: params.abortSignal,
       });
     }
     return pending;
@@ -202,9 +209,8 @@ async function resolveSharedMatrixClientState(
     if (shouldStart) {
       await ensureSharedClientStarted({
         state: created,
-        timeoutMs: params.timeoutMs,
-        initialSyncLimit: auth.initialSyncLimit,
         encryption: auth.encryption,
+        abortSignal: params.abortSignal,
       });
     }
     return created;
@@ -221,6 +227,7 @@ export async function resolveSharedMatrixClient(
     auth?: MatrixAuth;
     startClient?: boolean;
     accountId?: string | null;
+    abortSignal?: AbortSignal;
   } = {},
 ): Promise<MatrixClient> {
   const state = await resolveSharedMatrixClientState(params);
@@ -235,6 +242,7 @@ export async function acquireSharedMatrixClient(
     auth?: MatrixAuth;
     startClient?: boolean;
     accountId?: string | null;
+    abortSignal?: AbortSignal;
   } = {},
 ): Promise<MatrixClient> {
   const state = await resolveSharedMatrixClientState(params);

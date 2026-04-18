@@ -12,7 +12,7 @@ import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
@@ -46,6 +46,14 @@ export type RouteReplyParams = {
   sessionKey?: string;
   /** Provider account id (multi-account). */
   accountId?: string;
+  /** Originating sender id for sender-scoped outbound media policy. */
+  requesterSenderId?: string;
+  /** Originating sender display name for name-keyed sender policy matching. */
+  requesterSenderName?: string;
+  /** Originating sender username for username-keyed sender policy matching. */
+  requesterSenderUsername?: string;
+  /** Originating sender E.164 phone number for e164-keyed sender policy matching. */
+  requesterSenderE164?: string;
   /** Thread id for replies (Telegram topic id or Matrix thread event id). */
   threadId?: string | number;
   /** Config for provider-specific settings. */
@@ -85,10 +93,11 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   const normalizedChannel = normalizeMessageChannel(channel);
   const channelId =
     normalizeChannelId(channel) ?? normalizeOptionalLowercaseString(channel) ?? null;
-  const loadedPlugin = channelId ? getLoadedChannelPlugin(channelId) : undefined;
-  const bundledPlugin = channelId ? getBundledChannelPlugin(channelId) : undefined;
-  const messaging = loadedPlugin?.messaging ?? bundledPlugin?.messaging;
-  const threading = loadedPlugin?.threading ?? bundledPlugin?.threading;
+  const plugin = channelId
+    ? (getLoadedChannelPlugin(channelId) ?? getBundledChannelPlugin(channelId))
+    : undefined;
+  const messaging = plugin?.messaging;
+  const threading = plugin?.threading;
   const resolvedAgentId = params.sessionKey
     ? resolveSessionAgentId({
         sessionKey: params.sessionKey,
@@ -187,6 +196,10 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       cfg,
       agentId: resolvedAgentId,
       sessionKey: params.sessionKey,
+      requesterSenderId: params.requesterSenderId,
+      requesterSenderName: params.requesterSenderName,
+      requesterSenderUsername: params.requesterSenderUsername,
+      requesterSenderE164: params.requesterSenderE164,
     });
     const results = await deliverOutboundPayloads({
       cfg,
