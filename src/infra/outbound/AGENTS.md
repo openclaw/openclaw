@@ -15,9 +15,6 @@ real delivery.
 - Before discovering plugin-owned media/action metadata, first check whether the
   call actually includes plugin-owned params. Standard send params should not
   trigger bundled channel message-tool discovery.
-- Contract tests should reuse SDK/public helpers or narrow plugin-owned route
-  modules. Do not deep-load `runtime-api.ts` or `test-api.ts` barrels just to
-  access chunking, target parsing, or payload formatting helpers.
 
 ## Verification
 

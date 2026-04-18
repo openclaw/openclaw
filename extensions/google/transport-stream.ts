@@ -7,21 +7,8 @@ import {
   type SimpleStreamOptions,
   type ThinkingLevel,
 } from "@mariozechner/pi-ai";
-import { parseGeminiAuth } from "../infra/gemini-auth.js";
-import { normalizeGoogleApiBaseUrl } from "../infra/google-api-base-url.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
-  isGoogleGemini3FlashModel,
-  isGoogleGemini3ProModel,
-  resolveGoogleGemini3ThinkingLevel,
-  stripInvalidGoogleThinkingBudget,
-  type GoogleThinkingInputLevel,
-  type GoogleThinkingLevel,
-} from "./google-thinking-compat.js";
-import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
-import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
-import { transformTransportMessages } from "./transport-message-transform.js";
-import {
+  buildGuardedModelFetch,
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
@@ -29,8 +16,21 @@ import {
   finalizeTransportStream,
   mergeTransportHeaders,
   sanitizeTransportPayloadText,
+  stripSystemPromptCacheBoundary,
+  transformTransportMessages,
   type WritableTransportStream,
-} from "./transport-stream-shared.js";
+} from "openclaw/plugin-sdk/provider-transport-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { parseGeminiAuth } from "./gemini-auth.js";
+import { normalizeGoogleApiBaseUrl } from "./provider-policy.js";
+import {
+  isGoogleGemini3FlashModel,
+  isGoogleGemini3ProModel,
+  resolveGoogleGemini3ThinkingLevel,
+  stripInvalidGoogleThinkingBudget,
+  type GoogleThinkingInputLevel,
+  type GoogleThinkingLevel,
+} from "./thinking-api.js";
 
 type GoogleTransportModel = Model<"google-generative-ai"> & {
   headers?: Record<string, string>;
@@ -69,7 +69,13 @@ type GoogleGenerateContentRequest = {
 type GoogleTransportContentBlock =
   | { type: "text"; text: string; textSignature?: string }
   | { type: "thinking"; thinking: string; thinkingSignature?: string }
-  | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> };
+  | {
+      type: "toolCall";
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+      thoughtSignature?: string;
+    };
 
 type MutableAssistantOutput = {
   role: "assistant";
@@ -612,13 +618,13 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
       };
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? undefined;
-        const fetch = buildGuardedModelFetch(model);
+        const guardedFetch = buildGuardedModelFetch(model);
         let params = buildGoogleGenerativeAiParams(model, context, options);
         const nextParams = await options?.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as GoogleGenerateContentRequest;
         }
-        const response = await fetch(buildGoogleRequestUrl(model), {
+        const response = await guardedFetch(buildGoogleRequestUrl(model), {
           method: "POST",
           headers: buildGoogleHeaders(model, apiKey, options?.headers),
           body: JSON.stringify(params),
@@ -711,6 +717,7 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
                   id: toolCallId,
                   name: part.functionCall.name || "",
                   arguments: part.functionCall.args ?? {},
+                  thoughtSignature: part.thoughtSignature,
                 };
                 output.content.push(toolCall);
                 const blockIndex = output.content.length - 1;
