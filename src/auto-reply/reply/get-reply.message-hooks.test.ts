@@ -8,7 +8,9 @@ const mocks = vi.hoisted(() => ({
   applyMediaUnderstanding: vi.fn(async (..._args: unknown[]) => undefined),
   applyLinkUnderstanding: vi.fn(async (..._args: unknown[]) => undefined),
   createInternalHookEvent: vi.fn(),
+  hasEnrichHooks: vi.fn(() => false),
   triggerInternalHook: vi.fn(async (..._args: unknown[]) => undefined),
+  triggerEnrichHook: vi.fn(async (..._args: unknown[]) => ({})),
   resolveReplyDirectives: vi.fn(),
   initSessionState: vi.fn(),
 }));
@@ -20,6 +22,8 @@ vi.mock("../../globals.js", () => ({
 }));
 vi.mock("../../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: mocks.createInternalHookEvent,
+  hasEnrichHooks: mocks.hasEnrichHooks,
+  triggerEnrichHook: mocks.triggerEnrichHook,
   triggerInternalHook: mocks.triggerInternalHook,
 }));
 vi.mock("../../link-understanding/apply.js", () => ({
@@ -83,7 +87,9 @@ describe("getReplyFromConfig message hooks", () => {
     mocks.applyMediaUnderstanding.mockReset();
     mocks.applyLinkUnderstanding.mockReset();
     mocks.createInternalHookEvent.mockReset();
+    mocks.hasEnrichHooks.mockReset();
     mocks.triggerInternalHook.mockReset();
+    mocks.triggerEnrichHook.mockReset();
     mocks.resolveReplyDirectives.mockReset();
     mocks.initSessionState.mockReset();
 
@@ -104,7 +110,9 @@ describe("getReplyFromConfig message hooks", () => {
         messages: [],
       }),
     );
+    mocks.hasEnrichHooks.mockReturnValue(false);
     mocks.triggerInternalHook.mockResolvedValue(undefined);
+    mocks.triggerEnrichHook.mockResolvedValue({});
     mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
     mocks.initSessionState.mockResolvedValue({
       sessionCtx: {},
