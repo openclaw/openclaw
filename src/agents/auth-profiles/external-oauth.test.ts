@@ -34,6 +34,11 @@ function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCreden
   };
 }
 
+function createUsableOAuthExpiry(): number {
+  // Keep fixtures comfortably outside the shared near-expiry refresh margin.
+  return Date.now() + 30 * 60 * 1000;
+}
+
 describe("auth external oauth helpers", () => {
   beforeEach(() => {
     resolveExternalAuthProfilesWithPluginsMock.mockReset();
@@ -124,7 +129,7 @@ describe("auth external oauth helpers", () => {
       createCredential({
         access: "fresh-cli-access-token",
         refresh: "fresh-cli-refresh-token",
-        expires: Date.now() + 60_000,
+        expires: createUsableOAuthExpiry(),
       }),
     );
 
@@ -159,7 +164,7 @@ describe("auth external oauth helpers", () => {
         "openai-codex:default": createCredential({
           access: "healthy-local-access-token",
           refresh: "healthy-local-refresh-token",
-          expires: Date.now() + 60_000,
+          expires: createUsableOAuthExpiry(),
         }),
       }),
     );
