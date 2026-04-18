@@ -15,13 +15,14 @@ import { readSkillFrontmatterSafe } from "./skills/local-loader.js";
 import { loadWorkspaceSkillEntries } from "./skills/workspace.js";
 import { writePluginWithSkill } from "./test-helpers/skill-plugin-fixtures.js";
 
-const tempDirs: string[] = [];
 let fakeHome = "";
 let envSnapshot: SkillsHomeEnvSnapshot;
+let tempRoot = "";
+let workspaceCaseIndex = 0;
 
 async function createTempWorkspaceDir() {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
-  tempDirs.push(workspaceDir);
+  const workspaceDir = path.join(tempRoot, `workspace-${++workspaceCaseIndex}`);
+  await fs.mkdir(workspaceDir, { recursive: true });
   return workspaceDir;
 }
 
@@ -30,7 +31,9 @@ function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
 }
 
 beforeAll(async () => {
-  fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-home-"));
+  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-workspace-"));
+  fakeHome = path.join(tempRoot, "home");
+  await fs.mkdir(fakeHome, { recursive: true });
   envSnapshot = setMockSkillsHomeEnv(fakeHome);
 });
 
@@ -41,10 +44,9 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
   await restoreMockSkillsHomeEnv(envSnapshot, async () => {
-    if (fakeHome) {
-      await fs.rm(fakeHome, { recursive: true, force: true });
+    if (tempRoot) {
+      await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
 });
@@ -308,7 +310,6 @@ describe("loadWorkspaceSkillEntries", () => {
     async () => {
       const workspaceDir = path.join(fakeHome, "workspace");
       const outsideDir = path.join(fakeHome, "outside");
-      tempDirs.push(workspaceDir, outsideDir);
       const bundledDir = path.join(workspaceDir, ".bundled");
       const escapedSkillDir = path.join(outsideDir, "outside-bundled-skill");
       await writeSkill({
