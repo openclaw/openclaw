@@ -95,10 +95,19 @@ describe("before_agent_start hook merger", () => {
       {
         modelOverride: "llama3.3:8b",
         providerOverride: "ollama",
+        authProfileOverride: "ollama:work",
       },
       {
         modelOverride: "llama3.3:8b",
         providerOverride: "ollama",
+        authProfileOverride: "ollama:work",
+      },
+    ],
+    [
+      "returns authProfileOverride from a single plugin",
+      { authProfileOverride: "ollama:work" },
+      {
+        authProfileOverride: "ollama:work",
       },
     ],
     [
@@ -107,11 +116,13 @@ describe("before_agent_start hook merger", () => {
         systemPrompt: "You are a helpful assistant",
         modelOverride: "llama3.3:8b",
         providerOverride: "ollama",
+        authProfileOverride: "ollama:work",
       },
       {
         systemPrompt: "You are a helpful assistant",
         modelOverride: "llama3.3:8b",
         providerOverride: "ollama",
+        authProfileOverride: "ollama:work",
       },
     ],
   ] as const)("%s", async (_name, hookResult, expected) => {
@@ -133,7 +144,11 @@ describe("before_agent_start hook merger", () => {
     const result = await runWithHooks([
       {
         pluginId: "high-priority",
-        result: { modelOverride: "llama3.3:8b", providerOverride: "ollama" },
+        result: {
+          modelOverride: "llama3.3:8b",
+          providerOverride: "ollama",
+          authProfileOverride: "ollama:work",
+        },
         priority: 10,
       },
       {
@@ -147,6 +162,7 @@ describe("before_agent_start hook merger", () => {
     // Low-priority didn't return modelOverride, so ?? falls back to acc's value.
     expect(result?.modelOverride).toBe("llama3.3:8b");
     expect(result?.providerOverride).toBe("ollama");
+    expect(result?.authProfileOverride).toBe("ollama:work");
     expect(result?.prependContext).toBe("some context");
   });
 
@@ -174,6 +190,7 @@ describe("before_agent_start hook merger", () => {
     expect(result?.prependContext).toBe("legacy context");
     expect(result?.modelOverride).toBeUndefined();
     expect(result?.providerOverride).toBeUndefined();
+    expect(result?.authProfileOverride).toBeUndefined();
   });
 
   it("modelOverride without providerOverride leaves provider undefined", async () => {

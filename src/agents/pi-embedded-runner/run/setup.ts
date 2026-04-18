@@ -30,7 +30,9 @@ type HookRunnerLike = {
   runBeforeModelResolve(
     input: { prompt: string },
     context: HookContext,
-  ): Promise<{ providerOverride?: string; modelOverride?: string } | undefined>;
+  ): Promise<
+    { providerOverride?: string; modelOverride?: string; authProfileOverride?: string } | undefined
+  >;
   runBeforeAgentStart(
     input: { prompt: string },
     context: HookContext,
@@ -46,7 +48,13 @@ export async function resolveHookModelSelection(params: {
 }) {
   let provider = params.provider;
   let modelId = params.modelId;
-  let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
+  let modelResolveOverride:
+    | {
+        providerOverride?: string;
+        modelOverride?: string;
+        authProfileOverride?: string;
+      }
+    | undefined;
   let legacyBeforeAgentStartResult: PluginHookBeforeAgentStartResult | undefined;
   const hookRunner = params.hookRunner;
 
@@ -77,6 +85,9 @@ export async function resolveHookModelSelection(params: {
           modelResolveOverride?.providerOverride ?? legacyBeforeAgentStartResult?.providerOverride,
         modelOverride:
           modelResolveOverride?.modelOverride ?? legacyBeforeAgentStartResult?.modelOverride,
+        authProfileOverride:
+          modelResolveOverride?.authProfileOverride ??
+          legacyBeforeAgentStartResult?.authProfileOverride,
       };
     } catch (hookErr) {
       log.warn(`before_agent_start hook (legacy model resolve path) failed: ${String(hookErr)}`);
@@ -91,11 +102,34 @@ export async function resolveHookModelSelection(params: {
     modelId = modelResolveOverride.modelOverride;
     log.info(`[hooks] model overridden to ${modelId}`);
   }
+  if (modelResolveOverride?.authProfileOverride) {
+    log.info(`[hooks] auth profile preferred as ${modelResolveOverride.authProfileOverride}`);
+  }
 
   return {
     provider,
     modelId,
+    authProfileOverride: modelResolveOverride?.authProfileOverride,
     legacyBeforeAgentStartResult,
+  };
+}
+
+export function resolvePreferredRunAuthProfile(params: {
+  requestedAuthProfileId?: string;
+  requestedAuthProfileIdSource?: "auto" | "user";
+  hookAuthProfileOverride?: string;
+}): {
+  preferredProfileId?: string;
+  preferredProfileIdSource?: "auto" | "user";
+} {
+  const hookPreferredProfileId =
+    params.requestedAuthProfileIdSource === "user"
+      ? undefined
+      : params.hookAuthProfileOverride?.trim() || undefined;
+
+  return {
+    preferredProfileId: hookPreferredProfileId ?? params.requestedAuthProfileId?.trim(),
+    preferredProfileIdSource: hookPreferredProfileId ? "auto" : params.requestedAuthProfileIdSource,
   };
 }
 

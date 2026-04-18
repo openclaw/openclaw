@@ -113,7 +113,11 @@ import {
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
-import { resolveEffectiveRuntimeModel, resolveHookModelSelection } from "./run/setup.js";
+import {
+  resolveEffectiveRuntimeModel,
+  resolveHookModelSelection,
+  resolvePreferredRunAuthProfile,
+} from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
 import {
   resolveLiveToolResultMaxChars,
@@ -338,8 +342,12 @@ export async function runEmbeddedPiAgent(
       const authStore = ensureAuthProfileStore(agentDir, {
         allowKeychainPrompt: false,
       });
-      const preferredProfileId = params.authProfileId?.trim();
-      let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
+      const { preferredProfileId, preferredProfileIdSource } = resolvePreferredRunAuthProfile({
+        requestedAuthProfileId: params.authProfileId,
+        requestedAuthProfileIdSource: params.authProfileIdSource,
+        hookAuthProfileOverride: hookSelection.authProfileOverride,
+      });
+      let lockedProfileId = preferredProfileIdSource === "user" ? preferredProfileId : undefined;
       if (lockedProfileId) {
         const lockedProfile = authStore.profiles[lockedProfileId];
         if (
@@ -855,7 +863,7 @@ export async function runEmbeddedPiAgent(
             currentProvider: provider,
             currentModel: modelId,
             currentAuthProfileId: preferredProfileId,
-            currentAuthProfileIdSource: params.authProfileIdSource,
+            currentAuthProfileIdSource: preferredProfileIdSource,
           });
           if (requestedSelection && canRestartForLiveSwitch) {
             await clearLiveModelSwitchPending({

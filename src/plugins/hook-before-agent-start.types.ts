@@ -9,6 +9,8 @@ export type PluginHookBeforeModelResolveResult = {
   modelOverride?: string;
   /** Override the provider for this agent run. E.g. "ollama" */
   providerOverride?: string;
+  /** Prefer an auth profile for this run. Higher-priority hooks win. */
+  authProfileOverride?: string;
 };
 
 // before_prompt_build hook

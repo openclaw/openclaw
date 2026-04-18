@@ -96,7 +96,7 @@ Direction:
 
 - keep it working
 - document it as legacy
-- prefer `before_model_resolve` for model/provider override work
+- prefer `before_model_resolve` for model/provider/auth-profile override work
 - prefer `before_prompt_build` for prompt mutation work
 - remove only after real usage drops and fixture coverage proves migration safety
 
