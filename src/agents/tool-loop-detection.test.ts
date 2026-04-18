@@ -373,6 +373,46 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("treats update_plan status changes as real progress", () => {
+      const state = createState();
+      const result = { details: { status: "updated" } };
+
+      for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD - 1; i += 1) {
+        const toolCallId = `plan-repeat-${i}`;
+        const params = {
+          explanation: `tiny wording tweak ${i}`,
+          plan: [
+            { step: `read file ${i}`, status: "in_progress" },
+            { step: `patch code ${i}`, status: "pending" },
+          ],
+        };
+        recordToolCall(state, "update_plan", params, toolCallId);
+        recordToolCallOutcome(state, {
+          toolName: "update_plan",
+          toolParams: params,
+          toolCallId,
+          result,
+        });
+      }
+
+      const progressedParams = {
+        explanation: "status changed meaningfully",
+        plan: [
+          { step: "read file done", status: "completed" },
+          { step: "patch code now", status: "in_progress" },
+        ],
+      };
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "update_plan",
+        progressedParams,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
     it("applies custom thresholds when detection is enabled", () => {
       const state = createState();
       const { params, result } = createNoProgressPollFixture("sess-custom");

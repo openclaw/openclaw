@@ -150,12 +150,8 @@ function normalizeLoopDetectionParams(toolName: string, params: unknown): unknow
   const explanation = typeof params.explanation === "string" ? params.explanation.trim() : "";
 
   return {
-    toolName,
     planLength: normalizedPlan.length,
     statuses: normalizedPlan.map((entry) => entry.status),
-    inProgressCount: normalizedPlan.filter((entry) => entry.status === "in_progress").length,
-    completedCount: normalizedPlan.filter((entry) => entry.status === "completed").length,
-    pendingCount: normalizedPlan.filter((entry) => entry.status === "pending").length,
     stepPresence: normalizedPlan.map((entry) => entry.hasStep),
     hasExplanation: explanation.length > 0,
   };
