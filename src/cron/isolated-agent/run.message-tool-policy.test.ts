@@ -92,6 +92,14 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
+  it("disables the message tool when webhook delivery is active", async () => {
+    await expectMessageToolDisabledForPlan({
+      requested: false,
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+    });
+  });
+
   it("keeps the message tool enabled for shared callers when delivery is not requested", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
