@@ -205,6 +205,46 @@ export function redactSensitiveFieldValue(key: string, value: string): string {
   return value;
 }
 
+/**
+ * Machine-readable marker appended to agent-visible text when OpenClaw redacts
+ * secret-looking values. The marker is deliberately stable so downstream
+ * tooling, agents, and operators can detect redaction from the text alone.
+ * Keep this string stable; external docs, agents, and contracts reference it.
+ */
+export const OPENCLAW_REDACTED_MARKER = "[OPENCLAW-REDACTED]";
+
+/**
+ * Standard warning body used with {@link OPENCLAW_REDACTED_MARKER}. Stays
+ * stable so agents and external detection can match on the marker plus a
+ * short, documented guidance tail.
+ */
+export const OPENCLAW_REDACTED_NOTICE =
+  'OpenClaw redacted one or more secret-looking values (apiKey, token, secret, password, bearer) in this output. Treat redacted placeholders (for example "***" or "abc123…xyz") as opaque markers: do NOT write this output back to config files, .env files, or any on-disk secret, and do not echo the placeholder as a real value in subsequent tool calls. Re-fetch the real value from environment variables or the authoritative config source when you need it.';
+
+/**
+ * Redact text for agent-visible tool outputs. When redaction fires, append a
+ * machine-readable marker ({@link OPENCLAW_REDACTED_MARKER}) plus a short
+ * guidance note so the agent can detect redaction even when the placeholder
+ * itself (e.g. `"***"`) is not unambiguous on its own.
+ *
+ * Logs, UI labels, and other non-agent consumers should keep using
+ * {@link redactSensitiveText} to avoid marker pollution in those surfaces.
+ */
+export function redactSensitiveTextForAgent(text: string, options?: RedactOptions): string {
+  if (!text) {
+    return text;
+  }
+  const resolved = resolveRedactOptions(options);
+  if (resolved.mode === "off" || !resolved.patterns.length) {
+    return text;
+  }
+  const redacted = redactText(text, resolved.patterns);
+  if (redacted === text) {
+    return text;
+  }
+  return `${redacted}\n\n${OPENCLAW_REDACTED_MARKER} ${OPENCLAW_REDACTED_NOTICE}`;
+}
+
 export function getDefaultRedactPatterns(): string[] {
   return [...DEFAULT_REDACT_PATTERNS];
 }

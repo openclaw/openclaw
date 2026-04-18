@@ -4,9 +4,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   getDefaultRedactPatterns,
+  OPENCLAW_REDACTED_MARKER,
+  OPENCLAW_REDACTED_NOTICE,
   redactSensitiveFieldValue,
   redactSensitiveLines,
   redactSensitiveText,
+  redactSensitiveTextForAgent,
   resolveRedactOptions,
 } from "./redact.js";
 
@@ -418,5 +421,47 @@ describe("redactSensitiveLines", () => {
     expect(joined).toContain("-----END PRIVATE KEY-----");
     expect(joined).toContain("…redacted…");
     expect(joined).not.toContain("ABCDEF1234567890");
+  });
+});
+
+describe("redactSensitiveTextForAgent", () => {
+  it("appends the machine-readable marker when redaction actually fires", () => {
+    const input = '{"apiKey":"abcdef1234567890ghij","model":"foo"}';
+    const output = redactSensitiveTextForAgent(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toContain('"apiKey":"abcdef…ghij"');
+    expect(output).toContain(OPENCLAW_REDACTED_MARKER);
+    expect(output).toContain(OPENCLAW_REDACTED_NOTICE);
+    // The marker should come after the redacted payload, separated by a blank line.
+    expect(output.indexOf(OPENCLAW_REDACTED_MARKER)).toBeGreaterThan(
+      output.indexOf('"model":"foo"'),
+    );
+    expect(output).toMatch(/\n\n\[OPENCLAW-REDACTED\] /);
+  });
+
+  it("returns the input unchanged when no redaction fires", () => {
+    const input = "just a regular tool output with no secrets";
+    const output = redactSensitiveTextForAgent(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe(input);
+    expect(output).not.toContain(OPENCLAW_REDACTED_MARKER);
+  });
+
+  it("returns the input unchanged when mode is off, even if secrets are present", () => {
+    const input = '{"apiKey":"abcdef1234567890ghij"}';
+    const output = redactSensitiveTextForAgent(input, {
+      mode: "off",
+      patterns: defaults,
+    });
+    expect(output).toBe(input);
+    expect(output).not.toContain(OPENCLAW_REDACTED_MARKER);
+  });
+
+  it("returns empty input unchanged", () => {
+    expect(redactSensitiveTextForAgent("", { mode: "tools", patterns: defaults })).toBe("");
   });
 });

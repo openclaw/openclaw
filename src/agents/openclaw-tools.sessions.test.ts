@@ -683,14 +683,52 @@ describe("sessions tools", () => {
       truncated?: boolean;
       contentTruncated?: boolean;
       contentRedacted?: boolean;
+      notice?: string;
     };
     expect(details.contentRedacted).toBe(true);
     expect(details.contentTruncated).toBe(false);
     expect(details.truncated).toBe(false);
+    // When content is redacted, surface a machine-readable notice so agents can
+    // detect redaction from the response text itself, not only the structured flag.
+    expect(typeof details.notice).toBe("string");
+    expect(details.notice).toContain("[OPENCLAW-REDACTED]");
+    expect(details.notice).toContain("do NOT write this output back");
     const msg = details.messages?.[0] as { content?: Array<{ type?: string; text?: string }> };
     const textBlock = msg?.content?.find((b) => b.type === "text");
     expect(typeof textBlock?.text).toBe("string");
     expect(textBlock?.text).not.toContain("sk-1234567890abcdef1234");
+  });
+
+  it("sessions_history omits the redaction notice when nothing was redacted", async () => {
+    callGatewayMock.mockReset();
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "just regular content with no secrets" }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-no-redact-1", { sessionKey: "main" });
+    const details = result.details as {
+      contentRedacted?: boolean;
+      notice?: string;
+    };
+    expect(details.contentRedacted).toBe(false);
+    expect(details.notice).toBeUndefined();
   });
 
   it("sessions_history sets both contentRedacted and contentTruncated independently", async () => {
