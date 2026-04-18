@@ -58,6 +58,9 @@ export type AgentWaitResult = {
 export type SubagentRunOutcome = {
   status: "ok" | "error" | "timeout" | "unknown";
   error?: string;
+  startedAt?: number;
+  endedAt?: number;
+  elapsedMs?: number;
 };
 
 function extractToolResultText(content: unknown): string {
@@ -297,19 +300,29 @@ export function applySubagentWaitOutcome(params: {
     startedAt: params.startedAt,
     endedAt: params.endedAt,
   };
-  const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
-  if (params.wait?.status === "timeout") {
-    next.outcome = { status: "timeout" };
-  } else if (params.wait?.status === "error") {
-    next.outcome = { status: "error", error: waitError };
-  } else if (params.wait?.status === "ok") {
-    next.outcome = { status: "ok" };
-  }
   if (typeof params.wait?.startedAt === "number" && !next.startedAt) {
     next.startedAt = params.wait.startedAt;
   }
   if (typeof params.wait?.endedAt === "number" && !next.endedAt) {
     next.endedAt = params.wait.endedAt;
+  }
+  const timing: Pick<SubagentRunOutcome, "startedAt" | "endedAt" | "elapsedMs"> = {};
+  if (typeof next.startedAt === "number") {
+    timing.startedAt = next.startedAt;
+  }
+  if (typeof next.endedAt === "number") {
+    timing.endedAt = next.endedAt;
+  }
+  if (typeof next.startedAt === "number" && typeof next.endedAt === "number") {
+    timing.elapsedMs = Math.max(0, next.endedAt - next.startedAt);
+  }
+  const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
+  if (params.wait?.status === "timeout") {
+    next.outcome = { status: "timeout", ...timing };
+  } else if (params.wait?.status === "error") {
+    next.outcome = { status: "error", error: waitError, ...timing };
+  } else if (params.wait?.status === "ok") {
+    next.outcome = { status: "ok", ...timing };
   }
   return next;
 }

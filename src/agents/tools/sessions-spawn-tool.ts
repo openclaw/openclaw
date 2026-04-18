@@ -201,10 +201,13 @@ export function createSessionsSpawnTool(
           }>)
         : undefined;
 
+      const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
+
       if (streamTo && runtime !== "acp") {
         return jsonResult({
           status: "error",
           error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
+          ...roleContext,
         });
       }
 
@@ -212,6 +215,7 @@ export function createSessionsSpawnTool(
         return jsonResult({
           status: "error",
           error: `resumeSessionId is only supported for runtime=acp; got runtime=${runtime}`,
+          ...roleContext,
         });
       }
 
@@ -222,6 +226,7 @@ export function createSessionsSpawnTool(
             status: "error",
             error:
               "attachments are currently unsupported for runtime=acp; use runtime=subagent or remove attachments",
+            ...roleContext,
           });
         }
         const result = await spawnAcpDirect(
@@ -304,10 +309,15 @@ export function createSessionsSpawnTool(
               error: `Failed to register ACP run: ${summarizeError(err)}. Cleanup was attempted, but the already-started ACP run may still finish in the background.`,
               childSessionKey,
               runId: childRunId,
+              ...roleContext,
             });
           }
         }
-        return jsonResult(result);
+        return jsonResult(
+          result.status === "error" && requestedAgentId
+            ? { ...result, role: requestedAgentId }
+            : result,
+        );
       }
 
       const result = await spawnSubagentDirect(
@@ -345,7 +355,11 @@ export function createSessionsSpawnTool(
         },
       );
 
-      return jsonResult(result);
+      return jsonResult(
+        result.status === "error" && requestedAgentId
+          ? { ...result, role: requestedAgentId }
+          : result,
+      );
     },
   };
 }
