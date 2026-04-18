@@ -47,6 +47,16 @@ function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
   return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => cb());
 }
 
+async function writePromptLimitSkills(workspaceDir: string) {
+  for (const name of ["alpha-skill", "beta-skill", "gamma-skill"]) {
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", name),
+      name,
+      description: "D".repeat(240),
+    });
+  }
+}
+
 const withClearedEnv = <T>(
   keys: string[],
   run: (original: Record<string, string | undefined>) => T,
@@ -334,13 +344,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
 
   it("applies per-agent skillsLimits.maxSkillsPromptChars", async () => {
     const workspaceDir = await makeWorkspace();
-    for (const name of ["alpha-skill", "beta-skill", "gamma-skill"]) {
-      await writeSkill({
-        dir: path.join(workspaceDir, "skills", name),
-        name,
-        description: "D".repeat(240),
-      });
-    }
+    await writePromptLimitSkills(workspaceDir);
 
     const prompt = withWorkspaceHome(workspaceDir, () =>
       buildWorkspaceSkillsPrompt(workspaceDir, {
@@ -372,13 +376,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
 
   it("does not apply agents.list[].skillsLimits without an explicit agent id", async () => {
     const workspaceDir = await makeWorkspace();
-    for (const name of ["alpha-skill", "beta-skill", "gamma-skill"]) {
-      await writeSkill({
-        dir: path.join(workspaceDir, "skills", name),
-        name,
-        description: "D".repeat(240),
-      });
-    }
+    await writePromptLimitSkills(workspaceDir);
 
     const prompt = withWorkspaceHome(workspaceDir, () =>
       buildWorkspaceSkillsPrompt(workspaceDir, {
