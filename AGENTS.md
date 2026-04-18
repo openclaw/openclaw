@@ -127,7 +127,14 @@
 - Node remains supported for running built output (`dist/*`) and production installs.
 - Mac packaging (dev): `scripts/package-mac-app.sh` defaults to current arch.
 - Type-check/build: `pnpm build`
-- TypeScript checks: `pnpm tsgo` (prod graph), `pnpm tsgo:test` (full colocated-test graph), `pnpm tsgo:all` (both; used by `pnpm check`). Targeted test graphs: `pnpm tsgo:test:src`, `pnpm tsgo:test:extensions`, `pnpm tsgo:test:ui`, `pnpm tsgo:test:packages`.
+- TypeScript checks are split by architecture boundary:
+  - `pnpm tsgo` / `pnpm tsgo:core`: core production graph (`src/`, `ui/`, `packages/`; no `extensions/`).
+  - `pnpm tsgo:core:test`: core colocated tests.
+  - `pnpm tsgo:extensions`: bundled extension production graph.
+  - `pnpm tsgo:extensions:test`: bundled extension colocated tests.
+  - `pnpm tsgo:all`: every TypeScript graph above; this is what `pnpm check` runs.
+  - Narrow aliases remain for local loops: `pnpm tsgo:test:src`, `pnpm tsgo:test:ui`, `pnpm tsgo:test:packages`.
+- Boundary rule: core must not know extension implementation details. Extensions hook into core through manifests, registries, capabilities, and public `openclaw/plugin-sdk/*` contracts. If you find core production code naming a specific extension, or a core test that is really testing extension-owned behavior, call it out and prefer moving coverage/logic to the owning extension or a generic contract test.
 - Lint/format: `pnpm check`
 - Local agent/dev shells default to host-aware `OPENCLAW_LOCAL_CHECK=1` behavior for `pnpm tsgo` and `pnpm lint`; set `OPENCLAW_LOCAL_CHECK_MODE=throttled` to force the lower-memory profile, `OPENCLAW_LOCAL_CHECK_MODE=full` to keep lock-only behavior, or `OPENCLAW_LOCAL_CHECK=0` in CI/shared runs.
 - Format check: `pnpm format:check` (oxfmt --check)
