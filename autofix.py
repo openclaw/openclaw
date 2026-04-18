@@ -288,6 +288,13 @@ def _call_claude_subscription(system: str, user_msg: str) -> str:
     node_bin = _resolve_node_bin()
     sdk_cli = _resolve_sdk_cli()
     prompt = f"{system}\n\n---\n\n{user_msg}"
+    # On Windows, capture_output alone doesn't suppress the child
+    # console. CREATE_NO_WINDOW makes the node process spawn fully
+    # hidden -- avoids the "flashing cmd window every heartbeat tick"
+    # UX problem when the daemon runs in the background.
+    popen_kwargs = {}
+    if sys.platform == "win32":
+        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     proc = subprocess.run(
         [
             node_bin,
@@ -305,6 +312,7 @@ def _call_claude_subscription(system: str, user_msg: str) -> str:
         check=False,
         encoding="utf-8",
         errors="replace",
+        **popen_kwargs,
     )
     if proc.returncode != 0:
         print(f"Agent SDK subprocess exited {proc.returncode}", file=sys.stderr)
@@ -472,8 +480,23 @@ def check_autofix_loop(repo: str, branch: str) -> Optional[str]:
 # Apply, verify, push
 # ---------------------------------------------------------------------------
 
+_WIN_NO_WINDOW = (
+    {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    if sys.platform == "win32"
+    else {}
+)
+
+
 def git(*args, cwd=None, check=False):
-    result = subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd)
+    # CREATE_NO_WINDOW keeps git's child process fully hidden on
+    # Windows so the daemon doesn't flash a cmd window per invocation.
+    result = subprocess.run(
+        ["git", *args],
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+        **_WIN_NO_WINDOW,
+    )
     if check and result.returncode != 0:
         print(f"git {' '.join(args)} failed:\n{result.stderr}", file=sys.stderr)
         raise RuntimeError(f"git {args[0]} failed")
@@ -603,7 +626,12 @@ def apply_patches(repo: str, branch: str, head_sha: str, patches: list[FilePatch
         if VERIFY_CMD:
             print(f"autofix: running verification command `{VERIFY_CMD}` before push...")
             verify = subprocess.run(
-                VERIFY_CMD, shell=True, cwd=str(work_dir), capture_output=True, text=True
+                VERIFY_CMD,
+                shell=True,
+                cwd=str(work_dir),
+                capture_output=True,
+                text=True,
+                **_WIN_NO_WINDOW,
             )
             if verify.returncode != 0:
                 print(
