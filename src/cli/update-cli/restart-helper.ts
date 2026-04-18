@@ -90,20 +90,33 @@ rm -f "$0"
       const home = normalizeOptionalString(env.HOME) || process.env.HOME || os.homedir();
       const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
       const escapedPlistPath = shellEscape(plistPath);
+      const logPath = path.join(home, ".openclaw", "logs", "update-restart.log");
+      const escapedLogPath = shellEscape(logPath);
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
 # Standalone restart script — survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
 sleep 1
+# Capture launchctl stderr so bootstrap/kickstart failures leave a durable
+# audit trail. Without this, transient launchctl errors (plist-on-disk race,
+# schema rejection, stale job) disappear into /dev/null and the updater
+# reports success while the gateway is silently offline — see #68486.
+mkdir -p "$(dirname '${escapedLogPath}')" 2>/dev/null || true
+exec 2>>'${escapedLogPath}'
+echo "[$(date -u +%FT%TZ)] openclaw update restart attempt (label=${escaped})" >&2
 # Try kickstart first (works when the service is still registered).
 # If it fails (e.g. after bootout), clear any persisted disabled state,
-# then re-register via bootstrap and kickstart.
-if ! launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null; then
-  launchctl enable 'gui/${uid}/${escaped}' 2>/dev/null
-  launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}' 2>/dev/null
-  launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null || true
+# then re-register via bootstrap and kickstart. Any step's stderr now
+# lands in update-restart.log; the final kickstart no longer swallows
+# its exit code with \`|| true\`, so a genuine failure exits non-zero and
+# is inspectable.
+if ! launchctl kickstart -k 'gui/${uid}/${escaped}'; then
+  launchctl enable 'gui/${uid}/${escaped}'
+  launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}'
+  launchctl kickstart -k 'gui/${uid}/${escaped}'
 fi
-# Self-cleanup
+echo "[$(date -u +%FT%TZ)] openclaw update restart done" >&2
+# Self-cleanup (log is retained under ~/.openclaw/logs/update-restart.log).
 rm -f "$0"
 `;
     } else if (platform === "win32") {

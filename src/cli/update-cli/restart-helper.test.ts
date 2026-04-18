@@ -111,6 +111,28 @@ describe("restart-helper", () => {
       await cleanupScript(scriptPath);
     });
 
+    it("captures macOS launchctl stderr to ~/.openclaw/logs/update-restart.log (#68486)", async () => {
+      // Silent failure in macOS update restart helper: previously every
+      // launchctl call redirected stderr to /dev/null and the final kickstart
+      // was chained with `|| true`, so bootstrap/kickstart failures were
+      // invisible and the gateway stayed offline while the updater reported
+      // success. The script should now route stderr to a durable log file and
+      // stop swallowing the final exit code.
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 501;
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        HOME: "/Users/testuser",
+      });
+      expect(content).toContain("exec 2>>'/Users/testuser/.openclaw/logs/update-restart.log'");
+      // Every launchctl call should allow stderr through now (no `2>/dev/null`)
+      // and the final kickstart must not swallow its exit code.
+      expect(content).not.toMatch(/launchctl[^\n]*2>\/dev\/null/);
+      expect(content).not.toMatch(/launchctl kickstart[^\n]*\|\| true/);
+      await cleanupScript(scriptPath);
+    });
+
     it("uses OPENCLAW_LAUNCHD_LABEL override on macOS", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;
