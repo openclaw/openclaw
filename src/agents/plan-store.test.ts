@@ -236,6 +236,38 @@ describe("PlanStore", () => {
     });
   });
 
+  describe("stale-lock reclamation (PR-F review #3096520142)", () => {
+    it("reclaims a lock whose holder PID is dead and whose mtime is older than LOCK_STALE_MS", async () => {
+      // Dead holder PID: PID 0 doesn't correspond to a process on POSIX,
+      // and `process.kill(0, 0)` throws ESRCH (treated as dead by the
+      // reclamation logic). Avoids picking a real PID by accident.
+      const namespace = "ns-stale-lock";
+      await fs.mkdir(path.join(tmpDir, namespace), { recursive: true });
+      const lockFile = path.join(tmpDir, namespace, ".lock");
+      // Plant a stale lock: dead PID + mtime older than 60s.
+      await fs.writeFile(lockFile, `0-${Date.now() - 120_000}-deadbeef`);
+      const oldMs = (Date.now() - 120_000) / 1000; // 2 min ago in s
+      await fs.utimes(lockFile, oldMs, oldMs);
+      // lock() should reclaim and acquire successfully (no throw).
+      const release = await store.lock(namespace);
+      expect(typeof release).toBe("function");
+      await release();
+    });
+
+    it("does NOT reclaim a fresh lock whose holder PID is alive (the current process)", async () => {
+      const namespace = "ns-fresh-lock";
+      await fs.mkdir(path.join(tmpDir, namespace), { recursive: true });
+      const lockFile = path.join(tmpDir, namespace, ".lock");
+      // Plant a fresh lock: current PID (alive) + recent mtime.
+      await fs.writeFile(lockFile, `${process.pid}-${Date.now()}-deadbeef`);
+      // Acquisition should fail (after retries) because the holder is
+      // both fresh AND alive.
+      await expect(store.lock(namespace)).rejects.toThrow(/Failed to acquire plan lock/);
+      // Manual cleanup so the temp dir teardown is clean.
+      await fs.unlink(lockFile);
+    });
+  });
+
   describe("confine() — parent-symlink redirection (Codex P1 r3095586226)", () => {
     it("rejects a namespace directory that is a symlink pointing outside baseDir", async () => {
       // Create an attacker-controlled directory outside baseDir.
@@ -245,8 +277,18 @@ describe("PlanStore", () => {
         const symlinkTarget = path.join(tmpDir, "hostile");
         await fs.symlink(attackerDir, symlinkTarget);
         // read() / write() must throw with a 'parent symlink' confinement error.
+        // PR-F review fix (Copilot #3096520161 / #3096791944 / Greptile P1
+        // #3105248695): pass a complete StoredPlan so the test type-checks
+        // under `pnpm tsgo`. The confinement check fires inside `planPath`
+        // (called as the first line of `write()`) BEFORE any field is read,
+        // so the assertion is unchanged regardless of plan field content.
         await expect(
-          store.write("hostile", { steps: [{ step: "x", status: "pending" }] }),
+          store.write("hostile", {
+            namespace: "hostile",
+            steps: [{ step: "x", status: "pending" }],
+            createdAt: 1,
+            updatedAt: 1,
+          }),
         ).rejects.toThrow(/escapes base directory/);
         // Also verify nothing was written into the attacker directory.
         const filesInAttacker = await fs.readdir(attackerDir);

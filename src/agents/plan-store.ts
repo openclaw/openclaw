@@ -17,6 +17,14 @@ import { constants as fsConstants, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+// O_NOFOLLOW is POSIX; Windows fs constants don't define it. Feature-detect
+// to keep the read/lock paths cross-platform (matches the pattern in
+// `src/infra/fs-safe.ts:72-84`). On Windows the symlink rejection
+// degrades to none — Windows symlinks to outside baseDir would still be
+// caught by the realpath-based `confine()` walk.
+const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
+const NOFOLLOW_FLAG = SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0;
+
 export interface StoredPlanStep {
   step: string;
   status: "pending" | "in_progress" | "completed" | "cancelled";
@@ -32,26 +40,27 @@ export interface StoredPlan {
   updatedAt: number;
 }
 
-/**
- * Validates parsed JSON shape and strips prototype-pollution keys at every level.
- * Defense-in-depth: Node's JSON.parse doesn't pollute prototypes by default,
- * but explicitly removing __proto__/constructor/prototype keys prevents any
- * future code path from accidentally trusting them.
- */
 const VALID_STEP_STATUSES = new Set(["pending", "in_progress", "completed", "cancelled"]);
 
 /**
- * Validates parsed JSON shape and strips prototype-pollution keys at every level.
- * Defense-in-depth: Node's JSON.parse doesn't pollute prototypes by default,
- * but explicitly removing __proto__/constructor/prototype keys prevents any
- * future code path from accidentally trusting them.
+ * Validates parsed JSON shape AND constructs a fresh prototype-safe
+ * StoredPlan from validated fields only.
  *
- * Codex P2 (PR #67542 r3094816890): the prior shallow check (namespace is
- * string + steps is array) let malformed files like `steps: [null]` or
- * missing `createdAt`/`updatedAt` slip through, then crashed downstream
- * code (e.g. `mergeSteps()` reading `step.step`) instead of surfacing a
- * clear read-time error. This function now validates EVERY field needed
- * by downstream consumers.
+ * Defense-in-depth: Node's JSON.parse doesn't pollute prototypes by
+ * default, but constructing a fresh object only including known fields
+ * (instead of returning the parsed input) guarantees that any
+ * `__proto__`/`constructor`/`prototype` keys present in the source JSON
+ * are dropped at every level — top-level AND per-step. The prior
+ * shallow filter left step objects unfiltered, and `mergeSteps()`
+ * spreads step objects via `{ ...update, ...attribution }`, so a stored
+ * step containing pollution keys could have survived to the spread.
+ *
+ * Also enforces:
+ * - Namespace matches the requested namespace (file-rename detection).
+ * - Each step has non-empty `step` text + valid `status`.
+ * - Required `createdAt`/`updatedAt` are non-negative numbers.
+ *
+ * Codex P2 (PR #67542 r3094816890) + Copilot #3105043468 / #3096520083 / #3105169764.
  */
 function sanitizePlanShape(parsed: unknown, expectedNamespace: string): StoredPlan {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -104,21 +113,50 @@ function sanitizePlanShape(parsed: unknown, expectedNamespace: string): StoredPl
       `Plan file for "${expectedNamespace}" has invalid \`updatedAt\` — expected non-negative number`,
     );
   }
-  // Filter prototype-pollution keys defensively at the top level.
-  const safe: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (k === "__proto__" || k === "constructor" || k === "prototype") {
-      continue;
-    }
-    safe[k] = v;
+  // PR-F review fix (Copilot #3105043468 / #3096520083 etc): build clean
+  // step objects too — the prior shallow filter only stripped
+  // prototype-pollution keys at the top level, but `mergeSteps()` later
+  // spreads step objects (`{ ...update, ...attribution }`), so a stored
+  // step containing `__proto__`/`constructor`/`prototype` could survive
+  // and reach the spread. Construct each safe step from validated fields
+  // only, dropping all other keys.
+  const safeSteps: StoredPlanStep[] = [];
+  for (let i = 0; i < obj.steps.length; i += 1) {
+    const s = obj.steps[i] as Record<string, unknown>;
+    const safeStep: StoredPlanStep = {
+      step: s.step as string,
+      status: s.status as StoredPlanStep["status"],
+      ...(typeof s.activeForm === "string" ? { activeForm: s.activeForm } : {}),
+      ...(typeof s.updatedBy === "string" ? { updatedBy: s.updatedBy } : {}),
+      ...(typeof s.updatedAt === "number" && Number.isFinite(s.updatedAt)
+        ? { updatedAt: s.updatedAt }
+        : {}),
+    };
+    safeSteps.push(safeStep);
   }
-  return safe as unknown as StoredPlan;
+  // Filter prototype-pollution keys defensively at the top level too.
+  // (Step objects above are already prototype-safe by construction.)
+  const safe: StoredPlan = {
+    namespace: obj.namespace,
+    steps: safeSteps,
+    createdAt: obj.createdAt,
+    updatedAt: obj.updatedAt,
+  };
+  return safe;
 }
 
 // Stale-lock threshold bumped to 60s to reduce false-positive theft of
 // legitimate slow operations. Combined with PID liveness check, this gives
 // a much more conservative recovery model.
 const LOCK_STALE_MS = 60_000;
+// Hard upper bound (PR-F review fix, Codex P1 #3096565561): even if the
+// PID-liveness probe says the lock holder is alive, a lock older than
+// this hard cap is force-evicted. Mitigates the PID-reuse failure mode
+// where a crashed process's PID gets recycled by an unrelated process,
+// causing `process.kill(holderPid, 0)` to falsely report the original
+// holder as still alive and deadlocking subsequent writers indefinitely.
+// 5 minutes is well above any legitimate plan write (typically <1s).
+const LOCK_HARD_MAX_MS = 5 * 60_000;
 // Max allowed plan file size (defense-in-depth against giant JSON parse).
 const MAX_PLAN_FILE_BYTES = 1_048_576; // 1 MiB
 // Windows reserved device names — case-insensitive, with optional extension.
@@ -249,8 +287,12 @@ export class PlanStore {
     const planFile = this.planPath(namespace);
     let handle: fs.FileHandle | undefined;
     try {
-      // O_NOFOLLOW: refuse to follow symlinks at the leaf path.
-      handle = await fs.open(planFile, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      // O_NOFOLLOW (POSIX-only): refuse to follow symlinks at the leaf
+      // path. PR-F review fix (Copilot #3105043456): feature-detected
+      // via SUPPORTS_NOFOLLOW so the path stays cross-platform — on
+      // Windows the flag is `0` and parent-symlink confinement is still
+      // enforced via realpath in `confine()`.
+      handle = await fs.open(planFile, fsConstants.O_RDONLY | NOFOLLOW_FLAG);
       const stat = await handle.stat();
       if (!stat.isFile()) {
         throw new Error(`Plan path is not a regular file: ${planFile}`);
@@ -321,8 +363,12 @@ export class PlanStore {
 
   /**
    * Acquires a file-level lock for a namespace.
-   * Returns a release function. Stale locks (older than 10s) are
-   * cleaned up opportunistically by the next lock() caller.
+   * Returns a release function. Stale locks (older than `LOCK_STALE_MS`,
+   * currently 60s) are cleaned up opportunistically by the next
+   * lock() caller. PID liveness is checked before eviction to avoid
+   * stealing from a slow-but-alive holder; a hard cap
+   * (`LOCK_HARD_MAX_MS`, 5 minutes) overrides the alive check to
+   * guarantee progress under PID-reuse / process-stuck scenarios.
    */
   async lock(namespace: string): Promise<() => Promise<void>> {
     const lockFile = this.lockPath(namespace);
@@ -333,12 +379,26 @@ export class PlanStore {
     const lockToken = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 
     // Try to acquire lock with O_EXCL (fails if file exists).
-    // If lock exists but is stale (>10s), remove and retry.
+    // If lock exists but is stale (older than LOCK_STALE_MS = 60s),
+    // remove and retry. A hard cap (LOCK_HARD_MAX_MS = 5 min)
+    // overrides PID-liveness if the lock has been held longer than
+    // any legitimate write would need (PID-reuse mitigation).
     const maxRetries = 5;
     for (let i = 0; i < maxRetries; i++) {
       let handle: fs.FileHandle | undefined;
       try {
-        handle = await fs.open(lockFile, "wx");
+        // PR-F review fix (Copilot #3105043461): include O_NOFOLLOW so
+        // an attacker who plants `<namespace>/.lock` as a symlink
+        // BEFORE we try to acquire it can't redirect the create
+        // outside `baseDir`. `confine()` rejects parent-symlink
+        // redirection but doesn't catch a leaf-symlink at `.lock`.
+        // O_EXCL+O_CREAT+O_NOFOLLOW together enforce: file must not
+        // exist AND must not be a symlink.
+        handle = await fs.open(
+          lockFile,
+          fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | NOFOLLOW_FLAG,
+          0o600,
+        );
         try {
           await handle.writeFile(lockToken);
         } catch {
@@ -418,9 +478,23 @@ export class PlanStore {
                   }
                 }
                 if (alive) {
-                  // Holder is alive — wait, don't steal.
-                  await new Promise((r) => setTimeout(r, 200 * (i + 1)));
-                  continue;
+                  // PR-F review fix (Codex P1 #3096565561): hard cap
+                  // overrides the alive check to mitigate PID reuse.
+                  // After a crash + reboot (or any PID rollover), the
+                  // holder PID may belong to an unrelated process that
+                  // would never release this lock. The hard cap
+                  // guarantees progress; legitimate plan writes are
+                  // sub-second so reaching `LOCK_HARD_MAX_MS` (5 min)
+                  // is overwhelmingly likely a reused-PID or stuck
+                  // process.
+                  if (ageMs <= LOCK_HARD_MAX_MS) {
+                    // Holder is alive AND within hard cap — wait, don't steal.
+                    await new Promise((r) => setTimeout(r, 200 * (i + 1)));
+                    continue;
+                  }
+                  // Hard cap exceeded — fall through to the unlink branch
+                  // below. Comment-only signal (no log import in this
+                  // module): the lock was force-evicted past the deadman.
                 }
               }
               // Re-stat just before unlink to detect a new owner that
@@ -437,10 +511,35 @@ export class PlanStore {
                 continue;
               }
               await fs.unlink(lockFile);
+              // PR-F review fix (Codex P2 #3096565570): if this is the
+              // final iteration, the loop would exit here without ever
+              // attempting acquisition of the now-free lock. Reset the
+              // retry budget for one extra acquisition attempt to
+              // guarantee at least one try after a successful stale
+              // cleanup. This prevents avoidable write failures right
+              // when the stale threshold is crossed late in the loop.
+              if (i === maxRetries - 1) {
+                i -= 1; // grant one extra iteration
+              }
               continue; // Retry after removing stale lock.
             }
-          } catch {
-            continue; // Stat failed, retry.
+          } catch (inspectErr: unknown) {
+            // PR-F review fix (Copilot #3096520125 / #3105169755):
+            // only swallow transient/expected errors here. The
+            // explicit `throw new Error("Lock path is not a regular
+            // file")` from the lstat-based check above (and EPERM /
+            // unexpected errors in general) must be surfaced to the
+            // caller so symlink-attack attempts and misconfigurations
+            // aren't silently degraded into "Failed to acquire plan
+            // lock" retries.
+            const code = (inspectErr as NodeJS.ErrnoException).code;
+            if (code === "ENOENT") {
+              // Lock vanished between EEXIST and lstat — retry normally.
+              continue;
+            }
+            // Anything else (non-file lock target, EPERM, EACCES,
+            // structural problems) is hostile and must be surfaced.
+            throw inspectErr;
           }
           // Lock is fresh. Wait and retry.
           await new Promise((r) => setTimeout(r, 200 * (i + 1)));
