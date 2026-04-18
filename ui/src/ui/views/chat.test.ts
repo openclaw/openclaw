@@ -974,6 +974,37 @@ describe("chat view", () => {
     );
   });
 
+  it("keeps plural user transcript images visible after history reload", () => {
+    const container = document.createElement("div");
+
+    renderGroupedMessage(
+      container,
+      {
+        id: "user-history-images",
+        role: "user",
+        content: "",
+        MediaPaths: ["/tmp/openclaw/first.png", "/tmp/openclaw/second.jpg"],
+        MediaTypes: ["image/png", "application/octet-stream"],
+        timestamp: Date.now(),
+      },
+      "user",
+      {
+        showToolCalls: false,
+        basePath: "/openclaw",
+        assistantAttachmentAuthToken: "session-token",
+        localMediaPreviewRoots: ["/tmp/openclaw"],
+      },
+    );
+
+    const imageSources = [
+      ...container.querySelectorAll<HTMLImageElement>(".chat-message-image"),
+    ].map((image) => image.getAttribute("src"));
+    expect(imageSources).toEqual([
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ffirst.png&token=session-token",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fsecond.jpg&token=session-token",
+    ]);
+  });
+
   it("does not render blocked local transcript image paths", () => {
     const container = document.createElement("div");
 
@@ -997,6 +1028,7 @@ describe("chat view", () => {
     );
 
     expect(container.querySelector(".chat-message-image")).toBeNull();
+    expect(container.querySelector(".chat-bubble")).toBeNull();
   });
 
   it("skips non-image transcript media paths after history reload", () => {
@@ -1022,6 +1054,23 @@ describe("chat view", () => {
     );
 
     expect(container.querySelector(".chat-message-image")).toBeNull();
+  });
+
+  it("renders legacy input_image image_url blocks", () => {
+    const container = document.createElement("div");
+
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "input_image", image_url: "data:image/png;base64,cG5n" }],
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false },
+    );
+
+    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+    expect(image?.getAttribute("src")).toBe("data:image/png;base64,cG5n");
   });
 
   it("opens only safe assistant image URLs in a hardened new tab", () => {
