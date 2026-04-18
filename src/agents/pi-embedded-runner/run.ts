@@ -1164,6 +1164,19 @@ export async function runEmbeddedPiAgent(
                 `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
                 `error=${errorText.slice(0, 200)}`,
             );
+            // If this overflow came back after we already compacted earlier in the
+            // same overflow cycle, the bottleneck is the current turn's payload
+            // (typically large toolResult entries), not the summarized history.
+            // Surface an actionable hint pointing at the config knob.
+            if (overflowCompactionAttempts > 0) {
+              log.warn(
+                `[context-overflow-hint] overflow persisted after compaction for ${provider}/${modelId}; ` +
+                  `this typically indicates the current turn's payload (often large toolResult entries) ` +
+                  `exceeds the window even after history is summarized. Consider capping per-tool-result ` +
+                  `excerpts via agents.defaults.contextLimits.toolResultMaxChars. ` +
+                  `See /concepts/compaction#troubleshooting.`,
+              );
+            }
             const isCompactionFailure = isCompactionFailureError(errorText);
             const hadAttemptLevelCompaction = attemptCompactionCount > 0;
             // If this attempt already compacted (SDK auto-compaction), avoid immediately

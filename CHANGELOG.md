@@ -530,6 +530,7 @@ Docs: https://docs.openclaw.ai
 - Anthropic/models: add Claude Opus 4.7 `xhigh` reasoning effort support and keep it separate from adaptive thinking.
 - Control UI/settings: overhaul the settings and slash-command experience with faster presets, quick-create flows, and refreshed command discovery. (#67819) Thanks @BunsDev.
 - macOS/gateway: add `screen.snapshot` support for macOS app nodes, including runtime plumbing, default macOS allowlisting, and docs for monitor preview flows. (#67954) Thanks @BunsDev.
+- Agents/compaction: when a context overflow persists after auto-compaction already ran in the same cycle, log a `[context-overflow-hint]` warn line pointing at `agents.defaults.contextLimits.toolResultMaxChars`; compaction troubleshooting docs updated with the matching symptom. Thanks @MotherSphere.
 
 ### Fixes
 

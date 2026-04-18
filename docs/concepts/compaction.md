@@ -167,6 +167,16 @@ trims tool output without summarizing.
 outputs may be large. Try enabling
 [session pruning](/concepts/session-pruning).
 
+**Compact succeeds but the next turn still overflows?** If you see
+`auto-compaction succeeded` immediately followed by another
+`context overflow detected`, the bottleneck is the current turn's payload,
+not the summarized history. A common cause is one or more large `toolResult`
+entries in the same turn. Cap per-tool-result excerpts with
+`agents.defaults.contextLimits.toolResultMaxChars` (see
+[Token Use and Costs](/reference/token-use)). The runtime surfaces this
+case explicitly with a `[context-overflow-hint]` warn log pointing at the
+same knob.
+
 **Context feels stale after compaction?** Use `/compact Focus on <topic>` to
 guide the summary, or enable the [memory flush](/concepts/memory) so notes
 survive.
