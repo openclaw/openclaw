@@ -107,6 +107,9 @@ Built-in commands available today:
 - `/commands` shows the generated command catalog.
 - `/tools [compact|verbose]` shows what the current agent can use right now.
 - `/status` shows runtime status, including provider usage/quota when available.
+- `/doctor` shows a lightweight health summary for config validity, model/context, channel degradation, git/update state, and runtime info.
+- `/prompt` renders the detailed prompt/context report for the current session.
+- `/cache` shows the latest cache/system-prompt trace for the current session once at least one turn has run.
 - `/tasks` lists active/recent background tasks for the current session.
 - `/context [list|detail|json]` explains how context is assembled.
 - `/export-session [path]` exports the current session to HTML. Alias: `/export`.
@@ -177,6 +180,8 @@ Notes:
 - `/allowlist add|remove` requires `commands.config=true` and honors channel `configWrites`.
 - In multi-account channels, config-targeted `/allowlist --account <id>` and `/config set channels.<provider>.accounts.<id>...` also honor the target account's `configWrites`.
 - `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from OpenClaw session logs.
+- `/prompt` is the convenience alias for `/context detail`.
+- `/cache` only has data after the current session has produced at least one model turn with a prompt report.
 - `/restart` is enabled by default; set `commands.restart: false` to disable it.
 - `/plugins install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, or `clawhub:<pkg>`.
 - `/plugins enable|disable` updates plugin config and may prompt for a restart.
@@ -184,6 +189,7 @@ Notes:
 - Discord thread-binding commands (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`) require effective thread bindings to be enabled (`session.threadBindings.enabled` and/or `channels.discord.threadBindings.enabled`).
 - ACP command reference and runtime behavior: [ACP Agents](/tools/acp-agents).
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
+- When `/verbose` is on, new sessions can prepend operational notices such as the new session id, auto-compaction completion, model fallback notes, and a best-effort git freshness warning when the workspace is dirty or behind upstream.
 - `/trace` is narrower than `/verbose`: it only reveals plugin-owned trace/debug lines and keeps normal verbose tool chatter off.
 - `/fast on|off` persists a session override. Use the Sessions UI `inherit` option to clear it and fall back to config defaults.
 - `/fast` is provider-specific: OpenAI/OpenAI Codex map it to `service_tier=priority` on native Responses endpoints, while direct public Anthropic requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, map it to `service_tier=auto` or `standard_only`. See [OpenAI](/providers/openai) and [Anthropic](/providers/anthropic).
@@ -226,7 +232,7 @@ of treating `/tools` as a static catalog.
 
 - **Provider usage/quota** (example: “Claude 80% left”) shows up in `/status` for the current model provider when usage tracking is enabled. OpenClaw normalizes provider windows to `% left`; for MiniMax, remaining-only percent fields are inverted before display, and `model_remains` responses prefer the chat-model entry plus a model-tagged plan label.
 - **Token/cache lines** in `/status` can fall back to the latest transcript usage entry when the live session snapshot is sparse. Existing nonzero live values still win, and transcript fallback can also recover the active runtime model label plus a larger prompt-oriented total when stored totals are missing or smaller.
-- **Per-response tokens/cost** is controlled by `/usage off|tokens|full` (appended to normal replies).
+- **Per-response tokens/cost** is controlled by `/usage off|tokens|full` (appended to normal replies and kept on the main assistant payload even when trailing plugin/trace payloads are emitted).
 - `/model status` is about **models/auth/endpoints**, not usage.
 
 ## Model selection (`/model`)

@@ -163,7 +163,9 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 
 ## Operator quick refs
 
-- Chat commands: `/status`, `/new`, `/reset`, `/compact`, `/think <level>`, `/verbose on|off`, `/trace on|off`, `/usage off|tokens|full`, `/restart`, `/activation mention|always`
+- Chat commands: `/status`, `/doctor`, `/prompt`, `/cache`, `/new`, `/reset`, `/compact`, `/think <level>`, `/verbose on|off`, `/trace on|off`, `/usage off|tokens|full`, `/restart`, `/activation mention|always`
+- Diagnostics commands: `/doctor` gives a quick config/model/channel/git/runtime health snapshot, `/prompt` shows the detailed current context report, and `/cache` shows the latest cache/system-prompt trace for the current session after at least one turn.
+- Verbose session notices: `/verbose on` can prepend new-session, auto-compaction, model-fallback, and best-effort git freshness notices on new sessions.
 - Session tools: `sessions_list`, `sessions_history`, `sessions_send`
 - Skills registry: [ClawHub](https://clawhub.com)
 - Architecture overview: [Architecture](https://docs.openclaw.ai/concepts/architecture)
@@ -175,8 +177,8 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 - Apps + nodes: [macOS](https://docs.openclaw.ai/platforms/macos), [iOS](https://docs.openclaw.ai/platforms/ios), [Android](https://docs.openclaw.ai/platforms/android), [Nodes](https://docs.openclaw.ai/nodes)
 - Config + security: [Configuration](https://docs.openclaw.ai/gateway/configuration), [Security](https://docs.openclaw.ai/gateway/security), [Docker sandboxing](https://docs.openclaw.ai/install/docker)
 - Remote + web: [Gateway](https://docs.openclaw.ai/gateway), [Remote access](https://docs.openclaw.ai/gateway/remote), [Tailscale](https://docs.openclaw.ai/gateway/tailscale), [Web surfaces](https://docs.openclaw.ai/web)
-- Tools + automation: [Tools](https://docs.openclaw.ai/tools), [Skills](https://docs.openclaw.ai/tools/skills), [Cron jobs](https://docs.openclaw.ai/automation/cron-jobs), [Webhooks](https://docs.openclaw.ai/automation/webhook), [Gmail Pub/Sub](https://docs.openclaw.ai/automation/gmail-pubsub)
-- Internals: [Architecture](https://docs.openclaw.ai/concepts/architecture), [Agent](https://docs.openclaw.ai/concepts/agent), [Session model](https://docs.openclaw.ai/concepts/session), [Gateway protocol](https://docs.openclaw.ai/reference/rpc)
+- Tools + automation: [Tools](https://docs.openclaw.ai/tools), [Slash commands](https://docs.openclaw.ai/tools/slash-commands), [Skills](https://docs.openclaw.ai/tools/skills), [Cron jobs](https://docs.openclaw.ai/automation/cron-jobs), [Webhooks](https://docs.openclaw.ai/automation/webhook), [Gmail Pub/Sub](https://docs.openclaw.ai/automation/gmail-pubsub)
+- Internals: [Architecture](https://docs.openclaw.ai/concepts/architecture), [Agent](https://docs.openclaw.ai/concepts/agent), [Session model](https://docs.openclaw.ai/concepts/session), [Gateway protocol](https://docs.openclaw.ai/reference/rpc), [Tests](https://docs.openclaw.ai/reference/test)
 - Troubleshooting: [Channel troubleshooting](https://docs.openclaw.ai/channels/troubleshooting), [Logging](https://docs.openclaw.ai/logging), [Docs home](https://docs.openclaw.ai)
 
 ## Apps (optional)

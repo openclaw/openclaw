@@ -33,6 +33,17 @@ title: "Tests"
 - `pnpm test:docker:openwebui`: Starts Dockerized OpenClaw + Open WebUI, signs in through Open WebUI, checks `/api/models`, then runs a real proxied chat through `/api/chat/completions`. Requires a usable live model key (for example OpenAI in `~/.profile`), pulls an external Open WebUI image, and is not expected to be CI-stable like the normal unit/e2e suites.
 - `pnpm test:docker:mcp-channels`: Starts a seeded Gateway container and a second client container that spawns `openclaw mcp serve`, then verifies routed conversation discovery, transcript reads, attachment metadata, live event queue behavior, outbound send routing, and Claude-style channel + permission notifications over the real stdio bridge. The Claude notification assertion reads the raw stdio MCP frames directly so the smoke reflects what the bridge actually emits.
 
+## Turn fixtures and replay
+
+- `src/test-utils/turn-recorder.ts` records the agent-event and diagnostic-event stream for a turn into a JSON fixture with `version`, `recordedAt`, and ordered `entries`.
+- `src/test-utils/turn-replayer.ts` replays a saved fixture by re-emitting those events in order, which is useful for regression tests around listeners, telemetry export, and event-stream parity.
+- `src/test-utils/turn-replay.test.ts` is the parity suite for the replay harness.
+- Use the replay harness when you want to lock in control-flow or observability behavior without reconstructing the full live runtime around a scenario.
+
+Targeted run:
+
+- `pnpm exec vitest run src/test-utils/turn-replay.test.ts`
+
 ## Local PR gate
 
 For local PR land/gate checks, run:

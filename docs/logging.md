@@ -289,10 +289,15 @@ Notes:
 
 - You can also enable the plugin with `openclaw plugins enable diagnostics-otel`.
 - `protocol` currently supports `http/protobuf` only. `grpc` is ignored.
-- Metrics include token usage, cost, context size, run duration, and message-flow
-  counters/histograms (webhooks, queueing, session state, queue depth/wait).
+- Metrics include token usage, cost, context size, run duration, message-flow
+  counters/histograms (webhooks, queueing, session state, queue depth/wait),
+  tool-loop guard counters, and turn lifecycle metrics.
 - Traces/metrics can be toggled with `traces` / `metrics` (default: on). Traces
-  include model usage spans plus webhook/message processing spans when enabled.
+  include model usage spans plus webhook/message processing, tool-loop, and
+  turn-completion spans when enabled.
+- Turn lifecycle diagnostics emit `turn.started` / `turn.completed` events.
+  The OTel exporter maps those into turn counters, duration histograms,
+  iteration/tool-call counters, and a completion span.
 - Set `headers` when your collector requires auth.
 - Environment variables supported: `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`.
@@ -337,6 +342,20 @@ Queues + sessions:
 - `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`)
 - `openclaw.run.attempt` (counter, attrs: `openclaw.attempt`)
 
+Tool loops + turns:
+
+- `openclaw.tool.loop` (counter, attrs: `openclaw.tool`, `openclaw.level`,
+  `openclaw.action`, `openclaw.detector`, `openclaw.count`, optional
+  `openclaw.pairedTool`)
+- `openclaw.turn` (counter, attrs: `openclaw.provider`, `openclaw.model`,
+  `openclaw.phase`, and `openclaw.outcome` on completed turns)
+- `openclaw.turn.duration_ms` (histogram, attrs: `openclaw.provider`,
+  `openclaw.model`, `openclaw.outcome`)
+- `openclaw.turn.tool_calls` (counter, attrs: `openclaw.provider`,
+  `openclaw.model`, `openclaw.outcome`)
+- `openclaw.turn.iterations` (counter, attrs: `openclaw.provider`,
+  `openclaw.model`, `openclaw.outcome`)
+
 ### Exported spans (names + key attributes)
 
 - `openclaw.model.usage`
@@ -355,6 +374,15 @@ Queues + sessions:
 - `openclaw.session.stuck`
   - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`,
     `openclaw.sessionKey`, `openclaw.sessionId`
+- `openclaw.tool.loop`
+  - `openclaw.tool`, `openclaw.level`, `openclaw.action`,
+    `openclaw.detector`, `openclaw.count`, optional `openclaw.pairedTool`
+  - `openclaw.sessionKey`, `openclaw.sessionId`, `openclaw.message`
+- `openclaw.turn`
+  - `openclaw.provider`, `openclaw.model`, `openclaw.outcome`
+  - `openclaw.turnId`, `openclaw.runId`, `openclaw.sessionKey`
+  - `openclaw.iterations`, `openclaw.toolCalls`, `openclaw.toolErrors`
+  - optional `openclaw.tokens.total`
 
 ### Sampling + flushing
 
