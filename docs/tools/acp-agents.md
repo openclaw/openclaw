@@ -471,6 +471,11 @@ Notes:
 
 ACP sessions currently run on the host runtime, not inside the OpenClaw sandbox.
 
+> [!WARNING]
+> **Docker Deployment Note:** Because ACP sessions execute on the host runtime, any CLI harness adapters (e.g., `@google/gemini-cli`, `@mariozechner/pi-coding-agent`, `claude-code`) **must** be installed globally on the `openclaw-gateway` container.
+> 
+> Do **not** install ACP harnesses in the `openclaw-sandbox` container. The Gateway host directly orchestrates ACP binaries, so they must be present in the Gateway's system path.
+
 Current limitations:
 
 - If the requester session is sandboxed, ACP spawns are blocked for both `sessions_spawn({ runtime: "acp" })` and `/acp spawn`.
