@@ -28,6 +28,14 @@ const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
 export const DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 16_000;
 
 /**
+ * Session-write limit for tool results persisted to the session JSONL.
+ * Tool output beyond this is truncated before storage to prevent large exec
+ * or file-read results from consuming the entire context window across turns.
+ * ~50KB in characters (1 char ≈ 1 byte for typical ASCII/UTF-8 output).
+ */
+export const SESSION_MAX_TOOL_RESULT_CHARS = 51_200;
+
+/**
  * Backwards-compatible alias for older call sites/tests.
  */
 export const HARD_MAX_TOOL_RESULT_CHARS = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;

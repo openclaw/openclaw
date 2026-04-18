@@ -388,6 +388,20 @@ describe("installSessionToolResultGuard", () => {
     expect(text).toContain("truncated");
   });
 
+  it("caps tool result persistence at SESSION_MAX_TOOL_RESULT_CHARS (50KB)", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    // 80KB tool result – larger than the 50KB session cap
+    appendToolResultText(sm, "x".repeat(80_000));
+
+    const text = getToolResultText(getPersistedMessages(sm));
+    // Should be truncated to approximately 50KB (51 200 chars) plus truncation notice
+    expect(text.length).toBeLessThanOrEqual(51_200 + 200); // 200 chars headroom for truncation notice
+    expect(text.length).toBeGreaterThan(2_000); // but still keeps meaningful content
+    expect(text).toContain("truncated");
+  });
+
   it("does not truncate tool results under the limit", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);

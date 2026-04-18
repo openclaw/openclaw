@@ -9,6 +9,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatContextLimitTruncationNotice } from "./pi-embedded-runner/tool-result-context-guard.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+  SESSION_MAX_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
 } from "./pi-embedded-runner/tool-result-truncation.js";
 import {
@@ -34,8 +35,23 @@ function capToolResultSize(msg: AgentMessage, maxChars: number): AgentMessage {
   });
 }
 
+/**
+ * Maximum characters persisted per tool result in the session JSONL.
+ * Kept well below the model's context window to prevent session file inflation.
+ * 50KB ≈ 51 200 chars — large enough for typical command output, small enough
+ * to prevent runaway sessions from single large exec/read/web_fetch results.
+ */
+const PERSISTENCE_MAX_TOOL_RESULT_CHARS = SESSION_MAX_TOOL_RESULT_CHARS;
+
 function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): number {
   return Math.max(1, opts?.maxToolResultChars ?? DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
+}
+
+function resolvePersistenceMaxToolResultChars(opts?: { maxToolResultChars?: number }): number {
+  return Math.min(
+    resolveMaxToolResultChars(opts),
+    opts?.maxToolResultChars != null ? opts.maxToolResultChars : PERSISTENCE_MAX_TOOL_RESULT_CHARS,
+  );
 }
 
 function normalizePersistedToolResultName(
@@ -200,7 +216,11 @@ export function installSessionToolResultGuard(
       const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
-      const capped = capToolResultSize(persistMessage(normalizedToolResult), maxToolResultChars);
+      // Persistence cap: tool results stored to the session JSONL are truncated
+      // at SESSION_MAX_TOOL_RESULT_CHARS (50KB) to prevent session file inflation
+      // from oversized exec/read/web_fetch output.
+      const persistenceCap = resolvePersistenceMaxToolResultChars(opts);
+      const capped = capToolResultSize(persistMessage(normalizedToolResult), persistenceCap);
       const persisted = applyBeforeWriteHook(
         persistToolResult(capped, {
           toolCallId: id ?? undefined,
@@ -211,7 +231,7 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      return originalAppend(capToolResultSize(persisted, maxToolResultChars) as never);
+      return originalAppend(capToolResultSize(persisted, persistenceCap) as never);
     }
 
     // Skip tool call extraction for aborted/errored assistant messages.

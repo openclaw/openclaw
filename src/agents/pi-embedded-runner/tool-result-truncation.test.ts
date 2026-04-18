@@ -19,6 +19,7 @@ let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncatio
 let estimateToolResultReductionPotential: typeof import("./tool-result-truncation.js").estimateToolResultReductionPotential;
 let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 let HARD_MAX_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").HARD_MAX_TOOL_RESULT_CHARS;
+let SESSION_MAX_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").SESSION_MAX_TOOL_RESULT_CHARS;
 let resolveLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultMaxChars;
 let tmpDir: string | undefined;
 
@@ -36,6 +37,7 @@ async function loadFreshToolResultTruncationModuleForTest() {
     estimateToolResultReductionPotential,
     DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     HARD_MAX_TOOL_RESULT_CHARS,
+    SESSION_MAX_TOOL_RESULT_CHARS,
     resolveLiveToolResultMaxChars,
   } = await import("./tool-result-truncation.js"));
 }
@@ -200,6 +202,12 @@ describe("calculateMaxToolResultChars", () => {
   it("exports the live cap through both constant names", () => {
     expect(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS).toBe(16_000);
     expect(HARD_MAX_TOOL_RESULT_CHARS).toBe(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
+  });
+
+  it("exports SESSION_MAX_TOOL_RESULT_CHARS at 50KB", () => {
+    expect(SESSION_MAX_TOOL_RESULT_CHARS).toBe(51_200);
+    // Should be larger than the live cap to avoid double-truncation in session writes
+    expect(SESSION_MAX_TOOL_RESULT_CHARS).toBeGreaterThan(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
   });
 
   it("caps at HARD_MAX_TOOL_RESULT_CHARS for very large windows", () => {
