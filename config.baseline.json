@@ -37,7 +37,8 @@
         "models": [
           {
             "id": "llama-3.1-8b",
-            "name": "Llama 3.1 8B (Groq via MapleFlow)"
+            "name": "Llama 3.1 8B (Groq via MapleFlow)",
+            "api": "openai-completions"
           }
         ]
       }

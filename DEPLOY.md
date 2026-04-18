@@ -149,3 +149,18 @@ docker compose restart openclaw-gateway
 ```
 
 Verify in logs: `docker logs openclaw-gateway | grep -i heartbeat` should show `[heartbeat] disabled`.
+
+## Gotcha #8 — OpenClaw Defaults to `/v1/responses`, Not `/v1/chat/completions`
+
+When pointing OpenClaw's `openai` provider at an OpenAI-compatible endpoint (like MapleFlow,
+OpenRouter, Groq, or any Chat Completions proxy), set `api: "openai-completions"` on each
+model entry. Without it, OpenClaw uses the new OpenAI Responses API path (`/v1/responses`)
+which most proxies don't implement. Symptom: `HTTP 404: Endpoint not found`.
+
+Fixed by ensuring each model in `models.providers.openai.models[]` has:
+
+```json
+{ "id": "llama-3.1-8b", "name": "...", "api": "openai-completions" }
+```
+
+Included in `config.baseline.json`.
