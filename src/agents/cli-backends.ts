@@ -38,11 +38,6 @@ export type ResolvedCliBackendLiveTest = {
   dockerBinaryName?: string;
 };
 
-export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
-  const normalizeConfig = resolveFallbackCliBackendPolicy("claude-cli")?.normalizeConfig;
-  return normalizeConfig ? normalizeConfig(config) : config;
-}
-
 type FallbackCliBackendPolicy = {
   bundleMcp: boolean;
   bundleMcpMode?: CliBundleMcpMode;
@@ -154,18 +149,6 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
       },
     },
   };
-}
-
-export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
-  const ids = new Set<string>();
-  for (const backend of cliBackendsDeps.resolveRuntimeCliBackends()) {
-    ids.add(normalizeBackendKey(backend.id));
-  }
-  const configured = cfg?.agents?.defaults?.cliBackends ?? {};
-  for (const key of Object.keys(configured)) {
-    ids.add(normalizeBackendKey(key));
-  }
-  return ids;
 }
 
 export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendLiveTest | null {

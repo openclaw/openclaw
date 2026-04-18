@@ -1,8 +1,6 @@
 export {
   isGoogleGemini3FlashModel,
   isGoogleGemini3ProModel,
-  isGoogleGemini3ThinkingLevelModel,
-  isGoogleThinkingRequiredModel,
   resolveGoogleGemini3ThinkingLevel,
   stripInvalidGoogleThinkingBudget,
   type GoogleThinkingInputLevel,
