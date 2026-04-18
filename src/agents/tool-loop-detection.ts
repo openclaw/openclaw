@@ -112,7 +112,7 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
  * Uses tool name + deterministic JSON serialization digest of params.
  */
 export function hashToolCall(toolName: string, params: unknown): string {
-  return `${toolName}:${digestStable(params)}`;
+  return `${toolName}:${digestStable(normalizeLoopDetectionParams(toolName, params))}`;
 }
 
 function stableStringify(value: unknown): string {
@@ -130,6 +130,35 @@ function stableStringify(value: unknown): string {
 function digestStable(value: unknown): string {
   const serialized = stableStringifyFallback(value);
   return createHash("sha256").update(serialized).digest("hex");
+}
+
+function normalizeLoopDetectionParams(toolName: string, params: unknown): unknown {
+  if (toolName !== "update_plan" || !isPlainObject(params)) {
+    return params;
+  }
+
+  const rawPlan = Array.isArray(params.plan) ? params.plan : [];
+  const normalizedPlan = rawPlan.map((entry) => {
+    if (!isPlainObject(entry)) {
+      return { status: null, hasStep: false };
+    }
+    const status = typeof entry.status === "string" ? entry.status : null;
+    const hasStep = typeof entry.step === "string" && entry.step.trim().length > 0;
+    return { status, hasStep };
+  });
+
+  const explanation = typeof params.explanation === "string" ? params.explanation.trim() : "";
+
+  return {
+    toolName,
+    planLength: normalizedPlan.length,
+    statuses: normalizedPlan.map((entry) => entry.status),
+    inProgressCount: normalizedPlan.filter((entry) => entry.status === "in_progress").length,
+    completedCount: normalizedPlan.filter((entry) => entry.status === "completed").length,
+    pendingCount: normalizedPlan.filter((entry) => entry.status === "pending").length,
+    stepPresence: normalizedPlan.map((entry) => entry.hasStep),
+    hasExplanation: explanation.length > 0,
+  };
 }
 
 function stableStringifyFallback(value: unknown): string {

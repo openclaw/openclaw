@@ -331,6 +331,48 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("normalizes update_plan wording churn into the same loop signature", () => {
+      const state = createState();
+      const result = { details: { status: "updated" } };
+
+      for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        const toolCallId = `plan-${i}`;
+        const params = {
+          explanation: `tiny wording tweak ${i}`,
+          plan: [
+            { step: `read file ${i}`, status: "in_progress" },
+            { step: `patch code ${i}`, status: "pending" },
+          ],
+        };
+        recordToolCall(state, "update_plan", params, toolCallId);
+        recordToolCallOutcome(state, {
+          toolName: "update_plan",
+          toolParams: params,
+          toolCallId,
+          result,
+        });
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "update_plan",
+        {
+          explanation: "another tiny wording tweak",
+          plan: [
+            { step: "read file again", status: "in_progress" },
+            { step: "patch code again", status: "pending" },
+          ],
+        },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+      }
+    });
+
     it("applies custom thresholds when detection is enabled", () => {
       const state = createState();
       const { params, result } = createNoProgressPollFixture("sess-custom");
