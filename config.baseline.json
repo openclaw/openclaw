@@ -1,0 +1,109 @@
+{
+  "_comment": "Canonical baseline config for the skyhigh deployment. Copy to $OPENCLAW_CONFIG_DIR/openclaw.json on a fresh deploy. API key lives in ~/code/homeserver/.env as OPENAI_API_KEY (currently a MapleFlow sk_live_* token).",
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai/llama-3.1-8b"
+      },
+      "models": {
+        "openai/llama-3.1-8b": {}
+      },
+      "heartbeat": {
+        "every": "0m"
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "identity": {
+          "name": "Nova",
+          "emoji": "🤖"
+        },
+        "tools": {
+          "profile": "coding",
+          "exec": {
+            "host": "gateway",
+            "security": "full",
+            "ask": "off"
+          }
+        }
+      }
+    ]
+  },
+  "models": {
+    "providers": {
+      "openai": {
+        "baseUrl": "https://api.mapleflow.io/v1",
+        "models": [
+          {
+            "id": "llama-3.1-8b",
+            "name": "Llama 3.1 8B (Groq via MapleFlow)"
+          }
+        ]
+      }
+    }
+  },
+  "tools": {
+    "elevated": {
+      "enabled": true,
+      "allowFrom": {
+        "whatsapp": ["+16475391885"]
+      }
+    },
+    "exec": {
+      "host": "gateway",
+      "security": "full",
+      "ask": "off"
+    }
+  },
+  "commands": {
+    "native": true,
+    "nativeSkills": true,
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "channels": {
+    "whatsapp": {
+      "enabled": true,
+      "dmPolicy": "open",
+      "selfChatMode": false,
+      "allowFrom": ["*"],
+      "groupPolicy": "open",
+      "debounceMs": 5000,
+      "accounts": {
+        "default": {
+          "enabled": true,
+          "dmPolicy": "open",
+          "allowFrom": ["*"],
+          "groupPolicy": "open",
+          "debounceMs": 0
+        }
+      },
+      "mediaMaxMb": 50,
+      "denyFrom": [],
+      "dmHistoryLimit": 20
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "controlUi": {
+      "allowedOrigins": [
+        "http://localhost:18789",
+        "http://127.0.0.1:18789",
+        "https://claw.sky077.com"
+      ],
+      "dangerouslyAllowHostHeaderOriginFallback": true
+    }
+  },
+  "plugins": {
+    "entries": {
+      "duckduckgo": { "enabled": true },
+      "openai": { "enabled": true }
+    }
+  },
+  "skills": {
+    "entries": {
+      "openai-whisper-api": { "enabled": false }
+    }
+  }
+}
