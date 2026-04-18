@@ -296,6 +296,40 @@ export const handlePlanCommand: CommandHandler = async (params, allowTextCommand
       renderedSteps = renderedSteps.slice(0, -1);
       checklist = renderPlanChecklist(renderedSteps, format);
     }
+    // PR-11 review fix (Codex P2 #3105247855): the loop above only drops
+    // trailing steps while >1 remain, so a single oversized step (or one
+    // step with very long acceptanceCriteria) can still exceed the cap
+    // and produce a payload Telegram or other channel rejects. When down
+    // to 1 step still over cap, truncate that step's text in-place and
+    // re-render so the formatting (HTML tags, markdown checkboxes) stays
+    // valid — the renderer rewraps it cleanly.
+    if (checklist.length > RESTATE_SOFT_CAP && renderedSteps.length === 1) {
+      const TRUNCATED_STEP_MAX = Math.max(200, RESTATE_SOFT_CAP - 200);
+      const original = renderedSteps[0];
+      const truncatedStep: PlanStepForRender = {
+        ...original,
+        step:
+          original.step.length > TRUNCATED_STEP_MAX
+            ? original.step.slice(0, TRUNCATED_STEP_MAX) + "…"
+            : original.step,
+        ...(original.activeForm
+          ? {
+              activeForm:
+                original.activeForm.length > 200
+                  ? original.activeForm.slice(0, 200) + "…"
+                  : original.activeForm,
+            }
+          : {}),
+        // Drop acceptanceCriteria/verifiedCriteria when truncating —
+        // keeping partial criteria is misleading, and the user can
+        // open Control UI sidebar for the full plan.
+        ...(original.acceptanceCriteria ? { acceptanceCriteria: undefined } : {}),
+        ...(original.verifiedCriteria ? { verifiedCriteria: undefined } : {}),
+      };
+      renderedSteps = [truncatedStep];
+      checklist = renderPlanChecklist(renderedSteps, format);
+      droppedCount += 1; // count the in-place truncation in the footer note
+    }
     if (droppedCount > 0) {
       const footerNote = `\n… (${droppedCount} more step(s) truncated — open the plan-view sidebar in Control UI for the full checklist)`;
       checklist = `${checklist}${footerNote}`;

@@ -1254,7 +1254,14 @@ export class OpenClawApp extends LitElement {
       // agent continues its planning cycle.
       const message = `[QUESTION_ANSWER]: ${sanitized}`;
       void handleSendChatInternal(this, message).catch((err: unknown) => {
-        this.lastError = `Question answered but failed to notify agent: ${String(err)}`;
+        // PR-10 review fix (Greptile P2 #3105220364): if the synthetic
+        // message send fails after the sessions.patch already cleared
+        // the question state on the server, the agent is left waiting
+        // for an answer it never received. Restore the request snapshot
+        // so the user can retry from the same UI affordance instead of
+        // discovering the silent stall later.
+        this.planApprovalRequest = snapshotRequest;
+        this.planApprovalError = `Question answered but failed to notify agent: ${String(err)} — please retry`;
       });
     } catch (err) {
       this.planApprovalRequest = snapshotRequest;

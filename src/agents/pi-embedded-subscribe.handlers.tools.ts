@@ -584,6 +584,26 @@ function readPlanProposalDetails(result: unknown): {
     const step = (entry as Record<string, unknown>).step;
     const status = (entry as Record<string, unknown>).status;
     const activeForm = (entry as Record<string, unknown>).activeForm;
+    // PR-10 review fix (Greptile P1 #3105250277): the archetype prompt
+    // tells agents to include `acceptanceCriteria: [...]` on high-risk
+    // steps so the closure-gate prevents premature `status: "completed"`,
+    // but the parse here was silently dropping the field. Extract it
+    // (and `verifiedCriteria`, the runtime-tracked counterpart) so the
+    // closure-gate machinery + UI checklist nesting both work end-to-end.
+    const rawAcceptance = (entry as Record<string, unknown>).acceptanceCriteria;
+    const rawVerified = (entry as Record<string, unknown>).verifiedCriteria;
+    const cleanCriteria = (raw: unknown): string[] | undefined => {
+      if (!Array.isArray(raw)) {
+        return undefined;
+      }
+      const cleaned = raw
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+      return cleaned.length > 0 ? cleaned : undefined;
+    };
+    const acceptanceCriteria = cleanCriteria(rawAcceptance);
+    const verifiedCriteria = cleanCriteria(rawVerified);
     if (typeof step !== "string" || typeof status !== "string") {
       continue;
     }
@@ -591,6 +611,8 @@ function readPlanProposalDetails(result: unknown): {
       step,
       status,
       ...(typeof activeForm === "string" && activeForm.trim() ? { activeForm } : {}),
+      ...(acceptanceCriteria ? { acceptanceCriteria } : {}),
+      ...(verifiedCriteria ? { verifiedCriteria } : {}),
     });
   }
   if (plan.length === 0) {
