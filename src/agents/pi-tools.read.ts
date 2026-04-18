@@ -22,6 +22,9 @@ import type { AnyAgentTool, AgentToolResult } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { getImageMetadata, resizeToJpeg } from "../media/image-ops.js";
+import { detectMime } from "../media/mime.js";
+import { kindFromMime } from "../media/mime.js";
+import { readLocalFileSafely } from "../infra/fs-safe.js";
 
 export {
   REQUIRED_PARAM_GROUPS,
@@ -235,6 +238,23 @@ async function readTextFileBridge(
   return { content, truncated, totalLines };
 }
 
+// Helper function to detect if a WebM file is audio-only using magic bytes
+async function isWebmAudioOnly(filePath: string): Promise<boolean> {
+  try {
+    // Read first 8KB for magic byte detection
+    const { buffer } = await readLocalFileSafely({ filePath, maxBytes: 8192 });
+    const mime = await detectMime({ buffer, filePath });
+    const kind = kindFromMime(mime);
+    
+    // If detected as audio, it's audio-only WebM
+    // If detected as video, it contains video tracks
+    return kind === 'audio';
+  } catch (error) {
+    console.warn(`Failed to detect WebM type for ${filePath}, treating as video:`, error);
+    return false; // Safer to treat as video on error
+  }
+}
+
 // --- OPERATIONS HELPERS ---
 
 function createSandboxReadOperations(params: SandboxToolParams) {
@@ -386,7 +406,7 @@ function getAudioMimeType(ext: string): string {
     aac: "audio/aac",
     opus: "audio/opus",
     wma: "audio/x-ms-wma",
-    webm: "audio/webm", // Audio-only WebM files
+    webm: "audio/webm", // Will be overridden by detection if video
   };
   return mimeMap[ext] ?? "audio/mpeg";
 }
@@ -767,10 +787,11 @@ export function wrapToolWorkspaceRootGuardWithOptions(
 
 // Supported media file extensions for the read tool
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "bmp", "webp", "svg"]);
-// WebM is included in both audio and video extensions, with audio taking precedence
-// This ensures audio-only WebM files are correctly identified as audio
-const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma", "webm"]);
-const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi", "mkv", "m4v", "mpg", "mpeg"]);
+// Audio and video extensions (webm will be detected at runtime)
+const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma"]);
+const VIDEO_EXTENSIONS = new Set(["mp4", "mov", "avi", "mkv", "m4v", "mpg", "mpeg"]);
+// WebM requires detection to determine if audio-only or video
+const WEBM_EXTENSION = "webm";
 const MAX_DIR_ENTRIES = 200;
 
 // Transform function for transports to use
@@ -884,9 +905,38 @@ export function createOpenClawReadTool(
 
         let result: AgentToolResult;
 
-        // Check audio extensions first - this ensures WebM files are treated as audio
-        // when they contain audio-only content (most common use case for WebM in AI contexts)
-        if (AUDIO_EXTENSIONS.has(ext)) {
+        // Handle WebM files with magic byte detection
+        if (ext === WEBM_EXTENSION) {
+          const isAudioOnly = await isWebmAudioOnly(inputPath);
+          
+          if (isAudioOnly) {
+            result = {
+              toolCallId,
+              content: [
+                {
+                  type: "audio",
+                  url: mediaUrl,
+                  filename: fileName,
+                  mimeType: "audio/webm",
+                } as any,
+              ],
+              details: { path: inputPath, size: fileSize, detectedAs: "audio" },
+            } as AgentToolResult;
+          } else {
+            result = {
+              toolCallId,
+              content: [
+                {
+                  type: "video",
+                  url: mediaUrl,
+                  filename: fileName,
+                  mimeType: "video/webm",
+                } as any,
+              ],
+              details: { path: inputPath, size: fileSize, detectedAs: "video" },
+            } as AgentToolResult;
+          }
+        } else if (AUDIO_EXTENSIONS.has(ext)) {
           const mimeType = getAudioMimeType(ext);
 
           result = {
