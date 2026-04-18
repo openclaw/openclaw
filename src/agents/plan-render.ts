@@ -5,7 +5,14 @@
  * for each delivery surface. Channel adapters call
  * {@link renderPlanChecklist} with the appropriate format.
  *
- * Step shape matches the `update_plan` tool output (step, status, activeForm).
+ * Step shape matches the `update_plan` tool output (step, status,
+ * activeForm) PLUS PR-9 Wave B1 closure-gate fields
+ * (acceptanceCriteria, verifiedCriteria). The status union here includes
+ * `cancelled` per PR-B (#67514) — `PLAN_STEP_STATUSES` in
+ * `src/agents/tools/update-plan-tool.ts:24` is the authoritative list.
+ * Callers map agent tool output into this shape; they may also provide
+ * step text from heterogeneous sources (compaction snapshots, channel
+ * adapters) where validation isn't pre-applied.
  */
 
 export type PlanRenderFormat = "html" | "markdown" | "plaintext" | "slack-mrkdwn";
@@ -107,7 +114,14 @@ function renderStepLine(
       return `${markers[status] ?? "[ ]"} ${safe}`;
     }
     case "slack-mrkdwn": {
-      const escaped = escapeSlackMrkdwn(label);
+      // PR-C review fix (Copilot #3096459445 / #3096516846): apply
+      // mention-neutralization the same way the html / markdown /
+      // plaintext branches do, BEFORE the format-specific escape. This
+      // lets `escapeSlackMrkdwn` drop its indiscriminate `@`
+      // replacement (which mangled emails like `user@example.com`)
+      // while still protecting `@channel` / `@here` / `@everyone` and
+      // Discord-style `<@123>` raw mentions.
+      const escaped = escapeSlackMrkdwn(neutralizeMentions(label));
       if (status === "completed") {
         return `✅ ${escaped}`;
       }
@@ -166,7 +180,9 @@ function renderAcceptanceCriteria(step: PlanStepForRender, format: PlanRenderFor
         return isVerified ? `   [x] ${safe}` : `   [ ] ${safe}`;
       }
       case "slack-mrkdwn": {
-        const escaped = escapeSlackMrkdwn(criterion);
+        // Same neutralizeMentions-before-escape pattern as the parent
+        // step branch (PR-C review fix #3096459445 / #3096516846).
+        const escaped = escapeSlackMrkdwn(neutralizeMentions(criterion));
         return isVerified ? `   ✓ ${escaped}` : `   ◻ ${escaped}`;
       }
       default: {
@@ -207,7 +223,7 @@ export function renderPlanWithHeader(
       // platforms that follow plaintext mention conventions.
       return `${neutralizeMentions(safeTitle)}\n${checklist}`;
     case "slack-mrkdwn":
-      return `*${escapeSlackMrkdwn(safeTitle)}*\n${checklist}`;
+      return `*${escapeSlackMrkdwn(neutralizeMentions(safeTitle))}*\n${checklist}`;
     default: {
       const _exhaustive: never = format;
       return `${title}\n${checklist}`;
@@ -341,18 +357,37 @@ export function renderFullPlanArchetypeMarkdown(input: PlanArchetypeMarkdownInpu
   return lines.join("\n") + "\n";
 }
 
-/** Escapes Slack mrkdwn control characters: *, ~, `, _, and angle brackets. */
+/**
+ * Escapes Slack mrkdwn control characters using visually-similar
+ * Unicode lookalikes instead of backslash escaping (which Slack renders
+ * as visible noise in mrkdwn). Specifically:
+ *   - `&` / `<` / `>` → HTML-entity encoded (Slack ignores these in
+ *     mrkdwn but external markdown renderers may interpret them).
+ *   - `*` → U+2217 (∗, asterisk operator) — prevents bold parsing.
+ *   - `~` → U+223C (∼, tilde operator) — prevents strikethrough parsing.
+ *   - `` ` `` → U+2018 (', left single quote) — prevents code-span.
+ *   - `_` → U+FF3F (＿, fullwidth low line) — prevents italic parsing.
+ *
+ * Note: this differs from `extensions/slack/src/monitor/mrkdwn.ts`
+ * which uses backslash escaping. The plan renderer optimizes for
+ * READABILITY of agent-authored step text in human-visible Slack
+ * channels (no `\*\_` noise); the Slack monitor processes
+ * USER-AUTHORED content where exact-byte preservation matters more.
+ * Both are valid escape strategies for their respective use cases.
+ *
+ * Mention protection (@channel/@here/@everyone, Discord-style `<@123>`)
+ * is provided by `neutralizeMentions()` called at the render-branch
+ * level, NOT here. This function is pure formatting-character escape.
+ */
 function escapeSlackMrkdwn(text: string): string {
-  // Replace angle-bracket tokens first, then mrkdwn formatting chars.
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/\*/g, "\u2217") // ∗ (asterisk operator, visually similar)
-    .replace(/~/g, "\u223C") // ∼ (tilde operator)
-    .replace(/`/g, "\u2018") // ' (left single quote)
-    .replace(/_/g, "\uFF3F") // ＿ (fullwidth low line, prevents italic parse)
-    .replace(/@/g, "\uFE6B"); // ﹫ (small form variant, prevents mention parsing)
+    .replace(/\*/g, "\u2217")
+    .replace(/~/g, "\u223C")
+    .replace(/`/g, "\u2018")
+    .replace(/_/g, "\uFF3F");
 }
 
 function escapeHtml(text: string): string {
@@ -366,11 +401,20 @@ function escapeHtml(text: string): string {
 
 /**
  * Escapes markdown meta-characters in user-controlled text so a step like
- * "Deploy `rm -rf /`" or "[click](evil)" doesn't render as a code span or link.
+ * "Deploy `rm -rf /`", "[click](evil)", or "Deploy ~~prod~~ now" doesn't
+ * render as a code span, link, or break out of the cancelled-step
+ * `~~...~~` strikethrough wrapper.
+ *
+ * PR-C review fix (Codex P2 #3096528415 / Copilot #3096792952): `~` is
+ * in the escape set so that step text containing `~~` doesn't close
+ * the outer strikethrough wrapper used for cancelled steps. Without
+ * this, `Deploy ~~prod~~ now` rendered as `~~Deploy ~~prod~~ now~~`
+ * which markdown parses as `~~Deploy ~~`/`prod`/`~~ now~~` — broken
+ * cancelled rendering.
  */
 function escapeMarkdown(text: string): string {
   // Order matters: backslash first so we don't re-escape our own escapes.
-  return text.replace(/[\\`*_{}[\]()#+\-.!<>|]/g, "\\$&");
+  return text.replace(/[\\`*_{}[\]()#+\-.!<>|~]/g, "\\$&");
 }
 
 /**
@@ -391,10 +435,25 @@ function neutralizeMentions(text: string): string {
   return text.replace(/@(channel|here|everyone)\b/gi, "@\uFE6B$1").replace(/<@/g, "<\u200B@");
 }
 
+/**
+ * PR-C review fix (Copilot #3096792992): bounded set with FIFO eviction
+ * to prevent unbounded growth in long-running gateway processes if a
+ * malformed/malicious upstream produces many distinct statuses over
+ * time. Once `WARNED_STATUSES_MAX` is reached, the oldest tracked
+ * status is evicted on each new insert (Set iteration order is
+ * insertion order in ES2015+, so the first key is the oldest).
+ */
+const WARNED_STATUSES_MAX = 64;
 const warnedStatuses = new Set<string>();
 function warnUnknownStatus(status: string): void {
   if (warnedStatuses.has(status)) {
     return;
+  }
+  if (warnedStatuses.size >= WARNED_STATUSES_MAX) {
+    const oldest = warnedStatuses.values().next().value;
+    if (oldest !== undefined) {
+      warnedStatuses.delete(oldest);
+    }
   }
   warnedStatuses.add(status);
   console.warn(

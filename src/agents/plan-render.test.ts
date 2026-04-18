@@ -183,6 +183,45 @@ describe("markdown injection hardening", () => {
     const md = renderPlanChecklist(steps, "markdown");
     expect(md).toContain("~~Deploy \\`prod\\`~~");
   });
+
+  // PR-C review fix (Codex P2 #3096528415 / Copilot #3096792952 + #3105215256):
+  // step labels containing `~` or `~~` must be escaped so they don't
+  // close the cancelled-step `~~...~~` strikethrough wrapper early.
+  it("escapes tildes in step text (no premature strikethrough close)", () => {
+    const steps: PlanStepForRender[] = [{ step: "Deploy ~~prod~~ now", status: "cancelled" }];
+    const md = renderPlanChecklist(steps, "markdown");
+    // Tildes in step text are escaped; the outer wrapper stays intact.
+    expect(md).toContain("\\~\\~prod\\~\\~");
+    // Verify the line still parses as a single cancelled item (one outer
+    // strikethrough wrapper, not three separate broken segments).
+    expect(md).toMatch(/^- \[~\] ~~Deploy \\~\\~prod\\~\\~ now~~$/);
+  });
+
+  it("escapes a single tilde character in step text", () => {
+    const steps: PlanStepForRender[] = [{ step: "rsync src ~ dest", status: "pending" }];
+    const md = renderPlanChecklist(steps, "markdown");
+    expect(md).toContain("rsync src \\~ dest");
+  });
+
+  // PR-C review fix (Copilot #3105042738 / #3105215256): markdown title
+  // in renderPlanWithHeader must escape metacharacters so an
+  // agent-controlled title can't inject markdown formatting (links,
+  // code, headings, emphasis) into the rendered header line.
+  it("renderPlanWithHeader markdown: escapes metacharacters in title", () => {
+    const steps: PlanStepForRender[] = [{ step: "Step one", status: "pending" }];
+    const title = "# Release `notes` [click](https://evil.example) ~~strike~~";
+    const result = renderPlanWithHeader(title, steps, "markdown");
+    // No raw clickable link
+    expect(result).not.toMatch(/\[click\]\(https/);
+    // No raw code span (escaped backticks)
+    expect(result).toContain("\\`notes\\`");
+    // No raw inline heading marker (escaped `#`)
+    expect(result).toContain("\\#");
+    // No raw outer strikethrough (escaped `~`)
+    expect(result).toContain("\\~\\~strike\\~\\~");
+    // Header line still rendered as h3 (the explicit `### ` prefix)
+    expect(result).toMatch(/^### /);
+  });
 });
 
 describe("mention neutralization", () => {
