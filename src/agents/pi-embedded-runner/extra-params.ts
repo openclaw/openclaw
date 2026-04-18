@@ -83,6 +83,10 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   openaiWsWarmup?: boolean;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
 function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -120,6 +124,12 @@ function createStreamFnWithExtraParams(
     streamParams.cache_control = extraParams.cache_control;
   }
 
+  const configuredChatTemplateKwargs = isRecord(extraParams.chat_template_kwargs)
+    ? extraParams.chat_template_kwargs
+    : undefined;
+  const mirrorEnableThinkingToChatTemplateKwargs =
+    extraParams.mirror_enable_thinking_to_chat_template_kwargs === true;
+
   // Extract OpenRouter provider routing preferences from extraParams.provider.
   // Injected into model.compat.openRouterRouting so pi-ai's buildParams sets
   // params.provider in the API request body (openai-completions.js L359-362).
@@ -133,7 +143,12 @@ function createStreamFnWithExtraParams(
       ? (extraParams.provider as Record<string, unknown>)
       : undefined;
 
-  if (Object.keys(streamParams).length === 0 && !providerRouting) {
+  if (
+    Object.keys(streamParams).length === 0 &&
+    !providerRouting &&
+    !configuredChatTemplateKwargs &&
+    !mirrorEnableThinkingToChatTemplateKwargs
+  ) {
     return undefined;
   }
 
@@ -163,6 +178,30 @@ function createStreamFnWithExtraParams(
           }
           if (streamParams.cache_control !== undefined && payloadObj.cache_control === undefined) {
             payloadObj.cache_control = streamParams.cache_control;
+          }
+
+          const chatTemplateKwargsPayload = isRecord(payloadObj.chat_template_kwargs)
+            ? payloadObj.chat_template_kwargs
+            : {};
+
+          if (configuredChatTemplateKwargs) {
+            for (const [key, value] of Object.entries(configuredChatTemplateKwargs)) {
+              if (chatTemplateKwargsPayload[key] === undefined) {
+                chatTemplateKwargsPayload[key] = value;
+              }
+            }
+          }
+
+          if (
+            mirrorEnableThinkingToChatTemplateKwargs &&
+            chatTemplateKwargsPayload.enable_thinking === undefined &&
+            typeof payloadObj.enable_thinking === "boolean"
+          ) {
+            chatTemplateKwargsPayload.enable_thinking = payloadObj.enable_thinking;
+          }
+
+          if (Object.keys(chatTemplateKwargsPayload).length > 0) {
+            payloadObj.chat_template_kwargs = chatTemplateKwargsPayload;
           }
         }
         options?.onPayload?.(payload, payloadModel);
