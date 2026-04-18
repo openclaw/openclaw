@@ -1061,6 +1061,12 @@ export async function runEmbeddedAttempt(
       // bundled/plugin tools. Used as the raw-name set for the trusted local
       // MEDIA: passthrough gate: a normalized alias is not sufficient — the
       // emitted tool name must match an exact registration of this run.
+      const builtinToolNames = new Set(
+        effectiveTools.flatMap((tool) => {
+          const name = (tool.name ?? "").trim();
+          return name ? [name] : [];
+        }),
+      );
       // Admission-time conflict check only against non-plugin core tools, to
       // preserve prior behavior where client tools may coexist with unrelated
       // plugin tool names. MEDIA passthrough is still gated by the raw-name
@@ -1665,6 +1671,7 @@ export async function runEmbeddedAttempt(
           sessionKey: sandboxSessionKey,
           sessionId: params.sessionId,
           agentId: sessionAgentId,
+          builtinToolNames,
           internalEvents: params.internalEvents,
         }),
       );
