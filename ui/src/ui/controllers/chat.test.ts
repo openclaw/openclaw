@@ -417,6 +417,29 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Working...");
   });
 
+  it("drops leaked internal final payload from another run", () => {
+    const state = createActiveStreamingState();
+    const payload: ChatEventPayload = {
+      runId: "run-announce",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "System (untrusted): [2026-04-18 12:09:02 PDT] Exec completed (brisk-tr, code 0)",
+          },
+        ],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Working...");
+  });
+
   it("drops NO_REPLY final payload from own run", () => {
     const state = createState({
       sessionKey: "main",
@@ -445,6 +468,23 @@ describe("handleChatEvent", () => {
       sessionKey: "main",
       chatRunId: "run-1",
       chatStream: "NO_REPLY",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("does not persist leaked internal stream text on final without message", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "System (untrusted): [2026-04-18 12:09:02 PDT] Exec completed (brisk-tr, code 0)",
       chatStreamStartedAt: 100,
     });
     const payload: ChatEventPayload = {
@@ -518,6 +558,32 @@ describe("handleChatEvent", () => {
     // entry.text takes precedence — "real reply" is NOT silent, so the message is kept.
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatMessages).toHaveLength(1);
+  });
+
+  it("drops leaked internal final payload from own run", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "System (untrusted): [2026-04-18 12:09:02 PDT] Exec failed (amber-sl, signal SIGKILL)",
+          },
+        ],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
   });
 });
 

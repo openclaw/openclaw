@@ -277,6 +277,19 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
   });
 }
 
+function shouldKeepLiveAssistantMessage(message: Record<string, unknown> | null): boolean {
+  return !!message && !shouldHideHistoryMessage(message);
+}
+
+function buildStreamedAssistantMessage(text: string): Record<string, unknown> | null {
+  const candidate = {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    timestamp: Date.now(),
+  };
+  return shouldHideHistoryMessage(candidate) ? null : candidate;
+}
+
 export async function sendChatMessage(
   state: ChatState,
   message: string,
@@ -401,7 +414,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (payload.runId && state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
-      if (finalMessage && !isAssistantSilentReply(finalMessage)) {
+      if (shouldKeepLiveAssistantMessage(finalMessage)) {
         state.chatMessages = [...state.chatMessages, finalMessage];
         return null;
       }
@@ -417,36 +430,28 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
-    if (finalMessage && !isAssistantSilentReply(finalMessage)) {
+    if (shouldKeepLiveAssistantMessage(finalMessage)) {
       state.chatMessages = [...state.chatMessages, finalMessage];
     } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
-      state.chatMessages = [
-        ...state.chatMessages,
-        {
-          role: "assistant",
-          content: [{ type: "text", text: state.chatStream }],
-          timestamp: Date.now(),
-        },
-      ];
+      const streamedMessage = buildStreamedAssistantMessage(state.chatStream);
+      if (streamedMessage) {
+        state.chatMessages = [...state.chatMessages, streamedMessage];
+      }
     }
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
-    if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
+    if (shouldKeepLiveAssistantMessage(normalizedMessage)) {
       state.chatMessages = [...state.chatMessages, normalizedMessage];
     } else {
       const streamedText = state.chatStream ?? "";
       if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
-        state.chatMessages = [
-          ...state.chatMessages,
-          {
-            role: "assistant",
-            content: [{ type: "text", text: streamedText }],
-            timestamp: Date.now(),
-          },
-        ];
+        const streamedMessage = buildStreamedAssistantMessage(streamedText);
+        if (streamedMessage) {
+          state.chatMessages = [...state.chatMessages, streamedMessage];
+        }
       }
     }
     state.chatStream = null;
