@@ -1,4 +1,5 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
 import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/infra-runtime";
 import type { FetchLike } from "openclaw/plugin-sdk/media-runtime";
@@ -450,7 +451,7 @@ export async function resolveSlackThreadStarter(params: {
     return starter;
   } catch (err) {
     logVerbose(
-      `slack thread starter fetch failed channel=${params.channelId} ts=${params.threadTs}: ${err instanceof Error ? err.message : String(err)}`,
+      `slack thread starter fetch failed channel=${params.channelId} ts=${params.threadTs}: ${formatErrorMessage(err)}`,
     );
     return null;
   }
@@ -545,7 +546,7 @@ export async function resolveSlackThreadHistory(params: {
     }));
   } catch (err) {
     logVerbose(
-      `slack thread history fetch failed channel=${params.channelId} ts=${params.threadTs}: ${err instanceof Error ? err.message : String(err)}`,
+      `slack thread history fetch failed channel=${params.channelId} ts=${params.threadTs}: ${formatErrorMessage(err)}`,
     );
     return [];
   }

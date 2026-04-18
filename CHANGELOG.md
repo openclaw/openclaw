@@ -65,6 +65,7 @@ Docs: https://docs.openclaw.ai
 - Config/$schema: preserve root-authored `$schema` during partial config rewrites without injecting include-only schema URLs into the root config. (#47322) Thanks @EfeDurmaz16.
 - Agents/CLI delivery: run the same reply-media path normalizer the auto-reply flow uses before shipping `openclaw agent --deliver` payloads, so relative `MEDIA:./out/photo.png` tokens resolve against the agent workspace instead of being rejected downstream with `LocalMediaAccessError: Local media path is not under an allowed directory`. Thanks @frankekn.
 - Agents/Google: strip `thinkingBudget=0` for the thinking-required `gemini-2.5-pro` model in embedded-runner and native Google payloads, so requests no longer fail with `Budget 0 is invalid. This model only works in thinking mode.` and the API uses its default thinking behavior instead. (#68607) Thanks @josmithiii.
+- Slack/threads: log failed thread starter and history fetches at verbose level while preserving best-effort fallback behavior, so missing Slack thread context is diagnosable without interrupting inbound handling. (#68594) Thanks @martingarramon.
 
 ## 2026.4.15
 

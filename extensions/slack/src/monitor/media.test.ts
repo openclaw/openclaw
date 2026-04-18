@@ -895,7 +895,13 @@ describe("resolveSlackThreadStarter", () => {
       client,
     });
 
-    expect(result).toEqual({ text: "hello thread", userId: "U1", botId: undefined, ts: "1.000", files: undefined });
+    expect(result).toEqual({
+      text: "hello thread",
+      userId: "U1",
+      botId: undefined,
+      ts: "1.000",
+      files: undefined,
+    });
     expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
   });
 
