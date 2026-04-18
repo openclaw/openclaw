@@ -1,3 +1,4 @@
+import { setGlobalProviderRuntimeAuthOverrides } from "./provider-runtime-auth-override-global.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
@@ -86,6 +87,10 @@ export function setActivePluginRegistry(
   state.key = cacheKey ?? null;
   state.workspaceDir = workspaceDir ?? null;
   state.runtimeSubagentMode = runtimeSubagentMode;
+  // Keep global override accessor in lockstep with the active registry so any
+  // code path that swaps registries (reload, unload, gateway startup, tests)
+  // can't leave a stale override list behind.
+  setGlobalProviderRuntimeAuthOverrides(registry.providerRuntimeAuthOverrides);
 }
 
 export function getActivePluginRegistry(): PluginRegistry | null {
@@ -102,6 +107,7 @@ export function requireActivePluginRegistry(): PluginRegistry {
     state.activeVersion += 1;
     syncTrackedSurface(state.httpRoute, state.activeRegistry);
     syncTrackedSurface(state.channel, state.activeRegistry);
+    setGlobalProviderRuntimeAuthOverrides(state.activeRegistry.providerRuntimeAuthOverrides);
   }
   return asPluginRegistry(state.activeRegistry)!;
 }
@@ -238,4 +244,5 @@ export function resetPluginRuntimeStateForTest(): void {
   state.workspaceDir = null;
   state.runtimeSubagentMode = "default";
   state.importedPluginIds.clear();
+  setGlobalProviderRuntimeAuthOverrides([]);
 }

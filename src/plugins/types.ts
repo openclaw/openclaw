@@ -2014,6 +2014,48 @@ export type OpenClawPluginApi = {
     handler: PluginHookHandlerMap[K],
     opts?: { priority?: number },
   ) => void;
+  /**
+   * Register a runtime auth override for specific built-in model providers.
+   *
+   * When OpenClaw resolves auth for a listed provider, the override callback
+   * is invoked. The first registration that returns a non-null result wins.
+   * Returning `null` or `undefined` means "no override — continue default behavior."
+   * Throwing fails the request after logging (no implicit fallback).
+   */
+  registerProviderRuntimeAuthOverride: (override: ProviderRuntimeAuthOverride) => void;
+};
+
+// ── Provider Runtime Auth Override types ──
+
+export type ProviderRuntimeAuthOverrideContext = {
+  provider: string;
+  modelId: string;
+  profileId?: string;
+};
+
+export type ProviderRuntimeAuthOverrideResult = {
+  apiKey: string;
+  mode?: "api-key" | "oauth" | "token" | "aws-sdk";
+  source?: string;
+  /**
+   * Optional per-call base URL override. Applied only to the main LLM
+   * inference runner path. Side paths (media understanding, TTS, image
+   * generation) currently consume only `apiKey` in v1.
+   */
+  baseUrl?: string;
+  /**
+   * Optional extra headers merged into the outbound provider request in
+   * the main LLM inference runner path. Side paths currently consume only
+   * `apiKey` in v1.
+   */
+  providerRequestHeaders?: Record<string, string>;
+};
+
+export type ProviderRuntimeAuthOverride = {
+  providers: string[];
+  run: (
+    ctx: ProviderRuntimeAuthOverrideContext,
+  ) => Promise<ProviderRuntimeAuthOverrideResult | null | undefined>;
 };
 
 // Plugin hook contracts now live in hook-types.ts so hook runners can import a

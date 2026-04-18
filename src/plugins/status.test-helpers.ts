@@ -140,6 +140,7 @@ export function createPluginLoadResult(
     services: [],
     commands: [],
     conversationBindingResolvedHandlers: [],
+    providerRuntimeAuthOverrides: [],
     ...rest,
     realtimeTranscriptionProviders: realtimeTranscriptionProviders ?? [],
     realtimeVoiceProviders: realtimeVoiceProviders ?? [],

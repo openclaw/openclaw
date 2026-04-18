@@ -415,13 +415,13 @@ async function resolveGeminiCliEntry(
   };
 }
 
-async function resolveKeyEntry(params: {
+async function resolveKeyEntries(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
-}): Promise<MediaUnderstandingModelConfig | null> {
+}): Promise<MediaUnderstandingModelConfig[]> {
   const { cfg, agentDir, providerRegistry, capability } = params;
   const checkProvider = async (
     providerId: string,
@@ -445,6 +445,7 @@ async function resolveKeyEntry(params: {
         provider: providerId,
         cfg,
         agentDir,
+        runtimeOverrideRegistrationIsAvailable: true,
       }))
     ) {
       return null;
@@ -459,12 +460,23 @@ async function resolveKeyEntry(params: {
     return { type: "provider" as const, provider: providerId, model: resolvedModel };
   };
 
+  const entries: MediaUnderstandingModelConfig[] = [];
+  const seen = new Set<string>();
+  const pushEntry = (entry: MediaUnderstandingModelConfig | null) => {
+    if (!entry || entry.type === "cli") {
+      return;
+    }
+    const key = `${entry.provider}::${entry.model ?? ""}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    entries.push(entry);
+  };
+
   const activeProvider = params.activeModel?.provider?.trim();
   if (activeProvider) {
-    const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
-    if (activeEntry) {
-      return activeEntry;
-    }
+    pushEntry(await checkProvider(activeProvider, params.activeModel?.model));
   }
   for (const providerId of resolveConfiguredKeyProviderOrder({
     cfg,
@@ -476,12 +488,9 @@ async function resolveKeyEntry(params: {
       providerRegistry,
     }),
   })) {
-    const entry = await checkProvider(providerId, undefined);
-    if (entry) {
-      return entry;
-    }
+    pushEntry(await checkProvider(providerId, undefined));
   }
-  return null;
+  return entries;
 }
 
 function resolveImageModelFromAgentDefaults(cfg: OpenClawConfig): MediaUnderstandingModelConfig[] {
@@ -540,9 +549,9 @@ async function resolveAutoEntries(params: {
   if (gemini) {
     return [gemini];
   }
-  const keys = await resolveKeyEntry(params);
-  if (keys) {
-    return [keys];
+  const keyEntries = await resolveKeyEntries(params);
+  if (keyEntries.length > 0) {
+    return keyEntries;
   }
   return [];
 }
@@ -575,14 +584,14 @@ export async function resolveAutoImageModel(params: {
   if (resolvedActive) {
     return resolvedActive;
   }
-  const keyEntry = await resolveKeyEntry({
+  const keyEntries = await resolveKeyEntries({
     cfg: params.cfg,
     agentDir: params.agentDir,
     providerRegistry,
     capability: "image",
     activeModel: params.activeModel,
   });
-  return toActive(keyEntry);
+  return toActive(keyEntries[0] ?? null);
 }
 
 async function resolveActiveModelEntry(params: {

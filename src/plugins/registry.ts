@@ -111,6 +111,7 @@ import type {
   VideoGenerationProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
+  ProviderRuntimeAuthOverride,
 } from "./types.js";
 
 export type PluginHttpRouteRegistration = RegistryTypesPluginHttpRouteRegistration & {
@@ -1040,6 +1041,35 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerProviderRuntimeAuthOverride = (
+    record: PluginRecord,
+    override: ProviderRuntimeAuthOverride,
+  ): void => {
+    if (!override.providers?.length) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `registerProviderRuntimeAuthOverride: empty providers list, registration ignored`,
+      });
+      return;
+    }
+    if (typeof override.run !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `registerProviderRuntimeAuthOverride: run must be a function`,
+      });
+      return;
+    }
+    registry.providerRuntimeAuthOverrides.push({
+      pluginId: record.id,
+      override,
+      source: record.source,
+    });
+  };
+
   const registerTypedHook = <K extends PluginHookName>(
     record: PluginRecord,
     hookName: K,
@@ -1420,6 +1450,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               on: (hookName, handler, opts) =>
                 registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
+              registerProviderRuntimeAuthOverride: (override: ProviderRuntimeAuthOverride) =>
+                registerProviderRuntimeAuthOverride(record, override),
             }
           : {}),
         // Allow setup-only/setup-runtime paths to surface parse-time CLI metadata

@@ -43,6 +43,7 @@ import type {
   VideoGenerationProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
+  ProviderRuntimeAuthOverride,
 } from "./types.js";
 
 export type PluginToolRegistration = {
@@ -262,6 +263,12 @@ export type PluginRecord = {
   memorySlotSelected?: boolean;
 };
 
+export type PluginProviderRuntimeAuthOverrideRegistration = {
+  pluginId: string;
+  override: ProviderRuntimeAuthOverride;
+  source: string;
+};
+
 export type PluginRegistry = {
   plugins: PluginRecord[];
   tools: PluginToolRegistration[];
@@ -293,6 +300,7 @@ export type PluginRegistry = {
   services: PluginServiceRegistration[];
   commands: PluginCommandRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
+  providerRuntimeAuthOverrides: PluginProviderRuntimeAuthOverrideRegistration[];
   diagnostics: PluginDiagnostic[];
 };
 

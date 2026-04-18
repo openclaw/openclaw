@@ -32,6 +32,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     services: [],
     commands: [],
     conversationBindingResolvedHandlers: [],
+    providerRuntimeAuthOverrides: [],
     diagnostics: [],
   };
 }

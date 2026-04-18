@@ -55,6 +55,7 @@ export type BuildPluginApiParams = {
       | "registerMemoryFlushPlan"
       | "registerMemoryRuntime"
       | "registerMemoryEmbeddingProvider"
+      | "registerProviderRuntimeAuthOverride"
       | "on"
     >
   >;
@@ -109,6 +110,8 @@ const noopRegisterMemoryRuntime: OpenClawPluginApi["registerMemoryRuntime"] = ()
 const noopRegisterMemoryEmbeddingProvider: OpenClawPluginApi["registerMemoryEmbeddingProvider"] =
   () => {};
 const noopOn: OpenClawPluginApi["on"] = () => {};
+const noopRegisterProviderRuntimeAuthOverride: OpenClawPluginApi["registerProviderRuntimeAuthOverride"] =
+  () => {};
 
 export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi {
   const handlers = params.handlers ?? {};
@@ -177,5 +180,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.registerMemoryEmbeddingProvider ?? noopRegisterMemoryEmbeddingProvider,
     resolvePath: params.resolvePath,
     on: handlers.on ?? noopOn,
+    registerProviderRuntimeAuthOverride:
+      handlers.registerProviderRuntimeAuthOverride ?? noopRegisterProviderRuntimeAuthOverride,
   };
 }

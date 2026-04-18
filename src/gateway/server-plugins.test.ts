@@ -95,6 +95,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   cliRegistrars: [],
   services: [],
   conversationBindingResolvedHandlers: [],
+  providerRuntimeAuthOverrides: [],
   diagnostics,
 });
 

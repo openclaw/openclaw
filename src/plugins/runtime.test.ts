@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getGlobalProviderRuntimeAuthOverrides } from "./provider-runtime-auth-override-global.js";
+import type { PluginProviderRuntimeAuthOverrideRegistration } from "./registry-types.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { PluginHttpRouteRegistration } from "./registry.js";
 import {
@@ -9,6 +11,7 @@ import {
   pinActivePluginHttpRouteRegistry,
   recordImportedPluginId,
   releasePinnedPluginHttpRouteRegistry,
+  requireActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   resolveActivePluginHttpRouteRegistry,
   setActivePluginRegistry,
@@ -32,6 +35,20 @@ function createRuntimeRegistryPair() {
   return {
     startupRegistry: createEmptyPluginRegistry(),
     laterRegistry: createEmptyPluginRegistry(),
+  };
+}
+
+function createAuthOverride(pluginId: string): PluginProviderRuntimeAuthOverrideRegistration {
+  return {
+    pluginId,
+    source: "test",
+    override: {
+      providers: ["openai"],
+      run: async () => ({
+        apiKey: `${pluginId}-key`,
+        mode: "api-key",
+      }),
+    },
   };
 }
 
@@ -213,5 +230,31 @@ describe("setActivePluginRegistry", () => {
     recordImportedPluginId("broken-plugin");
 
     expect(listImportedRuntimePluginIds()).toEqual(["broken-plugin"]);
+  });
+
+  it("syncs provider runtime auth overrides when lazily creating an empty registry", () => {
+    resetPluginRuntimeStateForTest();
+
+    expect(getGlobalProviderRuntimeAuthOverrides()).toHaveLength(0);
+
+    const registry = getActivePluginRegistry();
+    expect(registry).toBeNull();
+
+    const required = requireActivePluginRegistry();
+    expect(required.providerRuntimeAuthOverrides).toEqual([]);
+    expect(getGlobalProviderRuntimeAuthOverrides()).toEqual([]);
+  });
+
+  it("clears provider runtime auth overrides when resetting runtime state for tests", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.providerRuntimeAuthOverrides = [createAuthOverride("override-plugin")];
+
+    setActivePluginRegistry(registry);
+    expect(getGlobalProviderRuntimeAuthOverrides()).toHaveLength(1);
+
+    resetPluginRuntimeStateForTest();
+
+    expect(getGlobalProviderRuntimeAuthOverrides()).toHaveLength(0);
+    expect(getActivePluginRegistry()).toBeNull();
   });
 });
