@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/streaming: clear the compaction replay guard after visible non-final boundaries so a post-tool assistant reply rotates to a fresh preview instead of editing the pre-compaction message. (#67993) Thanks @obviyus.
 - Matrix: fix `sessions_spawn --thread` subagent session spawning — thread binding creation, cleanup on session end, and completion-message delivery target resolution now work end-to-end. (#67643) Thanks @eejohnso-ops and @gumadeiras.
 - macOS/webchat: enable Undo and Redo in the composer text input by turning on the native `NSTextView` undo manager. (#34962) Thanks @tylerbittner.
+- Ollama/discovery: honor Modelfile `PARAMETER num_ctx` overrides over the base model's native `context_length` during `/api/show` enrichment, and auto-flag discovered models whose `/api/show` capabilities omit `tools` with `compat.supportsTools: false` so non-tool local models fall back to plain inference instead of failing with "does not support tools". (#68344) Thanks @neeravmakwana.
 
 ## 2026.4.15
 

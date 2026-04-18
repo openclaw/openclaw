@@ -350,9 +350,11 @@ function buildOllamaModelsConfig(
   return modelNames.map((name) => {
     const discovered = discoveredModelsByName?.get(name);
     // Suggested cloud models may be injected before `/api/tags` exposes them,
-    // so keep Kimi vision-capable during setup even without discovered metadata.
+    // so keep Kimi vision+tool-capable during setup even without discovered
+    // metadata; otherwise capability-driven compat flags would wrongly mark
+    // Kimi as non-tool-supporting until its first `/api/show` refresh.
     const capabilities =
-      discovered?.capabilities ?? (name === "kimi-k2.5:cloud" ? ["vision"] : undefined);
+      discovered?.capabilities ?? (name === "kimi-k2.5:cloud" ? ["vision", "tools"] : undefined);
     return buildOllamaModelDefinition(name, discovered?.contextWindow, capabilities);
   });
 }

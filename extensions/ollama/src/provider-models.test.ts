@@ -212,4 +212,64 @@ describe("ollama provider models", () => {
     const noCapabilities = buildOllamaModelDefinition("unknown-model", 65536);
     expect(noCapabilities.input).toEqual(["text"]);
   });
+
+  it("buildOllamaModelDefinition flags supportsTools=false when capabilities omit tools", () => {
+    const noTools = buildOllamaModelDefinition("llama3:latest", 8192, ["completion"]);
+    expect(noTools.compat).toEqual({ supportsTools: false });
+
+    const withTools = buildOllamaModelDefinition("qwen3:32b", 131072, ["completion", "tools"]);
+    expect(withTools.compat).toBeUndefined();
+
+    const missingCapabilities = buildOllamaModelDefinition("legacy-model", 8192);
+    expect(missingCapabilities.compat).toBeUndefined();
+
+    const emptyCapabilities = buildOllamaModelDefinition("legacy-model", 8192, []);
+    expect(emptyCapabilities.compat).toBeUndefined();
+  });
+
+  it("prefers Modelfile PARAMETER num_ctx over the base model's context_length", async () => {
+    const models: OllamaTagModel[] = [{ name: "llama3-32k:latest" }];
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        model_info: { "llama.context_length": 8192 },
+        parameters: 'stop "<|eot_id|>"\nnum_ctx 32768\nnum_keep 5',
+        capabilities: ["completion"],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const enriched = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
+
+    expect(enriched[0]?.contextWindow).toBe(32768);
+  });
+
+  it("uses the last Modelfile num_ctx override when parameters repeats the key", async () => {
+    const models: OllamaTagModel[] = [{ name: "llama3-override:latest" }];
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        model_info: { "llama.context_length": 8192 },
+        parameters: "num_ctx 16384\nnum_ctx 32768",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const enriched = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
+
+    expect(enriched[0]?.contextWindow).toBe(32768);
+  });
+
+  it("ignores malformed or non-positive num_ctx parameter values", async () => {
+    const models: OllamaTagModel[] = [{ name: "llama3-bogus:latest" }];
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        model_info: { "llama.context_length": 8192 },
+        parameters: "num_ctx not-a-number\nnum_ctx -1\nnum_ctx 0",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const enriched = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
+
+    expect(enriched[0]?.contextWindow).toBe(8192);
+  });
 });

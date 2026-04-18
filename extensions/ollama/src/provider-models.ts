@@ -93,6 +93,28 @@ function hasCachedOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
   return typeof info.contextWindow === "number" || (info.capabilities?.length ?? 0) > 0;
 }
 
+// Ollama's /api/show returns Modelfile PARAMETER overrides as a newline
+// delimited string (e.g. "num_ctx 32768\nnum_keep 5"). Extract the last
+// positive integer value for `num_ctx`, matching Ollama's own last-wins
+// semantics when a Modelfile lists the parameter more than once.
+export function parseOllamaNumCtxParameter(parameters: unknown): number | undefined {
+  if (typeof parameters !== "string" || !parameters.trim()) {
+    return undefined;
+  }
+  let lastValue: number | undefined;
+  for (const rawLine of parameters.split(/\r?\n/)) {
+    const match = rawLine.trim().match(/^num_ctx\s+(-?\d+)\b/);
+    if (!match) {
+      continue;
+    }
+    const parsed = Number.parseInt(match[1], 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      lastValue = parsed;
+    }
+  }
+  return lastValue;
+}
+
 export async function queryOllamaModelShowInfo(
   apiBase: string,
   modelName: string,
@@ -117,6 +139,7 @@ export async function queryOllamaModelShowInfo(
       const data = (await response.json()) as {
         model_info?: Record<string, unknown>;
         capabilities?: unknown;
+        parameters?: unknown;
       };
 
       let contextWindow: number | undefined;
@@ -134,6 +157,13 @@ export async function queryOllamaModelShowInfo(
             }
           }
         }
+      }
+      // Modelfile `PARAMETER num_ctx <value>` wins over the base model's
+      // native context_length: Ollama applies the override at generation time,
+      // so honor it here instead of reporting the smaller base value.
+      const paramCtx = parseOllamaNumCtxParameter(data.parameters);
+      if (paramCtx !== undefined) {
+        contextWindow = paramCtx;
       }
 
       const capabilities = Array.isArray(data.capabilities)
@@ -217,6 +247,13 @@ export function buildOllamaModelDefinition(
 ): ModelDefinitionConfig {
   const hasVision = capabilities?.includes("vision") ?? false;
   const input: ("text" | "image")[] = hasVision ? ["text", "image"] : ["text"];
+  // When /api/show returns a non-empty capabilities array that does not list
+  // "tools", trust Ollama's own capability signal and flag the model as
+  // non-tool-supporting so the agent falls back to plain chat instead of
+  // failing with a "does not support tools" error. Leave compat undefined
+  // when capabilities are missing, preserving the existing permissive default.
+  const hasCapabilitySignal = Array.isArray(capabilities) && capabilities.length > 0;
+  const supportsTools = hasCapabilitySignal ? capabilities.includes("tools") : true;
   return {
     id: modelId,
     name: modelId,
@@ -225,6 +262,7 @@ export function buildOllamaModelDefinition(
     cost: OLLAMA_DEFAULT_COST,
     contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+    ...(hasCapabilitySignal && !supportsTools ? { compat: { supportsTools: false } } : {}),
   };
 }
 

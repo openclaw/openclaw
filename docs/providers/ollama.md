@@ -151,14 +151,15 @@ Choose your preferred setup method and mode.
 
 When you set `OLLAMA_API_KEY` (or an auth profile) and **do not** define `models.providers.ollama`, OpenClaw discovers models from the local Ollama instance at `http://127.0.0.1:11434`.
 
-| Behavior             | Detail                                                                                                                                                              |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Catalog query        | Queries `/api/tags`                                                                                                                                                 |
-| Capability detection | Uses best-effort `/api/show` lookups to read `contextWindow` and detect capabilities (including vision)                                                             |
-| Vision models        | Models with a `vision` capability reported by `/api/show` are marked as image-capable (`input: ["text", "image"]`), so OpenClaw auto-injects images into the prompt |
-| Reasoning detection  | Marks `reasoning` with a model-name heuristic (`r1`, `reasoning`, `think`)                                                                                          |
-| Token limits         | Sets `maxTokens` to the default Ollama max-token cap used by OpenClaw                                                                                               |
-| Costs                | Sets all costs to `0`                                                                                                                                               |
+| Behavior             | Detail                                                                                                                                                                                                   |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Catalog query        | Queries `/api/tags`                                                                                                                                                                                      |
+| Capability detection | Uses best-effort `/api/show` lookups to read `contextWindow` and detect capabilities (including vision)                                                                                                  |
+| Vision models        | Models with a `vision` capability reported by `/api/show` are marked as image-capable (`input: ["text", "image"]`), so OpenClaw auto-injects images into the prompt                                      |
+| Tool support         | Models whose `/api/show` capabilities omit `tools` are auto-flagged with `compat.supportsTools: false` so chat/agent flows fall back to plain inference instead of failing with "does not support tools" |
+| Reasoning detection  | Marks `reasoning` with a model-name heuristic (`r1`, `reasoning`, `think`)                                                                                                                               |
+| Token limits         | Sets `maxTokens` to the default Ollama max-token cap used by OpenClaw                                                                                                                                    |
+| Costs                | Sets all costs to `0`                                                                                                                                                                                    |
 
 This avoids manual model entries while keeping the catalog aligned with the local Ollama instance.
 
@@ -184,9 +185,12 @@ If you set `models.providers.ollama` explicitly, auto-discovery is skipped and y
 
 <Tabs>
   <Tab title="Basic (implicit discovery)">
-    The simplest local-only enablement path is via environment variable:
+    For local-only setups, no environment variable is required — OpenClaw auto-registers a synthetic local auth marker for a reachable local Ollama host so discovery and chat work without any real key. Setting `OLLAMA_API_KEY` is only needed for hosted cloud access (`https://ollama.com`) or to force registration when the local host is not reachable at discovery time.
 
     ```bash
+    # Optional placeholder, only needed if you want to force registration
+    # of an unreachable local host. Any value works; OpenClaw does not send
+    # it to a local Ollama server that does not require auth.
     export OLLAMA_API_KEY="ollama-local"
     ```
 
@@ -346,7 +350,16 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   <Accordion title="Context windows">
     For auto-discovered models, OpenClaw uses the context window reported by Ollama when available, otherwise it falls back to the default Ollama context window used by OpenClaw.
 
-    You can override `contextWindow` and `maxTokens` in explicit provider config:
+    Modelfile `PARAMETER num_ctx <value>` overrides take precedence over the base model's native `context_length`, matching Ollama's own last-wins behavior at generation time. For example, given:
+
+    ```text
+    FROM llama3:latest
+    PARAMETER num_ctx 32768
+    ```
+
+    `ollama/llama3-32k:latest` is reported with a 32768-token context window instead of the base llama3 8192.
+
+    You can still override `contextWindow` and `maxTokens` in explicit provider config:
 
     ```json5
     {
