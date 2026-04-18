@@ -475,7 +475,6 @@ describe("signal createSignalEventHandler inbound context", () => {
   it("surfaces quoted Signal reply context in MsgContext", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        // oxlint-disable-next-line typescript/no-explicit-any
         cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
         historyLimit: 0,
       }),
@@ -508,7 +507,6 @@ describe("signal createSignalEventHandler inbound context", () => {
   it("marks media-only Signal quotes as quoted replies", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        // oxlint-disable-next-line typescript/no-explicit-any
         cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
         historyLimit: 0,
       }),
