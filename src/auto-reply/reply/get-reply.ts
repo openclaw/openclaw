@@ -239,10 +239,19 @@ export async function getReplyFromConfig(
       agentDir,
       activeModel: { provider, model },
     });
-    await applyLinkUnderstandingIfNeeded({
-      ctx: finalized,
-      cfg,
-    });
+    try {
+      await applyLinkUnderstandingIfNeeded({
+        ctx: finalized,
+        cfg,
+      });
+    } catch (linkErr) {
+      // Non-fatal: link-understanding is an optional enrichment step.
+      // After in-place upgrades, the hashed chunk may be missing from disk
+      // (ERR_MODULE_NOT_FOUND), which should not silently drop the message.
+      finalized.logger?.warn?.(
+        `[getReply] link-understanding import/apply failed (non-fatal): ${linkErr instanceof Error ? linkErr.message : String(linkErr)}`,
+      );
+    }
   }
   emitPreAgentMessageHooks({
     ctx: finalized,
