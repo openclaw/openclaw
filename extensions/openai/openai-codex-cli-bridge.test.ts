@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,13 @@ import { prepareOpenAICodexCliExecution } from "./openai-codex-cli-bridge.js";
 
 describe("prepareOpenAICodexCliExecution", () => {
   const tempDirs: string[] = [];
+  const resolveHashedCodexHome = (agentDir: string, profileId: string) =>
+    path.join(
+      agentDir,
+      "cli-auth",
+      "codex",
+      crypto.createHash("sha256").update(profileId).digest("hex").slice(0, 16),
+    );
 
   afterEach(async () => {
     await Promise.all(
@@ -52,6 +60,10 @@ describe("prepareOpenAICodexCliExecution", () => {
         account_id: "acct-123",
       },
     });
+    if (process.platform !== "win32") {
+      const authStat = await fs.stat(path.join(result?.env?.CODEX_HOME ?? "", "auth.json"));
+      expect(authStat.mode & 0o777).toBe(0o600);
+    }
   });
 
   it("returns null when there is no bridgeable canonical oauth credential", async () => {
@@ -73,5 +85,31 @@ describe("prepareOpenAICodexCliExecution", () => {
         },
       }),
     ).resolves.toBeNull();
+  });
+
+  it("refuses to overwrite a symlinked codex cli auth bridge file", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-cli-bridge-"));
+    tempDirs.push(agentDir);
+    const codexHome = resolveHashedCodexHome(agentDir, "openai-codex:default");
+    await fs.mkdir(codexHome, { recursive: true });
+    await fs.symlink(path.join(agentDir, "outside.txt"), path.join(codexHome, "auth.json"));
+
+    await expect(
+      prepareOpenAICodexCliExecution({
+        config: undefined,
+        workspaceDir: agentDir,
+        agentDir,
+        provider: "codex-cli",
+        modelId: "gpt-5.4",
+        authProfileId: "openai-codex:default",
+        authCredential: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      }),
+    ).rejects.toThrow("must not be a symlink");
   });
 });
