@@ -9,6 +9,10 @@ vi.mock("../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: vi.fn(),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
+vi.mock("../agents/runtime-dispatch.js", () => ({
+  runAgent: vi.fn(),
+}));
+
 
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
