@@ -132,10 +132,6 @@ const OPENAI_RESPONSES_APIS = new Set([
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 const MOONSHOT_COMPAT_PROVIDERS = new Set(["moonshot", "kimi"]);
 
-function isOllamaMoonshotCompatModel(modelId: string | null | undefined): boolean {
-  return /^kimi-k2\.5(?::|$)/i.test(modelId?.trim() ?? "");
-}
-
 function formatOpenClawUserAgent(version: string): string {
   return `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${version}`;
 }
@@ -575,12 +571,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "google-vertex";
 
   let compatibilityFamily: ProviderRequestCompatibilityFamily | undefined;
-  const isOllamaOpenAICompletions = provider === "ollama" && api === "openai-completions";
-  if (
-    provider &&
-    (MOONSHOT_COMPAT_PROVIDERS.has(provider) ||
-      (provider === "ollama" && isOllamaMoonshotCompatModel(input.modelId)))
-  ) {
+  if (provider && MOONSHOT_COMPAT_PROVIDERS.has(provider)) {
     compatibilityFamily = "moonshot";
   }
 
@@ -638,9 +629,7 @@ export function resolveProviderRequestCapabilities(
     // Native endpoint class is the real signal here. Users can point a generic
     // provider key at Moonshot or DashScope and still need streaming usage.
     supportsNativeStreamingUsageCompat:
-      endpointClass === "moonshot-native" ||
-      endpointClass === "modelstudio-native" ||
-      isOllamaOpenAICompletions,
+      endpointClass === "moonshot-native" || endpointClass === "modelstudio-native",
     compatibilityFamily,
   };
 }
