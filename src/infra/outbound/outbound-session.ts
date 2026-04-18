@@ -13,6 +13,15 @@ import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { buildOutboundBaseSessionKey } from "./base-session-key.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
+let sessionUpdatesRuntimePromise:
+  | Promise<typeof import("../../auto-reply/reply/session-updates.runtime.js")>
+  | undefined;
+
+async function loadSessionUpdatesRuntime() {
+  sessionUpdatesRuntimePromise ??= import("../../auto-reply/reply/session-updates.runtime.js");
+  return await sessionUpdatesRuntimePromise;
+}
+
 export type OutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
@@ -154,10 +163,19 @@ export async function ensureOutboundSessionEntry(params: {
     OriginatingTo: params.route.to,
   };
   try {
-    await recordSessionMetaFromInbound({
+    const sessionEntry = await recordSessionMetaFromInbound({
       storePath,
       sessionKey: params.route.sessionKey,
       ctx,
+    });
+    if (!sessionEntry?.sessionId) {
+      return;
+    }
+    const { prewarmMirroredSession } = await loadSessionUpdatesRuntime();
+    await prewarmMirroredSession({
+      cfg: params.cfg,
+      storePath,
+      sessionKey: params.route.sessionKey,
     });
   } catch {
     // Do not block outbound sends on session meta writes.
