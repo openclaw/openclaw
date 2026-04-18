@@ -106,6 +106,7 @@ describe("subagent registry steer restarts", () => {
   });
 
   beforeEach(() => {
+    vi.useRealTimers();
     lifecycleHandler = undefined;
     announceSpy.mockReset();
     announceSpy.mockResolvedValue(true);
@@ -242,6 +243,7 @@ describe("subagent registry steer restarts", () => {
   };
 
   afterEach(async () => {
+    vi.useRealTimers();
     announceSpy.mockReset();
     announceSpy.mockResolvedValue(true);
     runSubagentEndedHookMock.mockReset();
