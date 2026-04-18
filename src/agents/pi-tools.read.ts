@@ -1013,14 +1013,8 @@ async function detectMediaTypeFromBytes(
     let buffer: Buffer;
     
     if (useBridge && bridge) {
-      // Read file and slice to limit
-      const result = await bridge.readFile({
-        filePath,
-        cwd,
-        signal,
-      });
-      const fullBuffer = Buffer.isBuffer(result) ? result : Buffer.from(result);
-      buffer = fullBuffer.slice(0, maxBytesForSniffing);
+      // Use helper that reads only first maxBytesForSniffing bytes
+      buffer = await readFileBytesWithLimit(bridge, filePath, cwd, maxBytesForSniffing, signal);
     } else {
       const { buffer: localBuffer } = await readLocalFileSafely({ filePath, maxBytes: maxBytesForSniffing });
       buffer = localBuffer;
