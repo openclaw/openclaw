@@ -1725,6 +1725,34 @@ describe("chat view", () => {
     expect(container.textContent).toContain("System: exec failed after deploy, retrying");
   });
 
+  it("still renders quoted reset-instruction text that only matches the shared prefix", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          messages: [
+            {
+              id: "assistant-visible-reset-quote",
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "A new session was started via /new or /reset. If runtime-provided startup context is included for this first turn, use it before responding to the user. Can you explain what this instruction means?",
+                },
+              ],
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("A new session was started via /new or /reset.");
+    expect(container.textContent).toContain("Can you explain what this instruction means?");
+  });
+
   it("renders canvas-only assistant bubbles", () => {
     const container = document.createElement("div");
     render(

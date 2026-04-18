@@ -5,6 +5,8 @@ export const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 export const LEAKED_SESSION_RESET_PROMPT_PREFIX =
   "A new session was started via /new or /reset. If runtime-provided startup context is included for this first turn, use it before responding to the user.";
+const LEAKED_SESSION_RESET_PROMPT_BODY = `${LEAKED_SESSION_RESET_PROMPT_PREFIX} Then greet the user in your configured persona, if one is provided. Be yourself - use your defined voice, mannerisms, and mood. Keep it to 1-3 sentences and ask what they want to do. If the runtime model differs from default_model in the system prompt, mention the default model. Do not mention internal steps, files, tools, or reasoning.`;
+const LEAKED_SESSION_RESET_PROMPT_CURRENT_TIME_PREFIX = "\ncurrent time:";
 const LEAKED_EXEC_STATUS_ACTION_PATTERN = "(?:started|completed|finished|failed|denied)";
 const LEAKED_SYSTEM_EXEC_STATUS_PATTERN = new RegExp(
   String.raw`^system(?: \(untrusted\))?:\s*\[[^\]\n]+\]\s*exec ${LEAKED_EXEC_STATUS_ACTION_PATTERN}\s*\([^\)\n]+\)`,
@@ -27,6 +29,13 @@ function hasLeakedSystemExecStatus(text: string): boolean {
 
 function hasLeakedSenderMetadataExecStatus(text: string): boolean {
   return LEAKED_SENDER_METADATA_EXEC_STATUS_PATTERN.test(text);
+}
+
+function hasLeakedSessionResetPrompt(text: string): boolean {
+  return (
+    text.startsWith(normalizeLowercaseStringOrEmpty(LEAKED_SESSION_RESET_PROMPT_BODY)) &&
+    text.includes(LEAKED_SESSION_RESET_PROMPT_CURRENT_TIME_PREFIX)
+  );
 }
 
 export function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
@@ -52,7 +61,7 @@ export function isLeakedInternalHistoryMessage(message: unknown): boolean {
   if (hasLeakedSenderMetadataExecStatus(lower)) {
     return true;
   }
-  return lower.startsWith(normalizeLowercaseStringOrEmpty(LEAKED_SESSION_RESET_PROMPT_PREFIX));
+  return hasLeakedSessionResetPrompt(lower);
 }
 
 export function shouldHideHistoryMessage(message: unknown): boolean {

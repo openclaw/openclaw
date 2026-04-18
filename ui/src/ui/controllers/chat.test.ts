@@ -722,6 +722,32 @@ describe("loadChatHistory", () => {
     expect(state.chatMessages).toEqual([messages[1]]);
   });
 
+  it("keeps quoted reset-instruction history text that only matches the shared prefix", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "A new session was started via /new or /reset. If runtime-provided startup context is included for this first turn, use it before responding to the user. Can you explain what this instruction means?",
+          },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "real reply" }] },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual(messages);
+  });
+
   it("filters leaked session reset startup prompts from history", async () => {
     const messages = [
       {
