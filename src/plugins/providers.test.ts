@@ -281,7 +281,7 @@ describe("resolvePluginProviders", () => {
     ({ resolvePluginProviders } = await import("./providers.runtime.js"));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     loadOpenClawPluginsMock.mockReset();
     vi.doMock("./loader.js", () => ({
       loadOpenClawPlugins: (...args: Parameters<LoadOpenClawPlugins>) =>
@@ -332,7 +332,7 @@ describe("resolvePluginProviders", () => {
     applyPluginAutoEnableMock.mockReset();
     applyPluginAutoEnableMock.mockImplementation(
       (params): PluginAutoEnableResult => ({
-        config: params.config,
+        config: params.config ?? {},
         changes: [],
         autoEnabledReasons: {},
       }),

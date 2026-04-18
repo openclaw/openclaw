@@ -401,7 +401,6 @@ export type GatewayWebchatConfig = {
   chatHistoryMaxChars?: number;
 };
 
-
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -444,6 +443,7 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
+  webchat?: GatewayWebchatConfig;
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.
@@ -468,16 +468,4 @@ export type GatewayConfig = {
    * and can rollback to a known-good backup if startup fails due to config errors.
    */
   configBackup?: GatewayConfigBackup;
-};
-
-/**
- * Configuration for automatic config backup and rollback on gateway startup failure.
- */
-export type GatewayConfigBackup = {
-  /** Enable automatic config backups (default: true). */
-  enabled?: boolean;
-  /** Number of backup files to keep (default: 10). */
-  keepBackups?: number;
-  /** Automatically rollback to last known good config on startup failure (default: true). */
-  autoRollback?: boolean;
 };
