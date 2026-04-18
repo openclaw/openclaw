@@ -374,6 +374,20 @@ export function createUpdatePlanTool(options?: CreateUpdatePlanToolOptions): Any
 
       // Emit `agent_plan_event` so channel renderers + control UI see updates.
       // Skip emit when we have no runId — that's the standalone/test path.
+      //
+      // PR-10 review fix (Codex P2 #3104743333 — option C selected):
+      // include the structured `mergedSteps` (status/activeForm/
+      // acceptanceCriteria/verifiedCriteria), not just step labels.
+      // Under merge mode the tool INPUT is only a delta; UI subscribers
+      // need the merged result to render the sidebar correctly. The
+      // existing `steps` field stays as legacy for backwards compat.
+      const mergedSteps = plan.map((s) => ({
+        step: s.step,
+        status: s.status,
+        ...(s.activeForm !== undefined ? { activeForm: s.activeForm } : {}),
+        ...(s.acceptanceCriteria !== undefined ? { acceptanceCriteria: s.acceptanceCriteria } : {}),
+        ...(s.verifiedCriteria !== undefined ? { verifiedCriteria: s.verifiedCriteria } : {}),
+      }));
       if (runId) {
         emitAgentPlanEvent({
           runId,
@@ -383,6 +397,7 @@ export function createUpdatePlanTool(options?: CreateUpdatePlanToolOptions): Any
             title: "Plan updated",
             ...(explanation ? { explanation } : {}),
             steps: plan.map((s) => s.step),
+            mergedSteps,
             source: "update_plan",
           },
         });
@@ -394,6 +409,7 @@ export function createUpdatePlanTool(options?: CreateUpdatePlanToolOptions): Any
               phase: "completed",
               title: "Plan complete",
               steps: plan.map((s) => s.step),
+              mergedSteps,
               source: "update_plan",
             },
           });

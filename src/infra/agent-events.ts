@@ -58,7 +58,32 @@ export type AgentPlanEventData = {
   phase: "update" | "completed";
   title: string;
   explanation?: string;
+  /** Step labels only (legacy). Kept for backwards compatibility. */
   steps?: string[];
+  /**
+   * PR-10 review fix (Codex P2 #3104743333 escalated → option C):
+   * full structured merged plan after `update_plan` execution
+   * (status / activeForm / acceptanceCriteria / verifiedCriteria).
+   *
+   * Pre-fix the UI sidebar refresh in `app-tool-stream.ts` read
+   * `data.args` (the tool INPUT at start time). Under
+   * `update_plan { merge: true }` the input is a delta, not the merged
+   * result, so the sidebar drifted out of sync with the actual plan
+   * state. Solving via a structured `mergedSteps` field on the
+   * existing `agent_plan_event` channel — no new event type, no
+   * SessionEntry hot-path read, and the persister already subscribes
+   * to this stream so its own logic doesn't change.
+   *
+   * UI subscribers should prefer this over the legacy `steps`
+   * field when present.
+   */
+  mergedSteps?: Array<{
+    step: string;
+    status: string;
+    activeForm?: string;
+    acceptanceCriteria?: string[];
+    verifiedCriteria?: string[];
+  }>;
   source?: string;
 };
 
