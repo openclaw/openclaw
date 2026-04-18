@@ -5,6 +5,8 @@ const resolveRuntimePluginRegistryMock =
 const applyPluginAutoEnableMock =
   vi.fn<typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable>();
 const getMemoryRuntimeMock = vi.fn<typeof import("./memory-state.js").getMemoryRuntime>();
+const registerMemoryCapabilityLoaderMock =
+  vi.fn<typeof import("./memory-state.js").registerMemoryCapabilityLoader>();
 const resolveAgentWorkspaceDirMock =
   vi.fn<typeof import("../agents/agent-scope.js").resolveAgentWorkspaceDir>();
 const resolveDefaultAgentIdMock = vi.fn<
@@ -26,6 +28,7 @@ vi.mock("./loader.js", () => ({
 
 vi.mock("./memory-state.js", () => ({
   getMemoryRuntime: () => getMemoryRuntimeMock(),
+  registerMemoryCapabilityLoader: registerMemoryCapabilityLoaderMock,
 }));
 
 let getActiveMemorySearchManager: typeof import("./memory-runtime.js").getActiveMemorySearchManager;
@@ -126,6 +129,7 @@ describe("memory runtime auto-enable loading", () => {
     resolveRuntimePluginRegistryMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
     getMemoryRuntimeMock.mockReset();
+    registerMemoryCapabilityLoaderMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     resolveDefaultAgentIdMock.mockClear();
     applyPluginAutoEnableMock.mockImplementation((params) => ({
