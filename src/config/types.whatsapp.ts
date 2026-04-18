@@ -97,6 +97,8 @@ type WhatsAppSharedConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Channel health monitor overrides for this channel/account. */
   healthMonitor?: ChannelHealthMonitorConfig;
+  /** Suppress gateway-synthesized error replies instead of delivering them to the chat. */
+  silentErrorReplies?: boolean;
 };
 
 type WhatsAppConfigCore = {

@@ -91,7 +91,12 @@ function getCapturedDeliver() {
     capturedDispatchParams as {
       dispatcherOptions?: {
         deliver?: (
-          payload: { text?: string; isReasoning?: boolean; isCompactionNotice?: boolean },
+          payload: {
+            text?: string;
+            isReasoning?: boolean;
+            isCompactionNotice?: boolean;
+            isError?: boolean;
+          },
           info: { kind: "tool" | "block" | "final" },
         ) => Promise<void>;
       };
@@ -288,6 +293,48 @@ describe("whatsapp inbound dispatch", () => {
     );
     expect(deliverReply).not.toHaveBeenCalled();
     expect(rememberSentText).not.toHaveBeenCalled();
+  });
+
+  it("suppresses error payloads when WhatsApp silentErrorReplies is enabled", async () => {
+    const deliverReply = vi.fn(async () => undefined);
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({
+      cfg: { channels: { whatsapp: { silentErrorReplies: true } } } as never,
+      deliverReply,
+      rememberSentText,
+    });
+
+    const deliver = getCapturedDeliver();
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.(
+      { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
+      { kind: "final" },
+    );
+    expect(deliverReply).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
+  });
+
+  it("still delivers error payloads when WhatsApp silentErrorReplies is disabled", async () => {
+    const deliverReply = vi.fn(async () => undefined);
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({
+      cfg: { channels: { whatsapp: { silentErrorReplies: false } } } as never,
+      deliverReply,
+      rememberSentText,
+    });
+
+    const deliver = getCapturedDeliver();
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.(
+      { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
+      { kind: "final" },
+    );
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+    expect(rememberSentText).toHaveBeenCalledTimes(1);
   });
 
   it("maps WhatsApp blockStreaming=true to disableBlockStreaming=false", async () => {

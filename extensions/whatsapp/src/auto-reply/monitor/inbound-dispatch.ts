@@ -53,14 +53,19 @@ function resolveWhatsAppDisableBlockStreaming(cfg: ReturnType<LoadConfigFn>): bo
   return !cfg.channels.whatsapp.blockStreaming;
 }
 
-function shouldSuppressWhatsAppPayload(
-  payload: ReplyPayload,
-  info: { kind: ReplyLifecycleKind },
-): boolean {
-  if (info.kind === "tool") {
+function shouldSuppressWhatsAppPayload(params: {
+  payload: ReplyPayload;
+  info: { kind: ReplyLifecycleKind };
+  silentErrorReplies?: boolean;
+}): boolean {
+  if (params.info.kind === "tool") {
     return true;
   }
-  if (payload.isReasoning === true || payload.isCompactionNotice === true) {
+  if (
+    params.payload.isReasoning === true ||
+    params.payload.isCompactionNotice === true ||
+    (params.silentErrorReplies === true && params.payload.isError === true)
+  ) {
     return true;
   }
   return false;
@@ -236,7 +241,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
   maxMediaBytes: number;
   maxMediaTextChunkLimit?: number;
   msg: WebInboundMsg;
-  onModelSelected?: ChannelReplyOnModelSelected | undefined;
+  onModelSelected?: ChannelReplyOnModelSelected;
   rememberSentText: (
     text: string | undefined,
     opts: {
@@ -262,6 +267,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
   const disableBlockStreaming = resolveWhatsAppDisableBlockStreaming(params.cfg);
   let didSendReply = false;
   let didLogHeartbeatStrip = false;
+  const silentErrorReplies = params.cfg.channels?.whatsapp?.silentErrorReplies === true;
 
   const { queuedFinal, counts } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: params.context,
@@ -276,7 +282,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
         }
       },
       deliver: async (payload: ReplyPayload, info: { kind: ReplyLifecycleKind }) => {
-        if (shouldSuppressWhatsAppPayload(payload, info)) {
+        if (shouldSuppressWhatsAppPayload({ payload, info, silentErrorReplies })) {
           return;
         }
         await params.deliverReply({

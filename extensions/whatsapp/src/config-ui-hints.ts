@@ -17,6 +17,10 @@ export const whatsAppChannelConfigUiHints = {
     label: "WhatsApp Message Debounce (ms)",
     help: "Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable).",
   },
+  silentErrorReplies: {
+    label: "WhatsApp Silent Error Replies",
+    help: "Suppress gateway-synthesized error replies instead of sending them into the WhatsApp chat.",
+  },
   configWrites: {
     label: "WhatsApp Config Writes",
     help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
