@@ -50,9 +50,13 @@
                 ? mode === "light"
                   ? "dash-light"
                   : "dash"
-                : mode === "light"
-                  ? "light"
-                  : "dark";
+                : theme === "matrix"
+                  ? "matrix"
+                  : theme === "cyberpunk"
+                    ? "cyberpunk"
+                    : mode === "light"
+                      ? "light"
+                      : "dark";
           document.documentElement.setAttribute("data-theme", resolved);
           document.documentElement.setAttribute(
             "data-theme-mode",
