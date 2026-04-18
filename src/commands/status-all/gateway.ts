@@ -19,6 +19,14 @@ function countMatches(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
 
+function formatDurationSeconds(msText: string | null | undefined): string {
+  const ms = Number(msText);
+  if (!Number.isFinite(ms) || ms < 0) {
+    return "unknown";
+  }
+  return `${Math.max(1, Math.round(ms / 1000))}s`;
+}
+
 function shorten(message: string, maxLen: number): string {
   const cleaned = message.replace(/\s+/g, " ").trim();
   if (cleaned.length <= maxLen) {
@@ -34,6 +42,52 @@ function normalizeGwsLine(line: string): string {
     .replace(/\s+id=[^\s]+/g, "")
     .replace(/\s+error=Error:.*$/g, "")
     .trim();
+}
+
+function splitTimestampPrefix(line: string): { hasTimestampPrefix: boolean; content: string } {
+  const match = line.match(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\s+(.*)$/);
+  if (!match) {
+    return { hasTimestampPrefix: false, content: line.trimStart() };
+  }
+  return { hasTimestampPrefix: true, content: (match[1] ?? "").trimStart() };
+}
+
+function shouldSkipLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return true;
+  }
+
+  const { hasTimestampPrefix, content } = splitTimestampPrefix(trimmed);
+  const normalized = normalizeLowercaseStringOrEmpty(content || trimmed);
+
+  if (
+    normalized.includes("begin external-content") ||
+    normalized.includes("end external-content") ||
+    normalized === "source: web fetch" ||
+    normalized === "404: not found"
+  ) {
+    return true;
+  }
+
+  if (hasTimestampPrefix && !content.startsWith("[")) {
+    return true;
+  }
+
+  if (
+    (normalized.startsWith("[ws]") && normalized.includes("⇄ res ✓")) ||
+    normalized.startsWith("[feishu] received message") ||
+    normalized.startsWith("[feishu] dispatch message") ||
+    normalized.startsWith("[feishu] stream start") ||
+    normalized.startsWith("[feishu] stream close") ||
+    normalized.startsWith("[exec] elevated command") ||
+    normalized.startsWith("[tools] read failed") ||
+    normalized.startsWith("[tools] web_fetch failed")
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 function consumeJsonBlock(
@@ -83,9 +137,25 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
   };
 
   const lines = rawLines.map((line) => line.trimEnd()).filter(Boolean);
+  let skipIndentedResidue = false;
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     const trimmedStart = line.trimStart();
+    const { content } = splitTimestampPrefix(trimmedStart);
+    const matchText = content || trimmedStart;
+
+    if (skipIndentedResidue) {
+      if (/^\s*[-*•]\s+/.test(line) || /^\s{2,}\S/.test(line)) {
+        continue;
+      }
+      skipIndentedResidue = false;
+    }
+
+    if (shouldSkipLine(line)) {
+      skipIndentedResidue = /\[tools\]\s+(read failed|web_fetch failed)/i.test(trimmedStart);
+      continue;
+    }
+
     if (
       (trimmedStart.startsWith('"') ||
         trimmedStart === "}" ||
@@ -99,8 +169,65 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
       continue;
     }
 
+    const laneWait = matchText.match(
+      /(?:^\[[^\]]+\]\s+)?lane wait exceeded:\s+lane=([^\s]+)\s+waitedMs=(\d+)\s+queueAhead=(\d+)/,
+    );
+    if (laneWait) {
+      const lane = laneWait[1] ?? "unknown";
+      const waited = formatDurationSeconds(laneWait[2]);
+      const queueAhead = laneWait[3] ?? "unknown";
+      addGroup(
+        `lane:${lane}:${queueAhead}`,
+        `[diagnostic] lane wait exceeded: ${lane} · last ${waited} · queueAhead ${queueAhead}`,
+      );
+      continue;
+    }
+
+    if (matchText.includes("context-engine onSubagentEnded failed (best-effort)")) {
+      addGroup(
+        "subagent-ended-best-effort",
+        "[agents/subagent-registry] context-engine onSubagentEnded failed (best-effort)",
+      );
+      continue;
+    }
+
+    if (matchText.includes("Failed to create one-task flow for detached run")) {
+      addGroup(
+        "detached-flow-create-failed",
+        "[tasks/executor] Failed to create one-task flow for detached run",
+      );
+      continue;
+    }
+
+    if (matchText.includes("[context-overflow-diag]")) {
+      const sessionKey = matchText.match(/\bsessionKey=([^\s]+)/)?.[1] ?? null;
+      const provider = matchText.match(/\bprovider=([^\s]+)/)?.[1] ?? null;
+      const messages = matchText.match(/\bmessages=([^\s]+)/)?.[1] ?? "unknown";
+      if (sessionKey && provider) {
+        addGroup(
+          `overflow:${sessionKey}:${provider}`,
+          `[agent/embedded] context overflow: ${sessionKey} · provider ${provider} · last messages ${messages}`,
+        );
+        continue;
+      }
+    }
+
+    const autoCompaction = matchText.match(
+      /context overflow detected \(attempt \d+\/\d+\); attempting auto-compaction for ([^\s]+)/,
+    );
+    if (autoCompaction) {
+      const provider = autoCompaction[1] ?? "unknown";
+      addGroup(
+        `overflow-compaction:${provider}`,
+        `[agent/embedded] context overflow auto-compaction attempted (${provider})`,
+      );
+      continue;
+    }
+
     // "[openai-codex] Token refresh failed: 401 { ...json... }"
-    const tokenRefresh = line.match(/^\[([^\]]+)\]\s+Token refresh failed:\s*(\d+)\s*(\{)?\s*$/);
+    const tokenRefresh = matchText.match(
+      /^\[([^\]]+)\]\s+Token refresh failed:\s*(\d+)\s*(\{)?\s*$/,
+    );
     if (tokenRefresh) {
       const tag = tokenRefresh[1] ?? "unknown";
       const status = tokenRefresh[2] ?? "unknown";
@@ -127,7 +254,7 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
     }
 
     // "Embedded agent failed before reply: OAuth token refresh failed for openai-codex: ..."
-    const embedded = line.match(
+    const embedded = matchText.match(
       /^Embedded agent failed before reply:\s+OAuth token refresh failed for ([^:]+):/,
     );
     if (embedded) {
@@ -138,11 +265,11 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
 
     // "[gws] ⇄ res ✗ agent ... errorCode=UNAVAILABLE errorMessage=Error: OAuth token refresh failed ... runId=..."
     if (
-      line.startsWith("[gws]") &&
-      line.includes("errorCode=UNAVAILABLE") &&
-      line.includes("OAuth token refresh failed")
+      matchText.startsWith("[gws]") &&
+      matchText.includes("errorCode=UNAVAILABLE") &&
+      matchText.includes("OAuth token refresh failed")
     ) {
-      const normalized = normalizeGwsLine(line);
+      const normalized = normalizeGwsLine(matchText);
       addGroup(`gws:${normalized}`, normalized);
       continue;
     }
