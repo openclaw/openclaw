@@ -24,6 +24,35 @@ describe("buildAuthHealthSummary", () => {
   const profileReasonCodes = (summary: ReturnType<typeof buildAuthHealthSummary>) =>
     Object.fromEntries(summary.profiles.map((profile) => [profile.profileId, profile.reasonCode]));
 
+  function mockFreshCodexCliCredentials() {
+    readCodexCliCredentialsCachedMock.mockReturnValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "fresh-cli-access",
+      refresh: "fresh-cli-refresh",
+      expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
+      accountId: "acct-cli",
+    });
+  }
+
+  function buildOpenAiCodexOAuthStore(params: {
+    access: string;
+    refresh: string;
+    expires: number;
+    accountId?: string;
+  }) {
+    return {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          ...params,
+        },
+      },
+    };
+  }
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -110,27 +139,13 @@ describe("buildAuthHealthSummary", () => {
 
   it("does not let fresh .codex state override expired canonical health", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
-    readCodexCliCredentialsCachedMock.mockReturnValue({
-      type: "oauth",
-      provider: "openai-codex",
-      access: "fresh-cli-access",
-      refresh: "fresh-cli-refresh",
-      expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
+    mockFreshCodexCliCredentials();
+    const store = buildOpenAiCodexOAuthStore({
+      access: "expired-access",
+      refresh: "expired-refresh",
+      expires: now - 10_000,
       accountId: "acct-cli",
     });
-    const store = {
-      version: 1,
-      profiles: {
-        "openai-codex:default": {
-          type: "oauth" as const,
-          provider: "openai-codex",
-          access: "expired-access",
-          refresh: "expired-refresh",
-          expires: now - 10_000,
-          accountId: "acct-cli",
-        },
-      },
-    };
 
     const summary = buildAuthHealthSummary({
       store,
@@ -200,26 +215,12 @@ describe("buildAuthHealthSummary", () => {
 
   it("does not let fresh .codex state override near-expiry canonical health", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
-    readCodexCliCredentialsCachedMock.mockReturnValue({
-      type: "oauth",
-      provider: "openai-codex",
-      access: "fresh-cli-access",
-      refresh: "fresh-cli-refresh",
-      expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
-      accountId: "acct-cli",
+    mockFreshCodexCliCredentials();
+    const store = buildOpenAiCodexOAuthStore({
+      access: "near-expiry-local-access",
+      refresh: "near-expiry-local-refresh",
+      expires: now + 2 * 60_000,
     });
-    const store = {
-      version: 1,
-      profiles: {
-        "openai-codex:default": {
-          type: "oauth" as const,
-          provider: "openai-codex",
-          access: "near-expiry-local-access",
-          refresh: "near-expiry-local-refresh",
-          expires: now + 2 * 60_000,
-        },
-      },
-    };
 
     const summary = buildAuthHealthSummary({
       store,
