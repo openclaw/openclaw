@@ -144,8 +144,6 @@ restrictive allowlist, include `group:memory` (or both `memory_search` and
 }
 ```
 
-Then re-check with `/tools` in the same conversation where you are testing.
-
 **No results?** Run `openclaw memory status` to check the index. If empty, run
 `openclaw memory index --force`.
 
