@@ -177,10 +177,10 @@ LM Studio, Ollama, llama.cpp, vLLM, and similar — are not reachable at
 Use `host.docker.internal` instead when the onboarding wizard prompts for
 a base URL:
 
-| Provider  | Host base URL              | Container base URL                  |
-| --------- | -------------------------- | ----------------------------------- |
-| LM Studio | `http://127.0.0.1:1234`    | `http://host.docker.internal:1234`  |
-| Ollama    | `http://127.0.0.1:11434`   | `http://host.docker.internal:11434` |
+| Provider  | Host base URL            | Container base URL                  |
+| --------- | ------------------------ | ----------------------------------- |
+| LM Studio | `http://127.0.0.1:1234`  | `http://host.docker.internal:1234`  |
+| Ollama    | `http://127.0.0.1:11434` | `http://host.docker.internal:11434` |
 
 The bundled `docker-compose.yml` maps `host.docker.internal` to the host
 gateway via `extra_hosts: ["host.docker.internal:host-gateway"]`, so the
