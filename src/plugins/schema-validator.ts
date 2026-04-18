@@ -14,17 +14,47 @@ type AjvLike = {
           validate: (value: string) => boolean;
         },
   ) => AjvLike;
-  addMetaSchema: (schema: Record<string, unknown>) => AjvLike;
   compile: (schema: Record<string, unknown>) => ValidateFunction;
 };
-const ajvSingletons = new Map<"default" | "defaults", AjvLike>();
 
-function getAjv(mode: "default" | "defaults"): AjvLike {
-  const cached = ajvSingletons.get(mode);
+type AjvDialect = "draft-07" | "2020";
+type AjvMode = "default" | "defaults";
+
+// Per-draft dispatch: route explicitly draft-07/06/04-tagged schemas to the
+// default Ajv class, which supports tuple-form `items: [schema, ...]` and
+// `additionalItems`. The MCP TypeScript SDK ships these by default — it wraps
+// `zod-to-json-schema` with no target option, so `z.tuple(...)` emits tuple
+// items and the output is tagged `$schema: draft-07`. Unlabeled schemas go to
+// Ajv2020: pydantic v2 omits `$schema` but uses 2020-12 semantics (`prefixItems`,
+// `unevaluatedProperties`, `$dynamicRef`), and routing those through a draft-07
+// Ajv silently drops the 2020-12-only keywords under `strict: false` — the exact
+// bug class this PR fixes. Explicit 2020-12 tags also go to Ajv2020.
+const DRAFT_07_SCHEMA_URIS: readonly string[] = [
+  "http://json-schema.org/draft-07/schema",
+  "http://json-schema.org/draft-06/schema",
+  "http://json-schema.org/draft-04/schema",
+];
+
+function detectAjvDialect(schema: Record<string, unknown>): AjvDialect {
+  const schemaUri = typeof schema.$schema === "string" ? schema.$schema : "";
+  for (const draft07Uri of DRAFT_07_SCHEMA_URIS) {
+    if (schemaUri.startsWith(draft07Uri)) {
+      return "draft-07";
+    }
+  }
+  return "2020";
+}
+
+const ajvSingletons = new Map<string, AjvLike>();
+
+function getAjv(dialect: AjvDialect, mode: AjvMode): AjvLike {
+  const cacheKey = `${dialect}::${mode}`;
+  const cached = ajvSingletons.get(cacheKey);
   if (cached) {
     return cached;
   }
-  const ajvModule = require("ajv/dist/2020.js") as { default?: new (opts?: object) => AjvLike };
+  const modulePath = dialect === "2020" ? "ajv/dist/2020.js" : "ajv";
+  const ajvModule = require(modulePath) as { default?: new (opts?: object) => AjvLike };
   const AjvCtor =
     typeof ajvModule.default === "function"
       ? ajvModule.default
@@ -35,12 +65,6 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
     removeAdditional: false,
     ...(mode === "defaults" ? { useDefaults: true } : {}),
   });
-  // Ajv2020 only ships the draft/2020-12 meta-schema; register draft-07 so that
-  // schemas tagged `$schema: "http://json-schema.org/draft-07/schema#"` (e.g. the
-  // bundled channel config schemas) still compile alongside MCP tool schemas.
-  instance.addMetaSchema(
-    require("ajv/dist/refs/json-schema-draft-07.json") as Record<string, unknown>,
-  );
   instance.addFormat("uri", {
     type: "string",
     validate: (value: string) => {
@@ -49,7 +73,7 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
       return URL.canParse(value);
     },
   });
-  ajvSingletons.set(mode, instance);
+  ajvSingletons.set(cacheKey, instance);
   return instance;
 }
 
@@ -173,7 +197,9 @@ export function validateJsonSchemaValue(params: {
   const cacheKey = params.applyDefaults ? `${params.cacheKey}::defaults` : params.cacheKey;
   let cached = schemaCache.get(cacheKey);
   if (!cached || cached.schema !== params.schema) {
-    const validate = getAjv(params.applyDefaults ? "defaults" : "default").compile(params.schema);
+    const dialect = detectAjvDialect(params.schema);
+    const mode: AjvMode = params.applyDefaults ? "defaults" : "default";
+    const validate = getAjv(dialect, mode).compile(params.schema);
     cached = { validate, schema: params.schema };
     schemaCache.set(cacheKey, cached);
   }

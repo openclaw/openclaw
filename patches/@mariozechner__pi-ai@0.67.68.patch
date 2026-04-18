@@ -1,22 +1,73 @@
 diff --git a/dist/utils/validation.js b/dist/utils/validation.js
-index 52c74b2a5d8bed50546fba675f3c3f8c5c815127..2260fead0ed0db256753e82ea8dce4522205fa51 100644
+index 52c74b2a5d8bed50546fba675f3c3f8c5c815127..c754689d36af2c639c97d72dd23ba237a704a770 100644
 --- a/dist/utils/validation.js
 +++ b/dist/utils/validation.js
-@@ -1,5 +1,6 @@
--import AjvModule from "ajv";
-+import AjvModule from "ajv/dist/2020.js";
+@@ -1,6 +1,8 @@
++import Ajv2020Module from "ajv/dist/2020.js";
+ import AjvModule from "ajv";
  import addFormatsModule from "ajv-formats";
-+import draft07MetaSchema from "ajv/dist/refs/json-schema-draft-07.json" with { type: "json" };
  // Handle both default and named exports
++const Ajv2020 = Ajv2020Module.default || Ajv2020Module;
  const Ajv = AjvModule.default || AjvModule;
  const addFormats = addFormatsModule.default || addFormatsModule;
-@@ -27,6 +28,9 @@ if (canUseRuntimeCodegen()) {
+ // Detect if we're in a browser extension environment with strict CSP
+@@ -18,16 +20,42 @@ function canUseRuntimeCodegen() {
+         return false;
+     }
+ }
+-// Create a singleton AJV instance with formats only when runtime code generation is available.
+-let ajv = null;
++// Per-draft dispatch: explicitly draft-07/06/04-tagged schemas -> default Ajv
++// (supports tuple-form `items: [...]` emitted by the MCP TS SDK via
++// zod-to-json-schema's default jsonSchema7 target). Unlabeled and 2020-12-tagged
++// schemas -> Ajv2020 (pydantic/FastMCP emit 2020-12 semantics but omit
++// `$schema`, so unlabeled must default to Ajv2020 to avoid silently dropping
++// `prefixItems`/`unevaluatedProperties` under `strict:false`).
++const DRAFT_07_SCHEMA_URIS = [
++    "http://json-schema.org/draft-07/schema",
++    "http://json-schema.org/draft-06/schema",
++    "http://json-schema.org/draft-04/schema",
++];
++function schemaUsesDraft07Dialect(schema) {
++    const schemaUri = typeof schema?.$schema === "string" ? schema.$schema : "";
++    for (const draft07Uri of DRAFT_07_SCHEMA_URIS) {
++        if (schemaUri.startsWith(draft07Uri))
++            return true;
++    }
++    return false;
++}
++// Create singleton AJV instances with formats only when runtime code generation is available.
++let ajv2020 = null;
++let ajvDraft07 = null;
+ if (canUseRuntimeCodegen()) {
+     try {
+-        ajv = new Ajv({
++        ajv2020 = new Ajv2020({
++            allErrors: true,
++            strict: false,
++            coerceTypes: true,
++        });
++        addFormats(ajv2020);
++        ajvDraft07 = new Ajv({
+             allErrors: true,
              strict: false,
              coerceTypes: true,
          });
-+        // Ajv2020 only ships the draft/2020-12 meta-schema; register draft-07 so
-+        // legacy TypeBox/zod tools carrying `$schema: draft-07` still compile.
-+        ajv.addMetaSchema(draft07MetaSchema);
-         addFormats(ajv);
+-        addFormats(ajv);
++        addFormats(ajvDraft07);
      }
      catch (_e) {
+         console.warn("AJV validation disabled due to CSP restrictions");
+@@ -56,7 +84,11 @@ export function validateToolCall(tools, toolCall) {
+  */
+ export function validateToolArguments(tool, toolCall) {
+     // Skip validation in environments where runtime code generation is unavailable.
+-    if (!ajv || !canUseRuntimeCodegen()) {
++    if (!canUseRuntimeCodegen()) {
++        return toolCall.arguments;
++    }
++    const ajv = schemaUsesDraft07Dialect(tool.parameters) ? ajvDraft07 : ajv2020;
++    if (!ajv) {
+         return toolCall.arguments;
+     }
+     // Compile the schema.

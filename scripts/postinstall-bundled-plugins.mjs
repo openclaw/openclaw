@@ -119,11 +119,14 @@ const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
   /async\s+function\s+encryptedStream|encryptedStream\s*=\s*async/u;
 
 // Hotfix for @mariozechner/pi-ai's per-call tool-argument validator: it imports
-// the default `ajv` build, which only loads the draft-07 meta-schema. Zod-emitted
-// tool schemas and pydantic-v2 MCP servers declare `$schema: draft/2020-12`, so
-// every such tool call throws `no schema with key or ref ...draft/2020-12/schema`.
-// Swap the entrypoint to `ajv/dist/2020.js` and register the draft-07 meta so
-// both dialects compile. pnpm source checkouts also get this via
+// the default `ajv` build, which only loads the draft-07 meta-schema. Tool
+// schemas from pydantic-v2 / FastMCP declare (or imply) `$schema: draft/2020-12`
+// and use 2020-12-only keywords (`prefixItems`, `unevaluatedProperties`), so
+// every such tool call throws `no schema with key or ref ...draft/2020-12/schema`
+// — or silently drops the keywords under `strict:false`. Install per-draft
+// dispatch: explicitly draft-07/06/04-tagged schemas (MCP TS SDK + z.tuple())
+// go to default Ajv for tuple `items: [...]` support; unlabeled and 2020-12
+// schemas go to Ajv2020. pnpm source checkouts also get this via
 // pnpm.patchedDependencies; published npm/pnpm installs rely on this postinstall
 // hook to reach the same state.
 const PI_AI_VALIDATION_FILE = join(
@@ -134,23 +137,97 @@ const PI_AI_VALIDATION_FILE = join(
   "utils",
   "validation.js",
 );
-const PI_AI_AJV_IMPORT_NEEDLE = 'import AjvModule from "ajv";';
-const PI_AI_AJV_IMPORT_REPLACEMENT = [
-  'import AjvModule from "ajv/dist/2020.js";',
-  'import draft07MetaSchema from "ajv/dist/refs/json-schema-draft-07.json" with { type: "json" };',
+const PI_AI_IMPORT_BLOCK_NEEDLE = [
+  'import AjvModule from "ajv";',
+  'import addFormatsModule from "ajv-formats";',
+  "// Handle both default and named exports",
+  "const Ajv = AjvModule.default || AjvModule;",
 ].join("\n");
-const PI_AI_ADD_META_NEEDLE = [
+const PI_AI_IMPORT_BLOCK_REPLACEMENT = [
+  'import Ajv2020Module from "ajv/dist/2020.js";',
+  'import AjvModule from "ajv";',
+  'import addFormatsModule from "ajv-formats";',
+  "// Handle both default and named exports",
+  "const Ajv2020 = Ajv2020Module.default || Ajv2020Module;",
+  "const Ajv = AjvModule.default || AjvModule;",
+].join("\n");
+const PI_AI_SINGLETON_NEEDLE = [
+  "// Create a singleton AJV instance with formats only when runtime code generation is available.",
+  "let ajv = null;",
+  "if (canUseRuntimeCodegen()) {",
+  "    try {",
+  "        ajv = new Ajv({",
+  "            allErrors: true,",
+  "            strict: false,",
+  "            coerceTypes: true,",
   "        });",
   "        addFormats(ajv);",
+  "    }",
+  "    catch (_e) {",
+  '        console.warn("AJV validation disabled due to CSP restrictions");',
+  "    }",
+  "}",
 ].join("\n");
-const PI_AI_ADD_META_REPLACEMENT = [
+const PI_AI_SINGLETON_REPLACEMENT = [
+  "// Per-draft dispatch: explicitly draft-07/06/04-tagged schemas -> default Ajv",
+  "// (supports tuple-form `items: [...]` emitted by the MCP TS SDK via",
+  "// zod-to-json-schema's default jsonSchema7 target). Unlabeled and 2020-12-tagged",
+  "// schemas -> Ajv2020 (pydantic/FastMCP emit 2020-12 semantics but omit",
+  "// `$schema`, so unlabeled must default to Ajv2020 to avoid silently dropping",
+  "// `prefixItems`/`unevaluatedProperties` under `strict:false`).",
+  "const DRAFT_07_SCHEMA_URIS = [",
+  '    "http://json-schema.org/draft-07/schema",',
+  '    "http://json-schema.org/draft-06/schema",',
+  '    "http://json-schema.org/draft-04/schema",',
+  "];",
+  "function schemaUsesDraft07Dialect(schema) {",
+  '    const schemaUri = typeof schema?.$schema === "string" ? schema.$schema : "";',
+  "    for (const draft07Uri of DRAFT_07_SCHEMA_URIS) {",
+  "        if (schemaUri.startsWith(draft07Uri))",
+  "            return true;",
+  "    }",
+  "    return false;",
+  "}",
+  "// Create singleton AJV instances with formats only when runtime code generation is available.",
+  "let ajv2020 = null;",
+  "let ajvDraft07 = null;",
+  "if (canUseRuntimeCodegen()) {",
+  "    try {",
+  "        ajv2020 = new Ajv2020({",
+  "            allErrors: true,",
+  "            strict: false,",
+  "            coerceTypes: true,",
   "        });",
-  "        // Ajv2020 only ships the draft/2020-12 meta-schema; register draft-07 so",
-  "        // legacy TypeBox/zod tools carrying `$schema: draft-07` still compile.",
-  "        ajv.addMetaSchema(draft07MetaSchema);",
-  "        addFormats(ajv);",
+  "        addFormats(ajv2020);",
+  "        ajvDraft07 = new Ajv({",
+  "            allErrors: true,",
+  "            strict: false,",
+  "            coerceTypes: true,",
+  "        });",
+  "        addFormats(ajvDraft07);",
+  "    }",
+  "    catch (_e) {",
+  '        console.warn("AJV validation disabled due to CSP restrictions");',
+  "    }",
+  "}",
 ].join("\n");
-const PI_AI_ALREADY_PATCHED_MARKER = 'import AjvModule from "ajv/dist/2020.js";';
+const PI_AI_GUARD_NEEDLE = [
+  "    // Skip validation in environments where runtime code generation is unavailable.",
+  "    if (!ajv || !canUseRuntimeCodegen()) {",
+  "        return toolCall.arguments;",
+  "    }",
+].join("\n");
+const PI_AI_GUARD_REPLACEMENT = [
+  "    // Skip validation in environments where runtime code generation is unavailable.",
+  "    if (!canUseRuntimeCodegen()) {",
+  "        return toolCall.arguments;",
+  "    }",
+  "    const ajv = schemaUsesDraft07Dialect(tool.parameters) ? ajvDraft07 : ajv2020;",
+  "    if (!ajv) {",
+  "        return toolCall.arguments;",
+  "    }",
+].join("\n");
+const PI_AI_ALREADY_PATCHED_MARKER = "const Ajv2020 = Ajv2020Module.default || Ajv2020Module;";
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
@@ -686,14 +763,16 @@ export function applyPiAiAjv2020Hotfix(params = {}) {
       return { applied: false, reason: "already_patched" };
     }
     if (
-      !currentText.includes(PI_AI_AJV_IMPORT_NEEDLE) ||
-      !currentText.includes(PI_AI_ADD_META_NEEDLE)
+      !currentText.includes(PI_AI_IMPORT_BLOCK_NEEDLE) ||
+      !currentText.includes(PI_AI_SINGLETON_NEEDLE) ||
+      !currentText.includes(PI_AI_GUARD_NEEDLE)
     ) {
       return { applied: false, reason: "unexpected_content", targetPath };
     }
     const patchedText = currentText
-      .replace(PI_AI_AJV_IMPORT_NEEDLE, PI_AI_AJV_IMPORT_REPLACEMENT)
-      .replace(PI_AI_ADD_META_NEEDLE, PI_AI_ADD_META_REPLACEMENT);
+      .replace(PI_AI_IMPORT_BLOCK_NEEDLE, PI_AI_IMPORT_BLOCK_REPLACEMENT)
+      .replace(PI_AI_SINGLETON_NEEDLE, PI_AI_SINGLETON_REPLACEMENT)
+      .replace(PI_AI_GUARD_NEEDLE, PI_AI_GUARD_REPLACEMENT);
     const tempPath = createTempPath(targetPath);
     const tempFd = openFile(tempPath, "wx", initialTargetValidation.mode);
     let tempFdClosed = false;

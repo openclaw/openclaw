@@ -313,4 +313,93 @@ describe("schema validator", () => {
       });
     },
   );
+
+  // Per-draft dispatch: explicitly draft-07-tagged schemas go to the default Ajv
+  // class (supports tuple `items: [...]` emitted by zod-to-json-schema's default
+  // target, which the MCP TypeScript SDK uses). Unlabeled and 2020-12-tagged
+  // schemas go to Ajv2020, which understands `prefixItems`/`unevaluatedProperties`
+  // emitted by pydantic v2 / FastMCP. Keeping unlabeled on Ajv2020 avoids
+  // silently dropping 2020-12-only keywords under `strict:false`.
+  describe("per-draft Ajv dispatch", () => {
+    it("compiles explicit draft-07 tuple-form items via default Ajv", () => {
+      expectValidationSuccess({
+        cacheKey: "schema-validator.test.dispatch.draft07-tuple.valid",
+        schema: {
+          $schema: "http://json-schema.org/draft-07/schema#",
+          type: "array",
+          items: [{ type: "string" }, { type: "number" }],
+          minItems: 2,
+          maxItems: 2,
+        },
+        value: ["a", 1],
+      });
+      expectValidationFailure({
+        cacheKey: "schema-validator.test.dispatch.draft07-tuple.invalid",
+        schema: {
+          $schema: "http://json-schema.org/draft-07/schema#",
+          type: "array",
+          items: [{ type: "string" }, { type: "number" }],
+          minItems: 2,
+          maxItems: 2,
+        },
+        value: ["a", "b"],
+      });
+    });
+
+    it("compiles explicit draft-2020-12 prefixItems via Ajv2020", () => {
+      expectValidationSuccess({
+        cacheKey: "schema-validator.test.dispatch.draft2020-prefix.valid",
+        schema: {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "array",
+          prefixItems: [{ type: "string" }, { type: "number" }],
+          items: false,
+        },
+        value: ["a", 1],
+      });
+      expectValidationFailure({
+        cacheKey: "schema-validator.test.dispatch.draft2020-prefix.invalid",
+        schema: {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "array",
+          prefixItems: [{ type: "string" }, { type: "number" }],
+          items: false,
+        },
+        value: ["a", 1, "extra"],
+      });
+    });
+
+    it("routes unlabeled pydantic-style schemas to Ajv2020 (prefixItems recognized)", () => {
+      expectValidationSuccess({
+        cacheKey: "schema-validator.test.dispatch.unlabeled-prefix.valid",
+        schema: {
+          type: "array",
+          prefixItems: [{ type: "string" }, { type: "number" }],
+        },
+        value: ["a", 1],
+      });
+      expectValidationFailure({
+        cacheKey: "schema-validator.test.dispatch.unlabeled-prefix.invalid",
+        schema: {
+          type: "array",
+          prefixItems: [{ type: "string" }, { type: "number" }],
+        },
+        value: ["a", "b"],
+      });
+    });
+
+    it("enforces unevaluatedProperties on unlabeled schemas (Ajv2020 route)", () => {
+      expectValidationFailure({
+        cacheKey: "schema-validator.test.dispatch.unevaluatedProperties",
+        schema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+          unevaluatedProperties: false,
+        },
+        value: { name: "ok", extra: true },
+      });
+    });
+
+  });
 });

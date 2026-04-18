@@ -308,9 +308,10 @@ const ajv = new (AjvPkg as unknown as new (opts?: object) => import("ajv").defau
   strict: false,
   removeAdditional: false,
 });
-// Gateway protocol schemas declare `$schema: draft-07`; Ajv2020 only loads the
-// draft/2020-12 meta-schema by default, so register draft-07 explicitly to keep
-// those schemas compilable while accepting incoming draft/2020-12 MCP schemas.
+// Gateway protocol schemas are repo-internal, unlabeled (no `$schema`), and
+// grep-confirmed free of tuple-form `items: [...]` / `additionalItems`. Ajv2020
+// compiles them cleanly; draft-07 meta-schema is registered defensively in case
+// a future contributor attaches `$schema: draft-07` to a protocol schema.
 ajv.addMetaSchema(draft07MetaSchema);
 
 export const validateCommandsListParams = ajv.compile<CommandsListParams>(CommandsListParamsSchema);

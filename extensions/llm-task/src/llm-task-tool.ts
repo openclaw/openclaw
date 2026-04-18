@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
-import Ajv from "ajv/dist/2020.js";
+import Ajv2020 from "ajv/dist/2020.js";
+import AjvDefault from "ajv";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   formatXHighModelHint,
@@ -12,10 +12,27 @@ import {
 } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
 
-const AjvCtor = Ajv as unknown as typeof import("ajv").default;
-const draft07MetaSchema = createRequire(import.meta.url)(
-  "ajv/dist/refs/json-schema-draft-07.json",
-) as Record<string, unknown>;
+const Ajv2020Ctor = Ajv2020 as unknown as typeof import("ajv").default;
+const AjvDefaultCtor = AjvDefault as unknown as typeof import("ajv").default;
+
+// Route explicitly draft-07/06/04-tagged schemas to default Ajv (supports tuple
+// `items: [...]` emitted by the MCP TypeScript SDK via `zod-to-json-schema`'s
+// default `jsonSchema7` target). Unlabeled and 2020-12-tagged schemas go to
+// Ajv2020, which understands 2020-12-only keywords used by pydantic v2 /
+// FastMCP tools (`prefixItems`, `unevaluatedProperties`, `$dynamicRef`). Don't
+// default unlabeled schemas to draft-07 — pydantic omits `$schema` but emits
+// 2020-12 semantics, and draft-07 Ajv silently drops those keywords under
+// `strict: false`.
+const DRAFT_07_SCHEMA_URIS: readonly string[] = [
+  "http://json-schema.org/draft-07/schema",
+  "http://json-schema.org/draft-06/schema",
+  "http://json-schema.org/draft-04/schema",
+];
+
+function schemaUsesDraft07Dialect(schema: Record<string, unknown>): boolean {
+  const schemaUri = typeof schema.$schema === "string" ? schema.$schema : "";
+  return DRAFT_07_SCHEMA_URIS.some((uri) => schemaUri.startsWith(uri));
+}
 
 function stripCodeFences(s: string): string {
   const trimmed = s.trim();
@@ -232,12 +249,12 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
         const schema = params.schema;
         if (schema && typeof schema === "object" && !Array.isArray(schema)) {
-          const ajv = new AjvCtor({ allErrors: true, strict: false });
-          // User-supplied schemas may declare any JSON Schema draft; register
-          // draft-07 so Ajv2020 can compile both modern MCP-style 2020-12
-          // schemas and legacy draft-07 ones without throwing.
-          ajv.addMetaSchema(draft07MetaSchema);
-          const validate = ajv.compile(schema);
+          const schemaRecord = schema as Record<string, unknown>;
+          const AjvForSchema = schemaUsesDraft07Dialect(schemaRecord)
+            ? AjvDefaultCtor
+            : Ajv2020Ctor;
+          const ajv = new AjvForSchema({ allErrors: true, strict: false });
+          const validate = ajv.compile(schemaRecord);
           const ok = validate(parsed);
           if (!ok) {
             const msg =
