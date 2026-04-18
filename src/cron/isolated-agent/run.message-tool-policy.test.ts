@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { CronDeliveryMode } from "../types.js";
 import {
   clearFastTestEnv,
   dispatchCronDeliveryMock,
@@ -36,7 +37,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
   async function expectMessageToolDisabledForPlan(plan: {
     requested: boolean;
-    mode: "none" | "announce";
+    mode: CronDeliveryMode;
     channel?: string;
     to?: string;
   }) {
@@ -49,7 +50,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
   async function expectMessageToolEnabledForPlan(plan: {
     requested: boolean;
-    mode: "none" | "announce";
+    mode: CronDeliveryMode;
     channel?: string;
     to?: string;
   }) {
