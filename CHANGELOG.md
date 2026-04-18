@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/auth-profile cooldowns: skip profile-level cooldown penalties for `format`-classified failures and HTTP 400 errors. A malformed payload is a client-side bug, not a profile problem — penalizing the profile produces false-positive cooldowns that cascade into fallback churn when the caller retries with a corrected payload. `markAuthProfileFailure` now accepts optional `statusCode` / `httpStatus` params and short-circuits when either is 400, and `maybeMarkAuthProfileFailure` in the embedded runner extracts the 4xx/5xx status from `errorText` before forwarding. Fixes #23815.
 - Agents/bootstrap: resolve bootstrap from workspace truth instead of stale session transcript markers, keep embedded bootstrap instructions on a hidden user-context prelude, suppress normal `/new` and `/reset` greetings while `BOOTSTRAP.md` is still pending, and make the embedded runner read the bootstrap ritual before replying normally.
 - WhatsApp/multi-account: centralize named-account inbound policy, isolate per-account group activation and scoped session keys, preserve legacy activation backfill, and keep `accounts.default` shared defaults aligned across runtime, setup, and compat migration paths. Thanks @mcaxtr.
 - Cron/delivery: clean up isolated sessions after direct deliveries when `deleteAfterRun` is enabled, covering structured and threaded branches that previously bypassed cleanup. (#67807) Thanks @MonkeyLeeT.

@@ -1127,3 +1127,67 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
     expect(stats?.cooldownModel).toBeUndefined();
   });
 });
+
+describe("markAuthProfileFailure — format + HTTP 400 short-circuits", () => {
+  // Guard added alongside the `reason === "format"` short-circuit to cover
+  // callers that propagate the raw HTTP status. See CHANGELOG entry for
+  // context. Any call where reason is "format" OR statusCode===400 OR
+  // httpStatus===400 must not mutate the store's usageStats for the profile.
+
+  it("does not touch usageStats when reason === 'format'", async () => {
+    const store = makeStore({});
+    await markAuthProfileFailure({
+      store,
+      profileId: "anthropic:default",
+      reason: "format",
+    });
+    expect(storeMocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(store.usageStats?.["anthropic:default"]).toBeUndefined();
+  });
+
+  it("does not touch usageStats when statusCode === 400 and reason is otherwise", async () => {
+    const store = makeStore({});
+    await markAuthProfileFailure({
+      store,
+      profileId: "anthropic:default",
+      reason: "unknown",
+      statusCode: 400,
+    });
+    expect(storeMocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(store.usageStats?.["anthropic:default"]).toBeUndefined();
+  });
+
+  it("does not touch usageStats when httpStatus === 400 (alias)", async () => {
+    const store = makeStore({});
+    await markAuthProfileFailure({
+      store,
+      profileId: "anthropic:default",
+      reason: "rate_limit",
+      httpStatus: 400,
+    });
+    expect(storeMocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(store.usageStats?.["anthropic:default"]).toBeUndefined();
+  });
+
+  it("still records cooldown when statusCode is 429 (not a 400 case)", async () => {
+    const store = makeStore({});
+    await markAuthProfileFailure({
+      store,
+      profileId: "anthropic:default",
+      reason: "rate_limit",
+      statusCode: 429,
+    });
+    expect(storeMocks.updateAuthProfileStoreWithLock).toHaveBeenCalled();
+  });
+
+  it("still records cooldown when statusCode is 500 (server error, not a format bug)", async () => {
+    const store = makeStore({});
+    await markAuthProfileFailure({
+      store,
+      profileId: "anthropic:default",
+      reason: "unknown",
+      statusCode: 500,
+    });
+    expect(storeMocks.updateAuthProfileStoreWithLock).toHaveBeenCalled();
+  });
+});
