@@ -138,6 +138,7 @@ function buildRequestScopedFallbackNarrative(data: NarrativePhaseData): string {
 async function startNarrativeRunOrFallback(params: {
   subagent: SubagentSurface;
   sessionKey: string;
+  idempotencyKey: string;
   message: string;
   data: NarrativePhaseData;
   workspaceDir: string;
@@ -147,7 +148,7 @@ async function startNarrativeRunOrFallback(params: {
 }): Promise<string | null> {
   try {
     const run = await params.subagent.run({
-      idempotencyKey: params.sessionKey,
+      idempotencyKey: params.idempotencyKey,
       sessionKey: params.sessionKey,
       message: params.message,
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
@@ -189,6 +190,18 @@ function buildNarrativeSessionKey(params: {
   // key included millisecond-precision nowMs).
   const dayBucket = new Date(params.nowMs).toISOString().slice(0, 10);
   return `dreaming-narrative-${params.phase}-${workspaceHash}-${dayBucket}`;
+}
+
+function buildNarrativeIdempotencyKey(params: {
+  workspaceDir: string;
+  phase: NarrativePhaseData["phase"];
+  nowMs: number;
+}): string {
+  const workspaceHash = createHash("sha1").update(params.workspaceDir).digest("hex").slice(0, 12);
+  // Idempotency key must be unique per run so the gateway does not cache/dedupe
+  // fresh narrative sweeps within the same day-bucket session (see P1 review on
+  // PR #68437 — day-bucket idempotency caused stale cached narratives).
+  return `dreaming-narrative-${params.phase}-${workspaceHash}-${params.nowMs}`;
 }
 
 // ── Prompt building ────────────────────────────────────────────────────
@@ -855,6 +868,11 @@ export async function generateAndAppendDreamNarrative(params: {
     phase: params.data.phase,
     nowMs,
   });
+  const idempotencyKey = buildNarrativeIdempotencyKey({
+    workspaceDir: params.workspaceDir,
+    phase: params.data.phase,
+    nowMs,
+  });
   const message = buildNarrativePrompt(params.data);
   let runId: string | null = null;
   let waitStatus: string | null = null;
@@ -863,6 +881,7 @@ export async function generateAndAppendDreamNarrative(params: {
     runId = await startNarrativeRunOrFallback({
       subagent: params.subagent,
       sessionKey,
+      idempotencyKey,
       message,
       data: params.data,
       workspaceDir: params.workspaceDir,

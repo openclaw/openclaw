@@ -585,7 +585,8 @@ describe("generateAndAppendDreamNarrative", () => {
     const logger = createMockLogger();
     const nowMs = Date.parse("2026-04-05T03:00:00Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}-${nowMs}`;
+    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}-2026-04-05`;
+    const expectedIdempotencyKey = `dreaming-narrative-light-${workspaceHash}-${nowMs}`;
 
     await generateAndAppendDreamNarrative({
       subagent,
@@ -601,7 +602,7 @@ describe("generateAndAppendDreamNarrative", () => {
 
     expect(subagent.run).toHaveBeenCalledOnce();
     expect(subagent.run.mock.calls[0][0]).toMatchObject({
-      idempotencyKey: expectedSessionKey,
+      idempotencyKey: expectedIdempotencyKey,
       sessionKey: expectedSessionKey,
       deliver: false,
     });
