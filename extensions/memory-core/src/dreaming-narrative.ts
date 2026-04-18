@@ -127,12 +127,40 @@ function formatFallbackWriteFailure(err: unknown): string {
   return "unknown error";
 }
 
+/**
+ * Composes a safe fallback "narrative" from phase statistics only — never from
+ * the raw snippet / promotion content itself. The previous implementation
+ * returned the first non-empty snippet verbatim, which surfaced arbitrary
+ * memory content (including secrets like API tokens and session cookies) into
+ * the user-visible DREAMS.md diary. The cron-dispatched code path cannot
+ * obtain a subagent runtime, so we lack the request-scoped context needed to
+ * generate a proper narrative with the Anthropic API. Rather than leak raw
+ * memory, we emit a short statistical note that tells the reader what the
+ * sweep processed without quoting its contents.
+ */
 function buildRequestScopedFallbackNarrative(data: NarrativePhaseData): string {
-  return (
-    data.snippets.map((value) => value.trim()).find((value) => value.length > 0) ??
-    (data.promotions ?? []).map((value) => value.trim()).find((value) => value.length > 0) ??
-    "A memory trace surfaced, but details were unavailable in this run."
-  );
+  const trimmedSnippets = data.snippets
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  const trimmedPromotions = (data.promotions ?? [])
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  const themeCount = (data.themes ?? []).length;
+
+  const parts: string[] = [`Phase: ${data.phase}`];
+  if (trimmedSnippets.length > 0) {
+    parts.push(
+      `${trimmedSnippets.length} fragment${trimmedSnippets.length === 1 ? "" : "s"} surfaced`,
+    );
+  }
+  if (themeCount > 0) {
+    parts.push(`${themeCount} theme${themeCount === 1 ? "" : "s"} noted`);
+  }
+  if (trimmedPromotions.length > 0) {
+    parts.push(`${trimmedPromotions.length} promoted to durable memory`);
+  }
+
+  return `${parts.join(" · ")}. The narrator was elsewhere this pass — details stayed in the recall store.`;
 }
 
 async function startNarrativeRunOrFallback(params: {

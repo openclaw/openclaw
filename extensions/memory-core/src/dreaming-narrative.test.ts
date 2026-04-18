@@ -718,7 +718,13 @@ describe("generateAndAppendDreamNarrative", () => {
     });
 
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(content).toContain("API endpoints need authentication");
+    // Fallback must NEVER leak raw memory content — snippets can contain
+    // secrets (API tokens, URLs, session cookies). Assert the snippet body
+    // is not quoted verbatim into the user-visible diary.
+    expect(content).not.toContain("API endpoints need authentication");
+    expect(content).toContain("Phase: light");
+    expect(content).toContain("1 fragment surfaced");
+    expect(content).toContain("narrator was elsewhere");
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining(workspaceDir));
     expect(subagent.deleteSession).toHaveBeenCalledOnce();
@@ -745,7 +751,9 @@ describe("generateAndAppendDreamNarrative", () => {
     });
 
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(content).toContain("A durable candidate surfaced.");
+    expect(content).not.toContain("A durable candidate surfaced.");
+    expect(content).toContain("Phase: deep");
+    expect(content).toContain("1 promoted to durable memory");
   });
 
   it("does not fall back for non-Error objects that only spoof the stable code", async () => {
