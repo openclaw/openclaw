@@ -525,6 +525,10 @@ async function resolveAutoEntries(params: {
     return [activeEntry];
   }
   if (params.capability === "audio") {
+    const keys = await resolveKeyEntry(params);
+    if (keys) {
+      return [keys];
+    }
     const localAudio = await resolveLocalAudioEntry();
     if (localAudio) {
       return [localAudio];

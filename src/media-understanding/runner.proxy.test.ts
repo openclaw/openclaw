@@ -101,13 +101,14 @@ describe("runCapability proxy fetch passthrough", () => {
   });
   afterEach(() => vi.unstubAllEnvs());
 
-  it("passes fetchFn to audio provider when HTTPS_PROXY is set", async () => {
+  it("lets audio providers use their shared proxy-aware HTTP helper when HTTPS_PROXY is set", async () => {
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
     const seenFetchFn = await runAudioCapabilityWithFetchCapture({
       fixturePrefix: "openclaw-audio-proxy",
       outputText: "transcribed",
     });
-    expect(seenFetchFn).toBe(proxyFetchMocks.proxyFetch);
+    expect(seenFetchFn).toBeUndefined();
+    expect(proxyFetchMocks.resolveProxyFetchFromEnv).not.toHaveBeenCalled();
   });
 
   it("passes fetchFn to video provider when HTTPS_PROXY is set", async () => {

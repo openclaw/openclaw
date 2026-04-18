@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { runCapability } from "./runner.js";
+import { clearMediaUnderstandingBinaryCacheForTests, runCapability } from "./runner.js";
 import { withAudioFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
 
@@ -52,6 +52,13 @@ function createOpenAiAudioCfg(extra?: Partial<OpenClawConfig>): OpenClawConfig {
   } as unknown as OpenClawConfig;
 }
 
+async function createMockExecutable(dir: string, name: string) {
+  const filePath = path.join(dir, name);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(filePath, "#!/bin/sh\necho local audio fallback\n");
+  await fs.chmod(filePath, 0o755);
+}
+
 async function runAutoAudioCase(params: {
   transcribeAudio: (req: AudioTranscriptionRequest) => Promise<{ text: string; model: string }>;
   cfgExtra?: Partial<OpenClawConfig>;
@@ -87,6 +94,31 @@ describe("runCapability auto audio entries", () => {
     expect(result.outputs[0]?.text).toBe("ok");
     expect(seenModel).toBe("gpt-4o-transcribe");
     expect(result.decision.outcome).toBe("success");
+  });
+
+  it("prefers provider keys over auto-detected local audio binaries", async () => {
+    const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audio-bin-"));
+    await createMockExecutable(binDir, "whisper");
+    clearMediaUnderstandingBinaryCacheForTests();
+
+    try {
+      let seenModel: string | undefined;
+      const result = await withEnvAsync({ PATH: binDir }, () =>
+        runAutoAudioCase({
+          transcribeAudio: async (req) => {
+            seenModel = req.model;
+            return { text: "provider ok", model: req.model ?? "unknown" };
+          },
+        }),
+      );
+
+      expect(result.outputs[0]?.text).toBe("provider ok");
+      expect(seenModel).toBe("gpt-4o-transcribe");
+      expect(result.decision.outcome).toBe("success");
+    } finally {
+      await fs.rm(binDir, { recursive: true, force: true });
+      clearMediaUnderstandingBinaryCacheForTests();
+    }
   });
 
   it("skips auto audio when disabled", async () => {

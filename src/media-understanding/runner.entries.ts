@@ -568,9 +568,11 @@ export async function runProviderEntry(params: {
     throw new Error(`Media provider not available: ${providerId}`);
   }
 
-  // Resolve proxy-aware fetch from env vars (HTTPS_PROXY, HTTP_PROXY, etc.)
-  // so provider HTTP calls are routed through the proxy when configured.
-  const fetchFn = resolveProxyFetchFromEnv();
+  // Audio providers go through the shared provider HTTP helpers, which already
+  // handle proxy env vars and NO_PROXY at the request URL boundary. Passing an
+  // EnvHttpProxyAgent fetchFn here can force proxy handling before that layer
+  // and has broken multipart audio uploads for OpenAI-compatible providers.
+  const fetchFn = capability === "audio" ? undefined : resolveProxyFetchFromEnv();
 
   if (capability === "audio") {
     if (!provider.transcribeAudio) {
