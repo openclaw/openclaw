@@ -673,10 +673,16 @@ function handlePlanApprovalEvent(host: PlanApprovalHost, payload: AgentEventPayl
   // Auto-open the full plan in the right sidebar so the user can read
   // it without clicking "Open plan" first. The card itself surfaces
   // Accept/Edit/Reject; the sidebar shows the full markdown.
-  try {
-    host.openPlanInSidebar?.(next);
-  } catch {
-    // ignore — sidebar open is a best-effort affordance
+  //
+  // PR-10 deep-dive review: skip the auto-open for question events
+  // (request.question present) — there's no plan to render, and
+  // popping an empty sidebar with just a header is a confusing UX.
+  if (!isQuestionEvent) {
+    try {
+      host.openPlanInSidebar?.(next);
+    } catch {
+      // ignore — sidebar open is a best-effort affordance
+    }
   }
 }
 

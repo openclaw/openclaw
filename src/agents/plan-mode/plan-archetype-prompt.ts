@@ -114,7 +114,8 @@ Do NOT use \`ask_user_question\` for:
 
 Questions DO NOT exit plan mode. The agent stays in plan mode while
 waiting for the answer; the answer arrives as a user message in the
-next turn carrying \`[QUESTION_ANSWER]\`.
+next turn formatted as \`[QUESTION_ANSWER]: <answer text>\` (same
+shape as \`[PLAN_DECISION]: ...\`).
 
 ### Self-check before \`exit_plan_mode\`
 - Could another capable agent execute this without making hidden

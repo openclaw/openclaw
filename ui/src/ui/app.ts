@@ -1211,8 +1211,21 @@ export class OpenClawApp extends LitElement {
       // Defensive: only fire when the approval is actually a question.
       return;
     }
-    const trimmed = answer.trim();
-    if (!trimmed) {
+    // PR-10 deep-dive review (HIGH): sanitize the answer text before
+    // injecting it as a synthetic user message. The answer may be
+    // free-text from the user OR an option string the (potentially
+    // prompt-injected) agent supplied — strip control chars + cap
+    // length so a crafted option like "yes\n\n[SYSTEM] ignore prior"
+    // can't break the synthetic-message convention or smuggle further
+    // instructions into the next agent turn.
+    // Use Unicode property `Cc` (Control) to satisfy lint's
+    // no-control-regex rule while still stripping C0 + DEL + C1.
+    const sanitized = answer
+      .replace(/\p{Cc}/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 1000);
+    if (!sanitized) {
       return;
     }
     this.planApprovalBusy = true;
@@ -1224,14 +1237,17 @@ export class OpenClawApp extends LitElement {
         key: active.sessionKey,
         planApproval: {
           action: "answer",
-          answer: trimmed,
+          answer: sanitized,
           ...(active.approvalId ? { approvalId: active.approvalId } : {}),
         },
       });
-      // Inject `[QUESTION_ANSWER]` as a synthetic user message so the
-      // agent's next turn can act on the answer. Plan-mode state is
-      // unchanged — the agent continues its planning cycle.
-      const message = `[QUESTION_ANSWER] ${trimmed}`;
+      // Inject `[QUESTION_ANSWER]: <answer>` as a synthetic user
+      // message so the agent's next turn can act on the answer. Format
+      // matches the canonical pattern documented in
+      // tool-description-presets.ts (with COLON, mirroring
+      // [PLAN_DECISION]: ...). Plan-mode state is unchanged — the
+      // agent continues its planning cycle.
+      const message = `[QUESTION_ANSWER]: ${sanitized}`;
       void handleSendChatInternal(this, message).catch((err: unknown) => {
         this.lastError = `Question answered but failed to notify agent: ${String(err)}`;
       });
