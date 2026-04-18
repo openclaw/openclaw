@@ -59,6 +59,19 @@ EOF
   mv -f "${TMP_AUTH}" "${AUTH_FILE}"
 fi
 
+# Remove legacy secrets.providers.blink exec provider from openclaw.json.
+# The old get-secret.sh exec provider curls blink.new at gateway startup,
+# which hangs for 30s+ and blocks the entire boot on v2026.4.15+.
+# Blink API key is resolved via env var mapping now — no exec needed.
+if [ -f "${CONFIG_FILE}" ] && python3 -c "import json,sys; d=json.load(open('${CONFIG_FILE}')); sys.exit(0 if 'secrets' in d else 1)" 2>/dev/null; then
+  python3 -c "
+import json
+with open('${CONFIG_FILE}') as f: d = json.load(f)
+if 'secrets' in d: del d['secrets']
+with open('${CONFIG_FILE}', 'w') as f: json.dump(d, f, indent=2)
+" 2>/dev/null
+fi
+
 # Source agent secrets (set via `blink secrets set` → /data/.env).
 if [ -f "${ENV_FILE}" ]; then
   set -a
