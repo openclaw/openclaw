@@ -581,8 +581,11 @@ blink connector exec vercel v9/projects/PROJECT_ID GET
 
 ### Reddit
 ```bash
-# Get user identity
+# Get your own identity
 blink connector exec reddit api/v1/me GET
+
+# Get another user's profile (MUST append /about — without it Reddit returns 403)
+blink connector exec reddit user/USERNAME/about GET
 
 # Search posts
 blink connector exec reddit search GET '{"q":"OpenClaw","sort":"new","limit":"10"}'
@@ -686,6 +689,8 @@ blink connector exec composio_figma me GET              # NOT figma
 blink connector exec composio_youtube channels GET '{"part":"snippet,statistics","mine":"true"}'
 # If status shows composio_reddit:
 blink connector exec composio_reddit api/v1/me GET
+# Get another user's profile (MUST use /about suffix):
+blink connector exec composio_reddit user/USERNAME/about GET
 # If status shows composio_gmail:
 blink connector exec composio_gmail users/me/messages GET '{"q":"is:unread","maxResults":"10"}'
 ```
@@ -767,9 +772,18 @@ echo "$RESULT" | python3 -c "import json,sys; repos=json.load(sys.stdin)['data']
 ```
 
 ## Multiple accounts
+
+When multiple accounts are linked for the same provider, `blink connector status` shows all of them. Use `--account` to pick a specific account:
+
 ```bash
-blink connector exec github user/repos GET --account acct_xxx
+# Use the primary account (default)
+blink connector exec composio_reddit api/v1/me GET
+
+# Use a specific non-primary account
+blink connector exec composio_reddit api/v1/me GET --account account_id_here
 ```
+
+The `account_id` comes from the `blink connector status` output.
 
 ## Auto-link a connector
 If a connector is connected to the workspace but not linked to this agent:
