@@ -1876,7 +1876,7 @@ export async function runEmbeddedAttempt(
           if (hookResult?.toolsAllow && hookResult.toolsAllow.length > 0) {
             const originalLength = effectiveTools.length;
             const allowSet = new Set(hookResult.toolsAllow);
-            effectiveTools = effectiveTools.filter((t) => allowSet.has(t.function?.name ?? t.name));
+            effectiveTools = effectiveTools.filter((t) => allowSet.has(t.name));
             log.debug(
               `hooks: toolsAllow narrowed tools ${originalLength} → ${effectiveTools.length}`,
             );
