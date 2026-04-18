@@ -28,8 +28,9 @@ x-openclaw-base: &openclaw-base
     # GPU disabled by default in containers (no CUDA support)
     OPENCLAW_LLAMA_GPU: "off"
     # Gateway process skips channel monitors (discord-router handles Discord).
-    # CLI commands (docker exec) override this to access Discord REST API.
     OPENCLAW_SKIP_CHANNELS: "1"
+    # gogcli keyring password (shared across all instances)
+    GOG_KEYRING_PASSWORD: ${OPENCLAW_GOG_KEYRING_PASSWORD:-openclaw}
 
 services:
   openclaw-263176934089949194:
@@ -44,6 +45,7 @@ services:
       - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/263176934089949194:/home/node/.openclaw
       - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/263176934089949194/workspace:/home/node/.openclaw/workspace
       - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/263176934089949194/gogcli:/home/node/.config/gogcli
+      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/shared/auth/auth-profiles.json:/home/node/.openclaw/agents/main/agent/auth-profiles.json
     ports:
       - "${OPENCLAW_263176934089949194_PORT:-18789}:18789"
     command:
@@ -67,6 +69,8 @@ services:
     volumes:
       - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/310798523454980098:/home/node/.openclaw
       - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/310798523454980098/workspace:/home/node/.openclaw/workspace
+      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/310798523454980098/gogcli:/home/node/.config/gogcli
+      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/shared/auth/auth-profiles.json:/home/node/.openclaw/agents/main/agent/auth-profiles.json
     ports:
       - "${OPENCLAW_310798523454980098_PORT:-18791}:18789"
     command:
