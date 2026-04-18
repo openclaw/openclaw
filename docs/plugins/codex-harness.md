@@ -264,7 +264,8 @@ codex app-server --listen stdio://
 ```
 
 By default, OpenClaw asks Codex to request native approvals. You can tune that
-policy further:
+policy further, for example by tightening it and routing reviews through the
+guardian:
 
 ```json5
 {
@@ -274,7 +275,8 @@ policy further:
         enabled: true,
         config: {
           appServer: {
-            approvalPolicy: "on-request",
+            approvalPolicy: "untrusted",
+            approvalsReviewer: "guardian_subagent",
             sandbox: "workspace-write",
             serviceTier: "priority",
           },
