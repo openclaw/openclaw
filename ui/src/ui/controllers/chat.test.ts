@@ -675,6 +675,27 @@ describe("loadChatHistory", () => {
     expect(state.chatMessages).toEqual([messages[1]]);
   });
 
+  it("keeps legitimate System-prefixed chat text with generic exec wording", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "System: exec failed after deploy, retrying" }],
+      },
+      { role: "assistant", content: [{ type: "text", text: "real reply" }] },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual(messages);
+  });
+
   it("filters leaked sender metadata exec rows from history", async () => {
     const messages = [
       {

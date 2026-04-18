@@ -1703,7 +1703,7 @@ describe("chat view", () => {
     expect(container.textContent).toContain("real reply");
   });
 
-  it("still renders legitimate messages that start with System without exec leak markers", () => {
+  it("still renders legitimate messages that start with System and mention exec status generically", () => {
     const container = document.createElement("div");
     render(
       renderChat(
@@ -1713,9 +1713,7 @@ describe("chat view", () => {
             {
               id: "user-visible-system-prefix",
               role: "user",
-              content: [
-                { type: "text", text: "System: please reset the session when you're ready." },
-              ],
+              content: [{ type: "text", text: "System: exec failed after deploy, retrying" }],
               timestamp: Date.now(),
             },
           ],
@@ -1724,7 +1722,7 @@ describe("chat view", () => {
       container,
     );
 
-    expect(container.textContent).toContain("System: please reset the session when you're ready.");
+    expect(container.textContent).toContain("System: exec failed after deploy, retrying");
   });
 
   it("renders canvas-only assistant bubbles", () => {

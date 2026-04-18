@@ -30,4 +30,19 @@ describe("buildChatMarkdown", () => {
     expect(markdown).not.toContain("System (untrusted)");
     expect(markdown).not.toContain("Exec completed");
   });
+
+  it("keeps legitimate System-prefixed chat text with generic exec wording in exports", () => {
+    const markdown = buildChatMarkdown(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "System: exec failed after deploy, retrying" }],
+          timestamp: 1,
+        },
+      ],
+      "OpenClaw",
+    );
+
+    expect(markdown).toContain("System: exec failed after deploy, retrying");
+  });
 });
