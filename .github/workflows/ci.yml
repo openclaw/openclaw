@@ -1732,6 +1732,15 @@ jobs:
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: brew install xcodegen swiftlint swiftformat
 
+      - name: Detect Swift toolchain cache key
+        id: swift-toolchain
+        run: |
+          set -euo pipefail
+          xcode_version="$(xcodebuild -version | tr '\n' ' ' | sed 's/  */ /g; s/ $//')"
+          swift_version="$(swift --version | head -n 1)"
+          toolchain_key="$(printf '%s\n%s\n' "$xcode_version" "$swift_version" | shasum -a 256 | awk '{print $1}')"
+          echo "key=$toolchain_key" >> "$GITHUB_OUTPUT"
+
       - name: Cache SwiftPM
         uses: actions/cache@v5
         with:
@@ -1740,10 +1749,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-swiftpm-
 
+      - name: Cache Swift build directory
+        uses: actions/cache@v5
+        with:
+          path: apps/macos/.build
+          key: ${{ runner.os }}-swift-build-v1-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/shared/OpenClawKit/Package.swift', 'Swabble/Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-swift-build-v1-${{ steps.swift-toolchain.outputs.key }}-
+
       - name: Patch mlx-audio-swift manifest
         run: |
           set -euo pipefail
-          swift package resolve --package-path apps/macos >/dev/null
+          if [ ! -f apps/macos/.build/checkouts/mlx-audio-swift/Package.swift ]; then
+            swift package resolve --package-path apps/macos >/dev/null
+          fi
+          if [ ! -f apps/macos/.build/checkouts/mlx-audio-swift/Package.swift ]; then
+            echo "mlx-audio-swift checkout missing after swift package resolve" >&2
+            exit 1
+          fi
           chmod u+w apps/macos/.build/checkouts/mlx-audio-swift/Package.swift
           python <<'PY'
           from pathlib import Path
@@ -1779,7 +1802,10 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
-            if swift build --package-path apps/macos --configuration release; then
+            # The macOS lane validates the desktop app build; the CLI product is
+            # intentionally left to its own narrower surfaces instead of making
+            # this lane rebuild the whole package graph.
+            if swift build --package-path apps/macos --product OpenClaw --configuration release; then
               exit 0
             fi
             echo "swift build failed (attempt $attempt/3). Retrying…"
