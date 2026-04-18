@@ -141,10 +141,17 @@ export function getComfyConfig(cfg?: OpenClawConfig): ComfyProviderConfig {
       const pluginCapabilityConfig = pluginConfig[capability];
       const providerCapabilityConfig = providerConfig[capability];
       if (isRecord(pluginCapabilityConfig) && isRecord(providerCapabilityConfig)) {
-        merged[capability] = {
+        const capMerged = {
           ...pluginCapabilityConfig,
           ...providerCapabilityConfig,
         };
+        if (providerCapabilityConfig.workflowPath && pluginCapabilityConfig.workflow) {
+          delete capMerged.workflow;
+        }
+        if (providerCapabilityConfig.workflow && pluginCapabilityConfig.workflowPath) {
+          delete capMerged.workflowPath;
+        }
+        merged[capability] = capMerged;
       }
     }
     return merged;
@@ -624,15 +631,19 @@ export async function runComfyWorkflow(params: {
     value: params.prompt,
   });
 
-  const resolvedAuth =
+  let resolvedAuth =
     mode === "cloud"
       ? await resolveApiKeyForProvider({
           provider: "comfy",
           cfg: params.cfg,
           agentDir: params.agentDir,
           store: params.authStore,
-        })
+        }).catch(() => null)
       : null;
+  const pluginApiKey = normalizeOptionalString(capabilityConfig.apiKey);
+  if (mode === "cloud" && !resolvedAuth?.apiKey && pluginApiKey) {
+    resolvedAuth = { apiKey: pluginApiKey, source: "plugin-config", mode: "api-key" };
+  }
   if (mode === "cloud" && !resolvedAuth?.apiKey) {
     throw new Error("Comfy Cloud API key missing");
   }

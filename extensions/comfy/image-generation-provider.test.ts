@@ -143,6 +143,32 @@ describe("comfy image-generation provider", () => {
     });
   });
 
+  it("drops plugin inline workflow when provider overrides with workflowPath", () => {
+    const cfg = {
+      ...buildComfyPluginConfig({
+        image: {
+          workflow: {
+            "6": { inputs: { text: "" } },
+          },
+          promptNodeId: "6",
+        },
+      }),
+      ...buildComfyConfig({
+        image: {
+          workflowPath: "./workflows/override.json",
+          promptNodeId: "6",
+        },
+      }),
+    };
+
+    const merged = getComfyConfig(cfg);
+    expect(merged.image).toEqual({
+      workflowPath: "./workflows/override.json",
+      promptNodeId: "6",
+    });
+    expect(merged.image).not.toHaveProperty("workflow");
+  });
+
   it("submits a local workflow, waits for history, and downloads images", async () => {
     _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
