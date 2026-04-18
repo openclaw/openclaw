@@ -36,6 +36,26 @@ function scopeIdMatches(params: {
   return params.constraint === params.exact || params.constraint === params.groupSpace;
 }
 
+function hasRoleLookup(
+  memberRoleIds: Iterable<string>,
+): memberRoleIds is Iterable<string> & { has(roleId: string): boolean } {
+  return typeof (memberRoleIds as { has?: unknown }).has === "function";
+}
+
+function hasAnyRouteBindingRole(
+  roles: readonly string[],
+  memberRoleIds: Iterable<string> | null | undefined,
+): boolean {
+  if (!memberRoleIds) {
+    return false;
+  }
+  if (hasRoleLookup(memberRoleIds)) {
+    return roles.some((role) => memberRoleIds.has(role));
+  }
+  const memberRoleIdSet = new Set(memberRoleIds);
+  return roles.some((role) => memberRoleIdSet.has(role));
+}
+
 export function routeBindingScopeMatches(
   constraint: RouteBindingScopeConstraint,
   scope: RouteBindingScope,
@@ -54,6 +74,5 @@ export function routeBindingScopeMatches(
   if (!roles) {
     return true;
   }
-  const memberRoleIds = new Set(scope.memberRoleIds ?? []);
-  return roles.some((role) => memberRoleIds.has(role));
+  return hasAnyRouteBindingRole(roles, scope.memberRoleIds);
 }
