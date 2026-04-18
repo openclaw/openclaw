@@ -813,7 +813,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const shouldRenderStreamingStatus = (): boolean =>
     renderMode === "card" || Boolean(streamingStartPromise) || Boolean(streaming?.isActive());
 
-  const queueThinkingPrelude = (): boolean => {
+  const shouldRenderThinkingPanel = (options?: { forcePreview?: boolean }): boolean =>
+    Boolean(
+      options?.forcePreview ||
+      toolCallCount > 0 ||
+      activeTools.length > 0 ||
+      hasReasoningText() ||
+      (reasoningPreviewEnabled && hasThinkingPrelude),
+    );
+
+  const queueThinkingPrelude = (options?: { forcePreview?: boolean }): boolean => {
+    if (!shouldRenderThinkingPanel(options)) {
+      return false;
+    }
     if (hasThinkingPrelude) {
       return false;
     }
@@ -825,6 +837,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   /** Queue an update to the thinking panel content. */
   const queueThinkingPanelUpdate = () => {
     partialUpdateQueue = partialUpdateQueue.then(async () => {
+      if (!shouldRenderThinkingPanel()) {
+        return;
+      }
       if (streamingStartPromise) {
         await streamingStartPromise;
       }
@@ -870,11 +885,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       lastPartial = nextText;
     }
     streamPhase = "streaming";
-    ensureStreamingActivityTimer();
-    bumpThinkingActivity();
-    queueThinkingPanelUpdate();
-    // Collapse thinking panel when first assistant text arrives
-    markThinkingDone();
+    if (shouldRenderThinkingPanel()) {
+      ensureStreamingActivityTimer();
+      bumpThinkingActivity();
+      queueThinkingPanelUpdate();
+      // Collapse thinking panel when first assistant text arrives
+      markThinkingDone();
+    } else {
+      clearStreamingActivityTimer();
+    }
     queueStreamingRender();
   };
 
@@ -1415,20 +1434,22 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       },
       onAssistantMessageStart: streamingEnabled
         ? () => {
-            queueThinkingPrelude();
             startStreaming();
-            queueThinkingPanelUpdate();
+            if (reasoningPreviewEnabled) {
+              queueThinkingPrelude({ forcePreview: true });
+              queueThinkingPanelUpdate();
+            }
           }
         : undefined,
       onReasoningStream: reasoningEnabled
         ? (payload?: { text?: string; mediaUrls?: string[]; isReasoning?: boolean }) => {
-            queueThinkingPrelude();
             streamPhase = "thinking";
             const cleanedReasoningText = stripInlineDirectiveTagsForDisplay(
               payload?.text ?? "",
             ).text;
             if (cleanedReasoningText) {
               if (streamingEnabled) {
+                queueThinkingPrelude({ forcePreview: reasoningPreviewEnabled });
                 startStreaming();
                 queueReasoningUpdate(cleanedReasoningText);
               } else {
@@ -1475,7 +1496,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               );
               return;
             }
-            queueThinkingPrelude();
             startStreaming();
             queueStreamingUpdate(cleanedText, { dedupeWithLastPartial: true });
           }

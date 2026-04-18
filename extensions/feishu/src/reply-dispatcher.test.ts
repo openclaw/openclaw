@@ -735,7 +735,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
-  it("updates the thinking panel for text-only streaming in auto mode", async () => {
+  it("does not create a thinking panel for text-only streaming in auto mode", async () => {
     const dispatcher = createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
@@ -748,18 +748,30 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
-      expect.stringContaining("⏳ Streaming reply"),
-      { title: "💭 Thinking" },
-    );
+    expect(streamingInstances[0].updateThinking).not.toHaveBeenCalled();
     expect(streamingInstances[0].update).toHaveBeenLastCalledWith("第一段答案", {
       replace: true,
     });
   });
 
-  it("renders the thinking panel as soon as assistant activity starts", async () => {
+  it("does not render the thinking panel on assistant start without reasoning preview", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
+    });
+
+    await options.onReplyStart?.();
+    result.replyOptions.onAssistantMessageStart?.();
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].updateThinking).not.toHaveBeenCalled();
+  });
+
+  it("renders the thinking panel on assistant start when reasoning preview is enabled", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
     });
 
     await options.onReplyStart?.();
@@ -773,7 +785,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
-  it("keeps animating the thinking panel while streaming reply status is visible", async () => {
+  it("does not animate a thinking panel for plain text-only streaming", async () => {
     vi.useFakeTimers();
     try {
       const dispatcher = createFeishuReplyDispatcher({
@@ -793,11 +805,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       await vi.advanceTimersByTimeAsync(1_600);
       await flushAsyncTasks();
 
-      expect(updateThinking.mock.calls.length).toBeGreaterThan(baselineCalls);
-      expect(updateThinking).toHaveBeenLastCalledWith(
-        expect.stringContaining("⏳ Streaming reply"),
-        { title: "💭 Thinking" },
-      );
+      expect(updateThinking.mock.calls.length).toBe(baselineCalls);
     } finally {
       vi.useRealTimers();
     }
@@ -1520,9 +1528,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.deliver({ text: "[[reply_to_current]] hello final" }, { kind: "final" });
 
     expect(streamingInstances).toHaveLength(1);
-    // Partials are passed through unchanged so markdown formatting (tables,
-    // lists, fences) is never disturbed mid-stream.
-    expect(streamingInstances[0].update).toHaveBeenCalledWith("[[reply_to_current]] hello", {
+    // Render-only partials strip a leading reply directive while preserving the
+    // underlying raw streamText for final delivery bookkeeping.
+    expect(streamingInstances[0].update).toHaveBeenCalledWith("hello", {
       replace: true,
     });
     // Final delivery still strips directive tags before sending.
