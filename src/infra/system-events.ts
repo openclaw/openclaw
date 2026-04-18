@@ -167,7 +167,7 @@ export function consumeSystemEventEntries(
   ) {
     return [];
   }
-  const removed = entry.queue.splice(0, consumedEntries.length).map(cloneSystemEvent);
+  const removed = entry.queue.splice(0).map(cloneSystemEvent);
   if (entry.queue.length === 0) {
     entry.lastText = null;
     entry.lastContextKey = null;
