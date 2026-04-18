@@ -31,6 +31,13 @@ function buildScheduledTaskRestartScript(taskName: string, taskScriptPath?: stri
     ":retry",
     `timeout /t ${TASK_RESTART_RETRY_DELAY_SEC} /nobreak >nul`,
     "set /a attempts+=1",
+    // Check if the task is already running (e.g. CLI restart beat us to it).
+    // Use PowerShell Get-ScheduledTask instead of schtasks /Query because
+    // schtasks outputs localized status strings on non-English Windows,
+    // while Get-ScheduledTask .State is always an English enum.
+    `powershell -Command "(Get-ScheduledTask -TaskName '${taskName.replace(/'/g, "''")}' -ErrorAction SilentlyContinue).State" 2>nul | findstr /I "Running" >nul 2>&1`,
+    // Note: single quotes are doubled ('') for PowerShell string escaping.
+    "if not errorlevel 1 goto cleanup",
     `schtasks /Run /TN ${quotedTaskName} >nul 2>&1`,
     "if not errorlevel 1 goto cleanup",
     `if %attempts% GEQ ${TASK_RESTART_RETRY_LIMIT} goto fallback`,
