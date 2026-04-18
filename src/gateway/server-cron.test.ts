@@ -142,8 +142,7 @@ describe("buildGatewayCronService", () => {
 
   it("allows private webhook URLs when cron.webhookAllowPrivateNetwork=true", async () => {
     const cfg = createCronConfig("server-cron-ssrf-opt-in");
-    (cfg as { cron: { webhookAllowPrivateNetwork?: boolean } }).cron.webhookAllowPrivateNetwork =
-      true;
+    cfg.cron!.webhookAllowPrivateNetwork = true;
     loadConfigMock.mockReturnValue(cfg);
     fetchWithSsrFGuardMock.mockResolvedValue({ release: async () => {} });
 
@@ -169,10 +168,11 @@ describe("buildGatewayCronService", () => {
       await state.cron.run(job.id, "force");
 
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-      const call = fetchWithSsrFGuardMock.mock.calls[0][0] as {
-        policy?: { allowPrivateNetwork?: boolean };
-      };
-      expect(call.policy).toEqual({ allowPrivateNetwork: true });
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          policy: { allowPrivateNetwork: true },
+        }),
+      );
     } finally {
       state.cron.stop();
     }
