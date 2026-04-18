@@ -100,6 +100,23 @@ function sanitizePlanShape(parsed: unknown, expectedNamespace: string): StoredPl
         `Plan file for "${expectedNamespace}" has invalid step at index ${i} — \`activeForm\` must be a string when present`,
       );
     }
+    // PR-F review fix (Copilot #3105397845): also validate updatedBy /
+    // updatedAt when present. These are persisted by `mergeSteps()` so
+    // they round-trip through the store; without validation, malformed
+    // values could silently survive read.
+    if (s.updatedBy !== undefined && typeof s.updatedBy !== "string") {
+      throw new Error(
+        `Plan file for "${expectedNamespace}" has invalid step at index ${i} — \`updatedBy\` must be a string when present`,
+      );
+    }
+    if (
+      s.updatedAt !== undefined &&
+      (typeof s.updatedAt !== "number" || !Number.isFinite(s.updatedAt) || s.updatedAt < 0)
+    ) {
+      throw new Error(
+        `Plan file for "${expectedNamespace}" has invalid step at index ${i} — \`updatedAt\` must be a non-negative number when present`,
+      );
+    }
   }
   // Required timestamps. Numeric only — string ISO timestamps would silently
   // pass `typeof === "number"` checks downstream as NaN.
