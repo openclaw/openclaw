@@ -284,4 +284,63 @@ describe("handleCommands reset hooks", () => {
       }),
     );
   });
+
+  it("marks soft reset turns and emits reset hooks", async () => {
+    const params = buildResetParams("/reset soft", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      cliSessionIds: { "claude-cli": "cli-session-1" },
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "cli-session-1",
+          extraSystemPromptHash: "prompt-hash",
+        },
+      },
+      claudeCliSessionId: "cli-session-1",
+    } as HandleCommandsParams["sessionEntry"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "command", action: "reset" }),
+    );
+    expect(params.command.resetHookTriggered).toBe(true);
+    expect(params.command.softResetTriggered).toBe(true);
+    expect(params.command.softResetTail).toBe("");
+    expect(params.sessionEntry?.cliSessionIds).toBeUndefined();
+    expect(params.sessionEntry?.cliSessionBindings).toBeUndefined();
+    expect(params.sessionEntry?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("rejects soft reset for bound ACP sessions", async () => {
+    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(
+      "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+    );
+    const params = buildResetParams(
+      "/reset soft",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        Provider: "discord",
+        Surface: "discord",
+        CommandSource: "native",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "Usage: /reset soft is not available for ACP-bound sessions yet." },
+    });
+    expect(triggerInternalHookMock).not.toHaveBeenCalled();
+    expect(resetMocks.resetConfiguredBindingTargetInPlace).not.toHaveBeenCalled();
+  });
 });

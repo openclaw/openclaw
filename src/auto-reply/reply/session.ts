@@ -47,6 +47,7 @@ import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.sha
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
+import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
@@ -357,6 +358,7 @@ export async function initSessionState(params: {
   const strippedForReset = isGroup
     ? stripMentions(triggerBodyNormalized, ctx, cfg, agentId)
     : triggerBodyNormalized;
+  const softReset = parseSoftResetCommand(strippedForReset);
   // Reset triggers are configured as lowercased commands (e.g. "/new"), but users may type
   // "/NEW" etc. Match case-insensitively while keeping the original casing for any stripped body.
   const trimmedBodyLower = normalizeLowercaseStringOrEmpty(trimmedBody);
@@ -380,8 +382,9 @@ export async function initSessionState(params: {
     }
     const triggerPrefixLower = `${triggerLower} `;
     if (
-      trimmedBodyLower.startsWith(triggerPrefixLower) ||
-      strippedForResetLower.startsWith(triggerPrefixLower)
+      !softReset.matched &&
+      (trimmedBodyLower.startsWith(triggerPrefixLower) ||
+        strippedForResetLower.startsWith(triggerPrefixLower))
     ) {
       isNewSession = true;
       bodyStripped = strippedForReset.slice(trigger.length).trimStart();
