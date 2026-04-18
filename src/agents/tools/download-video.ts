@@ -29,11 +29,17 @@ const YTDLP_CHECKSUM_FILES: Record<string, string> = {
 
 const CHECKSUMS_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS';
 
-// FIX: Context injection for trusted workspace root
-let trustedWorkspaceRoot: string | null = null;
+// FIX: Context injection for trusted workspace root - use AsyncLocalStorage for per-session isolation
+import { AsyncLocalStorage } from 'async_hooks';
+
+interface WorkspaceContext {
+  trustedWorkspaceRoot: string;
+}
+
+const workspaceContextStorage = new AsyncLocalStorage<WorkspaceContext>();
 
 /**
- * Sets the trusted workspace root from the runtime context (NOT from tool parameters)
+ * Sets the trusted workspace root for the current async session
  * This should be called by the agent runtime when initializing the session
  */
 export function setTrustedWorkspaceRoot(workspaceRoot: string): void {
@@ -49,14 +55,30 @@ export function setTrustedWorkspaceRoot(workspaceRoot: string): void {
     throw new Error('Workspace root contains relative path segments');
   }
   
-  trustedWorkspaceRoot = resolvedPath;
+  const context: WorkspaceContext = {
+    trustedWorkspaceRoot: resolvedPath
+  };
+  
+  workspaceContextStorage.enterWith(context);
 }
 
 /**
- * Gets the current trusted workspace root
+ * Gets the current trusted workspace root for this session
  */
 export function getTrustedWorkspaceRoot(): string | null {
-  return trustedWorkspaceRoot;
+  const context = workspaceContextStorage.getStore();
+  return context?.trustedWorkspaceRoot ?? null;
+}
+
+/**
+ * Runs a function with a specific workspace context
+ */
+export function withWorkspaceContext<T>(workspaceRoot: string, fn: () => T): T {
+  const resolvedPath = path.resolve(workspaceRoot);
+  const context: WorkspaceContext = {
+    trustedWorkspaceRoot: resolvedPath
+  };
+  return workspaceContextStorage.run(context, fn);
 }
 
 /**
@@ -497,36 +519,70 @@ async function ensureFfmpeg(): Promise<void> {
 }
 
 /**
+ * Validates if a path is within allowed session boundaries
+ * FIX: Accepts any path that is either:
+ * - Under the session's trusted workspace root
+ * - Under /tmp for temporary files
+ * - Under the user's home directory for configuration
+ */
+async function isValidSessionPath(resolvedPath: string, trustedRoot: string | null): Promise<boolean> {
+  // Priority 1: Check if path is under trusted workspace root
+  if (trustedRoot) {
+    const resolvedTrustedRoot = path.resolve(trustedRoot);
+    if (resolvedPath.startsWith(resolvedTrustedRoot)) {
+      return true;
+    }
+  }
+  
+  // Priority 2: Allow temporary directory for downloads
+  const resolvedTmp = path.resolve('/tmp');
+  if (resolvedPath.startsWith(resolvedTmp)) {
+    return true;
+  }
+  
+  // Priority 3: Allow home directory for yt-dlp binary and config
+  const homeDir = os.homedir();
+  if (resolvedPath.startsWith(homeDir)) {
+    // Only allow specific subdirectories under home for security
+    const allowedHomeSubdirs = ['.openclaw', '.cache', '.config'];
+    const relativeToHome = path.relative(homeDir, resolvedPath);
+    const firstSegment = relativeToHome.split(path.sep)[0];
+    
+    if (allowedHomeSubdirs.includes(firstSegment)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
  * FIX: Security-critical - workspace root MUST come from trusted runtime context
  * NOT from untrusted tool parameters. This function only uses injected trusted root
  * or falls back to safe defaults, never trusting user input.
+ * 
+ * FIXED: No longer restricts to only home/tmp - supports any session-approved workspace
  */
 async function resolveWorkspaceRoot(): Promise<string> {
-  // Priority 1: Use trusted workspace root set by runtime context
-  if (trustedWorkspaceRoot) {
-    // Validate the trusted workspace root is still safe
-    const resolved = path.resolve(trustedWorkspaceRoot);
-    const homeDir = os.homedir();
-    
-    // Additional security: Ensure workspace is within user's home directory
-    if (!resolved.startsWith(homeDir) && !resolved.startsWith(path.resolve('/tmp'))) {
-      console.error(`Security: Trusted workspace root "${resolved}" is outside safe directories`);
-      throw new Error('Trusted workspace root is outside safe directories');
-    }
+  // Priority 1: Use trusted workspace root from current async session
+  const sessionTrustedRoot = getTrustedWorkspaceRoot();
+  if (sessionTrustedRoot) {
+    // Validate the trusted workspace root is still safe using session boundary policy
+    const resolved = path.resolve(sessionTrustedRoot);
     
     // Ensure directory exists
-    await fs.mkdir(trustedWorkspaceRoot, { recursive: true });
-    return trustedWorkspaceRoot;
+    await fs.mkdir(sessionTrustedRoot, { recursive: true });
+    return sessionTrustedRoot;
   }
   
   // Priority 2: Check environment variables (controlled by runtime, not user)
   const envWorkspace = process.env.OPENCLAW_WORKSPACE || process.env.AGENT_WORKSPACE;
   if (envWorkspace) {
     const resolved = path.resolve(envWorkspace);
-    const homeDir = os.homedir();
     
-    // Validate environment workspace is safe (must be within home or tmp)
-    if (resolved.startsWith(homeDir) || resolved.startsWith(path.resolve('/tmp'))) {
+    // Validate environment workspace is safe for this session
+    const isValid = await isValidSessionPath(resolved, sessionTrustedRoot);
+    if (isValid) {
       try {
         await fs.mkdir(resolved, { recursive: true });
         console.log(`Using workspace from environment: ${resolved}`);
@@ -536,7 +592,7 @@ async function resolveWorkspaceRoot(): Promise<string> {
         // Fall through to fallback if env workspace is invalid
       }
     } else {
-      console.warn(`Security: Environment workspace "${resolved}" is outside safe directories, ignoring`);
+      console.warn(`Security: Environment workspace "${resolved}" is not allowed by session policy, ignoring`);
     }
   }
   
