@@ -41,9 +41,6 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 0.19.0
         version: 0.19.0(zod@4.3.6)
-      '@anthropic-ai/sdk':
-        specifier: 0.81.0
-        version: 0.81.0(zod@4.3.6)
       '@anthropic-ai/vertex-sdk':
         specifier: ^0.16.0
         version: 0.16.0(zod@4.3.6)
