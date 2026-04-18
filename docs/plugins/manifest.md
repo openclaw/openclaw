@@ -155,6 +155,7 @@ Those belong in your plugin code and `package.json`.
 | `modelSupport`                      | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                  |
 | `cliBackends`                       | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                  |
 | `syntheticAuthRefs`                 | No       | `string[]`                       | Provider or CLI backend refs whose plugin-owned synthetic auth hook should be probed during cold model discovery before runtime loads.                                                                       |
+| `nonSecretAuthMarkers`              | No       | `string[]`                       | Bundled-plugin-owned placeholder API key values that represent non-secret local, OAuth, or ambient credential state.                                                                                         |
 | `commandAliases`                    | No       | `object[]`                       | Command names owned by this plugin that should produce plugin-aware config and CLI diagnostics before runtime loads.                                                                                         |
 | `providerAuthEnvVars`               | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that OpenClaw can inspect without loading plugin code.                                                                                                                      |
 | `providerAuthAliases`               | No       | `Record<string, string>`         | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                   |
@@ -605,6 +606,10 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
   auth hooks that must be visible to cold model discovery before the runtime
   registry exists. Only list refs whose runtime provider or CLI backend actually
   implements `resolveSyntheticAuth`.
+- `nonSecretAuthMarkers` is the cheap metadata path for bundled plugin-owned
+  placeholder API keys such as local, OAuth, or ambient credential markers.
+  Core treats these as non-secrets for auth display and secret audits without
+  hardcoding the owning provider.
 - `channelEnvVars` is the cheap metadata path for shell-env fallback, setup
   prompts, and similar channel surfaces that should not boot plugin runtime
   just to inspect env names.

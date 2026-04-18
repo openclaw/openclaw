@@ -25,12 +25,19 @@ import {
 
 const PROVIDER_ID = "xai";
 type CodeExecutionModule = typeof import("./code-execution.js");
+type XSearchModule = typeof import("./x-search.js");
 
 let codeExecutionModulePromise: Promise<CodeExecutionModule> | undefined;
+let xSearchModulePromise: Promise<XSearchModule> | undefined;
 
 function loadCodeExecutionModule(): Promise<CodeExecutionModule> {
   codeExecutionModulePromise ??= import("./code-execution.js");
   return codeExecutionModulePromise;
+}
+
+function loadXSearchModule(): Promise<XSearchModule> {
+  xSearchModulePromise ??= import("./x-search.js");
+  return xSearchModulePromise;
 }
 
 function hasResolvableXaiApiKey(config: unknown): boolean {
@@ -126,7 +133,7 @@ function createLazyXSearchTool(ctx: {
   }
 
   return createXSearchToolDefinition(async (toolCallId: string, args: Record<string, unknown>) => {
-    const { createXSearchTool } = await import("./x-search.js");
+    const { createXSearchTool } = await loadXSearchModule();
     const tool = createXSearchTool({
       config: ctx.config as never,
       runtimeConfig: (ctx.runtimeConfig as never) ?? null,
