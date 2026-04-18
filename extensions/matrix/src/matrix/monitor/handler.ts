@@ -268,6 +268,27 @@ function resolveMatrixMentionPrecheckText(params: {
   return "";
 }
 
+/**
+ * Strip mention prefixes from text for slash command detection.
+ * This ensures that messages like "@bot:server /new" are recognized as slash commands.
+ * Similar to Feishu's normalizeMentions and Mattermost's stripMentionPrefix.
+ */
+function stripMatrixMentionPrefixes(text: string, mentionRegexes: RegExp[]): string {
+  if (!text || mentionRegexes.length === 0) {
+    return text;
+  }
+  let result = text;
+  for (const pattern of mentionRegexes) {
+    // Match mention at the start of the text, followed by optional whitespace
+    const match = result.match(new RegExp(`^(${pattern.source})\\s*`));
+    if (match) {
+      result = result.slice(match[0].length).trimStart();
+      break; // Only strip the first mention prefix
+    }
+  }
+  return result;
+}
+
 function hasBundledMatrixReplacementRelation(event: MatrixRawEvent) {
   const relations = event.unsigned?.["m.relations"];
   if (!relations || typeof relations !== "object") {
@@ -935,8 +956,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           surface: "matrix",
         });
         const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-        const hasControlCommandInMessage = core.channel.text.hasControlCommand(
+        // Strip mention prefixes before checking for slash commands so that messages
+        // like "@bot:server /new" are recognized as slash commands (#68547)
+        const commandCheckText = stripMatrixMentionPrefixes(
           mentionPrecheckText,
+          agentMentionRegexes,
+        );
+        const hasControlCommandInMessage = core.channel.text.hasControlCommand(
+          commandCheckText,
           cfg,
         );
         const commandGate = resolveControlCommandGate({
