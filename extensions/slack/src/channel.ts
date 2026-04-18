@@ -333,6 +333,13 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     },
     messaging: {
       normalizeTarget: normalizeSlackMessagingTarget,
+      resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
+        const parent = parentConversationId?.trim();
+        const child = conversationId.trim();
+        return parent && parent !== child
+          ? { to: `channel:${parent}`, threadId: child }
+          : { to: normalizeSlackMessagingTarget(`channel:${child}`) };
+      },
       resolveSessionTarget: ({ id }) => normalizeSlackMessagingTarget(`channel:${id}`),
       parseExplicitTarget: ({ raw }) => parseSlackExplicitTarget(raw),
       inferTargetChatType: ({ to }) => parseSlackExplicitTarget(to)?.chatType,
