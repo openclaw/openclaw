@@ -72,6 +72,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     activationSourceConfig,
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
+    cache: false,
     log: params.log,
     coreGatewayHandlers: params.coreGatewayHandlers,
     baseMethods: params.baseMethods,
