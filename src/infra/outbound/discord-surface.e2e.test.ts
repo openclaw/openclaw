@@ -161,6 +161,7 @@ async function withLiveHarness<T>(
     stateDir: process.env.OPENCLAW_STATE_DIR,
     token: process.env.OPENCLAW_GATEWAY_TOKEN,
     port: process.env.OPENCLAW_GATEWAY_PORT,
+    allowSelfMessages: process.env.OPENCLAW_E2E_ALLOW_SELF_MESSAGES,
   };
   const liveEnv = resolveDiscordE2EEnv();
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-e2e-"));
@@ -174,6 +175,7 @@ async function withLiveHarness<T>(
   process.env.OPENCLAW_GATEWAY_TOKEN = token;
   process.env.OPENCLAW_GATEWAY_PORT = String(port);
   process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
+  process.env.OPENCLAW_E2E_ALLOW_SELF_MESSAGES = "1";
 
   const baseCfg = loadConfig();
   const nextCfg = {
@@ -254,7 +256,9 @@ async function withLiveHarness<T>(
             ? "OPENCLAW_STATE_DIR"
             : k === "token"
               ? "OPENCLAW_GATEWAY_TOKEN"
-              : "OPENCLAW_GATEWAY_PORT";
+              : k === "allowSelfMessages"
+                ? "OPENCLAW_E2E_ALLOW_SELF_MESSAGES"
+                : "OPENCLAW_GATEWAY_PORT";
       if (v === undefined) {
         delete process.env[envKey];
       } else {
@@ -273,6 +277,7 @@ describeLive("discord surface e2e (smoke)", () => {
         stateDir: process.env.OPENCLAW_STATE_DIR,
         token: process.env.OPENCLAW_GATEWAY_TOKEN,
         port: process.env.OPENCLAW_GATEWAY_PORT,
+        allowSelfMessages: process.env.OPENCLAW_E2E_ALLOW_SELF_MESSAGES,
       };
       const liveEnv = resolveDiscordE2EEnv();
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-e2e-"));
@@ -287,6 +292,7 @@ describeLive("discord surface e2e (smoke)", () => {
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_GATEWAY_PORT = String(port);
       process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
+      process.env.OPENCLAW_E2E_ALLOW_SELF_MESSAGES = "1";
 
       // Build a minimal config that enables ACP + discord for this run.
       const baseCfg = loadConfig();
@@ -311,6 +317,12 @@ describeLive("discord surface e2e (smoke)", () => {
           discord: {
             ...baseCfg.channels?.discord,
             enabled: true,
+            // Phase 11 F2: the E2E harness itself posts the user-task message as
+            // the `openclaw-e2e` bot (sharing the production bot token). The
+            // preflight defaults to allowBots="off" which drops that message
+            // BEFORE the OPENCLAW_E2E_ALLOW_SELF_MESSAGES bypass runs. Enable
+            // bot-authored messages in-test so the harness can drive the flow.
+            allowBots: true,
             threadBindings: {
               ...baseCfg.channels?.discord?.threadBindings,
               // Required so `/acp spawn ... --thread here` actually creates
@@ -418,7 +430,9 @@ describeLive("discord surface e2e (smoke)", () => {
                 ? "OPENCLAW_STATE_DIR"
                 : k === "token"
                   ? "OPENCLAW_GATEWAY_TOKEN"
-                  : "OPENCLAW_GATEWAY_PORT";
+                  : k === "allowSelfMessages"
+                    ? "OPENCLAW_E2E_ALLOW_SELF_MESSAGES"
+                    : "OPENCLAW_GATEWAY_PORT";
           if (v === undefined) {
             delete process.env[envKey];
           } else {
