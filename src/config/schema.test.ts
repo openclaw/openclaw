@@ -3,6 +3,7 @@ import { SENSITIVE_URL_HINT_TAG } from "../shared/net/redact-sensitive-url.js";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
+import { OpenClawSchema } from "./zod-schema.js";
 
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
@@ -294,6 +295,10 @@ describe("config schema", () => {
       web: {
         fetch: {
           ssrfPolicy: {
+            allowPrivateNetwork: true,
+            dangerouslyAllowPrivateNetwork: true,
+            allowedHostnames: ["matrix.internal"],
+            hostnameAllowlist: ["*.corp.example"],
             allowRfc2544BenchmarkRange: true,
           },
         },
@@ -301,8 +306,61 @@ describe("config schema", () => {
     });
 
     expect(parsed?.web?.fetch?.ssrfPolicy).toEqual({
+      allowPrivateNetwork: true,
+      dangerouslyAllowPrivateNetwork: true,
+      allowedHostnames: ["matrix.internal"],
+      hostnameAllowlist: ["*.corp.example"],
       allowRfc2544BenchmarkRange: true,
     });
+  });
+
+  it("accepts agents.list[].tools.web.fetch.ssrfPolicy", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        agents: {
+          list: [
+            {
+              id: "ops",
+              tools: {
+                web: {
+                  fetch: {
+                    ssrfPolicy: {
+                      dangerouslyAllowPrivateNetwork: true,
+                      allowedHostnames: ["matrix.home.arpa"],
+                      hostnameAllowlist: ["*.corp.example"],
+                      allowRfc2544BenchmarkRange: true,
+                    },
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects unknown keys under agents.list[].tools.web.fetch.ssrfPolicy", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        agents: {
+          list: [
+            {
+              id: "ops",
+              tools: {
+                web: {
+                  fetch: {
+                    ssrfPolicy: {
+                      unknown: true,
+                    },
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+    ).toThrow(/unrecognized key/i);
   });
 
   it("rejects allowPrivateNetwork on media-understanding request config", () => {
@@ -332,6 +390,20 @@ describe("config schema", () => {
           fetch: {
             firecrawl: {
               enabled: true,
+              nope: true,
+            },
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects unknown keys inside web fetch ssrf policy config", () => {
+    expect(() =>
+      ToolsSchema.parse({
+        web: {
+          fetch: {
+            ssrfPolicy: {
               nope: true,
             },
           },

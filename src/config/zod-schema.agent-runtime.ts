@@ -336,6 +336,17 @@ export const ToolsWebSearchSchema = z
   .strict()
   .optional();
 
+export const WebFetchSsrFPolicySchema = z
+  .object({
+    allowPrivateNetwork: z.boolean().optional(),
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+    allowedHostnames: z.array(z.string()).optional(),
+    hostnameAllowlist: z.array(z.string()).optional(),
+    allowRfc2544BenchmarkRange: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 export const ToolsWebFetchSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -348,12 +359,7 @@ export const ToolsWebFetchSchema = z
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
     readability: z.boolean().optional(),
-    ssrfPolicy: z
-      .object({
-        allowRfc2544BenchmarkRange: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
+    ssrfPolicy: WebFetchSsrFPolicySchema,
     // Keep the legacy Firecrawl fetch shape loadable so existing installs can
     // start and then migrate cleanly through doctor.
     firecrawl: z
@@ -604,6 +610,17 @@ export const AgentToolsSchema = z
     exec: AgentToolExecSchema,
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
+    web: z
+      .object({
+        fetch: z
+          .object({
+            ssrfPolicy: WebFetchSsrFPolicySchema,
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     sandbox: z
       .object({
         tools: ToolPolicySchema,

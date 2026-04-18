@@ -1,6 +1,13 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { SsrFBlockedError, type LookupFn } from "../../infra/net/ssrf.js";
+import type { AgentToolsConfig } from "../../config/types.tools.js";
+import {
+  mergeSsrFPolicies,
+  serializeSsrFPolicy,
+  SsrFBlockedError,
+  type LookupFn,
+  type SsrFPolicy,
+} from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
@@ -74,8 +81,36 @@ type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer 
     : undefined
   : undefined;
 
+type AgentWebFetchConfig = NonNullable<AgentToolsConfig["web"]>["fetch"];
+
 function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
   return resolveWebProviderConfig<"fetch", NonNullable<WebFetchConfig>>(cfg, "fetch");
+}
+
+function resolveAgentFetchConfig(agentTools?: AgentToolsConfig): AgentWebFetchConfig | undefined {
+  const fetch = agentTools?.web?.fetch;
+  if (!fetch || typeof fetch !== "object") {
+    return undefined;
+  }
+  return fetch as AgentWebFetchConfig;
+}
+
+function resolveEffectiveFetchConfig(params: {
+  config?: OpenClawConfig;
+  agentTools?: AgentToolsConfig;
+}): WebFetchConfig | undefined {
+  const globalFetch = resolveFetchConfig(params.config);
+  const agentFetch = resolveAgentFetchConfig(params.agentTools);
+  if (!globalFetch && !agentFetch) {
+    return undefined;
+  }
+  if (!agentFetch?.ssrfPolicy) {
+    return globalFetch;
+  }
+  return {
+    ...globalFetch,
+    ssrfPolicy: mergeSsrFPolicies(globalFetch?.ssrfPolicy, agentFetch.ssrfPolicy),
+  };
 }
 
 function resolveFetchEnabled(params: { fetch?: WebFetchConfig; sandboxed?: boolean }): boolean {
@@ -247,9 +282,7 @@ type WebFetchRuntimeParams = {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
-  ssrfPolicy?: {
-    allowRfc2544BenchmarkRange?: boolean;
-  };
+  ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
   resolveProviderFallback: () => ReturnType<typeof resolveWebFetchDefinition>;
 };
@@ -363,9 +396,8 @@ async function maybeFetchProviderWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
-  const allowRfc2544BenchmarkRange = params.ssrfPolicy?.allowRfc2544BenchmarkRange === true;
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}:${serializeSsrFPolicy(params.ssrfPolicy)}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -392,7 +424,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       lookupFn: params.lookupFn,
-      policy: allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange } : undefined,
+      policy: params.ssrfPolicy,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -569,11 +601,15 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
 
 export function createWebFetchTool(options?: {
   config?: OpenClawConfig;
+  agentTools?: AgentToolsConfig;
   sandboxed?: boolean;
   runtimeWebFetch?: RuntimeWebFetchMetadata;
   lookupFn?: LookupFn;
 }): AnyAgentTool | null {
-  const fetch = resolveFetchConfig(options?.config);
+  const fetch = resolveEffectiveFetchConfig({
+    config: options?.config,
+    agentTools: options?.agentTools,
+  });
   if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
     return null;
   }

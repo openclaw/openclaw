@@ -70,6 +70,43 @@ export function normalizeHostnameAllowlist(values?: string[]): string[] {
   );
 }
 
+export function mergeSsrFPolicies(
+  globalPolicy?: SsrFPolicy,
+  agentPolicy?: SsrFPolicy,
+): SsrFPolicy | undefined {
+  if (!globalPolicy && !agentPolicy) {
+    return undefined;
+  }
+  return {
+    ...globalPolicy,
+    ...agentPolicy,
+  };
+}
+
+export function serializeSsrFPolicy(policy?: SsrFPolicy): string {
+  return JSON.stringify({
+    allowPrivateNetwork: policy?.allowPrivateNetwork === true,
+    dangerouslyAllowPrivateNetwork: policy?.dangerouslyAllowPrivateNetwork === true,
+    allowRfc2544BenchmarkRange: policy?.allowRfc2544BenchmarkRange === true,
+    allowedHostnames: policy?.allowedHostnames ?? [],
+    hostnameAllowlist: policy?.hostnameAllowlist ?? [],
+  });
+}
+
+export function formatSsrFPolicyNarrowExceptions(policy?: SsrFPolicy): string | undefined {
+  const details: string[] = [];
+  if (policy?.allowedHostnames && policy.allowedHostnames.length > 0) {
+    details.push(`allowedHostnames=${policy.allowedHostnames.join(", ")}`);
+  }
+  if (policy?.hostnameAllowlist && policy.hostnameAllowlist.length > 0) {
+    details.push(`hostnameAllowlist=${policy.hostnameAllowlist.join(", ")}`);
+  }
+  if (policy?.allowRfc2544BenchmarkRange === true) {
+    details.push("allowRfc2544BenchmarkRange=true");
+  }
+  return details.length > 0 ? details.join("; ") : undefined;
+}
+
 export function isPrivateNetworkAllowedByPolicy(policy?: SsrFPolicy): boolean {
   return policy?.dangerouslyAllowPrivateNetwork === true || policy?.allowPrivateNetwork === true;
 }

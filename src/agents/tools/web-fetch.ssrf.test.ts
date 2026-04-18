@@ -35,7 +35,20 @@ function setMockFetch(
 
 async function createWebFetchToolForTest(params?: {
   firecrawlApiKey?: string;
-  ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean };
+  globalSsrFPolicy?: {
+    allowPrivateNetwork?: boolean;
+    dangerouslyAllowPrivateNetwork?: boolean;
+    allowedHostnames?: string[];
+    hostnameAllowlist?: string[];
+    allowRfc2544BenchmarkRange?: boolean;
+  };
+  agentSsrFPolicy?: {
+    allowPrivateNetwork?: boolean;
+    dangerouslyAllowPrivateNetwork?: boolean;
+    allowedHostnames?: string[];
+    hostnameAllowlist?: string[];
+    allowRfc2544BenchmarkRange?: boolean;
+  };
   cacheTtlMinutes?: number;
 }) {
   const { createWebFetchTool } = await import("./web-tools.js");
@@ -58,12 +71,21 @@ async function createWebFetchToolForTest(params?: {
         web: {
           fetch: {
             cacheTtlMinutes: params?.cacheTtlMinutes ?? 0,
-            ssrfPolicy: params?.ssrfPolicy,
+            ssrfPolicy: params?.globalSsrFPolicy,
             ...(params?.firecrawlApiKey ? { provider: "firecrawl" } : {}),
           },
         },
       },
     },
+    agentTools: params?.agentSsrFPolicy
+      ? {
+          web: {
+            fetch: {
+              ssrfPolicy: params.agentSsrFPolicy,
+            },
+          },
+        }
+      : undefined,
     lookupFn: lookupMock,
   });
 }
@@ -165,7 +187,7 @@ describe("web_fetch SSRF protection", () => {
 
     const fetchSpy = setMockFetch().mockResolvedValue(textResponse("benchmark ok"));
     const allowedTool = await createWebFetchToolForTest({
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      globalSsrFPolicy: { allowRfc2544BenchmarkRange: true },
       cacheTtlMinutes: 1,
     });
 
@@ -177,5 +199,53 @@ describe("web_fetch SSRF protection", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const stricterTool = await createWebFetchToolForTest({ cacheTtlMinutes: 1 });
     await expectBlockedUrl(stricterTool, url, /private|internal|blocked/i);
+  });
+
+  it("allows private-network targets when a named agent opts in", async () => {
+    const url = "http://127.0.0.1/private";
+    const deniedTool = await createWebFetchToolForTest({
+      globalSsrFPolicy: { dangerouslyAllowPrivateNetwork: false },
+    });
+    await expectBlockedUrl(deniedTool, url, /private|internal|blocked/i);
+
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("agent ok"));
+    const allowedTool = await createWebFetchToolForTest({
+      globalSsrFPolicy: { dangerouslyAllowPrivateNetwork: false },
+      agentSsrFPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
+
+    const result = await allowedTool?.execute?.("call", { url });
+    expect(result?.details).toMatchObject({ status: 200, extractor: "raw" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows narrow hostname exceptions from a named agent", async () => {
+    lookupMock.mockResolvedValue([{ address: "10.0.0.5", family: 4 }]);
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("hostname ok"));
+    const tool = await createWebFetchToolForTest({
+      globalSsrFPolicy: { allowedHostnames: ["global-only.internal"] },
+      agentSsrFPolicy: { allowedHostnames: ["matrix.home.arpa"] },
+    });
+
+    const result = await tool?.execute?.("call", { url: "https://matrix.home.arpa/status" });
+    expect(result?.details).toMatchObject({ status: 200, extractor: "raw" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse broader-policy cache entries for stricter policies", async () => {
+    const url = "http://198.18.0.153/file";
+    lookupMock.mockResolvedValue([{ address: "198.18.0.153", family: 4 }]);
+
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("broad cache"));
+    const broadTool = await createWebFetchToolForTest({
+      agentSsrFPolicy: { dangerouslyAllowPrivateNetwork: true },
+      cacheTtlMinutes: 1,
+    });
+    await broadTool?.execute?.("call", { url });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    const strictTool = await createWebFetchToolForTest({ cacheTtlMinutes: 1 });
+    await expectBlockedUrl(strictTool, url, /private|internal|blocked/i);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

@@ -274,8 +274,23 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
   "tools.web.fetch.readability": "Web Fetch Readability Extraction",
   "tools.web.fetch.ssrfPolicy": "Web Fetch SSRF Policy",
+  "tools.web.fetch.ssrfPolicy.allowPrivateNetwork": "Web Fetch Allow Private Network",
+  "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Web Fetch Dangerously Allow Private Network",
+  "tools.web.fetch.ssrfPolicy.allowedHostnames": "Web Fetch Allowed Hostnames",
+  "tools.web.fetch.ssrfPolicy.hostnameAllowlist": "Web Fetch Hostname Allowlist",
   "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
     "Web Fetch Allow RFC 2544 Benchmark Range",
+  "agents.list[].tools.web.fetch.ssrfPolicy": "Agent Web Fetch SSRF Policy",
+  "agents.list[].tools.web.fetch.ssrfPolicy.allowPrivateNetwork":
+    "Agent Web Fetch Allow Private Network",
+  "agents.list[].tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Agent Web Fetch Dangerously Allow Private Network",
+  "agents.list[].tools.web.fetch.ssrfPolicy.allowedHostnames": "Agent Web Fetch Allowed Hostnames",
+  "agents.list[].tools.web.fetch.ssrfPolicy.hostnameAllowlist":
+    "Agent Web Fetch Hostname Allowlist",
+  "agents.list[].tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "Agent Web Fetch Allow RFC 2544 Benchmark Range",
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.controlUi.root": "Control UI Assets Root",
   "gateway.controlUi.embedSandbox": "Control UI Embed Sandbox Mode",

@@ -16,6 +16,11 @@ import {
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import {
+  formatSsrFPolicyNarrowExceptions,
+  isPrivateNetworkAllowedByPolicy,
+  mergeSsrFPolicies,
+} from "../infra/net/ssrf.js";
 import { hasNonEmptyString } from "../infra/outbound/channel-target.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
@@ -1109,6 +1114,65 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
   return findings;
 }
 
+export function collectWebFetchSsrFPolicyFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const globalPolicy = cfg.tools?.web?.fetch?.ssrfPolicy;
+  const globalNarrowExceptions = formatSsrFPolicyNarrowExceptions(globalPolicy);
+
+  if (isPrivateNetworkAllowedByPolicy(globalPolicy)) {
+    findings.push({
+      checkId: "tools.web_fetch.ssrf_policy.default_private_network_enabled",
+      severity: "warn",
+      title: "Global web_fetch SSRF default allows private-network access",
+      detail:
+        "tools.web.fetch.ssrfPolicy is the default web_fetch SSRF posture for all agents, and it currently allows private-network access.",
+      remediation:
+        "Keep the global default restrictive when possible, and move required exceptions to named agents instead.",
+    });
+  } else if (globalNarrowExceptions) {
+    findings.push({
+      checkId: "tools.web_fetch.ssrf_policy.default_narrow_exceptions",
+      severity: "info",
+      title: "Global web_fetch SSRF default has narrow exceptions",
+      detail: `tools.web.fetch.ssrfPolicy is the default web_fetch SSRF posture for all agents, with these explicit exceptions: ${globalNarrowExceptions}.`,
+      remediation:
+        "Keep hostname and RFC2544 exceptions minimal, and prefer agent-scoped exceptions when only one agent needs them.",
+    });
+  }
+
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const agent of agents) {
+    if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
+      continue;
+    }
+    const agentPolicy = agent.tools?.web?.fetch?.ssrfPolicy;
+    if (!agentPolicy) {
+      continue;
+    }
+    const effectivePolicy = mergeSsrFPolicies(globalPolicy, agentPolicy);
+    const narrowExceptions = formatSsrFPolicyNarrowExceptions(effectivePolicy);
+    if (isPrivateNetworkAllowedByPolicy(effectivePolicy)) {
+      findings.push({
+        checkId: `agents.${agent.id}.tools.web_fetch.ssrf_policy.private_network_enabled`,
+        severity: "warn",
+        title: `Agent ${agent.id} widens web_fetch SSRF access`,
+        detail: `Global tools.web.fetch.ssrfPolicy is only the default baseline, not a hard ceiling, and agent ${agent.id} currently has effective private-network access for web_fetch.`,
+        remediation: `Limit agent ${agent.id} to narrower hostname exceptions if possible, and treat this widening as a security-sensitive exception.`,
+      });
+    } else if (narrowExceptions) {
+      findings.push({
+        checkId: `agents.${agent.id}.tools.web_fetch.ssrf_policy.narrow_exceptions`,
+        severity: "info",
+        title: `Agent ${agent.id} has web_fetch SSRF exceptions`,
+        detail: `Global tools.web.fetch.ssrfPolicy is only the default baseline, not a hard ceiling, and agent ${agent.id} currently has these effective web_fetch SSRF exceptions: ${narrowExceptions}.`,
+        remediation: "Keep agent-specific exceptions narrow and review them regularly.",
+      });
+    }
+  }
+
+  return findings;
+}
+
 function collectOpenExecSurfacePaths(cfg: OpenClawConfig): string[] {
   const channels = asNullableRecord(cfg.channels);
   if (!channels) {
@@ -1284,6 +1348,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectExecRuntimeFindings(cfg));
+  findings.push(...collectWebFetchSsrFPolicyFindings(cfg));
   findings.push(...auditNonDeep.collectHooksHardeningFindings(cfg, env));
   findings.push(...auditNonDeep.collectGatewayHttpNoAuthFindings(cfg, env));
   findings.push(...auditNonDeep.collectGatewayHttpSessionKeyOverrideFindings(cfg));

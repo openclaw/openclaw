@@ -1,5 +1,6 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { MemoryQmdIndexPath } from "./types.memory.js";
@@ -301,6 +302,8 @@ export type FsToolsConfig = {
   workspaceOnly?: boolean;
 };
 
+export type WebFetchSsrFPolicyConfig = SsrFPolicy;
+
 export type AgentToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -323,6 +326,13 @@ export type AgentToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Per-agent tool-specific runtime overrides. */
+  web?: {
+    fetch?: {
+      /** Per-agent SSRF policy overrides for web_fetch only. */
+      ssrfPolicy?: WebFetchSsrFPolicyConfig;
+    };
+  };
   sandbox?: {
     tools?: {
       allow?: string[];
@@ -553,10 +563,7 @@ export type ToolsConfig = {
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
       /** SSRF policy configuration for web_fetch. */
-      ssrfPolicy?: {
-        /** Allow RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility (e.g., Clash TUN mode, Surge). */
-        allowRfc2544BenchmarkRange?: boolean;
-      };
+      ssrfPolicy?: WebFetchSsrFPolicyConfig;
     };
   };
   media?: MediaToolsConfig;

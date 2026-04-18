@@ -7204,6 +7204,63 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       },
                       additionalProperties: false,
                     },
+                    web: {
+                      type: "object",
+                      properties: {
+                        fetch: {
+                          type: "object",
+                          properties: {
+                            ssrfPolicy: {
+                              type: "object",
+                              properties: {
+                                allowPrivateNetwork: {
+                                  type: "boolean",
+                                  title: "Agent Web Fetch Allow Private Network",
+                                  description:
+                                    "Legacy alias for agents.list[].tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork. Prefer the dangerously-named key so per-agent widening is explicit.",
+                                },
+                                dangerouslyAllowPrivateNetwork: {
+                                  type: "boolean",
+                                  title: "Agent Web Fetch Dangerously Allow Private Network",
+                                  description:
+                                    "Use this only when a named agent must reach private-network address ranges such as localhost, LAN, or internal hosts. Treat each enablement as a security-sensitive exception and keep the default restrictive.",
+                                },
+                                allowedHostnames: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                  title: "Agent Web Fetch Allowed Hostnames",
+                                  description:
+                                    "Exact hostname exceptions for this agent's web_fetch SSRF checks. Keep this list minimal and review entries regularly.",
+                                },
+                                hostnameAllowlist: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                  title: "Agent Web Fetch Hostname Allowlist",
+                                  description:
+                                    "Hostname allowlist patterns for this agent's web_fetch SSRF checks. Use narrow hostnames or suffix patterns and avoid broad wildcard access.",
+                                },
+                                allowRfc2544BenchmarkRange: {
+                                  type: "boolean",
+                                  title: "Agent Web Fetch Allow RFC 2544 Benchmark Range",
+                                  description:
+                                    "Allows RFC 2544 benchmark range IPs (198.18.0.0/15) for this agent's web_fetch fake-IP proxy compatibility while keeping other private-network SSRF protections in place.",
+                                },
+                              },
+                              additionalProperties: false,
+                              title: "Agent Web Fetch SSRF Policy",
+                              description:
+                                "Per-agent SSRF guardrail overrides for web_fetch. The global tools.web.fetch.ssrfPolicy stays the default baseline; use agent overrides only for explicitly trusted exceptions.",
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
                     sandbox: {
                       type: "object",
                       properties: {
@@ -7652,17 +7709,47 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   ssrfPolicy: {
                     type: "object",
                     properties: {
+                      allowPrivateNetwork: {
+                        type: "boolean",
+                        title: "Web Fetch Allow Private Network",
+                        description:
+                          "Legacy alias for tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork. Prefer the dangerously-named key so risk intent is explicit.",
+                      },
+                      dangerouslyAllowPrivateNetwork: {
+                        type: "boolean",
+                        title: "Web Fetch Dangerously Allow Private Network",
+                        description:
+                          "Allows web_fetch to reach private-network address ranges such as localhost, LAN, or internal hosts. Use only in trusted environments.",
+                      },
+                      allowedHostnames: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                        title: "Web Fetch Allowed Hostnames",
+                        description:
+                          "Exact hostname exceptions for web_fetch SSRF checks. Keep this list minimal and review entries regularly.",
+                      },
+                      hostnameAllowlist: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                        title: "Web Fetch Hostname Allowlist",
+                        description:
+                          "Hostname allowlist patterns for web_fetch SSRF checks. Use narrow hostnames or suffix patterns and avoid broad wildcard access.",
+                      },
                       allowRfc2544BenchmarkRange: {
                         type: "boolean",
                         title: "Web Fetch Allow RFC 2544 Benchmark Range",
                         description:
-                          "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
+                          "Allows RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility while keeping other private-network SSRF protections in place.",
                       },
                     },
                     additionalProperties: false,
                     title: "Web Fetch SSRF Policy",
                     description:
-                      "Scoped SSRF policy overrides for web_fetch. Keep this narrow and opt in only for known local-network proxy environments.",
+                      "Server-side request forgery guardrail settings for web_fetch. Keep defaults restrictive and add private-network or hostname exceptions only for explicitly trusted targets.",
                   },
                   firecrawl: {
                     type: "object",
@@ -24338,13 +24425,63 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.web.fetch.ssrfPolicy": {
       label: "Web Fetch SSRF Policy",
-      help: "Scoped SSRF policy overrides for web_fetch. Keep this narrow and opt in only for known local-network proxy environments.",
+      help: "Server-side request forgery guardrail settings for web_fetch. Keep defaults restrictive and add private-network or hostname exceptions only for explicitly trusted targets.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.fetch.ssrfPolicy.allowPrivateNetwork": {
+      label: "Web Fetch Allow Private Network",
+      help: "Legacy alias for tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork. Prefer the dangerously-named key so risk intent is explicit.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork": {
+      label: "Web Fetch Dangerously Allow Private Network",
+      help: "Allows web_fetch to reach private-network address ranges such as localhost, LAN, or internal hosts. Use only in trusted environments.",
+      tags: ["security", "access", "tools", "advanced"],
+    },
+    "tools.web.fetch.ssrfPolicy.allowedHostnames": {
+      label: "Web Fetch Allowed Hostnames",
+      help: "Exact hostname exceptions for web_fetch SSRF checks. Keep this list minimal and review entries regularly.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.fetch.ssrfPolicy.hostnameAllowlist": {
+      label: "Web Fetch Hostname Allowlist",
+      help: "Hostname allowlist patterns for web_fetch SSRF checks. Use narrow hostnames or suffix patterns and avoid broad wildcard access.",
       tags: ["access", "tools"],
     },
     "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange": {
       label: "Web Fetch Allow RFC 2544 Benchmark Range",
-      help: "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
+      help: "Allows RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility while keeping other private-network SSRF protections in place.",
       tags: ["access", "tools"],
+    },
+    "agents.list[].tools.web.fetch.ssrfPolicy": {
+      label: "Agent Web Fetch SSRF Policy",
+      help: "Per-agent SSRF guardrail overrides for web_fetch. The global tools.web.fetch.ssrfPolicy stays the default baseline; use agent overrides only for explicitly trusted exceptions.",
+      tags: ["access"],
+    },
+    "agents.list[].tools.web.fetch.ssrfPolicy.allowPrivateNetwork": {
+      label: "Agent Web Fetch Allow Private Network",
+      help: "Legacy alias for agents.list[].tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork. Prefer the dangerously-named key so per-agent widening is explicit.",
+      tags: ["access"],
+    },
+    "agents.list[].tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork": {
+      label: "Agent Web Fetch Dangerously Allow Private Network",
+      help: "Use this only when a named agent must reach private-network address ranges such as localhost, LAN, or internal hosts. Treat each enablement as a security-sensitive exception and keep the default restrictive.",
+      tags: ["security", "access", "advanced"],
+    },
+    "agents.list[].tools.web.fetch.ssrfPolicy.allowedHostnames": {
+      label: "Agent Web Fetch Allowed Hostnames",
+      help: "Exact hostname exceptions for this agent's web_fetch SSRF checks. Keep this list minimal and review entries regularly.",
+      tags: ["access"],
+    },
+    "agents.list[].tools.web.fetch.ssrfPolicy.hostnameAllowlist": {
+      label: "Agent Web Fetch Hostname Allowlist",
+      help: "Hostname allowlist patterns for this agent's web_fetch SSRF checks. Use narrow hostnames or suffix patterns and avoid broad wildcard access.",
+      tags: ["access"],
+    },
+    "agents.list[].tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange": {
+      label: "Agent Web Fetch Allow RFC 2544 Benchmark Range",
+      help: "Allows RFC 2544 benchmark range IPs (198.18.0.0/15) for this agent's web_fetch fake-IP proxy compatibility while keeping other private-network SSRF protections in place.",
+      tags: ["access"],
     },
     "gateway.controlUi.basePath": {
       label: "Control UI Base Path",
