@@ -259,7 +259,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
   });
 
-  it("prefers fresh Codex CLI credentials when the stored default profile is expired", async () => {
+  it("keeps runtime refresh on canonical auth even when .codex has a fresher token", async () => {
     const profileId = "openai-codex:default";
     saveAuthProfileStore(
       {
@@ -285,6 +285,23 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       expires: Date.now() + 86_400_000,
       accountId: "acct-cli",
     });
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async (params?: { context?: unknown }) => {
+        expect(params?.context).toMatchObject({
+          access: "expired-access-token",
+          refresh: "expired-refresh-token",
+          accountId: "acct-cli",
+        });
+        return {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "rotated-local-access-token",
+          refresh: "rotated-local-refresh-token",
+          expires: Date.now() + 86_400_000,
+          accountId: "acct-cli",
+        };
+      },
+    );
 
     await expect(
       resolveApiKeyForProfile({
@@ -293,12 +310,12 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
         agentDir,
       }),
     ).resolves.toEqual({
-      apiKey: "fresh-cli-access-token",
+      apiKey: "rotated-local-access-token",
       provider: "openai-codex",
       email: undefined,
     });
 
-    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
     expect(writeCodexCliCredentialsMock).not.toHaveBeenCalled();
   });
 
@@ -588,7 +605,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     );
   });
 
-  it("adopts a fresher imported refresh token even when its access token is already expired", async () => {
+  it("keeps the canonical refresh token even when .codex has a fresher but expired refresh token", async () => {
     const profileId = "openai-codex:default";
     saveAuthProfileStore(
       {
@@ -616,8 +633,8 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
       async (params?: { context?: unknown }) => {
         expect(params?.context).toMatchObject({
-          access: "newer-but-expired-cli-access-token",
-          refresh: "fresh-cli-refresh-token",
+          access: "expired-local-access-token",
+          refresh: "stale-local-refresh-token",
         });
         return {
           type: "oauth",

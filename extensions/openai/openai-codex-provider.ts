@@ -282,6 +282,35 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
   });
 }
 
+async function runImportOpenAICodexCliAuth(ctx: ProviderAuthContext) {
+  const profile = readOpenAICodexCliOAuthProfile({
+    env: process.env,
+    store: ensureAuthProfileStore(ctx.agentDir, {
+      allowKeychainPrompt: false,
+    }),
+  });
+  if (!profile) {
+    throw new Error(
+      "No compatible Codex CLI OAuth login found. Sign in with `codex` first or use ChatGPT OAuth instead.",
+    );
+  }
+
+  return buildOauthProviderAuthResult({
+    providerId: PROVIDER_ID,
+    defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
+    access: profile.credential.access,
+    refresh: profile.credential.refresh,
+    expires: profile.credential.expires,
+    email: profile.credential.email,
+    displayName: profile.credential.displayName,
+    profilePrefix: "default",
+    credentialExtra: profile.credential.accountId
+      ? { accountId: profile.credential.accountId }
+      : {},
+    notes: ["Imported existing Codex CLI login into OpenClaw canonical auth."],
+  });
+}
+
 function buildOpenAICodexAuthDoctorHint(ctx: { profileId?: string }) {
   if (ctx.profileId !== CODEX_CLI_PROFILE_ID) {
     return undefined;
@@ -301,6 +330,13 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         hint: "Browser sign-in",
         kind: "oauth",
         run: async (ctx) => await runOpenAICodexOAuth(ctx),
+      },
+      {
+        id: "import-codex-cli",
+        label: "Import Codex CLI login",
+        hint: "Use existing .codex auth once",
+        kind: "oauth",
+        run: async (ctx) => await runImportOpenAICodexCliAuth(ctx),
       },
     ],
     wizard: {
@@ -327,13 +363,6 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     },
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
     buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
-    resolveExternalAuthProfiles: (ctx) => {
-      const profile = readOpenAICodexCliOAuthProfile({
-        env: ctx.env,
-        store: ctx.store,
-      });
-      return profile ? [{ ...profile, persistence: "runtime-only" }] : undefined;
-    },
     supportsXHighThinking: ({ modelId }) =>
       matchesExactOrPrefix(modelId, OPENAI_CODEX_XHIGH_MODEL_IDS),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_CODEX_MODERN_MODEL_IDS),

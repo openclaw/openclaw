@@ -3,7 +3,10 @@ import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
 } from "../../gateway/mcp-http.loopback-runtime.js";
+import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
+import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
+import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import {
   buildBootstrapInjectionStats,
   buildBootstrapPromptWarning,
@@ -73,9 +76,23 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  const agentDir = resolveOpenClawAgentDir();
+  const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
+  const effectiveAuthProfileId =
+    requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
+  let authCredential: AuthProfileCredential | undefined;
+  if (effectiveAuthProfileId) {
+    const authStore = loadAuthProfileStoreForRuntime(agentDir, {
+      readOnly: true,
+      allowKeychainPrompt: false,
+    });
+    authCredential = authStore.profiles[effectiveAuthProfileId];
+  }
   const authEpoch = await resolveCliAuthEpoch({
     provider: params.provider,
-    authProfileId: params.authProfileId,
+    authProfileId: effectiveAuthProfileId,
+    skipLocalCredential:
+      backendResolved.authEpochMode === "profile-only" && Boolean(effectiveAuthProfileId),
   });
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
   const extraSystemPromptHash = hashCliSessionText(extraSystemPrompt);
@@ -149,13 +166,51 @@ export async function prepareCliRunContext(
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
   });
+  const preparedExecution = await backendResolved.prepareExecution?.({
+    config: params.config,
+    workspaceDir,
+    agentDir,
+    provider: params.provider,
+    modelId,
+    authProfileId: effectiveAuthProfileId,
+    authCredential,
+  });
+  const preparedBackendEnv =
+    preparedExecution?.env && Object.keys(preparedExecution.env).length > 0
+      ? { ...preparedBackend.env, ...preparedExecution.env }
+      : preparedBackend.env;
+  const preparedBackendCleanup =
+    preparedBackend.cleanup || preparedExecution?.cleanup
+      ? async () => {
+          try {
+            await preparedExecution?.cleanup?.();
+          } finally {
+            await preparedBackend.cleanup?.();
+          }
+        }
+      : undefined;
+  const preparedBackendClearEnv = [
+    ...(preparedBackend.backend.clearEnv ?? []),
+    ...(preparedExecution?.clearEnv ?? []),
+  ];
+  const preparedBackendFinal = {
+    ...preparedBackend,
+    backend: {
+      ...preparedBackend.backend,
+      ...(preparedBackendClearEnv.length > 0
+        ? { clearEnv: Array.from(new Set(preparedBackendClearEnv)) }
+        : {}),
+    },
+    ...(preparedBackendEnv ? { env: preparedBackendEnv } : {}),
+    ...(preparedBackendCleanup ? { cleanup: preparedBackendCleanup } : {}),
+  };
   const reusableCliSession = params.cliSessionBinding
     ? resolveCliSessionReuse({
         binding: params.cliSessionBinding,
-        authProfileId: params.authProfileId,
+        authProfileId: effectiveAuthProfileId,
         authEpoch,
         extraSystemPromptHash,
-        mcpConfigHash: preparedBackend.mcpConfigHash,
+        mcpConfigHash: preparedBackendFinal.mcpConfigHash,
       })
     : params.cliSessionId
       ? { sessionId: params.cliSessionId }
@@ -240,10 +295,11 @@ export async function prepareCliRunContext(
 
   return {
     params,
+    effectiveAuthProfileId,
     started,
     workspaceDir,
     backendResolved,
-    preparedBackend,
+    preparedBackend: preparedBackendFinal,
     reusableCliSession,
     modelId,
     normalizedModel,

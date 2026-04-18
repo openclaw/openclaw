@@ -105,6 +105,38 @@ describe("maybeCompactCodexAppServerSession", () => {
       },
     });
   });
+
+  it("reuses the bound auth profile for native compaction", async () => {
+    const fake = createFakeCodexClient();
+    let seenAuthProfileId: string | undefined;
+    __testing.setCodexAppServerClientFactoryForTests(async (_startOptions, authProfileId) => {
+      seenAuthProfileId = authProfileId;
+      return fake.client;
+    });
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      authProfileId: "openai-codex:work",
+    });
+
+    const pendingResult = maybeCompactCodexAppServerSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile,
+      workspaceDir: tempDir,
+    });
+    await vi.waitFor(() => {
+      expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    });
+    fake.emit({
+      method: "thread/compacted",
+      params: { threadId: "thread-1", turnId: "turn-1" },
+    });
+    await pendingResult;
+
+    expect(seenAuthProfileId).toBe("openai-codex:work");
+  });
 });
 
 function createFakeCodexClient(): {

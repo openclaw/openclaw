@@ -108,7 +108,7 @@ describe("buildAuthHealthSummary", () => {
     expect(statuses["google:no-refresh"]).toBe("expired");
   });
 
-  it("prefers fresher imported external OAuth credentials when reporting health", () => {
+  it("does not let fresh .codex state override expired canonical health", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     readCodexCliCredentialsCachedMock.mockReturnValue({
       type: "oauth",
@@ -138,7 +138,7 @@ describe("buildAuthHealthSummary", () => {
     });
 
     const statuses = profileStatuses(summary);
-    expect(statuses["openai-codex:default"]).toBe("ok");
+    expect(statuses["openai-codex:default"]).toBe("expired");
   });
 
   it("keeps healthy local oauth over fresher imported Codex CLI credentials in health status", () => {
@@ -198,7 +198,7 @@ describe("buildAuthHealthSummary", () => {
     expect(profile?.status).toBe("expiring");
   });
 
-  it("prefers fresher imported external OAuth when the local credential is near expiry", () => {
+  it("does not let fresh .codex state override near-expiry canonical health", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     readCodexCliCredentialsCachedMock.mockReturnValue({
       type: "oauth",
@@ -227,8 +227,8 @@ describe("buildAuthHealthSummary", () => {
     });
 
     const profile = summary.profiles.find((entry) => entry.profileId === "openai-codex:default");
-    expect(profile?.status).toBe("ok");
-    expect(profile?.expiresAt).toBe(now + DEFAULT_OAUTH_WARN_MS + 60_000);
+    expect(profile?.status).toBe("expiring");
+    expect(profile?.expiresAt).toBe(now + 2 * 60_000);
   });
 
   it("marks token profiles with invalid expires as missing with reason code", () => {

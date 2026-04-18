@@ -59,6 +59,7 @@ export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth
 export { coerceSecretRef, hasConfiguredSecretInput } from "../config/types.secrets.js";
 export { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 export { resolveRequiredHomeDir } from "../infra/home-dir.js";
+export { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 export {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
