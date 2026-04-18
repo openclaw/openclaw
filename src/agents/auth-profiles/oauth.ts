@@ -623,14 +623,16 @@ async function doRefreshOAuthTokenWithLock(params: {
         credential: cred,
       });
       if (externallyManaged) {
+        const hasUsableExternalCredential = hasUsableOAuthCredential(externallyManaged);
         if (
+          hasUsableExternalCredential &&
           shouldReplaceStoredOAuthCredential(cred, externallyManaged) &&
           !areOAuthCredentialsEquivalent(cred, externallyManaged)
         ) {
           store.profiles[params.profileId] = externallyManaged;
           saveAuthProfileStore(store, params.agentDir);
         }
-        if (hasUsableOAuthCredential(externallyManaged)) {
+        if (hasUsableExternalCredential) {
           return {
             apiKey: await buildOAuthApiKey(externallyManaged.provider, externallyManaged),
             newCredentials: externallyManaged,

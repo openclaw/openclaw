@@ -174,6 +174,46 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
+  it("refreshes near-expiry openai-codex credentials before hard expiry", async () => {
+    const profileId = "openai-codex:default";
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "near-expiry-access-token",
+            refresh: "near-expiry-refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValueOnce({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "rotated-access-token",
+      refresh: "rotated-refresh-token",
+      expires: Date.now() + 86_400_000,
+      accountId: "acct-rotated",
+    });
+
+    const result = await resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(agentDir),
+      profileId,
+      agentDir,
+    });
+
+    expect(result).toEqual({
+      apiKey: "rotated-access-token",
+      provider: "openai-codex",
+      email: undefined,
+    });
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+  });
+
   it("persists plugin-refreshed openai-codex credentials before returning", async () => {
     const profileId = "openai-codex:default";
     saveAuthProfileStore(
@@ -331,7 +371,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
             provider: "openai-codex",
             access: "healthy-local-access-token",
             refresh: "healthy-local-refresh-token",
-            expires: Date.now() + 60_000,
+            expires: Date.now() + 10 * 60_000,
           },
         },
       },
@@ -446,7 +486,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
               provider: "openai-codex",
               access: "reloaded-access-token",
               refresh: "reloaded-refresh-token",
-              expires: Date.now() + 60_000,
+              expires: Date.now() + 10 * 60_000,
             },
           },
         },
@@ -510,7 +550,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
           newCredentials: {
             access: "retried-access-token",
             refresh: "retried-refresh-token",
-            expires: Date.now() + 60_000,
+            expires: Date.now() + 10 * 60_000,
           },
         };
       });

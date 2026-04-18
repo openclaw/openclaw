@@ -215,6 +215,51 @@ describe("loginOpenAICodexOAuth", () => {
     });
   });
 
+  it("waits briefly before prompting for manual input on local oauth flows", async () => {
+    vi.useFakeTimers();
+    const { prompter } = createPrompter();
+    const runtime = createRuntime();
+    mocks.loginOpenAICodex.mockImplementation(
+      async (opts: { onManualCodeInput?: () => Promise<string> }) => {
+        expect(opts.onManualCodeInput).toBeTypeOf("function");
+        const manualPromise = opts.onManualCodeInput?.();
+        await vi.advanceTimersByTimeAsync(14_000);
+        expect(manualPromise).toBeDefined();
+        expect(prompter.text).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1_000);
+        return {
+          provider: "openai-codex" as const,
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+          email: "user@example.com",
+          manualCode: await manualPromise,
+        };
+      },
+    );
+
+    await expect(
+      loginOpenAICodexOAuth({
+        prompter,
+        runtime,
+        isRemote: false,
+        openUrl: async () => {},
+      }),
+    ).resolves.toMatchObject({
+      access: "access-token",
+      refresh: "refresh-token",
+    });
+
+    expect(prompter.text).toHaveBeenCalledWith({
+      message: "Paste the authorization code (or full redirect URL):",
+      validate: expect.any(Function),
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "OpenAI Codex OAuth callback did not arrive within 15000ms; switching to manual entry (callback_timeout).",
+    );
+    vi.useRealTimers();
+  });
+
   it("continues OAuth flow on non-certificate preflight failures", async () => {
     const creds = {
       provider: "openai-codex" as const,
@@ -274,5 +319,22 @@ describe("loginOpenAICodexOAuth", () => {
       "Run brew postinstall openssl@3",
       "OAuth prerequisites",
     );
+  });
+
+  it("rewrites callback validation failures with a stable internal code", async () => {
+    mocks.loginOpenAICodex.mockRejectedValue(new Error("State mismatch"));
+
+    const { prompter, spin } = createPrompter();
+    const runtime = createRuntime();
+    await expect(
+      loginOpenAICodexOAuth({
+        prompter,
+        runtime,
+        isRemote: false,
+        openUrl: async () => {},
+      }),
+    ).rejects.toThrow(/callback_validation_failed/i);
+
+    expect(spin.stop).toHaveBeenCalledWith("OpenAI OAuth failed");
   });
 });

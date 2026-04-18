@@ -8,7 +8,7 @@ import {
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./constants.js";
 import { log } from "./constants.js";
-import { resolveTokenExpiryState } from "./credential-state.js";
+import { hasUsableOAuthCredential as hasUsableOAuthCredentialShared } from "./credential-state.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 export type ExternalCliResolvedProfile = {
@@ -70,13 +70,7 @@ export function hasUsableOAuthCredential(
   credential: OAuthCredential | undefined,
   now = Date.now(),
 ): boolean {
-  if (!credential || credential.type !== "oauth") {
-    return false;
-  }
-  if (typeof credential.access !== "string" || credential.access.trim().length === 0) {
-    return false;
-  }
-  return resolveTokenExpiryState(credential.expires, now) === "valid";
+  return hasUsableOAuthCredentialShared(credential, { now });
 }
 
 export function shouldBootstrapFromExternalCliCredential(params: {

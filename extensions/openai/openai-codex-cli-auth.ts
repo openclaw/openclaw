@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AuthProfileStore, OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
-import { resolveRequiredHomeDir } from "openclaw/plugin-sdk/provider-auth";
+import {
+  hasUsableOAuthCredential,
+  resolveRequiredHomeDir,
+  type AuthProfileStore,
+  type OAuthCredential,
+} from "openclaw/plugin-sdk/provider-auth";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveCodexAccessTokenExpiry,
@@ -104,7 +108,13 @@ export function readOpenAICodexCliOAuthProfile(params: {
     ...(identity.profileName ? { displayName: identity.profileName } : {}),
   };
   const existing = params.store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID];
-  if (existing && (existing.type !== "oauth" || !oauthCredentialMatches(existing, credential))) {
+  const existingOAuth =
+    existing?.type === "oauth" && existing.provider === PROVIDER_ID ? existing : undefined;
+  if (
+    existingOAuth &&
+    hasUsableOAuthCredential(existingOAuth) &&
+    !oauthCredentialMatches(existingOAuth, credential)
+  ) {
     return null;
   }
 

@@ -162,8 +162,10 @@ export async function acquireFileLock(
     };
   }
 
-  const attempts = Math.max(1, options.retries.retries + 1);
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
+  const configuredRetries = Math.max(0, options.retries.retries);
+  const minimumRetryWindowMs = Math.max(0, options.stale - options.retries.maxTimeout);
+  const waitStart = Date.now();
+  for (let attempt = 0; ; attempt += 1) {
     try {
       const handle = await fs.open(lockPath, "wx");
       await handle.writeFile(
@@ -184,7 +186,9 @@ export async function acquireFileLock(
         await fs.rm(lockPath, { force: true }).catch(() => undefined);
         continue;
       }
-      if (attempt >= attempts - 1) {
+      const configuredRetriesExhausted = attempt >= configuredRetries;
+      const minimumRetryWindowSatisfied = Date.now() - waitStart >= minimumRetryWindowMs;
+      if (configuredRetriesExhausted && minimumRetryWindowSatisfied) {
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, computeDelayMs(options.retries, attempt)));
