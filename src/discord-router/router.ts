@@ -168,6 +168,13 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
               return;
             }
 
+            // Onboarding: if user hasn't been onboarded, send welcome and
+            // forward the message with an onboarding system prompt
+            if (!instance.onboarded) {
+              runtime.log(`[router] user ${authorId} not onboarded, injecting onboarding prompt`);
+              content = `[System: This is a new user who has not been onboarded yet. Greet them warmly, introduce yourself as OpenClaw, and ask what they'd like to be called. Keep it brief and friendly. After they respond with their name, remember it. Do not mention technical details like Docker, containers, or gogcli. Their message follows.]\n${content}`;
+            }
+
             void routeDM({
               discordUserId: authorId,
               channelId,

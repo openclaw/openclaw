@@ -4,6 +4,8 @@ import path from "node:path";
 export type InstanceConfig = {
   port: number;
   token: string;
+  onboarded: boolean;
+  configPath: string;
 };
 
 export type RouterConfig = {
@@ -52,6 +54,7 @@ export function loadRouterConfig(opts: {
     const configPath = path.join(instancesDir, discordUserId, "openclaw.json");
 
     let gatewayToken = "";
+    let onboarded = false;
     // Each instance gets a unique host port: base, base+2, base+4, ...
     // This matches the Docker Compose port mapping pattern.
     let port = basePort + portOffset * 2;
@@ -60,6 +63,7 @@ export function loadRouterConfig(opts: {
       try {
         const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
         gatewayToken = raw?.gateway?.auth?.token ?? "";
+        onboarded = raw?.onboarded === true;
         // Don't read port from instance config — that's the container-internal
         // port (always 18789). The host-mapped port is computed from the offset.
       } catch {
@@ -77,7 +81,7 @@ export function loadRouterConfig(opts: {
       port = Number(envPort);
     }
 
-    instances.set(discordUserId, { port, token: gatewayToken });
+    instances.set(discordUserId, { port, token: gatewayToken, onboarded, configPath });
     portOffset++;
   }
 
@@ -87,4 +91,16 @@ export function loadRouterConfig(opts: {
     instancesDir,
     agentTimeoutMs: 600_000,
   };
+}
+
+/** Mark an instance as onboarded in its config file. */
+export function markOnboarded(instance: InstanceConfig): void {
+  try {
+    const raw = JSON.parse(fs.readFileSync(instance.configPath, "utf-8"));
+    raw.onboarded = true;
+    fs.writeFileSync(instance.configPath, JSON.stringify(raw, null, 2));
+    instance.onboarded = true;
+  } catch {
+    // Best effort
+  }
 }
