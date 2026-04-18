@@ -524,6 +524,23 @@ async function ensureFfmpeg(): Promise<void> {
 }
 
 /**
+ * FIX: Use segment-safe path validation to prevent sibling directory traversal
+ * This ensures paths like /tmp2 or /home/user2 are not incorrectly accepted
+ */
+function isPathWithinBoundary(childPath: string, parentPath: string): boolean {
+  // Normalize and resolve both paths to handle symlinks and relative segments
+  const normalizedChild = path.resolve(childPath);
+  const normalizedParent = path.resolve(parentPath);
+  
+  // Ensure parent path ends with separator for accurate startsWith check
+  const parentWithSep = normalizedParent.endsWith(path.sep) ? normalizedParent : normalizedParent + path.sep;
+  
+  // Check if child path starts with parent path + separator
+  // This prevents matching sibling directories like /tmp2 when parent is /tmp
+  return normalizedChild.startsWith(parentWithSep) || normalizedChild === normalizedParent;
+}
+
+/**
  * Validates if a path is within allowed session boundaries
  * FIX: Accepts any path that is either:
  * - Under the session's trusted workspace root
@@ -533,21 +550,21 @@ async function ensureFfmpeg(): Promise<void> {
 async function isValidSessionPath(resolvedPath: string, trustedRoot: string | null): Promise<boolean> {
   // Priority 1: Check if path is under trusted workspace root
   if (trustedRoot) {
-    const resolvedTrustedRoot = path.resolve(trustedRoot);
-    if (resolvedPath.startsWith(resolvedTrustedRoot)) {
+    if (isPathWithinBoundary(resolvedPath, trustedRoot)) {
       return true;
     }
   }
   
   // Priority 2: Allow temporary directory for downloads
+  // FIX: Use segment-safe boundary check to prevent /tmp2 acceptance
   const resolvedTmp = path.resolve('/tmp');
-  if (resolvedPath.startsWith(resolvedTmp)) {
+  if (isPathWithinBoundary(resolvedPath, resolvedTmp)) {
     return true;
   }
   
   // Priority 3: Allow home directory for yt-dlp binary and config
   const homeDir = os.homedir();
-  if (resolvedPath.startsWith(homeDir)) {
+  if (isPathWithinBoundary(resolvedPath, homeDir)) {
     // Only allow specific subdirectories under home for security
     const allowedHomeSubdirs = ['.openclaw', '.cache', '.config'];
     const relativeToHome = path.relative(homeDir, resolvedPath);
@@ -632,8 +649,8 @@ function sanitizeFilename(title: string): string {
 }
 
 /**
- * FIX: Route gateway download URLs through assistant-media query API
- * The gateway media handler expects: /__openclaw__/assistant-media?source=<encodedPath>
+ * Builds a media URL for accessing downloaded files
+ * The link is created for the included media server which can play the streaming media locally.
  */
 function buildMediaUrl(workspaceRoot: string, filePath: string, gatewayOrigin?: string): string {
   // Ensure paths are absolute and resolved
@@ -662,9 +679,7 @@ function buildMediaUrl(workspaceRoot: string, filePath: string, gatewayOrigin?: 
     baseOrigin = `http://localhost:${MEDIA_SERVER_PORT}`;
   }
   
-  // Construct direct file URL 
-  // The link is created for the included media server which can play the streaming media locally.
-  // __openclaw__/assistant-media?source= is not a valid path and gives a 404 error! 
+  // Construct direct file URL for the media server
   const mediaUrl = `${baseOrigin}/${encodedPath}`;
   
   // Log for debugging (remove in production if needed)
@@ -832,7 +847,7 @@ export const downloadVideoTool = {
       // Security: Validate the final path is still within workspace (defense in depth)
       const resolvedPath = path.resolve(finalPath);
       const resolvedWorkspace = path.resolve(workspaceRoot);
-      if (!resolvedPath.startsWith(resolvedWorkspace)) {
+      if (!isPathWithinBoundary(resolvedPath, resolvedWorkspace)) {
         throw new Error(`Security violation: Attempted to access file outside workspace: ${resolvedPath}`);
       }
       
