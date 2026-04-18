@@ -764,6 +764,38 @@ function formatAutoEnabledActivationReason(
   return reasons.join("; ");
 }
 
+// Roll back partial array registrations when register() throws. Consumers of
+// registry.httpRoutes / registry.services / registry.hooks / etc. iterate
+// these arrays without status filtering, so without this snapshot an error-
+// status plugin's half-registered entries would still be served. `plugins`
+// and `diagnostics` are intentionally excluded because the caller's
+// error-recording path populates them.
+function captureRegistryArraySnapshot(registry: PluginRegistry): Map<string, unknown[]> {
+  const snapshot = new Map<string, unknown[]>();
+  for (const [key, value] of Object.entries(registry)) {
+    if (key === "plugins" || key === "diagnostics") {
+      continue;
+    }
+    if (Array.isArray(value)) {
+      snapshot.set(key, value.slice());
+    }
+  }
+  return snapshot;
+}
+
+function restoreRegistryArraySnapshot(
+  registry: PluginRegistry,
+  snapshot: Map<string, unknown[]>,
+): void {
+  for (const [key, previous] of snapshot) {
+    const target = (registry as unknown as Record<string, unknown>)[key];
+    if (Array.isArray(target)) {
+      target.length = 0;
+      target.push(...previous);
+    }
+  }
+}
+
 function recordPluginError(params: {
   logger: PluginLogger;
   registry: PluginRegistry;
@@ -1749,6 +1781,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
       const previousMemoryPromptSupplements = listMemoryPromptSupplements();
       const previousMemoryRuntime = getMemoryRuntime();
+      // Snapshot every array field on the registry so we can roll back the
+      // partial contributions a failing register() leaves behind. Consumers
+      // such as plugins-http, services, and hook-runner iterate these arrays
+      // without filtering by status, so orphan entries from error-status
+      // plugins would otherwise be served as if the plugin had loaded cleanly.
+      const previousRegistryArrays = captureRegistryArraySnapshot(registry);
 
       try {
         const result = register(api);
@@ -1786,6 +1824,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           flushPlanResolver: previousMemoryFlushPlanResolver,
           runtime: previousMemoryRuntime,
         });
+        restoreRegistryArraySnapshot(registry, previousRegistryArrays);
         recordPluginError({
           logger,
           registry,
