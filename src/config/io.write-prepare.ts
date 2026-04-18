@@ -83,13 +83,16 @@ function readRootSchemaUri(value: unknown): string | undefined {
   return value.$schema;
 }
 
+function hasOwnRootSchemaKey(value: unknown): boolean {
+  return isRecord(value) && Object.prototype.hasOwnProperty.call(value, "$schema");
+}
+
 function preserveRootSchemaUri(params: {
   sourceConfig: unknown;
   nextConfig: unknown;
   persistedCandidate: unknown;
 }): unknown {
-  const nextSchema = readRootSchemaUri(params.nextConfig);
-  if (nextSchema !== undefined) {
+  if (hasOwnRootSchemaKey(params.nextConfig)) {
     return params.persistedCandidate;
   }
   const sourceSchema = readRootSchemaUri(params.sourceConfig);

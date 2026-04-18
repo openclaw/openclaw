@@ -433,4 +433,42 @@ describe("config io write prepare", () => {
     expect(persisted.$schema).toBe("https://openclaw.ai/config.json");
     expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
   });
+
+  it("does not restore root $schema when the next config explicitly clears it", () => {
+    const sourceConfig = {
+      $schema: "https://openclaw.ai/config.json",
+      gateway: { mode: "local" },
+    };
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: sourceConfig,
+      sourceConfig,
+      nextConfig: {
+        $schema: null,
+        gateway: { mode: "local", port: 18789 },
+      },
+    }) as Record<string, unknown>;
+
+    expect(persisted).not.toHaveProperty("$schema");
+    expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+  });
+
+  it("does not restore root $schema when the next config sets an invalid value", () => {
+    const sourceConfig = {
+      $schema: "https://openclaw.ai/config.json",
+      gateway: { mode: "local" },
+    };
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: sourceConfig,
+      sourceConfig,
+      nextConfig: {
+        $schema: 123,
+        gateway: { mode: "local", port: 18789 },
+      },
+    }) as Record<string, unknown>;
+
+    expect(persisted.$schema).toBe(123);
+    expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+  });
 });
