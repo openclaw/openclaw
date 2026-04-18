@@ -83,7 +83,13 @@ function getFileExtension(url: string): string | undefined {
 
 function isImageTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   if (typeof mediaType === "string" && mediaType.trim()) {
-    return mediaType.trim().toLowerCase().startsWith("image/");
+    const normalized = mediaType.trim().toLowerCase();
+    if (normalized.startsWith("image/")) {
+      return true;
+    }
+    if (normalized !== "application/octet-stream") {
+      return false;
+    }
   }
   const ext = getFileExtension(path);
   return (
